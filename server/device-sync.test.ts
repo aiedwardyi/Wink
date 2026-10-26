@@ -73,6 +73,26 @@ describe("device sync", () => {
     expect(byId).toEqual({ home: true, work: false });
   });
 
+  it("marks a device stuck once it stayed on but stalled for the stale window", () => {
+    const folder = freshDir();
+    const stuck = (since: number) => ({ since, reason: "held" as const });
+    writeDeviceRecord(folder, { ...rec("home"), stuck: stuck(NOW - DEVICE_STALE_MS) }, NOW);
+    writeDeviceRecord(folder, { ...rec("work"), stuck: stuck(NOW - DEVICE_STALE_MS + 1) }, NOW);
+    writeDeviceRecord(folder, { ...rec("off"), stuck: stuck(NOW - 3 * DEVICE_STALE_MS) }, NOW - DEVICE_STALE_MS - 1);
+    writeDeviceRecord(folder, rec("old"), NOW);
+    const byId = Object.fromEntries(listDevices(folder, "x", NOW).map((d) => [d.deviceId, d.stuck]));
+    expect(byId).toEqual({ home: stuck(NOW - DEVICE_STALE_MS), work: undefined, off: undefined, old: undefined });
+  });
+
+  it("reads a record with an unknown stall reason as not stuck", () => {
+    const folder = freshDir();
+    writeDeviceRecord(folder, rec("home"), NOW);
+    const path = join(folder, DEVICE_DIR, "home.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), stuck: { since: 0, reason: "later" } }));
+    expect(listDevices(folder, "x", NOW)).toMatchObject([{ deviceId: "home", offline: false }]);
+    expect(listDevices(folder, "x", NOW)[0].stuck).toBeUndefined();
+  });
+
   it("saves a trimmed name that a fresh load reads back", () => {
     const dataDir = freshDir();
     expect(loadDeviceName(dataDir)).toBeNull();

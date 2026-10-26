@@ -30,6 +30,7 @@ import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { showComputerPanelChrome } from "@/lib/friends-chrome";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
+import { useSyncStalls } from "@/lib/sync-stall";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
 import { altDigitSelectsPane, backquoteTogglesTerminal } from "@/lib/terminal-hotkeys";
 import { useTerminalPanes } from "@/lib/terminal-panes";
@@ -360,6 +361,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [dispatch]);
 
   useTerminalPanes(dispatch, terminalOpen);
+  useSyncStalls();
 
   useEffect(() => {
     return window.ogb?.onNotificationClick?.((target) => {

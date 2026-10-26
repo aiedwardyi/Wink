@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeDeviceRecord } from "./device-sync.ts";
 import { decodeDrivePath } from "./drive-mirror.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
-import { GOOGLE_BINDING_FILE, GOOGLE_MIRROR_DIR, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
+import { GOOGLE_BINDING_FILE, GOOGLE_MIRROR_DIR, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleStall, type GoogleSync } from "./google-sync.ts";
 import { ensureMemorySyncDevice, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
@@ -23,7 +23,7 @@ interface LocalBot { id: string; syncId: string; name: string; talked: boolean; 
 interface PC {
   name: string; dataDir: string; deviceId: string; writerId: string; account: GoogleAccount; sync: GoogleSync; ledger: MemorySyncLedger;
   bots: LocalBot[]; pictures: Record<string, string>; folder: string | null; workspaceId: string; sequence: number;
-  activations: Array<string | null>; logs: string[]; hang: boolean; republishing: boolean; skew: number;
+  activations: Array<string | null>; logs: string[]; hang: boolean; republishing: boolean; skew: number; stalls: Array<GoogleStall | null>;
 }
 
 type Booting = Omit<PC, "sync"> & { sync?: GoogleSync };
@@ -35,6 +35,7 @@ let pcs: PC[];
 const driveA = () => drives.get(A.sub)!;
 const driveFiles = (drive: FakeDrive) => [...drive.records.values()].filter(({ file }) => file.appProperties?.ph).map(({ file, bytes }) => ({ path: decodeDrivePath(file.name)!, bytes: bytes.toString("utf8") }));
 const drivePaths = (drive: FakeDrive) => driveFiles(drive).map((file) => file.path).sort();
+const driveRecord = (pc: PC) => JSON.parse(driveFiles(driveA()).find((file) => file.path === `devices/${pc.deviceId}.json`)!.bytes);
 
 function files(dir: string, prefix = ""): string[] {
   if (!existsSync(dir)) return [];
@@ -82,6 +83,12 @@ function publish(pc: Booting): void {
   writeDeviceRecord(folder, { deviceId: pc.deviceId, name: pc.name, host: `${pc.name}.example.ts.net`, chatSync: 2 }, 1_800_000_000_000);
 }
 
+/** What the server writes when a stall begins or clears, and on each heartbeat. */
+function presence(pc: Booting, lastSeen = Date.now()): void {
+  const stuck = pc.stalls.at(-1) ?? undefined;
+  writeDeviceRecord(pc.folder!, { deviceId: pc.deviceId, name: pc.name, host: `${pc.name}.example.ts.net`, chatSync: 2, stuck }, lastSeen);
+}
+
 /** What the engines read back from the folder: peers' bots and their memory. */
 function importPeers(pc: PC): void {
   const folder = pc.folder!;
@@ -118,6 +125,10 @@ function boot(pc: Booting): GoogleSync {
     },
     log: (line) => void pc.logs.push(line),
     now: () => Date.now() + pc.skew,
+    stuck: (stall) => {
+      pc.stalls.push(stall);
+      presence(pc);
+    },
   });
 }
 
@@ -126,7 +137,7 @@ function makePC(name: string, options: { bots?: LocalBot[]; pictures?: Record<st
   mkdirSync(dataDir, { recursive: true });
   const base: Booting = {
     name, dataDir, deviceId: `device-${name}`, writerId: `writer-${name}`, ledger: { bots: {} }, bots: options.bots ?? [], pictures: options.pictures ?? {},
-    folder: null, workspaceId: randomUUID(), sequence: 1, activations: [], logs: [], hang: false, republishing: false, skew: 0,
+    folder: null, workspaceId: randomUUID(), sequence: 1, activations: [], logs: [], hang: false, republishing: false, skew: 0, stalls: [],
     account: new GoogleAccount(CLIENT, null, { fetch: tokenFetch, log: () => {} }),
   };
   const pc: PC = Object.assign(base, { sync: boot(base) });
@@ -330,6 +341,66 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(home.sync.status().held).toBeUndefined();
     expect(readFileSync(join(home.folder!, "pictures", "from-work.png"), "utf8")).toBe("work picture");
     expect(home.logs).toEqual([`[google-sync] waiting on ${table}: open in another app`, `[google-sync] synced ${table}`]);
+  });
+
+  it("keeps one stall from the first waiting pass to the first clean one, and offline passes leave it", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const work = makePC("work");
+    await startOn(work);
+    work.pictures["from-work.png"] = "work picture";
+    publish(work);
+    await settle(work);
+
+    const release = holdOpen(join(home.dataDir, GOOGLE_TABLE_FILE));
+    try {
+      await settle(home);
+      expect(home.stalls).toEqual([{ since: expect.any(Number), reason: "held" }]);
+      expect(driveRecord(home).stuck).toEqual(home.stalls[0]);
+      await settle(home);
+      driveA().responses.push(new Response(null, { status: 503 }));
+      await settle(home);
+      driveA().responses.push(new Error("network down"));
+      await settle(home);
+      driveA().responses.push(new Response(null, { status: 429 }));
+      await settle(home);
+      expect(home.stalls).toHaveLength(1);
+      expect(home.logs.some((line) => line.startsWith("[google-sync] pass stopped"))).toBe(false);
+    } finally {
+      release();
+    }
+    await settle(home);
+    expect(home.stalls).toEqual([{ since: expect.any(Number), reason: "held" }, null]);
+    await settle(home);
+    expect(driveRecord(home).stuck).toBeUndefined();
+  });
+
+  it("keeps the device record reaching Drive while passes stop on an error", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const work = makePC("work");
+    await startOn(work);
+    await settle(home);
+
+    driveA().responses.push(new Response(null, { status: 400 }));
+    await settle(home);
+    expect(home.sync.status().state).toBe("error");
+    expect(home.stalls).toEqual([{ since: expect.any(Number), reason: "error" }]);
+    expect(driveRecord(home)).toMatchObject({ stuck: home.stalls[0] });
+    const uploads = driveA().uploads.length;
+    driveA().responses.push(new Response(null, { status: 400 }));
+    await settle(home);
+    expect(driveA().uploads.length).toBe(uploads);
+    presence(home, 1_900_000_000_000);
+    driveA().responses.push(new Response(null, { status: 400 }));
+    await settle(home);
+    expect(home.stalls).toHaveLength(1);
+    expect(driveRecord(home)).toMatchObject({ lastSeen: 1_900_000_000_000, stuck: home.stalls[0] });
+
+    await settle(home);
+    expect(home.stalls).toEqual([{ since: expect.any(Number), reason: "error" }, null]);
+    await settle(home);
+    expect(driveRecord(home).stuck).toBeUndefined();
   });
 
   it("does not finish a join while another app holds a device file it needs", async () => {

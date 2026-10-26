@@ -44,6 +44,7 @@ export interface GoogleSyncStatus {
   problem?: string;
   held?: number;
 }
+export type GoogleStall = { since: number; reason: "held" | "error" };
 
 const bindingSchema = z.object({
   version: z.literal(1),
@@ -89,6 +90,8 @@ type Options = {
   now?: () => number;
   log?: (line: string) => void;
   passMs?: number;
+  /** A stall began, changed reason or cleared. */
+  stuck?: (stall: GoogleStall | null) => void;
 };
 
 const tableSchema = z.object({ binding: z.object({ rootId: z.string().min(1).nullable() }), files: z.record(z.string(), z.object({})) });
@@ -158,6 +161,8 @@ export function createGoogleSync(options: Options) {
   let problem: "offline" | "error" | null = null;
   // Files another app holds open; each pass rebuilds the set.
   let held = new Set<string>();
+  // From the first pass that left a file waiting or stopped on an error to the first clean one.
+  let stall: GoogleStall | null = null;
   // Uploads wait for Drive space until uploadAt; downloads keep the normal pace.
   let fullStrikes = 0;
   let uploadAt = 0;
@@ -371,6 +376,21 @@ export function createGoogleSync(options: Options) {
     problem = null;
   }
 
+  function stalled(): void {
+    const reason = held.size ? "held" : problem === "error" ? "error" : null;
+    const next = reason && { since: stall?.since ?? now(), reason };
+    if (next?.reason === stall?.reason) return;
+    stall = next;
+    options.stuck?.(stall);
+  }
+
+  // A stopped pass never reaches this PC's device record, so peers would read the PC as off.
+  async function beat(bound: GoogleBinding): Promise<void> {
+    try {
+      await createDriveMirror({ owner: { issuer: ISSUER, sub: bound.owner.sub }, mirrorPath: bound.mirrorPath, statePath, ownIds: ownIds(), client, now }).beat();
+    } catch {}
+  }
+
   async function pass(bound: GoogleBinding): Promise<number> {
     const owner = { issuer: ISSUER, sub: bound.owner.sub } as const;
     let summary: DriveMirrorSummary;
@@ -405,17 +425,23 @@ export function createGoogleSync(options: Options) {
       const busy = heldSchema.safeParse(error);
       if (busy.success) {
         stuck(busy.data, bound.mirrorPath);
+        stalled();
+        await beat(bound);
         return passMs;
       }
       const offline = error instanceof GoogleAccountError || (error instanceof DriveClientError && (error.status === 0 || error.status >= 500 || error.status === 429));
       problem = offline ? "offline" : "error";
-      if (!offline) log(`[google-sync] pass stopped: ${error instanceof DriveMirrorError ? error.problem : error instanceof Error ? error.message : String(error)}`);
+      if (offline) return passMs;
+      log(`[google-sync] pass stopped: ${error instanceof DriveMirrorError ? error.problem : error instanceof Error ? error.message : String(error)}`);
+      stalled();
+      await beat(bound);
       return passMs;
     }
     problem = null;
     lastSyncAt = now();
     // A pass that stopped early never reached some held paths.
     wait(summary.retryAfterMs === null ? summary.held : [...held, ...summary.held]);
+    if (summary.retryAfterMs === null) stalled();
     if (summary.retryAfterMs === null && !summary.failed.some((path) => path.startsWith("threads-v2"))) chatFirst = false;
     if (!summary.driveFull) {
       fullStrikes = 0;
@@ -462,6 +488,7 @@ export function createGoogleSync(options: Options) {
           problem = "error";
           log(`[google-sync] pass failed: ${error instanceof Error ? error.message : String(error)}`);
         }
+        stalled();
       }
       running = null;
       schedule(delay);

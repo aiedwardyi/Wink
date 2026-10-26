@@ -6,6 +6,7 @@ import { leaveFor } from "@/lib/back-navigation";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
+import { stallTime, type DeviceStall } from "@/lib/sync-stall";
 import { usePresence } from "@/lib/use-presence";
 import { api } from "@/state/store";
 
@@ -16,6 +17,7 @@ export interface DeviceItem {
   current: boolean;
   offline: boolean;
   laptop?: boolean;
+  stuck?: DeviceStall;
 }
 
 const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: number; className?: string }) =>
@@ -72,7 +74,7 @@ export function DeviceSwitcher({
   /** Phone drawer state: the portaled menu shuts with it. */
   drawerOpen?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const deviceWindow = window.ogb?.deviceWindow;
   const visible = labeled || Boolean(deviceWindow);
   const [devices, reload] = useDevices(visible);
@@ -159,7 +161,9 @@ export function DeviceSwitcher({
                       <DeviceIcon device={device} size={16} />
                     </span>
                     <span className="min-w-0 flex-1 truncate">{device.name}</span>
-                    {device.current ? (
+                    {device.stuck ? (
+                      <span className="text-[12px] text-ink-secondary">{t("chrome.deviceStuck", { time: stallTime(device.stuck.since, locale) })}</span>
+                    ) : device.current ? (
                       <span className="flex items-center gap-1 text-[12px] text-accent">
                         <Check size={14} />
                         {t("chrome.deviceCurrent")}

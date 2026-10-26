@@ -293,7 +293,7 @@ import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { teamRoute } from "./team-route.ts";
-import { createGoogleSync, GOOGLE_MIRROR_DIR, googleSyncRoute } from "./google-sync.ts";
+import { createGoogleSync, GOOGLE_MIRROR_DIR, googleSyncRoute, type GoogleStall } from "./google-sync.ts";
 import type { PublicPhone } from "./phone-devices.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import * as vps from "./vps-computer.ts";
@@ -2051,6 +2051,7 @@ function scheduleProfilePublish(): void {
 
 let deviceName = loadDeviceName(DATA_DIR);
 let deviceLaptop = false;
+let deviceStuck: GoogleStall | null = null;
 
 function publishDeviceRecord(): void {
   const folder = profileSyncSettings.folder;
@@ -2070,6 +2071,7 @@ function publishDeviceRecord(): void {
         relayHost,
         laptop: deviceLaptop,
         chatSync: 2,
+        stuck: deviceStuck ?? undefined,
       },
       Date.now(),
     );
@@ -2200,6 +2202,10 @@ const googleSync = createGoogleSync({
   republishing: () => threadSyncV2?.republishing() ?? false,
   pull: (threadId) => void pullSyncedThread(threadId),
   openThread: () => threadRoutes.openThread(),
+  stuck: (stall) => {
+    deviceStuck = stall;
+    publishDeviceRecord();
+  },
 });
 const uploadCloudRoots = cloudSyncRoots();
 let uploadTarget: { folder: string | null; dir: string } | undefined;

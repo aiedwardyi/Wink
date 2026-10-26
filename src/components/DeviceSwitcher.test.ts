@@ -24,6 +24,7 @@ function setPhone(phone: boolean) {
 
 afterEach(() => {
   store.api.mockReset();
+  vi.useRealTimers();
   delete window.ogb;
   document.body.innerHTML = "";
 });
@@ -187,6 +188,26 @@ describe("DeviceSwitcher", () => {
     expect(open).toHaveBeenCalledWith("work.tail1234.ts.net", "Work");
     expect(navigate).not.toHaveBeenCalled();
     expect(host.querySelector("ul:not([inert])")).toBeNull();
+  });
+
+  it.each([false, true])("says when a stuck PC stopped syncing, this PC too, and keeps it openable (phone %s)", async (phone) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 26, 22, 0));
+    setPhone(phone);
+    const open = phone ? null : setDesktop();
+    const { host, navigate } = await renderView([
+      device("home", { current: true, stuck: { since: new Date(2026, 9, 26, 18, 25).getTime(), reason: "held" } }),
+      device("work", { stuck: { since: new Date(2026, 9, 25, 16, 38).getTime(), reason: "error" } }),
+      device("laptop"),
+    ], vi.fn(), DeviceSwitcher, phone);
+    await act(async () => click(host.querySelector("button[aria-expanded]")!));
+    const row = (id: string) => document.querySelector(`[data-device-id=${id}]`)!;
+    expect(row("home").textContent).toMatch(/^homeNot syncing since 6:25\sPM$/);
+    expect(row("work").textContent).toMatch(/^workNot syncing since Oct 25, 4:38\sPM$/);
+    expect(row("laptop").textContent).toBe("laptop");
+    await act(async () => click(row("work")));
+    if (open) expect(open).toHaveBeenCalledWith("work.tail1234.ts.net", "work");
+    else expect(navigate).toHaveBeenCalledWith("https://work.tail1234.ts.net/");
   });
 
   it("keeps the desktop menu on screen beside a narrow sidebar", async () => {

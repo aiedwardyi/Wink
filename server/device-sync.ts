@@ -26,13 +26,15 @@ const deviceSchema = z.object({
   lastSeen: z.number().int().nonnegative(),
   laptop: z.boolean().optional(),
   chatSync: z.literal(2).optional(),
+  /** On but not syncing since, by this PC's clock. */
+  stuck: z.object({ since: z.number().int().nonnegative(), reason: z.enum(["held", "error"]) }).optional().catch(undefined),
 });
 
 export type DeviceRecord = z.infer<typeof deviceSchema>;
 export type DeviceListItem = DeviceRecord & { current: boolean; offline: boolean };
 
 export function writeDeviceRecord(folder: string, record: Omit<DeviceRecord, "lastSeen">, now: number): void {
-  const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync });
+  const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync, stuck: record.stuck });
   const directory = join(folder, DEVICE_DIR);
   mkdirSync(directory, { recursive: true });
   writeFileAtomic(join(directory, `${parsed.deviceId}.json`), `${JSON.stringify(parsed, null, 2)}\n`);
@@ -94,7 +96,11 @@ export function listDevices(folder: string, currentId: string, now: number, limi
     try {
       const parsed = deviceSchema.safeParse(JSON.parse(readFileSync(join(directory, basename(name)), "utf8")));
       if (!parsed.success) continue;
-      items.push({ ...parsed.data, current: parsed.data.deviceId === currentId, offline: now - parsed.data.lastSeen > DEVICE_STALE_MS });
+      const { stuck, ...record } = parsed.data;
+      const item: DeviceListItem = { ...record, current: record.deviceId === currentId, offline: now - record.lastSeen > DEVICE_STALE_MS };
+      // A stall shorter than the stale window stays quiet.
+      if (stuck && !item.offline && record.lastSeen - stuck.since >= DEVICE_STALE_MS) item.stuck = stuck;
+      items.push(item);
     } catch {}
   }
   return items.sort((a, b) => a.name.localeCompare(b.name));

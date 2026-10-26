@@ -59,6 +59,8 @@ export interface DriveMirrorSummary {
 export type DriveHashes = Map<string, { size: bigint; mtimeNs: bigint; md5: string }>;
 type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; chatFirst?: boolean; openThread?: string | null; downloaded?: (path: string) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
 const passes = new Set<string>();
+// The device record md5 beat() last sent, by table; it leaves the table to the next full pass.
+const beats = new Map<string, string>();
 const samePath = (a: string, b: string) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const md5 = (bytes: Uint8Array) => createHash("md5").update(bytes).digest("hex");
 export const drivePathHash = (path: string) => createHash("sha256").update(path).digest("hex").slice(0, 32);
@@ -727,6 +729,23 @@ export function createDriveMirror(options: Options) {
       passes.add(statePath);
       inflight = run().finally(() => { inflight = null; passes.delete(statePath); });
       return inflight;
+    },
+    /** Uploads this PC's device record alone. */
+    async beat(): Promise<void> {
+      const table = readTable(statePath);
+      const rootId = table?.binding.rootId;
+      if (!table || !rootId || table.binding.owner.sub !== owner.sub || !samePath(table.binding.mirrorPath, mirrorPath)) return;
+      const path = `devices/${ids.profileDeviceId}.json`;
+      const bytes = localBytes(path);
+      if (!bytes) return;
+      const sum = md5(bytes);
+      const entry = table.files[path];
+      if (beats.get(statePath) === sum || (entry?.md5 === sum && entry.size === String(bytes.byteLength))) return;
+      const name = encodeDrivePath(path);
+      const id = entry?.driveId ?? (await client.listNamed(rootId, name)).find((file) => !file.trashed && file.appProperties?.ph === drivePathHash(path))?.id;
+      if (id) await client.updateMedia(id, bytes);
+      else await client.createFile(rootId, name, { ph: drivePathHash(path) }, bytes);
+      beats.set(statePath, sum);
     },
   };
 }
