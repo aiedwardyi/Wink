@@ -19,6 +19,7 @@ type GoogleBody = {
   lastSyncAt: number | null;
   move?: true;
   problem?: string;
+  held?: number;
 };
 type FolderBody = {
   configured: boolean;
@@ -181,6 +182,34 @@ describe("SyncPanel Google states", () => {
     routes.set(GOOGLE, () => google("drive-full"));
     const host = await mount();
     expect(line(host)).toBe("Google Drive가 가득 찼어요.");
+  });
+
+  it.each<[string, number, string]>([
+    ["up-to-date", 1, "1 file is open in another app, so it can't sync yet."],
+    ["syncing", 3, "3 files are open in other apps, so they can't sync yet."],
+    ["joining", 2, "2 files are open in other apps, so they can't sync yet."],
+  ])("says held files can't sync yet while %s", async (state, held, expected) => {
+    ogbStub();
+    routes.set(GOOGLE, () => google(state, { held, progress: { done: 1, total: 4 } }));
+    const host = await mount();
+    expect(line(host)).toBe(expected);
+    expect(buttons(host)).toEqual(["Sign Out"]);
+  });
+
+  it.each<[number, string]>([
+    [1, "다른 앱에서 파일 1개를 열고 있어서 아직 동기화할 수 없어요."],
+    [2, "다른 앱에서 파일 2개를 열고 있어서 아직 동기화할 수 없어요."],
+  ])("says %i held files can't sync yet in Korean on a ko-KR PC", async (held, expected) => {
+    localStorage.setItem("omb-locale", "system");
+    vi.stubGlobal("ogb", { ...ogbStub().ogb, getLocale: () => "ko-KR" });
+    routes.set(GOOGLE, () => google("up-to-date", { held }));
+    expect(line(await mount())).toBe(expected);
+  });
+
+  it("keeps offline ahead of held files", async () => {
+    ogbStub();
+    routes.set(GOOGLE, () => google("offline", { held: 1 }));
+    expect(line(await mount())).toBe("Offline. Changes sync when you're back online.");
   });
 
   it("polls every 5 seconds while open and stops on unmount", async () => {
@@ -529,15 +558,16 @@ describe("SyncPanel move to Google", () => {
 });
 
 describe("SyncPanel on a phone", () => {
-  it.each<[GoogleSyncStatus["state"], string]>([
+  it.each<[GoogleSyncStatus["state"], string, number?]>([
     ["up-to-date", "Up to date · edward@example.com"],
     ["syncing", "Syncing…"],
     ["drive-full", "Google Drive is full."],
     ["offline", "Offline. Changes sync when you're back online."],
     ["folder", "Up to date · Wink Sync"],
-  ])("shows %s through the authenticated relay route", async (state, expected) => {
+    ["joining", "2 files are open in other apps, so they can't sync yet.", 2],
+  ])("shows %s through the authenticated relay route", async (state, expected, held) => {
     const caller = { relay: true, ...requestCredentials(true, true, false, undefined) };
-    const read = vi.fn(async () => ({ ...google(state), state }));
+    const read = vi.fn(async () => ({ ...google(state, held ? { held } : {}), state }));
     const start = vi.fn(async () => { throw new Error("phone cannot start sync"); });
     vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
       const reply = await googleSyncRoute(init?.method ?? "GET", path, caller, { read, start });

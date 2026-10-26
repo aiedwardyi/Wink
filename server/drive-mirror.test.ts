@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -602,6 +603,47 @@ describe("Drive mirror", () => {
       for (const path of peers) expect(read(pcs[0], path)).toBe("peer");
       expect(table(pcs[0]).files["pictures/big.png"]).toBeUndefined();
     }
+  });
+
+  it.each(["EPERM", "EBUSY"])("syncs around a peer file another app holds open (%s) and lands it once released", async (code) => {
+    const head = "threads-v2/bot/thread/writer-work/head.json";
+    const other = "threads-v2/bot/other/writer-work/head.json";
+    const heads = [seed(head, "old head"), seed(other, "old other")];
+    seed("devices/device-work.json", "peer");
+    await pcs[0].mirror.syncOnce();
+    drive.edit(heads[0].id, Buffer.from("new head"));
+    drive.edit(heads[1].id, Buffer.from("new other"));
+    seed("memory-v2/bot/bbbbbbbbbbbb.json", "peer memory");
+    write(pcs[0], "pictures/local.png", "local picture");
+    const target = join(pcs[0].folder, ...head.split("/"));
+    const realRename = fs.renameSync;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (to === target) throw Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+      realRename(from, to);
+    });
+    syncBuiltinESMExports();
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        const before = drive.calls.length;
+        const landed: string[] = [];
+        const summary = await mirrorFor(pcs[0], { downloaded: (path) => void landed.push(path) }).syncOnce();
+        expect(summary.held).toEqual([head]);
+        expect(summary.failed).toEqual([]);
+        expect(summary.downloaded).toEqual(pass === 0 ? ["memory-v2/bot/bbbbbbbbbbbb.json", other] : []);
+        expect(landed).toEqual(summary.downloaded);
+        expect(summary.uploaded).toEqual(pass === 0 ? ["pictures/local.png"] : []);
+        expect(read(pcs[0], head)).toBe("old head");
+        expect(drive.calls.slice(before).map((call) => call.url.searchParams.get("q") ?? "").filter((q) => q.includes("in parents") && !q.includes("name ="))).toEqual([]);
+      }
+    } finally {
+      rename.mockRestore();
+      syncBuiltinESMExports();
+    }
+    const summary = await mirrorFor(pcs[0]).syncOnce();
+    expect(summary.held).toEqual([]);
+    expect(summary.downloaded).toEqual([head]);
+    expect(read(pcs[0], head)).toBe("new head");
+    expect(read(pcs[0], other)).toBe("new other");
   });
 
   it.each(["create", "update"])("reports a failed %s and still downloads later paths", async (kind) => {

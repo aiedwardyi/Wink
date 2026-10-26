@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeDeviceRecord } from "./device-sync.ts";
 import { decodeDrivePath } from "./drive-mirror.ts";
 import { GoogleAccount, type GoogleSession } from "./google-account.ts";
-import { GOOGLE_BINDING_FILE, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
+import { GOOGLE_BINDING_FILE, GOOGLE_MIRROR_DIR, GOOGLE_TABLE_FILE, createGoogleSync, googleSyncRoute, readGoogleBinding, type GoogleSync } from "./google-sync.ts";
 import { ensureMemorySyncDevice, syncBotMemory, type MemorySyncLedger } from "./memory-sync.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import { createSyncOperation, loadOrCreateSyncWorkspace, readSyncOperations, writeSyncOperation } from "./profile-sync.ts";
@@ -131,6 +132,20 @@ function makePC(name: string, options: { bots?: LocalBot[]; pictures?: Record<st
   const pc: PC = Object.assign(base, { sync: boot(base) });
   pcs.push(pc);
   return pc;
+}
+
+const realRename = fs.renameSync;
+/** Fails every rename onto a path ending in suffix, as a file another app holds open does. */
+function holdOpen(suffix: string, code = "EPERM"): () => void {
+  const rename = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (String(to).endsWith(suffix)) throw Object.assign(new Error(`${code}: operation not permitted, rename '${String(from)}' -> '${String(to)}'`), { code, path: String(from), dest: String(to) });
+    realRename(from, to);
+  });
+  syncBuiltinESMExports();
+  return () => {
+    rename.mockRestore();
+    syncBuiltinESMExports();
+  };
 }
 
 async function settle(pc: PC): Promise<void> {
@@ -258,6 +273,83 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     await settle(home);
     expect(home.sync.status().state).toBe("up-to-date");
     expect(drivePaths(driveA())).toContain("pictures/late.png");
+  });
+
+  it.each(["EPERM", "EBUSY"])("syncs the rest while another app holds a chat head open (%s), says so once, then lands it", async (code) => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const work = makePC("work", { bots: [bot("Scout")] });
+    await startOn(work);
+    await settle(home);
+    const scout = work.bots[0];
+    const head = `threads-v2/${scout.syncId}/${scout.chats[0]}/${work.writerId}/head.json`;
+    const local = join(home.folder!, ...head.split("/"));
+    const old = readFileSync(local, "utf8");
+    work.pictures["from-work.png"] = "work picture";
+    publish(work);
+    write(work.folder!, head, JSON.stringify({ thread: scout.chats[0], cut: 2 }));
+    await settle(work);
+    home.pictures["late.png"] = "late picture";
+    publish(home);
+
+    const release = holdOpen(local, code);
+    try {
+      for (let pass = 0; pass < 3; pass++) await settle(home);
+      expect(home.sync.status()).toMatchObject({ state: "up-to-date", held: 1 });
+      expect(readFileSync(join(home.folder!, "pictures", "from-work.png"), "utf8")).toBe("work picture");
+      expect(drivePaths(driveA())).toContain("pictures/late.png");
+      expect(readFileSync(local, "utf8")).toBe(old);
+    } finally {
+      release();
+    }
+    await settle(home);
+    expect(home.sync.status().state).toBe("up-to-date");
+    expect(home.sync.status().held).toBeUndefined();
+    expect(readFileSync(local, "utf8")).toBe(JSON.stringify({ thread: scout.chats[0], cut: 2 }));
+    expect(home.logs).toEqual([`[google-sync] waiting on ${head}: open in another app`, `[google-sync] synced ${head}`]);
+  });
+
+  it("shows a held state table as a waiting file, not an error, and logs it once", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const work = makePC("work");
+    await startOn(work);
+    work.pictures["from-work.png"] = "work picture";
+    publish(work);
+    await settle(work);
+
+    const table = join(home.dataDir, GOOGLE_TABLE_FILE);
+    const release = holdOpen(table);
+    try {
+      for (let pass = 0; pass < 3; pass++) await settle(home);
+      expect(home.sync.status()).toMatchObject({ state: "up-to-date", held: 1 });
+    } finally {
+      release();
+    }
+    await settle(home);
+    expect(home.sync.status().held).toBeUndefined();
+    expect(readFileSync(join(home.folder!, "pictures", "from-work.png"), "utf8")).toBe("work picture");
+    expect(home.logs).toEqual([`[google-sync] waiting on ${table}: open in another app`, `[google-sync] synced ${table}`]);
+  });
+
+  it("does not finish a join while another app holds a device file it needs", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const work = makePC("work");
+    const release = holdOpen(join("work", GOOGLE_MIRROR_DIR, "devices", "device-home.json"));
+    try {
+      await startOn(work);
+      await settle(work);
+      expect(work.sync.status()).toMatchObject({ state: "joining", held: 1 });
+      expect(readGoogleBinding(work.dataDir)).toMatchObject({ kind: "ok", binding: { phase: "joining" } });
+      expect(work.activations).toEqual([]);
+    } finally {
+      release();
+    }
+    await settle(work);
+    expect(readGoogleBinding(work.dataDir)).toMatchObject({ kind: "ok", binding: { phase: "ready" } });
+    expect(work.sync.status()).toMatchObject({ state: "up-to-date" });
+    expect(work.sync.status().held).toBeUndefined();
   });
 
   it("stays syncing until the engines finish republishing into the mirror", async () => {

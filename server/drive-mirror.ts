@@ -49,6 +49,7 @@ export interface DriveMirrorSummary {
   skipped: string[];
   conflicts: string[];
   failed: string[];
+  held: string[];
   duplicates: Array<{ path: string; selectedId: string; ids: string[] }>;
   retryAfterMs: number | null;
   driveFull: boolean;
@@ -267,7 +268,8 @@ export function createDriveMirror(options: Options) {
     }
   }
 
-  async function download(path: string, bytes: Buffer, once: boolean, check: () => void, ownPaths: string[]): Promise<boolean> {
+  /** Null when another app still holds the target open after the rename retries. */
+  async function download(path: string, bytes: Buffer, once: boolean, check: () => void, ownPaths: string[]): Promise<boolean | null> {
     check();
     parents(path, true);
     const target = join(mirrorPath, ...path.split("/"));
@@ -282,8 +284,14 @@ export function createDriveMirror(options: Options) {
       }
       check();
       assertDownloadPath(path, ownPaths);
-      if (!once) await renameDriveFile(tmp, target, () => { check(); assertDownloadPath(path, ownPaths); });
-      else {
+      if (!once) {
+        try {
+          await renameDriveFile(tmp, target, () => { check(); assertDownloadPath(path, ownPaths); });
+        } catch (error) {
+          if (error instanceof Error && "code" in error && (error.code === "EBUSY" || error.code === "EPERM")) return null;
+          throw error;
+        }
+      } else {
         try {
           linkSync(tmp, target);
         } catch (error) {
@@ -326,7 +334,7 @@ export function createDriveMirror(options: Options) {
       writeFileAtomic(statePath, `${JSON.stringify(table, null, 2)}\n`, { mode: 0o600 });
       checked = lstatSync(statePath, { bigint: true });
     }
-    const summary: DriveMirrorSummary = { uploaded: [], downloaded: [], skipped: [], conflicts: [], failed: [], duplicates: [], retryAfterMs: null, driveFull: false };
+    const summary: DriveMirrorSummary = { uploaded: [], downloaded: [], skipped: [], conflicts: [], failed: [], held: [], duplicates: [], retryAfterMs: null, driveFull: false };
     let uploads = options.uploads ?? true;
     function held(): boolean {
       if (!uploads) summary.driveFull = true;
@@ -612,6 +620,12 @@ export function createDriveMirror(options: Options) {
         if (!matches(file, downloaded)) throw new DriveMirrorError("content-changed");
         const written = await download(path, downloaded, rule === "once", check, ownPaths);
         check();
+        if (written === null) {
+          summary.held.push(path);
+          // The row now differs from the stale local file, so later passes fetch it again by id without the change feed.
+          track(path, file);
+          return;
+        }
         const current = localHash(path);
         if (current && same(file, current)) {
           if (written) summary.downloaded.push(path);

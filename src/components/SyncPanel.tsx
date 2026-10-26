@@ -36,6 +36,7 @@ type GoogleSync = {
   lastSyncAt: number | null;
   move?: true;
   problem?: string;
+  held?: number;
 };
 
 type Action = { label: string; run: () => void };
@@ -205,6 +206,9 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
       else if (google.join.first) line = t("settings.sync.firstPc", { email });
       else line = t("settings.sync.joining", { email, pcs: google.join.pcs });
       if (!refused) main = { label: t("settings.sync.start"), run: () => void start() };
+      quiets.push(signOutAction);
+    } else if (google.held && (google.state === "joining" || google.state === "syncing" || google.state === "up-to-date")) {
+      line = t(google.held === 1 ? "settings.sync.heldOne" : "settings.sync.heldMany", { count: google.held });
       quiets.push(signOutAction);
     } else if (google.state === "joining" || google.state === "syncing") {
       line = google.progress
