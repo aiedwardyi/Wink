@@ -209,7 +209,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     });
   }
 
-  function addNotice(task: StoredTask, db: DatabaseSync): void {
+  function addNotice(task: StoredTask, db: DatabaseSync, notice?: Message): void {
     const noticed = db.prepare(`WITH RECURSIVE path(id) AS (
       SELECT active_leaf_id FROM thread_state WHERE thread_id = ?
       UNION SELECT json_extract(m.json, '$.parentId') FROM messages m JOIN path ON m.id = path.id WHERE m.thread_id = ?
@@ -218,7 +218,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       .get(task.threadId, task.threadId, task.threadId, `error: ${CONFLICT_NOTICE}`, `error: ${CONFLICT_NOTICE_V2}`);
     if (noticed) return;
     const parent = db.prepare("SELECT active_leaf_id FROM thread_state WHERE thread_id = ?").get(task.threadId)?.active_leaf_id;
-    const message: Message = { id: randomUUID(), at: Date.now(), parentId: parent ? String(parent) : null, role: "bot", kind: "activity", tool: { name: `error: ${CONFLICT_NOTICE_V2}`, ok: false } };
+    const message: Message = { ...(notice ?? { id: randomUUID(), at: Date.now(), role: "bot", kind: "activity", tool: { name: `error: ${CONFLICT_NOTICE_V2}`, ok: false } }), parentId: parent ? String(parent) : null };
     host.store.applySyncChanges(task.botId, task.threadId, [
       { cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false },
       { cursor: 0, kind: "head", rowId: "", value: message.id, conflict: false },
@@ -509,11 +509,15 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
   }
 
   function joinStale(task: StoredTask, stale: StaleBranch): void {
+    const messages = host.store.messagesFor(task.threadId);
+    const parent = messages.find((message) => message.id === stale.first.id)?.parentId;
+    const notice = messages.find((message) => message.id === parent && isConflictNotice(message));
     engine.commit(task, project(task.threadId, [{ kind: "row", value: stale.first }, { kind: "head", value: stale.tip }]), undefined, (db) => {
       host.store.applySyncChanges(task.botId, task.threadId, [
         { cursor: 0, kind: "row", rowId: stale.first.id, value: stale.first, conflict: false },
         { cursor: 0, kind: "head", rowId: "", value: stale.tip, conflict: false },
       ]);
+      if (notice) addNotice(task, db, notice);
       if (stale.missed) db.prepare("INSERT INTO sync_v2_joins VALUES (?, ?, ?) ON CONFLICT(thread) DO UPDATE SET missed = excluded.missed, tip = excluded.tip").run(task.threadId, stale.missed, stale.tip);
     });
     schedule(task.threadId);

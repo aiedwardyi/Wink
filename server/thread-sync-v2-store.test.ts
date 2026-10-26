@@ -634,6 +634,163 @@ describe("store delta sync", { timeout: 60_000 }, () => {
     });
   }
 
+  for (const writers of [[LOW, HIGH], [HIGH, LOW]]) {
+    it(`keeps the split notice on the active path after X4's later join (${writers[0]})`, async () => {
+      const all = isolated(writers);
+      const [a, b] = all;
+      for (const item of all) await item.peer.call("clock");
+      await b.peer.call("append", { text: "base" });
+      await b.peer.call("flush");
+      share([a], [b]);
+      await a.peer.call("pull");
+      const kept: Message[] = [];
+      for (let leg = 1; leg <= 2; leg++) {
+        kept.push(await a.peer.call<Message>("append", { text: `A leg ${leg}` }));
+        kept.push(await a.peer.call<Message>("append", { text: `A reply ${leg}`, role: "bot" }));
+        await a.peer.call("flush");
+        for (let send = 1; send <= 2; send++) {
+          await b.peer.call("append", { text: `B leg ${leg} send ${send}` });
+          await b.peer.call("append", { text: `B reply ${leg} send ${send}`, role: "bot" });
+        }
+        await b.peer.call("flush");
+        share([a], [b]);
+        await a.peer.call("pull");
+        if (leg === 1) {
+          expect(joinCount(a.peer.dataDir)).toBe(1);
+          expect((await a.peer.snapshot()).rows.filter(isConflictNotice)).toHaveLength(0);
+        }
+      }
+      const split = await a.peer.snapshot();
+      const notice = split.rows.find(isConflictNotice)!;
+      expect(notice.parentId).toBe((await b.peer.snapshot()).leaf);
+      expect(path(split)).toContain(notice.id);
+      expect(kept.every((row) => !path(split).includes(row.id))).toBe(true);
+      expect(split.logs).toContain("chat sync v2: kept thread split (edit or regenerate)");
+      await a.peer.call("flush");
+      share([b], [a]);
+      await b.peer.call("pull");
+      await b.peer.call("flush");
+      const sent = await a.peer.call<Message>("append", { text: "A leg 3" });
+      expect(sent.parentId).toBe(notice.id);
+      const reply = await a.peer.call<Message>("append", { text: "A reply 3", role: "bot" });
+      await a.peer.call("flush");
+      for (let send = 1; send <= 2; send++) {
+        await b.peer.call("append", { text: `B leg 3 send ${send}` });
+        await b.peer.call("append", { text: `B reply 3 send ${send}`, role: "bot" });
+      }
+      const main = (await b.peer.snapshot()).leaf;
+      await b.peer.call("flush");
+      const before = await a.peer.snapshot();
+      share([a], [b]);
+      await a.peer.call("pull");
+      const joined = await a.peer.snapshot();
+      expect(tip(joined)).toBe(reply.id);
+      expect(joined.rows.find((row) => row.id === sent.id)?.parentId).toBe(main);
+      expect(path(joined)).toContain(notice.id);
+      expect(joined.rows.filter(isConflictNotice)).toEqual([{ ...notice, parentId: reply.id }]);
+      expect(kept.every((row) => !path(joined).includes(row.id))).toBe(true);
+      const rows = [...before.rows, ...(await b.peer.snapshot()).rows.filter((row) => !before.rows.some((old) => old.id === row.id))]
+        .map((row) => row.id === sent.id ? { ...row, parentId: main } : row.id === notice.id ? { ...row, parentId: reply.id } : row);
+      expect(joined.rows).toEqual(expect.arrayContaining(rows));
+      expect(joined.rows).toHaveLength(rows.length);
+      expect(new Set(joined.rows.map((row) => row.id)).size).toBe(rows.length);
+      await a.peer.call("flush");
+      share([b], [a]);
+      await b.peer.call("pull");
+      const peer = await b.peer.snapshot();
+      expect(peer.leaf).toBe(reply.id);
+      expect(peer.rows.filter(isConflictNotice)).toHaveLength(0);
+      expect(peer.rows).toEqual(expect.arrayContaining(joined.rows.filter((row) => !isConflictNotice(row))));
+      expect(peer.rows).toHaveLength(joined.rows.length - 1);
+      expect(path(peer)).toEqual(path(joined).filter((id) => id !== notice.id));
+      for (let round = 0; round < 3; round++) {
+        for (const item of all) {
+          await item.peer.call("tick", { at: 30_000 });
+          await item.peer.call("flush");
+        }
+        share(all, all);
+      }
+      await a.peer.call("restart");
+      await a.peer.call("poll");
+      const settled = await a.peer.snapshot();
+      expect(path(settled)).toContain(notice.id);
+      expect(settled.rows.filter(isConflictNotice)).toHaveLength(1);
+      expect(settled.rows).toEqual(joined.rows);
+      await b.peer.call("poll");
+      const remote = await b.peer.snapshot();
+      expect(remote.rows).toEqual(peer.rows);
+      expect(path(remote)).toEqual(path(peer));
+      await a.peer.call("append", { text: "after the join" });
+      await a.peer.call("flush");
+      await a.peer.call("pull");
+      const continued = await a.peer.snapshot();
+      expect(path(continued)).toContain(notice.id);
+      expect(continued.rows.filter(isConflictNotice)).toHaveLength(1);
+    });
+  }
+
+  it("keeps an older off-path notice untouched after X4's later join", async () => {
+    const { a, c } = await behind();
+    for (const peer of [a, c]) await peer.call("clock");
+    const base = (await c.snapshot()).rows[0];
+    const older: Message = { id: "older-notice", at: 1, parentId: base.id, role: "bot", kind: "activity", tool: { name: `error: ${CONFLICT_NOTICE_V2}`, ok: false } };
+    const child: Message = { id: "older-child", at: 2, parentId: older.id, role: "user", kind: "text", text: "older branch" };
+    await c.call("seed", { rows: [base, older, child], leaf: base.id });
+    const kept = await c.call<Message>("append", { text: "A leg 2" });
+    await c.call("branch", { id: kept.id, text: "edited leg 2" });
+    await exchange(a, c);
+    const split = await c.snapshot();
+    const notice = split.rows.find((row) => isConflictNotice(row) && row.id !== older.id)!;
+    expect(path(split)).toContain(notice.id);
+    expect(path(split)).not.toContain(older.id);
+    expect(split.logs).toContain("chat sync v2: kept thread split (edit or regenerate)");
+    const sent = await c.call<Message>("append", { text: "A leg 3" });
+    expect(sent.parentId).toBe(notice.id);
+    const reply = await c.call<Message>("append", { text: "A reply 3", role: "bot" });
+    for (let send = 1; send <= 2; send++) {
+      await a.call("append", { text: `B leg 3 send ${send}` });
+      await a.call("append", { text: `B reply 3 send ${send}`, role: "bot" });
+    }
+    await a.call("flush");
+    const before = await c.snapshot();
+    const ids = new Set([...before.rows, ...(await a.snapshot()).rows].map((row) => row.id));
+    await exchange(a, c);
+    const joined = await c.snapshot();
+    expect(tip(joined)).toBe(reply.id);
+    expect(joined.rows.find((row) => row.id === older.id)).toEqual(older);
+    expect(joined.rows.find((row) => row.id === child.id)).toEqual(child);
+    expect(joined.rows.filter((row) => isConflictNotice(row) && path(joined).includes(row.id))).toEqual([{ ...notice, parentId: reply.id }]);
+    expect(joined.rows.filter(isConflictNotice)).toHaveLength(2);
+    expect(joined.rows.map((row) => row.id).sort()).toEqual([...ids].sort());
+    expect(new Set(joined.rows.map((row) => row.id)).size).toBe(joined.rows.length);
+    for (let round = 0; round < 2; round++) await c.call("poll");
+    await c.call("restart");
+    await c.call("poll");
+    const settled = await c.snapshot();
+    expect(settled.rows).toEqual(joined.rows);
+    expect(path(settled)).toContain(notice.id);
+    expect(path(settled)).not.toContain(older.id);
+  });
+
+  it("leaves an older off-path notice untouched when the join orphans no notice", async () => {
+    const { a, c } = await behind();
+    for (const peer of [a, c]) await peer.call("clock");
+    const base = (await c.snapshot()).rows[0];
+    const older: Message = { id: "older-notice", at: 1, parentId: base.id, role: "bot", kind: "activity", tool: { name: `error: ${CONFLICT_NOTICE_V2}`, ok: false } };
+    const child: Message = { id: "older-child", at: 2, parentId: older.id, role: "user", kind: "text", text: "older branch" };
+    await c.call("seed", { rows: [base, older, child], leaf: base.id });
+    const sent = await c.call<Message>("append", { text: "typed while stale" });
+    expect(sent.parentId).toBe(base.id);
+    await exchange(a, c);
+    const joined = await c.snapshot();
+    expect(joined.leaf).toBe(sent.id);
+    expect(joined.rows.find((row) => row.id === older.id)).toEqual(older);
+    expect(joined.rows.find((row) => row.id === child.id)).toEqual(child);
+    expect(path(joined)).not.toContain(older.id);
+    expect(joined.rows.filter(isConflictNotice)).toEqual([older]);
+    expect(new Set(joined.rows.map((row) => row.id)).size).toBe(joined.rows.length);
+  });
+
   it("notes the other PC's messages until a reply after a join and never after a normal pull", async () => {
     const { a, c } = await behind();
     await c.call("append", { text: "typed while stale" });
