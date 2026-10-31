@@ -43,6 +43,7 @@ import { Presence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
 import { markColdOpen, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
+import { useMonoHud } from "@/lib/use-mono-hud";
 
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
@@ -135,6 +136,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
+  useMonoHud(bot, state.instances);
   const terminalOpen = Boolean(bot && terminalViews[bot.id] && state.activeView === "chat" && !browserWorkspaceBotId && !localVmWorkspaceBotId);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;

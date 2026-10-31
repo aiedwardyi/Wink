@@ -4,6 +4,7 @@
 // that keeps the two halves from drifting apart, and it means adding a skin is
 // one CSS block plus one line in SKINS.
 import { useSyncExternalStore } from "react";
+import monoHudCss from "@/skins/mono-hud.css?inline";
 import toolSkinsCss from "@/skins/tool-skins.css?inline";
 
 export const SKIN_IDS = [
@@ -49,6 +50,7 @@ export const SKIN_IDS = [
   "steel-gray",
   "claude",
   "precision",
+  "mono-hud",
   "notebook",
   "messenger",
   "community",
@@ -118,6 +120,7 @@ export const SKINS: readonly Skin[] = [
   { id: "steel-gray", name: "Steel Gray", tagline: "Cool steel, mint signal." },
   { id: "claude", name: "Claude", tagline: "Warm black, serif replies, quiet chrome." },
   { id: "precision", name: "Precision", tagline: "Compact issue discussion, cool charcoal." },
+  { id: "mono-hud", name: "Servo", tagline: "Black HUD, white gauges, color only in the marks." },
   { id: "notebook", name: "Notebook", tagline: "Document calm, paper and ink." },
   { id: "messenger", name: "Messenger", tagline: "Blue bubbles, clear conversation." },
   { id: "community", name: "Community", tagline: "Sender-first shared space, slate dark." },
@@ -214,12 +217,13 @@ export function readSkin(): SkinId {
  */
 export function applySkin(id: SkinId): void {
   document.documentElement.dataset.skin = id;
-  const extra = document.head.querySelector("style[data-skin-extra]");
-  if (!TOOL_SKIN_IDS.has(id)) extra?.remove();
-  else if (!extra) {
+  const kind = TOOL_SKIN_IDS.has(id) ? "tool" : id === "mono-hud" ? id : "";
+  const extra = document.head.querySelector<HTMLElement>("style[data-skin-extra]");
+  if (extra && extra.dataset.skinExtra !== kind) extra.remove();
+  if (kind && extra?.dataset.skinExtra !== kind) {
     const style = document.createElement("style");
-    style.dataset.skinExtra = "";
-    style.textContent = toolSkinsCss;
+    style.dataset.skinExtra = kind;
+    style.textContent = kind === "tool" ? toolSkinsCss : monoHudCss;
     document.head.append(style);
   }
   try {

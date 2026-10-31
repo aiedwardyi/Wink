@@ -2126,7 +2126,7 @@ html[lang="ko"] {
   --radius-xl: 8px;
 }
 
-@scope ([data-skin="precision"]) to ([data-skin]) {
+@scope ([data-skin="precision"], [data-skin="mono-hud"]) to ([data-skin]) {
   [data-orbit-message] {
     border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 68%, transparent);
     padding-block: 0.5rem;
@@ -2151,6 +2151,43 @@ html[lang="ko"] {
     border: 1px solid var(--color-hairline);
     box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-accent) 42%, transparent);
   }
+}
+
+/* ── Servo ─────────────────────────────────────────────────────────────────
+   Precision's transcript on the dial's black stage. White is the only signal;
+   engine marks keep their lab colors. Structure lives in skins/mono-hud.css.
+   ───────────────────────────────────────────────────────────────────────── */
+[data-skin="mono-hud"] {
+  --color-app: #08090b;
+  --color-panel: #0d0e11;
+  --color-raised: #17191e;
+  --color-raised-hover: #202228;
+  --color-card: #17191e;
+  --color-inset: #050608;
+  --color-control: #1b1d22;
+  --color-hairline: #2b2e35;
+
+  --color-ink: #eef0f3;
+  --color-ink-secondary: #a3a7b1;
+
+  --color-accent: #e8eaee;
+  --color-accent-border: #ffffff;
+  --color-accent-text: #ffffff;
+  --color-focus: #ffffff;
+  --color-accent-ink: #08090b;
+  --color-bubble-user: #111317;
+
+  --color-success: #d2d5db;
+  --color-danger: #ff8c98;
+  --color-danger-ink: #08090b;
+  --color-warning: #bfc3cb;
+  --color-scrollbar: #33363e;
+  --color-maus-line: #a3a7b1;
+
+  --font-sans: var(--font-geist) "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Malgun Gothic", system-ui, sans-serif;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
 }
 
 /* ── Community ─────────────────────────────────────────────────────────────
@@ -3775,6 +3812,7 @@ html[lang="ko"] {
 /* Keep the rail-to-glyph gap after skin-specific bot padding rules. */
 :root[data-shape="boxy"]:is(
   [data-skin="precision"],
+  [data-skin="mono-hud"],
   [data-skin="notebook"],
   [data-skin="messenger"],
   [data-skin="community"],
