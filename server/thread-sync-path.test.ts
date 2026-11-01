@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { messageDatabase } from "./message-db.ts";
 import { Store, type Message } from "./store.ts";
-import * as pathChecks from "./thread-sync-path.ts";
+import { syncPathChanged } from "./thread-sync-path.ts";
 import type { SyncChange } from "./thread-sync-v2.ts";
 
 const rowChange = (message: Message): SyncChange => ({ cursor: 0, kind: "row", rowId: message.id, value: message, conflict: false });
@@ -26,26 +26,15 @@ describe("sync path continuity", () => {
     const rows = Array.from({ length: 100_000 }, (_, i) => ({ ...message(`m${i}`, i ? `m${i - 1}` : null), text: "x".repeat(512) }));
     const leaf = rows.at(-1)!.id;
     const { store, bot, threadId } = fixture(rows, leaf);
-    const check = Object.values(pathChecks)[0];
-    let elapsed = 0;
-    vi.spyOn(pathChecks, Object.keys(pathChecks)[0] as keyof typeof pathChecks).mockImplementation((...args: Parameters<typeof check>) => {
-      const start = performance.now();
-      try {
-        return check(...args);
-      } finally {
-        elapsed += performance.now() - start;
-      }
-    });
     const prepare = vi.spyOn(messageDatabase(), "prepare");
     const samples: number[] = [];
     for (let page = 0; page < 5; page++) {
       const added = Array.from({ length: 50 }, (_, i) => message(`new-${page}-${i}`, i ? `new-${page}-${i - 1}` : leaf));
-      elapsed = 0;
-      store.applySyncChanges(bot.id, threadId, [
-        ...added.map(rowChange),
-        { cursor: 0, kind: "head", rowId: "", value: leaf, conflict: false },
-      ]);
-      samples.push(elapsed);
+      const changes: SyncChange[] = [...added.map(rowChange), { cursor: 0, kind: "head", rowId: "", value: leaf, conflict: false }];
+      const start = performance.now();
+      expect(syncPathChanged(messageDatabase(), threadId, changes)).toBe(false);
+      samples.push(performance.now() - start);
+      store.applySyncChanges(bot.id, threadId, changes);
     }
     console.log(`sync continuity 100000 rows, 50-row append pages: ${samples.map((ms) => ms.toFixed(3)).join(", ")} ms; max ${Math.max(...samples).toFixed(3)} ms`);
     expect(Math.max(...samples)).toBeLessThan(5);
