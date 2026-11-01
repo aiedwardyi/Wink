@@ -24,7 +24,7 @@ import { loadReplyStyle } from "@/lib/reply-style";
 import { appSettingsNavigation } from "@/lib/settings-chrome";
 import { createBotPatchQueue } from "./bot-patch-queue";
 import { createViewedReplies } from "./viewed-replies";
-import { firstChatPeripherals, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
+import { canPrefetchChat, firstChatPeripherals, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { completedReopenDismissals } from "@/lib/task-recovery";
@@ -2537,7 +2537,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
-        // Not before: over Tailscale Serve or the relay both share one pipe, and hello would queue behind the snapshot.
+        // Remote links share one pipe, so hello must not queue behind the snapshot.
         if (!prefetchStarted && !hydrated && !hydrationPromise) prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
         prefetchStarted = true;
       },
@@ -2567,6 +2567,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (frame.replayed) flushDeltas();
       },
     });
+    if (canPrefetchChat(window.location)) {
+      prefetchStarted = true;
+      prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
+    }
     // rAF never fires while hidden, so text streamed meanwhile would miss the
     // restored window's first frame, and a reply waiting on its tail would never settle.
     const flushOnVisibility = () => flushDeltas();

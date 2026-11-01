@@ -3,6 +3,11 @@
 export const FIRST_CHAT_PERIPHERAL_KEYS = ["config", "routines", "webhooks"] as const;
 export const DEFERRED_INSTANCE_IDLE_MS = 800;
 
+export function canPrefetchChat(location: Pick<Location, "protocol" | "hostname">): boolean {
+  // TLS may be a single-pipe Serve proxy, even when its hostname is localhost.
+  return location.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+}
+
 export function isFirstChatPeripheral(key: string): boolean {
   return (FIRST_CHAT_PERIPHERAL_KEYS as readonly string[]).includes(key);
 }
