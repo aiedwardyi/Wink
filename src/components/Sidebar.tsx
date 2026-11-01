@@ -52,7 +52,7 @@ import { useManualCheck, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
-import { showSidebarDensityControls, showSidebarPhone, showSidebarRoutines, showSidebarTeachSkill } from "@/lib/friends-chrome";
+import { showBotMenuCopy, showBotMenuMakeGroup, showGroupMenuCopyId, showNewMenuExport, showNewMenuTeams, showPhoneDrawerCollapse, showSidebarDensityControls, showSidebarPhone, showSidebarRoutines, showSidebarTeachSkill } from "@/lib/friends-chrome";
 import { nextRename } from "@/lib/rename";
 import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -310,7 +310,7 @@ function RoomContextMenu({
         <FolderPlus size={16} className="text-ink-secondary" />
         {t("chrome.moveToContext")}
       </button>
-      <button
+      {showGroupMenuCopyId() && <button
         onClick={() => {
           void navigator.clipboard?.writeText(group.threadId);
           onClose();
@@ -319,7 +319,7 @@ function RoomContextMenu({
       >
         <ClipboardCopy size={16} className="text-ink-secondary" />
         {t("chrome.copyConversationId")}
-      </button>
+      </button>}
       <button
         onClick={() => {
           dispatch({ type: "deleteGroup", groupId: group.id });
@@ -574,11 +574,11 @@ function BotContextMenu({
           dispatch({ type: "select", id: bot.id });
           dispatch({ type: "toggleSettings", open: true });
         }),
-        item(<Copy size={16} className="text-ink-secondary" />, t("chrome.duplicate"), () =>
+        showBotMenuCopy() && item(<Copy size={16} className="text-ink-secondary" />, t("chrome.duplicate"), () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
-        divider("d2"),
-        item(<Users size={16} className="text-ink-secondary" />, t("chrome.makeGroupWithBot"), () => {
+        showBotMenuMakeGroup() && divider("d2"),
+        showBotMenuMakeGroup() && item(<Users size={16} className="text-ink-secondary" />, t("chrome.makeGroupWithBot"), () => {
           onMakeGroup(bot.id);
         }),
         divider("d3"),
@@ -1568,7 +1568,7 @@ export function Sidebar({
           style={windowNoDragStyle}
         >
           {density !== "icons" && <DeviceSwitcher />}
-          <button
+          {(!isPhone() || showPhoneDrawerCollapse()) && <button
             type="button"
             onClick={toggleCollapsed}
             aria-label={
@@ -1605,7 +1605,7 @@ export function Sidebar({
                 {collapsedUnreadBadge}
               </span>
             )}
-          </button>
+          </button>}
           {showSidebarDensityControls() && (
           <div className="relative">
             <button
@@ -1691,7 +1691,7 @@ export function Sidebar({
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
                   </button>
-                  <button
+                  {showNewMenuExport() && <button
                     onClick={() => {
                       setPlusOpen(false);
                       void exportAllBots();
@@ -1701,8 +1701,8 @@ export function Sidebar({
                   >
                     {exportingTeam ? <Loader2 size={16} className="animate-spin text-ink-secondary" /> : <ArrowDownToLine size={16} className="text-ink-secondary" />}
                     {exportingTeam ? t("chrome.exporting") : t("chrome.exportAllBots")}
-                  </button>
-                  <button
+                  </button>}
+                  {showNewMenuTeams() && <button
                     onClick={() => {
                       setPlusOpen(false);
                       setTeamLibraryOpen(true);
@@ -1711,7 +1711,7 @@ export function Sidebar({
                   >
                     <Library size={16} className="text-ink-secondary" />
                     {t("chrome.teams")}
-                  </button>
+                  </button>}
                   {archivedBots.length > 0 && (
                     <button
                       onClick={() => {
