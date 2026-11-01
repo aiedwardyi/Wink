@@ -33,13 +33,13 @@ function screenshot(metadata = false): Buffer {
     ...(metadata ? [chunk("tEXt", Buffer.from("Comment\0password=MetadataSecret123"))] : []), chunk("IDAT", data), chunk("IEND", Buffer.alloc(0))]);
 }
 
-async function fixture(bytes: Buffer) {
+async function fixture(bytes: Buffer, mime: TeamReport["images"][number]["mime"] = "image/png") {
   const dir = await mkdtemp(join(tmpdir(), "report-relay-")); dirs.push(dir);
   const owner = reportOwnerHash("edward@example.test");
   const keys = generateKeyPairSync("ed25519");
   const auth = { idToken: "token", ticket: "ticket", pk: keys.publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64url"), sig: "A".repeat(86) };
   const report: TeamReport = { id: "a".repeat(32), owner, at: 1, bot: { id: "helper", name: "Helper" }, threadId: "thread", branchId: "request", selectedMessageId: "request", requestMessageId: "request",
-    summary: "Broken sidebar", diagnosis: "", originals: [], images: [{ messageId: "request", mime: "image/png", base64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex"), source: "stored-message", collectedAt: 1 }],
+    summary: "Broken sidebar", diagnosis: "", originals: [], images: [{ messageId: "request", mime, base64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex"), source: "stored-message", collectedAt: 1 }],
     diagnostics: "", incident: { engine: "unknown", model: "unknown", version: "unknown" }, current: { engine: "fixture", model: "fixture", version: "fixture" }, missing: [] };
   const envelope = { auth, report, signature: sign(null, reportPayload(owner, auth, report), keys.privateKey).toString("base64url") };
   const accounts = { register: async () => ({ ok: true as const, label: "abcdefghijklmnop", subHash: "subject", account: "unused" }) };
@@ -47,6 +47,23 @@ async function fixture(bytes: Buffer) {
 }
 
 describe("report image validation", () => {
+  it.each([0xfe, 0xe1])("R7 rejects JPEG metadata after a scan: marker %i", async (marker) => {
+    const scan = Buffer.from("ffda0008010100003f001122ff0033ffd044", "hex");
+    const text = Buffer.from("password=MetadataSecret123"), size = Buffer.alloc(2); size.writeUInt16BE(text.length + 2);
+    const bytes = Buffer.concat([Buffer.from("ffd8", "hex"), scan, Buffer.from([0xff, marker]), size, text, scan, Buffer.from("ffd9", "hex")]);
+    expect(safeImageMetadata(bytes, "image/jpeg", redactSecretsInText)).toBe(false);
+    const f = await fixture(bytes, "image/jpeg");
+    expect((await f.store.submit(f.envelope, f.accounts, Date.now())).status).toBe(400);
+    expect(await f.store.claim()).toEqual([]);
+  });
+  it("R7 keeps JPEG pixels opaque across stuffing, restart markers and multiple scans", () => {
+    const scan = Buffer.concat([Buffer.from("ffda0008010100003f00", "hex"), Buffer.from("password=PixelPattern123"), Buffer.from("ff00feffffd0ffd711", "hex")]);
+    const metadata = Buffer.from("fffe000673616665", "hex");
+    const bytes = Buffer.concat([Buffer.from("ffd8", "hex"), scan, metadata, scan, metadata, Buffer.from("ffd9", "hex")]);
+    const seen: string[] = [];
+    expect(safeImageMetadata(bytes, "image/jpeg", (text) => { seen.push(text); return redactSecretsInText(text); })).toBe(true);
+    expect(seen).toEqual(["safe", "safe"]);
+  });
   it("R5 accepts real PNG pixel data resembling credentials without scanning IDAT", async () => {
     const bytes = screenshot(); expect(bytes.toString("latin1")).toContain("password=PixelPattern123");
     const f = await fixture(bytes);

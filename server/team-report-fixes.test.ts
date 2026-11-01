@@ -73,6 +73,33 @@ const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can yo
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
 describe("review report authorization regressions", () => {
+  it.each(["collect", "send"].flatMap((action) => ["earlier", "selected"].map((change) => [action, change])))("R6 applies %s evidence updates to a saved draft: %s", async (action, change) => {
+    const f = fixture(); const correction = f.append("user", "Keep the export running");
+    f.append("user", "Check status"); const bad = f.append("bot", "Stopped the export");
+    f.append("user", "Why?"); const recent = f.append("bot", "Sorry"); f.append("user", "Report this to Ed");
+    const draft = await f.call({ action: "collect", summary: "Export stopped", diagnosis: "Cause unknown" });
+    expect((draft.report as TeamReport).selectedMessageId).toBe(recent.id);
+    expect((draft.report as TeamReport).originals.some((message) => message.id === correction.id)).toBe(false);
+    const updated = await f.call({ action, report_id: draft.id, ...(change === "earlier" ? { earlier_message_ids: [correction.id] } : { selected_message_id: bad.id }) });
+    expect(updated).toMatchObject({ id: draft.id, state: action === "send" ? "accepted" : "draft" });
+    const saved = JSON.parse(readFileSync(join(f.dir, "drafts", `${draft.id}.json`), "utf8")).report as TeamReport;
+    expect(saved).toMatchObject({ summary: "Export stopped", diagnosis: "Cause unknown", selectedMessageId: change === "selected" ? bad.id : recent.id });
+    if (change === "earlier") expect(saved.originals.find((message) => message.id === correction.id)?.text).toBe(correction.text);
+    if (action === "collect") expect(await f.call({ action: "send", report_id: draft.id })).toMatchObject({ id: draft.id, state: "accepted" });
+    expect((await f.relay.claim())[0].report).toEqual(saved);
+  });
+  it("R6 retains earlier bot references and excluded images when correcting a draft selection", async () => {
+    const f = fixture(); const earlier = f.append("bot", "The export must keep running", { png: png.toString("base64") });
+    f.append("user", "Check status"); const bad = f.append("bot", "Stopped the export");
+    f.append("user", "Why?"); f.append("bot", "Sorry"); f.append("user", "Report this to Ed");
+    const draft = await f.call({ action: "collect", earlier_message_ids: [earlier.id], exclude_image_message_ids: [earlier.id] });
+    const updated = await f.call({ action: "collect", report_id: draft.id, selected_message_id: bad.id });
+    expect(updated.report).toMatchObject({ selectedMessageId: bad.id, images: [] });
+    expect((updated.report as TeamReport).originals.find((message) => message.id === earlier.id)?.text).toBe(earlier.text);
+    expect((updated.report as TeamReport).missing).toContain(`Images on ${earlier.id} excluded as sensitive or unrelated.`);
+    expect(await f.call({ action: "send", report_id: draft.id })).toMatchObject({ id: draft.id, state: "accepted" });
+    expect((await f.relay.claim())[0].report.images).toEqual([]);
+  });
   it.each(["Don't let Ed know about this", "Do not let Edward know", "Never let Eddie know", "에디한테 말하지 마", "에드워드한테 알리지 마"])("R1 keeps negated disclosure private: %s", (text) => {
     expect(reportIntent(text)).toBe("draft");
     expect(reportIntent(text, true)).toBe("draft");

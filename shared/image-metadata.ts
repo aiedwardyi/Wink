@@ -31,13 +31,26 @@ export function safeImageMetadata(bytes: Buffer, mime: string, scrub: (text: str
         if (bytes[offset++] !== 0xff) return false;
         while (bytes[offset] === 0xff) offset++;
         const marker = bytes[offset++]!;
-        if (marker === 0xda || marker === 0xd9) break;
+        if (marker === 0xd9) return true;
         if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
         const size = bytes.readUInt16BE(offset);
         if (size < 2 || offset + size > bytes.length) return false;
         if ((marker >= 0xe0 || marker === 0xfe) && !safe(bytes.subarray(offset + 2, offset + size))) return false;
         offset += size;
+        if (marker === 0xda) {
+          while (offset < bytes.length) {
+            offset = bytes.indexOf(0xff, offset);
+            if (offset < 0) return false;
+            const start = offset++;
+            while (bytes[offset] === 0xff) offset++;
+            const next = bytes[offset++]!;
+            if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) continue;
+            offset = start;
+            break;
+          }
+        }
       }
+      return false;
     } else if (mime === "image/webp") {
       for (let offset = 12; offset + 8 <= bytes.length;) {
         const type = bytes.toString("ascii", offset, offset + 4), size = bytes.readUInt32LE(offset + 4);

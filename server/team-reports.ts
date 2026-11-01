@@ -105,6 +105,17 @@ export class TeamReports {
     const incidentRequest = clarification && anchor ? anchor : request;
     if (!previous) writeFileAtomic(contextFile, JSON.stringify({ requestId: incidentRequest.id }), { mode: 0o600 });
     try {
+      if (previous && !previous.receipt && body.action !== "retry" && (body.selected_message_id || body.earlier_message_ids)) {
+        const saved = previous.report;
+        const selected = body.selected_message_id ?? saved.selectedMessageId;
+        const index = path.findIndex((message) => message.id === selected);
+        previous.report = { ...collectReport({ owner: o.owner!, bot, threadId: body.fromThreadId, path,
+          request: path.find((message) => message.id === saved.requestMessageId)!, selectedMessageId: selected,
+          earlierMessageIds: body.earlier_message_ids ?? saved.originals.filter((message) => path.findIndex((entry) => entry.id === message.id) < index).slice(-8).map((message) => message.id),
+          excludeImageMessageIds: [...(body.exclude_image_message_ids ?? []), ...saved.missing.flatMap((note) => /^Images on (.+) excluded as sensitive or unrelated\.$/.exec(note)?.[1] ?? [])],
+          attachmentsDir: o.attachmentsDir, roots: o.roots(bot.id, body.fromThreadId), current: o.current(bot.id) }),
+          id: saved.id, summary: saved.summary, diagnosis: saved.diagnosis };
+      }
       report = previous ? previous.report : collectReport({ owner: o.owner!, bot, threadId: body.fromThreadId, path, request: incidentRequest,
         selectedMessageId: body.selected_message_id, earlierMessageIds: body.earlier_message_ids,
         excludeImageMessageIds: body.exclude_image_message_ids,
