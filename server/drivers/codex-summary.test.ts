@@ -15,6 +15,7 @@ import { createSummaryRepair } from "../summary-repair.ts";
 import { summaryInstance } from "../summary-instance.ts";
 import { CodexDriver } from "./codex.ts";
 
+const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/generate-text.json", import.meta.url), "utf8"));
 const SUMMARY = "SUMMARY\nKeep the pending video research open. Verify the numerical memory budgets against the original slides before declaring the investigation complete.";
 const history = (): Message[] => Array.from({ length: 70 }, (_, i) => [
   { id: `u${i}`, at: i, role: "user" as const, kind: "text" as const, text: `request ${i}` },
@@ -59,6 +60,10 @@ describe("Codex summaries", () => {
               send({ id: msg.id, result: { turn: { id: "summary-turn" } } });
               if (mode === "hang") return;
               if (mode === "rpc-error") return send({ method: "error", params: { error: { message: "summary failed" }, willRetry: false } });
+              if (mode === "recorded") {
+                for (const event of recorded.reply.events) send(event);
+                return;
+              }
               send({ method: "item/completed", params: { item: { type: "agentMessage", id: "summary", text: SUMMARY, phase: "final_answer" } } });
               send({ method: "turn/completed", params: { turn: { status: "completed" } } });
             }
@@ -81,6 +86,12 @@ describe("Codex summaries", () => {
   it("R8 exposes one-shot text generation and its deadline", () => {
     expect(instance.generateText).toBeTypeOf("function");
     expect(instance.textTimeoutMs).toBeGreaterThan(0);
+  });
+
+  it("parses a recorded app-server text reply", async () => {
+    mode = "recorded";
+    await expect(instance.generateText!(recorded.stamp.prompt)).resolves.toBe("SUMMARY\nKeep the pending research open until the memory budgets are verified.");
+    expect(children.at(-1)!.exitCode).toBe(0);
   });
 
   it("R9 builds a summary for a Codex selection after settle", async () => {
