@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs, saveConfig } from "./config.ts";
 import { redactSecretsInText } from "./redact.ts";
-import { captureToolDetail } from "./tool-detail.ts";
+import { captureToolDetail, redactToolMessage } from "./tool-detail.ts";
 
 let build: typeof import("../shared/tool-detail.ts").buildToolDetail;
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -125,6 +125,27 @@ describe("tool detail", () => {
   it("clips a very long single line", () => {
     const detail = build({ output: "x".repeat(20_000) }, redactSecretsInText);
     expect(detail).toEqual({ output: ["x".repeat(80)] });
+  });
+
+  it("sizes a fitting preview without code point arrays or encoding", () => {
+    const from = vi.spyOn(Array, "from");
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    const detail = build({ input: "npm test", output: "all green\ndone in 3s" }, redactSecretsInText);
+    const calls = [from.mock.calls.length, encode.mock.calls.length];
+    from.mockRestore();
+    encode.mockRestore();
+    expect(calls).toEqual([0, 0]);
+    expect(detail).toEqual({ input: "npm test", output: ["all green", "done in 3s"] });
+  });
+
+  it("re-reads a plain stored detail without credential line scans", () => {
+    const stored = { input: "npm test", output: ["all green", "done in 3s"], more: 2 };
+    const scan = vi.spyOn(String.prototype, "matchAll");
+    const message = redactToolMessage({ tool: { name: "Bash", detail: stored } });
+    const calls = scan.mock.calls.length;
+    scan.mockRestore();
+    expect(calls).toBe(0);
+    expect(message.tool?.detail).toEqual(stored);
   });
 
   it("normalizes CRLF and ignores a trailing line terminator", () => {
