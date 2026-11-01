@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { modelDialEnabled } from "@/lib/feature-flags";
 import { I18nProvider } from "@/lib/i18n";
+import * as phoneSwipe from "@/lib/phone-swipe";
 import type { Bot, InstanceInfo } from "@/state/store";
 import { ModelPickerControl } from "./ModelPicker";
 
@@ -360,6 +361,80 @@ describe("ModelDial", () => {
   describe("on a phone", () => {
     beforeEach(() => {
       Element.prototype.setPointerCapture = () => undefined;
+      vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+      vi.spyOn(window, "innerHeight", "get").mockReturnValue(844);
+    });
+
+    it.each([
+      ["short", 24, 4, 15, 0],
+      ["ordinary", 60, 4, 30, 1],
+      ["fast", 120, 4, 10, 3],
+    ])("bounds %s flicks in both directions", async (_name, distance, moves, ms, steps) => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      media({ phone: true });
+      const tick = vi.spyOn(phoneSwipe, "hapticTick");
+      await mount();
+      const landed = [];
+      for (const dir of [-1, 1]) {
+        tick.mockClear();
+        await drag(0, dir * distance, moves, ms);
+        await settle();
+        landed.push(tick.mock.calls.length);
+        expect(selected()).toBe(dir < 0 ? order[steps % order.length] : order[0]);
+        await settle();
+        expect(tick).toHaveBeenCalledTimes(steps);
+      }
+      expect(landed).toEqual([steps, steps]);
+      expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it.each([-1, 1])("swipes effort in chat order with direction %s", async (dir) => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      media({ phone: true });
+      await mount();
+      await drag(dir * 160, 0, 4, 30);
+      expect(effort()).toBe(dir < 0 ? "Extra high" : "medium");
+      expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it.each([-1, 1])("ignores incidental motion with direction %s", async (dir) => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      media({ phone: true });
+      await mount();
+      await drag(dir * 8, dir * 6, 4, 10);
+      await drag(dir * 39, dir * 8, 4, 10);
+      await settle();
+      expect(effort()).toBe("high");
+      expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it.each([-1, 1])("locks the vertical axis and cancels without coasting with direction %s", async (dir) => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      media({ phone: true });
+      await mount();
+      await pointer("pointerdown", 200, 400);
+      for (let i = 1; i <= 4; i++) {
+        await wait(10);
+        await pointer("pointermove", 200 + (i === 1 ? 0 : 60), 400 + dir * 30 * i);
+      }
+      await pointer("pointercancel", 260, 400 + dir * 120);
+      await settle();
+      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
+      expect(effort()).toBe("high");
+      await settle();
+      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
+    });
+
+    it.each([-1, 1])("keeps one effort notch through a reversal with direction %s", async (dir) => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      media({ phone: true });
+      await mount();
+      await pointer("pointerdown", 200, 400);
+      await pointer("pointermove", 200 + dir * 80, 400);
+      await pointer("pointermove", 200 - dir * 160, 400);
+      await pointer("pointerup", 200 - dir * 160, 400);
+      expect(effort()).toBe(dir < 0 ? "Extra high" : "medium");
+      expect(selected()).toBe("claude-opus-5-5");
     });
 
     it("turns one model per drag step", async () => {
@@ -378,37 +453,38 @@ describe("ModelDial", () => {
       vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
       media({ phone: true });
       await mount();
-      await drag(0, -120, 4, 10);
+      await drag(0, -40, 4, 10);
+      await wait(20);
+      expect(selected()).toBe("claude-sonnet-5-5");
       await settle();
-      const landed = order.indexOf(selected()!);
-      expect(Number(document.querySelector<HTMLElement>(".dial-stage")!.style.getPropertyValue("--turn"))).toBeGreaterThan(2);
+      expect(selected()).toBe("gpt-6.1-sol");
       expect(document.querySelectorAll('.dial-card[aria-pressed="true"]')).toHaveLength(1);
       await settle();
-      expect(order.indexOf(selected()!)).toBe(landed);
+      expect(selected()).toBe("gpt-6.1-sol");
     });
 
-    it("stays put when the finger rests before release", async () => {
+    it.each([-1, 1])("stays put when the finger rests before release with direction %s", async (dir) => {
       vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
       media({ phone: true });
       await mount();
       await pointer("pointerdown", 200, 400);
       for (let i = 1; i <= 4; i++) {
         await wait(10);
-        await pointer("pointermove", 200, 400 - 30 * i);
+        await pointer("pointermove", 200, 400 + dir * 30 * i);
       }
       await wait(150);
-      await pointer("pointerup", 200, 280);
+      await pointer("pointerup", 200, 400 + dir * 120);
       await settle();
-      expect(selected()).toBe("gpt-6.1-sol");
+      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
     });
 
     it("moves effort one notch per horizontal swipe", async () => {
       media({ phone: true });
       await mount();
-      await drag(200, 0);
+      await drag(-200, 0);
       expect(effort()).toBe("Extra high");
-      await drag(-200, 0);
-      await drag(-200, 0);
+      await drag(200, 0);
+      await drag(200, 0);
       expect(effort()).toBe("medium");
       expect(selected()).toBe("claude-opus-5-5");
     });
@@ -455,11 +531,11 @@ describe("ModelDial", () => {
       await settle();
       expect(selected()).toBe("claude-opus-5-5");
       expect(vibrate).toHaveBeenCalledTimes(2);
-      await drag(200, 0);
-      await drag(200, 0);
+      await drag(-200, 0);
+      await drag(-200, 0);
       expect(effort()).toBe("max");
       expect(vibrate).toHaveBeenCalledTimes(4);
-      await drag(200, 0);
+      await drag(-200, 0);
       expect(vibrate).toHaveBeenCalledTimes(4);
       expect(vibrate).toHaveBeenLastCalledWith(10);
     });
@@ -469,24 +545,24 @@ describe("ModelDial", () => {
       Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
       media({ phone: true, reduced: true });
       await mount();
-      await drag(200, 0);
+      await drag(-200, 0);
       expect(effort()).toBe("Extra high");
       expect(vibrate).not.toHaveBeenCalled();
       Reflect.deleteProperty(window.navigator, "vibrate");
       await act(async () => root.unmount());
       media({ phone: true });
       await mount();
-      await drag(200, 0);
+      await drag(-200, 0);
       expect(effort()).toBe("Extra high");
     });
 
-    it("snaps without coasting under reduced motion", async () => {
+    it.each([-1, 1])("snaps without coasting under reduced motion with direction %s", async (dir) => {
       vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
       media({ phone: true, reduced: true });
       await mount();
-      await drag(0, -120, 4, 10);
+      await drag(0, dir * 120, 4, 10);
       await settle();
-      expect(selected()).toBe("gpt-6.1-sol");
+      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
     });
   });
 });
