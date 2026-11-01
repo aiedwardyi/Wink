@@ -16,6 +16,7 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
   const opened = [];
   const self = {
     location: { hostname, origin: `https://${hostname}` },
+    skipWaiting: () => {},
     addEventListener: (type, listener) => {
       listeners[type] = listener;
     },
@@ -23,7 +24,10 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
     clients: { matchAll: async () => windows, openWindow: async (url) => opened.push(url) },
   };
   const caches = {
-    open: async () => ({ add: async (request) => cache.set(request.url, `cached ${request.url}`) }),
+    open: async () => ({
+      add: async (request) => cache.set(request.url, `cached ${request.url}`),
+      match: async (url) => cache.get(url),
+    }),
     match: async (url) => cache.get(url),
   };
   class Request {
@@ -32,7 +36,7 @@ function worker(hostname, network = () => Promise.reject(new TypeError("Failed t
     }
   }
   const now = 1_800_000_000_000;
-  runInNewContext(SOURCE, { self, caches, fetch: network, Request, Response: { error: () => "browser error" }, URL, Date: { now: () => now } });
+  runInNewContext(SOURCE, { self, caches, fetch: network, Request, Response, URL, setTimeout, Date: { now: () => now } });
   return { listeners, cache, shown, opened, now };
 }
 
@@ -56,20 +60,25 @@ async function click(listeners, url) {
 
 function load(listeners, mode) {
   let answer = null;
-  listeners.fetch({ request: { mode }, respondWith: (promise) => (answer = promise) });
-  return answer;
+  const waits = [];
+  listeners.fetch({
+    request: { mode, method: "GET", url: `https://${RELAY}/` },
+    respondWith: (promise) => (answer = promise),
+    waitUntil: (promise) => waits.push(promise),
+  });
+  return answer && Promise.all([answer, ...waits]).then(([page]) => page);
 }
 
 describe("service worker", () => {
-  it("stays push-only on tailnet and local origins", () => {
+  it("registers the app shell and push handlers on tailnet and local origins", () => {
     for (const host of ["home.tail1234.ts.net", "abcdefghijklmnop.tail1234.ts.net", "127.0.0.1", "localhost"]) {
-      expect(Object.keys(worker(host).listeners).sort(), host).toEqual(["notificationclick", "push"]);
+      expect(Object.keys(worker(host).listeners).sort(), host).toEqual(["activate", "fetch", "install", "notificationclick", "push"]);
     }
   });
 
-  it("caches only the offline page on a relay origin", async () => {
+  it("keeps an offline fallback on a relay origin without a reachable app shell", async () => {
     const { listeners, cache } = worker(RELAY);
-    expect(Object.keys(listeners).sort()).toEqual(["fetch", "install", "notificationclick", "push"]);
+    expect(Object.keys(listeners).sort()).toEqual(["activate", "fetch", "install", "notificationclick", "push"]);
     await install(listeners);
     expect([...cache.keys()]).toEqual(["/offline.html"]);
   });
@@ -136,8 +145,8 @@ describe("service worker", () => {
   });
 
   it("lets a reachable PC answer the page load itself", async () => {
-    const { listeners } = worker(RELAY, async () => "live page");
+    const { listeners } = worker(RELAY, async () => new Response("live page"));
     await install(listeners);
-    expect(await load(listeners, "navigate")).toBe("live page");
+    expect(await (await load(listeners, "navigate")).text()).toBe("live page");
   });
 });

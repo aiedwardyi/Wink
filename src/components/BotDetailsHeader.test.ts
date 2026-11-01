@@ -39,11 +39,11 @@ describe("QA 17 one Bot-details header entry", () => {
   it("keeps avatar and name as the ChatView header entry that opens Bot details", () => {
     expect(chatHeader).toContain('title={t("chat.openProfile"');
     expect(chatHeader).toContain('onActivate={() => dispatch({ type: "toggleSettings", open: true })}');
-    expect(chatHeader).toContain('onClick={() => dispatch({ type: "toggleSettings", open: true, avatar: !isPhone() })}');
+    expect(chatHeader).not.toContain("avatar: !isPhone()");
   });
 
   it("shows the bot name below md and opens Bot details with no pencil", () => {
-    const phoneTitle = 'min-w-0 max-w-full shrink truncate text-left text-[15px] font-semibold text-ink md:hidden';
+    const phoneTitle = 'min-w-0 shrink truncate text-left text-[15px] font-semibold text-ink md:hidden';
     const at = chatHeader.indexOf(phoneTitle);
     expect(at).toBeGreaterThan(-1);
     const phone = chatHeader.slice(at - 240, at + phoneTitle.length);
@@ -52,24 +52,26 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(phone).not.toContain("Pencil");
     expect(phone).not.toContain("showEditButton");
     expect(phone).not.toContain("onDoubleClick");
-    expect(phoneTitle.split(" ")).not.toContain("w-full");
+    expect(phone).not.toContain("w-full");
     expect(chatHeader).toContain("max-md:flex-[0_1000_auto]");
     expect(chatHeader).not.toContain("minmax(4.5rem,1fr)");
     expect(phoneHeaderName).toContain('cluster.style.flex = "0 1000 auto"');
-    expect(phoneHeaderName).toContain("phoneHeaderSlots(Math.max(text, statusWidth), Math.max(4 * rem, statusWidth))");
+    expect(phoneHeaderName).toContain("phoneHeaderSlots(text, 4 * rem)");
     expect(phoneHeaderName).not.toContain("4.5 * rem");
     expect(phoneHeaderName).not.toContain("aria-label");
     expect(phoneHeaderName).toContain('querySelector("[data-chat-terminal]")');
     expect(chatHeader).toContain("data-chat-terminal");
-    expect(chatHeader).toContain('data-chat-name className="min-w-0 flex-1"');
-    expect(chatHeader).toContain('className="min-w-0 max-md:hidden"');
-    expect(chatHeader).toContain("showEditButton");
+    expect(chatHeader).toContain('className="min-w-0 flex-1 overflow-hidden max-md:hidden"');
+    expect(chatHeader).toContain("showEditButton={showHeaderPencil()}");
   });
 
-  it("keeps the Chief of Staff name when the badge folds to the crown", () => {
-    expect(chatHeader).toContain('aria-label={t("chrome.chiefOfStaff")}');
-    expect(chatHeader).toContain("@max-xs/chathead:sr-only");
-    expect(chatHeader).not.toContain("@max-xs/chathead:hidden");
+  it("labels the Chief crown without a text pill on desktop and phone", () => {
+    const chief = headerBlock(chatHeader, "{bot.chiefOfStaff && (", "</span>");
+    expect(chief).toContain('aria-label={t("chrome.chiefOfStaff")}');
+    expect(chief).toContain('title={t("chrome.chiefOfStaff")}');
+    expect(chief).toContain('<Crown size={14} aria-hidden="true" />');
+    expect(chief).not.toContain("<span className=");
+    expect(chief).not.toContain("max-md:hidden");
   });
 
   it("wraps the header controls instead of overlapping at narrow widths", () => {

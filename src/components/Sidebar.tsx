@@ -35,7 +35,6 @@ import {
   moveSection,
   placeSection,
   sameSectionOrder,
-  userSectionId,
   userSectionName,
   type SectionDropPlace,
 } from "@/lib/sidebar-layout";
@@ -52,7 +51,7 @@ import { useManualCheck, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
-import { showSidebarDensityControls, showSidebarPhone, showSidebarRoutines, showSidebarTeachSkill } from "@/lib/friends-chrome";
+import { showBotMenuCopy, showBotMenuMakeGroup, showGroupMenuCopyId, showNewMenuExport, showNewMenuTeams, showPhoneDrawerCollapse, showSidebarDensityControls, showSidebarPhone, showSidebarRoutines, showSidebarTeachSkill } from "@/lib/friends-chrome";
 import { nextRename } from "@/lib/rename";
 import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -92,6 +91,7 @@ import {
   normalizeSidebarOrder,
   orderedSidebarItems,
   partitionSidebarItemKeys,
+  sectionIdFor,
   sidebarPriorityFor,
   sameSidebarOrder,
   sidebarItemKey,
@@ -310,7 +310,7 @@ function RoomContextMenu({
         <FolderPlus size={16} className="text-ink-secondary" />
         {t("chrome.moveToContext")}
       </button>
-      <button
+      {showGroupMenuCopyId() && <button
         onClick={() => {
           void navigator.clipboard?.writeText(group.threadId);
           onClose();
@@ -319,7 +319,7 @@ function RoomContextMenu({
       >
         <ClipboardCopy size={16} className="text-ink-secondary" />
         {t("chrome.copyConversationId")}
-      </button>
+      </button>}
       <button
         onClick={() => {
           dispatch({ type: "deleteGroup", groupId: group.id });
@@ -387,10 +387,10 @@ function SectionPicker({
       ...state.bots.filter((b) => !b.hidden && b.section).map((b) => b.section!),
       ...listedGroups(state.groups).filter((g) => g.section).map((g) => g.section!),
     ]),
-  ];
+  ].filter((section) => sectionIdFor(section) !== UNASSIGNED_SECTION_ID);
 
   const assign = (section: string) => {
-    onAssign(section);
+    onAssign(userSectionName(sectionIdFor(section)) ?? "");
     onClose();
   };
 
@@ -574,11 +574,11 @@ function BotContextMenu({
           dispatch({ type: "select", id: bot.id });
           dispatch({ type: "toggleSettings", open: true });
         }),
-        item(<Copy size={16} className="text-ink-secondary" />, t("chrome.duplicate"), () =>
+        showBotMenuCopy() && item(<Copy size={16} className="text-ink-secondary" />, t("chrome.duplicate"), () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
-        divider("d2"),
-        item(<Users size={16} className="text-ink-secondary" />, t("chrome.makeGroupWithBot"), () => {
+        showBotMenuMakeGroup() && divider("d2"),
+        showBotMenuMakeGroup() && item(<Users size={16} className="text-ink-secondary" />, t("chrome.makeGroupWithBot"), () => {
           onMakeGroup(bot.id);
         }),
         divider("d3"),
@@ -1082,7 +1082,6 @@ export function Sidebar({
     bot?: Bot;
     group?: Group;
   };
-  const sectionIdFor = (section?: string) => section?.trim() ? userSectionId(section.trim()) : UNASSIGNED_SECTION_ID;
   const activeBots = state.bots.filter((bot) => !bot.hidden);
   const listed = listedGroups(state.groups);
   const items: SidebarItem[] = [
@@ -1160,9 +1159,11 @@ export function Sidebar({
   );
   const sectionsReorderable = density !== "icons" && q.length === 0 && sectionIds.length > 1;
   const rowsReorderable = q.length === 0;
+  const loneUnassigned = sectionIds.length === 1
+    && priorityItemsByTier.chief.length === 0 && priorityItemsByTier.pinned.length === 0;
   // Search must show every match. The icon rail has no headers but honors the same collapse.
   const sectionsCollapsible = q.length === 0;
-  const sectionCollapsed = (id: string) => !(id === UNASSIGNED_SECTION_ID && sectionIds.length === 1)
+  const sectionCollapsed = (id: string) => !(id === UNASSIGNED_SECTION_ID && loneUnassigned)
     && sectionsCollapsible && collapsedSections.has(id);
   // The rail shows every chat except those inside a collapsed section, and a
   // visible icon glows for itself: the expand button stands in only for those
@@ -1568,7 +1569,7 @@ export function Sidebar({
           style={windowNoDragStyle}
         >
           {density !== "icons" && <DeviceSwitcher />}
-          <button
+          {(!isPhone() || showPhoneDrawerCollapse()) && <button
             type="button"
             onClick={toggleCollapsed}
             aria-label={
@@ -1605,7 +1606,7 @@ export function Sidebar({
                 {collapsedUnreadBadge}
               </span>
             )}
-          </button>
+          </button>}
           {showSidebarDensityControls() && (
           <div className="relative">
             <button
@@ -1691,7 +1692,7 @@ export function Sidebar({
                     <Users size={16} className="text-ink-secondary" />
                     {t("chrome.newChannel")}
                   </button>
-                  <button
+                  {showNewMenuExport() && <button
                     onClick={() => {
                       setPlusOpen(false);
                       void exportAllBots();
@@ -1701,8 +1702,8 @@ export function Sidebar({
                   >
                     {exportingTeam ? <Loader2 size={16} className="animate-spin text-ink-secondary" /> : <ArrowDownToLine size={16} className="text-ink-secondary" />}
                     {exportingTeam ? t("chrome.exporting") : t("chrome.exportAllBots")}
-                  </button>
-                  <button
+                  </button>}
+                  {showNewMenuTeams() && <button
                     onClick={() => {
                       setPlusOpen(false);
                       setTeamLibraryOpen(true);
@@ -1711,7 +1712,7 @@ export function Sidebar({
                   >
                     <Library size={16} className="text-ink-secondary" />
                     {t("chrome.teams")}
-                  </button>
+                  </button>}
                   {archivedBots.length > 0 && (
                     <button
                       onClick={() => {
@@ -1795,7 +1796,7 @@ export function Sidebar({
           {sectionIds.map((id) => {
             const name = sectionLabel(id);
             const sectionItems = orderedItemsBySection.get(id) ?? [];
-            const lone = id === UNASSIGNED_SECTION_ID && sectionIds.length === 1;
+            const lone = id === UNASSIGNED_SECTION_ID && loneUnassigned;
             const collapsed = sectionCollapsed(id);
             const hiddenItems = collapsed ? sectionItems.filter((item) => item.id !== state.selectedId) : [];
             const shownItems = collapsed ? sectionItems.filter((item) => item.id === state.selectedId) : sectionItems;

@@ -31,6 +31,11 @@ vi.mock("@/lib/phone-swipe", async (importOriginal) => ({
   isPhone: () => true,
 }));
 
+vi.mock("@/lib/friends-chrome", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/friends-chrome")>()),
+  showPhoneDrawerCollapse: vi.fn(() => true),
+}));
+
 class FakeEventSource {
   static current: FakeEventSource | null = null;
   onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
@@ -487,7 +492,7 @@ describe("Sidebar priority ordering", () => {
   });
 });
 
-describe("Sidebar layout controls", () => {
+describe("Sidebar layout controls with phone collapse restored", () => {
   it("toggles the persisted icon rail while restoring the saved labeled width", async () => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "0");
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, "360");
@@ -1253,14 +1258,132 @@ describe("Sidebar section collapse", () => {
     }
   });
 
-  it("hides the Unassigned header while it is the only section", async () => {
+  it("hides the Others header without pins, a Chief, or another section", async () => {
     const { host, unmount } = await mount([bot("u1"), bot("u2")]);
     try {
       expect(shownBots(host, "unassigned")).toEqual(["u1", "u2"]);
       expect(header(host, "unassigned")).toBeNull();
-      expect(host.textContent).not.toContain("Unassigned");
+      expect(host.textContent).not.toContain("Others");
     } finally {
       await unmount();
+    }
+  });
+
+  it.each(["pinned", "chiefOfStaff"] as const)("shows Others on %s and restores its saved collapse when priority returns", async (priority) => {
+    const { host, unmount } = await mount([bot("u1"), bot("u2"), bot("u3")]);
+    const setPriority = (value: boolean) => act(async () => {
+      storeDispatch!({ type: "updateBot", botId: "u1", patch: { [priority]: value } });
+    });
+    try {
+      await select("u1");
+      expect(header(host, "unassigned")).toBeNull();
+      await setPriority(true);
+      expect(header(host, "unassigned")?.getAttribute("aria-label")).toBe("Others");
+      expect(shownBots(host, "unassigned")).toEqual(["u2", "u3"]);
+      await act(async () => header(host, "unassigned")!.click());
+      expect(header(host, "unassigned")?.getAttribute("aria-label")).toBe("Others, 2 hidden");
+      expect(shownBots(host, "unassigned")).toEqual([]);
+      expect(JSON.parse(window.localStorage.getItem(SIDEBAR_COLLAPSED_SECTIONS_KEY)!)).toEqual(["unassigned"]);
+
+      await setPriority(false);
+      expect(header(host, "unassigned")).toBeNull();
+      expect(shownBots(host, "unassigned")).toEqual(["u1", "u2", "u3"]);
+      expect(JSON.parse(window.localStorage.getItem(SIDEBAR_COLLAPSED_SECTIONS_KEY)!)).toEqual(["unassigned"]);
+      await setPriority(true);
+      expect(header(host, "unassigned")?.getAttribute("aria-expanded")).toBe("false");
+      expect(shownBots(host, "unassigned")).toEqual([]);
+      await act(async () => header(host, "unassigned")!.click());
+      expect(shownBots(host, "unassigned")).toEqual(["u2", "u3"]);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("honors saved Others collapse in the icon rail with a pin and glows only the expand button", async () => {
+    resetArrivalGlow();
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_SECTIONS_KEY, JSON.stringify(["unassigned"]));
+    const { host, unmount } = await mount([{ ...bot("u1"), pinned: true }, bot("u2")]);
+    try {
+      await select("u1");
+      expect(shownBots(host, "unassigned")).toEqual([]);
+      await act(async () => { noteArrival("u2"); });
+      expect(host.querySelectorAll('[data-arrival-glow="true"]')).toHaveLength(1);
+      expect(host.querySelector('button[title="Expand sidebar"]')?.getAttribute("data-arrival-glow")).toBe("true");
+      await act(async () => storeDispatch!({ type: "updateBot", botId: "u1", patch: { pinned: false } }));
+      expect(shownBots(host, "unassigned")).toEqual(["u1", "u2"]);
+    } finally {
+      await unmount();
+      window.localStorage.removeItem(SIDEBAR_COLLAPSED_KEY);
+      resetArrivalGlow();
+    }
+  });
+
+  it("labels Others and its collapsed count in Korean", async () => {
+    persistPreference("ko");
+    const { host, unmount } = await mount([{ ...bot("u1"), pinned: true }, bot("u2")]);
+    try {
+      await select("u1");
+      expect(header(host, "unassigned")?.getAttribute("aria-label")).toBe("기타");
+      await act(async () => header(host, "unassigned")!.click());
+      expect(header(host, "unassigned")?.getAttribute("aria-label")).toBe("기타, 1개 숨김");
+    } finally {
+      await unmount();
+      persistPreference("en");
+    }
+  });
+
+  it.each(["Others", "기타"])("keeps one built-in header for saved section %s without rewriting it", async (section) => {
+    const patched: Array<{ path: string; body: unknown }> = [];
+    const { host, unmount } = await mount([{ ...bot("pin"), pinned: true }, scoped("career", section), bot("u1")], patched);
+    try {
+      expect(shownBots(host, "unassigned")).toEqual(["career", "u1"]);
+      expect(host.querySelectorAll("[data-sidebar-section-header]")).toHaveLength(1);
+      expect(header(host, "unassigned")?.getAttribute("aria-label")).toBe("Others");
+      expect(patched).toEqual([]);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each(["en", "ko"] as const)("merges Move to Section's built-in name and keeps the header after dragging back in %s", async (locale) => {
+    persistPreference(locale);
+    const patched: Array<{ path: string; body: unknown }> = [];
+    const { host, unmount } = await mount([{ ...bot("chief"), chiefOfStaff: true }, { ...bot("pin"), pinned: true }, bot("career"), bot("u1")], patched);
+    const row = () => host.querySelector('[data-sidebar-row-id="career"]')!;
+    const moveTo = async (name: string) => {
+      await act(async () => row().querySelector('[role="button"]')!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }),
+      ));
+      const move = [...document.querySelectorAll<HTMLButtonElement>("[data-bot-menu] button")]
+        .find((button) => button.textContent === (locale === "ko" ? "분류로 이동" : "Move to section"))!;
+      expect(move).toBeDefined();
+      await act(async () => move.click());
+      const input = document.querySelector<HTMLInputElement>("[data-section-picker] input")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, name);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => input.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    };
+    try {
+      await select("chief");
+      await moveTo(locale === "ko" ? "기타" : "Others");
+      await vi.waitFor(() => expect(patched).toContainEqual({ path: "/api/bots/career", body: { section: "" } }));
+      expect(shownBots(host, "unassigned")).toEqual(["career", "u1"]);
+      expect(host.querySelectorAll("[data-sidebar-section-header]")).toHaveLength(1);
+      await moveTo("Work");
+      expect(shownBots(host, "section:Work")).toEqual(["career"]);
+      const source = row();
+      await act(async () => fire(source, "dragstart"));
+      const target = host.querySelector('[data-sidebar-section-id="unassigned"] [data-sidebar-section-header]')!;
+      await act(async () => { fire(target, "dragover"); fire(target, "drop"); fire(source, "dragend"); });
+      await vi.waitFor(() => expect(shownBots(host, "unassigned")).toContain("career"));
+      expect(host.querySelectorAll("[data-sidebar-section-header]")).toHaveLength(1);
+      expect(header(host, "unassigned")?.getAttribute("aria-label")).toBe(locale === "ko" ? "기타" : "Others");
+    } finally {
+      await unmount();
+      persistPreference("en");
     }
   });
 
@@ -1712,7 +1835,7 @@ describe("Sidebar bot second line", () => {
     }
   });
 
-  it("shows Working without preview text while the bot is busy", async () => {
+  it("keeps Working beside the model line on phone without preview text", async () => {
     const worker = {
       ...bot("worker"),
       busy: true,
@@ -1724,6 +1847,9 @@ describe("Sidebar bot second line", () => {
     try {
       await vi.waitFor(() => expect(host.textContent).toContain("Meta Muse 1.3"), { timeout: 5000 });
       expect(host.textContent).toContain("Working");
+      const modelRow = host.querySelector("[data-sidebar-model-row]");
+      expect(modelRow?.textContent).toContain("Working");
+      expect(modelRow?.querySelector("[data-sidebar-model-label]")).not.toBeNull();
       expect(host.textContent).not.toContain("Giraffe preview sentence");
     } finally {
       await act(async () => root.unmount());
@@ -1731,7 +1857,7 @@ describe("Sidebar bot second line", () => {
     }
   });
 
-  it("puts Chief of Staff above a readable compact model label", async () => {
+  it("puts the Chief crown beside the name above a readable compact model label", async () => {
     const chief = {
       ...bot("chief"),
       chiefOfStaff: true,
@@ -1742,8 +1868,11 @@ describe("Sidebar bot second line", () => {
       await vi.waitFor(() => expect(host.querySelector("[data-sidebar-model-label]")).not.toBeNull(), { timeout: 5000 });
       const title = host.querySelector("[data-sidebar-chief-title]");
       const model = host.querySelector("[data-sidebar-model-label]");
-      expect(title?.textContent).toContain("Chief of Staff");
-      expect(title?.parentElement?.querySelector("[data-sidebar-model-row]")).toBe(model?.parentElement);
+      expect(title?.textContent).toBe("");
+      expect(title?.getAttribute("aria-label")).toBe("Chief of Staff");
+      expect(title?.getAttribute("title")).toBe("Chief of Staff");
+      expect(title?.parentElement?.textContent).toBe("chief");
+      expect(title?.parentElement?.querySelector("[data-sidebar-model-row]")).toBeNull();
       expect(model?.textContent).toBe("Meta Muse 1.3 Cont.");
       expect(host.textContent).not.toContain("Contributor");
       expect(host.querySelector("[data-sidebar-model-dot]")?.className).toContain("left-0.5");

@@ -1,5 +1,68 @@
 @import "tailwindcss";
 
+[data-media-viewer] header {
+  padding-top: env(safe-area-inset-top, 0px);
+  min-height: calc(56px + env(safe-area-inset-top, 0px));
+}
+
+.media-viewer-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 65%);
+}
+
+.media-viewer-button:hover {
+  background: rgb(38 38 38 / 90%);
+}
+
+[data-media-viewer] :focus-visible {
+  outline: 2px solid white;
+  outline-offset: -2px;
+}
+
+.media-viewer-zoom {
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+[data-viewer-controls] {
+  transition: opacity 150ms;
+}
+
+[data-controls="hidden"] [data-viewer-controls]:not(:focus-within) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-image-stage][data-fit="false"] {
+  cursor: grab;
+}
+
+[data-image-stage][data-fit="false"]:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 767px), (hover: none) and (pointer: coarse) {
+  [data-viewer-previous],
+  [data-viewer-next] {
+    display: none;
+  }
+
+  [data-controls="hidden"] header[data-viewer-controls]:not(:focus-within) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-viewer-controls] {
+    transition: none;
+  }
+}
+
 @font-face {
   font-family: "Symbols Nerd Font Mono";
   src: url("/fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
@@ -85,6 +148,37 @@
 :root[data-shape="soft"][data-skin^="tui"] {
   --radius-lg: 0.5rem;
   --radius-xl: 0.75rem;
+}
+
+[data-orbit-message-body]:has(> [data-message-reactions]) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+[data-orbit-message="user"] [data-orbit-message-body]:has(> [data-message-reactions]) {
+  align-items: flex-end;
+}
+
+[data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
+  padding-bottom: 0.875rem;
+}
+
+[data-orbit-message-body] > [data-message-reactions] {
+  position: relative;
+  inset: auto;
+  max-width: calc(100% - 1rem);
+  margin: -0.875rem 0.5rem 0;
+  translate: none;
+  justify-content: flex-start;
+}
+
+[data-orbit-message="user"] [data-message-reactions] {
+  justify-content: flex-end;
+}
+
+[data-room-transcript] [data-orbit-message-body]:has(> [data-message-reactions]) {
+  padding-bottom: 0;
 }
 
 /* Nested skin previews keep their own geometry. */
@@ -1571,11 +1665,7 @@ html[lang="ko"] {
   }
 
   [data-room-transcript] [data-orbit-message-body]:has(> [data-message-reactions]) {
-    padding-bottom: 2.75rem;
-  }
-
-  [data-room-transcript] [data-message-reactions] {
-    bottom: 2.75rem;
+    padding-bottom: 2rem;
   }
 
   [data-room-transcript] [data-message-hover-actions] {
