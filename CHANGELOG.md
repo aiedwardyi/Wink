@@ -2,6 +2,72 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.223] - 2026-11-02
+
+### Changed
+- The model dial stays in its desktop layout down to 800 px wide, keeps text readable, and fits short windows.
+- The model dial turns one model per swipe, drag or wheel flick, at any speed.
+- Chats open about a second faster on a cold start.
+- Bots keep track of unfinished work across chat summaries and before calling a task done.
+
+### Fixed
+- The model dial title no longer hides under the window caption.
+- Sending a message clears a stuck "Paused" Agentic Mode.
+
+## [1.0.222] - 2026-11-01
+
+### Added
+- Full-screen image viewer.
+- Swipe back through phone Settings.
+- Phone settings show which phones are connected.
+- A "catching up" line above the composer while sync catches up.
+
+### Changed
+- Cleaner chat and menus: shorter bot menu, no pin button under messages, no pencil beside the bot name.
+- Pinned bots sit above a foldable Others section.
+- Worker icons are back in the chat header.
+- The phone app opens from a saved shell when the connection is slow.
+- Claude usage stays quiet when rate limited.
+
+### Fixed
+- Servo's composer strip lines up with the frame, and the model picker keeps its own colors in Servo.
+- The relay setup form scrolls fully into view.
+- The phone terminal status line fits.
+- Reachable PCs stay online while sync catches up.
+
+## [1.0.221] - 2026-11-01
+
+### Changed
+- Team bug reports send only on one fixed call phrase.
+- The model dial confirms your pick with a press, a ring and a short buzz on phones.
+
+### Fixed
+- Codex no longer repeats its answer when you add an instruction mid-answer.
+
+## [1.0.220] - 2026-11-01
+
+### Added
+- Team members can send a Wink bug report from chat; the bot gathers the chat and screenshots.
+- The model dial is on for team members.
+
+### Changed
+- Codex chats answer once: "working on it" lines hide when the answer lands.
+- Codex gets Wink's instructions once instead of with every message.
+- Long Codex chats get summaries, like Claude chats.
+- Chats open faster on the PC again.
+
+### Fixed
+- Interrupted syncs between PCs keep their chat branches separate.
+
+## [1.0.219] - 2026-11-01
+
+### Added
+- Servo, a monochrome theme.
+- Stuck workers on a teammate's PC are reported to the team owner automatically.
+
+### Changed
+- The phone chat opens faster.
+
 ## [1.0.218] - 2026-10-31
 
 ### Fixed
