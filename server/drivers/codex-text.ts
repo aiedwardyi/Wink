@@ -16,12 +16,14 @@ const DISABLED_FEATURES = [
 
 function textCatalog(env: Record<string, string | undefined>, model: string, cwd: string): string {
   const cached = JSON.parse(readFileSync(join(codexHome(env), "models_cache.json"), "utf8"));
-  const info = cached.models?.find((entry: { slug: string }) => entry.slug === model);
+  const legacy = model === "gpt-6.1-sol" ? "gpt-6-sol" : model === "gpt-6.1-terra" ? "gpt-5.6-terra" : model;
+  const info = cached.models?.find((entry: { slug: string }) => entry.slug === model)
+    ?? cached.models?.find((entry: { slug: string }) => entry.slug === legacy);
   if (!info) throw new Error("Codex text model catalog unavailable");
   const dir = mkdtempSync(join(cwd, "catalog-"));
   // Model metadata can force Code Mode and native tools despite disabled feature flags.
   writeFileSync(join(dir, "models.json"), JSON.stringify({ models: [{
-    ...info, tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null,
+    ...info, slug: model, tool_mode: "direct", shell_type: "disabled", apply_patch_tool_type: null,
     experimental_supported_tools: [], multi_agent_version: null,
   }] }));
   return dir;
@@ -155,7 +157,9 @@ export function createCodexText(cli: string, childEnv: () => Record<string, stri
       clearTimeout(timer);
       controllers.delete(controller);
       opts?.signal?.removeEventListener("abort", onAbort);
-      if (catalogDir) rmSync(catalogDir, { recursive: true, force: true });
+      if (catalogDir) {
+        try { rmSync(catalogDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+      }
     }
   };
 

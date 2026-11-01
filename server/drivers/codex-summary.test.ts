@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,8 @@ import { createSummaryBuild, inlineSummarizer } from "../summary-build.ts";
 import { createSummaryRepair } from "../summary-repair.ts";
 import { summaryInstance } from "../summary-instance.ts";
 import { CodexDriver } from "./codex.ts";
+
+vi.mock("node:fs", async (importOriginal) => ({ ...await importOriginal<typeof import("node:fs")>() }));
 
 const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/generate-text.json", import.meta.url), "utf8"));
 const SUMMARY = "SUMMARY\nKeep the pending video research open. Verify the numerical memory budgets against the original slides before declaring the investigation complete.";
@@ -149,6 +152,52 @@ describe("Codex summaries", () => {
     await instance.generateText!("summarize");
     const env = vi.mocked(procs.spawnCli).mock.calls.at(-1)![2].env!;
     for (const name of Object.keys(secrets)) expect(env[name]).toBeUndefined();
+  });
+
+  it.each([
+    ["gpt-6.1-sol", "gpt-6-sol"],
+    ["gpt-6.1-terra", "gpt-5.6-terra"],
+  ])("uses compatible cached metadata for %s", async (model, legacy) => {
+    const originalSpawn = vi.mocked(procs.spawnCli).getMockImplementation()!;
+    const catalogs: any[] = [];
+    vi.mocked(procs.spawnCli).mockImplementation((cli, args, opts) => {
+      const option = args.find((arg) => arg.startsWith("model_catalog_json="));
+      if (option) catalogs.push(JSON.parse(readFileSync(JSON.parse(option.slice("model_catalog_json=".length)), "utf8")));
+      return originalSpawn(cli, args, opts);
+    });
+    const metadata = { slug: legacy, tool_mode: "code_mode_only", context_window: 200_000 };
+    writeFileSync(join(scratch, "models_cache.json"), JSON.stringify({ models: [metadata] }));
+    await expect(instance.generateText!("summarize", { model })).resolves.toBe(SUMMARY);
+    expect(catalogs[0].models).toEqual([expect.objectContaining({ slug: model, context_window: 200_000, tool_mode: "direct", shell_type: "disabled" })]);
+    expect(calls.find((call) => call.method === "thread/start")?.params.model).toBe(model);
+
+    writeFileSync(join(scratch, "models_cache.json"), JSON.stringify({ models: [metadata, { ...metadata, slug: model, context_window: 400_000 }] }));
+    await expect(instance.generateText!("summarize", { model })).resolves.toBe(SUMMARY);
+    expect(catalogs[1].models[0]).toMatchObject({ slug: model, context_window: 400_000 });
+  });
+
+  it.each(["success", "rpc-error"])("preserves the %s outcome when catalog cleanup is locked", async (outcome) => {
+    mode = outcome;
+    vi.spyOn(fs, "rmSync").mockImplementationOnce(() => { throw new Error("EPERM: catalog locked"); });
+    const result = instance.generateText!("summarize");
+    if (outcome === "success") await expect(result).resolves.toBe(SUMMARY);
+    else await expect(result).rejects.toThrow("Codex text generation failed");
+    expect(children.at(-1)!.exitCode).toBe(0);
+  });
+
+  it.each(["missing", "invalid"])("keeps the deterministic fallback with a %s model cache", async (cache) => {
+    const path = join(scratch, "models_cache.json");
+    if (cache === "missing") rmSync(path);
+    else writeFileSync(path, "{");
+    const input = { messages: history(), contextWindow: 200_000, taskRecordText: "Continue research" };
+    const baseline = await prepareModelContext(input);
+    const prepared = await prepareModelContext({ ...input, summarize: inlineSummarizer(instance, 0) });
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready" || baseline.status !== "ready") throw new Error("context preparation failed");
+    expect(isFallbackSummary(prepared.compaction!.summary)).toBe(true);
+    expect(prepared.compaction!.summary).toBe(baseline.compaction!.summary);
+    expect(prepared.transcript).toEqual(baseline.transcript);
+    expect(calls.some((call) => call.method === "thread/start")).toBe(false);
   });
 
   it("fails closed when the selected model metadata is unavailable", async () => {
