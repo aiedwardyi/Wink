@@ -3315,6 +3315,8 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.itemType === "assistant_text") {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
+        // the line answering a direct steer stays shown: the final does not repeat it
+        const steerReply = event.phase === "commentary" && store.messagesFor(event.threadId).findLast((m) => (m.role === "user" && m.steered && !m.queueId) || (m.role === "bot" && m.kind === "text"))?.role === "user";
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true }
@@ -3327,7 +3329,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // kept so "finished" can say what it finished with, rather than
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), event.phase);
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), steerReply ? undefined : event.phase);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);
