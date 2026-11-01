@@ -75,6 +75,7 @@ export function ModelPickerControl({
   const focusComposerAfterCloseRef = useRef(false);
   const openedWithShortcutRef = useRef(false);
   const switchingRef = useRef(false);
+  const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
   const followUpRef = useRef(false);
   followUpRef.current = Boolean(state.pendingQueued?.[bot.threadId]?.length) || bot.messages.some((message) => message.queued) || Boolean(accepted?.some((send) => send.kind === "sends-next"));
@@ -130,7 +131,12 @@ export function ModelPickerControl({
     setOpen(true);
   };
   useImperativeHandle(switchControl, () => () => show(false, true));
-  const close = () => setOpen(false);
+  const close = () => {
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = 0;
+    setOpen(false);
+  };
+  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("orbit:model-picker", { detail: { id: bindingsId, open } }));
     if (open) window.addEventListener("orbit:close-model-picker", close);
@@ -139,15 +145,20 @@ export function ModelPickerControl({
       if (open) window.dispatchEvent(new CustomEvent("orbit:model-picker", { detail: { id: bindingsId, open: false } }));
     };
   }, [bindingsId, open]);
-  const save = (candidate: ModelSelection = draft, fromKeyboard = false) => {
-    if (!canCommit(candidate)) return;
-    focusComposerAfterCloseRef.current = fromKeyboard && (openedWithShortcutRef.current || switchingRef.current) && !contained;
-    if (switchingRef.current) switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
-    else dispatch({ type: "setModel", botId: bot.id, selection: candidate });
+  const finishSave = () => {
     close();
     if (focusComposerAfterCloseRef.current) {
       focusComposerOnActivation({ activatedElement: triggerRef.current });
     }
+  };
+  const save = (candidate: ModelSelection = draft, fromKeyboard = false, closeDelay = 0) => {
+    if (saveTimerRef.current || !canCommit(candidate)) return false;
+    focusComposerAfterCloseRef.current = fromKeyboard && (openedWithShortcutRef.current || switchingRef.current) && !contained;
+    if (switchingRef.current) switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
+    else dispatch({ type: "setModel", botId: bot.id, selection: candidate });
+    if (closeDelay) saveTimerRef.current = window.setTimeout(finishSave, closeDelay);
+    else finishSave();
+    return true;
   };
   const pick = (next: ModelSelection) => {
     setDraft(next);

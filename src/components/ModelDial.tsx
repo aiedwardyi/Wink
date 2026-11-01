@@ -103,7 +103,7 @@ type ModelDialProps = {
   draft: ModelSelection;
   canCommit: (selection: ModelSelection) => boolean;
   onDraft: (next: ModelSelection) => void;
-  onSave: (next?: ModelSelection, fromKeyboard?: boolean) => void;
+  onSave: (next?: ModelSelection, fromKeyboard?: boolean, closeDelay?: number) => boolean;
   handle: Ref<ModelDialHandle | null>;
   stageRef: Ref<HTMLDivElement>;
   bindingsId: string;
@@ -324,6 +324,19 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     intro.current = anims.filter((anim): anim is Animation => Boolean(anim));
   };
 
+  const commit = (fromKeyboard = false, button = stage.current?.querySelector("[data-dial-pick]")) => {
+    if (!pickable || !onSave(draft, fromKeyboard, 140)) return;
+    quench();
+    if (phone && window.matchMedia(PHONE_DIAL_QUERY).matches) hapticTick();
+    const face = stage.current!;
+    const fill = { backgroundColor: "var(--accent)", borderColor: "var(--accent)", color: "#050608" };
+    button?.animate?.([fill, fill], 180);
+    button?.querySelector("kbd")?.animate?.([{ color: "#050608" }, { color: "#050608" }], 180);
+    if (!reducedMotion()) button?.animate?.([{ opacity: .6, transform: "scale(1)" }, { opacity: 0, transform: "scale(1.22)" }], { duration: 180, easing: "ease-out", pseudoElement: "::after" });
+    const card = face.querySelector('.dial-card[aria-pressed="true"]');
+    if (card && !reducedMotion()) card.animate?.([{ borderColor: "var(--accent)" }, { borderColor: getComputedStyle(card).borderColor }], { duration: 180, easing: "ease-out" });
+  };
+
   // Steps stay separate from key handling so pointer and touch input can drive the same moves.
   const go = (j: number) => {
     const target = models[j];
@@ -357,8 +370,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
       if (key === "Enter") {
         const target = event.target instanceof Element ? event.target : null;
         if (target && target !== event.currentTarget && (!target.closest(".dial-stage") || (target.closest("button") && !target.closest(".dial-card")))) return false;
-        quench();
-        onSave(draft, true);
+        commit(true);
       } else if (moves[key]) {
         quench();
         typing.current.at = 0;
@@ -512,7 +524,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
                   data-model-cell={model.cell.options[0]!.id}
                   aria-pressed={j === index}
                   style={{ "--k": k, "--ak": ak, "--o": fade ?? 0, "--lag": `${lead && Math.min(Math.max(1 + lead * k, 0), 2) * 10}ms`, pointerEvents: fade ? undefined : "none" } as CSSProperties}
-                  onClick={() => (j === index ? onSave() : go(j))}
+                  onClick={() => (j === index ? commit() : go(j))}
                 >
                   <ProviderMark driverKind={model.instance.driverKind} size={18} className="dial-mark" />
                   <span className="dial-card-text">
@@ -529,7 +541,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
 
         <nav className="dial-rail" aria-label={t("model.engineAxis")}>
           <button type="button" aria-label={t("model.previousModel")} onClick={() => stepModel(-1)}><ArrowUp size={18} /></button>
-          <button type="button" data-pick aria-label={t("model.dial.pick")} disabled={!pickable} onClick={() => onSave()}><Square size={16} /></button>
+          <button type="button" data-pick aria-label={t("model.dial.pick")} disabled={!pickable} onClick={(event) => commit(false, event.currentTarget)}><Square size={16} /></button>
           <button type="button" aria-label={t("model.nextModel")} onClick={() => stepModel(1)}><ArrowDown size={18} /></button>
         </nav>
         <div className="dial-typeahead" data-on={typed.on || undefined} data-miss={typed.i < 0 || undefined} aria-hidden>
@@ -537,7 +549,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
         </div>
 
         <section className="dial-stats">
-          <button type="button" className="dial-cta" data-dial-pick disabled={!pickable} onClick={() => onSave()}>{t("model.dial.pick")} <kbd>Enter</kbd></button>
+          <button type="button" className="dial-cta" data-dial-pick disabled={!pickable} onClick={(event) => commit(false, event.currentTarget)}>{t("model.dial.pick")} <kbd>Enter</kbd></button>
           <div className="dial-stat">
             <div className="dial-ring" data-none={intel == null || undefined}>
               <div className="track" />
