@@ -6,7 +6,7 @@ import { publicKeyFromRaw, LABEL_RE } from "../../shared/relay-protocol.ts";
 import { REPORT_ID, REPORT_MAX_BYTES, reportOwnerHash, reportPayload, teamReportSchema, type ReportReceipt } from "../../shared/team-report.ts";
 import { accountRequestSchema, type Accounts } from "./accounts.ts";
 import { writeAtomic } from "./team.ts";
-import { redactSecretsInText } from "../../server/redact.ts";
+import { redactSecretsInText } from "../../shared/redact.ts";
 
 const envelopeSchema = z.strictObject({ auth: accountRequestSchema, signature: z.string().length(86).regex(/^[A-Za-z0-9_-]+$/), report: teamReportSchema });
 export const heldReportSchema = z.strictObject({

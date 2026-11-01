@@ -5,19 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Accounts } from "../src/accounts.ts";
-import { reportHttp } from "../src/reports-http.ts";
-import { ReportStore, type HeldReport } from "../src/reports.ts";
-import { makeIssuer } from "./google-issuer.ts";
-import { PHONE_RELAY_OFF, readyMessageSchema, signTicket, type PhoneRelayStatus } from "../../shared/relay-protocol.ts";
-import { reportOwnerHash, reportPayload } from "../../shared/team-report.ts";
-import { collectReport } from "../../server/team-report-evidence.ts";
-import { reportIntent, teamReportPrompt, TEAM_REPORT_RULE } from "../../server/team-report-intent.ts";
-import { claimTeamReports, reportOwnerPost } from "../../server/team-report-owner.ts";
-import { sendTeamReport } from "../../server/team-report-transport.ts";
-import { loadOrCreateIdentity, writeTicket } from "../../server/phone-relay/store.ts";
-import { TeamReports } from "../../server/team-reports.ts";
-import type { Store } from "../../server/store.ts";
+import { Accounts } from "../relay/src/accounts.ts";
+import { reportHttp } from "../relay/src/reports-http.ts";
+import { ReportStore, type HeldReport } from "../relay/src/reports.ts";
+import { makeIssuer } from "../relay/test/google-issuer.ts";
+import { PHONE_RELAY_OFF, readyMessageSchema, signTicket, type PhoneRelayStatus } from "../shared/relay-protocol.ts";
+import { reportOwnerHash, reportPayload } from "../shared/team-report.ts";
+import { collectReport } from "./team-report-evidence.ts";
+import { reportIntent, teamReportPrompt, TEAM_REPORT_RULE } from "./team-report-intent.ts";
+import { claimTeamReports, reportOwnerPost } from "./team-report-owner.ts";
+import { sendTeamReport } from "./team-report-transport.ts";
+import { loadOrCreateIdentity, writeTicket } from "./phone-relay/store.ts";
+import { TeamReports } from "./team-reports.ts";
+import type { Store } from "./store.ts";
 
 const ownerEmail = "edward@example.test";
 const owner = reportOwnerHash(ownerEmail);
@@ -32,8 +32,8 @@ afterEach(() => { vi.restoreAllMocks(); for (const close of closers.splice(0)) c
 async function profile(dir: string): Promise<Store> {
   vi.resetModules();
   process.env.OMB_DATA_DIR = dir;
-  const { Store } = await import("../../server/store.ts");
-  const { closeMessageDb } = await import("../../server/message-db.ts");
+  const { Store } = await import("./store.ts");
+  const { closeMessageDb } = await import("./message-db.ts");
   closers.push(closeMessageDb);
   return new Store(() => ({ instanceId: "fixture", model: "current-model" }));
 }
