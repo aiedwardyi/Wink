@@ -137,8 +137,6 @@ win:
   target:
     - target: nsis
       arch: x64
-    - target: zip
-      arch: x64
   icon: build/icon-1024.png
   # Keeps Orbit.exe so taskbar pins and the installer's running-app check survive the rename.
   executableName: Orbit

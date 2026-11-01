@@ -94,6 +94,8 @@ jobs:
         env:
           ERROR_REPORT_DSN: ${{ vars.ERROR_REPORT_DSN }}
         run: node scripts/write-error-report-config.mjs
+      # CI on the tip typechecks before publish, so the release build only bundles.
+      - run: npm pkg set "scripts.build=vite build"
       - run: pnpm package:win
       - name: Verify the packaged tree and start the packaged server
         shell: bash
@@ -131,19 +133,12 @@ jobs:
           echo "::error::the packaged server never served /api/health"
           cat "$RUNNER_TEMP/server.log" || true
           exit 1
-      - name: Stable-named copy
-        shell: bash
-        run: |
-          v=$(node -p "require('./package.json').version")
-          cp "release/Wink-$v-setup.exe" release/Wink-setup.exe
-          # Old links point at the Orbit name, so keep it as a second identical alias.
-          cp "release/Wink-$v-setup.exe" release/Orbit-setup.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release
           path: |
-            release/*.exe
-            release/*.exe.blockmap
+            release/Wink-${{ needs.prepare.outputs.version }}-setup.exe
+            release/Wink-${{ needs.prepare.outputs.version }}-setup.exe.blockmap
             release/latest.yml
           if-no-files-found: error
           retention-days: 7
@@ -189,6 +184,9 @@ jobs:
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           cd assets
+          cp "Wink-$VERSION-setup.exe" Wink-setup.exe
+          # Old links point at the Orbit name, so keep it as a second identical alias.
+          cp "Wink-$VERSION-setup.exe" Orbit-setup.exe
           tag="v$VERSION"
           if ! gh release view "$tag" --repo aiedwardyi/orbit-releases > /dev/null 2>&1; then
             gh release create "$tag" --repo aiedwardyi/orbit-releases \
