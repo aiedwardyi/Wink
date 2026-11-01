@@ -73,6 +73,153 @@ const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can yo
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
 describe("review report authorization regressions", () => {
+  it.each(["에디에게", "에드워드한테", "대표님께"].flatMap((recipient) => [
+    ...["보내", "보내줘", "보내 줘", "보내줘요", "보내주세요", "보내 주세요", "보내주실래요?", "보내줄래?", "보내줄래요?", "보내 주실 수 있나요?", "보내라", "보내요", "보내십시오", "보고해줘요", "전달해 주실래요?", "보네", "보네줘"].map((ending) => [`${recipient} ${ending}`, "send"]),
+    ...["보낸", "보냈어?", "보내 놓은", "보내놓은", "보내 둔", "보내던", "보내는 중", "보내 놓았던", "보내 던", "보내 는", "보내 진", "보내 버린", "보네 놓은"].map((ending) => [`${recipient} ${ending} 메시지 찾아줘`, "none"]),
+    ...["보내", "보네"].flatMap((verb) => ["지 마", " 지 마", "지마", " 지마", "지 말아", " 지 말아", "지말아", " 지말아"].map((ending) => [`${recipient} ${verb}${ending}`, "draft"])),
+  ]))("classifies Korean send endings: %s", (text, intent) => {
+    expect(reportIntent(text)).toBe(intent);
+    expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each([
+    ["Send this screenshot to Ed", "send"], ["Ed, report this", "send"], ["send this to Edward", "send"], ["Ed, send reproduction steps", "send"],
+    ["Tell Alice that Edward is on vacation", "none"], ["Don't let Ed know about this", "draft"], ["Ed, send reproduction steps to Alice", "none"],
+  ])("classifies English send commands: %s", (text, intent) => {
+    expect(reportIntent(text)).toBe(intent);
+    expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each([false, true])("collects an attached recurring failure with a stale explicit ID: %s", async (explicit) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
+    const draft = await f.call({ action: "draft" });
+    f.append("bot", "Here is the report draft");
+    const request = f.append("user", "The export failed again. Send this screenshot to Ed", { png: png.toString("base64") });
+    const result = await f.call({ action: "send", ...(explicit ? { report_id: draft.id } : {}) });
+    expect(result).toMatchObject({ state: "accepted" });
+    expect(result.id).not.toBe(draft.id);
+    const [held] = await f.relay.claim();
+    expect(held.report.requestMessageId).toBe(request.id);
+    expect(held.report.images).toEqual([expect.objectContaining({ messageId: request.id })]);
+  });
+  it.each(["Retry that report", "Resend it", "Try again", "Send it again", "Send it to Edward again", "다시 보내줘"])("retains saved evidence for an attached retry command: %s", async (text) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
+    const draft = await f.call({ action: "draft" });
+    f.append("bot", "Here is the report draft"); f.append("user", text, { png: png.toString("base64") });
+    expect(await f.call({ action: "send" })).toMatchObject({ id: draft.id, state: "accepted" });
+    expect((await f.relay.claim())[0].report).toEqual(draft.report);
+  });
+  it.each(["Ed, send reproduction steps", "Ed, forward yesterday's screenshot", "Ed, forward yesterday’s screenshot", "Eddie please send failing export logs", "Ed, send debugging notes", "Ed, report this", "send this to Edward"])("accepts descriptive objects addressed to the owner: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+    expect(reportIntent(text, true)).toBe("send");
+  });
+  it.each(["Ed, send reproduction steps to Alice", "Ed, forward yesterday's screenshot to her", "Ed, send reproduction steps 앨리스한테", "Ed, send reproduction steps 앨리스 한테", "Ed, send her screenshots", "Ed, send the manager screenshots", "Ed, forward Alice logs"])("requires evidence of a conflicting recipient: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each(["보내", "보네"].flatMap((verb) => ["지 마", " 지 마", "지마", " 지마", "지 말아", " 지 말아", "지말아", " 지말아"].map((negative) => `에디에게 ${verb}${negative}`)))("vetoes Korean send spelling and spacing variants: %s", (text) => {
+    expect(reportIntent(text)).toBe("draft");
+    expect(reportIntent(text, true)).toBe("draft");
+  });
+  it("scans a 100k identifier in under 50 ms", () => {
+    const text = `에디한테 ${"A".repeat(100_000)} 보내줘`;
+    reportIntent("에디한테 보내줘");
+    const start = performance.now();
+    expect(reportIntent(text)).toBe("send");
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+  it.each(["이 상품의 대표 사진 보내줘", "이 상품의 대표 썸네일 보내줘", "대표 사진 보내줘", "대표 썸네일 보내줘", "대표 이미지 보내줘", "대표 사례 보고해줘"])("keeps descriptive uses of 대표 private: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each(["Send Eddie a message to Alice", "Ed, send Alice screenshots", "Eddie please send Alice logs", "Ed, share this for King", "Send this to Alice instead of Edward, 보내줘", "Ed, send Alice screenshots 보내줘"])("rejects another delivery recipient: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each(["Send the v1.0.219 crash, the one on save, to Edward", "Please report the crash in version 1.0.219 to Ed", "Send this error, including the screenshot, to Edward", "Send this report about failing to save to Edward", "Share the steps for reproducing this with Edward", "대표가 이거 받아야 해, 보내줘", "The app froze\nSend it to Ed"])("accepts recipient-bound descriptions: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+    expect(reportIntent(text, true)).toBe("send");
+  });
+  it.each(["collect", "send", "retry"].flatMap((action) => ["wording", "image", "new again"].map((reason) => [action, reason])))("ignores a stale explicit ID for a fresh %s request: %s", async (action, reason) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Report this to Ed");
+    const draft = await f.call({ action: "collect" });
+    f.append("bot", "Here is the report draft"); f.append("bot", "The export failed");
+    const request = f.append("user", reason === "new again" ? "Send this new issue to Ed again" : reason === "wording" ? "Send this new issue to Ed" : "Send this to Ed", reason === "image" ? { png: png.toString("base64") } : {});
+    const result = await f.call({ action, report_id: draft.id });
+    if (action === "retry") {
+      expect(result).toHaveProperty("error");
+      expect(await f.relay.claim()).toHaveLength(0);
+      const sent = await f.call({ action: "send", report_id: draft.id });
+      expect(sent.state).toBe("accepted");
+      expect(sent.id).not.toBe(draft.id);
+    } else {
+      expect(result.state).toBe(action === "send" ? "accepted" : "draft");
+      expect(result.id).not.toBe(draft.id);
+      const saved = JSON.parse(readFileSync(join(f.dir, "drafts", `${result.id}.json`), "utf8")).report as TeamReport;
+      expect(saved.requestMessageId).toBe(request.id);
+      if (reason === "image") expect(saved.images).toHaveLength(1);
+      if (action === "collect") expect(await f.call({ action: "send", report_id: draft.id })).toMatchObject({ id: result.id, state: "accepted" });
+    }
+  });
+  it.each(["에디 에게", "에디에게", "에디한테", "에디 한테", "에드워드에게", "대표님께"].flatMap((recipient) => ["보네", "보내", "보내줘", "보내 줘", "보네줘"].map((verb) => `${recipient} ${verb}`)))("accepts Korean spacing and send typos: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+    expect(reportIntent(text, true)).toBe("send");
+  });
+  it.each(["에디에게 보내지 마", "에디 에게 보내지 마", "대표님께 보고하지 마", "에디 에게 보네지 마"])("keeps Korean send vetoes private: %s", (text) => {
+    expect(reportIntent(text)).not.toBe("send");
+    expect(reportIntent(text, true)).not.toBe("send");
+  });
+  it.each(["앨리스에게 에디가 휴가라고 보내", "앨리스 에게 에디 보내", "앨리스 에게 에디 보네"])("does not treat a Korean recipient's message as delivery to the owner: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each([
+    ["에디 이거 보내줘", "send"], ["Ed, report this", "send"], ["에드워드 보내", "send"], ["대표님 이거 보고해줘", "send"],
+    ["Send this to Alice instead of Edward", "none"], ["Tell Alice that Edward is on vacation", "none"], ["에드워드 휴가래", "none"], ["앨리스한테 보내, 에디 말고", "none"],
+    ["Eddie please send this", "send"], ["Ed, send this to Alice", "none"], ["Eddie please send Alice this", "none"], ["에디 이거 앨리스한테 보내줘", "none"],
+    ["에디 말고 이거 보내줘", "none"], ["에디 대신 이거 보내줘", "none"],
+    ["Ed, don't send this", "draft"], ["대표님 이거 보고하지 마", "draft"], ['"Ed, report this"', "none"],
+  ])("handles direct address without a recipient marker: %s", (text, intent) => {
+    expect(reportIntent(text)).toBe(intent);
+    expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each(["Edward", "Eddie", "Ed", "에드워드", "에디", "대표"].flatMap((alias) => [alias, `${alias}님`]))("accepts bare recipient %s", (alias) => {
+    expect(reportIntent(`${alias} 이거 보내줘`)).toBe("send");
+  });
+  it.each(["Edward", "Eddie", "Ed", "에드워드", "에디", "대표"])("requires %s to be the delivery recipient", (alias) => {
+    for (const text of [`Send this to Alice instead of ${alias}`, `Tell Alice that ${alias} is on vacation`, `Let Alice know about ${alias}`, `Send ${alias}'s notes to Alice`, `Send this to Alice with ${alias}`, `Flag this for Alice with ${alias}`]) {
+      expect(reportIntent(text)).toBe("none");
+      expect(reportIntent(text, true)).toBe("none");
+    }
+    expect(reportIntent(`Send this to ${alias}`)).toBe("send");
+  });
+  it.each(["앨리스한테 보내, 에디 말고", "앨리스한테 에디 소식 보내줘", "에디 대신 앨리스한테 보내줘", "에디한테 말고 앨리스한테 보내줘", "에디한테 받은 메시지 보내줘", "에드워드 휴가래"])("does not authorize an owner mention: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each(["에드워드", "에디", "대표"])("accepts the Korean recipient %s", (alias) => {
+    expect(reportIntent(`${alias}한테 보내줘`)).toBe("send");
+  });
+  it.each(["Share this with Edward", "Send Ed this report", "Ed needs this, send this to him", "에디가 이거 받아야 해, 보내줘"])("retains addressed requests: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+  });
+  it.each(["send", "retry"])("keeps the explicit report ID on %s after unrelated chat", async (action) => {
+    const f = fixture(); f.append("user", "Keep the export running"); const bad = f.append("bot", "Stopped the export");
+    const request = f.append("user", "Draft a report for Ed"); const draft = await f.call({ action: "draft" });
+    const original = draft.report as TeamReport;
+    f.append("bot", "Here is the report draft"); f.append("user", "What is two plus two?"); f.append("bot", "Four");
+    f.append("user", action === "retry" ? "Retry that report" : "Send that report to Ed");
+    expect(await f.call({ action, report_id: draft.id })).toMatchObject({ id: draft.id, state: "accepted" });
+    const [held] = await f.relay.claim();
+    expect(held.report).toEqual(original);
+    expect(held.report).toMatchObject({ selectedMessageId: bad.id, requestMessageId: request.id });
+  });
+  it.each(["send", "retry"])("validates an explicit report branch on %s after unrelated chat", async (action) => {
+    const f = fixture(); f.append("user", "Keep notes"); const bad = f.append("bot", "Deleted notes");
+    f.append("user", "Draft a report for Ed"); const draft = await f.call({ action: "draft" });
+    f.append("user", "What is two plus two?"); f.append("bot", "Four"); f.append("user", "Retry that report");
+    f.path.splice(f.path.indexOf(bad), 1);
+    expect(await f.call({ action, report_id: draft.id })).toEqual({ error: "Saved report does not belong to this branch/sender/team." });
+    expect(await f.relay.claim()).toHaveLength(0);
+  });
   it.each(["collect", "send"].flatMap((action) => ["earlier", "selected"].map((change) => [action, change])))("R6 applies %s evidence updates to a saved draft: %s", async (action, change) => {
     const f = fixture(); const correction = f.append("user", "Keep the export running");
     f.append("user", "Check status"); const bad = f.append("bot", "Stopped the export");

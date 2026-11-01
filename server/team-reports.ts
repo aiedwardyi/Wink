@@ -82,11 +82,13 @@ export class TeamReports {
     const lastBot = path.slice(0, path.indexOf(request)).findLast((message) => message.role === "bot" && message.kind === "text");
     const replying = anchor && lastBot && path.indexOf(lastBot) > path.indexOf(anchor) && !lastBot.comm && (!lastBot.from || lastBot.from.botId === bot.id)
       && (/\breport\b|which Wink|보고/i.test(lastBot.text ?? "") || Boolean(context?.reportId && lastBot.text?.includes(context.reportId)));
-    const retryWords = /\b(?:retry|resend|again)\b|다시/i.test(request.text ?? "");
-    const fresh = anchor && anchor.id !== request.id && (request.image || request.png || /<attached-(?:image|file)\b|\b(?:new|another|different)\b|새로운|새\s*(?:문제|오류|버그)/i.test(request.text ?? "")
+    const retryWords = /(?:^|[.!?;\n])\s*(?:(?:please|ok|okay|yes|yeah)[,\s]+)*(?:(?:retry|resend)\b|try\s+again\b|send\s+(?:it|(?:that|this|the)\s+report)\b[^.!?;\n]*\bagain\b|다시\s*(?:보[내네]|시도))/i.test(request.text ?? "");
+    const newIncident = anchor && (anchor.id !== request.id || (body.report_id && body.report_id !== context?.reportId)) && (/\b(?:new|another|different)\b|새로운|새\s*(?:문제|오류|버그)/i.test(request.text ?? "")
+      || (!retryWords && (request.image || request.png || /<attached-(?:image|file)\b/i.test(request.text ?? ""))));
+    const fresh = anchor && anchor.id !== request.id && (newIncident
       || path.slice(path.indexOf(anchor) + 1, path.indexOf(request)).some((message) => message.role === "user" && message.kind === "text" && reportIntent(message.text ?? "", true) === "none"));
     const followup = Boolean(anchor && anchor.id !== request.id && !fresh && (replying || retryWords));
-    const savedId = fresh ? undefined : body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
+    const savedId = newIncident ? undefined : body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
     let previous: { report: TeamReport; receipt?: ReportReceipt } | undefined;
     if (savedId) {
       try { previous = JSON.parse(readFileSync(join(o.dir, `${savedId}.json`), "utf8")); } catch {}
