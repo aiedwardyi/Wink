@@ -16,6 +16,7 @@
 
 import { newId } from "./contracts.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
+import { stalePeerThreads } from "./peer-approval-recovery.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
 export { peerAllowKey } from "./peer-approval-key.ts";
@@ -182,14 +183,17 @@ export function cancelPeerApprovalsForThread(threadId: string): void {
   }
 }
 
-/** Cards left on disk by a previous run can never be answered — their
- * in-memory approval died with the process. Settle them at boot so a
- * crashed run doesn't leave a thread with a permanently blocked composer. */
+/** Peer cards cannot be answered after their in-memory resolvers die. */
 export function dismissStalePeerCards(bus: ApprovalBus): number {
+  const candidates = stalePeerThreads(
+    [...new Set(bus.store.bots.flatMap((bot) => [bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]))],
+    (requestId) => pendingComms.has(requestId),
+  );
   let dismissed = 0;
   for (const bot of bus.store.bots) {
     const threadIds = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
     for (const threadId of threadIds) {
+      if (!candidates.has(threadId)) continue;
       for (const message of bus.store.messagesFor(threadId)) {
         const card = message.card;
         if (!card?.requestId || card.answered || card.dismissed) continue;
