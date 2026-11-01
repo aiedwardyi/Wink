@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { applySkin } from "@/lib/skins";
 import type { Bot, InstanceInfo, ModelSelection } from "@/state/store";
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
@@ -73,6 +74,25 @@ afterEach(async () => {
 });
 
 describe("ModelPicker cross navigation", () => {
+  it.each([false, true])("keeps Servo's open selector in Precision (contained %s)", async (contained) => {
+    mock.instances = [engine("claude", "claudeAgent", ["claude-opus-5-5"])];
+    try {
+      applySkin("mono-hud");
+      await mount({ instanceId: "claude", model: "claude-opus-5-5" }, true, contained);
+      expect(document.querySelector(".model-cross-backdrop")?.getAttribute("data-skin")).toBe("precision");
+      expect(document.querySelector('[aria-haspopup="dialog"]')?.hasAttribute("data-skin")).toBe(false);
+      expect(document.documentElement.dataset.skin).toBe("mono-hud");
+      await act(async () => applySkin("precision"));
+      expect(document.querySelector(".model-cross-backdrop")?.hasAttribute("data-skin")).toBe(false);
+      await act(async () => applySkin("mono-hud"));
+      expect(document.querySelector(".model-cross-backdrop")?.getAttribute("data-skin")).toBe("precision");
+      await act(async () => applySkin("wink"));
+      expect(document.querySelector(".model-cross-backdrop")?.hasAttribute("data-skin")).toBe(false);
+    } finally {
+      await act(async () => applySkin("precision"));
+    }
+  });
+
   it.each(["en", "ko"] as const)("updates the status price with the highlighted model in %s", async (locale) => {
     vi.stubGlobal("localStorage", window.localStorage);
     persistPreference(locale);

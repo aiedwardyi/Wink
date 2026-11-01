@@ -18,6 +18,7 @@ import { useI18n } from "@/lib/i18n";
 import { modelDialEnabled } from "@/lib/feature-flags";
 import { loadModelPickerView, saveModelPickerView } from "@/lib/model-picker-view";
 import { showTouchPickerLegend } from "@/lib/friends-chrome";
+import { DEFAULT_SKIN, useSkin } from "@/lib/skins";
 import { ModelDial, useDialFontWarm, useModelDialFits, type ModelDialHandle } from "./ModelDial";
 import "./ModelPicker.css";
 
@@ -50,6 +51,7 @@ export function ModelPickerControl({
   bot, className, contained = false, label, defaultOpen = false, store, accepted, switchControl, onSwitching, onRerunSettled, dial = false,
 }: ModelPickerProps & { store: PickerStore; accepted?: readonly AcceptedSend[] }) {
   const { t } = useI18n();
+  const skin = useSkin();
   const { state, dispatch, refreshInstances } = store;
   const shortcutEnabled = !contained && state.selectedId === bot.id;
   const selection = shownModelSelection(bot);
@@ -303,7 +305,7 @@ export function ModelPickerControl({
   );
 
   const dialog = (
-    <div className="model-cross-backdrop animate-fade-in" data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
+    <div className="model-cross-backdrop animate-fade-in" data-skin={skin === "mono-hud" ? DEFAULT_SKIN : undefined} data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
       if (event.target === event.currentTarget || (event.target instanceof Element && event.target.matches(".model-cross-plane, .model-cross-stage"))) close();
     }}>
       <div
