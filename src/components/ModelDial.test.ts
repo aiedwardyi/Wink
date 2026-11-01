@@ -567,6 +567,128 @@ describe("ModelDial", () => {
   });
 });
 
+describe("ModelDial confirm", () => {
+  const saves = () => dispatch.mock.calls.filter(([action]) => action.type === "setModel");
+  const fills = (button: Element) => animate.mock.calls.filter(([frames], k) => animate.mock.contexts[k] === button && frames[0]?.backgroundColor === "var(--accent)");
+  const rings = () => animate.mock.calls.filter(([, options]) => typeof options === "object" && options.pseudoElement === "::after");
+  const click = (selector: string) => act(async () => document.querySelector<HTMLButtonElement>(selector)!.click());
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // The dialog and dial schedule through the window timer.
+    vi.spyOn(window, "setTimeout").mockImplementation((fn, ms) => setTimeout(fn as () => void, ms));
+  });
+
+  it.each([
+    [false, "[data-dial-pick]"],
+    [false, "[data-pick]"],
+    [false, "Enter"],
+    [false, '.dial-card[aria-pressed="true"]'],
+    [true, "[data-dial-pick]"],
+    [true, '.dial-card[aria-pressed="true"]'],
+  ])("saves once before confirming and closing on phone=%s via %s", async (phone, path) => {
+    media({ phone });
+    await mount();
+    await key("ArrowDown");
+    const button = document.querySelector(path === "[data-pick]" ? path : "[data-dial-pick]")!;
+    animate.mockClear();
+    if (path === "Enter") await key("Enter");
+    else await click(path);
+    expect(saved()?.model).toBe("claude-sonnet-5-5");
+    expect(saves()).toHaveLength(1);
+    expect(fills(button)).toHaveLength(1);
+    expect(rings()).toHaveLength(1);
+    expect(dispatch.mock.invocationCallOrder.at(-1)).toBeLessThan(animate.mock.invocationCallOrder[0]!);
+    await click("[data-dial-pick]");
+    await click('.dial-card[aria-pressed="true"]');
+    await key("Enter");
+    expect(saves()).toHaveLength(1);
+    expect(fills(button)).toHaveLength(1);
+    await wait(139);
+    expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
+    await wait(1);
+    expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+  });
+
+  it("does nothing for a disabled selection through every commit path", async () => {
+    const vibrate = vi.fn(() => true);
+    Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
+    media({ phone: true });
+    await mount({ grokSignedIn: false });
+    await key("ArrowUp");
+    const button = document.querySelector("[data-dial-pick]")!;
+    vibrate.mockClear();
+    animate.mockClear();
+    await click("[data-dial-pick]");
+    await click("[data-pick]");
+    await click('.dial-card[aria-pressed="true"]');
+    await key("Enter");
+    await wait(180);
+    expect(saves()).toHaveLength(0);
+    expect(fills(button)).toHaveLength(0);
+    expect(rings()).toHaveLength(0);
+    expect(vibrate).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
+  });
+
+  it("keeps the accent fill and close delay without a ring under reduced motion", async () => {
+    media({ reduced: true });
+    await mount();
+    const button = document.querySelector("[data-dial-pick]")!;
+    animate.mockClear();
+    await key("Enter");
+    expect(saves()).toHaveLength(1);
+    expect(fills(button)).toHaveLength(1);
+    expect(rings()).toHaveLength(0);
+    await wait(139);
+    expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
+    await wait(1);
+    expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+  });
+
+  it.each([
+    [true, true, false, 1],
+    [true, false, false, 0],
+    [false, true, false, 0],
+    [true, true, true, 0],
+  ])("gates the haptic on phone=%s vibration=%s reduced=%s", async (phone, vibration, reduced, ticks) => {
+    const vibrate = vi.fn(() => true);
+    Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
+    localStorage.setItem(phoneSwipe.VIBRATION_KEY, vibration ? "on" : "off");
+    media({ phone, reduced });
+    await mount();
+    await click("[data-dial-pick]");
+    await key("Enter");
+    expect(vibrate).toHaveBeenCalledTimes(ticks);
+    if (ticks) expect(vibrate).toHaveBeenCalledWith(10);
+  });
+
+  it("stays silent in a narrow mouse window", async () => {
+    const vibrate = vi.fn(() => true);
+    Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
+    mouse(700);
+    await mount();
+    await click("[data-dial-pick]");
+    expect(saves()).toHaveLength(1);
+    expect(vibrate).not.toHaveBeenCalled();
+  });
+
+  it("cancels the pending close on dismiss and confirms again after reopening", async () => {
+    media();
+    await mount();
+    await key("Enter");
+    await key("Escape");
+    await wait(50);
+    await click('[aria-haspopup="dialog"]');
+    await wait(90);
+    expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
+    await key("Enter");
+    expect(saves()).toHaveLength(2);
+    await wait(140);
+    expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+  });
+});
+
 describe("ModelDial ring", () => {
   let reads = 0;
   const cap = () => document.querySelectorAll(".dial-ring .cap")[1];

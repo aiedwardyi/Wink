@@ -245,6 +245,9 @@
 .dial-stats { position: absolute; left: 96px; right: 96px; top: 712px; display: flex; align-items: center; gap: 56px; }
 .dial-cta { display: flex; height: 56px; align-items: center; gap: 14px; padding: 0 18px 0 20px; border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 9%, #0b0d11); box-shadow: 0 0 calc(22px * var(--glow)) color-mix(in srgb, var(--accent) 16%, transparent); font-size: 16px; font-weight: 500; }
 .dial-cta:disabled { cursor: default; opacity: .5; }
+.dial-stage :is([data-pick], [data-dial-pick]) { position: relative; transition: transform 90ms var(--spring), filter 90ms linear; }
+.dial-stage :is([data-pick], [data-dial-pick]):enabled:active { transform: scale(.94); filter: brightness(.9); }
+.dial-stage :is([data-pick], [data-dial-pick])::after { content: ""; position: absolute; inset: -1px; border: 1px solid var(--accent); border-radius: inherit; opacity: 0; pointer-events: none; }
 .dial-stage kbd { display: inline-grid; min-width: 22px; height: 22px; place-items: center; padding: 0 6px; border: 1px solid #ffffff1f; border-radius: 5px; background: #ffffff08; color: var(--ink-2); font: 500 10.5px var(--mono); }
 .dial-stat { display: flex; align-items: center; gap: 16px; }
 .dial-stat-text { display: flex; flex-direction: column; gap: 6px; }
@@ -331,4 +334,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dial-stage *, .dial-stage *::before, .dial-stage *::after { transition: none !important; animation: none !important; }
+  .dial-stage :is([data-pick], [data-dial-pick]):enabled:active { transform: none; }
 }
