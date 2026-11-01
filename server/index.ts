@@ -99,6 +99,7 @@ import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNote
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
+import { summaryInstance } from "./summary-instance.ts";
 import { findCliCandidates, resetPathCache } from "./env-path.ts";
 import { testCliBinary } from "./cli-probe.ts";
 import { buildNotification, type Notification } from "./notify.ts";
@@ -2669,7 +2670,10 @@ const summaryRepair = createSummaryRepair({
   store,
   instanceFor: async (botId, threadId) => {
     const bot = store.bot(botId);
-    return bot ? registry.get((await resolvedBotSelection(bot, store.taskByThread(botId, threadId))).instanceId) : undefined;
+    if (!bot) return undefined;
+    const selection = await resolvedBotSelection(bot, store.taskByThread(botId, threadId));
+    const instance = registry.get(selection.instanceId);
+    return instance ? summaryInstance(instance, selection.model) : undefined;
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   taskRecordText: (threadId, contextWindow) => {
@@ -2695,7 +2699,7 @@ const summaryBuild = createSummaryBuild({
       ? paneNotesForTurn(messages, new Set(), task.paneNotesDeliveredId ?? undefined, true, true, contextWindow)
       : null;
     return {
-      instance,
+      instance: summaryInstance(instance, selection.model),
       contextWindow,
       taskRecordText: (record ? taskRecordBlock(record, Math.max(512, Math.floor(contextWindow * 0.15) * 3)) : "") ||
         "No durable task record is available.",
@@ -4691,13 +4695,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       summaryGrace: grace,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
-      summarize: inlineSummarizer(instance, waitedMs),
+      summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
         phase: "compact",
         engine: instance.driverKind,
-        model: instance.textModel ?? null,
+        model: summaryInstance(instance, model).textModel ?? null,
         run: 0,
         deadlineMs: inlineDeadlineMs(instance, waitedMs),
       }, record),
@@ -6100,7 +6104,8 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   await providerReload.wait(selection.instanceId);
-  const instance = registry.get(selection.instanceId);
+  const selectedInstance = registry.get(selection.instanceId);
+  const instance = selectedInstance && summaryInstance(selectedInstance, selection.model);
   if (!instance) {
     const message = `${bot.name}'s model is unavailable`;
     store.appendMessage(threadId, {

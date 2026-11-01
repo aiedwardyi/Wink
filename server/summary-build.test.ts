@@ -680,14 +680,14 @@ describe("summary build wiring", () => {
   });
 
   it("the 1:1 send's inline call runs on the deadline left after the wait; the room path is unchanged", () => {
-    const sends = index.split("summarize: inlineSummarizer(instance, waitedMs),");
+    const sends = index.split("summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),");
     expect(sends).toHaveLength(2);
     expect(sends[0]!.lastIndexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeGreaterThan(sends[0]!.lastIndexOf("async function startClaimedTurn("));
     expect(index).toContain("summarize: instance.generateText ? (prompt) => instance.generateText!(prompt) : undefined,");
   });
 
   it("the 1:1 compact log reports the deadline the inline call gets", () => {
-    const send = index.split("summarize: inlineSummarizer(instance, waitedMs),")[1]!;
+    const send = index.split("summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),")[1]!;
     expect(send.slice(0, send.indexOf("}, record),"))).toContain("deadlineMs: inlineDeadlineMs(instance, waitedMs),");
     expect(inlineDeadlineMs({ textTimeoutMs: 90_000 }, 30_000)).toBe(60_000);
     expect(inlineDeadlineMs({ textTimeoutMs: 90_000 }, 0)).toBe(90_000);
