@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { writeSnapshotCache } from "./snapshot-cache";
 import { StoreProvider, useStore, type Bot } from "./store";
@@ -19,6 +19,11 @@ class FakeEventSource {
 
 let store: ReturnType<typeof useStore>;
 let unmount: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  vi.spyOn(window.location, "protocol", "get").mockReturnValue("http:");
+  vi.spyOn(window.location, "hostname", "get").mockReturnValue("127.0.0.1");
+});
 
 afterEach(async () => {
   await unmount?.();
@@ -88,7 +93,7 @@ describe("first-send hydration", () => {
     expect(store.state.bots[0].name).toBe("Live");
   });
 
-  it("asks for the snapshot after starting the stream without waiting for open", async () => {
+  it("asks for the snapshot on loopback without waiting for open", async () => {
     writeSnapshotCache({ bots: [bot("Saved")], groups: [], selectedId: "b1" });
     const earlier = FakeEventSource.last;
     const reads: { streamStarted: boolean; streamOpen: boolean; openChat: string }[] = [];
@@ -100,6 +105,30 @@ describe("first-send hydration", () => {
     await mount(false);
     expect(reads).toEqual([{ streamStarted: true, streamOpen: false, openChat: "b1" }]);
     await act(async () => FakeEventSource.last.onopen?.());
+    expect(reads).toHaveLength(1);
+  });
+
+  it("asks for the snapshot once the stream is open, naming the open chat", async () => {
+    vi.spyOn(window.location, "protocol", "get").mockReturnValue("https:");
+    vi.spyOn(window.location, "hostname", "get").mockReturnValue("phone.example");
+    writeSnapshotCache({ bots: [bot("Saved")], groups: [], selectedId: "b1" });
+    const reads: { streamOpen: boolean; openChat: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url) !== "/api/bots?messages=200") return Response.json({}, { status: 404 });
+      reads.push({ streamOpen: FakeEventSource.last.opened, openChat: (init?.headers as Record<string, string>)["x-open-chat"] });
+      return Response.json({ bots: [bot("Prefetched")], groups: [], cursor: "stream00:4" });
+    }));
+    await mount(false);
+    expect(reads).toEqual([]);
+    await act(async () => {
+      FakeEventSource.last.opened = true;
+      FakeEventSource.last.onopen?.();
+    });
+    expect(reads).toEqual([{ streamOpen: true, openChat: "b1" }]);
+    await act(async () => FakeEventSource.last.onopen?.());
+    expect(reads).toHaveLength(1);
+    await emit({ kind: "hello", resumed: false, cursor: "stream00:4" });
+    await vi.waitFor(() => expect(store.state.hydrated).toBe(true));
     expect(reads).toHaveLength(1);
   });
 
