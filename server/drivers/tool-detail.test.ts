@@ -8,8 +8,10 @@ import { ensureDirs, saveConfig } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { redactToolMessage } from "../tool-detail.ts";
 import { GrokAgentDriver } from "./acp/grok.ts";
 import { MuseAgentDriver } from "./acp/muse.ts";
+import { ClaudeDriver } from "./claude.ts";
 import { CodexDriver } from "./codex.ts";
 
 const TESTING = join(dirname(fileURLToPath(import.meta.url)), "..", "testing");
@@ -27,6 +29,16 @@ interface ToolFixture {
   newText?: string;
   output: string;
   failed?: boolean;
+}
+
+interface RecordedBlock {
+  type: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  tool_use_id?: string;
+  content?: string;
+  is_error?: boolean;
 }
 
 describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) => {
@@ -356,6 +368,58 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
       expect(events[2]).not.toHaveProperty("detail");
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+describe("Claude recorded tool detail", () => {
+  let instance: ProviderInstance | undefined;
+  let scratch: string;
+
+  beforeEach(() => {
+    ensureDirs();
+    chmodSync(join(TESTING, "fake-claude-cli.ts"), 0o755);
+    scratch = mkdtempSync(join(tmpdir(), "omb-claude-detail-"));
+  });
+
+  afterEach(async () => {
+    delete process.env.FAKE_CLAUDE_TOOL_FIXTURE;
+    await instance?.dispose();
+    saveConfig({ features: { toolDetailCapture: false } });
+    await removeTempDir(scratch);
+  });
+
+  it("captures and re-reads a recorded Bash, Read and Edit reply", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/tool-detail.json", import.meta.url), "utf8"));
+    const blocks: RecordedBlock[] = recorded.reply.messages.flatMap((message: { message: { content: RecordedBlock[] } }) => message.message.content);
+    const steps = blocks.filter((block) => block.type === "tool_use").map((use) => {
+      const result = blocks.find((block) => block.tool_use_id === use.id);
+      return { name: use.name, input: use.input, content: result?.content, is_error: result?.is_error };
+    });
+    const fixture = join(scratch, "tools.json");
+    writeFileSync(fixture, JSON.stringify(steps));
+    process.env.FAKE_CLAUDE_TOOL_FIXTURE = fixture;
+    saveConfig({ features: { toolDetailCapture: true } });
+    instance = await ClaudeDriver.create({
+      instanceId: "claude-detail-test",
+      displayName: "Claude",
+      environment: {},
+      enabled: true,
+      config: { cli: join(TESTING, "fake-claude-cli.ts"), permissionMode: "acceptEdits" },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-recorded-detail", text: recorded.stamp.prompt });
+      await recorder.until((event) => event.type === "turn.completed");
+      const details = recorder.events.flatMap((event) => event.type === "item.completed" && event.itemType === "tool" ? [event.detail] : []);
+      expect(details).toEqual([
+        { input: "echo tool-detail-ok", output: ["tool-detail-ok", "Shell cwd was reset to C:\\work\\run"] },
+        { input: "C:\\work\\run\\notes.txt" },
+        { input: "C:\\work\\run\\notes.txt", diff: ["-hello", "+hello, orbit"] },
+      ]);
+      expect(details.map((detail) => redactToolMessage({ tool: { name: "tool", detail } }).tool.detail)).toEqual(details);
+    } finally {
+      recorder.stop();
     }
   });
 });

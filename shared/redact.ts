@@ -93,6 +93,9 @@ const PEM_TAIL_HOLD = 96;
 
 const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD];
 
+/** A literal every content pattern above needs; text with none has nothing to mask. */
+const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
+
 const WORD_CHAR = /[A-Za-z0-9_]/;
 const JWT_SEG_CHAR = /[A-Za-z0-9_-]/;
 const BEARER_TOKEN_CHAR = /[A-Za-z0-9._~+/=-]/;
@@ -437,7 +440,8 @@ export class StreamSecretMasker {
 
 
 export function redactSecretsInText(text: string): string {
-  if (!text || text.length < 8) return text;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Only strings take the hint exit; anything else still fails in replace below.
+  if (!text || text.length < 8 || (typeof text === "string" && !SECRET_HINT.test(text))) return text;
   let out = text;
   out = out.replace(PEM_BLOCK, (_m, open: string, body: string, close: string) => `${open}\n${pemMask(body)}\n${close}`);
   out = out.replace(PEM_OPEN, (_m, open: string, body: string) => {

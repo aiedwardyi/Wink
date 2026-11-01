@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { redactSecrets, StreamSecretMasker } from "./redact.ts";
 
@@ -341,6 +341,16 @@ describe("redactSecretsInText", () => {
     ]) {
       expect(redactSecretsInText(s), s).toBe(s);
     }
+  });
+
+  it("skips every pattern pass when no secret-shaped literal appears", () => {
+    const text = "npm run build -- --mode=production: 12 files in C:/work/app_v2 (3.2s)";
+    const replace = vi.spyOn(String.prototype, "replace");
+    const out = redactSecretsInText(text);
+    const calls = replace.mock.calls.length;
+    replace.mockRestore();
+    expect(calls).toBe(0);
+    expect(out).toBe(text);
   });
 
   it("wires stream-aware masking onto SSE frames and persisted NDJSON", () => {

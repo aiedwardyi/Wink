@@ -1,0 +1,106 @@
+{
+  "stamp": {
+    "engine": "claude",
+    "cliVersion": "2.1.316",
+    "recordedAt": "2026-11-01T20:47:43.173Z",
+    "sourcePc": "home",
+    "source": "claude -p --output-format stream-json --model haiku in a scratch folder: Bash echo, then Read and Edit of notes.txt",
+    "prompt": "Bash: echo tool-detail-ok, then Edit notes.txt: replace \"hello\" with \"hello, orbit\""
+  },
+  "reply": {
+    "messages": [
+      {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_01ER2aHUzT4Aqaur7WSPbFma",
+              "name": "Bash",
+              "input": {
+                "command": "echo tool-detail-ok",
+                "description": "Echo tool-detail-ok"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_019udgxHLexsmbG12cQB7BqJ",
+              "name": "Read",
+              "input": {
+                "file_path": "C:\\work\\run\\notes.txt"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_019udgxHLexsmbG12cQB7BqJ",
+              "content": "1\tgreeting = \"hello\"\n2\t"
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01ER2aHUzT4Aqaur7WSPbFma",
+              "content": "tool-detail-ok\nShell cwd was reset to C:\\work\\run",
+              "is_error": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "assistant",
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_01Vdpseu6y7wM9phrjYAPL4K",
+              "name": "Edit",
+              "input": {
+                "replace_all": false,
+                "file_path": "C:\\work\\run\\notes.txt",
+                "old_string": "hello",
+                "new_string": "hello, orbit"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01Vdpseu6y7wM9phrjYAPL4K",
+              "content": "The file C:\\work\\run\\notes.txt has been updated successfully. (file state is current in your context \u2014 no need to Read it back)"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
