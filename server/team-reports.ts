@@ -74,21 +74,15 @@ export class TeamReports {
     const path = o.store.activePath(body.fromThreadId);
     const request = path.findLast((message) => message.role === "user" && message.kind === "text");
     if (!request || request.comm || request.from || request.queued || /(?:UNTRUSTED WEBHOOK|AUTHENTICATED WEBHOOK)/i.test(request.text ?? "")) return { error: "A direct user report request is required." };
+    if (reportIntent(request.text ?? "") !== "send") return { error: "No report call phrase. No report sent." };
     mkdirSync(o.dir, { recursive: true, mode: 0o700 });
     const contextFile = join(o.dir, `context-${createHash("sha256").update(JSON.stringify([bot.id, body.fromThreadId])).digest("hex")}.json`);
     let context: { requestId: string; reportId?: string } | undefined;
     try { context = z.strictObject({ requestId: z.string(), reportId: z.string().regex(REPORT_ID).optional() }).parse(JSON.parse(readFileSync(contextFile, "utf8"))); } catch {}
     const anchor = path.find((message) => message.id === context?.requestId);
-    const lastBot = path.slice(0, path.indexOf(request)).findLast((message) => message.role === "bot" && message.kind === "text");
-    const replying = anchor && lastBot && path.indexOf(lastBot) > path.indexOf(anchor) && !lastBot.comm && (!lastBot.from || lastBot.from.botId === bot.id)
-      && (/\breport\b|which Wink|보고/i.test(lastBot.text ?? "") || Boolean(context?.reportId && lastBot.text?.includes(context.reportId)));
-    const retryWords = /(?:^|[.!?;\n])\s*(?:(?:please|ok|okay|yes|yeah)[,\s]+)*(?:(?:retry|resend)\b|try\s+again\b|send\s+(?:it|(?:that|this|the)\s+report)\b[^.!?;\n]*\bagain\b|다시\s*(?:보[내네]|시도))/i.test(request.text ?? "");
-    const newIncident = anchor && (anchor.id !== request.id || (body.report_id && body.report_id !== context?.reportId)) && (/\b(?:new|another|different)\b|새로운|새\s*(?:문제|오류|버그)/i.test(request.text ?? "")
-      || (!retryWords && (request.image || request.png || /<attached-(?:image|file)\b/i.test(request.text ?? ""))));
-    const fresh = anchor && anchor.id !== request.id && (newIncident
-      || path.slice(path.indexOf(anchor) + 1, path.indexOf(request)).some((message) => message.role === "user" && message.kind === "text" && reportIntent(message.text ?? "", true) === "none"));
-    const followup = Boolean(anchor && anchor.id !== request.id && !fresh && (replying || retryWords));
-    const savedId = newIncident ? undefined : body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
+    const newIncident = anchor && (anchor.id !== request.id || (body.report_id && body.report_id !== context?.reportId))
+      && (request.image || request.png || /<attached-(?:image|file)\b/i.test(request.text ?? ""));
+    const savedId = newIncident ? undefined : body.report_id ?? (anchor ? context?.reportId : undefined);
     let previous: { report: TeamReport; receipt?: ReportReceipt } | undefined;
     if (savedId) {
       try { previous = JSON.parse(readFileSync(join(o.dir, `${savedId}.json`), "utf8")); } catch {}
@@ -98,14 +92,9 @@ export class TeamReports {
       const saved = previous.report;
       if (saved.owner !== o.owner || !o.store.conversationForBot(saved.bot.id, body.fromThreadId) || saved.threadId !== body.fromThreadId || !ids.has(saved.requestMessageId) || !ids.has(saved.selectedMessageId) || !saved.originals.every((message) => ids.has(message.id))) return { error: "Saved report does not belong to this branch/sender/team." };
     }
-    let intent = reportIntent(request.text ?? "", Boolean((previous || anchor) && (replying || retryWords || request.id === previous?.report.requestMessageId)));
-    const clarification = followup && /^(?:the\s+)?(?:screenshot|image|file|answer|message)\b|^(?:이전|방금|마지막|스크린샷|사진|첨부)/i.test(request.text ?? "");
-    if (intent === "none") return { error: "No explicit report or draft request. No report sent." };
-    if (!body.report_id && previous?.receipt && !retryWords && !clarification && reportIntent(request.text ?? "") === "send") previous = undefined;
-    if (clarification && anchor && reportIntent(anchor.text ?? "") === "draft") intent = "draft";
+    if (!body.report_id && body.action !== "retry" && previous?.receipt && request.id !== previous.report.requestMessageId) previous = undefined;
     let report: TeamReport;
-    const incidentRequest = clarification && anchor ? anchor : request;
-    if (!previous) writeFileAtomic(contextFile, JSON.stringify({ requestId: incidentRequest.id }), { mode: 0o600 });
+    if (!previous) writeFileAtomic(contextFile, JSON.stringify({ requestId: request.id }), { mode: 0o600 });
     try {
       if (previous && !previous.receipt && body.action !== "retry" && (body.selected_message_id || body.earlier_message_ids)) {
         const saved = previous.report;
@@ -118,7 +107,7 @@ export class TeamReports {
           attachmentsDir: o.attachmentsDir, roots: o.roots(bot.id, body.fromThreadId), current: o.current(bot.id) }),
           id: saved.id, summary: saved.summary, diagnosis: saved.diagnosis };
       }
-      report = previous ? previous.report : collectReport({ owner: o.owner!, bot, threadId: body.fromThreadId, path, request: incidentRequest,
+      report = previous ? previous.report : collectReport({ owner: o.owner!, bot, threadId: body.fromThreadId, path, request,
         selectedMessageId: body.selected_message_id, earlierMessageIds: body.earlier_message_ids,
         excludeImageMessageIds: body.exclude_image_message_ids,
         attachmentsDir: o.attachmentsDir, roots: o.roots(bot.id, body.fromThreadId), current: o.current(bot.id) });
@@ -144,7 +133,7 @@ export class TeamReports {
     const save = (receipt?: ReportReceipt) => writeFileAtomic(join(o.dir, `${report.id}.json`), JSON.stringify({ report, ...(receipt ? { receipt } : {}) }), { mode: 0o600 });
     save(previous?.receipt);
     writeFileAtomic(contextFile, JSON.stringify({ requestId: report.requestMessageId, reportId: report.id }), { mode: 0o600 });
-    if (body.action === "collect" || body.action === "draft" || intent === "draft") {
+    if (body.action === "collect" || body.action === "draft") {
       return { id: report.id, state: "draft", sent: false, checklist: REPORT_CHECKLIST,
         earlierReferences: path.slice(0, path.findIndex((message) => message.id === report.selectedMessageId)).filter((message) => message.role === "user" && message.kind === "text" && !message.comm).slice(-8).map((message) => ({ id: message.id, text: reportText(message.text ?? "").slice(0, 360) })),
         recentAnswers: path.slice(0, path.indexOf(request)).filter((message) => message.role === "bot" && message.kind === "text" && !message.comm).slice(-8).map((message) => ({ id: message.id, text: reportText(message.text ?? "").slice(0, 360) })),

@@ -22,9 +22,9 @@
 
 ## Invited team report pilot
 
-- On an authenticated team install offering this pilot, say "Send this Wink issue to Edward" or "대표님께 이 문제 보고해줘". Edward, Eddie, Ed, 에드워드, 에디 and 대표 resolve to that team's configured owner. A send request authorizes collecting relevant original chat evidence and incident images; no second approval is required.
-- Ask for a draft or preview first to keep it local. Ordinary bug discussion sends nothing. Unrelated desktop capture and complete native logs are excluded.
-- The receipt says whether the private report service accepted it or the owner's local inbox filed it. Bot reading is unverified. On an offline or unsupported relay, a private local draft remains; ask to retry that report with its ID.
+- On an authenticated team install, 에디에게 보내 must end a sentence in your own text outside quotes, code and pasted logs to collect and send without another approval (spacing, 보네 typo and 줘/줘요/주세요/줄래/줄래요/요 endings allowed), and repeating it after failed or unconfirmed delivery without a new attachment reuses the saved report.
+- Unrelated desktop capture and complete native logs are excluded.
+- The receipt says whether the private report service accepted it or the owner's local inbox filed it. Bot reading is unverified. On an offline or unsupported relay, a private local draft remains.
 
 ## Where things live
 
