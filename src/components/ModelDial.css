@@ -44,6 +44,7 @@
   height: var(--ph);
   overflow: hidden;
   user-select: none;
+  touch-action: none;
 }
 .dial-stage[data-boot], .dial-stage[data-boot] * { transition: none !important; animation: none !important; }
 .dial-layer { position: absolute; inset: 0; }
@@ -308,7 +309,7 @@ html[data-orbit-caption="win32"] .model-dial { top: var(--orbit-caption-height);
 .model-cross-header .model-dial-view:hover { color: #f2f3f5; }
 
 /* Phone: dial on top facing down, cards as a drum below it. */
-.dial-stage[data-phone] { --face: 90deg; --top: env(safe-area-inset-top, 0px); --gap: max(0px, (var(--ph) - 800px - var(--top) - env(safe-area-inset-bottom, 0px)) / 3); --cx: 50%; --cy: calc(238px + var(--top) + var(--gap)); --cw: calc(var(--pw) - 32px); --ch: 58px; width: var(--pw); height: var(--ph); touch-action: none; }
+.dial-stage[data-phone] { --face: 90deg; --top: env(safe-area-inset-top, 0px); --gap: max(0px, (var(--ph) - 800px - var(--top) - env(safe-area-inset-bottom, 0px)) / 3); --cx: 50%; --cy: calc(238px + var(--top) + var(--gap)); --cw: calc(var(--pw) - 32px); --ch: 58px; width: var(--pw); height: var(--ph); }
 .dial-stage[data-phone] :is(.dial-top p, .dial-orbits, .dial-link, .dial-rail, .dial-typeahead, .dial-keys, .dial-src, .dial-cta kbd) { display: none; }
 @media (pointer: fine) { .dial-stage[data-phone] .dial-cta kbd { display: inline-grid; } }
 .dial-stage[data-phone] .dial-top { left: 16px; top: calc(16px + var(--top)); width: calc(var(--pw) - 32px); }

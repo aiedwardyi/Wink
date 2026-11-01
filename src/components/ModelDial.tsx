@@ -381,7 +381,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     clearTimeout(typing.current.timer);
     typing.current.timer = window.setTimeout(() => setTyped((current) => ({ ...current, on: false })), 700);
   };
-  useDialTouch(stage, phone, index, PHONE_PITCH * fit.zoom, { step: stepModel, shift: shiftEffort });
+  useDialTouch(stage, index, PHONE_PITCH * fit.zoom, { step: stepModel, shift: shiftEffort });
 
   useImperativeHandle(handle, () => ({
     key: (event) => {

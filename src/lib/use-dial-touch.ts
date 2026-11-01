@@ -1,23 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
-import { lockAxis, reducedMotion, type SwipeAxis } from "./phone-swipe";
+import { lockAxis, type SwipeAxis } from "./phone-swipe";
 
-const SHIFT_PX = 40;
-const SAMPLE_MS = 100;
-const FLICK_MIN = 0.6;
-const FLICK_MAX = 0.8;
-const DECAY_MS = 90;
-const REST = 0.05;
+const SWIPE_PX = 40;
+const HOLD_MS = 600;
 const WAIT_MS = 500;
 
 type Moves = { step: (dir: number) => void; shift: (dir: number) => void };
-type Drag = { id: number; x: number; y: number; from: number; axis: SwipeAxis; shifted: boolean; samples: { y: number; t: number }[] };
+type Drag = { id: number; x: number; y: number; at: number; axis: SwipeAxis; shifted: boolean; held: boolean; anchor?: number };
 
-/** Phone dial: a vertical drag turns models, a flick coasts and snaps to the nearest one, a horizontal swipe moves effort one notch. */
-export function useDialTouch(ref: RefObject<HTMLElement | null>, enabled: boolean, index: number, pitch: number, moves: Moves): void {
+/** A swipe turns one model at any speed; a drag held 600 ms turns one more per pitch. A horizontal swipe moves effort one notch. */
+export function useDialTouch(ref: RefObject<HTMLElement | null>, index: number, pitch: number, moves: Moves): void {
   const latest = useRef({ moves, pitch });
   latest.current = { moves, pitch };
-  // Travel in px (down is positive), model steps landed and the one still rendering.
-  const spin = useRef({ pos: 0, done: 0, pending: 0, sent: 0, run: () => {} });
+  // Model steps asked for, steps landed and the one still rendering.
+  const spin = useRef({ goal: 0, done: 0, pending: 0, sent: 0, run: () => {} });
 
   useLayoutEffect(() => {
     const state = spin.current;
@@ -29,49 +25,38 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, enabled: boolea
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || !enabled) return;
+    if (!el) return;
     const state = spin.current;
     let drag: Drag | null = null;
-    let velocity = 0;
     let frame = 0;
-    let at = 0;
     let dragged = false;
 
-    const goal = () => -Math.round(state.pos / latest.current.pitch);
     const tick = (now: number) => {
       frame = 0;
-      if (!drag && velocity) {
-        const dt = Math.min(now - at, 50);
-        state.pos += velocity * dt;
-        velocity *= Math.exp(-dt / DECAY_MS);
-        if (Math.abs(velocity) < REST) velocity = 0;
-      }
-      at = now;
       if (state.pending && now - state.sent > WAIT_MS) {
         state.pending = 0;
-        velocity = 0;
-        state.pos = -state.done * latest.current.pitch;
+        state.goal = state.done;
       }
-      if (!state.pending && goal() !== state.done) {
-        state.pending = Math.sign(goal() - state.done);
+      if (!state.pending && state.goal !== state.done) {
+        state.pending = Math.sign(state.goal - state.done);
         state.sent = now;
         latest.current.moves.step(state.pending);
       }
-      if (velocity || state.pending) frame = requestAnimationFrame(tick);
+      if (state.pending) frame = requestAnimationFrame(tick);
     };
     const run = () => {
-      if (frame) return;
-      at = performance.now();
-      frame = requestAnimationFrame(tick);
+      if (!frame) frame = requestAnimationFrame(tick);
     };
     state.run = run;
+    const turn = (steps: number) => {
+      state.goal += steps;
+      run();
+    };
 
     const onDown = (event: PointerEvent) => {
-      if (!event.isPrimary) return;
-      velocity = 0;
+      if (!event.isPrimary || event.button) return;
       dragged = false;
-      state.pos = -(state.done + state.pending) * latest.current.pitch;
-      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, from: state.pos, axis: null, shifted: false, samples: [] };
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, at: performance.now(), axis: null, shifted: false, held: false };
     };
     const onMove = (event: PointerEvent) => {
       if (event.pointerId !== drag?.id) return;
@@ -88,25 +73,28 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, enabled: boolea
         }
       }
       if (drag.axis === "x") {
-        if (drag.shifted || Math.abs(dx) < SHIFT_PX) return;
+        if (drag.shifted || Math.abs(dx) < SWIPE_PX) return;
         drag.shifted = true;
         latest.current.moves.shift(-Math.sign(dx));
         return;
       }
-      const now = performance.now();
-      drag.samples = [...drag.samples.filter((sample) => now - sample.t < SAMPLE_MS), { y: event.clientY, t: now }];
-      state.pos = drag.from + dy;
-      run();
+      // Travel from before the hold never counts, so a fast swipe that rests still turns one model.
+      if (!drag.held && performance.now() - drag.at >= HOLD_MS) {
+        drag.held = true;
+        if (drag.anchor !== undefined) drag.anchor = event.clientY;
+      }
+      if (drag.anchor === undefined) {
+        if (Math.abs(dy) < SWIPE_PX) return;
+        drag.anchor = event.clientY;
+        turn(-Math.sign(dy));
+      } else if (drag.held) {
+        const steps = Math.trunc((event.clientY - drag.anchor) / latest.current.pitch);
+        drag.anchor += steps * latest.current.pitch;
+        if (steps) turn(-steps);
+      }
     };
     const onUp = (event: PointerEvent) => {
-      if (event.pointerId !== drag?.id) return;
-      const now = performance.now();
-      const live = drag.samples.filter((sample) => now - sample.t < SAMPLE_MS);
-      const [first, last] = [live[0], live.at(-1)];
-      const speed = drag.axis === "y" && first && last && last.t > first.t ? (last.y - first.y) / (last.t - first.t) : 0;
-      velocity = event.type === "pointerup" && !reducedMotion() && Math.abs(speed) >= FLICK_MIN ? Math.max(-FLICK_MAX, Math.min(FLICK_MAX, speed)) : 0;
-      drag = null;
-      run();
+      if (event.pointerId === drag?.id) drag = null;
     };
     const onClick = (event: MouseEvent) => {
       if (!dragged) return;
@@ -134,5 +122,5 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, enabled: boolea
       el.removeEventListener("touchstart", hold);
       el.removeEventListener("touchmove", hold);
     };
-  }, [ref, enabled]);
+  }, [ref]);
 }
