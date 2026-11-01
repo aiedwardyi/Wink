@@ -20,5 +20,11 @@ export function reportIntent(raw: string, allowRetry = false): "send" | "draft" 
   if (!alias && !retry) return "none";
   if (/\b(?:should|could|would|might)\s+(?:we|i|someone)\b|\b(?:not|never)\s+(?:report|send)\b|(?:보낼까|보고할까)/i.test(text)) return "none";
   if (/\b(?:did|have|has|had)\s+(?:you|we|i|someone|edward|eddie|ed)\b|\b(?:told|asked|said|instructed|says|tells)\b|\b(?:he|she|they|edward|eddie|ed)\s+(?:would|might)\s+(?:probably\s+)?(?:want|like|need)\b|\b(?:have|has|wrote|received)\s+(?:a|the|this|that)\s+(?:bug\s+)?report\b|\b(?:do|does)\s+(?:we|i|someone)\s+(?:need|have|want)\s+to\b|(?:보내라고|보고하라고|전달하라고)|(?:하셨어|말했|시켰)/i.test(text)) return "none";
-  return retry || /(?:^|[,.!?\n])\s*(?:(?:please|pls|hey|ok|okay|yeah|yes|let's)\s+|(?:i(?:'d| would) like|i (?:want|need)(?: you)?)\s+to\s+|(?:can|could|would|will)\s+you\s+(?:please\s+)?)*(?:send|report|forward|submit|tell|flag|file|share)\b|\blet\b.{0,40}\bknow\b|(?:보내\s*(?:줘|주|줄|드려)|보내[.!?\s]*$|(?:보고|전달|제보|전송|공유|신고)\s*(?:해|하|좀\s*해|부탁)|(?:알려|말해)\s*(?:줘|주|드려))/i.test(text) ? "send" : "none";
+  const owner = String.raw`(?<![\p{L}\p{N}_])(?:edward|eddie|ed|에드워드|에디|대표)(?:님)?`;
+  const end = String.raw`(?:한테로|에게|한테|께|로|에)?(?![\p{L}\p{N}_]|['’]s\b)`;
+  const start = String.raw`(?:^|[,.!?\n])\s*(?:(?:please|pls|hey|ok|okay|yeah|yes|let's)\s+|(?:i(?:'d| would) like|i (?:want|need)(?: you)?)\s+to\s+|(?:can|could|would|will)\s+you\s+(?:please\s+)?)*`;
+  const direct = new RegExp(String.raw`${start}(?:(?:send|report|forward|submit)\b(?:(?!\bto\b)[^,.!?;\n])*\bto\s+${owner}${end}|(?:flag|file|share)\b(?:(?!\b(?:to|for|with)\b)[^,.!?;\n])*\b(?:to|for|with)\s+${owner}${end}|(?:tell|send)\s+${owner}${end}|let\s+${owner}${end}\s+know\b)`, "iu");
+  const korean = new RegExp(String.raw`(?:^|[,.!?;\n])(?:(?![\p{L}\p{N}_]+(?:한테|에게|께))[^,.!?;\n])*${owner}(?:한테로|에게|한테|께|로|에)(?:는|도)?(?![\p{L}\p{N}_]|\s*(?:받|온|들은))(?:(?![\p{L}\p{N}_]+(?:한테|에게|께)|말고|대신)[^,.!?;\n])*(?:보내\s*(?:줘|주|줄|드려)|보내[.!?\s]*$|(?:보고|전달|제보|전송|공유|신고)\s*(?:해|하|좀\s*해|부탁)|(?:알려|말해)\s*(?:줘|주|드려))`, "iu");
+  const pronoun = new RegExp(String.raw`(?:^|[.!?\n])\s*${owner}${end}\s+[^,.!?;\n]+,\s*(?:please\s+)?(?:send|forward|report|share)\b(?:(?!\bto\b)[^,.!?;\n])*\bto\s+him\b|(?:^|[.!?\n])\s*${owner}가[^,.!?;\n]*(?:봐야|받아야|알아야)[^,.!?;\n]*,\s*보내\s*(?:줘|주|줄|드려)`, "iu");
+  return retry || direct.test(text) || korean.test(text) || pronoun.test(text) ? "send" : "none";
 }

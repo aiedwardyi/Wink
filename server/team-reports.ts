@@ -86,7 +86,7 @@ export class TeamReports {
     const fresh = anchor && anchor.id !== request.id && (request.image || request.png || /<attached-(?:image|file)\b|\b(?:new|another|different)\b|새로운|새\s*(?:문제|오류|버그)/i.test(request.text ?? "")
       || path.slice(path.indexOf(anchor) + 1, path.indexOf(request)).some((message) => message.role === "user" && message.kind === "text" && reportIntent(message.text ?? "", true) === "none"));
     const followup = Boolean(anchor && anchor.id !== request.id && !fresh && (replying || retryWords));
-    const savedId = fresh ? undefined : body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
+    const savedId = body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
     let previous: { report: TeamReport; receipt?: ReportReceipt } | undefined;
     if (savedId) {
       try { previous = JSON.parse(readFileSync(join(o.dir, `${savedId}.json`), "utf8")); } catch {}

@@ -73,6 +73,42 @@ const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can yo
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
 describe("review report authorization regressions", () => {
+  it.each(["Edward", "Eddie", "Ed", "에드워드", "에디", "대표"])("requires %s to be the delivery recipient", (alias) => {
+    for (const text of [`Send this to Alice instead of ${alias}`, `Tell Alice that ${alias} is on vacation`, `Let Alice know about ${alias}`, `Send ${alias}'s notes to Alice`, `Send this to Alice with ${alias}`, `Flag this for Alice with ${alias}`]) {
+      expect(reportIntent(text)).toBe("none");
+      expect(reportIntent(text, true)).toBe("none");
+    }
+    expect(reportIntent(`Send this to ${alias}`)).toBe("send");
+  });
+  it.each(["앨리스한테 보내, 에디 말고", "앨리스한테 에디 소식 보내줘", "에디 대신 앨리스한테 보내줘", "에디한테 말고 앨리스한테 보내줘", "에디한테 받은 메시지 보내줘", "에드워드 휴가래"])("does not authorize an owner mention: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each(["에드워드", "에디", "대표"])("accepts the Korean recipient %s", (alias) => {
+    expect(reportIntent(`${alias}한테 보내줘`)).toBe("send");
+  });
+  it.each(["Share this with Edward", "Send Ed this report", "Ed needs this, send this to him", "에디가 이거 받아야 해, 보내줘"])("retains addressed requests: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+  });
+  it.each(["send", "retry"])("keeps the explicit report ID on %s after unrelated chat", async (action) => {
+    const f = fixture(); f.append("user", "Keep the export running"); const bad = f.append("bot", "Stopped the export");
+    const request = f.append("user", "Draft a report for Ed"); const draft = await f.call({ action: "draft" });
+    const original = draft.report as TeamReport;
+    f.append("bot", "Here is the report draft"); f.append("user", "What is two plus two?"); f.append("bot", "Four");
+    f.append("user", action === "retry" ? "Retry that report" : "Send that report to Ed");
+    expect(await f.call({ action, report_id: draft.id })).toMatchObject({ id: draft.id, state: "accepted" });
+    const [held] = await f.relay.claim();
+    expect(held.report).toEqual(original);
+    expect(held.report).toMatchObject({ selectedMessageId: bad.id, requestMessageId: request.id });
+  });
+  it.each(["send", "retry"])("validates an explicit report branch on %s after unrelated chat", async (action) => {
+    const f = fixture(); f.append("user", "Keep notes"); const bad = f.append("bot", "Deleted notes");
+    f.append("user", "Draft a report for Ed"); const draft = await f.call({ action: "draft" });
+    f.append("user", "What is two plus two?"); f.append("bot", "Four"); f.append("user", "Retry that report");
+    f.path.splice(f.path.indexOf(bad), 1);
+    expect(await f.call({ action, report_id: draft.id })).toEqual({ error: "Saved report does not belong to this branch/sender/team." });
+    expect(await f.relay.claim()).toHaveLength(0);
+  });
   it.each(["collect", "send"].flatMap((action) => ["earlier", "selected"].map((change) => [action, change])))("R6 applies %s evidence updates to a saved draft: %s", async (action, change) => {
     const f = fixture(); const correction = f.append("user", "Keep the export running");
     f.append("user", "Check status"); const bad = f.append("bot", "Stopped the export");
