@@ -14,6 +14,8 @@ import type { Logger } from "./log.ts";
 import { peerPrefix, rateKey } from "./net-util.ts";
 import { SNAG_CLAIM_MAX, type SnagStore } from "./snags.ts";
 import type { TeamLog } from "./team.ts";
+import type { ReportStore } from "./reports.ts";
+import { reportHttp } from "./reports-http.ts";
 
 export interface ApiOptions {
   base: string;
@@ -28,6 +30,7 @@ export interface ApiOptions {
   teamOwnerEmail?: string;
   /** Set with `team`. */
   snags?: SnagStore;
+  reports?: ReportStore;
   limits: RelayLimits;
   log: Logger;
   now: () => number;
@@ -258,6 +261,10 @@ export function createApiServer(opts: ApiOptions): Server {
       return sendJson(res, 200, JSON.stringify(team.stats(tz)), cors);
     }
 
+    if (/^\/v1\/team\/reports\/(submit|claim|ack)$/.test(url) && accounts && teamOwnerEmail && opts.reports) {
+      if (!teamLimit.take(ip)) return reply(res, 429, { error: "rate-limited" });
+      return reportHttp(req, res, { accounts, reports: opts.reports, owner: teamOwnerEmail, now: opts.now, who: team ? (label) => team.who(label) : undefined });
+    }
     const snagsUrl = SNAGS_RE.exec(url);
     if (accounts && signinOrigin && team && teamOwnerEmail && snags && snagsUrl) {
       const peer = peerPrefix(req.socket.remoteAddress);

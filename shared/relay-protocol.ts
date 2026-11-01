@@ -52,6 +52,7 @@ export const readyMessageSchema = z.object({
   account: z.string().optional(),
   /** The relay takes `snag` frames. Older PCs strip this field. */
   snags: z.literal(true).optional(),
+  reportOwner: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 /** Relay to PC: a phone waits on an empty pool. */
 export const wantMessageSchema = z.object({ type: z.literal("want"), n: count });
@@ -549,6 +550,7 @@ export interface PhoneRelayStatus {
   nextRetryAt: number | null;
   /** The connected relay takes stuck-worker reports. */
   snags?: boolean;
+  reportOwner?: string;
 }
 
 export const PHONE_RELAY_OFF: Readonly<PhoneRelayStatus> = Object.freeze({

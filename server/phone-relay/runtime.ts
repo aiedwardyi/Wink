@@ -338,6 +338,7 @@ class RelayRuntime {
       nextRetryAt: link.nextRetryAt,
     };
     if (connected && link.snags) next.snags = true;
+    if (connected && link.reportOwner) next.reportOwner = link.reportOwner;
     if (sameStatus(next, this.current)) return;
     this.current = next;
     this.options.onStatus({ ...next });
@@ -363,6 +364,7 @@ function sameStatus(a: PhoneRelayStatus, b: PhoneRelayStatus): boolean {
     a.certNotAfter === b.certNotAfter &&
     a.lastError === b.lastError &&
     a.nextRetryAt === b.nextRetryAt &&
-    a.snags === b.snags
+    a.snags === b.snags &&
+    a.reportOwner === b.reportOwner
   );
 }

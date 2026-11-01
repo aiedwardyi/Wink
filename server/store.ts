@@ -182,6 +182,7 @@ export interface Message {
   origin?: string;
   quiet?: true;
   snagIds?: string[];
+  reportIds?: string[];
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Message to @X" in the caller's chat, linking to the

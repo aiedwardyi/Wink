@@ -78,6 +78,7 @@ export class FakeRelay extends EventEmitter {
   answerPings = true;
   /** Offer snags in ready, as a team relay does. An old relay closes the channel on a snag. */
   offerSnags = false;
+  reportOwner?: string;
   readonly snags: unknown[] = [];
   enrollAnswer: ((body: string) => EnrollAnswer) | null = null;
   /** When set, enroll answers wait for it. */
@@ -302,6 +303,7 @@ export class FakeRelay extends EventEmitter {
           if (this.refreshTicket) ready.ticket = this.refreshTicket;
           if (this.refreshAccount && msg.account) ready.account = this.refreshAccount;
           if (this.offerSnags) ready.snags = true;
+          if (this.reportOwner) ready.reportOwner = this.reportOwner;
           socket.write(encodeFrame(ready));
           this.record("control:ready");
         } else if (msg.type === "ping") {

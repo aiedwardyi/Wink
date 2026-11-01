@@ -35,6 +35,7 @@
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
+import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
@@ -196,6 +197,7 @@ const ROUTINE_FIELDS_SCHEMA = {
 } as const;
 
 const TOOLS = [
+  ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   {
     name: "list_bots",
     description:
@@ -606,6 +608,10 @@ function confirmationResult(r: Json, fallback: string): { text: string } {
 }
 
 async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{ text: string; isError?: boolean }> {
+  if (name === "report_issue") {
+    const r = await api("/api/internal/team-report", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
+    return { text: JSON.stringify(r), ...(r.error ? { isError: true } : {}) };
+  }
   if (name === "list_bots") {
     const r = await api(`/api/internal/agents?self=${encodeURIComponent(BOT_ID)}`);
     const bots = (r.bots as Array<Json>) ?? [];

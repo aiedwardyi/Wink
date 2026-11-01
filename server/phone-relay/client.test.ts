@@ -118,6 +118,18 @@ describe("relay client", () => {
     expect(fresh.c.snapshot().state).toBe("connected");
   });
 
+  it("advertises reporting only from an authenticated current session", async () => {
+    r = await rig();
+    r.relay.reportOwner = "a".repeat(64);
+    r.relay.on("event", () => bus.emit("event"));
+    const { c } = start();
+    expect(c.snapshot().reportOwner).toBeUndefined();
+    await waitFor(() => c.snapshot().state === "connected");
+    expect(c.snapshot().reportOwner).toBe("a".repeat(64));
+    c.stop();
+    expect(c.snapshot().reportOwner).toBeUndefined();
+  });
+
   it("bursts toward pool.max when a phone drains the pool, bounded by parallel opens", async () => {
     r = await rig();
     const relay = r.relay;

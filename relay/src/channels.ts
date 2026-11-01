@@ -43,6 +43,7 @@ export interface ChannelContext {
   now: () => number;
   /** Set only when the relay has a team owner. */
   snags?: SnagStore;
+  reportOwner?: string;
 }
 
 type AccountSet = { subHash: string; name: string; person: string; refreshed?: string };
@@ -194,6 +195,7 @@ export function handleControl(ctx: ChannelContext, socket: TLSSocket): void {
       if (result.ticket) ready.ticket = result.ticket;
       if (result.account?.refreshed) ready.account = result.account.refreshed;
       if (ctx.snags) ready.snags = true;
+      if (ctx.reportOwner) ready.reportOwner = ctx.reportOwner;
       send(socket, ready);
       const waiting = hub.waitingCount(result.label);
       if (waiting > 0) link.want(waiting);
