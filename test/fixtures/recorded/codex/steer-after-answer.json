@@ -1,0 +1,96 @@
+{
+  "stamp": {
+    "engine": "codex",
+    "cliVersion": "0.165.0",
+    "recordedAt": "2026-11-01T10:19:35.134Z",
+    "sourcePc": "home",
+    "source": "Real app-server notifications from an isolated fixed server C13 turn; ids redacted",
+    "model": "gpt-5.6-luna",
+    "effort": "low",
+    "prompt": "Write 40 numbered lines, one short fact about the ocean per line. Then one last line: GIBBON-9107. No intro. Do not call any tools.",
+    "steer": "Also add one more last line: CONDOR-8868. Do not call any tools."
+  },
+  "reply": {
+    "steer": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "turn/steer",
+      "params": {
+        "threadId": "<redacted>",
+        "expectedTurnId": "<redacted>",
+        "input": [
+          {
+            "type": "text",
+            "text": "[Wink note: Any earlier final answer in this running turn is already shown to the user and stays visible. Continue from it; do not repeat it when answering this follow-up.]\n\nAlso add one more last line: CONDOR-8868. Do not call any tools."
+          }
+        ]
+      }
+    },
+    "events": [
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "<redacted>",
+            "text": "1. Oceans cover most of Earth’s surface.\n2. The Pacific Ocean is the largest ocean.\n3. The Atlantic Ocean separates the Americas from Europe and Africa.\n4. The Indian Ocean is the warmest major ocean.\n5. The Arctic Ocean is the smallest ocean.\n6. The Southern Ocean surrounds Antarctica.\n7. Ocean water is salty.\n8. Coral reefs support many marine species.\n9. Whales are marine mammals.\n10. Dolphins breathe air through blowholes.\n11. Sharks have cartilaginous skeletons.\n12. Sea turtles migrate across oceans.\n13. Octopuses have three hearts.\n14. Jellyfish have no bones.\n15. Plankton drift with ocean currents.\n16. Phytoplankton produce oxygen through photosynthesis.\n17. Kelp is a type of large algae.\n18. Mangroves protect tropical coastlines.\n19. Tides are influenced by the Moon.\n20. Ocean currents move heat around Earth.\n21. Waves are often caused by wind.\n22. Deep ocean water is very cold.\n23. Sunlight reaches only the upper ocean.\n24. The abyssal zone is nearly dark.\n25. Hydrothermal vents occur on the seafloor.\n26. Some vent organisms use chemosynthesis.\n27. The Mariana Trench is extremely deep.\n28. Ocean pressure increases with depth.\n29. Seawater freezes below freshwater’s freezing point.\n30. Icebergs float because ice is less dense than water.\n31. Coral animals build reefs from calcium carbonate.\n32. Sea stars can regrow lost arms.\n33. Crabs have hard external shells.\n34. Eels are elongated fish.\n35. Flying fish can glide above water.\n36. Bioluminescence creates light in some sea creatures.\n37. Sound travels efficiently through seawater.\n38. Oceans absorb substantial atmospheric carbon dioxide.\n39. Plastic pollution harms marine life.\n40. Protecting oceans helps sustain coastal communities.\nGIBBON-9107",
+            "phase": "final_answer",
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "<redacted>",
+          "turnId": "<redacted>",
+          "completedAtMs": 1793528337588
+        },
+        "emittedAtMs": 1793528337596
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "<redacted>",
+            "text": "CONDOR-8868",
+            "phase": "final_answer",
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "<redacted>",
+          "turnId": "<redacted>",
+          "completedAtMs": 1793528339235
+        },
+        "emittedAtMs": 1793528339242
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "<redacted>",
+          "turn": {
+            "id": "<redacted>",
+            "rootTurnId": "<redacted>",
+            "items": [
+              {
+                "type": "agentMessage",
+                "id": "<redacted>",
+                "text": "CONDOR-8868",
+                "phase": "final_answer",
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1793528330,
+            "completedAt": 1793528339,
+            "durationMs": 9247
+          }
+        },
+        "emittedAtMs": 1793528339289
+      }
+    ]
+  }
+}

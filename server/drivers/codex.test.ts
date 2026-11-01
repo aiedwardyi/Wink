@@ -159,8 +159,36 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(await instance.adapter.steer!("t-steer", "extra")).toBe(true);
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(1);
-    expect(recorder.events).toContainEqual(expect.objectContaining({ type: "content.delta", delta: "extra" }));
+    expect(recorder.events).toContainEqual(expect.objectContaining({ type: "content.delta", delta: expect.stringContaining("extra") }));
     expect(await instance.adapter.steer!("t-steer", "late")).toBe(false);
+  });
+
+  it("tells a C13 follow-up that earlier final answers stay visible", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/steer-after-answer.json", import.meta.url), "utf8"));
+    const messages = recorded.reply.events
+      .filter((event: { method: string }) => event.method === "item/completed")
+      .map((event: { params: { item: { text: string; phase: string } } }) => event.params.item);
+    await create({ mode: "steer", environment: { FAKE_CODEX_MESSAGES: JSON.stringify(messages) } });
+    const dump = join(scratch, "steer.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-c13", text: recorded.stamp.prompt, system: "Wink instructions." });
+    await recorder.until((e) => e.type === "content.delta");
+    expect(await instance.adapter.steer!("t-c13", recorded.stamp.steer)).toBe(true);
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    const calls = sentCalls(dump);
+    expect(calls.filter((call) => call.method === "turn/start")).toHaveLength(1);
+    expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: recorded.stamp.prompt }]);
+    expect(calls.find((call) => call.method === "turn/steer")?.params).toEqual({
+      threadId: "codex-thread-1", expectedTurnId: "native-turn-1", input: recorded.reply.steer.params.input,
+    });
+    expect(recorded.reply.steer.params.input[0].text).toContain("earlier final answer");
+    expect(recorded.reply.steer.params.input[0].text).toContain("stays visible");
+    expect(recorded.reply.steer.params.input[0].text.endsWith(`\n\n${recorded.stamp.steer}`)).toBe(true);
+    const texts = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
+    expect(texts).toMatchObject(messages.map(({ text, phase }: { text: string; phase: string }) => ({ text, phase })));
+    expect(messages).toHaveLength(2);
+    expect(messages[0].text.match(/^\d+\. /gm)).toHaveLength(40);
+    expect(messages[1]).toMatchObject({ text: "CONDOR-8868", phase: "final_answer" });
   });
 
   it("falls back when native steering rejects the turn", async () => {

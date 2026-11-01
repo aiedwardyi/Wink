@@ -50,6 +50,7 @@ import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
 const DRIVER_KIND = "codex";
+const STEER_NOTE = "[Wink note: Any earlier final answer in this running turn is already shown to the user and stays visible. Continue from it; do not repeat it when answering this follow-up.]";
 
 const codexAuthSchema = z.object({ auth_mode: z.string().nullish(), tokens: z.object({ id_token: z.string() }) });
 
@@ -404,7 +405,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           const result = await request("turn/steer", {
             threadId: nativeThreadId,
             expectedTurnId: nativeTurnId,
-            input: [{ type: "text", text }],
+            input: [{ type: "text", text: `${STEER_NOTE}\n\n${text}` }],
           });
           return result?.turnId === nativeTurnId;
         } catch {
