@@ -1434,6 +1434,16 @@ describe("skin persistence", () => {
     expect(extras).toHaveLength(0);
   });
 
+  it("swaps the extra style tag between the tool skins and Servo", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({})));
+    applySkin("mono-hud");
+    expect(extras.map((el) => el.dataset.skinExtra)).toEqual(["mono-hud"]);
+    applySkin("modal");
+    expect(extras.map((el) => el.dataset.skinExtra)).toEqual(["tool"]);
+    applySkin("precision");
+    expect(extras).toHaveLength(0);
+  });
+
   it("stamps data-skin and remembers the choice under omb-skin", () => {
     applySkin("ledger");
     expect(dataset.skin).toBe("ledger");

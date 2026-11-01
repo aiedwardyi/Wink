@@ -99,6 +99,7 @@ import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNote
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
+import { summaryInstance } from "./summary-instance.ts";
 import { findCliCandidates, resetPathCache } from "./env-path.ts";
 import { testCliBinary } from "./cli-probe.ts";
 import { buildNotification, type Notification } from "./notify.ts";
@@ -296,8 +297,12 @@ import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { teamRoute } from "./team-route.ts";
+import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
+import { TeamReports } from "./team-reports.ts";
+import { hasReportEnrollment, sendTeamReport } from "./team-report-transport.ts";
+import { reportOwnerPost, startTeamReportOwner } from "./team-report-owner.ts";
 import { createGoogleSync, GOOGLE_MIRROR_DIR, googleSyncRoute } from "./google-sync.ts";
 import type { PublicPhone } from "./phone-devices.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
@@ -490,6 +495,7 @@ let { host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_
 // Absent unless phoneRelay.base is configured and enabled; it starts only
 // once handleRequest exists, so early static serving is never reachable.
 let relayPresenceHost: string | null = null;
+let relayModelDial = false;
 const phoneAccess: PhoneAccess = new PhoneAccess({
   dataDir: DATA_DIR,
   env: process.env,
@@ -505,6 +511,11 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
   },
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
+    const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
+    if (dial !== relayModelDial) {
+      relayModelDial = dial;
+      broadcast({ kind: "config", ...configStatus() });
+    }
     const host = phoneAccess.presenceHost();
     void teamSnags?.sync();
     if (host === relayPresenceHost) return;
@@ -584,6 +595,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
       OMB_THREAD_ID: threadId,
       OMB_COMMS_TOKEN: COMMS_TOKEN,
       OMB_TURN_DEPTH: String(depth),
+      OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
     },
   };
 }
@@ -963,6 +975,17 @@ const teamSnags = snagUserData ? new TeamSnags({
   scrub: { home: homedir(), user: process.env.USERNAME ?? process.env.USER ?? "" },
   warn: (line) => console.warn(line),
 }) : null;
+const teamReports = new TeamReports({
+  dir: join(DATA_DIR, "team-report-drafts"), store, status: () => phoneAccess.status(), owner: googleEnv.teamOwner,
+  enrolled: () => hasReportEnrollment(DATA_DIR, phoneAccess.base()),
+  attachmentsDir: ATTACHMENTS_DIR,
+  roots: (botId, threadId) => botOutputRoots(store.bot(botId)!, threadId, store.conversationForBot(botId, threadId)?.group?.id),
+  current: (botId) => {
+    const selection = store.bot(botId)?.modelSelection;
+    return { engine: selection ? registry.get(selection.instanceId)?.driverKind ?? "unknown" : "unknown", model: selection?.model ?? "unknown", version: process.env.OMB_APP_VERSION ?? "unknown" };
+  },
+  send: (report) => sendTeamReport({ dataDir: DATA_DIR, base: () => phoneAccess.base(), tokens: googleAccount }, report),
+});
 initializeSteerQueue(store, drainQueuedSends, () => threadSyncGate.enabled && profileSyncSettings.syncChats && !!profileSyncSettings.folder);
 if (store.botsFile === "unreadable") console.warn("bot sync: bots.json is there but did not load; not syncing bots until it does");
 store.renameModel(registry.instances().filter((i) => i.driverKind === "claudeAgent").map((i) => i.instanceId), "claude-sonnet-5", "claude-sonnet-5-5");
@@ -2669,7 +2692,10 @@ const summaryRepair = createSummaryRepair({
   store,
   instanceFor: async (botId, threadId) => {
     const bot = store.bot(botId);
-    return bot ? registry.get((await resolvedBotSelection(bot, store.taskByThread(botId, threadId))).instanceId) : undefined;
+    if (!bot) return undefined;
+    const selection = await resolvedBotSelection(bot, store.taskByThread(botId, threadId));
+    const instance = registry.get(selection.instanceId);
+    return instance ? summaryInstance(instance, selection.model) : undefined;
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   taskRecordText: (threadId, contextWindow) => {
@@ -2695,7 +2721,7 @@ const summaryBuild = createSummaryBuild({
       ? paneNotesForTurn(messages, new Set(), task.paneNotesDeliveredId ?? undefined, true, true, contextWindow)
       : null;
     return {
-      instance,
+      instance: summaryInstance(instance, selection.model),
       contextWindow,
       taskRecordText: (record ? taskRecordBlock(record, Math.max(512, Math.floor(contextWindow * 0.15) * 3)) : "") ||
         "No durable task record is available.",
@@ -4691,13 +4717,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       summaryGrace: grace,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
-      summarize: inlineSummarizer(instance, waitedMs),
+      summarize: inlineSummarizer(summaryInstance(instance, model), waitedMs),
       onSummaryCall: (record) => logSummaryCall({
         botId: bot.id,
         threadId,
         phase: "compact",
         engine: instance.driverKind,
-        model: instance.textModel ?? null,
+        model: summaryInstance(instance, model).textModel ?? null,
         run: 0,
         deadlineMs: inlineDeadlineMs(instance, waitedMs),
       }, record),
@@ -5362,6 +5388,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           taskStatePrompt +
           reactPrompt +
           showImagePrompt +
+          (integrations.agents ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           CORPUS_SEARCH_INSTRUCTIONS +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
@@ -6100,7 +6127,8 @@ async function runClaimedGroupMemberTurn(
     return true;
   }
   await providerReload.wait(selection.instanceId);
-  const instance = registry.get(selection.instanceId);
+  const selectedInstance = registry.get(selection.instanceId);
+  const instance = selectedInstance && summaryInstance(selectedInstance, selection.model);
   if (!instance) {
     const message = `${bot.name}'s model is unavailable`;
     store.appendMessage(threadId, {
@@ -6276,6 +6304,7 @@ async function runClaimedGroupMemberTurn(
     `Reply as yourself, ${detailedRepliesEnabled(cfg) ? "" : "briefly and "}conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     reactionSystemGuidance(),
     coordinationPrompt,
+    integrations.agents && teamReports.prompt().trimStart(),
     integrations.agents && `${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}`,
     integrations.agents &&
       "If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation.",
@@ -6924,7 +6953,7 @@ function configStatus() {
       browser: builtInBrowserEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
-      modelDial: cfg.features?.modelDial === true,
+      modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
     browserProfiles: cfg.browserProfiles ?? [],
   };
@@ -7146,6 +7175,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
+      if (method === "POST" && path === "/api/internal/team-report") {
+        return json(res, 200, await teamReports.handle(await readBody(req)));
+      }
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";
@@ -8791,6 +8823,9 @@ startTeamSnagOwner({
   postedIds: () => chiefSnagIds(store),
   warn: (line) => console.warn(line),
 });
+startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => phoneAccess.base(), baked: googleEnv.teamRelay,
+  owner: googleEnv.teamOwner, email: () => googleAccount.owner()?.email ?? null, tokens: googleAccount,
+  ...reportOwnerPost(store, profileSyncSettings.deviceId) });
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
 for (const bot of store.bots) {

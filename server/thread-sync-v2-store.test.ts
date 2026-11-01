@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Message, TaskRecord } from "./store.ts";
+import type { BotRecord, Message, TaskRecord } from "./store.ts";
 import { CONFLICT_NOTICE } from "./thread-sync.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { writeDeviceRecord } from "./device-sync.ts";
@@ -508,6 +508,125 @@ describe("store delta sync", { timeout: 60_000 }, () => {
       expect(path(await peer.snapshot())).toEqual(path(snapshot));
     }
   });
+
+  for (const scenario of ["duplicate interrupted turn", "duplicate completed turn", "distinct interrupted turn"]) {
+    it(`R11 keeps a ${scenario} split below the home final`, async () => {
+      const folder = temp();
+      const a = pc(folder, "home", true, false, false, LOW);
+      const c = pc(folder, "laptop", true, false, false, HIGH);
+      const base = await a.call<Message>("append", { text: "base" });
+      await a.call("flush");
+      await c.call("pull");
+      const request = "Check the video KB, slides and comments";
+      const sent = await c.call<Message>("append", { text: scenario.startsWith("duplicate") ? request : "Check another video" });
+      await c.call("append", { role: "bot", text: "I'll check the video, slides and comments." });
+      for (const ok of [false, false, true]) {
+        await c.call("append", { role: "bot", patch: { kind: "activity", tool: { name: "Read", ok } } });
+      }
+      if (scenario === "duplicate completed turn") await c.call("append", { role: "bot", text: "Laptop final" });
+      const laptopTip = (await c.snapshot()).leaf;
+      await a.call("append", { text: request });
+      for (let i = 0; i < 6; i++) await a.call("append", { role: "bot", patch: { kind: "activity", tool: { name: "Read", ok: true } } });
+      const final = await a.call<Message>("append", { role: "bot", text: "Home final: checked the video, slides and comments." });
+      await a.call("flush");
+      await exchange(a, c);
+      for (const peer of [a, c]) {
+        const snapshot = await peer.snapshot();
+        expect(tip(snapshot)).not.toBe(laptopTip);
+        expect(tip(snapshot)).toBe(final.id);
+        expect(path(snapshot)).not.toContain(sent.id);
+        expect(snapshot.rows.find((row) => row.id === sent.id)?.parentId).toBe(base.id);
+        expect(snapshot.rows.some((row) => row.id === laptopTip)).toBe(true);
+        expect(snapshot.rows.filter(isConflictNotice)).toHaveLength(peer === c ? 1 : 0);
+        expect(heads(peer.dataDir).map((head) => head.value)).toEqual([final.id]);
+        await peer.call("restart");
+        await peer.call("poll");
+        expect(tip(await peer.snapshot())).toBe(final.id);
+      }
+    });
+  }
+
+  it("R12 keeps resume state when another PC imports off-path rows", async () => {
+    const { a, c, main } = await behind();
+    await a.call("continuity");
+    const before = (await a.snapshot()).tasks.find((task) => task.threadId === "thread")!;
+    await c.call("batch", { count: 4 });
+    const stale = (await c.snapshot()).rows.slice(1);
+    await exchange(a, c);
+    const after = await a.snapshot();
+    expect(after.leaf).toBe(main);
+    expect(stale.every((row) => after.rows.some((message) => message.id === row.id))).toBe(true);
+    expect(after.tasks.find((task) => task.threadId === "thread")).toEqual(before);
+    expect((await a.call<BotRecord>("bot")).resumeCursors).toEqual({ test: "cursor" });
+    await a.call("restart");
+    expect((await a.snapshot()).tasks.find((task) => task.threadId === "thread")).toEqual(before);
+  });
+
+  it("R13 joins a short stale send that was not answered elsewhere", async () => {
+    const { a, c, main } = await behind();
+    const sent = await c.call<Message>("append", { text: "A new request typed while stale" });
+    await exchange(a, c);
+    for (const peer of [a, c]) {
+      const snapshot = await peer.snapshot();
+      expect(snapshot.leaf).toBe(sent.id);
+      expect(snapshot.rows.find((row) => row.id === sent.id)?.parentId).toBe(main);
+      expect(snapshot.rows.filter(isConflictNotice)).toHaveLength(0);
+    }
+  });
+
+  it("joins completed Claude narration, tools and final without changing output", async () => {
+    const { a, c, main } = await behind();
+    const sent = await c.call<Message>("append", { text: "A distinct request" });
+    const narration = await c.call<Message>("append", { role: "bot", text: "Checking the file", patch: { summarized: true } });
+    const tool = await c.call<Message>("append", { role: "bot", patch: { kind: "activity", tool: { name: "Read", ok: true } } });
+    const final = await c.call<Message>("append", { role: "bot", text: "Claude final: the file is correct." });
+    await exchange(a, c);
+    for (const peer of [a, c]) {
+      const snapshot = await peer.snapshot();
+      expect(snapshot.leaf).toBe(final.id);
+      expect(snapshot.rows.find((row) => row.id === sent.id)?.parentId).toBe(main);
+      expect(snapshot.rows.filter((row) => [narration.id, tool.id, final.id].includes(row.id))).toEqual([narration, tool, final]);
+      expect(snapshot.rows.filter(isConflictNotice)).toHaveLength(0);
+    }
+  });
+
+  for (const change of ["metadata", "equal head", "equal row", "off-path edit", "active ancestor edit", "active ancestor reparent", "head switch"]) {
+    it(`keeps resume state only while the active path stays unchanged (${change})`, async () => {
+      const folder = temp();
+      const a = pc(folder, "a");
+      const b = pc(folder, "b");
+      const base = await a.call<Message>("append", { text: "base" });
+      const ancestor = await a.call<Message>("append", { text: "active request" });
+      const final = await a.call<Message>("append", { role: "bot", text: "active final" });
+      await a.call("flush");
+      await b.call("pull");
+      const side: Message = { id: "side", parentId: base.id, at: Date.now(), role: "user", kind: "text", text: "off path" };
+      await b.call("import", { rows: [side] });
+      await b.call("continuity");
+      const before = (await b.snapshot()).tasks.find((task) => task.threadId === "thread")!;
+      if (change === "metadata") {
+        await a.call("rename", { title: "Renamed" });
+        await a.call("flush");
+        await b.call("pull");
+      } else if (change === "equal head") await b.call("import", { leaf: final.id });
+      else if (change === "equal row") await b.call("import", { rows: [ancestor] });
+      else if (change === "off-path edit") await b.call("import", { rows: [{ ...side, text: "edited off path" }], leaf: final.id });
+      else if (change === "active ancestor edit") await b.call("import", { rows: [{ ...ancestor, text: "changed context" }] });
+      else if (change === "active ancestor reparent") await b.call("import", { rows: [{ ...ancestor, parentId: side.id }] });
+      else await b.call("import", { leaf: side.id });
+      const after = (await b.snapshot()).tasks.find((task) => task.threadId === "thread")!;
+      if (change.startsWith("active ancestor") || change === "head switch") {
+        expect(after.resumeCursors).toEqual({});
+        expect(after.lastInstanceId).toBeUndefined();
+        expect(after.providerSessionBoundId).toBeUndefined();
+        expect(after.resumeSeed).toBeUndefined();
+        expect((await b.call<BotRecord>("bot")).resumeCursors).toEqual({});
+      } else {
+        expect(after).toEqual({ ...before, title: change === "metadata" ? "Renamed" : before.title });
+        expect((await b.call<BotRecord>("bot")).resumeCursors).toEqual({ test: "cursor" });
+      }
+    });
+  }
 
   for (const [setup, reason] of [["4 user turns", "4 user turns"], ["outside wake window", "outside wake window"], ["edit of the stale send", "edit or regenerate"],
     ["edit of a row both PCs had", "edit or regenerate"], ["switch back to the stale send", "branch switch"], ["another writer", "another writer"],

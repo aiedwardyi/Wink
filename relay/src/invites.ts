@@ -25,8 +25,10 @@ export class InviteStore {
   private pruned = 0;
   private compacted = 0;
   private fileBytes = 0;
+  private readonly now: () => number;
 
-  private constructor(dir: string, private readonly now: () => number) {
+  private constructor(dir: string, now: () => number) {
+    this.now = now;
     this.path = join(dir, FILE);
   }
 

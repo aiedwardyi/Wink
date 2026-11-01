@@ -1,0 +1,165 @@
+/* Servo. applySkin() injects this only while it is on: unanchored selectors
+   here would tax every style recalc on every skin. */
+
+/* The composer's top edge is a six-segment effort gauge, lit from the
+   data-hud-effort that useMonoHud() stamps on the root. One keyframe name per
+   level, so a new level replays the latch and the same level stays still. */
+@scope ([data-skin="mono-hud"]) to ([data-skin]) {
+  :scope {
+    --hud-line: #ffffff1f;
+    --hud-dim: #ffffff1c;
+    --hud-on: #c9ccd3;
+    --hud-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    --hud-click: linear(0.0000, 0.0396, 0.1386, 0.2710, 0.4167, 0.5607, 0.6927, 0.8066, 0.8996, 0.9711, 1.0226, 1.0564, 1.0755, 1.0831, 1.0821, 1.0752, 1.0649, 1.0530, 1.0408, 1.0293, 1.0193, 1.0109, 1.0043, 0.9994, 0.9961, 0.9941, 0.9932, 0.9931, 0.9935, 0.9943, 1.0000);
+  }
+
+  [data-orbit-composer-frame],
+  [data-orbit-rainbow] {
+    corner-shape: bevel;
+  }
+
+  [data-orbit-composer-frame] {
+    border-radius: 12px;
+    background: linear-gradient(160deg, #1a1c21, #111216 60%, #0d0e11);
+    box-shadow: inset 0 0 0 1px var(--hud-line);
+  }
+
+  [data-orbit-composer-frame]:focus-within {
+    box-shadow: inset 0 0 0 1px #ffffff38;
+  }
+
+  [data-orbit-composer-frame]::before,
+  [data-orbit-composer-frame]::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 20px;
+    right: 16px;
+    height: 3px;
+    mask: repeating-linear-gradient(90deg, #000 0 calc(100% / 6 - 4px), transparent 0 calc(100% / 6));
+    pointer-events: none;
+  }
+
+  [data-orbit-composer-frame]::before {
+    background: var(--hud-dim);
+  }
+
+  [data-orbit-composer-frame]::after {
+    background: linear-gradient(90deg, var(--hud-on) calc(var(--hud-fill, 0) * 100% / 6), transparent 0);
+    animation: var(--hud-in, none) 280ms var(--hud-click);
+  }
+
+  :scope[data-hud-effort="minimal"] [data-orbit-composer-frame] { --hud-fill: 1; --hud-in: hud-latch-1; }
+  :scope[data-hud-effort="low"] [data-orbit-composer-frame] { --hud-fill: 2; --hud-in: hud-latch-2; }
+  :scope[data-hud-effort="medium"] [data-orbit-composer-frame] { --hud-fill: 3; --hud-in: hud-latch-3; }
+  :scope[data-hud-effort="high"] [data-orbit-composer-frame] { --hud-fill: 4; --hud-in: hud-latch-4; }
+  :scope[data-hud-effort="xhigh"] [data-orbit-composer-frame] { --hud-fill: 5; --hud-in: hud-latch-5; }
+
+  :scope:is([data-hud-effort="max"], [data-hud-effort="ultra"]) [data-orbit-composer-frame] {
+    --hud-fill: 6;
+    --hud-in: hud-latch-6;
+    --hud-on: #ffffff;
+    box-shadow: inset 0 0 0 1px #ffffff4d, 0 0 16px #ffffff14;
+  }
+
+  /* Header chips: chamfered tiles, effort and workers as mono caps readouts. */
+  [class~="@container/chathead"] :is(button[aria-haspopup="dialog"]:not([data-worker-status]), span.rounded-full[title]) {
+    border-radius: 5px;
+    corner-shape: bevel;
+  }
+
+  [class~="@container/chathead"] button[aria-haspopup="dialog"]:not([data-worker-status]) {
+    border-color: #ffffff24;
+  }
+
+  [class~="@container/chathead"] span.rounded-full[title] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px #ffffff2e;
+  }
+
+  [data-model-effort],
+  [data-worker-status] {
+    font-family: var(--hud-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  /* Dial: the stage's inline --accent is the lab color. Kept as --hud-lab for
+     the picked card's mark; every piece of chrome under the stage goes white. */
+  .dial-stage {
+    --hud-lab: var(--accent);
+  }
+
+  .dial-stage > * {
+    --accent: #e8eaee;
+    --accent-ink: #ffffff;
+    --hot: #ffffff;
+  }
+
+  .dial-card[aria-pressed="true"] .dial-mark {
+    color: var(--hud-lab);
+  }
+
+  .dial-scene-lab {
+    display: none;
+  }
+
+  /* inline --c, so only !important reaches it */
+  .dial-chamber,
+  .dial-wedge,
+  .dial-frame {
+    --c: #d9dce2 !important;
+  }
+
+  .dial-logo .dial-mark,
+  .dial-seg .dial-mark.lit {
+    filter: none;
+  }
+
+  .dial-card,
+  .dial-frame {
+    corner-shape: bevel;
+  }
+
+  .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) {
+    --hot: #ffffff;
+    --halo: #ffffffa6;
+  }
+
+  .dial-shock {
+    background: #ffffff;
+  }
+
+  .dial-stage[data-max] .dial-bar b {
+    background: none;
+    color: #ffffff;
+  }
+
+  /* List picker: one white accent for every family; marks keep their own. */
+  :is(.model-cross-backdrop, .model-cross-backdrop[data-picker-family]) {
+    --picker-accent: #e8eaee;
+  }
+
+  .model-cross-chrome {
+    corner-shape: bevel;
+  }
+
+  .model-cross-options {
+    --color-success: #c9ccd3;
+    --color-warning: #bfc3cb;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-orbit-composer-frame]::after {
+      animation: none;
+    }
+  }
+}
+
+@keyframes hud-latch-1 { from { opacity: 0; transform: scaleY(2.4); } }
+@keyframes hud-latch-2 { from { opacity: 0; transform: scaleY(2.4); } }
+@keyframes hud-latch-3 { from { opacity: 0; transform: scaleY(2.4); } }
+@keyframes hud-latch-4 { from { opacity: 0; transform: scaleY(2.4); } }
+@keyframes hud-latch-5 { from { opacity: 0; transform: scaleY(2.4); } }
+@keyframes hud-latch-6 { from { opacity: 0; transform: scaleY(2.4); } }

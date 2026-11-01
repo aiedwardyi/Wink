@@ -20,6 +20,12 @@
 - Sections group bots in the sidebar (Move to section in a bot's menu). A section can have one Chief of Staff (Make Chief of Staff in the same menu), who coordinates that section and can create specialist bots.
 - Groups are shared chats with several bots and the user (New group in the sidebar's + menu).
 
+## Invited team report pilot
+
+- On an authenticated team install offering this pilot, say "Send this Wink issue to Edward" or "대표님께 이 문제 보고해줘". Edward, Eddie, Ed, 에드워드, 에디 and 대표 resolve to that team's configured owner. A send request authorizes collecting relevant original chat evidence and incident images; no second approval is required.
+- Ask for a draft or preview first to keep it local. Ordinary bug discussion sends nothing. Unrelated desktop capture and complete native logs are excluded.
+- The receipt says whether the private report service accepted it or the owner's local inbox filed it. Bot reading is unverified. On an offline or unsupported relay, a private local draft remains; ask to retry that report with its ID.
+
 ## Where things live
 
 - Wink's data folder is `~/.orbit`.

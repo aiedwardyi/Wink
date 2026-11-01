@@ -162,12 +162,16 @@ export class TeamLog {
   private prunedAt = 0;
   private readonly journal: string;
   private readonly checkpointFile: string;
+  private readonly now: () => number;
+  private readonly log: Logger;
 
   private constructor(
     dir: string,
-    private readonly now: () => number,
-    private readonly log: Logger,
+    now: () => number,
+    log: Logger,
   ) {
+    this.now = now;
+    this.log = log;
     this.journal = join(dir, JOURNAL);
     this.checkpointFile = join(dir, CHECKPOINT);
   }
