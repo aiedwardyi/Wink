@@ -39,6 +39,8 @@ function media({ wide = true, reduced = false, phone = false } = {}) {
 
 function mouse(width: number, height = 900) {
   const screen = { width, height, changes: new Set<(event: Event) => void>() };
+  vi.spyOn(window, "innerWidth", "get").mockImplementation(() => screen.width);
+  vi.spyOn(window, "innerHeight", "get").mockImplementation(() => screen.height);
   const fits = (query: string) => query.split(", ").some((part) => part.split(" and ").every((term) => {
     const [, name, value] = /\(([\w-]+): ([\w./]+)\)/.exec(term)!;
     if (name === "max-aspect-ratio") return screen.width * Number(value.split("/")[1]) <= screen.height * Number(value.split("/")[0]);
@@ -309,6 +311,8 @@ describe("ModelDial", () => {
 
   describe("in a mouse window", () => {
     const vertical = () => document.querySelector(".dial-stage")?.hasAttribute("data-phone");
+    const stage = () => document.querySelector<HTMLElement>(".dial-stage")!.style;
+    const floor = () => parseFloat(stage().getPropertyValue("--floor")) * Number(stage().zoom);
 
     it("keeps the wide dial when wide or short", async () => {
       for (const [width, height] of [[1440, 900], [1024, 600]]) {
@@ -321,7 +325,7 @@ describe("ModelDial", () => {
     });
 
     it("takes the vertical dial when narrow", async () => {
-      for (const [width, height] of [[1000, 900], [700, 900], [480, 900], [600, 300]]) {
+      for (const [width, height] of [[800, 900], [700, 900], [480, 900], [600, 300]]) {
         mouse(width, height);
         await mount();
         expect(vertical()).toBe(true);
@@ -329,6 +333,35 @@ describe("ModelDial", () => {
         await act(async () => root.unmount());
         vi.restoreAllMocks();
       }
+    });
+
+    it("keeps the wide dial in a desktop window down to 801px", async () => {
+      for (const [width, height] of [[1000, 900], [937, 904], [801, 900], [801, 600]]) {
+        mouse(width, height);
+        await mount();
+        expect(vertical()).toBe(false);
+        await act(async () => root.unmount());
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("floors desktop text at 12px as the window shrinks", async () => {
+      for (const [width, height, zoom] of [[2560, 1080, 1.2], [1440, 900, 1], [937, 904, 12 / 13.5], [801, 600, 12 / 13.5]]) {
+        mouse(width, height);
+        await mount();
+        expect(Number(stage().zoom)).toBeCloseTo(zoom);
+        expect(floor()).toBeCloseTo(12);
+        await act(async () => root.unmount());
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("caps the vertical dial's width and floors its text", async () => {
+      mouse(800, 900);
+      await mount();
+      expect(vertical()).toBe(true);
+      expect(parseFloat(stage().getPropertyValue("--pw"))).toBeLessThanOrEqual(480);
+      expect(floor()).toBeCloseTo(12);
     });
 
     it("turns models with a mouse drag when narrow", async () => {
@@ -435,6 +468,13 @@ describe("ModelDial", () => {
       await pointer("pointerup", 200 - dir * 160, 400);
       expect(effort()).toBe(dir < 0 ? "Extra high" : "medium");
       expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it("fills the screen with no text floor", async () => {
+      media({ phone: true });
+      await mount();
+      const style = document.querySelector<HTMLElement>(".dial-stage")!.style;
+      expect([style.zoom, style.getPropertyValue("--pw"), style.getPropertyValue("--ph"), style.getPropertyValue("--floor")]).toEqual(["1", "390px", "844px", ""]);
     });
 
     it("turns one model per drag step", async () => {

@@ -15,14 +15,16 @@ import "./ModelDial.css";
 
 const DIAL_QUERY = "(pointer: fine)";
 const PHONE_DIAL_QUERY = `${PHONE_QUERY} and (pointer: coarse)`;
-// Mouse windows too narrow for the 1440x900 stage at .75 zoom take the phone layout; short wide ones keep the stage.
-const NARROW_DIAL_QUERY = "(max-width: 639.98px) and (pointer: fine), (max-width: 1079.98px) and (max-aspect-ratio: 8/5) and (pointer: fine)";
+// At 800px the desktop face is down to the phone dial's size (dialFrame), so narrower mouse windows take the phone layout.
+const NARROW_DIAL_QUERY = "(max-width: 800px) and (pointer: fine)";
 const FADE = [1, 0.55, 0.22];
 const PHONE_FADE = [1, 0.38];
 // Card spacing in the phone layout; ModelDial.css uses the same 66px.
 const PHONE_PITCH = 66;
 // The phone layout's shortest stage; taller or wider screens grow the stage to their edges.
 const PHONE_MIN: [number, number] = [390, 800];
+// A mouse window's phone layout stops growing sideways here, so cards never stretch.
+const MOUSE_ROOM = 480;
 // Overdrive's outer arc: a segment every 12 deg, minus three under the effort label and one under the max pointer.
 const RING = Array.from({ length: 30 }, (_, k) => 270 + k * 12).filter((a) => Math.abs(a - 450) > 12 && a !== 366);
 
@@ -41,6 +43,26 @@ function sector(r0: number, r1: number, a0: number, a1: number) {
 }
 
 const SQUIGGLE = Array.from({ length: 24 }, (_, k) => ` Q${k * 10 + 6} ${5 + (k % 2 ? 1 : -1) * [4.2, 3.2, 4.6, 3.6][k % 4]!} ${k * 10 + 11} 5`).join("");
+
+const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
+
+// Desktop geometry in stage px for the 1440x900 composition. Zoom stops at 12/13.5, where the 12px floor meets the 13.5px bar text;
+// smaller windows narrow the frame, then shrink the face (fs) down to the phone dial's .625.
+function dialFrame(width: number, height: number) {
+  const zoom = Math.max(12 / 13.5, Math.min(width / 1440, height / 900));
+  const [w, h] = [Math.min(width / zoom, 1440), Math.min(height / zoom, 900)];
+  const m = clamp((w - 980) / 2, 24, 96);
+  const head = clamp(44 - (900 - h) / 4, 20, 44);
+  const stats = h - 134 - clamp((h - 780) / 4 + 24, 24, 54);
+  // Today's 400/712 spacing keeps the next card above the wheel's fade into the stats row; the header takes 112px.
+  const cyMax = Math.min(400, stats - 312);
+  // Face half + spoke radius; the rest is card 340, rail gap 24 and rail 58. Cards need a 280px spoke to clear each other.
+  const room = w - 2 * m - 422;
+  const fsW = room >= 482 ? (room - 78) / 480 : (room - 280) / 240;
+  const fs = clamp(Math.min(fsW, (cyMax - head - 112) / 240), 0.625, 1);
+  const R = Math.max(280, 240 * fs + 78);
+  return { zoom, w, h, m, head, stats, fs, R, cx: Math.max(m, (w - 240 * fs - R - 422) / 2) + 240 * fs, cy: Math.max(head + 112 + 240 * fs, cyMax) };
+}
 
 function useMatch(media: string, enabled: boolean): boolean {
   const [fits, setFits] = useState(() => enabled && (globalThis.window?.matchMedia?.(media).matches ?? false));
@@ -176,8 +198,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const { turn, lab: labTurn, lead, labMs } = track.current;
 
   const [boot, setBoot] = useState(true);
-  const [zoom, setZoom] = useState(1);
-  const [room, setRoom] = useState(PHONE_MIN);
+  const [fit, setFit] = useState<{ zoom: number; room: number[]; floor: number; frame?: ReturnType<typeof dialFrame> }>({ zoom: 1, room: PHONE_MIN, floor: 0 });
   const [typed, setTyped] = useState<{ text: string; i: number; on: boolean }>({ text: "", i: -1, on: false });
   const [live, setLive] = useState("");
   const typing = useRef({ text: "", at: 0, timer: 0 });
@@ -203,17 +224,22 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     };
   }, []);
 
-  useEffect(() => {
-    if (!phone) return;
-    const [width, height] = PHONE_MIN;
-    const fit = () => {
-      const fill = Math.min(window.innerWidth / width, window.innerHeight / height);
-      setZoom(fill);
-      setRoom([window.innerWidth / fill, window.innerHeight / fill]);
+  // Mouse windows get a 12px text floor (--floor); touch phones keep their sizes.
+  useLayoutEffect(() => {
+    const resize = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight - (stage.current?.parentElement?.getBoundingClientRect().top ?? 0);
+      if (!phone) {
+        const frame = dialFrame(width, height);
+        return setFit({ zoom: frame.zoom, room: [frame.w, frame.h], floor: 12 / frame.zoom, frame });
+      }
+      const fill = Math.min(width / PHONE_MIN[0], height / PHONE_MIN[1]);
+      const mouse = !window.matchMedia(PHONE_DIAL_QUERY).matches;
+      setFit({ zoom: fill, room: [mouse ? Math.min(width / fill, MOUSE_ROOM) : width / fill, height / fill], floor: mouse ? 12 / fill : 0 });
     };
-    fit();
-    window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
   }, [phone]);
 
   const quench = () => {
@@ -355,7 +381,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     clearTimeout(typing.current.timer);
     typing.current.timer = window.setTimeout(() => setTyped((current) => ({ ...current, on: false })), 700);
   };
-  useDialTouch(stage, phone, index, PHONE_PITCH * zoom, { step: stepModel, shift: shiftEffort });
+  useDialTouch(stage, phone, index, PHONE_PITCH * fit.zoom, { step: stepModel, shift: shiftEffort });
 
   useImperativeHandle(handle, () => ({
     key: (event) => {
@@ -385,8 +411,9 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   }));
 
   const gauges = [...new Set(models.map((model) => pickerEfforts(model, model.cell).length))].filter((n) => n > 0);
+  const { frame } = fit;
   const stageStyle = {
-    zoom: phone ? zoom : undefined,
+    zoom: fit.zoom,
     "--t": `${labMs}ms`,
     "--turn": turn,
     "--lab": labTurn,
@@ -394,7 +421,10 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     "--lab-step": labStep,
     "--accent": accent,
     "--g": `${150 + (level + 0.5) * 240 / Math.max(efforts.length, 1)}deg`,
-    ...(phone && { "--pw": `${room[0]}px`, "--ph": `${room[1]}px` }),
+    "--pw": `${fit.room[0]}px`,
+    "--ph": `${fit.room[1]}px`,
+    ...(fit.floor && { "--floor": `${fit.floor}px` }),
+    ...(frame && { "--m": `${frame.m}px`, "--head": `${frame.head}px`, "--stats": `${frame.stats}px`, "--fs": frame.fs, "--R": `${frame.R}px`, "--cx": `${frame.cx}px`, "--cy": `${frame.cy}px` }),
   } as CSSProperties;
   const effortText = effort ? modelEffortLabel(effort.label, t) : "-";
   const sourceLine = (key: DialStat, value: number | undefined) => {
