@@ -48,6 +48,7 @@ import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { WorkerRow, WorkerChip, useWorkerRows, type ShownRun } from "./WorkerRows";
 import { shownState, workerRuns } from "@/lib/worker-runs";
 import { AttachedImageGallery, ShownImage } from "./AttachmentPreview";
+import { MediaViewerProvider } from "./MediaViewerProvider";
 import { FileAttachmentRows } from "./FileAttachmentRow";
 import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ReactionBar, ReactionChips } from "./Reactions";
@@ -1578,6 +1579,7 @@ export function GroupView({ group }: { group: Group }) {
   ));
 
   return (
+    <MediaViewerProvider threadId={group.threadId} messages={shown}>
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
       <Presence open={membersOpen && !group.dm}>
@@ -1923,5 +1925,6 @@ export function GroupView({ group }: { group: Group }) {
       </div>
       </div>
     </main>
+    </MediaViewerProvider>
   );
 }
