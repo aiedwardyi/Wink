@@ -77,10 +77,10 @@ export function teamSnagNote(snags: ClaimedSnag[], file: string, timeZone?: stri
 }
 
 /** The default section's Chief gets a note that cannot schedule a wake. */
-export function postChiefNote(store: Store, deviceId: string | undefined, text: string, ids?: string[]): boolean {
+export function postChiefNote(store: Store, deviceId: string | undefined, text: string, ids?: string[], reportIds?: string[]): boolean {
   const chief = store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section));
   if (!chief) return false;
-  store.appendMessage(chief.threadId, { role: "bot", kind: "note", text, origin: deviceId, quiet: true, ...(ids ? { snagIds: ids } : {}) });
+  store.appendMessage(chief.threadId, { role: "bot", kind: "note", text, origin: deviceId, quiet: true, ...(ids ? { snagIds: ids } : {}), ...(reportIds ? { reportIds } : {}) });
   return true;
 }
 
@@ -94,6 +94,12 @@ export function chiefSnagIds(store: Store): Set<string> {
     }
   }
   return ids;
+}
+
+export function chiefReportIds(store: Store): Set<string> {
+  const chief = store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section));
+  const threads = chief ? new Set([chief.threadId, ...store.tasks(chief.id).map((task) => task.threadId)]) : [];
+  return new Set([...threads].flatMap((threadId) => store.messagesFor(threadId).flatMap((message) => message.reportIds ?? [])));
 }
 
 /** One claim: owner-gated like /api/team. Returns how many reports it took. */

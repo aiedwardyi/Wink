@@ -1,0 +1,62 @@
+{
+  "stamp": {
+    "engine": "codex",
+    "cliVersion": "0.165.0",
+    "recordedAt": "2026-11-01T06:35:04.760Z",
+    "sourcePc": "home",
+    "source": "CodexDriver.generateText with isolated HOME/CODEX_HOME; real app-server completion notifications, ids redacted",
+    "model": "gpt-6.1-sol",
+    "effort": "low",
+    "prompt": "Return exactly: SUMMARY\nKeep the pending research open until the memory budgets are verified."
+  },
+  "reply": {
+    "events": [
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "<redacted>",
+            "text": "SUMMARY\nKeep the pending research open until the memory budgets are verified.",
+            "phase": "final_answer",
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "<redacted>",
+          "turnId": "<redacted>",
+          "completedAtMs": 1793514904752
+        },
+        "emittedAtMs": 1793514904752
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "<redacted>",
+          "turn": {
+            "id": "<redacted>",
+            "rootTurnId": "<redacted>",
+            "items": [
+              {
+                "type": "agentMessage",
+                "id": "<redacted>",
+                "text": "SUMMARY\nKeep the pending research open until the memory budgets are verified.",
+                "phase": "final_answer",
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1793514902,
+            "completedAt": 1793514904,
+            "durationMs": 2698
+          }
+        },
+        "emittedAtMs": 1793514904752
+      }
+    ]
+  }
+}

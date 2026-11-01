@@ -9,6 +9,7 @@ import { SNAG_KEEP_MS, SNAG_LEASE_MS, SnagStore } from "../src/snags.ts";
 import { TeamLog } from "../src/team.ts";
 import { event, makePc, openControl, startRelay, type Control, type Harness } from "./fixtures.ts";
 import { makeIssuer, type IdClaims, type TestIssuer } from "./google-issuer.ts";
+import { reportOwnerHash } from "../../shared/team-report.ts";
 
 const DESKTOP = "desktop-client.apps.googleusercontent.com";
 const WEB = "web-client.apps.googleusercontent.com";
@@ -87,6 +88,7 @@ describe("snag frames", () => {
     h = await startRelay({ google: google(issuer), teamOwnerEmail: OWNER });
     const ctl = await openControl(h, makePc());
     expect(ctl.ready.snags).toBe(true);
+    expect(ctl.ready.reportOwner).toBe(reportOwnerHash(OWNER));
     const oldPc = readyMessageSchema.omit({ snags: true });
     expect(oldPc.parse(ctl.ready)).not.toHaveProperty("snags");
     await stillUp(ctl);
@@ -96,6 +98,7 @@ describe("snag frames", () => {
     h = await startRelay();
     const plain = await openControl(h, makePc());
     expect(plain.ready).not.toHaveProperty("snags");
+    expect(plain.ready).not.toHaveProperty("reportOwner");
     plain.socket.destroy();
   });
 
