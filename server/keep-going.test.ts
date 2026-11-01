@@ -553,19 +553,52 @@ describe("KeepGoing start_after", () => {
     await expect(h.keepGoing.check("b1")).resolves.toEqual({ skipped: "waiting" });
   });
 
-  it("refuses a delay while paused after failed tries", async () => {
+  it("refuses a delay outside a user turn while paused after failed tries", async () => {
     const h = harness();
     h.keepGoing.enable("b1", "t1", h.state.packet);
     await h.keepGoing.check("b1");
     await h.keepGoing.check("b1");
     h.state.now++;
     await expect(h.keepGoing.check("b1")).resolves.toEqual({ skipped: "paused" });
-    h.keepGoing.turnStarted("b1", "t1", true);
-    expect(h.keepGoing.fromTool("b1", "t1", true, h.state.packet, startAfter)).toEqual({ error: expect.stringContaining("paused") });
+    h.keepGoing.turnStarted("b1", "t1", false);
+    expect(h.keepGoing.fromTool("b1", "t1", true, h.state.packet, startAfter)).toEqual({ error: "Agentic Mode stays paused (two tries made no progress) until a turn the user typed turns it on" });
     expect(JSON.parse(readFileSync(h.deps.file!, "utf8")).bots.b1).not.toHaveProperty("startAfter");
     h.state.now = Date.parse(startAfter);
     await expect(h.keepGoing.check("b1")).resolves.toEqual({ skipped: "paused" });
     expect(h.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["no-progress", "bot-paused"] as const)("clears a %s pause when a user turn sets a delay", async (reason) => {
+    const h = harness();
+    h.keepGoing.enable("b1", "t1", h.state.packet);
+    if (reason === "no-progress") {
+      await h.keepGoing.check("b1");
+      await h.keepGoing.check("b1");
+      h.state.now++;
+      await h.keepGoing.check("b1");
+    } else h.keepGoing.pause("b1", reason);
+    expect(h.keepGoing.view("b1")).toEqual({ paused: reason });
+    h.keepGoing.turnStarted("b1", "t1", true);
+    expect(h.keepGoing.fromTool("b1", "t1", true, h.state.packet, startAfter)).toEqual({ ok: true });
+    expect(new KeepGoing(h.deps).view("b1")).toEqual({ paused: null });
+    h.state.now = Date.parse(startAfter) - 1;
+    await expect(h.keepGoing.check("b1")).resolves.toEqual({ skipped: "waiting" });
+    h.state.now++;
+    h.state.usage!.observedAt = new Date(h.state.now).toISOString();
+    await expect(h.keepGoing.check("b1")).resolves.toEqual({ dispatched: "Write tests" });
+  });
+
+  it("keeps a usage pause but takes a delay from any turn", async () => {
+    const h = harness();
+    h.keepGoing.enable("b1", "t1", h.state.packet);
+    h.keepGoing.pause("b1", "usage-stale");
+    h.keepGoing.turnStarted("b1", "t1", false);
+    expect(h.keepGoing.fromTool("b1", "t1", true, h.state.packet, startAfter)).toEqual({ ok: true });
+    expect(h.keepGoing.view("b1")).toEqual({ paused: "usage-stale" });
+    h.state.now = Date.parse(startAfter);
+    h.state.usage!.observedAt = new Date(h.state.now).toISOString();
+    await expect(h.keepGoing.check("b1")).resolves.toEqual({ dispatched: "Write tests" });
+    expect(h.keepGoing.view("b1")).toEqual({ paused: null });
   });
 
   it("drops the turn rules until the delay ends", () => {
