@@ -13,6 +13,9 @@
 //                     thread/tokenUsage/updated per model call of the turn
 //   FAKE_CODEX_USAGE_REPLAY  JSON tokenUsage the app-server replays after
 //                     thread/resume, stamped with an earlier turn's id
+//   FAKE_CODEX_MESSAGES  JSON array of {text, phase?}: the turn's agentMessage
+//                     items, in place of the one default reply
+//   FAKE_CODEX_NO_INJECT  thread/inject_items fails, like a CLI without it
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { readFileSync, writeFileSync, writeSync } from "node:fs";
@@ -77,7 +80,8 @@ const finishTurn = () => {
     notify("item/agentMessage/delta", { itemId: "m1", delta: "done from " });
     notify("item/agentMessage/delta", { itemId: "m1", delta: "fake codex" });
   }
-  notify("item/completed", { item: { id: "m1", type: "agentMessage", text: "done from fake codex" } });
+  const messages = process.env.FAKE_CODEX_MESSAGES ? JSON.parse(process.env.FAKE_CODEX_MESSAGES) : [{ text: "done from fake codex" }];
+  messages.forEach((message: object, i: number) => notify("item/completed", { item: { id: `m${i + 1}`, type: "agentMessage", ...message } }));
   if (process.env.FAKE_CODEX_USAGE) {
     // like the real app-server: one report per model call, each carrying
     // that call (`last`) and the running thread total
@@ -180,6 +184,11 @@ process.stdin.on("data", (chunk) => {
         break;
       case "thread/start":
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
+        break;
+      case "thread/inject_items":
+        out(process.env.FAKE_CODEX_NO_INJECT
+          ? { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } }
+          : { jsonrpc: "2.0", id: msg.id, result: {} });
         break;
       case "turn/steer": {
         if (mode === "steer-reject" || msg.params.expectedTurnId !== "native-turn-1") {

@@ -47,7 +47,7 @@ export function waitForPeerReply(peer: {
       if (event.threadId !== peer.threadId) return;
       const step = peer.fold(event);
       if (step === "completed") answer.end("(the bot finished without a text reply)");
-      else if (step) answer.add(step.text);
+      else if (step) answer.add(step.text, step.replace);
     });
     const timer = setTimeout(() => {
       taskId = peer.adopt();

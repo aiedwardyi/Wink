@@ -119,8 +119,8 @@ export function peerAnswer(
     () => finish(text || askJoinedText(botName)),
   );
   return {
-    add: (step: string) => {
-      if (!done) text += (text ? "\n" : "") + step;
+    add: (step: string, replace = false) => {
+      if (!done) text = replace ? step : text + (text ? "\n" : "") + step;
     },
     end: (fallback: string, replied = true) => finish(text || fallback, replied),
   };

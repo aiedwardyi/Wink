@@ -2598,7 +2598,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, { text: string; messageId: string }>();
-const turnSummary = turnSummaries();
+const turnSummary = turnSummaries((threadId, ids) => { for (const id of ids) store.patchMessage(threadId, id, { summarized: true }); });
 const unreadTurns = turnUnread();
 
 const TASK_PACKET_FLUSH_MS = 30_000;
@@ -3285,7 +3285,7 @@ bus.subscribe((event: RuntimeEvent) => {
     case "item.completed":
       if (event.itemType === "assistant_text") {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
-        const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized });
+        const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true }
@@ -3298,7 +3298,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // kept so "finished" can say what it finished with, rather than
         // just that something ended; an engine summary is not the bot's words
         if (!event.summarized) lastReply.set(event.threadId, { text: event.text, messageId: message.id });
-        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized));
+        turnSummary.note(event.threadId, event.turnId, message.id, Boolean(event.summarized), event.phase);
       } else if (event.itemType === "tool" && event.itemId) {
         const itemKey = `${event.threadId}:${event.itemId}`;
         const pending = toolMessageByItem.get(itemKey);
@@ -6344,7 +6344,7 @@ async function runClaimedGroupMemberTurn(
       if (e.threadId !== threadId) return;
       const step = reply.fold(e);
       if (step === "completed") finish("settled");
-      else if (step) replyText += `\n${step.text}`;
+      else if (step) replyText = `${step.replace ? "" : replyText}\n${step.text}`;
       // Waiting on a person is not turn work: hold the ceiling while an
       // approval or question card is open, so deciding slowly does not
       // stop the turn underneath the card. Everything else keeps burning it.

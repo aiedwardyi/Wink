@@ -49,6 +49,8 @@ import { accountLabel, cachedSignIn, storedAccount } from "./auth-status.ts";
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
 const DRIVER_KIND = "codex";
+// Wink's own system diff only; a message that merely opens with the tag stays user text.
+const SYSTEM_REMINDER = /^(<system-reminder>\n\[Wink instructions update [\s\S]*?\n<\/system-reminder>)\n\n/;
 
 const codexAuthSchema = z.object({ auth_mode: z.string().nullish(), tokens: z.object({ id_token: z.string() }) });
 
@@ -578,7 +580,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                   emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: item.text });
                 }
                 state.sawStreamDelta = false;
-                emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: item.text });
+                emit({
+                  ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: item.text,
+                  ...(item.phase ? { phase: item.phase } : {}),
+                });
               }
             } else if (["commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(item.type)) {
               const parsed = toolItemSchema.safeParse(item);
@@ -798,6 +803,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             sandbox: config.fullAuto ? "danger-full-access" : "workspace-write",
             approvalPolicy,
             approvalsReviewer,
+            ...(turn.system ? { developerInstructions: turn.system } : {}),
             ephemeral: false,
             config: { web_search: "live" },
           });
@@ -805,13 +811,24 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           startedModel = started?.model ?? null;
         }
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
-        const prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
+        let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
+        const reminder = cursor && !resumeFailed ? SYSTEM_REMINDER.exec(prompt) : null;
+        if (reminder) {
+          // older CLIs lack inject_items; the diff then stays in the prompt
+          try {
+            await request("thread/inject_items", {
+              threadId: codexThreadId,
+              items: [{ type: "message", role: "developer", content: [{ type: "input_text", text: reminder[1] }] }],
+            });
+            prompt = prompt.slice(reminder[0].length);
+          } catch {}
+        }
         nativeThreadId = codexThreadId;
         nativeTurnId = null;
         state.turnRequested = true;
         const startedTurn = await request("turn/start", {
           threadId: codexThreadId,
-          input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${prompt}` : prompt }],
+          input: [{ type: "text", text: prompt }],
           // Spread, not `effort: turn.effort ?? null`. Probed against
           // codex-cli 0.146.0: null is indistinguishable from an absent key
           // — both leave the thread's current effort alone, emitting no
@@ -920,7 +937,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         effortLevels: ["low", "medium", "high", "xhigh", "max"],
         rateLimits: true,
         askApproval: !config.fullAuto,
-        // Each input re-sends turn.system, yet a resumed thread kept to its first copy.
+        // turn.system rides once, as thread/start developerInstructions; a resumed thread keeps that copy.
         pinnedSystem: true,
       },
       sendTurn,
