@@ -37,6 +37,18 @@ export function dialStep(rows: PickerRow[], current: ModelSelection, dir: number
   return movePicker(rows, current, dir < 0 ? "ArrowUp" : "ArrowDown");
 }
 
+const WHEEL_PX = 16;
+const WHEEL_IDLE_MS = 200;
+
+/** True once per wheel or trackpad burst, momentum tail included; a 200 ms pause or a reversal starts the next. */
+export function dialWheel(burst: { at: number; dir: number; sum: number }, event: WheelEvent): boolean {
+  const now = performance.now();
+  const dir = Math.sign(event.deltaY);
+  const before = now - burst.at < WHEEL_IDLE_MS && dir === burst.dir ? burst.sum : 0;
+  Object.assign(burst, { at: now, dir, sum: before + Math.abs(event.deltaY) * [1, 16, window.innerHeight][event.deltaMode]! });
+  return before < WHEEL_PX && burst.sum >= WHEEL_PX;
+}
+
 /** Effort stops at either end; the list picker wraps. */
 export function dialShift(rows: PickerRow[], current: ModelSelection, dir: number): ModelSelection {
   const item = pickerModels(rows).find((model) => model.instance.instanceId === current.instanceId && model.cell.options.some((option) => option.id === current.model));

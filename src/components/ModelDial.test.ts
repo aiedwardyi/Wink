@@ -39,6 +39,8 @@ function media({ wide = true, reduced = false, phone = false } = {}) {
 
 function mouse(width: number, height = 900) {
   const screen = { width, height, changes: new Set<(event: Event) => void>() };
+  vi.spyOn(window, "innerWidth", "get").mockImplementation(() => screen.width);
+  vi.spyOn(window, "innerHeight", "get").mockImplementation(() => screen.height);
   const fits = (query: string) => query.split(", ").some((part) => part.split(" and ").every((term) => {
     const [, name, value] = /\(([\w-]+): ([\w./]+)\)/.exec(term)!;
     if (name === "max-aspect-ratio") return screen.width * Number(value.split("/")[1]) <= screen.height * Number(value.split("/")[0]);
@@ -101,9 +103,9 @@ async function settle() {
   for (let i = 0; i < 60; i++) await wait(20);
 }
 
-async function pointer(type: string, x: number, y: number, pointerType = "touch") {
+async function pointer(type: string, x: number, y: number, pointerType = "touch", button = 0) {
   await act(async () => {
-    document.querySelector(".dial-stage")!.dispatchEvent(new window.PointerEvent(type, { pointerId: 1, pointerType, isPrimary: true, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    document.querySelector(".dial-stage")!.dispatchEvent(new window.PointerEvent(type, { pointerId: 1, pointerType, isPrimary: true, button, clientX: x, clientY: y, bubbles: true, cancelable: true }));
   });
 }
 
@@ -114,6 +116,12 @@ async function drag(dx: number, dy: number, moves = 4, ms = 30, pointerType = "t
     await pointer("pointermove", 200 + dx * i / moves, 400 + dy * i / moves, pointerType);
   }
   await pointer("pointerup", 200 + dx, 400 + dy, pointerType);
+}
+
+async function wheel(deltaY: number, deltaMode = 0) {
+  await act(async () => {
+    document.querySelector(".dial-stage")!.dispatchEvent(new window.WheelEvent("wheel", { deltaY, deltaMode, bubbles: true, cancelable: true }));
+  });
 }
 
 const order = ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6-luna", "grok-4.7"];
@@ -309,6 +317,8 @@ describe("ModelDial", () => {
 
   describe("in a mouse window", () => {
     const vertical = () => document.querySelector(".dial-stage")?.hasAttribute("data-phone");
+    const stage = () => document.querySelector<HTMLElement>(".dial-stage")!.style;
+    const floor = () => parseFloat(stage().getPropertyValue("--floor")) * Number(stage().zoom);
 
     it("keeps the wide dial when wide or short", async () => {
       for (const [width, height] of [[1440, 900], [1024, 600]]) {
@@ -321,7 +331,7 @@ describe("ModelDial", () => {
     });
 
     it("takes the vertical dial when narrow", async () => {
-      for (const [width, height] of [[1000, 900], [700, 900], [480, 900], [600, 300]]) {
+      for (const [width, height] of [[800, 900], [700, 900], [480, 900], [600, 300]]) {
         mouse(width, height);
         await mount();
         expect(vertical()).toBe(true);
@@ -331,6 +341,49 @@ describe("ModelDial", () => {
       }
     });
 
+    it("keeps the wide dial in a desktop window down to 801px", async () => {
+      for (const [width, height] of [[1000, 900], [937, 904], [801, 900], [801, 600]]) {
+        mouse(width, height);
+        await mount();
+        expect(vertical()).toBe(false);
+        await act(async () => root.unmount());
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("floors desktop text at 12px as the window shrinks", async () => {
+      for (const [width, height, zoom] of [[2560, 1080, 1.2], [1440, 900, 1], [937, 904, 12 / 13.5], [801, 600, 12 / 13.5]]) {
+        mouse(width, height);
+        await mount();
+        expect(Number(stage().zoom)).toBeCloseTo(zoom);
+        expect(floor()).toBeCloseTo(12);
+        await act(async () => root.unmount());
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("scales the wide dial to fit a short window", async () => {
+      for (const height of [480, 448]) {
+        mouse(1024, height);
+        await mount();
+        const px = (name: string) => parseFloat(stage().getPropertyValue(name));
+        const [cy, fs, stats] = [px("--cy"), px("--fs"), px("--stats")];
+        expect(px("--ph") * Number(stage().zoom)).toBeLessThanOrEqual(height);
+        expect(cy + 240 * fs).toBeLessThanOrEqual(stats);
+        expect(cy + 32).toBeLessThanOrEqual(stats - 72);
+        await act(async () => root.unmount());
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("caps the vertical dial's width and floors its text", async () => {
+      mouse(800, 900);
+      await mount();
+      expect(vertical()).toBe(true);
+      expect(parseFloat(stage().getPropertyValue("--pw"))).toBeLessThanOrEqual(480);
+      expect(floor()).toBeCloseTo(12);
+    });
+
     it("turns models with a mouse drag when narrow", async () => {
       Element.prototype.setPointerCapture = () => undefined;
       mouse(700);
@@ -338,6 +391,16 @@ describe("ModelDial", () => {
       await drag(0, -60, 4, 60, "mouse");
       await settle();
       expect(selected()).toBe("claude-sonnet-5-5");
+    });
+
+    it("ignores a right-button drag", async () => {
+      mouse(1440);
+      await mount();
+      await pointer("pointerdown", 200, 400, "mouse", 2);
+      await pointer("pointermove", 200, 300, "mouse");
+      await pointer("pointerup", 200, 300, "mouse");
+      await settle();
+      expect(selected()).toBe("claude-opus-5-5");
     });
 
     it("swaps layouts on resize and keeps the pick and the view", async () => {
@@ -368,8 +431,8 @@ describe("ModelDial", () => {
     it.each([
       ["short", 24, 4, 15, 0],
       ["ordinary", 60, 4, 30, 1],
-      ["fast", 120, 4, 10, 3],
-    ])("bounds %s flicks in both directions", async (_name, distance, moves, ms, steps) => {
+      ["fast", 120, 4, 10, 1],
+    ])("bounds %s swipes in both directions", async (_name, distance, moves, ms, steps) => {
       vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
       media({ phone: true });
       const tick = vi.spyOn(phoneSwipe, "hapticTick");
@@ -419,10 +482,10 @@ describe("ModelDial", () => {
       }
       await pointer("pointercancel", 260, 400 + dir * 120);
       await settle();
-      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
+      expect(selected()).toBe(dir < 0 ? "claude-sonnet-5-5" : "grok-4.7");
       expect(effort()).toBe("high");
       await settle();
-      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
+      expect(selected()).toBe(dir < 0 ? "claude-sonnet-5-5" : "grok-4.7");
     });
 
     it.each([-1, 1])("keeps one effort notch through a reversal with direction %s", async (dir) => {
@@ -437,6 +500,13 @@ describe("ModelDial", () => {
       expect(selected()).toBe("claude-opus-5-5");
     });
 
+    it("fills the screen with no text floor", async () => {
+      media({ phone: true });
+      await mount();
+      const style = document.querySelector<HTMLElement>(".dial-stage")!.style;
+      expect([style.zoom, style.getPropertyValue("--pw"), style.getPropertyValue("--ph"), style.getPropertyValue("--floor")]).toEqual(["1", "390px", "844px", ""]);
+    });
+
     it("turns one model per drag step", async () => {
       media({ phone: true });
       await mount();
@@ -449,7 +519,7 @@ describe("ModelDial", () => {
       expect(selected()).toBe("claude-opus-5-5");
     });
 
-    it("coasts after a flick and lands on a model", async () => {
+    it("lands one model after a quick flick, with no coast", async () => {
       vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
       media({ phone: true });
       await mount();
@@ -457,10 +527,8 @@ describe("ModelDial", () => {
       await wait(20);
       expect(selected()).toBe("claude-sonnet-5-5");
       await settle();
-      expect(selected()).toBe("gpt-6.1-sol");
+      expect(selected()).toBe("claude-sonnet-5-5");
       expect(document.querySelectorAll('.dial-card[aria-pressed="true"]')).toHaveLength(1);
-      await settle();
-      expect(selected()).toBe("gpt-6.1-sol");
     });
 
     it.each([-1, 1])("stays put when the finger rests before release with direction %s", async (dir) => {
@@ -475,7 +543,7 @@ describe("ModelDial", () => {
       await wait(150);
       await pointer("pointerup", 200, 400 + dir * 120);
       await settle();
-      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
+      expect(selected()).toBe(dir < 0 ? "claude-sonnet-5-5" : "grok-4.7");
     });
 
     it("moves effort one notch per horizontal swipe", async () => {
@@ -562,7 +630,161 @@ describe("ModelDial", () => {
       await mount();
       await drag(0, dir * 120, 4, 10);
       await settle();
-      expect(selected()).toBe(dir < 0 ? "gpt-6.1-sol" : "gpt-6-luna");
+      expect(selected()).toBe(dir < 0 ? "claude-sonnet-5-5" : "grok-4.7");
+    });
+  });
+
+  describe.each([
+    { where: "on a phone", kind: "touch", setup: () => {
+      media({ phone: true });
+      vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+      vi.spyOn(window, "innerHeight", "get").mockReturnValue(844);
+    } },
+    { where: "with a mouse on the wide dial", kind: "mouse", setup: () => void mouse(1440) },
+  ])("one model per swipe $where", ({ kind, setup }) => {
+    beforeEach(async () => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      Element.prototype.setPointerCapture = () => undefined;
+      setup();
+      await mount();
+    });
+
+    const path = async (ys: number[], end = "pointerup") => {
+      await pointer("pointerdown", 200, 400, kind);
+      for (const y of ys) {
+        await wait(16);
+        await pointer("pointermove", 200, y, kind);
+      }
+      await pointer(end, 200, ys.at(-1)!, kind);
+    };
+
+    it.each([["slow", 60, 130], ["normal", 120, 30], ["fast", 400, 4]])("turns one model per %s swipe in both directions", async (_speed, distance, ms) => {
+      for (const [dy, model] of [[-distance, "claude-sonnet-5-5"], [distance, "claude-opus-5-5"], [distance, "grok-4.7"]] as const) {
+        await drag(0, dy, 4, ms, kind);
+        await settle();
+        expect(selected()).toBe(model);
+      }
+    });
+
+    it("keeps motion under the threshold still, held or not", async () => {
+      await drag(0, -39, 4, 10, kind);
+      await drag(0, 39, 4, 10, kind);
+      await drag(5, -39, 4, 200, kind);
+      await settle();
+      expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it("turns once for each swipe in a quick run", async () => {
+      for (let i = 0; i < 3; i++) await drag(0, -120, 2, 4, kind);
+      await settle();
+      expect(selected()).toBe("gpt-6-luna");
+      for (let i = 0; i < 2; i++) await drag(0, 120, 2, 4, kind);
+      await settle();
+      expect(selected()).toBe("claude-sonnet-5-5");
+    });
+
+    it("adds nothing for a reversal inside a swipe", async () => {
+      await path([340, 400, 480, 360]);
+      await settle();
+      expect(selected()).toBe("claude-sonnet-5-5");
+    });
+
+    it("keeps the model a cancelled swipe already turned", async () => {
+      await path([380, 340], "pointercancel");
+      await settle();
+      expect(selected()).toBe("claude-sonnet-5-5");
+      await path([420, 430], "pointercancel");
+      await settle();
+      expect(selected()).toBe("claude-sonnet-5-5");
+    });
+
+    it("turns one more model per pitch only once held", async () => {
+      await pointer("pointerdown", 200, 400, kind);
+      await wait(700);
+      for (const y of [390, 360, 330, 294, 260, 228]) {
+        await pointer("pointermove", 200, y, kind);
+        await wait(16);
+      }
+      await settle();
+      expect(selected()).toBe("gpt-6-luna");
+      for (const y of [250, 294]) {
+        await pointer("pointermove", 200, y, kind);
+        await wait(16);
+      }
+      await pointer("pointerup", 200, 294, kind);
+      await settle();
+      expect(selected()).toBe("gpt-6.1-sol");
+    });
+
+    it("stays one model when a fast swipe rests past the hold", async () => {
+      await pointer("pointerdown", 200, 400, kind);
+      await wait(4);
+      await pointer("pointermove", 200, 250, kind);
+      await wait(4);
+      await pointer("pointermove", 200, 100, kind);
+      await wait(700);
+      await pointer("pointermove", 200, 102, kind);
+      await pointer("pointermove", 200, 96, kind);
+      await pointer("pointerup", 200, 96, kind);
+      await settle();
+      expect(selected()).toBe("claude-sonnet-5-5");
+    });
+  });
+
+  describe.each([1440, 700])("wheel at %ipx", (width) => {
+    beforeEach(async () => {
+      vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+      mouse(width);
+      await mount();
+    });
+
+    const burst = async (deltas: number[], mode = 0) => {
+      for (const delta of deltas) {
+        await wheel(delta, mode);
+        await wait(16);
+      }
+    };
+
+    it.each([
+      [0, [2, 6, 18, 42, 60, 34, 20, 11, 6, 3, 2, 1]],
+      [1, [1, 3, 2, 1, 1]],
+      [2, [1, 1]],
+    ])("turns one model per burst and its momentum tail in delta mode %i", async (mode, deltas) => {
+      for (const [dir, model] of [[1, "claude-sonnet-5-5"], [1, "gpt-6.1-sol"], [-1, "claude-sonnet-5-5"]] as const) {
+        await burst(deltas.map((delta) => dir * delta), mode);
+        expect(selected()).toBe(model);
+        await wait(250);
+      }
+    });
+
+    it("turns once per notch when the notches come apart", async () => {
+      for (let i = 0; i < 3; i++) {
+        await wheel(100);
+        await wait(300);
+      }
+      expect(selected()).toBe("gpt-6-luna");
+    });
+
+    it("turns back at once when a burst reverses", async () => {
+      await burst([20, 40, 20]);
+      expect(selected()).toBe("claude-sonnet-5-5");
+      await burst([-20, -40, -20]);
+      expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it("ignores a brush under 16px", async () => {
+      await burst([5, 5, 5]);
+      await wait(250);
+      await burst([-4, -4]);
+      expect(selected()).toBe("claude-opus-5-5");
+    });
+
+    it("keeps one step per wheel event in List View", async () => {
+      await act(async () => document.querySelector<HTMLButtonElement>(".model-dial-view")!.click());
+      await act(async () => {
+        for (let i = 0; i < 3; i++) document.querySelector(".model-cross-stage")!.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 4, bubbles: true, cancelable: true }));
+      });
+      expect(document.querySelector('[data-model-cell][aria-pressed="true"]')?.getAttribute("data-model-cell")).toBe("gpt-6-luna");
     });
   });
 });

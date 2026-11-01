@@ -7,6 +7,7 @@ import { chipEffortLabel, chipEffortShortLabel, chipPhoneName,displayedChipEffor
 import { movePicker, pickerColumn, pickerEfforts, pickerModels, pickerRows, selectPickerEffort, selectPickerModel, withPickerEffort } from "@/lib/cross-model-picker";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { pickerPrice } from "@/lib/model-index";
+import { dialWheel } from "@/lib/model-dial";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { noReplySource, switchFromNoReply } from "@/lib/no-reply-switch";
@@ -84,6 +85,7 @@ export function ModelPickerControl({
   followUpRef.current = Boolean(state.pendingQueued?.[bot.threadId]?.length) || bot.messages.some((message) => message.queued) || Boolean(accepted?.some((send) => send.kind === "sends-next"));
   const stageRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef({ x: 0, y: 0, stepped: true });
+  const wheelRef = useRef({ at: 0, dir: 0, sum: 0 });
   const [stageWidth, setStageWidth] = useState(0);
   const bindingsId = useId();
   const rows = pickerRows(state.instances, selection, draft);
@@ -202,13 +204,14 @@ export function ModelPickerControl({
       event.preventDefault();
       event.stopPropagation();
       if (!event.deltaY) return;
+      if (dialView && !dialWheel(wheelRef.current, event)) return;
       const direction = event.deltaY > 0 ? "ArrowDown" : "ArrowUp";
       setDraft((current) => movePicker(rows, withPickerEffort(state.instances.find((item) => item.instanceId === current.instanceId), current), direction));
       setCustomOpen(false);
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
-  }, [open, rows, state.instances]);
+  }, [open, rows, state.instances, dialView]);
 
   // Touch equivalent of the wheel handler above: the stage isn't a scroll
   // container, so a plain touchmove does nothing. One gesture steps once,
