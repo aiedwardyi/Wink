@@ -155,6 +155,14 @@ describe("a turn's commentary after its final answer", () => {
     }
   });
 
+  it("hides the next turn's commentary after a steer that got no reply", async () => {
+    const events = await codexTurn("t-stale", [{ text: commentary, phase: "commentary" }, { text: final, phase: "final_answer" }]);
+    const view = chat("t-stale");
+    view.messages.push({ id: "user-b", at: 1, role: "user", kind: "text", text: "also check the logs", steered: true }, { id: "user-c", at: 2, role: "user", kind: "text", text: "next question" });
+    for (const event of events) view.feed(event);
+    expect(view.shown()).toEqual(["also check the logs", "next question", final]);
+  });
+
   it("gives a peer turn's Reply-to stamp to the final, not the hidden commentary", async () => {
     const events = await codexTurn("t-peer", [{ text: commentary, phase: "commentary" }, { text: final, phase: "final_answer" }]);
     const view = chat("t-peer");

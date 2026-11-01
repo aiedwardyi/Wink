@@ -3316,7 +3316,8 @@ bus.subscribe((event: RuntimeEvent) => {
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
-        const steerReply = event.phase === "commentary" && store.messagesFor(event.threadId).findLast((m) => (m.role === "user" && m.steered && !m.queueId) || (m.role === "bot" && m.kind === "text"))?.role === "user";
+        const anchor = event.phase === "commentary" ? store.messagesFor(event.threadId).findLast((m) => m.role === "user" || (m.role === "bot" && m.kind === "text")) : undefined;
+        const steerReply = anchor?.role === "user" && anchor.steered && !anchor.queueId;
         const message = pushMessage(
           event.summarized
             ? { role: "bot", kind: "text", text: event.text, summarized: true }
