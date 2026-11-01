@@ -251,7 +251,7 @@ describe("provider-neutral context compaction", () => {
       summarize: async () => `SUMMARY\n${line}`,
     });
     expect(first.status).toBe("ready");
-    if (first.status !== "ready" || !first.compaction) return;
+    if (first.status !== "ready" || !first.compaction) throw new Error("expected a first compaction");
 
     const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary two");
     await prepareModelContext({
