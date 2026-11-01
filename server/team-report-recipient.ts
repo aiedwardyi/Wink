@@ -4,6 +4,8 @@ const COURTESY = new Set(["please", "pls", "hey", "ok", "okay", "yeah", "yes", "
 const MODAL = new Set(["can", "could", "would", "will"]);
 const VERBS = new Set(["send", "report", "forward", "submit", "tell", "flag", "file", "share", "let"]);
 const OBJECT = /^(?:this|that|it|these|those|the|a|an|my|our|your|all|some|everything|logs?|reports?|screenshots?|images?|files?|messages?|diagnostics?|evidence|details|feedback|bugs?|issues?|errors?|crashes|crash|debug|console|server|client|stack|trace|output)$/;
+const PRONOUN = /^(?:me|you|him|her|us|them|someone|everyone)$/;
+const ROLE = /^(?:manager|developer|engineer|designer|owner|admin|team|support)$/;
 const INFINITIVE = /^(?:save|reproduce|debug|fix|check|test|show|explain|help|send|report|see|know|collect|include)$/;
 const GERUND = /^(?:saving|reproducing|debugging|fixing|checking|testing|showing|explaining|helping|sending|reporting|sharing|filing|collecting)$/;
 const PARTICLES = ["한테로", "에게", "한테", "께", "로", "에"];
@@ -39,7 +41,8 @@ function command(words: string[], start: number): { start: number; index: number
 }
 
 export function reportRecipient(text: string): boolean {
-  const words = (text.match(/[\p{L}\p{N}_]+(?:['’][\p{L}\p{N}_]+)?|\n|[^\s]/gu) ?? []).map((word) => word.toLowerCase());
+  const tokens = text.match(/[\p{L}\p{N}_]+(?:['’][\p{L}\p{N}_]+)?|\n|[^\s]/gu) ?? [];
+  const words = tokens.map((word) => word.toLowerCase());
   const commands: Array<{ start: number; index: number; addressed: boolean }> = [];
   for (let index = 0; index < words.length; index++) {
     if (index && !BOUNDARY.test(words[index - 1])) continue;
@@ -57,9 +60,12 @@ export function reportRecipient(text: string): boolean {
     if (verb === "tell" || verb === "let") {
       recipient = Boolean(OWNER.exec(first)) && (verb !== "let" || words[current.index + 2] === "know");
       if (!recipient) { conflicts.add(current.index); continue; }
-    } else if (current.addressed && /^(?:send|forward)$/.test(verb) && !OWNER.test(first) && !OBJECT.test(first)) { other = true; conflicts.add(current.index); }
+    } else if (current.addressed && /^(?:send|forward)$/.test(verb) && !OWNER.test(first) &&
+      (PRONOUN.test(first) || (first === "the" && ROLE.test(words[current.index + 2] ?? "")) ||
+        (!OBJECT.test(first) && /^\p{Lu}[\p{L}\p{N}_]*$/u.test(tokens[current.index + 1] ?? "")))) { other = true; conflicts.add(current.index); }
     for (let at = current.index + 1; at < end; at++) {
       const preposition = words[at], next = words[at + 1] ?? "";
+      if (!OWNER.test(preposition) && (RECIPIENT_PARTICLES.includes(next) || RECIPIENT_PARTICLES.some((particle) => preposition.length > particle.length && (preposition.endsWith(particle) || preposition.endsWith(`${particle}는`) || preposition.endsWith(`${particle}도`))))) { other = true; conflicts.add(at); }
       if (preposition !== "to" && !(/^(?:flag|file|share)$/.test(verb) && /^(?:for|with)$/.test(preposition))) continue;
       if ((preposition === "to" && INFINITIVE.test(next)) || (preposition === "for" && (GERUND.test(next) || OBJECT.test(next)))) continue;
       if (OWNER.test(next)) recipient = true;

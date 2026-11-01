@@ -73,6 +73,18 @@ const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can yo
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
 describe("review report authorization regressions", () => {
+  it.each(["Ed, send reproduction steps", "Ed, forward yesterday's screenshot", "Ed, forward yesterday’s screenshot", "Eddie please send failing export logs", "Ed, send debugging notes", "Ed, report this", "send this to Edward"])("accepts descriptive objects addressed to the owner: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+    expect(reportIntent(text, true)).toBe("send");
+  });
+  it.each(["Ed, send reproduction steps to Alice", "Ed, forward yesterday's screenshot to her", "Ed, send reproduction steps 앨리스한테", "Ed, send reproduction steps 앨리스 한테", "Ed, send her screenshots", "Ed, send the manager screenshots", "Ed, forward Alice logs"])("requires evidence of a conflicting recipient: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each(["보내", "보네"].flatMap((verb) => ["지 마", " 지 마", "지마", " 지마", "지 말아", " 지 말아", "지말아", " 지말아"].map((negative) => `에디에게 ${verb}${negative}`)))("vetoes Korean send spelling and spacing variants: %s", (text) => {
+    expect(reportIntent(text)).toBe("draft");
+    expect(reportIntent(text, true)).toBe("draft");
+  });
   it("scans a 100k identifier in under 50 ms", () => {
     const text = `에디한테 ${"A".repeat(100_000)} 보내줘`;
     reportIntent("에디한테 보내줘");
