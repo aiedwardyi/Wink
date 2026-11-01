@@ -13,7 +13,7 @@ import { DATA_DIR } from "./config.ts";
 import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
-import { syncPathStamp } from "./thread-sync-path.ts";
+import { syncPathChanged } from "./thread-sync-path.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { workspaceDir } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -2068,7 +2068,7 @@ export class Store {
       const cached = this.threads.get(threadId);
       const events: StoreChange[] = [];
       const pathChanged = mdb.withMessageTransaction((db) => {
-        const before = syncPathStamp(db, threadId);
+        const changed = syncPathChanged(db, threadId, changes);
         for (const change of changes) {
           if (change.kind === "metadata") {
             // SAFETY: The sync engine validates metadata before adding a change page.
@@ -2094,7 +2094,7 @@ export class Store {
             if (leaf) events.push({ type: "thread", threadId, activeLeafId: leaf });
           }
         }
-        return before !== syncPathStamp(db, threadId);
+        return changed;
       });
       if (pathChanged) {
         task.resumeCursors = {};
