@@ -1,5 +1,5 @@
 const OWNER = /^(edward|eddie|ed|에드워드|에디|대표)(님)?(한테로|에게|한테|께|로|에|가)?(?:는|도)?$/iu;
-const BOUNDARY = /^[,.!?;\n]$/;
+const BOUNDARY = /^[,.!?;\n。]$/;
 const COURTESY = new Set(["please", "pls", "hey", "ok", "okay", "yeah", "yes", "let's"]);
 const MODAL = new Set(["can", "could", "would", "will"]);
 const VERBS = new Set(["send", "report", "forward", "submit", "tell", "flag", "file", "share", "let"]);
@@ -10,17 +10,26 @@ const INFINITIVE = /^(?:save|reproduce|debug|fix|check|test|show|explain|help|se
 const GERUND = /^(?:saving|reproducing|debugging|fixing|checking|testing|showing|explaining|helping|sending|reporting|sharing|filing|collecting)$/;
 const PARTICLES = ["한테로", "에게", "한테", "께", "로", "에"];
 const RECIPIENT_PARTICLES = ["한테로", "에게", "한테", "께"];
-const KOREAN_SEND = /^(?:(?:보고|전달|제보|전송|공유|신고)(?:해|하)[\p{L}]*|(?:알려|말해)(?:줘|주세요|주|드려)?)$/u;
-const KOREAN_ENDING = /^(?:줘(?:요)?|주세요|주실래(?:요)?|줄래(?:요)?|드려(?:요)?|라|요|십시오)$/u;
+const KOREAN_ENDING = /^(?:줘(?:요)?|주세요|주실래(?:요)?|줄래(?:요)?|드려(?:요)?|라|요|세요|십시오)$/u;
 const KOREAN_REPORT = /^(?:보고|전달|제보|전송|공유|신고)$/;
 
 function koreanSend(words: string[], index: number): boolean {
-  if (/^보[내네]/.test(words[index])) {
-    const ending = words[index].slice(2), next = words[index + 1] ?? "";
-    if (ending) return KOREAN_ENDING.test(ending) || (ending === "주실" && next === "수" && /^있나요$/.test(words[index + 2] ?? ""));
-    return !next || BOUNDARY.test(next) || KOREAN_ENDING.test(next) || (next === "주실" && words[index + 2] === "수" && words[index + 3] === "있나요");
+  let send = /^(?:보[내네]|(?:보고|전달|제보|전송|공유|신고)(?:해|하)|알려|알리(?=세요|십시오)|말해)(.*)$/u.exec(words[index] ?? "");
+  if (KOREAN_REPORT.test(words[index] ?? "")) {
+    index++;
+    if (words[index] === "좀") index++;
+    send = /^(?:해|하|부탁해|부탁)(.*)$/u.exec(words[index] ?? "");
   }
-  return KOREAN_SEND.test(words[index]) || (KOREAN_REPORT.test(words[index]) && /^(?:해|하|부탁|좀)/.test(words[index + 1] ?? ""));
+  if (!send) return false;
+  const ending = send[1], next = words[index + 1] ?? "";
+  if (ending) return KOREAN_ENDING.test(ending) || (ending === "주실" && next === "수" && words[index + 2] === "있나요");
+  return !next || BOUNDARY.test(next) || KOREAN_ENDING.test(next) || (next === "주실" && words[index + 2] === "수" && words[index + 3] === "있나요");
+}
+
+function sentenceEnd(words: string[], index: number): boolean {
+  const word = words[index];
+  return /^[.!?\n。]$/.test(word) && !(word === "." && /\d$/.test(words[index - 1] ?? "") && /^\d/.test(words[index + 1] ?? ""))
+    || /[가-힣](?:다|요|죠)$/.test(word);
 }
 
 function command(words: string[], start: number): { start: number; index: number; addressed: boolean } | undefined {
@@ -51,12 +60,12 @@ export function reportRecipient(text: string): boolean {
   const words = tokens.map((word) => word.toLowerCase());
   const commands: Array<{ start: number; index: number; addressed: boolean }> = [];
   for (let index = 0; index < words.length; index++) {
-    if (index && !BOUNDARY.test(words[index - 1])) continue;
+    if (index && !BOUNDARY.test(words[index - 1]) && !sentenceEnd(words, index - 1)) continue;
     const found = command(words, index);
     if (found) { commands.push(found); index = found.index; }
   }
   const subject = OWNER.exec(words[0] ?? "");
-  const sentenceEnd = words.findIndex((word) => /^[.!?]$/.test(word));
+  const firstEnd = words.findIndex((_word, index) => sentenceEnd(words, index));
   const conflicts = new Set<number>();
   for (let index = 0; index < commands.length; index++) {
     const current = commands[index], end = commands[index + 1]?.start ?? words.length;
@@ -70,12 +79,13 @@ export function reportRecipient(text: string): boolean {
       (PRONOUN.test(first) || (first === "the" && ROLE.test(words[current.index + 2] ?? "")) ||
         (!OBJECT.test(first) && /^\p{Lu}[\p{L}\p{N}_]*$/u.test(tokens[current.index + 1] ?? "")))) { other = true; conflicts.add(current.index); }
     for (let at = current.index + 1; at < end; at++) {
+      if (sentenceEnd(words, at)) break;
       const preposition = words[at], next = words[at + 1] ?? "";
       if (!OWNER.test(preposition) && (RECIPIENT_PARTICLES.includes(next) || RECIPIENT_PARTICLES.some((particle) => preposition.length > particle.length && (preposition.endsWith(particle) || preposition.endsWith(`${particle}는`) || preposition.endsWith(`${particle}도`))))) { other = true; conflicts.add(at); }
       if (preposition !== "to" && !(/^(?:flag|file|share)$/.test(verb) && /^(?:for|with)$/.test(preposition))) continue;
       if ((preposition === "to" && INFINITIVE.test(next)) || (preposition === "for" && (GERUND.test(next) || OBJECT.test(next)))) continue;
       if (OWNER.test(next)) recipient = true;
-      else if (preposition === "to" && next === "him" && subject && !subject[3] && (sentenceEnd < 0 || current.start < sentenceEnd)) recipient = true;
+      else if (preposition === "to" && next === "him" && subject && !subject[3] && (firstEnd < 0 || current.start < firstEnd)) recipient = true;
       else { other = true; conflicts.add(at); }
     }
     if (recipient && !other) return true;

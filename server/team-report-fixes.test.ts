@@ -76,7 +76,22 @@ describe("review report authorization regressions", () => {
   it.each(["에디에게", "에드워드한테", "대표님께"].flatMap((recipient) => [
     ...["보내", "보내줘", "보내 줘", "보내줘요", "보내주세요", "보내 주세요", "보내주실래요?", "보내줄래?", "보내줄래요?", "보내 주실 수 있나요?", "보내라", "보내요", "보내십시오", "보고해줘요", "전달해 주실래요?", "보네", "보네줘"].map((ending) => [`${recipient} ${ending}`, "send"]),
     ...["보낸", "보냈어?", "보내 놓은", "보내놓은", "보내 둔", "보내던", "보내는 중", "보내 놓았던", "보내 던", "보내 는", "보내 진", "보내 버린", "보네 놓은"].map((ending) => [`${recipient} ${ending} 메시지 찾아줘`, "none"]),
-    ...["보내", "보네"].flatMap((verb) => ["지 마", " 지 마", "지마", " 지마", "지 말아", " 지 말아", "지말아", " 지말아"].map((ending) => [`${recipient} ${verb}${ending}`, "draft"])),
+    ...["보내", "보네", "보고하", "전달하", "전송하", "제보하", "알리", "공유하", "신고하"].flatMap((verb) => {
+      const command = verb.endsWith("하") ? `${verb.slice(0, -1)}해` : verb === "알리" ? "알려" : verb;
+      return [
+        ...["", "줘", " 줘", "줘요", "주세요", " 주세요", "주실래요?", "줄래?", "줄래요?", " 주실 수 있나요?", "라", "요"].map((ending) => [`${recipient} ${command}${ending}`, "send"]),
+        ...["세요", "십시오"].map((ending) => [`${recipient} ${verb}${ending}`, "send"]),
+        ...["던", "는 중", "지 않아도 돼", "지 않았어", " 던", " 는", " 진", " 버린"].map((ending) => [`${recipient} ${verb}${ending} 메시지 찾아줘`, "none"]),
+        ...[" 놓은", "놓은", " 둔", " 놓았던"].map((ending) => [`${recipient} ${command}${ending} 메시지 찾아줘`, "none"]),
+        ...(verb.endsWith("하") ? [
+          ...["하던", "하지 않아도 돼", "하지 않았어", "해 놓은", "해 주던"].map((ending) => [`${recipient} ${verb.slice(0, -1)} ${ending} 메시지 찾아줘`, "none"]),
+          [`${recipient} ${verb.slice(0, -1)} 하지 마`, "draft"],
+          ...["부탁해", "부탁해요", "좀 해줘"].map((ending) => [`${recipient} ${verb.slice(0, -1)} ${ending}`, "send"]),
+        ] : []),
+        ...["지 마", " 지 마", "지마", " 지마", "지 말아", " 지 말아", "지말아", " 지말아"].map((ending) => [`${recipient} ${verb}${ending}`, "draft"]),
+        ...[" 안 돼", " 안 해", " 나중에"].map((ending) => [`${recipient} ${verb}${ending}`, "draft"]),
+      ];
+    }),
   ]))("classifies Korean send endings: %s", (text, intent) => {
     expect(reportIntent(text)).toBe(intent);
     expect(reportIntent(text, true)).toBe(intent);
@@ -87,6 +102,15 @@ describe("review report authorization regressions", () => {
   ])("classifies English send commands: %s", (text, intent) => {
     expect(reportIntent(text)).toBe(intent);
     expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each(["Send this to Ed", "Ed, send reproduction steps", "Flag this for Edward", "Share this with Eddie"].flatMap((ask) =>
+    [".", "!", "?", "\n", "。", " 처리해요", " 처리합니다"].flatMap((boundary) => [
+      `${ask}${boundary} The failure happens when switching to dark mode.`,
+      `${ask}${boundary} This fails for Alice. It also happens with Bob when switching to dark mode.`,
+      `${ask}${boundary} This happens with Alice. The output belongs to Bob and is missing for Carol.`,
+    ])))("keeps explanatory sentences out of the delivery clause: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+    expect(reportIntent(text, true)).toBe("send");
   });
   it.each([false, true])("collects an attached recurring failure with a stale explicit ID: %s", async (explicit) => {
     const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
@@ -100,11 +124,25 @@ describe("review report authorization regressions", () => {
     expect(held.report.requestMessageId).toBe(request.id);
     expect(held.report.images).toEqual([expect.objectContaining({ messageId: request.id })]);
   });
-  it.each(["Retry that report", "Resend it", "Try again", "Send it again", "Send it to Edward again", "다시 보내줘"])("retains saved evidence for an attached retry command: %s", async (text) => {
+  it.each(["Retry that report", "Resend it", "Try again", "Send it again", "Send it to Edward again", "다시 보내줘", "Looks good, resend it", "Please, looks good! Retry this report", "Looks good, resend it <attached-image name='failure.png'>", "yes"].flatMap((text) => [false, true].map((explicit) => [text, explicit] as const)))("retains saved evidence for an attached retry command: %s (explicit %s)", async (text, explicit) => {
     const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
     const draft = await f.call({ action: "draft" });
     f.append("bot", "Here is the report draft"); f.append("user", text, { png: png.toString("base64") });
-    expect(await f.call({ action: "send" })).toMatchObject({ id: draft.id, state: "accepted" });
+    expect(await f.call({ action: "send", report_id: explicit ? draft.id : undefined })).toMatchObject({ id: draft.id, state: "accepted" });
+    expect((await f.relay.claim())[0].report).toEqual(draft.report);
+  });
+  it.each(["the image above", "방금 보낸 첨부"].flatMap((text) => [false, true].map((explicit) => [text, explicit] as const)))("retains draft evidence for an attached clarification: %s (explicit %s)", async (text, explicit) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
+    const draft = await f.call({ action: "draft" });
+    f.append("bot", "Here is the report draft"); f.append("user", text, { png: png.toString("base64") });
+    expect(await f.call({ action: "send", report_id: explicit ? draft.id : undefined })).toMatchObject({ id: draft.id, state: "draft", report: draft.report });
+    expect(await f.relay.claim()).toHaveLength(0);
+  });
+  it.each([false, true])("retains a saved report when retry context describes new infrastructure: %s", async (explicit) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Report this to Ed");
+    const draft = await f.call({ action: "collect" });
+    f.append("bot", "Here is the report draft"); f.append("user", "Retry that report, the new relay is up");
+    expect(await f.call({ action: "retry", report_id: explicit ? draft.id : undefined })).toMatchObject({ id: draft.id, state: "accepted" });
     expect((await f.relay.claim())[0].report).toEqual(draft.report);
   });
   it.each(["Ed, send reproduction steps", "Ed, forward yesterday's screenshot", "Ed, forward yesterday’s screenshot", "Eddie please send failing export logs", "Ed, send debugging notes", "Ed, report this", "send this to Edward"])("accepts descriptive objects addressed to the owner: %s", (text) => {
