@@ -2537,6 +2537,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
+        // Remote links share one pipe, so hello must not queue behind the snapshot.
         if (!prefetchStarted && !hydrated && !hydrationPromise) prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
         prefetchStarted = true;
       },

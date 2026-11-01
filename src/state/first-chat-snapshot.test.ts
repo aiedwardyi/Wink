@@ -13,6 +13,7 @@ describe("chat snapshot prefetch", () => {
     ["http://127.0.0.1:8799", true],
     ["http://localhost:8799", true],
     ["http://[::1]:8799", true],
+    ["https://[::1]:8799", false],
     ["https://localhost:9484", false],
     ["https://127.0.0.1:9484", false],
     ["https://phone.example", false],
