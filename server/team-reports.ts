@@ -82,7 +82,7 @@ export class TeamReports {
     const lastBot = path.slice(0, path.indexOf(request)).findLast((message) => message.role === "bot" && message.kind === "text");
     const replying = anchor && lastBot && path.indexOf(lastBot) > path.indexOf(anchor) && !lastBot.comm && (!lastBot.from || lastBot.from.botId === bot.id)
       && (/\breport\b|which Wink|보고/i.test(lastBot.text ?? "") || Boolean(context?.reportId && lastBot.text?.includes(context.reportId)));
-    const retryWords = /\b(?:retry|resend|again)\b|다시/i.test(request.text ?? "");
+    const retryWords = /(?:^|[.!?;\n])\s*(?:(?:please|ok|okay|yes|yeah)[,\s]+)*(?:(?:retry|resend)\b|try\s+again\b|send\s+(?:it|(?:that|this|the)\s+report)\b[^.!?;\n]*\bagain\b|다시\s*(?:보[내네]|시도))/i.test(request.text ?? "");
     const newIncident = anchor && (anchor.id !== request.id || (body.report_id && body.report_id !== context?.reportId)) && (/\b(?:new|another|different)\b|새로운|새\s*(?:문제|오류|버그)/i.test(request.text ?? "")
       || (!retryWords && (request.image || request.png || /<attached-(?:image|file)\b/i.test(request.text ?? ""))));
     const fresh = anchor && anchor.id !== request.id && (newIncident

@@ -73,6 +73,40 @@ const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can yo
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
 describe("review report authorization regressions", () => {
+  it.each(["에디에게", "에드워드한테", "대표님께"].flatMap((recipient) => [
+    ...["보내", "보내줘", "보내 줘", "보내줘요", "보내주세요", "보내 주세요", "보내주실래요?", "보내줄래?", "보내줄래요?", "보내 주실 수 있나요?", "보내라", "보내요", "보내십시오", "보고해줘요", "전달해 주실래요?", "보네", "보네줘"].map((ending) => [`${recipient} ${ending}`, "send"]),
+    ...["보낸", "보냈어?", "보내 놓은", "보내놓은", "보내 둔", "보내던", "보내는 중", "보내 놓았던", "보내 던", "보내 는", "보내 진", "보내 버린", "보네 놓은"].map((ending) => [`${recipient} ${ending} 메시지 찾아줘`, "none"]),
+    ...["보내", "보네"].flatMap((verb) => ["지 마", " 지 마", "지마", " 지마", "지 말아", " 지 말아", "지말아", " 지말아"].map((ending) => [`${recipient} ${verb}${ending}`, "draft"])),
+  ]))("classifies Korean send endings: %s", (text, intent) => {
+    expect(reportIntent(text)).toBe(intent);
+    expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each([
+    ["Send this screenshot to Ed", "send"], ["Ed, report this", "send"], ["send this to Edward", "send"], ["Ed, send reproduction steps", "send"],
+    ["Tell Alice that Edward is on vacation", "none"], ["Don't let Ed know about this", "draft"], ["Ed, send reproduction steps to Alice", "none"],
+  ])("classifies English send commands: %s", (text, intent) => {
+    expect(reportIntent(text)).toBe(intent);
+    expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each([false, true])("collects an attached recurring failure with a stale explicit ID: %s", async (explicit) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
+    const draft = await f.call({ action: "draft" });
+    f.append("bot", "Here is the report draft");
+    const request = f.append("user", "The export failed again. Send this screenshot to Ed", { png: png.toString("base64") });
+    const result = await f.call({ action: "send", ...(explicit ? { report_id: draft.id } : {}) });
+    expect(result).toMatchObject({ state: "accepted" });
+    expect(result.id).not.toBe(draft.id);
+    const [held] = await f.relay.claim();
+    expect(held.report.requestMessageId).toBe(request.id);
+    expect(held.report.images).toEqual([expect.objectContaining({ messageId: request.id })]);
+  });
+  it.each(["Retry that report", "Resend it", "Try again", "Send it again", "Send it to Edward again", "다시 보내줘"])("retains saved evidence for an attached retry command: %s", async (text) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
+    const draft = await f.call({ action: "draft" });
+    f.append("bot", "Here is the report draft"); f.append("user", text, { png: png.toString("base64") });
+    expect(await f.call({ action: "send" })).toMatchObject({ id: draft.id, state: "accepted" });
+    expect((await f.relay.claim())[0].report).toEqual(draft.report);
+  });
   it.each(["Ed, send reproduction steps", "Ed, forward yesterday's screenshot", "Ed, forward yesterday’s screenshot", "Eddie please send failing export logs", "Ed, send debugging notes", "Ed, report this", "send this to Edward"])("accepts descriptive objects addressed to the owner: %s", (text) => {
     expect(reportIntent(text)).toBe("send");
     expect(reportIntent(text, true)).toBe("send");

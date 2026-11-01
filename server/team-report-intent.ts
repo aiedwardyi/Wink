@@ -16,7 +16,7 @@ export function reportIntent(raw: string, allowRetry = false): "send" | "draft" 
   if (!text || /(?:imported|forwarded|quoted|transcript|인용|전달받은)\s*(?:text|message|instructions|내용|메시지)?\s*:/i.test(text)) return "none";
   const addressed = reportRecipient(text);
   const alias = /(?<![\p{L}\p{N}_])(?:(?:edward|eddie|ed|에드워드|에디)(?:님)?(?:한테로|에게|한테|께|로|에|가)?(?:는|도)?|대표(?:님)?\s*(?:한테로|에게|한테|께|로|에|가)|(?:to|for|with|tell)\s+대표(?:님)?)(?![\p{L}\p{N}_])/iu.test(text) || addressed;
-  const retry = allowRetry && /^(?:(?:please|ok|okay|yes|yeah|looks good)[,.!\s]*)*(?:(?:retry|resend)(?:\s+(?:it|that|this|the|report))*|try again|send it|다시\s*(?:보내줘|시도해줘)|네|응|좋아)[.!?\s]*$|^(?:yes|ok|okay|네|응)[.!\s]*$|^(?:the\s+)?(?:screenshot|image|file|answer|message)\s+(?:in my last message|above)[.!\s]*$|^(?:방금|마지막)\s*(?:보낸\s*)?(?:스크린샷|사진|첨부)[.!\s]*$/i.test(text);
+  const retry = allowRetry && /^(?:(?:please|ok|okay|yes|yeah|looks good)[,.!\s]*)*(?:(?:retry|resend)(?:\s+(?:it|that|this|the|report))*|try again|send it(?:\s+again)?|다시\s*(?:보내줘|시도해줘)|네|응|좋아)[.!?\s]*$|^(?:yes|ok|okay|네|응)[.!\s]*$|^(?:the\s+)?(?:screenshot|image|file|answer|message)\s+(?:in my last message|above)[.!\s]*$|^(?:방금|마지막)\s*(?:보낸\s*)?(?:스크린샷|사진|첨부)[.!\s]*$/i.test(text);
   if (!alias && !allowRetry) return "none";
   if (/\b(?:draft|preview|not\s+yet|hold\s+off)\b|(?:show|review)\b.{0,60}\b(?:first|before\s+send)|\b(?:do not|don't|don’t|dont|never)\s+(?:send|report|forward|submit|tell|share|file|flag|let\b.{0,40}\bknow)\b|초안|미리\s*(?:보|보여)|먼저\s*(?:보|보여)|(?:보[내네]|전송하|보고하|전달하|제보하|알리|말하|공유하|신고하)\s*지\s*(?:마|말)|(?:보[내네]|보고|전달|전송|제보).{0,12}(?:안\s*돼|안\s*해|나중에)/i.test(text)) return "draft";
   if (!alias && !retry) return "none";

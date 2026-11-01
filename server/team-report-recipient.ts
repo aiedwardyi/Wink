@@ -10,10 +10,16 @@ const INFINITIVE = /^(?:save|reproduce|debug|fix|check|test|show|explain|help|se
 const GERUND = /^(?:saving|reproducing|debugging|fixing|checking|testing|showing|explaining|helping|sending|reporting|sharing|filing|collecting)$/;
 const PARTICLES = ["한테로", "에게", "한테", "께", "로", "에"];
 const RECIPIENT_PARTICLES = ["한테로", "에게", "한테", "께"];
-const KOREAN_SEND = /^(?:보[내네](?:줘|주세요|주|줄래|줄|드려|드려요)?|(?:보고|전달|제보|전송|공유|신고)(?:해|하)[\p{L}]*|(?:알려|말해)(?:줘|주세요|주|드려)?)$/u;
+const KOREAN_SEND = /^(?:(?:보고|전달|제보|전송|공유|신고)(?:해|하)[\p{L}]*|(?:알려|말해)(?:줘|주세요|주|드려)?)$/u;
+const KOREAN_ENDING = /^(?:줘(?:요)?|주세요|주실래(?:요)?|줄래(?:요)?|드려(?:요)?|라|요|십시오)$/u;
 const KOREAN_REPORT = /^(?:보고|전달|제보|전송|공유|신고)$/;
 
 function koreanSend(words: string[], index: number): boolean {
+  if (/^보[내네]/.test(words[index])) {
+    const ending = words[index].slice(2), next = words[index + 1] ?? "";
+    if (ending) return KOREAN_ENDING.test(ending) || (ending === "주실" && next === "수" && /^있나요$/.test(words[index + 2] ?? ""));
+    return !next || BOUNDARY.test(next) || KOREAN_ENDING.test(next) || (next === "주실" && words[index + 2] === "수" && words[index + 3] === "있나요");
+  }
   return KOREAN_SEND.test(words[index]) || (KOREAN_REPORT.test(words[index]) && /^(?:해|하|부탁|좀)/.test(words[index + 1] ?? ""));
 }
 
