@@ -223,11 +223,17 @@ export class KeepGoing {
       if (!parsed.success) return { error: "start_after must be RFC3339 with an offset" };
       const entry = this.bots[botId];
       if (!entry?.on) return { error: "start_after requires Agentic Mode to be on" };
-      if (entry.paused) return { error: "Agentic Mode is paused; the user must turn it off and on" };
       if (entry.ownerDeviceId !== this.deps.deviceId()) return { error: "Agentic Mode belongs to another PC" };
       if (entry.threadId !== threadId || this.deps.botThreadId(botId) !== threadId) return { error: "Agentic Mode task changed" };
-      entry.startAfter = parsed.data;
-      entry.revision++;
+      if (entry.paused === "no-progress" || entry.paused === "bot-paused") {
+        if (this.userTurns.get(botId) !== threadId) {
+          return { error: `Agentic Mode stays paused (${entry.paused === "no-progress" ? "two tries made no progress" : "the user asked to stop"}) until a turn the user typed turns it on` };
+        }
+        this.enable(botId, threadId, packet);
+      }
+      const current = this.bots[botId]!;
+      current.startAfter = parsed.data;
+      current.revision++;
       this.save();
     } else if (this.userTurns.get(botId) !== threadId) return { error: "only a turn the user started with their own message can turn Agentic Mode on" };
     else this.enable(botId, threadId, packet);
