@@ -33,10 +33,10 @@
     content: "";
     position: absolute;
     top: 0;
-    left: 20px;
-    right: 16px;
+    left: 12px;
+    right: 12px;
     height: 3px;
-    mask: repeating-linear-gradient(90deg, #000 0 calc(100% / 6 - 4px), transparent 0 calc(100% / 6));
+    mask: repeating-linear-gradient(90deg, #000 0 calc((100% + 4px) / 6 - 4px), transparent 0 calc((100% + 4px) / 6));
     pointer-events: none;
   }
 
@@ -83,71 +83,6 @@
     font-size: 10.5px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-  }
-
-  /* Dial: the stage's inline --accent is the lab color. Kept as --hud-lab for
-     the picked card's mark; every piece of chrome under the stage goes white. */
-  .dial-stage {
-    --hud-lab: var(--accent);
-  }
-
-  .dial-stage > * {
-    --accent: #e8eaee;
-    --accent-ink: #ffffff;
-    --hot: #ffffff;
-  }
-
-  .dial-card[aria-pressed="true"] .dial-mark {
-    color: var(--hud-lab);
-  }
-
-  .dial-scene-lab {
-    display: none;
-  }
-
-  /* inline --c, so only !important reaches it */
-  .dial-chamber,
-  .dial-wedge,
-  .dial-frame {
-    --c: #d9dce2 !important;
-  }
-
-  .dial-logo .dial-mark,
-  .dial-seg .dial-mark.lit {
-    filter: none;
-  }
-
-  .dial-card,
-  .dial-frame {
-    corner-shape: bevel;
-  }
-
-  .dial-stage[data-max] :is(.dial-notch, .dial-overdrive path) {
-    --hot: #ffffff;
-    --halo: #ffffffa6;
-  }
-
-  .dial-shock {
-    background: #ffffff;
-  }
-
-  .dial-stage[data-max] .dial-bar b {
-    background: none;
-    color: #ffffff;
-  }
-
-  /* List picker: one white accent for every family; marks keep their own. */
-  :is(.model-cross-backdrop, .model-cross-backdrop[data-picker-family]) {
-    --picker-accent: #e8eaee;
-  }
-
-  .model-cross-chrome {
-    corner-shape: bevel;
-  }
-
-  .model-cross-options {
-    --color-success: #c9ccd3;
-    --color-warning: #bfc3cb;
   }
 
   @media (prefers-reduced-motion: reduce) {
