@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { openSync, closeSync, fstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { REPORT_IMAGE_BYTES, teamReportSchema, type TeamReport } from "../shared/team-report.ts";
+import { safeImageMetadata } from "../shared/image-metadata.ts";
 import { sniffImageMime } from "./attachments.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message } from "./store.ts";
@@ -110,7 +111,7 @@ export function collectReport(options: EvidenceOptions): TeamReport {
         if (images.length >= 3) throw new Error("image count exceeded");
         const bytes = read();
         const mime = sniffImageMime(bytes) as TeamReport["images"][number]["mime"] | null;
-        if (!mime || bytes.length > REPORT_IMAGE_BYTES || reportText(bytes.toString("latin1")) !== bytes.toString("latin1")) throw new Error("unsafe image type/size/metadata");
+        if (!mime || bytes.length > REPORT_IMAGE_BYTES || !safeImageMetadata(bytes, mime, reportText)) throw new Error("unsafe image type/size/metadata");
         images.push({ messageId: message.id, mime, base64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex"), source, collectedAt: Date.now() });
         if (source === "referenced-file") missing.push(`Image on ${message.id} read from referenced file at collection; historical bytes unverified.`);
       } catch { missing.push(`Image on ${message.id} unavailable or refused by path/type/size/secret checks.`); }

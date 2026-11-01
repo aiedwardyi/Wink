@@ -263,7 +263,7 @@ export function createApiServer(opts: ApiOptions): Server {
 
     if (/^\/v1\/team\/reports\/(submit|claim|ack)$/.test(url) && accounts && teamOwnerEmail && opts.reports) {
       if (!teamLimit.take(ip)) return reply(res, 429, { error: "rate-limited" });
-      return reportHttp(req, res, { accounts, reports: opts.reports, owner: teamOwnerEmail, now: opts.now, who: team ? (label) => team.who(label) : undefined });
+      return reportHttp(req, res, { accounts, reports: opts.reports, owner: teamOwnerEmail, now: opts.now, log, who: team ? (label) => team.who(label) : undefined });
     }
     const snagsUrl = SNAGS_RE.exec(url);
     if (accounts && signinOrigin && team && teamOwnerEmail && snags && snagsUrl) {

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { REPORT_MAX_BYTES } from "../../shared/team-report.ts";
 import type { Accounts } from "./accounts.ts";
+import { silentLogger, type Logger } from "./log.ts";
 import { reportAckSchema, type ReportStore } from "./reports.ts";
 
 async function body(req: IncomingMessage, max: number): Promise<unknown> {
@@ -18,6 +19,7 @@ async function body(req: IncomingMessage, max: number): Promise<unknown> {
 export async function reportHttp(req: IncomingMessage, res: ServerResponse, options: {
   accounts: Accounts; reports: ReportStore; owner: string; now(): number;
   who?(label: string): { name: string; person: string };
+  log?: Logger;
 }): Promise<void> {
   const send = (status: number, data: unknown) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" });
@@ -43,7 +45,8 @@ export async function reportHttp(req: IncomingMessage, res: ServerResponse, opti
     }
     return send(404, { error: "not-found" });
   } catch (error) {
-    const invalid = error instanceof SyntaxError || (error as Error).message === "too-large";
+    const invalid = error instanceof SyntaxError || (error instanceof Error && error.message === "too-large");
+    if (!invalid) (options.log ?? silentLogger).log("reports-error", { route: req.url?.split("/").at(-1), reason: "unexpected" });
     return send(invalid ? 400 : 503, { error: invalid ? "bad-report-body" : "report-store-unavailable" });
   }
 }

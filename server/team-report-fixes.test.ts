@@ -72,6 +72,46 @@ function fixture() {
 const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can you send this to Eddie?", "Send this Wink issue to Edward", "This is broken. Report it to Edward.", "Tell Ed about this", "Forward this to Edward", "Hey, send this to Edward please", "ok report this to ed", "Yeah send it to Edward", "Let Edward know about this bug", "Let's report this to Ed", "I'd like to report this to Edward", "Could you flag this for Edward?", "File a bug report with Edward for this", "Edward needs to see this, send it to him", "Please let Ed know the app froze", "Report it to Ed pls", "대표님께 이 문제 보고해줘", "에드워드한테 이거 보내줘", "대표님께 보내주세요", "대표님한테 알려줘", "이 오류 대표님께 전달 부탁해요", "대표님께 보고해 주세요", "대표님한테 보내줄래?", "이거 에디한테 보고 좀 해줘", "대표님께 전송해줘", "에드워드님께 공유해줘", "대표님께 이 버그 신고해줘", "에디한테 말해줘", "에드워드가 이거 봐야 해, 보내줘"];
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
+describe("review report authorization regressions", () => {
+  it.each(["Don't let Ed know about this", "Do not let Edward know", "Never let Eddie know", "에디한테 말하지 마", "에드워드한테 알리지 마"])("R1 keeps negated disclosure private: %s", (text) => {
+    expect(reportIntent(text)).toBe("draft");
+    expect(reportIntent(text, true)).toBe("draft");
+  });
+  it.each(["send", "retry"])("R2 excludes saved draft images on %s with explicit and inferred IDs", async (action) => {
+    for (const explicit of [false, true]) {
+      const f = fixture(); const incident = f.append("user", "Draft a report for Edward", { png: png.toString("base64") });
+      const draft = await f.call({ action: "draft" });
+      expect((draft.report as TeamReport).images).toHaveLength(1);
+      f.append("bot", "Here is the report draft. Want me to send it?"); f.append("user", "Send it to Edward without the screenshot");
+      expect(await f.call({ action, ...(explicit ? { report_id: draft.id } : {}), exclude_image_message_ids: [incident.id] })).toMatchObject({ id: draft.id, state: "accepted" });
+      const [held] = await f.relay.claim();
+      expect(held.report.images).toEqual([]);
+      expect(held.report.missing).toContain(`Images on ${incident.id} excluded as sensitive or unrelated.`);
+      expect(JSON.parse(readFileSync(join(f.dir, "drafts", `${draft.id}.json`), "utf8")).report.images).toEqual([]);
+    }
+  });
+  it.each(["send", "retry"].flatMap((action) => ["Would you like me to send the email to Alice?", "Would you like me to send the draft email to Alice?"].map((question) => [action, question])))("R3 unrelated delivery question cannot authorize report %s: %s", async (action, question) => {
+    const f = fixture(); f.append("user", "Keep notes"); f.append("bot", "Deleted notes"); f.append("user", "Draft a report for Ed");
+    const draft = await f.call({ action: "draft" });
+    f.append("bot", question); f.append("user", "yes");
+    expect(await f.call({ action, report_id: draft.id })).toHaveProperty("error");
+    expect(await f.relay.claim()).toHaveLength(0);
+  });
+  it.each(["new wording", "screenshot", "message", "accepted"])("R4 collects a fresh incident after %s", async (reason) => {
+    const f = fixture(); f.append("user", "Keep notes"); const old = f.append("bot", "Deleted notes"); f.append("user", "Report this to Edward");
+    const first = await f.call({ action: reason === "accepted" ? "send" : "collect" });
+    f.append("bot", reason === "accepted" ? "Report accepted by the service." : "Here is the report draft. Want me to send it?");
+    if (reason === "message") { f.append("user", "Now the export is broken"); f.append("bot", "I deleted the export. Should I report it?"); }
+    const request = f.append("user", reason === "new wording" ? "Send this new issue to Edward" : "Send this issue to Edward", reason === "screenshot" ? { png: png.toString("base64") } : {});
+    const result = await f.call({ action: "send" });
+    expect(result.state).toBe("accepted"); expect(result.id).not.toBe(first.id);
+    const saved = JSON.parse(readFileSync(join(f.dir, "drafts", `${result.id}.json`), "utf8")).report as TeamReport;
+    expect(saved.requestMessageId).toBe(request.id);
+    if (reason === "screenshot") expect(saved.images).toHaveLength(1);
+    if (reason === "message") expect(saved.selectedMessageId).not.toBe(old.id);
+  });
+});
+
 describe("audit intent regressions", () => {
   it.each(fresh)("B1 accepts %s", (text) => expect(reportIntent(text)).toBe("send"));
   it.each(followups)("B1 resolves saved draft on %s", async (text) => {

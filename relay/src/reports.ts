@@ -7,6 +7,7 @@ import { REPORT_ID, REPORT_MAX_BYTES, reportOwnerHash, reportPayload, teamReport
 import { accountRequestSchema, type Accounts } from "./accounts.ts";
 import { writeAtomic } from "./team.ts";
 import { redactSecretsInText } from "../../shared/redact.ts";
+import { safeImageMetadata } from "../../shared/image-metadata.ts";
 
 const envelopeSchema = z.strictObject({ auth: accountRequestSchema, signature: z.string().length(86).regex(/^[A-Za-z0-9_-]+$/), report: teamReportSchema });
 export const heldReportSchema = z.strictObject({
@@ -91,8 +92,7 @@ export class ReportStore {
         : head.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex")) ? "image/jpeg"
         : /^GIF8[79]a/.test(head.toString("latin1")) ? "image/gif"
         : head.subarray(0, 4).toString() === "RIFF" && head.subarray(8, 12).toString() === "WEBP" ? "image/webp" : null;
-      const metadata = bytes.toString("latin1");
-      if (bytes.length > 1024 * 1024 || image.base64 !== bytes.toString("base64") || mime !== image.mime || createHash("sha256").update(bytes).digest("hex") !== image.sha256 || redactSecretsInText(metadata) !== metadata) return { status: 400, body: { error: "bad-image" } };
+      if (bytes.length > 1024 * 1024 || image.base64 !== bytes.toString("base64") || mime !== image.mime || createHash("sha256").update(bytes).digest("hex") !== image.sha256 || !safeImageMetadata(bytes, image.mime, redactSecretsInText)) return { status: 400, body: { error: "bad-image" } };
     }
     return this.serial(async () => {
       const entries = await this.entries(now);

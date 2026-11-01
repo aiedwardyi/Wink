@@ -81,10 +81,12 @@ export class TeamReports {
     const anchor = path.find((message) => message.id === context?.requestId);
     const lastBot = path.slice(0, path.indexOf(request)).findLast((message) => message.role === "bot" && message.kind === "text");
     const replying = anchor && lastBot && path.indexOf(lastBot) > path.indexOf(anchor) && !lastBot.comm && (!lastBot.from || lastBot.from.botId === bot.id)
-      && /report|draft|deliver|send|which Wink|보고|초안|전송|보낼|보내/i.test(lastBot.text ?? "");
+      && (/\breport\b|which Wink|보고/i.test(lastBot.text ?? "") || Boolean(context?.reportId && lastBot.text?.includes(context.reportId)));
     const retryWords = /\b(?:retry|resend|again)\b|다시/i.test(request.text ?? "");
-    const followup = Boolean(anchor && anchor.id !== request.id && (replying || retryWords));
-    const savedId = body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
+    const fresh = anchor && anchor.id !== request.id && (request.image || request.png || /<attached-(?:image|file)\b|\b(?:new|another|different)\b|새로운|새\s*(?:문제|오류|버그)/i.test(request.text ?? "")
+      || path.slice(path.indexOf(anchor) + 1, path.indexOf(request)).some((message) => message.role === "user" && message.kind === "text" && reportIntent(message.text ?? "", true) === "none"));
+    const followup = Boolean(anchor && anchor.id !== request.id && !fresh && (replying || retryWords));
+    const savedId = fresh ? undefined : body.report_id ?? (followup && (!body.selected_message_id || body.selected_message_id === anchor?.id) ? context?.reportId : undefined);
     let previous: { report: TeamReport; receipt?: ReportReceipt } | undefined;
     if (savedId) {
       try { previous = JSON.parse(readFileSync(join(o.dir, `${savedId}.json`), "utf8")); } catch {}
@@ -97,6 +99,7 @@ export class TeamReports {
     let intent = reportIntent(request.text ?? "", Boolean((previous || anchor) && (replying || retryWords || request.id === previous?.report.requestMessageId)));
     const clarification = followup && /^(?:the\s+)?(?:screenshot|image|file|answer|message)\b|^(?:이전|방금|마지막|스크린샷|사진|첨부)/i.test(request.text ?? "");
     if (intent === "none") return { error: "No explicit report or draft request. No report sent." };
+    if (!body.report_id && previous?.receipt && !retryWords && !clarification && reportIntent(request.text ?? "") === "send") previous = undefined;
     if (clarification && anchor && reportIntent(anchor.text ?? "") === "draft") intent = "draft";
     let report: TeamReport;
     const incidentRequest = clarification && anchor ? anchor : request;
@@ -120,6 +123,11 @@ export class TeamReports {
       report.diagnosis = reportText(body.diagnosis ?? report.diagnosis).slice(0, 2000);
     }
     if (previous?.receipt && body.action !== "retry") return { ...previous.receipt, text: receiptText(previous.receipt) };
+    if (body.exclude_image_message_ids?.length) {
+      const excluded = new Set(body.exclude_image_message_ids);
+      const notes = [...excluded].filter((id) => report.images.some((image) => image.messageId === id)).map((id) => `Images on ${id} excluded as sensitive or unrelated.`);
+      report = { ...report, images: report.images.filter((image) => !excluded.has(image.messageId)), missing: [...new Set([...notes, ...report.missing])].slice(0, 32) };
+    }
     const save = (receipt?: ReportReceipt) => writeFileAtomic(join(o.dir, `${report.id}.json`), JSON.stringify({ report, ...(receipt ? { receipt } : {}) }), { mode: 0o600 });
     save(previous?.receipt);
     writeFileAtomic(contextFile, JSON.stringify({ requestId: report.requestMessageId, reportId: report.id }), { mode: 0o600 });
