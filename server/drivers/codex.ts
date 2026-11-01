@@ -45,6 +45,7 @@ import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, codexRateLimitWindows } from "./rate-limits.ts";
 import { accountLabel, cachedSignIn, storedAccount } from "./auth-status.ts";
+import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
@@ -229,6 +230,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       }
     };
     await refreshModels();
+    const text = createCodexText(config.cli, childEnv, () => models.default);
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => void;
@@ -905,6 +907,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     refreshModels,
     snapshot,
     loginConfig: () => ({ cli: config.cli, env: childEnv() }),
+    generateText: text.generateText,
+    get textModel() { return models.default; },
+    textTimeoutMs: CODEX_TEXT_TIMEOUT_MS,
     adapter: {
       provider: DRIVER_KIND,
       capabilities: {
@@ -943,6 +948,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       },
     },
     dispose: async () => {
+      text.dispose();
       for (const { stop } of active.values()) stop();
       listeners.clear();
     },
