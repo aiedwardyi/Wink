@@ -2077,7 +2077,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const chatSnapshot = (signal?: AbortSignal) =>
       api(`/api/bots?messages=${MESSAGE_PAGE}`, { signal, headers: { "x-open-chat": stateRef.current.selectedId } });
     let prefetchedChat: Promise<any> | null = null;
-    let prefetchStarted = false;
     let snapshotBoundary: string | undefined;
     type PeripheralKey = "instances" | "config" | "routines" | "webhooks";
     type PeripheralPart = {
@@ -2535,12 +2534,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
-      onOpen: () => {
-        rawDispatch({ type: "connected", value: true });
-        // Not before: over Tailscale Serve or the relay both share one pipe, and hello would queue behind the snapshot.
-        if (!prefetchStarted && !hydrated && !hydrationPromise) prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
-        prefetchStarted = true;
-      },
+      onOpen: () => rawDispatch({ type: "connected", value: true }),
       onError: () => rawDispatch({ type: "connected", value: false }),
       onSnapshotRequired: (cursor) => {
         clearTimeout(hydrationFallback);
@@ -2567,6 +2561,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (frame.replayed) flushDeltas();
       },
     });
+    // Start the stream first without adding its round trip to the snapshot.
+    prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
     // rAF never fires while hidden, so text streamed meanwhile would miss the
     // restored window's first frame, and a reply waiting on its tail would never settle.
     const flushOnVisibility = () => flushDeltas();

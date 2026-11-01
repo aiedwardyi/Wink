@@ -32,7 +32,7 @@ async function emit(frame: object, lastEventId = "") {
   await act(async () => FakeEventSource.last.onmessage!({ data: JSON.stringify(frame), lastEventId }));
 }
 
-async function mount() {
+async function mount(open = true) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -48,10 +48,12 @@ async function mount() {
     host.remove();
   };
   await act(async () => root.render(createElement(StoreProvider, null, createElement(Probe))));
-  await act(async () => {
-    FakeEventSource.last.opened = true;
-    FakeEventSource.last.onopen?.();
-  });
+  if (open) {
+    await act(async () => {
+      FakeEventSource.last.opened = true;
+      FakeEventSource.last.onopen?.();
+    });
+  }
 }
 
 const bot = (name: string) => ({
@@ -86,17 +88,19 @@ describe("first-send hydration", () => {
     expect(store.state.bots[0].name).toBe("Live");
   });
 
-  it("asks for the snapshot once the stream is open, naming the open chat", async () => {
+  it("asks for the snapshot after starting the stream without waiting for open", async () => {
     writeSnapshotCache({ bots: [bot("Saved")], groups: [], selectedId: "b1" });
     const earlier = FakeEventSource.last;
-    const reads: { streamOpen: boolean; openChat: string }[] = [];
+    const reads: { streamStarted: boolean; streamOpen: boolean; openChat: string }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url) !== "/api/bots?messages=200") return Response.json({}, { status: 404 });
-      reads.push({ streamOpen: FakeEventSource.last !== earlier && FakeEventSource.last.opened, openChat: (init?.headers as Record<string, string>)["x-open-chat"] });
+      reads.push({ streamStarted: FakeEventSource.last !== earlier, streamOpen: FakeEventSource.last.opened, openChat: (init?.headers as Record<string, string>)["x-open-chat"] });
       return Response.json({ bots: [bot("Prefetched")], groups: [], cursor: "stream00:4" });
     }));
-    await mount();
-    expect(reads).toEqual([{ streamOpen: true, openChat: "b1" }]);
+    await mount(false);
+    expect(reads).toEqual([{ streamStarted: true, streamOpen: false, openChat: "b1" }]);
+    await act(async () => FakeEventSource.last.onopen?.());
+    expect(reads).toHaveLength(1);
   });
 
   it("holds an early response beyond the fallback deadline until hello", async () => {
