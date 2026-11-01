@@ -72,6 +72,7 @@ export interface ClientSnapshot {
   nextRetryAt: number | null;
   /** The live session's relay takes snags. */
   snags: boolean;
+  reportOwner?: string;
 }
 
 export interface RelayClientOptions {
@@ -117,6 +118,7 @@ interface Session {
   pingSentAt: number | null;
   snags: boolean;
   snagWait: { id: string; settle(ok: boolean): void } | null;
+  reportOwner?: string;
   channels: Set<DataChannel>;
   cancels: Set<Cancel>;
 }
@@ -152,7 +154,7 @@ export class RelayClient {
     let poolIdle = 0;
     if (this.session?.ready) for (const channel of this.session.channels) if (channel.state === "idle") poolIdle++;
     const snags = this.session?.ready === true && this.session.snags;
-    return { state: this.state, rttMs: this.rttMs, poolIdle, lastError: this.lastError, nextRetryAt: this.nextRetryAt, snags };
+    return { state: this.state, rttMs: this.rttMs, poolIdle, lastError: this.lastError, nextRetryAt: this.nextRetryAt, snags, ...(this.session?.ready && this.session.reportOwner ? { reportOwner: this.session.reportOwner } : {}) };
   }
 
   /** One at a time, and only after a ready that offered snags: an older relay closes the channel on one. True once the relay answers. */
@@ -320,6 +322,7 @@ export class RelayClient {
       case "ready":
         if (!session.authSent || session.ready) throw new Error("unexpected ready");
         session.snags = msg.snags === true;
+        session.reportOwner = msg.reportOwner;
         this.onReady(session, msg.session, msg.poolToken, msg.pool.min, msg.pool.max, msg.ticket);
         if (msg.account) this.opts.onAccount?.(msg.account);
         return;

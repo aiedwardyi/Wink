@@ -296,6 +296,7 @@ import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
 import { teamRoute } from "./team-route.ts";
+import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
 import { createGoogleSync, GOOGLE_MIRROR_DIR, googleSyncRoute } from "./google-sync.ts";
@@ -490,6 +491,7 @@ let { host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_
 // Absent unless phoneRelay.base is configured and enabled; it starts only
 // once handleRequest exists, so early static serving is never reachable.
 let relayPresenceHost: string | null = null;
+let relayModelDial = false;
 const phoneAccess: PhoneAccess = new PhoneAccess({
   dataDir: DATA_DIR,
   env: process.env,
@@ -505,6 +507,11 @@ const phoneAccess: PhoneAccess = new PhoneAccess({
   },
   onChange: () => {
     postPhoneKeepAwake(phoneAccess, utilityParentPort);
+    const dial = effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status()));
+    if (dial !== relayModelDial) {
+      relayModelDial = dial;
+      broadcast({ kind: "config", ...configStatus() });
+    }
     const host = phoneAccess.presenceHost();
     void teamSnags?.sync();
     if (host === relayPresenceHost) return;
@@ -6924,7 +6931,7 @@ function configStatus() {
       browser: builtInBrowserEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
-      modelDial: cfg.features?.modelDial === true,
+      modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
     browserProfiles: cfg.browserProfiles ?? [],
   };

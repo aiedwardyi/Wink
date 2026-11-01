@@ -209,7 +209,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     const fit = () => {
       const fill = Math.min(window.innerWidth / width, window.innerHeight / height);
       setZoom(fill);
-      if (phone) setRoom([window.innerWidth / fill, window.innerHeight / fill]);
+      setRoom([window.innerWidth / fill, window.innerHeight / fill]);
     };
     fit();
     window.addEventListener("resize", fit);
