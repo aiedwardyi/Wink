@@ -18,7 +18,7 @@ function rig(staleTurns: string[]) {
   bus.subscribe((e) => {
     const step = reply.fold(e);
     if (step === "completed") completed = true;
-    else if (step) text += (text ? "\n" : "") + step.text;
+    else if (step) text = step.replace ? step.text : text + (text ? "\n" : "") + step.text;
   });
   const event = (turnId: string, patch: Record<string, unknown>) => bus.publish({
     provider: "claude", eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), threadId: "t1", turnId, ...patch,
@@ -75,6 +75,20 @@ describe("ownTurnReply", () => {
     r.event("mine", { type: "turn.completed", ok: true });
     expect(r.text()).toBe("mine");
     expect(r.completed()).toBe(true);
+  });
+
+  it("keeps partial and subsequent answers while removing only commentary", () => {
+    const r = rig([]);
+    const text = (body: string, phase?: "commentary" | "partial_answer" | "final_answer") =>
+      r.event("mine", { type: "item.completed", itemType: "assistant_text", text: body, phase });
+    text("Checking.", "commentary");
+    text("First finding.", "partial_answer");
+    text("Context.");
+    text("Still checking.", "commentary");
+    text("Second finding.", "final_answer");
+    text("Late commentary.", "commentary");
+    text("Third finding.", "final_answer");
+    expect(r.text()).toBe("First finding.\nContext.\nSecond finding.\nThird finding.");
   });
 });
 

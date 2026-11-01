@@ -217,6 +217,7 @@ import {
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
+  systemTurnInput,
   TASK_RESUME_PROMPT,
   taskRecordBlock,
   TurnSeeds,
@@ -5405,26 +5406,20 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
                 .map((t) => `@${t.name} (ask_bot bot_id ${t.id})`)
                 .join(" and ")} in their message — bring them in with ask_bot and fold their reply into your answer.`
             : "");
-        // a rewound, Orbit-compacted, or pre-compact fat thread never
-        // resumes the abandoned provider session. the active task's own
-        // session - another task's cursor would resume the wrong
-        // conversation and defeat the context bubble
         let resumeCursor = resume ? task.resumeCursors[instanceId] : undefined;
         let text = withLate(turnText);
+        let systemUpdate = "";
         let systemRecycle = false;
         if (live.adapter.capabilities.pinnedSystem === true) {
-          // The session still holds the system text it started with: what
-          // changed since rides at the top of this turn, or recycles the
-          // session when too big, unless that would kill background work.
           const delivered = resumeCursor === undefined ? undefined : store.sessionSystem(instanceId, resumeCursor);
           // A cursor with no record (saved before records existed) may hold any older text.
           const unknown = resumeCursor !== undefined && delivered === undefined;
           const updated = (unknown ? null : withSystemChanges(text, delivered, system))
             ?? (live.adapter.hasBackgroundWork?.(threadId) === true ? withSystemChanges(text, delivered ?? "", system, Infinity) : null);
-          if (updated !== null) text = updated;
+          if (updated !== null) ({ text, systemUpdate } = systemTurnInput(text, updated, instance.driverKind));
           else systemRecycle = true;
         }
-        const finalGraceInputs = { ...graceInputs, grace: { ...summaryGrace, requestText: text, recycle: summaryGrace.recycle || systemRecycle } };
+        const finalGraceInputs = { ...graceInputs, grace: { ...summaryGrace, requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle } };
         const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;
         if (systemRecycle || (finalGrace && !finalGrace.safe)) {
           const lateCount = late.length;
@@ -5486,6 +5481,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         resumeFallback: resumeCursor !== undefined ? { text: withLate(resumeFallback) } : undefined,
         transcript,
         system,
+        systemUpdate,
         approval: bot.autoApprove ? "auto" : "ask",
         attended: !isUnattended(bot.id),
         integrations,

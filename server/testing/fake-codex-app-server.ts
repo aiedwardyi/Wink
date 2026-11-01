@@ -187,7 +187,7 @@ process.stdin.on("data", (chunk) => {
         break;
       case "thread/inject_items":
         out(process.env.FAKE_CODEX_NO_INJECT
-          ? { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } }
+          ? { jsonrpc: "2.0", id: msg.id, error: { code: Number(process.env.FAKE_CODEX_NO_INJECT) < 0 ? Number(process.env.FAKE_CODEX_NO_INJECT) : -32601, message: "injection failed" } }
           : { jsonrpc: "2.0", id: msg.id, result: {} });
         break;
       case "turn/steer": {

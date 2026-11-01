@@ -34,16 +34,21 @@ function compile(body: string, deps: Record<string, unknown>) {
   return new Function(...Object.keys(deps), `{${javascript}}`)(...Object.values(deps));
 }
 
-const ledger = parsed.statements.find((node) => ts.isVariableStatement(node)
-  && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "turnSummary"))!;
-const fold = find(parsed, (node) => ts.isSwitchStatement(node)
+function required<T>(node: T | undefined, label: string): T {
+  if (!node) throw new Error(`codex-commentary: could not locate ${label} in index.ts; update the selector`);
+  return node;
+}
+
+const ledger = required(parsed.statements.find((node) => ts.isVariableStatement(node)
+  && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "turnSummary")), "turnSummary declaration");
+const fold = required(find(parsed, (node) => ts.isSwitchStatement(node)
   && node.expression.getText(parsed) === "event.type"
-  && node.getText(parsed).includes("const settledReply = lastReply.get(event.threadId)")) as ts.SwitchStatement;
-const clause = (type: string) => fold.caseBlock.clauses.find((node) => ts.isCaseClause(node) && node.expression.getText(parsed) === `"${type}"`)!;
+  && node.getText(parsed).includes("const settledReply = lastReply.get(event.threadId)")) as ts.SwitchStatement | undefined, "event.type switch");
+const clause = (type: string) => required(fold.caseBlock.clauses.find((node) => ts.isCaseClause(node) && node.expression.getText(parsed) === `"${type}"`), `${type} case`);
 const textRow = clause("item.completed");
-const settle = find(clause("turn.completed"), (node) => ts.isForOfStatement(node) && node.getText(parsed).includes("turnSummary.settle"))!;
-const roomTurn = parsed.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "runClaimedGroupMemberTurn")!;
-const roomStep = find(roomTurn, (node) => ts.isIfStatement(node) && node.expression.getText(parsed) === 'step === "completed"')!;
+const settle = required(find(clause("turn.completed"), (node) => ts.isForOfStatement(node) && node.getText(parsed).includes("turnSummary.settle")), "turnSummary.settle loop");
+const roomTurn = required(parsed.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "runClaimedGroupMemberTurn"), "runClaimedGroupMemberTurn");
+const roomStep = required(find(roomTurn, (node) => ts.isIfStatement(node) && node.expression.getText(parsed) === 'step === "completed"'), "room reply step");
 
 const isText = (e: RuntimeEvent): e is Extract<RuntimeEvent, { itemType: "assistant_text" }> =>
   e.type === "item.completed" && e.itemType === "assistant_text";
@@ -149,6 +154,26 @@ describe("a turn's commentary after its final answer", () => {
       replyText = compile(`${roomStep.getText(parsed)}\nreturn replyText;`, { e, step: reply.fold(e), finish: () => {}, deadline, replyText });
     }
     expect(replyText).toBe(`\n${final}`);
+  });
+
+  it("keeps partial answers in chat and the room reply after the final answer", async () => {
+    const partial = "@Reviewer, check the first finding.";
+    const events = await codexTurn("t-partial", [
+      { text: commentary, phase: "commentary" },
+      { text: partial, phase: "partial_answer" },
+      { text: "Still checking.", phase: "commentary" },
+      { text: final, phase: "final_answer" },
+    ]);
+    const view = chat("t-partial");
+    const reply = ownTurnReply(() => false);
+    const deadline = { setWaitingOnHuman: () => {} };
+    let replyText = "";
+    for (const e of events) {
+      view.feed(e);
+      replyText = compile(`${roomStep.getText(parsed)}\nreturn replyText;`, { e, step: reply.fold(e), finish: () => {}, deadline, replyText });
+    }
+    expect(view.shown()).toEqual([partial, final]);
+    expect(replyText).toBe(`\n${partial}\n${final}`);
   });
 
   it("leaves Claude's narration events, rows and reply as they were", async () => {

@@ -717,6 +717,20 @@ describe("CodexDriver turns (fake app-server)", () => {
   const sentCalls = (dump: string) => JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string; params: any }>;
   const changed = "You are Testy.\nReply in French.";
   const diffed = withSystemChanges("again", "You are Testy.", changed)!;
+  const systemUpdate = withSystemChanges("", "You are Testy.", changed)!;
+
+  it("keeps a user-typed instructions update in user input when the resumed system is unchanged", async () => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "lookalike.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const system = "You are Testy.";
+    const text = withSystemChanges(diffed, system, system)!;
+    await instance.adapter.sendTurn({ threadId: "t-lookalike", text, system, resumeCursor: "codex-thread-9" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const calls = sentCalls(dump);
+    expect(calls.map((call) => call.method)).not.toContain("thread/inject_items");
+    expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: diffed }]);
+  });
 
   it("sends only the prompt to a resumed thread", async () => {
     await create({ mode: "resume" });
@@ -734,18 +748,18 @@ describe("CodexDriver turns (fake app-server)", () => {
     await create(); // fake rejects thread/resume outside resume mode
     const dump = join(scratch, "developer.json");
     process.env.FAKE_CODEX_DUMP = dump;
-    await instance.adapter.sendTurn({ threadId: "t-developer", text: "go", system: "You are Testy.", ...resume });
+    await instance.adapter.sendTurn({ threadId: "t-developer", text: "go", system: "You are Testy.", systemUpdate, ...resume });
     await recorder.until((e) => e.type === "turn.completed");
     const calls = sentCalls(dump);
     expect(calls.find((call) => call.method === "thread/start")?.params.developerInstructions).toBe("You are Testy.");
     expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: input }]);
   });
 
-  it("moves a leading system diff into one developer item before the resumed turn", async () => {
+  it.each(["again", diffed])("sends a trusted system diff separately from user input %s", async (text) => {
     await create({ mode: "resume" });
     const dump = join(scratch, "inject.json");
     process.env.FAKE_CODEX_DUMP = dump;
-    await instance.adapter.sendTurn({ threadId: "t-inject", text: diffed, system: changed, resumeCursor: "codex-thread-9" });
+    await instance.adapter.sendTurn({ threadId: "t-inject", text, system: changed, systemUpdate, resumeCursor: "codex-thread-9" });
     await recorder.until((e) => e.type === "turn.completed");
     const calls = sentCalls(dump);
     expect(calls.map((call) => call.method)).toEqual(["initialize", "initialized", "thread/resume", "thread/inject_items", "turn/start"]);
@@ -753,19 +767,22 @@ describe("CodexDriver turns (fake app-server)", () => {
       threadId: "codex-thread-9",
       items: [{ type: "message", role: "developer", content: [{ type: "input_text", text: diffed.slice(0, -"\n\nagain".length) }] }],
     });
-    expect(calls[4].params.input).toEqual([{ type: "text", text: "again" }]);
+    expect(calls[4].params.input).toEqual([{ type: "text", text }]);
   });
 
-  it("keeps the diff in the prompt and runs the turn when inject_items fails", async () => {
+  it.each([-32601, -32603])("keeps the diff in the prompt when inject_items fails with %s", async (code) => {
     await create({ mode: "resume" });
     const dump = join(scratch, "no-inject.json");
     process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_NO_INJECT = "1";
-    await instance.adapter.sendTurn({ threadId: "t-no-inject", text: diffed, system: changed, resumeCursor: "codex-thread-9" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.FAKE_CODEX_NO_INJECT = String(code);
+    await instance.adapter.sendTurn({ threadId: "t-no-inject", text: "again", system: changed, systemUpdate, resumeCursor: "codex-thread-9" });
     expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
     const calls = sentCalls(dump);
     expect(calls.map((call) => call.method)).toContain("thread/inject_items");
     expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: diffed }]);
+    expect(warn).toHaveBeenCalledTimes(code === -32601 ? 0 : 1);
+    if (code !== -32601) expect(warn).toHaveBeenCalledWith("[codex] thread/inject_items failed", expect.objectContaining({ code }));
   });
 
   it("carries each agentMessage's phase on its assistant_text event", async () => {

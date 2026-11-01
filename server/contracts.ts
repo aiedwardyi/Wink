@@ -209,6 +209,8 @@ export interface SendTurnInput {
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
   system?: string;
+  /** Codex only: trusted system diff prefix, separate from user text. */
+  systemUpdate?: string;
   /** The bot's Ask for approval / Auto chip. Omitted keeps the driver's own mode. */
   approval?: "ask" | "auto";
   /** A person is present for this turn. Only then does background work it

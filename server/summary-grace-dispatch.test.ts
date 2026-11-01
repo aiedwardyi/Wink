@@ -7,7 +7,7 @@ import { KEEP_GOING_RULES, keepGoingTurnOptions } from "./keep-going.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } from "./steer-queue.ts";
 import type { Message } from "./store.ts";
 import { createSummaryBuild, type SummaryWait } from "./summary-build.ts";
-import { buildResumeFallback, buildTurnContext, withSystemChanges } from "./turn-context.ts";
+import { buildResumeFallback, buildTurnContext, systemTurnInput, withSystemChanges } from "./turn-context.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 // Execute the production folds and dispatch without booting the server.
@@ -157,7 +157,7 @@ describe("summary grace dispatch", () => {
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
         foldQueuedSends, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
-        buildTurnContext, buildResumeFallback, withSystemChanges, planSummaryGrace,
+        buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace,
         clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {}, paneNoteTurnThreads: new Set(),
         opensHostFiles: () => false, privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",

@@ -11,6 +11,7 @@ type Phase = Extract<RuntimeEvent, { itemType: "assistant_text" }>["phase"];
 export function ownTurnReply(stale: (threadId: string, turnId: string | undefined) => boolean) {
   let own: string | undefined;
   let final = false;
+  const retained: string[] = [];
   // a failed start completes before dispatch returns the id to claim
   const ended = new Set<string>();
   return {
@@ -33,10 +34,10 @@ export function ownTurnReply(stale: (threadId: string, turnId: string | undefine
       if (e.turnId && e.turnId !== own) return null;
       if (e.phase === "commentary" && final) return null;
       const text = e.summarized ? `${ENGINE_SUMMARY_PREFIX}${e.text}` : e.text;
+      if (e.phase !== "commentary") retained.push(text);
       if (e.phase !== "final_answer" || final) return { text };
-      // the final answer supersedes the commentary before it
       final = true;
-      return { text, replace: true };
+      return { text: retained.join("\n"), replace: true };
     },
   };
 }

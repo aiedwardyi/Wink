@@ -412,6 +412,12 @@ export function withSystemChanges(
   ].join("\n");
 }
 
+export function systemTurnInput(text: string, updated: string, driverKind: string) {
+  return driverKind === "codex"
+    ? { text, systemUpdate: updated.slice(0, updated.length - text.length) }
+    : { text: updated, systemUpdate: "" };
+}
+
 const REWOUND_PREAMBLE =
   "[The user rewound this conversation (edited a message or switched to another version). Everything before this point was replaced by the following history:]";
 const FRESH_PREAMBLE =

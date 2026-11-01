@@ -50,8 +50,6 @@ import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
 const DRIVER_KIND = "codex";
-// Wink's own system diff only; a message that merely opens with the tag stays user text.
-const SYSTEM_REMINDER = /^(<system-reminder>\n\[Wink instructions update [\s\S]*?\n<\/system-reminder>)\n\n/;
 
 const codexAuthSchema = z.object({ auth_mode: z.string().nullish(), tokens: z.object({ id_token: z.string() }) });
 
@@ -704,7 +702,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const pend = rpcPending.get(msg.id);
             if (pend) {
               rpcPending.delete(msg.id);
-              msg.error ? pend.reject(new Error(msg.error.message ?? JSON.stringify(msg.error))) : pend.resolve(msg.result);
+              msg.error ? pend.reject(Object.assign(new Error(msg.error.message ?? JSON.stringify(msg.error)), { code: msg.error.code })) : pend.resolve(msg.result);
             }
           } else if (msg.id !== undefined && msg.method) {
             handleServerRequest(msg);
@@ -814,16 +812,17 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
         let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
-        const reminder = cursor && !resumeFailed ? SYSTEM_REMINDER.exec(prompt) : null;
-        if (reminder) {
+        if (cursor && !resumeFailed && turn.systemUpdate) {
           // older CLIs lack inject_items; the diff then stays in the prompt
           try {
             await request("thread/inject_items", {
               threadId: codexThreadId,
-              items: [{ type: "message", role: "developer", content: [{ type: "input_text", text: reminder[1] }] }],
+              items: [{ type: "message", role: "developer", content: [{ type: "input_text", text: turn.systemUpdate.trimEnd() }] }],
             });
-            prompt = prompt.slice(reminder[0].length);
-          } catch {}
+          } catch (error) {
+            if ((error as { code?: number }).code !== -32601) console.warn("[codex] thread/inject_items failed", error);
+            prompt = `${turn.systemUpdate}${prompt}`;
+          }
         }
         nativeThreadId = codexThreadId;
         nativeTurnId = null;
