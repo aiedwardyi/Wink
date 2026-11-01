@@ -47,9 +47,10 @@ const SQUIGGLE = Array.from({ length: 24 }, (_, k) => ` Q${k * 10 + 6} ${5 + (k 
 const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
 
 // Desktop geometry in stage px for the 1440x900 composition. Zoom stops at 12/13.5, where the 12px floor meets the 13.5px bar text;
-// smaller windows narrow the frame, then shrink the face (fs) down to the phone dial's .625.
+// smaller windows narrow the frame, then shrink the face (fs) down to the phone dial's .625. Under a 614px frame the height wins
+// and the whole composition scales: header 132, .625 face 300, gap 24, stats and footer 158.
 function dialFrame(width: number, height: number) {
-  const zoom = Math.max(12 / 13.5, Math.min(width / 1440, height / 900));
+  const zoom = Math.min(Math.max(12 / 13.5, Math.min(width / 1440, height / 900)), height / 614);
   const [w, h] = [Math.min(width / zoom, 1440), Math.min(height / zoom, 900)];
   const m = clamp((w - 980) / 2, 24, 96);
   const head = clamp(44 - (900 - h) / 4, 20, 44);
@@ -231,7 +232,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
       const height = window.innerHeight - (stage.current?.parentElement?.getBoundingClientRect().top ?? 0);
       if (!phone) {
         const frame = dialFrame(width, height);
-        return setFit({ zoom: frame.zoom, room: [frame.w, frame.h], floor: 12 / frame.zoom, frame });
+        return setFit({ zoom: frame.zoom, room: [frame.w, frame.h], floor: Math.min(12 / frame.zoom, 13.5), frame });
       }
       const fill = Math.min(width / PHONE_MIN[0], height / PHONE_MIN[1]);
       const mouse = !window.matchMedia(PHONE_DIAL_QUERY).matches;

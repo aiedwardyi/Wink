@@ -362,6 +362,20 @@ describe("ModelDial", () => {
       }
     });
 
+    it("scales the wide dial to fit a short window", async () => {
+      for (const height of [480, 448]) {
+        mouse(1024, height);
+        await mount();
+        const px = (name: string) => parseFloat(stage().getPropertyValue(name));
+        const [cy, fs, stats] = [px("--cy"), px("--fs"), px("--stats")];
+        expect(px("--ph") * Number(stage().zoom)).toBeLessThanOrEqual(height);
+        expect(cy + 240 * fs).toBeLessThanOrEqual(stats);
+        expect(cy + 32).toBeLessThanOrEqual(stats - 72);
+        await act(async () => root.unmount());
+        vi.restoreAllMocks();
+      }
+    });
+
     it("caps the vertical dial's width and floors its text", async () => {
       mouse(800, 900);
       await mount();
@@ -418,7 +432,7 @@ describe("ModelDial", () => {
       ["short", 24, 4, 15, 0],
       ["ordinary", 60, 4, 30, 1],
       ["fast", 120, 4, 10, 1],
-    ])("bounds %s flicks in both directions", async (_name, distance, moves, ms, steps) => {
+    ])("bounds %s swipes in both directions", async (_name, distance, moves, ms, steps) => {
       vi.useFakeTimers({ toFake: ["performance", "requestAnimationFrame", "cancelAnimationFrame"] });
       media({ phone: true });
       const tick = vi.spyOn(phoneSwipe, "hapticTick");
