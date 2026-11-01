@@ -674,7 +674,7 @@ describe("summary build wiring", () => {
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
     expect(index.indexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
     expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined);");
-    expect(index).toContain("requestText: text, recycle: summaryGrace.recycle || systemRecycle");
+    expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");
     expect(index).toContain("const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;");
     expect(index).toMatch(/summaryBuild\.dispose\(\);\s*summaryRepair\.dispose\(\);/);
   });
