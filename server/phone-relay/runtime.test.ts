@@ -85,6 +85,7 @@ describe("phone relay end to end", () => {
 
   it("issues a certificate through the relay and ends phone TLS inside the PC", async () => {
     r = await rig();
+    r.relay.reportOwner = "a".repeat(64);
     const { seen, handler, releaseSse, download } = harness();
     const statuses = new StatusLog();
     const rejections: IngressRejection[] = [];
@@ -104,6 +105,7 @@ describe("phone relay end to end", () => {
     const connected = await statuses.until((s) => s.state === "connected");
     expect(statuses.all.some((s) => s.state === "certifying")).toBe(true);
     expect(connected.host).toBe(r.host);
+    expect(connected.reportOwner).toBe("a".repeat(64));
     expect(connected.certNotAfter).toBeGreaterThan(Date.now());
     expect(r.acme.log).toContain("challenge:tls-alpn-01");
     expect(r.acme.log).not.toContain("challenge:http-01");

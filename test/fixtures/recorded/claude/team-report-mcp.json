@@ -1,0 +1,59 @@
+{
+  "stamp": {
+    "engine": "claude",
+    "cliVersion": "2.1.316",
+    "recordedAt": "2026-11-01T06:24:14.819Z",
+    "sourcePc": "home",
+    "source": "Claude Code MCP stdio into agents-proxy.ts against a localhost collect-only harness stub; generated fixture IDs"
+  },
+  "reply": {
+    "initialize": {
+      "method": "initialize",
+      "params": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {
+          "roots": {
+            "listChanged": true
+          },
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "extensions": {
+            "io.modelcontextprotocol/tasks": {}
+          }
+        },
+        "clientInfo": {
+          "name": "claude-code",
+          "title": "Claude Code",
+          "version": "2.1.316",
+          "description": "Anthropic's agentic coding tool",
+          "websiteUrl": "https://claude.com/claude-code"
+        }
+      },
+      "jsonrpc": "2.0",
+      "id": 0
+    },
+    "list": {
+      "method": "tools/list",
+      "jsonrpc": "2.0",
+      "id": 1
+    },
+    "call": {
+      "method": "tools/call",
+      "params": {
+        "name": "report_issue",
+        "arguments": {
+          "action": "collect",
+          "selected_message_id": "fixture-incident"
+        },
+        "_meta": {
+          "claudecode/toolUseId": "toolu_01FN6hLy1qesiXuJZWvwpbsb",
+          "progressToken": 2
+        }
+      },
+      "jsonrpc": "2.0",
+      "id": 2
+    }
+  }
+}
