@@ -786,6 +786,20 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(texts[2]).not.toHaveProperty("phase");
   });
 
+  it("maps recorded commentary and final answer items", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/turn-phases.json", import.meta.url), "utf8"));
+    const messages = recorded.reply.events
+      .filter((event: { method: string }) => event.method === "item/completed")
+      .map((event: { params: { item: { text: string; phase: string } } }) => event.params.item);
+    expect(messages.map((item: { phase: string }) => item.phase)).toEqual(["commentary", "final_answer"]);
+    await create({ mode: "bench-quiet" });
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify(messages);
+    await instance.adapter.sendTurn({ threadId: "t-recorded-phase", text: recorded.stamp.prompt });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    const texts = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
+    expect(texts).toMatchObject(messages.map(({ text, phase }: { text: string; phase: string }) => ({ text, phase })));
+  });
+
   it("surfaces an approval request and forwards the user's decision", async () => {
     await create({ mode: "approval" });
     const dump = join(scratch, "dump.json");
