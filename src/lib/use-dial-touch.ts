@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
-import { hapticTick, lockAxis, reducedMotion, type SwipeAxis } from "./phone-swipe";
+import { lockAxis, reducedMotion, type SwipeAxis } from "./phone-swipe";
 
 const SHIFT_PX = 40;
 const SAMPLE_MS = 100;
-const FLICK_MIN = 0.3;
-const FLICK_MAX = 3;
-const DECAY_MS = 300;
+const FLICK_MIN = 0.6;
+const FLICK_MAX = 0.8;
+const DECAY_MS = 90;
 const REST = 0.05;
 const WAIT_MS = 500;
 
@@ -24,7 +24,6 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, enabled: boolea
     if (!state.pending) return;
     state.done += state.pending;
     state.pending = 0;
-    hapticTick();
     state.run();
   }, [index]);
 
@@ -91,7 +90,7 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, enabled: boolea
       if (drag.axis === "x") {
         if (drag.shifted || Math.abs(dx) < SHIFT_PX) return;
         drag.shifted = true;
-        latest.current.moves.shift(Math.sign(dx));
+        latest.current.moves.shift(-Math.sign(dx));
         return;
       }
       const now = performance.now();
