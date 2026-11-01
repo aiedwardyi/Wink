@@ -6,7 +6,7 @@ import { DIAL_DIGITS, dialFind, dialPrice, dialScore, dialShift, dialSource, dia
 import { formatUsd, pickerPrice } from "@/lib/model-index";
 import { MODEL_INDEX_AS_OF } from "../../shared/model-index-data.ts";
 import { engineBadgeText, modelEffortLabel, modelFamilyAccent } from "@/lib/model-chip";
-import { PHONE_QUERY, reducedMotion } from "@/lib/phone-swipe";
+import { PHONE_QUERY, hapticTick, reducedMotion } from "@/lib/phone-swipe";
 import { useDialTouch } from "@/lib/use-dial-touch";
 import { useI18n } from "@/lib/i18n";
 import { ProviderMark } from "./ProviderIcons";
@@ -19,8 +19,10 @@ const PHONE_DIAL_QUERY = `${PHONE_QUERY} and (pointer: coarse)`;
 const NARROW_DIAL_QUERY = "(max-width: 639.98px) and (pointer: fine), (max-width: 1079.98px) and (max-aspect-ratio: 8/5) and (pointer: fine)";
 const FADE = [1, 0.55, 0.22];
 const PHONE_FADE = [1, 0.38];
-// Card spacing in the phone layout; ModelDial.css uses the same 62px.
-const PHONE_PITCH = 62;
+// Card spacing in the phone layout; ModelDial.css uses the same 66px.
+const PHONE_PITCH = 66;
+// The phone layout's shortest stage; taller or wider screens grow the stage to their edges.
+const PHONE_MIN: [number, number] = [390, 800];
 // Overdrive's outer arc: a segment every 12 deg, minus three under the effort label and one under the max pointer.
 const RING = Array.from({ length: 30 }, (_, k) => 270 + k * 12).filter((a) => Math.abs(a - 450) > 12 && a !== 366);
 
@@ -175,6 +177,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
 
   const [boot, setBoot] = useState(true);
   const [zoom, setZoom] = useState(1);
+  const [room, setRoom] = useState(PHONE_MIN);
   const [typed, setTyped] = useState<{ text: string; i: number; on: boolean }>({ text: "", i: -1, on: false });
   const [live, setLive] = useState("");
   const typing = useRef({ text: "", at: 0, timer: 0 });
@@ -202,7 +205,12 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
 
   useEffect(() => {
     if (!phone) return;
-    const fit = () => setZoom(Math.min(window.innerWidth / 390, window.innerHeight / 844));
+    const [width, height] = PHONE_MIN;
+    const fit = () => {
+      const fill = Math.min(window.innerWidth / width, window.innerHeight / height);
+      setZoom(fill);
+      if (phone) setRoom([window.innerWidth / fill, window.innerHeight / fill]);
+    };
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
@@ -251,6 +259,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
 
   useLayoutEffect(() => {
     const moved = shown.current.i !== undefined && shown.current.i !== index;
+    if (phone && (moved || (shown.current.i !== undefined && shown.current.effort !== effort?.label))) hapticTick();
     const landed = max && shown.current.effort !== "max" && shown.current.i !== undefined;
     const write = () => {
       const text = barText.current!;
@@ -373,6 +382,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     "--lab-step": labStep,
     "--accent": accent,
     "--g": `${150 + (level + 0.5) * 240 / Math.max(efforts.length, 1)}deg`,
+    ...(phone && { "--pw": `${room[0]}px`, "--ph": `${room[1]}px` }),
   } as CSSProperties;
   const effortText = effort ? modelEffortLabel(effort.label, t) : "-";
   const sourceLine = (key: DialStat, value: number | undefined) => {
