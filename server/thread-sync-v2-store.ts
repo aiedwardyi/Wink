@@ -499,12 +499,19 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
     };
     const edited = rows.some((row, i) => (kids.get(row.id)?.length ?? 0) !== (i < rows.length - 1 ? 1 : 0));
     const turns = rows.filter((row) => row.role === "user" && row.kind === "text").length;
+    const prompts = new Set(trunk.slice(at).map((id) => byId.get(id)!).filter((row) => row.role === "user" && row.kind === "text").map((row) => row.text?.trim()).filter(Boolean));
+    const duplicate = rows.some((row) => row.role === "user" && row.kind === "text" && row.text?.trim() && prompts.has(row.text.trim()));
+    const pending = rows.slice(rows.findLastIndex((row) => row.role === "user" && row.kind === "text") + 1);
+    const final = pending.slice(pending.findLastIndex((row) => row.kind === "activity") + 1)
+      .some((row) => row.role === "bot" && row.kind === "text" && row.text?.trim() && !row.summarized);
     const reason = !rows.every((row) => mine(row.id)) ? "another writer"
       : edited || !appended(rows[0].id, branch[at - 1] ?? null) ? "edit or regenerate"
       : based(pick.version.baseStamp) !== parentOf(tip) || (kids.get(parentOf(rows[0].id)) ?? []).some((id) => id !== rows[0].id && mine(id)) ? "branch switch"
       : turns > JOIN_TURNS ? `${turns} user turns`
       : !soonAfterWake(rows[0].at, JOIN_WINDOW_MS) ? "outside wake window"
-      : rows.some((row) => row.kind === "compaction") ? "compaction" : undefined;
+      : rows.some((row) => row.kind === "compaction") ? "compaction"
+      : duplicate ? "duplicate user text"
+      : pending.some((row) => row.role === "bot") && !final ? "unfinished bot turn" : undefined;
     return { first: { ...rows[0], parentId: main }, tip, missed: trunk.slice(at).filter((id) => byId.get(id)!.kind === "text").length, reason };
   }
 
