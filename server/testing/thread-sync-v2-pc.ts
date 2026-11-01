@@ -134,7 +134,7 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
     const threadId = args.threadId ?? "thread";
     switch (method) {
       case "seed": store.adoptSyncedTask(bot.id, { threadId, title: "Chat", createdAt: 1 }, args.rows ?? [], args.leaf ?? null, true); break;
-      case "append": value = store.appendMessage(threadId, { role: args.role ?? "user", kind: "text", text: args.text, at: args.at ?? Date.now() }); break;
+      case "append": value = store.appendMessage(threadId, { role: args.role ?? "user", kind: "text", text: args.text, at: args.at ?? Date.now(), ...args.patch }); break;
       case "compaction": value = store.appendCompaction(threadId, args.compaction!); break;
       case "batch":
         for (let i = 0; i < Number(args.count); i++) store.appendMessage(threadId, { role: "user", kind: "text", text: `row ${i}` });
@@ -199,6 +199,21 @@ parentPort!.on("message", async ({ id, method, args = {} }: { id: number; method
         break;
       case "cursor":
         store.setResumeCursor(bot.id, "test", "cursor");
+        break;
+      case "continuity": {
+        const task = store.taskByThread(bot.id, threadId)!;
+        task.lastInstanceId = "test";
+        task.providerSessionBoundId = store.activeLeaf(threadId) ?? undefined;
+        store.markResumeSeeded(bot.id, threadId, { instanceId: "test", cursor: "cursor", compactionId: null });
+        store.setResumeCursor(bot.id, "test", "cursor", threadId);
+        break;
+      }
+      case "bot": value = bot; break;
+      case "import":
+        store.applySyncChanges(bot.id, threadId, [
+          ...(args.rows ?? []).map((row) => ({ cursor: 0, kind: "row" as const, rowId: row.id, value: row, conflict: false })),
+          ...(args.leaf === undefined ? [] : [{ cursor: 0, kind: "head" as const, rowId: "", value: args.leaf, conflict: false }]),
+        ]);
         break;
       case "fail":
         messageDatabase().exec("CREATE TEMP TRIGGER reject_outbox BEFORE INSERT ON sync_v2_packets BEGIN SELECT RAISE(ABORT, 'outbox rejected'); END");

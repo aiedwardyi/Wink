@@ -13,6 +13,7 @@ import { DATA_DIR } from "./config.ts";
 import { defaultComputerForNewBot } from "./local-routing.ts";
 import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
+import { syncPathChanged } from "./thread-sync-path.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
 import { workspaceDir } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
@@ -2066,7 +2067,8 @@ export class Store {
       }
       const cached = this.threads.get(threadId);
       const events: StoreChange[] = [];
-      mdb.withMessageTransaction((db) => {
+      const pathChanged = mdb.withMessageTransaction((db) => {
+        const changed = syncPathChanged(db, threadId, changes);
         for (const change of changes) {
           if (change.kind === "metadata") {
             // SAFETY: The sync engine validates metadata before adding a change page.
@@ -2092,12 +2094,15 @@ export class Store {
             if (leaf) events.push({ type: "thread", threadId, activeLeafId: leaf });
           }
         }
+        return changed;
       });
-      task.resumeCursors = {};
-      delete task.lastInstanceId;
-      delete task.providerSessionBoundId;
-      delete task.resumeSeed;
-      if (bot.threadId === threadId) bot.resumeCursors = {};
+      if (pathChanged) {
+        task.resumeCursors = {};
+        delete task.lastInstanceId;
+        delete task.providerSessionBoundId;
+        delete task.resumeSeed;
+        if (bot.threadId === threadId) bot.resumeCursors = {};
+      }
       bot.tasks?.sort((a, b) => b.createdAt - a.createdAt);
       this.saveBots();
       for (const event of events) this.emit(event);
