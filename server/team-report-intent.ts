@@ -1,9 +1,9 @@
 import type { PhoneRelayStatus } from "../shared/relay-protocol.ts";
 import { REPORT_OWNER } from "../shared/team-report.ts";
 
-export const TEAM_REPORT_RULE = " Use report_issue to collect and send without another approval only when the user's own text outside quotes, code and pasted logs contains 에디에게 보내 (optional spaces, 보네 typo and 줘/줘요/주세요/줄래/줄래요/요 endings allowed, followed by end/space/punctuation), excluding negated or descriptive/past forms, and reuse the saved report after failed or unconfirmed delivery when the phrase is repeated without a new attachment.";
+export const TEAM_REPORT_RULE = " Use report_issue to collect and send without another approval only when the user's own text outside quotes, code and pasted logs ends a sentence with 에디에게 보내 (spacing, 보네 typo and 줘/줘요/주세요/줄래/줄래요/요 endings allowed), reusing the saved report after failed or unconfirmed delivery if repeated without a new attachment.";
 
-const CALL_PHRASE = /에디\s*에게\s*보[내네](?!\s*(?:지\s*(?:마|말)|놓|둔|던|는|진|버린))(?:줘요?|주세요|줄래요?|요)?(?=$|[\s\p{P}])/u;
+const CALL_PHRASE = /에디\s*에게\s*보[내네](?:[ \t]*(?:줘요?|주세요|줄래요?|요))?[ \tㅋㅎㅠㅜ~^。！？]*(?:[.!?…]|\r?\n|$)/u;
 
 export function teamReportPrompt(status: PhoneRelayStatus, owner: string | null): string {
   return status.state === "connected" && owner && REPORT_OWNER.test(owner) && status.reportOwner === owner ? TEAM_REPORT_RULE : "";

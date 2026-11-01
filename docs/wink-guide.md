@@ -22,7 +22,7 @@
 
 ## Invited team report pilot
 
-- On an authenticated team install, only 에디에게 보내 in your own text outside quotes, code and pasted logs authorizes collecting evidence and sending without another approval (optional spaces, 보네 typo and 줘/줘요/주세요/줄래/줄래요/요 endings allowed, followed by end/space/punctuation, negated or descriptive/past forms excluded), and repeating the phrase after failed or unconfirmed delivery without a new attachment reuses the saved report.
+- On an authenticated team install, 에디에게 보내 must end a sentence in your own text outside quotes, code and pasted logs to collect and send without another approval (spacing, 보네 typo and 줘/줘요/주세요/줄래/줄래요/요 endings allowed), and repeating it after failed or unconfirmed delivery without a new attachment reuses the saved report.
 - Unrelated desktop capture and complete native logs are excluded.
 - The receipt says whether the private report service accepted it or the owner's local inbox filed it. Bot reading is unverified. On an offline or unsupported relay, a private local draft remains.
 
