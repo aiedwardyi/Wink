@@ -15,7 +15,7 @@ interface ToolDetailInput {
   more?: number;
 }
 
-const NON_ASCII = /[\x80-￿]/;
+const NON_ASCII = /[\x80-\uffff]/;
 // UTF-8 length as TextEncoder counts it: a lone surrogate encodes as U+FFFD.
 const bytes = (value: unknown) => {
   const json = JSON.stringify(value);
