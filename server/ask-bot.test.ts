@@ -69,6 +69,30 @@ describe("ask_bot past its wait", () => {
     expect(watched).toBeUndefined();
   });
 
+  it("returns only the final answer of a turn that wrote commentary first", async () => {
+    const phased = (body: string, phase: "commentary" | "final_answer"): RuntimeEvent =>
+      ({ ...base(), provider: "codex", type: "item.completed", itemType: "assistant_text", text: body, phase });
+    const asked = ask();
+    bus.publish(phased("I'll read the filings first.", "commentary"));
+    bus.publish(phased("Filing summary.", "final_answer"));
+    bus.publish(completed());
+    expect(await asked).toEqual({ text: "Filing summary.", replied: true });
+  });
+
+  it("keeps partial answers and unphased text when a final answer replaces commentary", async () => {
+    const phased = (body: string, phase: "commentary" | "partial_answer" | "final_answer"): RuntimeEvent =>
+      ({ ...base(), provider: "codex", type: "item.completed", itemType: "assistant_text", text: body, phase });
+    const asked = ask();
+    bus.publish(phased("I'll read the filings first.", "commentary"));
+    bus.publish(phased("First filing summary.", "partial_answer"));
+    bus.publish(text("Additional context."));
+    bus.publish(phased("Still checking.", "commentary"));
+    bus.publish(phased("Second filing summary.", "final_answer"));
+    bus.publish(phased("Late commentary.", "commentary"));
+    bus.publish(completed());
+    expect(await asked).toEqual({ text: "First filing summary.\nAdditional context.\nSecond filing summary.", replied: true });
+  });
+
   it("hands back a task id, then the late reply reaches the receipt, the caller's thread and the channel once", async () => {
     const asked = await ask();
     expect(asked.taskId).toBe("ask-task-1");

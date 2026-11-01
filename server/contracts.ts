@@ -132,7 +132,7 @@ export type RuntimeEvent = RuntimeEventBase &
       }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
     | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail }
-    | { type: "item.completed"; itemType: "assistant_text"; text: string; summarized?: boolean }
+    | { type: "item.completed"; itemType: "assistant_text"; text: string; summarized?: boolean; phase?: "commentary" | "partial_answer" | "final_answer" }
     | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
     | {
         type: "request.opened";
@@ -209,6 +209,8 @@ export interface SendTurnInput {
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
   system?: string;
+  /** Codex only: trusted system diff prefix, separate from user text. */
+  systemUpdate?: string;
   /** The bot's Ask for approval / Auto chip. Omitted keeps the driver's own mode. */
   approval?: "ask" | "auto";
   /** A person is present for this turn. Only then does background work it

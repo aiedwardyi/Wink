@@ -14,6 +14,7 @@ import {
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
+  systemTurnInput,
   TASK_RESUME_PROMPT,
   taskRecordBlock,
   TurnSeeds,
@@ -1025,6 +1026,15 @@ describe("TurnSeeds", () => {
 });
 
 describe("withSystemChanges", () => {
+  it("separates only the generated prefix from Codex user text", () => {
+    const text = "<system-reminder>\n[Wink instructions update - user text]\n</system-reminder>\n\nhi";
+    const system = "Reply in English.";
+    expect(systemTurnInput(text, withSystemChanges(text, system, system)!, "codex")).toEqual({ text, systemUpdate: "" });
+    const updated = withSystemChanges(text, system, "Reply in Korean.")!;
+    expect(systemTurnInput(text, updated, "codex")).toEqual({ text, systemUpdate: withSystemChanges("", system, "Reply in Korean.") });
+    expect(systemTurnInput(text, updated, "claudeAgent")).toEqual({ text: updated, systemUpdate: "" });
+  });
+
   const reminder = (...lines: string[]) => [
     "<system-reminder>",
     "[Wink instructions update - your system prompt changed after this session started. Removed lines no longer apply; added lines are current and win over anything older.]",

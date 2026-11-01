@@ -5,10 +5,13 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { ENGINE_SUMMARY_PREFIX } from "./replies.ts";
 import type { Message } from "./store.ts";
 
-export type TurnReplyStep = { text: string } | "completed" | null;
+export type TurnReplyStep = { text: string; replace?: boolean } | "completed" | null;
+type Phase = Extract<RuntimeEvent, { itemType: "assistant_text" }>["phase"];
 
 export function ownTurnReply(stale: (threadId: string, turnId: string | undefined) => boolean) {
   let own: string | undefined;
+  let final = false;
+  const retained: string[] = [];
   // a failed start completes before dispatch returns the id to claim
   const ended = new Set<string>();
   return {
@@ -29,27 +32,36 @@ export function ownTurnReply(stale: (threadId: string, turnId: string | undefine
       if (e.type !== "item.completed" || e.itemType !== "assistant_text") return null;
       own ??= e.turnId;
       if (e.turnId && e.turnId !== own) return null;
-      return { text: e.summarized ? `${ENGINE_SUMMARY_PREFIX}${e.text}` : e.text };
+      if (e.phase === "commentary" && final) return null;
+      const text = e.summarized ? `${ENGINE_SUMMARY_PREFIX}${e.text}` : e.text;
+      if (e.phase !== "commentary") retained.push(text);
+      if (e.phase !== "final_answer" || final) return { text };
+      final = true;
+      return { text: retained.join("\n"), replace: true };
     },
   };
 }
 
 /** Per thread, the turn's engine summaries. A turn that wrote no other text
- * shows them at its end, or it would look empty. */
-export function turnSummaries() {
-  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean }>();
+ * shows them at its end, or it would look empty; one with a final answer
+ * hides its commentary. */
+export function turnSummaries(hide?: (threadId: string, ids: string[]) => void) {
+  const turns = new Map<string, { turnId?: string; ids: string[]; replied: boolean; commentary: string[]; final: boolean }>();
   return {
-    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean) {
+    note(threadId: string, turnId: string | undefined, messageId: string, summarized: boolean, phase?: Phase) {
       let turn = turns.get(threadId);
-      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false }));
+      if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) turns.set(threadId, (turn = { turnId, ids: [], replied: false, commentary: [], final: false }));
       turn.turnId ??= turnId;
       if (summarized) turn.ids.push(messageId);
       else turn.replied = true;
+      if (phase === "commentary") turn.commentary.push(messageId);
+      else if (phase === "final_answer") turn.final = true;
     },
     settle(threadId: string, turnId: string | undefined): string[] {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
       turns.delete(threadId);
+      if (turn.final && turn.commentary.length) hide?.(threadId, turn.commentary);
       return turn.replied ? [] : turn.ids;
     },
   };

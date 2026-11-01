@@ -17,6 +17,7 @@ import { PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../config.ts"
 import type { ProviderInstance } from "../contracts.ts";
 import * as procs from "../procs.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { withSystemChanges } from "../turn-context.ts";
 import { CodexDriver } from "./codex.ts";
 import { retireAppServer } from "./codex-catalog.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
@@ -131,6 +132,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_RATE_LIMITS;
     delete process.env.FAKE_CODEX_USAGE;
     delete process.env.FAKE_CODEX_USAGE_REPLAY;
+    delete process.env.FAKE_CODEX_MESSAGES;
+    delete process.env.FAKE_CODEX_NO_INJECT;
     delete process.env.OPENAI_API_KEY;
     delete process.env.BOX_TOKEN;
     delete process.env.OMB_TTS_KEY;
@@ -300,9 +303,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.env.OMB_TTS_KEY).toBeUndefined();
     const methods = seen.calls.map((c: { method: string }) => c.method);
     expect(methods).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
-    // persona rides in front of the prompt text — codex has no system slot
     const turnStart = seen.calls.at(-1);
-    expect(turnStart.params.input[0].text).toBe("You are Testy.\n\nlist files");
+    expect(turnStart.params.input[0].text).toBe("list files");
     const threadStart = seen.calls.find((c: { method: string }) => c.method === "thread/start");
     expect(threadStart.params).toMatchObject({ model: "gpt-6-sol", modelProvider: "openai" });
   });
@@ -709,6 +711,110 @@ describe("CodexDriver turns (fake app-server)", () => {
     const calls = JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string; params: any }>;
     const input = calls.find((call) => call.method === "turn/start")?.params?.input?.[0]?.text;
     expect(input).toBe("durable summary and recent tail\n\ngo");
+  });
+
+  // SAFETY: the fake owns this dump and writes one method and params pair per call.
+  const sentCalls = (dump: string) => JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string; params: any }>;
+  const changed = "You are Testy.\nReply in French.";
+  const diffed = withSystemChanges("again", "You are Testy.", changed)!;
+  const systemUpdate = withSystemChanges("", "You are Testy.", changed)!;
+
+  it("keeps a user-typed instructions update in user input when the resumed system is unchanged", async () => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "lookalike.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const system = "You are Testy.";
+    const text = withSystemChanges(diffed, system, system)!;
+    await instance.adapter.sendTurn({ threadId: "t-lookalike", text, system, resumeCursor: "codex-thread-9" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const calls = sentCalls(dump);
+    expect(calls.map((call) => call.method)).not.toContain("thread/inject_items");
+    expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: diffed }]);
+  });
+
+  it("sends only the prompt to a resumed thread", async () => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "resumed.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-resumed-prompt", text: "again", system: "You are Testy.", resumeCursor: "codex-thread-9" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(sentCalls(dump).find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: "again" }]);
+  });
+
+  it.each([
+    ["a fresh thread", {}, "go"],
+    ["a failed resume", { resumeCursor: "gone-thread", resumeFallback: { text: "durable summary and recent tail\n\ngo" } }, "durable summary and recent tail\n\ngo"],
+  ])("gives the system to thread/start as developer instructions on %s", async (_case, resume, input) => {
+    await create(); // fake rejects thread/resume outside resume mode
+    const dump = join(scratch, "developer.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-developer", text: "go", system: "You are Testy.", systemUpdate, ...resume });
+    await recorder.until((e) => e.type === "turn.completed");
+    const calls = sentCalls(dump);
+    expect(calls.find((call) => call.method === "thread/start")?.params.developerInstructions).toBe("You are Testy.");
+    expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: input }]);
+  });
+
+  it.each(["again", diffed])("sends a trusted system diff separately from user input %s", async (text) => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "inject.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-inject", text, system: changed, systemUpdate, resumeCursor: "codex-thread-9" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const calls = sentCalls(dump);
+    expect(calls.map((call) => call.method)).toEqual(["initialize", "initialized", "thread/resume", "thread/inject_items", "turn/start"]);
+    expect(calls[3].params).toEqual({
+      threadId: "codex-thread-9",
+      items: [{ type: "message", role: "developer", content: [{ type: "input_text", text: diffed.slice(0, -"\n\nagain".length) }] }],
+    });
+    expect(calls[4].params.input).toEqual([{ type: "text", text }]);
+  });
+
+  it.each([-32601, -32603])("keeps the diff in the prompt when inject_items fails with %s", async (code) => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "no-inject.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.FAKE_CODEX_NO_INJECT = String(code);
+    await instance.adapter.sendTurn({ threadId: "t-no-inject", text: "again", system: changed, systemUpdate, resumeCursor: "codex-thread-9" });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    const calls = sentCalls(dump);
+    expect(calls.map((call) => call.method)).toContain("thread/inject_items");
+    expect(calls.find((call) => call.method === "turn/start")?.params.input).toEqual([{ type: "text", text: diffed }]);
+    expect(warn).toHaveBeenCalledTimes(code === -32601 ? 0 : 1);
+    if (code !== -32601) expect(warn).toHaveBeenCalledWith("[codex] thread/inject_items failed", expect.objectContaining({ code }));
+  });
+
+  it("carries each agentMessage's phase on its assistant_text event", async () => {
+    await create();
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify([
+      { text: "Checking the files.", phase: "commentary" },
+      { text: "Two files.", phase: "final_answer" },
+      { text: "Untagged.", phase: null },
+    ]);
+    await instance.adapter.sendTurn({ threadId: "t-phase", text: "count files" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const texts = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
+    expect(texts).toMatchObject([
+      { text: "Checking the files.", phase: "commentary" },
+      { text: "Two files.", phase: "final_answer" },
+      { text: "Untagged." },
+    ]);
+    expect(texts[2]).not.toHaveProperty("phase");
+  });
+
+  it("maps recorded commentary and final answer items", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/turn-phases.json", import.meta.url), "utf8"));
+    const messages = recorded.reply.events
+      .filter((event: { method: string }) => event.method === "item/completed")
+      .map((event: { params: { item: { text: string; phase: string } } }) => event.params.item);
+    expect(messages.map((item: { phase: string }) => item.phase)).toEqual(["commentary", "final_answer"]);
+    await create({ mode: "bench-quiet" });
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify(messages);
+    await instance.adapter.sendTurn({ threadId: "t-recorded-phase", text: recorded.stamp.prompt });
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    const texts = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
+    expect(texts).toMatchObject(messages.map(({ text, phase }: { text: string; phase: string }) => ({ text, phase })));
   });
 
   it("surfaces an approval request and forwards the user's decision", async () => {
