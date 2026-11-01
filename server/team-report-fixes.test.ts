@@ -73,6 +73,31 @@ const fresh = ["Report this to Edward", "Please report this bug to Ed.", "Can yo
 const followups = ["Looks good, send it", "ok send it to Ed", "Retry that report", "retry", "try again", "resend it", "다시 보내줘", "다시 시도해줘", "yes"];
 
 describe("review report authorization regressions", () => {
+  it.each(["에디 에게", "에디에게", "에디한테", "에디 한테", "에드워드에게", "대표님께"].flatMap((recipient) => ["보네", "보내", "보내줘", "보내 줘", "보네줘"].map((verb) => `${recipient} ${verb}`)))("accepts Korean spacing and send typos: %s", (text) => {
+    expect(reportIntent(text)).toBe("send");
+    expect(reportIntent(text, true)).toBe("send");
+  });
+  it.each(["에디에게 보내지 마", "에디 에게 보내지 마", "대표님께 보고하지 마", "에디 에게 보네지 마"])("keeps Korean send vetoes private: %s", (text) => {
+    expect(reportIntent(text)).not.toBe("send");
+    expect(reportIntent(text, true)).not.toBe("send");
+  });
+  it.each(["앨리스에게 에디가 휴가라고 보내", "앨리스 에게 에디 보내", "앨리스 에게 에디 보네"])("does not treat a Korean recipient's message as delivery to the owner: %s", (text) => {
+    expect(reportIntent(text)).toBe("none");
+    expect(reportIntent(text, true)).toBe("none");
+  });
+  it.each([
+    ["에디 이거 보내줘", "send"], ["Ed, report this", "send"], ["에드워드 보내", "send"], ["대표님 이거 보고해줘", "send"],
+    ["Send this to Alice instead of Edward", "none"], ["Tell Alice that Edward is on vacation", "none"], ["에드워드 휴가래", "none"], ["앨리스한테 보내, 에디 말고", "none"],
+    ["Eddie please send this", "send"], ["Ed, send this to Alice", "none"], ["Eddie please send Alice this", "none"], ["에디 이거 앨리스한테 보내줘", "none"],
+    ["에디 말고 이거 보내줘", "none"], ["에디 대신 이거 보내줘", "none"],
+    ["Ed, don't send this", "draft"], ["대표님 이거 보고하지 마", "draft"], ['"Ed, report this"', "none"],
+  ])("handles direct address without a recipient marker: %s", (text, intent) => {
+    expect(reportIntent(text)).toBe(intent);
+    expect(reportIntent(text, true)).toBe(intent);
+  });
+  it.each(["Edward", "Eddie", "Ed", "에드워드", "에디", "대표"].flatMap((alias) => [alias, `${alias}님`]))("accepts bare recipient %s", (alias) => {
+    expect(reportIntent(`${alias} 이거 보내줘`)).toBe("send");
+  });
   it.each(["Edward", "Eddie", "Ed", "에드워드", "에디", "대표"])("requires %s to be the delivery recipient", (alias) => {
     for (const text of [`Send this to Alice instead of ${alias}`, `Tell Alice that ${alias} is on vacation`, `Let Alice know about ${alias}`, `Send ${alias}'s notes to Alice`, `Send this to Alice with ${alias}`, `Flag this for Alice with ${alias}`]) {
       expect(reportIntent(text)).toBe("none");
