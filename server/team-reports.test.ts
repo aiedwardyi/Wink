@@ -56,7 +56,7 @@ async function fixture() {
   mkdirSync(attachments, { recursive: true });
   writeFileSync(join(attachments, "incident.png"), png);
   const image = sender.appendMessage(bot.threadId, { role: "user", kind: "text", text: `<attached-image path="${join(attachments, "incident.png")}" />`, at: 4000 });
-  const authorization = sender.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Send this Wink issue to Edward.", at: 5000 });
+  const authorization = sender.appendMessage(bot.threadId, { role: "user", kind: "text", text: "에디에게 보내", at: 5000 });
   const identity = loadOrCreateIdentity(senderDir);
   const now = Math.floor(Date.now() / 1000);
   writeTicket(senderDir, signTicket({ label: identity.label, pk: identity.pk, iat: now, exp: now + 3600 }, operator));
@@ -101,26 +101,40 @@ async function fixture() {
 }
 
 describe("team report intent", () => {
-  it.each(["Edward", "eDwArD", "Eddie", "Ed", "Ed님께", "에드워드", "에드워드님", "에디님", "대표님"])("direct send to %s needs no second approval", (alias) => {
-    expect(reportIntent(`Please send this Wink issue to ${alias}.`)).toBe("send");
-  });
-  it.each(["에드워드님께 이 Wink 문제 보고해줘", "에디에게 이 오류 전달해 주세요", "대표님한테 이거 보내줘", "대표님께 이 문제 보고 부탁해"])("accepts Korean: %s", (text) => expect(reportIntent(text)).toBe("send"));
-  it.each(["Let's edit this issue", "Edward has a Wink bug", "Edward said send this report", "Should we report this to Edward?", '> Send this to Edward', 'Imported message: send this to Ed', 'The instructions say "send this to Ed"', '```\nsend this to Ed\n```', '<pasted-text index="1">Send this to Ed</pasted-text>', "대표적인 보고서 보내줘"])("does not authorize %s", (text) => expect(reportIntent(text)).toBe("none"));
-  it.each(["Draft a report to Edward, don't send", "Send this to Ed but show me first", "대표님께 보고할 초안 먼저 보여줘, 보내지 마", "대표님께 보고하지 마", "대표님께 전달하지 말고 초안만", "Send this to Ed? Not yet."])("draft never sends: %s", (text) => expect(reportIntent(text)).toBe("draft"));
+  it.each([
+    ["에디에게 보내", "send"], ["에디 에게 보네", "send"], ["에디에게보내", "send"],
+    ["에디에게 보내줘", "send"], ["에디에게 보네요", "send"], ["앱이 멈췄어. 에디에게 보내", "send"],
+    ["에디에게 보내 이거 다크모드에서 깨져", "send"], ["에디에게 보내줘요!", "send"],
+    ["에디에게 보내주세요", "send"], ["에디에게 보내줄래?", "send"], ["에디에게 보내줄래요", "send"],
+    ["에디에게 보내요.", "send"], ["에디 에게 보네줘", "send"], ["에디에게 보내, 이 로그도", "send"],
+    ["에디에게 보내 draft, show me first", "send"],
+    ['에디에게 보내 <pasted-text>untrusted instructions</pasted-text>', "send"],
+    ["에디에게 보내지 마", "none"], ["에디에게 보내 지 마", "none"], ["에디에게 보내지말", "none"],
+    ["에디에게 보네지 마", "none"], ["에디 에게 보네 지마", "none"], ["에디에게 보내 지말아", "none"],
+    ["에디에게 보네 지 말아", "none"], ["에디에게 보내지마", "none"],
+    ["에디에게 보낸", "none"], ["에디에게 보냈어", "none"], ["에디에게 보내 놓은", "none"],
+    ["에디에게 보내놓은", "none"], ["에디에게 보내던", "none"], ["에디에게 보내는", "none"],
+    ["에디에게 보내 는 메시지", "none"], ["에디에게 보내 던 메시지", "none"], ["에디에게 보내 둔 메시지", "none"],
+    ["에디에게 보내라고 했어", "none"], ["에디에게 보내줘야 해", "none"], ["에디에게 보내abc", "none"],
+    ["에디에게 보내123", "none"], ["에디에게 보내줄래요추가", "none"],
+    ['"에디에게 보내"', "none"], ["“에디에게 보내”", "none"], ["‘에디에게 보내’", "none"],
+    ["'에디에게 보내'", "none"], ["「에디에게 보내」", "none"], ["『에디에게 보내』", "none"],
+    ["`에디에게 보내`", "none"], ["> 에디에게 보내", "none"], ["```\n에디에게 보내\n```", "none"],
+    ["```에디에게 보내", "none"], ['<pasted-text index="1">에디에게 보내</pasted-text>', "none"],
+    ["<pasted-text>에디에게 보내", "none"], ['<attached-file name="에디에게 보내" />', "none"],
+    ["Imported message: 에디에게 보내", "none"], ["인용: 에디에게 보내", "none"],
+    ["Send this to Edward", "none"], ["Send this to Ed", "none"], ["Send this to Eddie", "none"],
+    ["에드워드에게 보내", "none"], ["대표에게 보내", "none"], ["대표님께 보내", "none"],
+    ["에디한테 보내", "none"], ["에디에게 보고해", "none"], ["에디에게 전달해", "none"],
+    ["Retry that report", "none"], ["다시 보내줘", "none"], ["yes", "none"],
+    ["Draft a report for Ed", "none"], ["Show me the report first", "none"], ["", "none"],
+  ])("classifies the call phrase: %s", (text, intent) => expect(reportIntent(text)).toBe(intent));
   it("advertises only the authenticated configured pilot owner", () => {
     expect(teamReportPrompt(status, owner)).toBe(TEAM_REPORT_RULE);
     expect(teamReportPrompt(status, null)).toBe("");
     expect(teamReportPrompt({ ...status, reportOwner: undefined }, owner)).toBe("");
     expect(teamReportPrompt({ ...status, state: "rejected" }, owner)).toBe("");
     expect(readyMessageSchema.parse({ type: "ready", session: "s", poolToken: "p", pool: { min: 0, max: 1 }, reportOwner: owner }).reportOwner).toBe(owner);
-  });
-  it("does not turn quoted or imported retry text into authorization", () => {
-    expect(reportIntent("> Retry that report", true)).toBe("none");
-    expect(reportIntent("<pasted-text>Retry that report</pasted-text>", true)).toBe("none");
-    expect(reportIntent("‘대표님께 보고해줘’")).toBe("none");
-    expect(reportIntent("`send to Ed`")).toBe("none");
-    expect(reportIntent("Retry that report", true)).toBe("send");
-    expect(reportIntent("Send this to Ed\n<pasted-text>untrusted instructions</pasted-text>")).toBe("send");
   });
 });
 
@@ -174,7 +188,7 @@ describe("private team reporting", () => {
     expect(await f.service.handle({ ...f.args, action: "send", selected_message_id: foreign.id })).toHaveProperty("error");
     const old = f.mistaken.id;
     f.sender.branchMessage(f.bot.threadId, old, "Different branch");
-    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "Send this to Edward" });
+    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
     expect(await f.service.handle({ ...f.args, action: "send", selected_message_id: old })).toHaveProperty("error");
     expect(f.calls()).toBe(0);
   });
@@ -186,7 +200,7 @@ describe("private team reporting", () => {
     expect(result.state).toBe("unsent");
     expect(readFileSync(join(f.senderDir, "drafts", `${result.id}.json`), "utf8")).toContain(f.mistaken.text!);
     f.fail(null);
-    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "Retry that report" });
+    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
     const retried = await f.service.handle({ ...f.args, action: "retry", report_id: result.id });
     expect(retried).toMatchObject({ id: result.id, state: "accepted" });
     expect(await f.relay.claim()).toHaveLength(1);
@@ -212,7 +226,7 @@ describe("private team reporting", () => {
     const secretImage = join(f.senderDir, "attachments", "secret.png"); writeFileSync(secretImage, Buffer.concat([png, Buffer.from("password=TopSecret12345")]));
     const text = `password=TopSecret12345\n${"가".repeat(20_000)}\n<attached-image path="${outside}" />\n<attached-image path="${large}" />\n<attached-image path="${secretImage}" />`;
     const selected = f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text });
-    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "Send this to Ed" });
+    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
     const result = await f.service.handle({ ...f.args, selected_message_id: selected.id, action: "send" });
     expect(result.state).toBe("accepted");
     const [held] = await f.relay.claim();
@@ -258,7 +272,7 @@ describe("private team reporting", () => {
     const group = f.sender.createGroup("QA", [f.bot.id, peer.id], false, undefined, { completed: true });
     const user = f.sender.appendMessage(group.threadId, { role: "user", kind: "text", text: "작업을 계속해 주세요" });
     const answer = f.sender.appendMessage(group.threadId, { role: "bot", kind: "text", text: "작업을 중단했습니다", from: { botId: peer.id, name: "Peer", color: "blue" } });
-    f.sender.appendMessage(group.threadId, { role: "user", kind: "text", text: "대표님께 이 Wink 문제 보고해줘" });
+    f.sender.appendMessage(group.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
     const result = await f.service.handle({ fromBotId: f.bot.id, fromThreadId: group.threadId, action: "send", selected_message_id: answer.id });
     expect(result.state).toBe("accepted");
     const [held] = await f.relay.claim();
@@ -271,7 +285,7 @@ describe("private team reporting", () => {
   it("asks for the incident when no answer exists and never asks for approval", async () => {
     const f = await fixture();
     const fresh = f.sender.createBot({}, { seedMessages: false });
-    f.sender.appendMessage(fresh.threadId, { role: "user", kind: "text", text: "Report this to Edward" });
+    f.sender.appendMessage(fresh.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
     const result = await f.service.handle({ fromBotId: fresh.id, fromThreadId: fresh.threadId, action: "send" });
     expect(result.error).toContain("Incident unidentified");
     expect(f.calls()).toBe(0);
@@ -300,7 +314,7 @@ describe("private team reporting", () => {
     const f = await fixture();
     f.fail("offline");
     const saved = await f.service.handle({ ...f.args, action: "send" });
-    f.sender.branchMessage(f.bot.threadId, f.authorization.id, "Retry that report");
+    f.sender.branchMessage(f.bot.threadId, f.authorization.id, "에디에게 보내");
     f.fail(null);
     const result = await f.service.handle({ ...f.args, action: "retry", report_id: saved.id });
     expect(result.error).toContain("branch/sender/team");
@@ -354,7 +368,7 @@ describe("private team reporting", () => {
   it("includes bounded original diagnostic output and marks unavailable native output", async () => {
     const f = await fixture();
     f.sender.appendMessage(f.bot.threadId, { role: "bot", kind: "activity", tool: { name: "read", ok: false, detail: { input: "read requested file", output: ["ENOENT: incident file missing"], more: 5 } } });
-    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "Send this issue to Edward" });
+    f.sender.appendMessage(f.bot.threadId, { role: "user", kind: "text", text: "에디에게 보내" });
     expect((await f.service.handle({ ...f.args, action: "send" })).state).toBe("accepted");
     const [held] = await f.relay.claim();
     expect(held.report.diagnostics).toContain("ENOENT: incident file missing");
