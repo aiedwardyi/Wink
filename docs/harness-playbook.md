@@ -222,6 +222,8 @@ always say "X% left".
 - Push only after the verify steps pass.
 - Never merge, force-push, or rewrite pushed history unless the user names
   that action. Landing a verified result in step 9 is part of the job.
+- Name each verified, unlanded branch in the task record. Before a release or calling
+  a task done, list open PRs and unmerged branches; land each or record why it waits.
 - Never stop a worker or others' processes unless the user names it.
 
 ## Panes
