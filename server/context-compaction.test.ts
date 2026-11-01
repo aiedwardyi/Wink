@@ -242,6 +242,32 @@ describe("provider-neutral context compaction", () => {
     );
   });
 
+  it("keeps built but unlanded work word for word across summaries", async () => {
+    const line = "PR #874 green, not merged: branch fix/stranded-pr at 1a2b3c4";
+    const first = await prepareModelContext({
+      messages: longHistory(120),
+      contextWindow: 1_024,
+      taskRecordText: "Goal: finish",
+      summarize: async () => `SUMMARY\n${line}`,
+    });
+    expect(first.status).toBe("ready");
+    if (first.status !== "ready" || !first.compaction) throw new Error("expected a first compaction");
+
+    const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary two");
+    await prepareModelContext({
+      messages: [...longHistory(120), compactionMessage("c1", "m119", first.compaction), ...longHistory(90, 120)],
+      contextWindow: 1_024,
+      taskRecordText: "Goal: finish",
+      summarize,
+    });
+
+    const prompt = summarize.mock.calls[0]?.[0] ?? "";
+    expect(prompt).toContain(line);
+    expect(prompt).toContain(
+      "Keep work that is built but not landed word for word: PR numbers, branch names, shas and their state (green, pushed, not merged).",
+    );
+  });
+
   it("asks for events up to the boundary, not the next action", async () => {
     const summarize = vi.fn(async (_prompt: string) => "SUMMARY\nsummary");
     const result = await prepareModelContext({

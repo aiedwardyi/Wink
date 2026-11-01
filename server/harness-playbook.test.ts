@@ -156,9 +156,15 @@ describe("harness playbook", () => {
     expect(prompt).toContain("- Never stop a worker or others' processes unless the user names it.");
   });
 
+  it("keeps unlanded branches in the task record and lands or explains them before done", () => {
+    expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain(
+      "- Name each verified, unlanded change (PR, branch, sha) in the task record. Before a release or calling a task done, list open PRs and unmerged branches; land each or record why it waits.",
+    );
+  });
+
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(12824);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13014);
   });
 
   it("fills the worktree path from the configured root", () => {
