@@ -79,6 +79,8 @@ export function SkinPicker() {
     () => (document.documentElement.dataset.skin as SkinId) || readSkin(),
   );
   const [expanded, setExpanded] = useState(false);
+  // A theme picked from the open fold stays put until the fold closes, so keyboard focus is not lost.
+  const [picked, setPicked] = useState<SkinId | null>(null);
   const moreId = useId();
 
   // The theme-cycle hotkey calls applySkin() directly, outside this
@@ -90,7 +92,7 @@ export function SkinPicker() {
   }, []);
 
   const featured = FEATURED_SKIN_IDS.map((id) => SKINS.find((skin) => skin.id === id)!);
-  if (!FEATURED_SKIN_IDS.includes(active)) {
+  if (!FEATURED_SKIN_IDS.includes(active) && active !== picked) {
     const current = SKINS.find((skin) => skin.id === active);
     if (current) featured.push(current);
   }
@@ -100,7 +102,7 @@ export function SkinPicker() {
     { key: "settings.skin.light", skins: skins.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)) },
   ] as const;
 
-  const renderGroups = (items: typeof SKINS) => groups(items).filter(({ skins }) => skins.length > 0).map(({ key, skins }) => (
+  const renderGroups = (items: typeof SKINS, folded = false) => groups(items).filter(({ skins }) => skins.length > 0).map(({ key, skins }) => (
     <Section key={key} title={t(key)}>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {skins.map((skin) => {
@@ -112,6 +114,7 @@ export function SkinPicker() {
               onClick={() => {
                 applySkin(skin.id);
                 setActive(skin.id);
+                setPicked(folded ? skin.id : null);
               }}
               aria-pressed={selected}
               className={cn(
@@ -147,14 +150,17 @@ export function SkinPicker() {
         type="button"
         aria-expanded={expanded}
         aria-controls={moreId}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          setExpanded(!expanded);
+          setPicked(null);
+        }}
         className="flex min-h-11 items-center justify-between gap-2 rounded-lg border border-hairline/60 px-3 py-2 text-left text-[13px] font-medium text-ink hover:bg-control/50"
       >
         {t("settings.skin.more", { count: extra.length })}
         <ChevronDown size={16} className={cn("shrink-0 transition-transform", expanded && "rotate-180")} />
       </button>
       <div id={moreId} hidden={!expanded} className={expanded ? "flex flex-col gap-4" : undefined}>
-        {expanded && renderGroups(extra)}
+        {expanded && renderGroups(extra, true)}
       </div>
     </div>
   );

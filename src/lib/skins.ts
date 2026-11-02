@@ -160,6 +160,7 @@ const TERMINAL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["terminal", "ter
 export const isTerminalSkin = (id: SkinId): boolean => TERMINAL_SKIN_IDS.has(id);
 
 const TOOL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["logfile", "multiplexer", "modal"]);
+export const HUD_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["mono-hud", "servo-gray"]);
 
 export const DEFAULT_SKIN: SkinId = "precision";
 
@@ -219,7 +220,7 @@ export function readSkin(): SkinId {
  */
 export function applySkin(id: SkinId): void {
   document.documentElement.dataset.skin = id;
-  const kind = TOOL_SKIN_IDS.has(id) ? "tool" : id === "mono-hud" || id === "servo-gray" ? "mono-hud" : "";
+  const kind = TOOL_SKIN_IDS.has(id) ? "tool" : HUD_SKIN_IDS.has(id) ? "mono-hud" : "";
   const extra = document.head.querySelector<HTMLElement>("style[data-skin-extra]");
   if (extra && extra.dataset.skinExtra !== kind) extra.remove();
   if (kind && extra?.dataset.skinExtra !== kind) {

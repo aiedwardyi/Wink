@@ -66,6 +66,20 @@ describe("featured themes", () => {
     expect(document.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("keeps focus on a theme picked from the open fold and promotes it once folded", async () => {
+    await mount("precision");
+    const more = document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    await act(async () => more.click());
+    const servo = [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((button) => button.textContent === "Servo Gray")!;
+    servo.focus();
+    await act(async () => servo.click());
+    expect(servo.isConnected).toBe(true);
+    expect(document.activeElement).toBe(servo);
+    expect(servo.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => more.click());
+    expect(names()).toEqual([...featured.slice(0, 6), "Servo Gray", ...featured.slice(6)]);
+  });
+
   it("cycles all themes in dark then light order including Servo Gray", () => {
     const order = [...SKINS.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)), ...SKINS.filter((skin) => LIGHT_SKIN_IDS.has(skin.id))];
     expect(order.map((skin) => skin.id)).toContain("servo-gray");
