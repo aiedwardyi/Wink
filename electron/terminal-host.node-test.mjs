@@ -3147,6 +3147,8 @@ const codexSolPane = async (f) => {
 for (const [name, screen] of [
   ["the model switch menu", CODEX_SOL_MENU],
   ["an idle prompt", codexSolIdle()],
+  ["another placeholder", codexSolIdle().replace("Ask Codex to do anything", "Explain this codebase")],
+  ["a typed draft", codexSolIdle().replace("Ask Codex to do anything", "check the render log first")],
   ["a background terminal", codexSolIdle("  1 background terminal running · /ps to view · /stop to close\r\n")],
   ["background terminals", codexSolIdle("  2 background terminals running · /ps to view\r\n")],
 ]) {
