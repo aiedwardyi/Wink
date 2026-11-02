@@ -111,10 +111,6 @@ export function startUpload(file: UploadFile, options: UploadOptions = {}): Prom
   return holdReload(run(file, options));
 }
 
-export function resumeUpload(id: string, file: UploadFile, options: UploadOptions = {}): Promise<UploadDone> {
-  return startUpload(file, { ...options, uploadId: id });
-}
-
 export async function cancelUpload(id: string): Promise<void> {
   await fetch(`/api/uploads/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
 }

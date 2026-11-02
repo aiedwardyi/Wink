@@ -18,23 +18,6 @@ export function requestNotificationPermission(): Promise<NotificationPermission>
   return Notification.requestPermission();
 }
 
-/** The Settings line "Get notified…" is a promise. Do not show it unless
- * this surface can actually deliver a toast. */
-export function canClaimGetNotified(input: {
-  toastsAvailable?: boolean;
-  html5: boolean;
-}): boolean {
-  if (input.toastsAvailable === false) return false;
-  if (input.toastsAvailable === true) return true;
-  return input.html5;
-}
-
-export function desktopNotificationHint(canNotify: boolean): string {
-  return canNotify
-    ? "Get notified when this bot finishes or needs input"
-    : "Desktop alerts aren't available on this computer";
-}
-
 export type TerminalAttentionReason = "bell" | "activity" | "exit" | "error";
 
 export interface TerminalAttentionCopy {

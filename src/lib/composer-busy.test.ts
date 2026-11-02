@@ -9,7 +9,6 @@ import {
   composerSendSourceText,
   modelForNextSend,
   peelNextBusyRoomSend,
-  pendingSteerEntries,
   rearmRoomFlushHold,
 } from "./composer-busy";
 import { imageSupportForTargets } from "./composer-attachments";
@@ -165,30 +164,6 @@ describe("Composer wiring", () => {
     const pick = composer.slice(composer.indexOf("const pickFiles = "), composer.indexOf("const idlePlaceholder = "));
     expect(pick).toContain("uploadImage: pasteImageAttachment");
     expect(pick).not.toContain("showImageSupportNotice");
-  });
-});
-
-describe("pendingSteerEntries", () => {
-  it("keeps each queued 1:1 send as its own chip instead of joining them", () => {
-    expect(
-      pendingSteerEntries(
-        {
-          t1: [
-            { queueId: "a", text: "one" },
-            { queueId: "b", text: "two" },
-          ],
-        },
-        "t1",
-      ),
-    ).toEqual([
-      { queueId: "a", text: "one" },
-      { queueId: "b", text: "two" },
-    ]);
-  });
-
-  it("returns no chips when the thread has nothing waiting", () => {
-    expect(pendingSteerEntries(undefined, "t1")).toEqual([]);
-    expect(pendingSteerEntries({ t2: [{ queueId: "x", text: "other" }] }, "t1")).toEqual([]);
   });
 });
 

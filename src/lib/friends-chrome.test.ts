@@ -17,7 +17,6 @@ import {
   showSettingsMoreServicesSection,
   showSettingsEnginesNav,
   showUsagePerBotTable,
-  showEngineRailZoo,
   showSidebarDensityControls,
   showSidebarPhone,
   showSidebarRoutines,
@@ -77,7 +76,6 @@ describe("friends chrome flags", () => {
     expect(showSettingsMoreServicesSection()).toBe(false);
     expect(showSettingsEnginesNav()).toBe(false);
     expect(showUsagePerBotTable()).toBe(false);
-    expect(showEngineRailZoo()).toBe(false);
     expect(showBotMenuCopy()).toBe(false);
     expect(showBotMenuMakeGroup()).toBe(false);
     expect(showNewMenuExport()).toBe(false);

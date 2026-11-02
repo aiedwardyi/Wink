@@ -75,11 +75,6 @@ export function showUsagePerBotTable(): boolean {
   return false;
 }
 
-/** "Show all engines · N more" and the local engine zoo on the picker rail. */
-export function showEngineRailZoo(): boolean {
-  return false;
-}
-
 export function showSkinTaglines(): boolean {
   return false;
 }

@@ -11,7 +11,6 @@ import { StoreProvider, type Bot } from "@/state/store";
 import { canDeleteWhileWorking } from "../../shared/working-thread";
 import {
   TASK_PICKER_DISMISS_MS,
-  TASK_RENAME_HINT,
   TaskPicker,
   filterTasks,
   taskPickerPointerIntent,
@@ -50,9 +49,7 @@ describe("task picker copy", () => {
     expect(taskPicker).toContain('t("task.running")');
   });
 
-  it("advertises both gestures the row actually handles", () => {
-    expect(TASK_RENAME_HINT).toContain("double-click");
-    expect(TASK_RENAME_HINT).toContain("right-click");
+  it("allows time for a second click before dismissing", () => {
     expect(TASK_PICKER_DISMISS_MS).toBeGreaterThanOrEqual(500);
   });
 });

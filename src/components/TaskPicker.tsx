@@ -20,8 +20,6 @@ import { canDeleteWhileWorking, liveRunForBot, workingThreadId } from "../../sha
  * just long enough for the second click to land; rename cancels the close. */
 export const TASK_PICKER_DISMISS_MS = 500;
 
-export const TASK_RENAME_HINT = "Click to switch · double-click or right-click to rename";
-
 /** Decide what a pointer event on a task row should do. The click that
  * accompanies a dblclick (detail >= 2) must not switch/close — that is
  * what used to eat the advertised rename. */

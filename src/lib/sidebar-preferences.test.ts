@@ -15,7 +15,6 @@ import {
   SIDEBAR_SIDE_KEY,
   SIDEBAR_SNAP_DISTANCE,
   SIDEBAR_WIDTH_KEY,
-  SIDEBAR_WIDTH_STEP,
   clampSidebarWidth,
   displaySidebarWidth,
   dockedDetailsWidth,
@@ -24,7 +23,6 @@ import {
   loadSidebarCollapsed,
   loadSidebarDensity,
   loadSidebarOrder,
-  loadSectionOrder,
   loadSidebarSide,
   loadSidebarWidth,
   parseSidebarCollapsed,
@@ -35,13 +33,11 @@ import {
   saveSidebarCollapsed,
   saveSidebarDensity,
   saveSidebarOrder,
-  saveSectionOrder,
   saveSidebarSide,
   restoreSidebarDragWidth,
   saveSidebarWidth,
   snapSidebarDrag,
   stepSidebarLayout,
-  stepSidebarWidth,
 } from "./sidebar-preferences";
 
 describe("sidebar density preferences", () => {
@@ -78,23 +74,6 @@ describe("sidebar side preferences", () => {
     expect(loadSidebarSide({ getItem: () => "left" })).toBe("left");
     expect(loadSidebarSide({ getItem: () => { throw new Error("blocked"); } })).toBe("left");
     expect(() => saveSidebarSide("left", { setItem: () => { throw new Error("blocked"); } })).not.toThrow();
-  });
-});
-
-describe("sidebar section preferences", () => {
-  it("round-trips unique section ids and tolerates blocked or malformed storage", () => {
-    const setItem = vi.fn();
-    saveSectionOrder(["section:Work", "section:Work", "section:Personal"], { setItem });
-    expect(setItem).toHaveBeenCalledWith(
-      SIDEBAR_SECTION_ORDER_KEY,
-      JSON.stringify(["section:Work", "section:Personal"]),
-    );
-    expect(
-      loadSectionOrder({ getItem: () => JSON.stringify(["section:Work", "section:Work", "section:Personal"]) }),
-    ).toEqual(["section:Work", "section:Personal"]);
-    expect(loadSectionOrder({ getItem: () => "not-json" })).toEqual([]);
-    expect(loadSectionOrder({ getItem: () => { throw new Error("blocked"); } })).toEqual([]);
-    expect(() => saveSectionOrder(["section:Work"], { setItem: () => { throw new Error("blocked"); } })).not.toThrow();
   });
 });
 
@@ -176,18 +155,6 @@ describe("sidebar width preferences", () => {
     expect(dockedDetailsWidth(true, true, 3)).toBe(0);
     expect(dockedDetailsWidth(true, false, 0)).toBe(0);
     expect(dockedDetailsWidth(false, false, 3)).toBe(0);
-  });
-
-  it("steps ten pixels on horizontal arrows and clamps at the named-list range", () => {
-    expect(SIDEBAR_WIDTH_STEP).toBe(10);
-    expect(stepSidebarWidth(320, "ArrowRight")).toBe(330);
-    expect(stepSidebarWidth(320, "ArrowLeft")).toBe(310);
-    expect(stepSidebarWidth(SIDEBAR_MIN_WIDTH, "ArrowLeft")).toBe(SIDEBAR_MIN_WIDTH);
-    expect(stepSidebarWidth(SIDEBAR_MAX_WIDTH, "ArrowRight")).toBe(SIDEBAR_MAX_WIDTH);
-    expect(stepSidebarWidth(320, "Home")).toBe(SIDEBAR_MIN_WIDTH);
-    expect(stepSidebarWidth(320, "End")).toBe(SIDEBAR_MAX_WIDTH);
-    expect(stepSidebarWidth(320, "ArrowUp")).toBe(null);
-    expect(stepSidebarWidth(320, "Enter")).toBe(null);
   });
 
   it("restores the pre-drag labeled width and collapsed flag when a pointer drag is cancelled", () => {
