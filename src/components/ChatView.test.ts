@@ -941,13 +941,22 @@ describe("ChatView transcript click focus", () => {
   it("leaves focus in Find while it is open", async () => {
     const { host, composer, scroller, click, unmount } = await mount();
     try {
-      await click(host.querySelector('button[aria-label="Find in conversation"]')!);
+      await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true })); });
       const find = host.querySelector('input[aria-label="Find in this conversation"]') as HTMLInputElement;
       find.focus();
       await click(scroller);
       expect(document.activeElement).not.toBe(composer);
       expect(document.activeElement).toBe(find);
       expect(host.querySelector("[data-chat-find]")?.contains(find)).toBe(true);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("keeps Find out of the header", async () => {
+    const { host, unmount } = await mount();
+    try {
+      expect(host.querySelector('button[aria-label="Find in conversation"]')).toBeNull();
     } finally {
       await unmount();
     }

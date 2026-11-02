@@ -40,7 +40,7 @@ import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { usePhoneHeaderNameFloor } from "@/lib/use-phone-header-name";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { showBotNewTaskControl, showComputerPanelChrome, showHeaderPencil } from "@/lib/friends-chrome";
+import { showBotNewTaskControl, showChatHeaderFind, showComputerPanelChrome, showHeaderPencil } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
@@ -1511,6 +1511,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
               <TerminalSquare size={18} />
             </button>
           )}
+          {showChatHeaderFind() && (
           <button
             onClick={() => find.toggleFind()}
             aria-label={t("chat.findInConversation")}
@@ -1523,6 +1524,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           >
             <Search size={18} />
           </button>
+          )}
           {showBotNewTaskControl() && <TaskPicker bot={bot} />}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && <CallButton bot={bot} />}

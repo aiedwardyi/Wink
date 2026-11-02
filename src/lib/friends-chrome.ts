@@ -136,6 +136,11 @@ export function showHeaderPencil(): boolean {
   return false;
 }
 
+/** Find in the chat header; Ctrl+F still opens it. */
+export function showChatHeaderFind(): boolean {
+  return false;
+}
+
 export function showTouchPickerLegend(): boolean {
   return false;
 }

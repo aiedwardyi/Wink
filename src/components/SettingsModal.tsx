@@ -815,6 +815,7 @@ export function SettingsModal({
                     <ToolCallsRow />
                     <DetailedRepliesRow />
                     <NotificationsRow />
+                    <StartFreshRow />
                   </div>
                 )}
                 {showSettingsAdvancedSection() && (
@@ -848,7 +849,6 @@ export function SettingsModal({
                 )}
                   </>
                 )}
-                <StartFreshRow />
               </>
             )}
 
