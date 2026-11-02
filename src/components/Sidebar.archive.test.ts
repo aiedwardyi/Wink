@@ -62,6 +62,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
     ...actual,
+    useStoreDispatch: () => () => undefined,
     api: async (path: string, init?: RequestInit): Promise<ApiResult> => {
       calls.push({ path, method: init?.method ?? "GET", body: textBody(init?.body) });
       if (path === "/api/profile-sync") await syncAnswer;

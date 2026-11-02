@@ -82,8 +82,8 @@ afterEach(async () => {
 
 describe("phone Settings navigation", () => {
   it.each([
-    ["en", ["Account", "General", "Connections", "Themes", "Usage", "Model Index"]],
-    ["ko", ["계정", "일반", "연결", "테마", "사용량", "모델 지표"]],
+    ["en", ["Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index"]],
+    ["ko", ["계정", "일반", "연결", "기기", "테마", "사용량", "모델 지표"]],
   ])("opens the labeled list in %s without mounting a page or Shortcuts", async (locale, labels) => {
     await open(locale);
     const rows = [...dialog()!.querySelectorAll("nav button")].filter((node) => node.querySelector(".lucide-chevron-right"));
@@ -174,7 +174,7 @@ describe("phone Settings navigation", () => {
     phone = false;
     await open();
     expect([...dialog()!.querySelectorAll("nav button")].map((node) => node.getAttribute("aria-label"))).toEqual([
-      "Account", "General", "Connections", "Phone", "Themes", "Usage", "Model Index", "Shortcuts",
+      "Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index", "Shortcuts",
     ]);
     expect(button("General")?.getAttribute("aria-current")).toBe("page");
     expect(button("Back")).toBeNull();
@@ -183,11 +183,11 @@ describe("phone Settings navigation", () => {
     expect(dialog()?.parentElement?.hasAttribute("data-closing")).toBe(true);
   });
 
-  it("keeps Phone in a narrow desktop window", async () => {
+  it("keeps Devices in a narrow desktop window", async () => {
     vi.stubGlobal("ogb", {});
     await open();
     const rows = [...dialog()!.querySelectorAll("nav button")].map((node) => node.textContent);
-    expect(rows).toContain("Phone");
+    expect(rows).toContain("Devices");
   });
 
   it("shows the list when desktop Shortcuts narrows to phone", async () => {
