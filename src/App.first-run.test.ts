@@ -21,6 +21,8 @@ async function until<T>(found: () => T | null | undefined) {
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((node) => node.textContent === text);
 const star = () => [...document.querySelectorAll<HTMLAnchorElement>('[role="dialog"] a')].find((node) => node.textContent === "Star on GitHub");
 const analyticsPuts = () => fetchMock.mock.calls.filter(([url, init]) => url === "/api/analytics" && init?.method === "PUT");
+const sent = () => analyticsPuts().map(([, init]) => JSON.parse(String(init.body)));
+const checkbox = () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!;
 
 async function toFinalStep() {
   await act(async () => root.render(createElement(App)));
@@ -67,19 +69,21 @@ describe("first run end", () => {
     expect(star()).toBeUndefined();
   });
 
-  it("asks about analytics with nothing chosen and saves only an explicit pick", async () => {
+  it("checks usage stats by default and saves it on Open Wink", async () => {
     await toFinalStep();
-    const yes = button("Yes")!;
-    const no = button("No")!;
-    expect(yes.getAttribute("aria-checked")).toBe("false");
-    expect(no.getAttribute("aria-checked")).toBe("false");
-    expect(document.activeElement).not.toBe(yes);
+    expect(checkbox().checked).toBe(true);
+    expect(document.activeElement?.getAttribute("role")).toBe("dialog");
     expect(analyticsPuts()).toHaveLength(0);
-
-    await act(async () => no.click());
-    expect(no.getAttribute("aria-checked")).toBe("true");
-    expect(analyticsPuts().map(([, init]) => JSON.parse(String(init.body)))).toEqual([{ enabled: false }]);
     await act(async () => button("Open Wink")!.click());
-    expect(analyticsPuts()).toHaveLength(1);
+    expect(sent()).toEqual([{ enabled: true }]);
+  });
+
+  it("saves false after one tap to uncheck", async () => {
+    await toFinalStep();
+    await act(async () => checkbox().click());
+    expect(checkbox().checked).toBe(false);
+    expect(analyticsPuts()).toHaveLength(0);
+    await act(async () => button("Open Wink")!.click());
+    expect(sent()).toEqual([{ enabled: false }]);
   });
 });

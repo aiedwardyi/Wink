@@ -152,7 +152,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const controls = () => [...dialog.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )];
-    // The analytics step must not land focus on Yes, or a held Enter opts in.
+    // The last step takes focus itself, so a held Enter cannot skip it.
     (step === 2 ? dialog : controls()[0])?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
