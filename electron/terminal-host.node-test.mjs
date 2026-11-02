@@ -3134,6 +3134,60 @@ test("a Codex usage limit with its reset on a later line sends a LIMIT note", as
   assert.match(f.notes[0].text, limitNote("Codex", "5:49 AM"));
 });
 
+const CODEX_SOL_LIMIT = "\x1b[2J\x1b[H• Added word-text-validation.py (+65 -0)\r\n     1 +import json, re\r\n    + Show details\r\n■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/\r\nusage to purchase more credits or try again at 1:01 PM.\r\n\r\n";
+const CODEX_SOL_MENU = `${CODEX_SOL_LIMIT}  Approaching rate limits\r\n  Switch to gpt-6-luna for lower credit usage?\r\n\r\n› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.\r\n  2. Keep current model\r\n  3. Keep current model (never show again)  Hide future rate limit reminders about switching models\r\n\r\n  enter select · esc back\r\n`;
+const codexSolIdle = (footer = "") => `${CODEX_SOL_LIMIT}${footer}› Ask Codex to do anything\r\n\r\n  GPT-6.1-Sol max · ~\\AppData\\Local\\Temp\\wink-FEEL-QA-EP2-P3 · Complete FEEL-QA-EP2-P3.md\r\n  ? for shortcuts${" ".repeat(77)}⚠ 7 warnings · f2 to view\r\n`;
+const codexSolPane = async (f) => {
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "codex --model gpt-6.1-sol 'go'" });
+  f.host.resize(f.event, pane.sessionId, 120, 40);
+  await f.advance(5_000);
+  return pane;
+};
+
+for (const [name, screen] of [
+  ["the model switch menu", CODEX_SOL_MENU],
+  ["an idle prompt", codexSolIdle()],
+  ["a background terminal", codexSolIdle("  1 background terminal running · /ps to view · /stop to close\r\n")],
+  ["background terminals", codexSolIdle("  2 background terminals running · /ps to view\r\n")],
+]) {
+  test(`a Codex usage limit under ${name} sends one LIMIT note`, async (t) => {
+    const f = stallFixture();
+    t.after(() => f.host.dispose());
+    await codexSolPane(f);
+    f.children[0].data(screen);
+    await f.settle();
+    await f.advance(121_000);
+    assert.equal(f.notes.length, 1);
+    assert.match(f.notes[0].text, limitNote("Codex", "1:01 PM"));
+    await f.advance(600_000);
+    assert.equal(f.notes.length, 1);
+  });
+}
+
+test("a Codex usage limit stays one LIMIT note while its background terminal footer comes and goes", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await codexSolPane(f);
+  for (const screen of [CODEX_SOL_MENU, codexSolIdle("  1 background terminal running · /ps to view · /stop to close\r\n"), codexSolIdle(), codexSolIdle("  1 background terminal running · /ps to view\r\n")]) {
+    f.children[0].data(screen);
+    await f.settle();
+    await f.advance(600_000);
+  }
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, limitNote("Codex", "1:01 PM"));
+});
+
+test("a stuck Codex pane with a background terminal footer and no limit sends STALLED", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await codexSolPane(f);
+  f.children[0].data(codexSolIdle("  1 background terminal running · /ps to view · /stop to close\r\n").replace(/■[^]*1:01 PM\.\r\n/, "■ stream disconnected before completion\r\n"));
+  await f.settle();
+  await f.advance(121_000);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: .*1 background terminal running/s);
+});
+
 for (const [name, command, screen] of [
   ["a diff line quoting the Claude sentence", "claude go", "+// Claude example: You've hit your session limit · resets 3pm (Asia/Seoul)\r\n"],
   ["a grep hit quoting the Codex sentence", "claude go", "tests/limits.ts:12: ■ You've hit your usage limit. Upgrade your plan or try again at 5:49 AM.\r\n"],
