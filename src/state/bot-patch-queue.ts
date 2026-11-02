@@ -27,8 +27,6 @@ export type BotUpdatePatch = Partial<
     | "approvePeerComms"
     | "memoryNotes"
     | "composio"
-    | "browser"
-    | "browserProfile"
     | "shareTerminalWithChat"
     | "leanStartup"
     | "projectNotes"

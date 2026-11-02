@@ -1397,7 +1397,6 @@ describe("fields cleared on another client", () => {
     ["pinnedMessageId", "m1", { pinnedMessageId: "m1" }],
     ["section", "Work", { section: "Work" }],
     ["mascotStyle", "icon-05", { mascotStyle: "icon-05" }],
-    ["browserProfile", "guest", { browserProfile: "guest" }],
     ["rememberedProjectCwd", "C:/work", { lastProjectCwd: "C:/work" }],
   ] as const)("clears a bot's %s on a client that did not make the change", (field, value, source) => {
     const set = reducer(initialState, { type: "botPatched", bot: { ...botFrame(source), messages: [message] } });

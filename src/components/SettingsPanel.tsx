@@ -7,7 +7,7 @@ import { WorkingFolderField } from "./WorkingFolderField";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { builtInBrowserEnabled, memoryNotesEnabled } from "@/lib/feature-flags";
+import { memoryNotesEnabled } from "@/lib/feature-flags";
 import { showBotDetailsAdvanced, showDisabledShareTerminal } from "@/lib/friends-chrome";
 import {
   dropMemory,
@@ -597,7 +597,6 @@ export function SettingsPanel({
         | "chiefOfStaff"
         | "approvePeerComms"
         | "composio"
-        | "browser"
         | "shareTerminalWithChat"
         | "leanStartup"
         | "projectNotes"
@@ -611,12 +610,8 @@ export function SettingsPanel({
   const canAutoReview = engine?.capabilities?.approvalReview === true;
   const canCoordinate = engine?.capabilities?.agentsMcp === true;
   const canUseVps = engine?.capabilities?.computerMcp === true && engine.driverKind !== "boxAgent";
-  const canUseBrowser = engine?.capabilities?.browserMcp === true;
-  const desktopBrowser = Boolean(window.ogb?.browser);
   const desktopTerminal = Boolean(window.ogb?.terminal);
   const serverHasTerminal = state.config?.features?.terminalHost === true;
-  const browserFeature = builtInBrowserEnabled(state.config);
-  const browserEnabled = bot.browser !== false;
   const terminalShared =
     bot.shareTerminalWithChat === true || (bot.shareTerminalWithChat !== false && (desktopTerminal || serverHasTerminal));
   const shareTerminalDisabled = !terminalShared && !desktopTerminal && !serverHasTerminal;
@@ -939,32 +934,6 @@ export function SettingsPanel({
                 className={cn(
                   "absolute top-[3px] size-5 rounded-full bg-white transition-all",
                   bot.approvePeerComms ? "left-[21px]" : "left-[3px]",
-                )}
-              />
-            </button>
-            </div>
-          )}
-
-          {advancedOpen && browserFeature && (
-            <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div>
-              <div className="text-[15px] font-medium text-ink">Browser</div>
-            </div>
-            <button
-              role="switch"
-              aria-checked={browserEnabled}
-              aria-label="Give This Bot a Built-in Browser"
-              disabled={!browserEnabled && (!desktopBrowser || !browserFeature || !canUseBrowser)}
-              onClick={() => patch({ browser: !browserEnabled })}
-              className={cn(
-                "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-                browserEnabled ? "bg-accent" : "bg-control",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-                  browserEnabled ? "left-[21px]" : "left-[3px]",
                 )}
               />
             </button>

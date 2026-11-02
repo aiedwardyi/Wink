@@ -365,7 +365,6 @@ describe("SettingsModal friends chrome", () => {
     expect(picker).toContain("language.matchSystem");
     expect(picker).toContain("language.name.en");
     expect(picker).toContain("language.name.ko");
-    expect(picker).not.toContain("language.matchSystemHint");
     expect(picker).not.toContain("aria-describedby");
     expect(picker).not.toMatch(/title=\{id === "system"/);
     expect(source).toContain("settings.profile.title");

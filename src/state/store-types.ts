@@ -306,11 +306,6 @@ export interface Bot {
   /** Whether this bot may use the workspace's connected apps. Unset means
    * allowed for existing bots; imported bots start with this disabled. */
   composio?: boolean;
-  /** Whether this bot gets the app's built-in browser (Browser tab). On unless switched off. */
-  browser?: boolean;
-  /** Named browser profile id (config.browserProfiles); absent/null = the
-   * bot's own session (null is how a clear travels over PATCH). */
-  browserProfile?: string | null;
   /** Allow this bot's provider to read its own Orbit terminal screen. */
   shareTerminalWithChat?: boolean;
   /** null = off. Server-owned; toggled through /keep-going, never the bot PATCH. */
@@ -353,19 +348,12 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { skillRecorder: boolean; showToolCalls?: boolean; detailedReplies?: boolean; browser?: boolean; memoryNotes?: boolean; terminalHost?: boolean; modelDial?: boolean };
-  /** Named browser sessions any bot can be pointed at. */
-  browserProfiles?: BrowserProfile[];
-}
-
-export interface BrowserProfile {
-  id: string;
-  name: string;
+  features?: { skillRecorder: boolean; showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; modelDial?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "gemini" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features" | "browserProfiles"
+  "xai" | "gemini" | "openaiCompat" | "composio" | "box" | "vps" | "rooms" | "localVm" | "tts" | "imageGen" | "anthropic" | "vertex" | "customKeys" | "profile" | "features"
 >;
 
 /** How an engine gets installed - declared by its driver, mirrors
@@ -558,11 +546,8 @@ export type Action =
   | { type: "webhookPatched"; webhook: WebhookTrigger }
   | { type: "webhookAttempted"; attempt: WebhookAttempt }
   | { type: "webhookDeleted"; webhookId: string }
-  | { type: "createRoutine"; input: RoutineInput }
   | { type: "updateRoutine"; routineId: string; patch: Partial<RoutineInput> }
   | { type: "deleteRoutine"; routineId: string }
-  | { type: "runRoutine"; routineId: string }
-  | { type: "cancelRoutineRun"; runId: string }
   | { type: "markRoutineRunSeen"; runId: string }
   | { type: "groupPatched"; group: Partial<Group> & { id: string } }
   | { type: "groupDeleted"; groupId: string }

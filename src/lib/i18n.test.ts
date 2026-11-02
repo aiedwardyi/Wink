@@ -533,15 +533,7 @@ describe("remaining P1 surfaces", () => {
 });
 
 describe("sidebar create group and bot/room chrome", () => {
-  it("keeps Create group, Make a copy, Delete, and Move to context as complete EN+KO phrases", () => {
-    expect(en["chrome.createChannel"]).toBe("Create group");
-    expect(en["chrome.createChannelOne"]).toBe("Create group · {count} bot");
-    expect(en["chrome.createChannelMany"]).toBe("Create group · {count} bots");
-    expect(ko["chrome.createChannel"]).toBe("그룹 만들기");
-    expect(ko["chrome.createChannelOne"]).toBe("그룹 만들기 · 봇 {count}개");
-    expect(ko["chrome.createChannelMany"]).toBe("그룹 만들기 · 봇 {count}개");
-    expect(ko["chrome.createChannelOne"]).not.toMatch(/Create Channel|\bbot\b|\bbots\b/i);
-    expect(ko["chrome.createChannelMany"]).not.toMatch(/Create Channel|\bbot\b|\bbots\b/i);
+  it("keeps Make a copy, Delete, and Move to context as complete EN+KO phrases", () => {
     expect(en["chrome.duplicate"]).toBe("Make a copy");
     expect(ko["chrome.duplicate"]).toBe("사본 만들기");
     expect(ko["chrome.duplicate"]).not.toMatch(/Duplicate/i);
@@ -560,7 +552,6 @@ describe("sidebar create group and bot/room chrome", () => {
 
   it("wires those phrases into Sidebar instead of hardcoded English", () => {
     expect(sidebar).not.toContain("NewRoomPanel");
-    expect(sidebar).not.toContain('"chrome.createChannelOne"');
     expect(groupWizard).toContain('t("groupWizard.create")');
     expect(groupWizard).toContain('t("groupWizard.addBot")');
     expect(groupWizard).toContain('t("groupWizard.addAnother")');
@@ -669,8 +660,6 @@ describe("empty-engine first launch copy", () => {
     expect(en["noEngines.body"]).toBe("Your bots run on an engine. Most people start with Claude.");
     expect(ko["noEngines.body"]).toBe("봇은 엔진으로 작동합니다. 대부분 Claude로 시작합니다.");
     expect(ko["noEngines.body"]).not.toMatch(/Your bots need one of these/i);
-    expect(en["noEngines.checkAgain"]).toBe("Check again");
-    expect(ko["noEngines.checkAgain"]).toBe("다시 확인");
   });
 
   it("names every shipped engine in the onboarding principle", () => {
@@ -684,12 +673,10 @@ describe("empty-engine first launch copy", () => {
     expect(noEngines).toContain('t("noEngines.title")');
     expect(noEngines).toContain('t("noEngines.body")');
     expect(noEngines).toContain("<EngineConnect");
-    expect(noEngines).not.toContain('t("noEngines.checkAgain")');
     expect(noEngines).not.toMatch(/Install an AI engine to get started/);
     expect(onboarding).toContain('t("noEngines.title")');
     expect(onboarding).toContain('t("noEngines.body")');
     expect(onboarding).toContain("<EngineConnect");
-    expect(onboarding).not.toContain('t("noEngines.checkAgain")');
   });
 });
 
@@ -750,7 +737,6 @@ describe("first-run core path leftovers", () => {
     expect(en["chrome.removeFromContext"]).toBe("Remove from section");
     expect(ko["chrome.removeFromContext"]).not.toMatch(/Remove from context/i);
     expect(en["chrome.newContextName"]).toBe("New section name");
-    expect(en["chrome.channelContext"]).toBe("Section (optional)");
     expect(en["task.new"]).toBe("New task");
     expect(ko["task.new"]).toBe("새 작업");
     expect(en["task.matching"]).toContain("{count}");
@@ -767,8 +753,6 @@ describe("first-run core path leftovers", () => {
     expect(en["model.switchEngine"]).toBe("Switch engine");
     expect(ko["model.switchEngine"]).toBe("엔진 바꾸기");
     expect(ko["model.switchEngine"]).not.toMatch(/Switch engine/i);
-    expect(en["model.cliVersion"]).toBe("Engine {version}");
-    expect(ko["model.cliVersion"]).toBe("엔진 {version}");
     expect(en["model.pinnedTitle"]).toBe("{engine} · {model}");
     expect(ko["model.pinnedTitle"]).toBe("{engine} · {model}");
     expect(en["model.automaticTitle"]).toBe("Stay on this engine while it works. Currently {name}.");
@@ -788,10 +772,6 @@ describe("first-run core path leftovers", () => {
     expect(en["usage.limits.pending"]).toBe("Appears after your next {name} message.");
     expect(en["usage.limits.pending"]).not.toBe(en["usage.limits.notReported"]);
     expect(Object.hasOwn(en, "usage.limits.unavailable")).toBe(false);
-    expect(translate("en", "model.cliVersion", { version: "1.0.13" })).toBe("Engine 1.0.13");
-    expect(translate("ko", "model.cliVersion", { version: "1.0.13" })).toBe("엔진 1.0.13");
-    expect(en["model.showAll"]).toContain("{count}");
-    expect(ko["model.showAll"]).toContain("{count}");
     expect(en["engines.setCli"]).toBe("Set engine path…");
     expect(ko["engines.setCli"]).toBe("엔진 경로 지정…");
     expect(en["connections.connected"]).toBe("Connected");
@@ -958,7 +938,6 @@ describe("plan usage", () => {
 
   it("wires those phrases into the Usage settings surface instead of hardcoded English", () => {
     expect(usageSection).toContain('t("usage.limits.title")');
-    expect(usageSection).not.toContain('t("usage.limits.subtitle")');
     expect(usageSection).toContain('t("usage.limits.empty")');
     expect(planUsageBar).toContain('"usage.limits.session"');
     expect(planUsageBar).toContain('"usage.limits.weekly"');

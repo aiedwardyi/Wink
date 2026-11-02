@@ -1,5 +1,5 @@
 export interface FeatureFlagConfig {
-  features?: { skillRecorder?: boolean; showToolCalls?: boolean; detailedReplies?: boolean; browser?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  features?: { skillRecorder?: boolean; showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
 }
 
 export function detailedRepliesEnabled(config: FeatureFlagConfig | null | undefined): boolean {
@@ -18,12 +18,6 @@ export function skillRecorderEnabled(config: FeatureFlagConfig | null | undefine
 
 export function modelDialEnabled(config: FeatureFlagConfig | null | undefined): boolean {
   return config?.features?.modelDial === true;
-}
-
-/** The built-in per-bot browser (Browser tab of the computer panel) is
- * removed: permanently off, whatever the config says. */
-export function builtInBrowserEnabled(_config: FeatureFlagConfig | null | undefined): boolean {
-  return false;
 }
 
 /** Tool-run chips in the transcript. Off by default — the mascot already
