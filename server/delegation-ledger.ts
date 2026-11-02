@@ -23,7 +23,11 @@ export function recordDelegationReceipt(receipt: Omit<DelegationReceipt, "finish
   const all = [next, ...receipts.filter((row) => row.id !== receipt.id)];
   const open = all.filter((row) => row.state && !terminalMailState(row.state));
   receipts = [...open, ...all.filter((row) => (!row.state || terminalMailState(row.state)) && now - row.finishedAt <= MAX_AGE).slice(0, 100)];
-  writeFileAtomic(FILE, JSON.stringify(receipts, null, 2), { mode: 0o600 });
+  try {
+    writeFileAtomic(FILE, JSON.stringify(receipts, null, 2), { mode: 0o600 });
+  } catch (error) {
+    console.error("delegations: could not persist receipts", error);
+  }
 }
 
 export const findDelegationReceipt = (id: string): DelegationReceipt | null => receipts.find((row) => row.id === id) ?? null;

@@ -144,7 +144,7 @@ import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
-import { claimReplyWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
+import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
 import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
@@ -2934,6 +2934,7 @@ const watchdog = new TurnWatchdog({
       stallErrorActivity(bot, minutes, Boolean(store.groupByThread(turn.threadId))),
     );
     finalizeDelegationWatch(turn.threadId, false, "", "Delegated turn stalled and was stopped");
+    const stalledTurnId = turnRegistry.current(turn.threadId)?.turnId;
     turnUsage.delete(turn.threadId);
     roomStallCompletions.stall(turn.threadId);
     // ACP interruption settles within five seconds; other adapters settle
@@ -2942,6 +2943,10 @@ const watchdog = new TurnWatchdog({
     // clears it first when the adapter responds.
     const release = setTimeout(() => {
       providerReload.settled(turn.threadId);
+      if (stalledTurnId && turnRegistry.get(stalledTurnId)) {
+        if (settleMail(store, turn.threadId, stalledTurnId, false, "interrupted")) paneWake.noteArrived(turn.botId, turn.threadId);
+        turnRegistry.settle(stalledTurnId);
+      }
       const group = store.groupByThread(turn.threadId);
       const speaker = groupSpeakers.get(turn.threadId);
       if (group && group.busyBotId === turn.botId && speaker?.botId === turn.botId) {
@@ -3994,7 +3999,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
           "",
           `Delegated turn could not start — ${why.slice(0, 120)}`,
         )
-        : failUnwatchedDelegation(taskId, sourceThreadId, toBotId, bot?.name ?? toBotId, `Delegated turn could not start: ${why.slice(0, 120)}`, commsBus);
+        : failUnwatchedDelegation(taskId, sourceThreadId, toBotId, bot?.name ?? toBotId, `error: delegation to @${bot?.name ?? toBotId} could not start — ${why.slice(0, 120)}`, commsBus);
       const source = store.conversationForBot(sourceBotId, sourceThreadId)?.bot;
       if (!source) return;
       // a second row after one was written is the same dead handoff twice
@@ -4040,7 +4045,7 @@ bus.subscribe((event: RuntimeEvent) => {
   // A settling bot frees itself as a delegation TARGET too: handoffs that
   // found it busy remain ready on their source threads.
   const settledBot = store.botByThread(event.threadId);
-  if (settledBot) drainWaitingOn(commsBus, approvalBus, settledBot.id, runDelegatedTurn, event.threadId);
+  if (settledBot) drainWaitingOn(commsBus, approvalBus, runDelegatedTurn);
 });
 
 // ── steer-queue drain: messages sent while the bot was busy ────────────
@@ -4096,7 +4101,7 @@ const paneWake = new PaneWakeScheduler({
       }
     });
   },
-  admit: (_botId, threadId) => claimReplyWake(store, threadId),
+  admit: (botId, threadId) => admitPaneWake(store, botId, threadId, commsBus.replyUnwoken),
   warn: (line) => console.warn(line),
 });
 
@@ -4137,7 +4142,7 @@ function drainQueuedSends() {
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
     // a send that never runs leaves no turn.completed to rerun a taken-over handoff
     const rerunIfIdle = () =>
-      continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, botId, runDelegatedTurn), botHasActiveTurn);
+      continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, runDelegatedTurn), botHasActiveTurn);
     if (room) {
       // a room thread's turn.completed never re-drains this bot either
       void enqueueDrainedRoomTurn(botId, threadId, room).then(rerunIfIdle);

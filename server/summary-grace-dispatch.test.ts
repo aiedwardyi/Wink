@@ -159,6 +159,7 @@ describe("summary grace dispatch", () => {
         foldQueuedSends, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace,
         clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {}, paneNoteTurnThreads: new Set(),
+        mailForTurn: () => [], markMailRead() {}, markPaneMailRead() {},
         opensHostFiles: () => false, privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",

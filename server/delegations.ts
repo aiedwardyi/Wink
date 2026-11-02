@@ -177,15 +177,7 @@ export async function pollDelegation(
   }
 }
 
-/** Source threads holding a handoff that already waited on this busy bot at
- * least once, or a taken-over rerun - the set a target's settling turn re-drains. Fresh items
- * (attempts 0) are excluded: they run when their SOURCE turn settles, and
- * draining them early would start the peer before the delegator finished. */
-export function threadsWaitingOn(toBotId: string): string[] {
-  return [...pendingDelegations].filter(([, items]) => items.some((item) => item.toBotId === toBotId && findDelegationReceipt(item.id)?.state === "ready")).map(([threadId]) => threadId);
-}
-
-export function drainWaitingOn(bus: CommsBus, approvalBus: ApprovalBus, _toBotId: string, runTarget: Parameters<typeof drainDelegations>[3], _exceptThreadId?: string): void {
+export function drainWaitingOn(bus: CommsBus, approvalBus: ApprovalBus, runTarget: Parameters<typeof drainDelegations>[3]): void {
   pumpReady(bus, approvalBus, runTarget);
 }
 
@@ -311,7 +303,7 @@ export function queueDelegation(
     attempts: 0,
   };
   if (queued.reason !== undefined) queued.reason = redactSecretsInText(queued.reason);
-  acceptPeerTask(bus, from, target, sourceThreadId, queued.kind!, "held", id);
+  acceptPeerTask(from, target, sourceThreadId, queued.kind!, "held", id);
   if (options.ready) readyItem(queued);
   list.push(queued);
   pendingDelegations.set(sourceThreadId, list);
@@ -346,7 +338,7 @@ export function drainDelegations(
   pumpReady(bus, approvalBus, runTarget);
 }
 
-export function acceptPeerTask(_bus: CommsBus, from: BotRecord, target: BotRecord, threadId: string, kind: "ask" | "delegation", state: MailState, id = newId()): string {
+export function acceptPeerTask(from: BotRecord, target: BotRecord, threadId: string, kind: "ask" | "delegation", state: MailState, id = newId()): string {
   recordDelegationReceipt({ id, sourceThreadId: threadId, toBotId: target.id, toBotName: target.name, status: "queued", kind, deliver: "queued", state,
     source: { botId: from.id, threadId, turnId: turnRegistry.current(threadId)?.turnId ?? "" }, target: { botId: target.id, ...(state === "dispatching" ? { threadId: target.threadId } : {}) } });
   return id;
@@ -368,7 +360,7 @@ function pumpReady(bus: CommsBus, approvalBus: ApprovalBus, runTarget: Parameter
     const from = item.fromBotId ? bus.store.conversationForBot(item.fromBotId, threadId)?.bot : bus.store.botByThread(threadId);
     const target = bus.store.bot(item.toBotId);
     if (!from || !target) {
-      failQueued(bus, threadId, item, from ? "no such bot" : "error: delegation failed - source bot no longer belongs to this conversation");
+      failQueued(bus, threadId, item, from ? `error: delegation to ${item.toBotId} failed — no such bot` : "error: delegation failed — source bot no longer belongs to this conversation");
       continue;
     }
     if (from.approvePeerComms && !item.approved) {
@@ -380,7 +372,7 @@ function pumpReady(bus: CommsBus, approvalBus: ApprovalBus, runTarget: Parameter
         item.approved = true;
         updateReceipt(item.id, { state: "ready" });
         savePending();
-      }).catch((error) => failQueued(bus, threadId, item, String(error))).finally(() => {
+      }).catch((error) => failQueued(bus, threadId, item, failedLine(error))).finally(() => {
         approvingItems.delete(item.id);
         pumpReady(bus, approvalBus, runTarget);
       });
@@ -396,7 +388,7 @@ function pumpReady(bus: CommsBus, approvalBus: ApprovalBus, runTarget: Parameter
     }
     dispatchingTargets.add(target.id);
     updateReceipt(item.id, { state: "dispatching", status: "running", target: { botId: target.id, threadId: target.threadId } });
-    void processOne(bus, approvalBus, from, threadId, item, runTarget).catch((error) => failQueued(bus, threadId, item, `error: delegation failed - ${error instanceof Error ? error.message : String(error)}`)).finally(() => {
+    void processOne(bus, from, threadId, item, runTarget).catch((error) => failQueued(bus, threadId, item, failedLine(error))).finally(() => {
       acknowledgeDelegation(threadId, item.id);
       dispatchingTargets.delete(item.toBotId);
       pumpReady(bus, approvalBus, runTarget);
@@ -416,12 +408,14 @@ export function bindPeerTurn(threadId: string, turnId: string): void {
   }
 }
 
+const failedLine = (error: unknown) => `error: delegation failed — ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`;
+
 function failQueued(bus: CommsBus, threadId: string, item: PendingDelegationItem, result: string, status: DelegationOutcome = "failed"): void {
   acknowledgeDelegation(threadId, item.id);
   finishDelegatedTurn(bus, { taskId: item.id, toBotId: item.toBotId, sourceThreadId: threadId, sourceBotId: item.fromBotId }, false, "", result);
   if (status === "denied") {
     updateReceipt(item.id, { status, state: "refused" });
-    patchDelegationChip(bus, item.id, { name: "Delegation denied by user", ok: false });
+    patchDelegationChip(bus, item.id, { name: `Delegation to @${bus.store.bot(item.toBotId)?.name ?? item.toBotId} denied by user`, ok: false });
   }
 }
 
@@ -441,8 +435,10 @@ export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?
   const list = pendingDelegations.get(threadId);
   if (!list?.length) return;
   const privateSourceId = bus.store.botByThread(threadId)?.id;
+  // a scoped discard is a failed turn: ready work belongs to an earlier turn that finished
+  const scoped = Boolean(sourceBotId || turnId);
   const dropped = list.filter((item) => (!sourceBotId || (item.fromBotId ?? privateSourceId) === sourceBotId)
-    && (!turnId || item.turnId === turnId && findDelegationReceipt(item.id)?.state === "held"));
+    && (!scoped || findDelegationReceipt(item.id)?.state === "held" && (!turnId || item.turnId === turnId)));
   if (!dropped.length) return;
   const remaining = list.filter((item) => !dropped.includes(item));
   if (remaining.length) pendingDelegations.set(threadId, remaining);
@@ -487,10 +483,10 @@ export function discardOrphanedDelegations(bus: CommsBus): number {
       recordDelegationReceipt({ ...receipt, state: receipt.status === "done" ? "done" : "failed" });
     } else if (receipt.state && !terminalMailState(receipt.state)) {
       const queued = receipt.state === "held" || receipt.state === "ready" || receipt.state === "approval";
-      finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: receipt.toBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", queued ? "Delegation dropped - the delegating turn did not finish" : "interrupted by a restart");
+      finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: receipt.toBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", queued ? `Delegation to @${receipt.toBotName} dropped - the turn did not finish` : "interrupted by a restart");
       if (queued) {
         updateReceipt(receipt.id, { status: "dropped", state: "dropped" });
-        patchDelegationChip(bus, receipt.id, { name: "Delegation dropped - the delegating turn did not finish", ok: false });
+        patchDelegationChip(bus, receipt.id, { name: `Delegation to @${receipt.toBotName} dropped - the turn did not finish`, ok: false });
       }
     }
   }
@@ -501,10 +497,12 @@ export function discardOrphanedDelegations(bus: CommsBus): number {
   }
   pendingDelegations.clear();
   savePending();
-  for (const bot of bus.store.bots) for (const task of bot.tasks ?? []) {
-    for (const row of bus.store.messagesFor(task.threadId)) {
-      if (row.comm?.read?.state === "handed") bus.store.patchMessage(task.threadId, row.id, { comm: { ...row.comm, read: row.comm.read.upto ? { ...row.comm.read, state: "read" } : undefined } });
-    }
+  const threadIds = new Set([
+    ...bus.store.bots.flatMap((bot) => (bot.tasks ?? []).map((task) => task.threadId)),
+    ...bus.store.groups.flatMap((group) => [group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]),
+  ]);
+  for (const threadId of threadIds) for (const row of bus.store.messagesFor(threadId)) {
+    if (row.comm?.read?.state === "handed") bus.store.patchMessage(threadId, row.id, { comm: { ...row.comm, read: row.comm.read.upto ? { ...row.comm.read, state: "read" } : undefined } });
   }
   return threads.length;
 }
@@ -523,19 +521,18 @@ export function discardDelegationsFrom(bus: CommsBus, sourceBotId: string): void
     for (const item of held) {
       acknowledgeDelegation(threadId, item.id);
       updateReceipt(item.id, { status: "dropped", state: "dropped", result: "source bot deleted" });
-      patchDelegationChip(bus, item.id, { name: "Delegation dropped - source bot deleted", ok: false });
+      patchDelegationChip(bus, item.id, { name: `Delegation to @${bus.store.bot(item.toBotId)?.name ?? item.toBotId} dropped - the turn did not finish`, ok: false });
     }
   }
   for (const receipt of receiptSnapshot()) {
     if (receipt.toBotId !== sourceBotId || !receipt.state || terminalMailState(receipt.state)) continue;
-    finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: sourceBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", "no such bot");
+    finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: sourceBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", `error: delegation to ${receipt.toBotId} failed — no such bot`);
     acknowledgeDelegation(receipt.sourceThreadId, receipt.id);
   }
 }
 
 async function processOne(
   bus: CommsBus,
-  _approvalBus: ApprovalBus,
   from: BotRecord,
   sourceThreadId: string,
   item: PendingDelegationItem,
@@ -549,7 +546,7 @@ async function processOne(
     sourceBotId: string,
     transcriptText?: string,
   ) => void | Promise<void>,
-): Promise<"settled" | "requeued"> {
+): Promise<void> {
   const sender = from;
   const target = bus.store.bot(item.toBotId);
   if (!target) throw new Error("no such bot");
@@ -560,7 +557,7 @@ async function processOne(
     noteMessageFrom(bus, sender, target, channel);
     runningDelegations.set(item.id, { sourceThreadId, item });
     await runTarget(item.toBotId, prompt, item.depth + 1, sourceThreadId, channel, item.id, sender.id, `Answering ${sender.name}'s earlier request`);
-    return "settled";
+    return;
   }
   const channel = getOrCreateChannel(bus.store, sender, target);
   const body = channel.threadId === sourceThreadId ? undefined : item.message;
@@ -568,7 +565,6 @@ async function processOne(
   mirrorExchange(bus, sender, target, item.message, channel, sourceThreadId, !delivered);
   runningDelegations.set(item.id, { sourceThreadId, item });
   await runTarget(item.toBotId, delegatedPrompt(sender, item), item.depth + 1, sourceThreadId, channel, item.id, sender.id, `${item.message}${reasonLine(item)}`);
-  return "settled";
 }
 
 const reasonLine = (item: PendingDelegationItem) => item.reason ? `\n\n[Reason: ${item.reason}]` : "";

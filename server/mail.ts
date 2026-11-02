@@ -2,6 +2,7 @@ import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { claimDelegationWake } from "./comms-budget.ts";
 import type { Message, Store } from "./store.ts";
 import type { MailRead } from "./mail-types.ts";
+import { paneNoteWaiting } from "./pane-wake.ts";
 
 type MailStore = Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "activePath" | "messagesFor" | "patchMessage">;
 export interface MailPart { id: string; text: string; upto: number; part?: number }
@@ -14,6 +15,7 @@ export function registerReplyWake(row: Message): void {
 export function unreadMail(store: MailStore, threadId: string): Message[] {
   const bot = store.botByThread(threadId);
   const task = bot && store.taskByThread(bot.id, threadId);
+  if (task && !task.mailUnread?.length) return [];
   const rows = store.activePath(threadId);
   const byId = new Map(rows.map((row) => [row.id, row]));
   const ids = task?.mailUnread ?? (store.groupByThread(threadId) ? rows.filter((row) => row.comm?.mailKey && row.comm.peer === "reply").map((row) => row.id) : []);
@@ -57,7 +59,7 @@ export function mailForTurn(store: MailStore, threadId: string, paneIds: readonl
     if (cap <= 0) break;
     let cut = remainder.lastIndexOf("\n", cap - 1) + 1;
     if (!cut) cut = remainder.lastIndexOf(" ", cap - 1) + 1;
-    if (!cut) break;
+    if (!cut) cut = cap;
     parts.push({ id: row.id, text: frame(store, row, `${prefix}${remainder.slice(0, cut)}${tail}`), upto: offset + cut, part });
     break;
   }
@@ -96,7 +98,7 @@ export function toolMailResult(store: MailStore, threadId: string, taskId: strin
   const row = store.messagesFor(threadId).find((row) => row.comm?.taskId === taskId && row.comm.peer === "reply");
   if (!row) return result;
   const read = row.comm?.read;
-  if (read?.state === "handed" || read?.state === "read" && (read.upto ?? row.text?.length ?? 0) >= (row.text?.length ?? 0)) return "";
+  if (read?.state === "handed" || read?.state === "read" && (read.upto ?? row.text?.length ?? 0) >= (row.text?.length ?? 0)) return "already in your context";
   const offset = read?.upto ?? 0;
   const text = result?.slice(offset);
   const remainder = row.text!.slice(offset);
@@ -107,6 +109,9 @@ export function toolMailResult(store: MailStore, threadId: string, taskId: strin
 }
 
 export function settleMail(store: MailStore, threadId: string, turnId: string, ok: boolean, stopReason?: string): boolean {
+  const bot = store.botByThread(threadId);
+  const task = bot && store.taskByThread(bot.id, threadId);
+  if (task && !task.mailUnread?.length) return false;
   let reverted = false;
   for (const row of store.messagesFor(threadId)) {
     const read = row.comm?.read;
@@ -135,4 +140,11 @@ export function hasUnreadReplyWake(store: MailStore, threadId: string): boolean 
 
 export function claimReplyWake(store: MailStore, threadId: string): boolean {
   return !hasUnreadReplyWake(store, threadId) || claimDelegationWake(threadId);
+}
+
+/** A spent reply budget must not drop a pane note's own wake. */
+export function admitPaneWake(store: MailStore, botId: string, threadId: string, replyUnwoken?: (botId: string, detail: string) => void): boolean {
+  if (claimReplyWake(store, threadId) || paneNoteWaiting(store, botId, threadId)) return true;
+  if (unreadMail(store, threadId).some((row) => row.comm!.wake)) replyUnwoken?.(botId, "wake budget spent");
+  return false;
 }

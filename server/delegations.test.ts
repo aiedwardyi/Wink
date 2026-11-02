@@ -25,7 +25,6 @@ import {
   resolveDelegationId,
   settleTakenOverDelegation,
   takeOverDelegatedTurn,
-  threadsWaitingOn,
   _pendingCount,
   type DelegatedTurn,
 } from "./delegations.ts";
@@ -938,8 +937,7 @@ describe("busy retries and receipts", () => {
     await waitFor(() => chipCount("waiting - they're busy") === 1);
     expect(dispatched).toHaveLength(0);
     expect(_pendingCount(from.threadId)).toBe(1);
-    // this is the set a settling target turn re-drains
-    expect(threadsWaitingOn(target.id)).toEqual([from.threadId]);
+    expect(findDelegationReceipt(taskId)?.state).toBe("ready");
     expect(pendingDelegationInfo(taskId)).toMatchObject({ toBotId: target.id, attempts: 1 });
 
     store.patchBot(target.id, { busy: false });
@@ -1173,7 +1171,6 @@ describe("user takeover of a delegated turn", () => {
     expect(chip()).toEqual({ name: paused });
     expect(findDelegationReceipt(taskId)?.state).toBe("ready");
     expect(pendingDelegationInfo(taskId)).toMatchObject({ sourceThreadId: career.threadId, toBotId: wink.id, attempts: 0 });
-    expect(threadsWaitingOn(wink.id)).toEqual([career.threadId]);
   });
 
   it("reruns the handoff and settles it with the rerun's reply", async () => {
@@ -1381,19 +1378,19 @@ describe("user takeover of a delegated turn", () => {
   it("reruns a taken-over handoff when the user's queued send never starts", async () => {
     const { taskId } = await takenOverOnce();
     const waiting = queueSteeredMessage(wink.id, wink.threadId, "one more thing");
-    drainWaitingOn(commsBus, approvalBus, wink.id, runTarget);
+    drainWaitingOn(commsBus, approvalBus, runTarget);
     await new Promise((r) => setTimeout(r, 50));
     expect(dispatched).toHaveLength(1);
 
     // the send left the queue but its turn never started, so no turn.completed follows
     cancelSteeredMessage(wink.id, waiting.id);
-    drainWaitingOn(commsBus, approvalBus, wink.id, runTarget);
+    drainWaitingOn(commsBus, approvalBus, runTarget);
     await waitFor(() => dispatched.length === 2 && pendingDelegationInfo(taskId) === null);
 
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const drainSends = index.slice(index.indexOf("function drainQueuedSends() {"));
     const body = drainSends.slice(0, drainSends.indexOf("\n}"));
-    expect(body).toContain("drainWaitingOn(commsBus, approvalBus, botId, runDelegatedTurn)");
+    expect(body).toContain("drainWaitingOn(commsBus, approvalBus, runDelegatedTurn)");
     expect(body).toContain("onDispatchError: rerunIfIdle,");
     expect(body).toContain(".then(rerunIfIdle)");
     expect(body).toMatch(/continueQueuedDrainIfIdle\(store, botId, drainQueuedSends, botHasActiveTurn\);\r?\n\s*rerunIfIdle\(\);/);
@@ -1402,13 +1399,13 @@ describe("user takeover of a delegated turn", () => {
   it("reruns a taken-over handoff when a queued room turn never starts", async () => {
     const { taskId } = await takenOverOnce();
     queueRoomParticipation(wink.id, "room-thread", { groupId: "room" });
-    drainWaitingOn(commsBus, approvalBus, wink.id, runTarget);
+    drainWaitingOn(commsBus, approvalBus, runTarget);
     await new Promise((r) => setTimeout(r, 50));
     expect(dispatched).toHaveLength(1);
 
     // the room item left the queue, but its turn aborted before a provider turn
     drainSteeredMessages(store, () => {});
-    drainWaitingOn(commsBus, approvalBus, wink.id, runTarget);
+    drainWaitingOn(commsBus, approvalBus, runTarget);
     await waitFor(() => dispatched.length === 2 && pendingDelegationInfo(taskId) === null);
 
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");

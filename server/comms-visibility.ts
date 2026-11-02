@@ -132,33 +132,6 @@ export function noteMessageFrom(bus: CommsBus, from: BotRecord, target: BotRecor
   });
 }
 
-/** Show `target`'s reply under the sender's message in the thread it was asked
- * from. False when nothing was posted: no reply, no channel, or the asking
- * thread is the channel, which already gets the reply from `mirrorReply`. */
-export function postPeerReply(
-  bus: CommsBus,
-  from: BotRecord,
-  target: BotRecord,
-  reply: string,
-  channel: GroupRecord | undefined,
-  sourceThreadId = from.threadId,
-  wake = false,
-): boolean {
-  const comm = commLink(channel, target);
-  if (!comm || !reply.trim() || channel?.threadId === sourceThreadId) return false;
-  const row: Omit<Message, "id" | "at"> = {
-    role: "bot",
-    kind: "activity",
-    tool: { name: `Reply from @${target.name}` },
-    comm: { ...comm, peer: "reply", ...(wake ? { wake: true as const } : {}) },
-    text: reply,
-  };
-  if (wake) row.origin = bus.deviceId;
-  if (sourceThreadId !== from.threadId) row.from = { botId: from.id, name: from.name, color: from.color };
-  bus.store.appendMessage(sourceThreadId, row);
-  return true;
-}
-
 /** Close a handoff's loop in the sender's thread: patch its chip in place, or
  * fall back to the room row when the chip is gone. Either way one row, never two.
  * False means the sender's thread got nothing (a 1:1 whose chip is gone). */

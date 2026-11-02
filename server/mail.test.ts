@@ -48,6 +48,20 @@ it("delivers a long reply whole over bounded, word-aligned folds", () => {
   expect(mailReplayText(store.messagesFor(bot.threadId).find((m) => m.id === row.id)!)).toContain(text);
 });
 
+it("folds a long reply with no whitespace and the reply after it", () => {
+  const long = reply("x".repeat(5000));
+  const later = reply("later reply", "later");
+  for (let i = 0; i < 20 && unreadMail(store, bot.threadId).length; i++) {
+    const parts = mailForTurn(store, bot.threadId, [], 1000);
+    expect(parts.length).toBeGreaterThan(0);
+    expect(Math.ceil(Buffer.byteLength(parts[0].text, "utf8") / 3) + 6).toBeLessThanOrEqual(325);
+    markMailRead(store, bot.threadId, parts, `turn-${i}`);
+  }
+  const rows = store.messagesFor(bot.threadId);
+  expect(rows.find((row) => row.id === long.id)?.comm?.read?.upto).toBe(5000);
+  expect(rows.find((row) => row.id === later.id)?.comm?.read?.state).toBe("read");
+});
+
 it.each([[false, undefined], [true, "cancelled"], [true, "interrupted"]])("reverts a handover after ok=%s, stop=%s", (ok, reason) => {
   reply("unread");
   handMail(store, bot.threadId, "task", "turn", "request");

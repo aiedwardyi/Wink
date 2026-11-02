@@ -3602,8 +3602,8 @@ describe("harness HTTP API", () => {
         sameTurn: z.boolean().optional(),
         error: z.string().optional(),
       });
-      const internal = async (method: string, path: string, body?: InternalBody) => {
-        const headers = new Headers({ authorization: `Bearer ${token}` });
+      const internal = async (method: string, path: string, body?: InternalBody, bearer = token) => {
+        const headers = new Headers({ authorization: `Bearer ${bearer}` });
         if (body) headers.set("content-type", "application/json");
         const response = await fetch(`${BASE}${path}`, {
           method,
@@ -3667,26 +3667,19 @@ describe("harness HTTP API", () => {
       );
       expect(checked).toMatchObject({ status: 200, body: { status: "queued" } });
 
-      for (const request of [
-        internal("POST", "/api/internal/ask-bot", {
-          fromBotId: outsider.id,
-          fromThreadId: room.threadId,
-          toBotId: target.id,
-          message: "not a member",
-        }),
-        internal("POST", "/api/internal/delegate-bot", {
-          fromBotId: outsider.id,
-          fromThreadId: room.threadId,
-          toBotId: target.id,
-          message: "not a member",
-        }),
-        internal(
-          "GET",
-          `/api/internal/delegations/${taskId}?fromBotId=${outsider.id}&fromThreadId=${room.threadId}`,
-        ),
-      ]) {
-        expect((await request).status).toBe(403);
-      }
+      // the caller is the token's bot: a spoofed body id still acts as the member
+      const outsiderPath = `/api/internal/delegations/${taskId}?fromBotId=${outsider.id}&fromThreadId=${room.threadId}`;
+      expect(await internal("GET", outsiderPath)).toMatchObject({ status: 200, body: { status: "queued" } });
+      expect((await api("PATCH", `/api/bots/${outsider.id}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${outsider.id}/messages`, { text: "check the room task" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const outsiderToken = JSON.parse(readFileSync(fakeClaudeDump, "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots
+        .find((bot: { id: string }) => bot.id === outsider.id)?.busy, { timeout: 5_000 }).toBe(false);
+      expect(await internal("GET", outsiderPath, undefined, outsiderToken)).toMatchObject({ status: 403 });
 
       expect((await api("PATCH", `/api/bots/${source.id}`, {
         modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
@@ -5319,7 +5312,7 @@ describe("startTurn presence boundary", () => {
     }
   });
 
-  it("does not announce a wait when startTurn rejects a busy target", async () => {
+  it("queues an ask to a busy target without dispatching it", async () => {
     const source = (await api("POST", "/api/bots", {})).body.bot;
     const target = (await api("POST", "/api/bots", {})).body.bot;
     const hanging = await hangingModel();
@@ -5375,16 +5368,17 @@ describe("startTurn presence boundary", () => {
         }),
       });
       expect(asked.status).toBe(200);
-      const body = z.object({ busy: z.boolean().optional(), text: z.string().optional() }).parse(await asked.json());
-      expect(body.busy === true || (body.text ?? "").includes("already working")).toBe(true);
+      const body = z.object({ taskId: z.string(), text: z.string() }).parse(await asked.json());
+      expect(body.text).toContain(`@Busy target is working on it. Task id: ${body.taskId}.`);
       expect(stream.frames.filter(
         (frame) => frame.kind === "turn.dispatch" && frame.threadId === target.threadId,
       ).length).toBe(before);
     } finally {
       stream.close();
       await api("POST", `/api/bots/${source.id}/interrupt`, {}).catch(() => undefined);
-      await api("POST", `/api/bots/${target.id}/interrupt`, {}).catch(() => undefined);
+      // deleting the source first drops the queued ask, so it never dispatches during cleanup
       await api("DELETE", `/api/bots/${source.id}`).catch(() => undefined);
+      await api("POST", `/api/bots/${target.id}/interrupt`, {}).catch(() => undefined);
       await api("DELETE", `/api/bots/${target.id}`).catch(() => undefined);
     }
   });

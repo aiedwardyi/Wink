@@ -1,7 +1,8 @@
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
-import { _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
+import { _loadPending, bindPeerTurn, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
 import { handMail, mailForTurn, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { Store } from "./store.ts";
@@ -36,12 +37,12 @@ it("keeps ready work through more than three busy settles", async () => {
   drainDelegations(bus, bus, from.threadId, run);
   for (let i = 0; i < 5; i++) {
     await new Promise((resolve) => setImmediate(resolve));
-    drainWaitingOn(bus, bus, target.id, run);
+    drainWaitingOn(bus, bus, run);
   }
   await new Promise((resolve) => setImmediate(resolve));
   expect(findDelegationReceipt(queued.id!)?.state).toBe("ready");
   store.setActivity(target.id, "idle");
-  drainWaitingOn(bus, bus, target.id, run);
+  drainWaitingOn(bus, bus, run);
   await new Promise((resolve) => setImmediate(resolve));
   expect(run).toHaveBeenCalledTimes(1);
 });
@@ -95,6 +96,17 @@ it("drops only the stopped turn's held work and preserves earlier ready work", (
   turnRegistry.settle("stopped");
 });
 
+it("keeps earlier ready work when a failed turn has no turn id", () => {
+  const { store, from, target, bus } = setup();
+  store.setActivity(target.id, "working");
+  const ready = queueDelegation(bus, from, { toBotId: target.id, message: "ready", depth: 0 }, 1);
+  drainDelegations(bus, bus, from.threadId, () => {});
+  const held = queueDelegation(bus, from, { toBotId: target.id, message: "held", depth: 0 }, 1);
+  discardDelegations(bus, from.threadId, from.id);
+  expect(findDelegationReceipt(ready.id!)?.state).toBe("ready");
+  expect(findDelegationReceipt(held.id!)?.state).toBe("dropped");
+});
+
 it("terminalizes running work on restart and repairs publication without waking", async () => {
   const { from, target, bus, wakeSender } = setup();
   const queued = queueDelegation(bus, from, { toBotId: target.id, message: "work", depth: 0 }, 1);
@@ -110,12 +122,40 @@ it("terminalizes running work on restart and repairs publication without waking"
   expect(bus.store.messagesFor(from.threadId)).toHaveLength(before);
 });
 
+it("releases a reply handed to a room turn after a restart", () => {
+  const { store, from, target, bus } = setup();
+  const room = store.createGroup("Room", [from.id, target.id]);
+  const mailKey = `room-task:reply:${room.threadId}`;
+  const row = store.appendMessage(room.threadId, { role: "bot", kind: "text", text: "Room reply", from: { botId: target.id, name: target.name, color: target.color }, comm: { groupId: room.id, withBotId: target.id, withName: target.name, withColor: target.color, peer: "reply", taskId: "room-task", mailKey, state: "done" } });
+  handMail(store, room.threadId, "room-task", "crashed", "request");
+  expect(mailForTurn(store, room.threadId)).toEqual([]);
+  _loadPending();
+  discardOrphanedDelegations(bus);
+  expect(mailForTurn(store, room.threadId).map((part) => part.id)).toEqual([row.id]);
+});
+
+it("keeps a delegated reply when the receipt file cannot be written", async () => {
+  const { store, from, target, bus } = setup();
+  const queued = queueDelegation(bus, from, { toBotId: target.id, message: "work", depth: 0 }, 1);
+  drainDelegations(bus, bus, from.threadId, () => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const file = join(DATA_DIR, "delegation-receipts.json");
+  rmSync(file, { force: true });
+  mkdirSync(file);
+  expect(() => bindPeerTurn(target.threadId, "target-turn")).not.toThrow();
+  expect(() => finishDelegatedTurn(bus, { toBotId: target.id, taskId: queued.id, sourceThreadId: from.threadId, sourceBotId: from.id }, true, "Finished work")).not.toThrow();
+  expect(mailForTurn(store, from.threadId)[0].text).toContain("Finished work");
+  expect(error).toHaveBeenCalledWith("delegations: could not persist receipts", expect.anything());
+  error.mockRestore();
+});
+
 it("fails every open receipt targeting a deleted bot", () => {
   const { from, target, bus } = setup();
   const queued = queueDelegation(bus, from, { toBotId: target.id, message: "work", depth: 0 }, 1);
   discardDelegationsFrom(bus, target.id);
   expect(findDelegationReceipt(queued.id!)?.state).toBe("failed");
-  expect(findDelegationReceipt(queued.id!)?.result).toBe("no such bot");
+  expect(findDelegationReceipt(queued.id!)?.result).toBe(`error: delegation to ${target.id} failed — no such bot`);
 });
 
 it("retains an open receipt while pruning terminal receipts", () => {

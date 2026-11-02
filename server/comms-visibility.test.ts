@@ -4,104 +4,12 @@
 import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { getOrCreateChannel, mirrorExchange, mirrorOutcomeToRoom, postPeerReply, type CommsBus } from "./comms-visibility.ts";
+import { getOrCreateChannel, mirrorOutcomeToRoom, type CommsBus } from "./comms-visibility.ts";
 import { DATA_DIR } from "./config.ts";
-import { prepareModelContext } from "./context-compaction.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { Store, type BotRecord } from "./store.ts";
-import { countSessionToolRounds } from "./turn-context.ts";
 
 const selection = (): ModelSelection => ({ instanceId: "claude", model: "fake-model" });
-
-describe("postPeerReply", () => {
-  let store: Store;
-  let from: BotRecord;
-  let target: BotRecord;
-  let bus: CommsBus;
-
-  beforeEach(() => {
-    rmSync(DATA_DIR, { recursive: true, force: true });
-    store = new Store(selection);
-    from = store.patchBot(store.createBot().id, { name: "Atlas" })!;
-    target = store.patchBot(store.createBot().id, { name: "Helper" })!;
-    bus = { store, broadcast: () => {} };
-  });
-
-  it("shows the message and the reply under their chips in the asker's chat, in order", () => {
-    const channel = getOrCreateChannel(store, from, target);
-    mirrorExchange(bus, from, target, "Check the release.", channel);
-    const targetBefore = JSON.stringify(store.messagesFor(target.threadId));
-    const channelBefore = JSON.stringify(store.messagesFor(channel.threadId));
-
-    expect(postPeerReply(bus, from, target, "Release is green.", channel)).toBe(true);
-
-    const link = { groupId: channel.id, withBotId: target.id, withName: target.name, withColor: target.color };
-    expect(store.messagesFor(from.threadId).filter((message) => message.kind === "activity")).toMatchObject([
-      { kind: "activity", tool: { name: "Message to @Helper" }, comm: { ...link, peer: "message" }, text: "Check the release." },
-      { kind: "activity", tool: { name: "Reply from @Helper" }, comm: { ...link, peer: "reply" }, text: "Release is green." },
-    ]);
-    expect(store.messagesFor(from.threadId).some((message) => message.from)).toBe(false);
-    const received = store.messagesFor(target.threadId).at(-1)!;
-    expect(received.tool).toEqual({ name: "Message from @Atlas" });
-    expect(received.text).toBeUndefined();
-    expect(received.comm?.peer).toBe("from");
-    expect(JSON.stringify(store.messagesFor(target.threadId))).toBe(targetBefore);
-    expect(JSON.stringify(store.messagesFor(channel.threadId))).toBe(channelBefore);
-  });
-
-  it.each([["no text", " \n"], ["no channel", "Release is green."]])("posts no reply row with %s", (_, reply) => {
-    const channel = reply.trim() ? undefined : getOrCreateChannel(store, from, target);
-    mirrorExchange(bus, from, target, "Check the release.", channel);
-    const before = JSON.stringify(store.messagesFor(from.threadId));
-
-    expect(postPeerReply(bus, from, target, reply, channel)).toBe(false);
-
-    expect(JSON.stringify(store.messagesFor(from.threadId))).toBe(before);
-  });
-
-  it("keeps the asking bot's attribution on both rows in a room", () => {
-    const room = store.createGroup("Release", [from.id, target.id], false);
-    const channel = getOrCreateChannel(store, from, target);
-    mirrorExchange(bus, from, target, "Check the release.", channel, room.threadId);
-
-    expect(postPeerReply(bus, from, target, "Release is green.", channel, room.threadId)).toBe(true);
-
-    expect(store.messagesFor(room.threadId)).toMatchObject([
-      { tool: { name: "Message to @Helper" }, from: { botId: from.id }, comm: { peer: "message" }, text: "Check the release." },
-      { tool: { name: "Reply from @Helper" }, from: { botId: from.id }, comm: { peer: "reply" }, text: "Release is green." },
-    ]);
-    expect(store.messagesFor(from.threadId).some((message) => message.comm)).toBe(false);
-  });
-
-  it("leaves the pair channel as today when the ask comes from it", () => {
-    const channel = getOrCreateChannel(store, from, target);
-    mirrorExchange(bus, from, target, "Check the release.", channel, channel.threadId);
-
-    expect(postPeerReply(bus, from, target, "Release is green.", channel, channel.threadId)).toBe(false);
-
-    const chip = store.messagesFor(channel.threadId).find((message) => message.kind === "activity")!;
-    expect(chip.text).toBeUndefined();
-    expect(chip.comm?.peer).toBe("message");
-    expect(store.messagesFor(channel.threadId).filter((message) => message.kind === "activity")).toHaveLength(1);
-  });
-
-  it("keeps both bodies out of the model's replay and the tool-round count", async () => {
-    const channel = getOrCreateChannel(store, from, target);
-    mirrorExchange(bus, from, target, "Check the zebra release.", channel);
-    postPeerReply(bus, from, target, "The okapi build is green.", channel);
-    store.appendMessage(from.threadId, { role: "bot", kind: "text", text: "Helper says it is fine." });
-    const messages = store.messagesFor(from.threadId);
-
-    const prepared = await prepareModelContext({ messages, contextWindow: 200_000, taskRecordText: "" });
-
-    expect(prepared.status).toBe("ready");
-    const replay = JSON.stringify(prepared);
-    expect(replay).toContain("Helper says it is fine.");
-    expect(replay).not.toContain("zebra");
-    expect(replay).not.toContain("okapi");
-    expect(countSessionToolRounds(messages)).toBe(0);
-  });
-});
 
 describe("getOrCreateChannel", () => {
   let store: Store;

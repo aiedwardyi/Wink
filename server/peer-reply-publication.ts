@@ -72,6 +72,7 @@ export function wakeForPeerReply(bus: CommsBus, receipt: DelegationReceipt): voi
   const home = receipt.publish?.find((destination) => destination.threadId === receipt.sourceThreadId && destination.row?.comm?.peer === "reply");
   if (!home || !bus.store.taskByThread(sender.id, home.threadId) || bus.store.groupByThread(home.threadId)) return;
   const row = bus.store.messagesFor(home.threadId).find((row) => row.comm?.mailKey === home.mailKey);
+  if (!row && home.row?.comm?.wake) bus.replyUnwoken?.(sender.id, "reply post failed");
   if (!row || row.comm?.read) return;
   registerReplyWake(row);
   bus.wakeSender(sender.id, home.threadId);

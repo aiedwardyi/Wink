@@ -307,7 +307,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       let currentTarget = target;
       const queueAsk = (approved = false) => {
         const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved });
-        if (queued.id && deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, toBotId, deps.runDelegatedTurn);
+        if (queued.id && deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
         return json(res, 200, { botName: currentTarget.name, taskId: queued.id, shown: false, text: `@${currentTarget.name} is working on it. Task id: ${queued.id}. Collect the reply with wait_delegation; do not ask again.` });
       };
       if (target.busy) return queueAsk();
@@ -348,7 +348,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const channel = getOrCreateChannel(store, currentFrom, currentTarget);
       mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
       const prefixed = peerMessagePrompt(currentFrom, message, "ask");
-      const taskId = acceptPeerTask(commsBus, currentFrom, currentTarget, fromThreadId, "ask", "dispatching");
+      const taskId = acceptPeerTask(currentFrom, currentTarget, fromThreadId, "ask", "dispatching");
       const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId, {
         sender: currentFrom,
         channel,
