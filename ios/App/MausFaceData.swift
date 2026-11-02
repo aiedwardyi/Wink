@@ -1,7 +1,5 @@
-// Generated from the Blob Studio export of the mascot (MausMascotios/MausAvatar.tsx;
-// the same tables ship in src/components/CursorAvatar.tsx) — do not hand-edit. 25 expressions × 2 eye rings × 48 points, a mouth per expression,
-// and per-state pools, cadences, blink rhythm and body motion. Same numbers as
-// the desktop, which is the whole point.
+// Generated from the Blob Studio mascot export; do not hand-edit.
+// 25 expressions, eye rings, mouths, state pools, cadences and body motion.
 import CoreGraphics
 
 enum MausState: String, CaseIterable {
