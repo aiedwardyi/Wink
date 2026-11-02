@@ -26,13 +26,6 @@ import {
 } from "../../shared/bot-avatar";
 import { OrbitRingFrame, workingRingStyle } from "./OrbitRing";
 
-/** Legacy face-placement knobs — accepted, ignored. */
-export const FACE_X = 80;
-export const FACE_Y = 102;
-export const FACE_SCALE = 0.47;
-export const EYE_SCALE = 1.12;
-export const MOUTH_WEIGHT = 11;
-
 export type MausAvatarHandle = {
   blink: () => void;
   spin: (durationMs?: number) => void;

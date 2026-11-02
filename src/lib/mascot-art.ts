@@ -76,7 +76,3 @@ export function mascotLayerMarkup(svg: string): string {
     + `<span class="mascot-blink">${open}${eyes}</svg></span></span>`
     + (top ? `${open.replace("<svg", '<svg class="mascot-top"')}${top}</svg>` : "");
 }
-
-export function mascotDataUrl(style: MascotStyle, color: string): string {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(mascotSvgMarkup(style, color))}`;
-}

@@ -1,50 +1,50 @@
-import { CURSOR_STATES, type CursorState } from "@/components/CursorAvatar";
 import type { MausColor as ServerMausColor } from "../../server/store";
 
-/** The mascot's behaviour vocabulary — CursorAvatar's 39 states, under the
- * app's historical names. */
+const CURSOR_STATES = [
+  "sleeping",
+  "waking",
+  "idle",
+  "listening",
+  "thinking",
+  "searching",
+  "working",
+  "excited",
+  "surprised",
+  "suspicious",
+  "angry",
+  "drowsy",
+  "happy",
+  "curious",
+  "confused",
+  "bored",
+  "proud",
+  "shy",
+  "sad",
+  "laughing",
+  "scared",
+  "playful",
+  "celebrate",
+  "orbit",
+  "radar",
+  "progress",
+  "spawning",
+  "humming",
+  "loading",
+  "dictating",
+  "sending",
+  "receiving",
+  "uploading",
+  "writing",
+  "notifying",
+  "alerting",
+  "bouncing",
+  "dragging",
+  "powering-down",
+] as const;
+
+type CursorState = (typeof CURSOR_STATES)[number];
 export type MausState = CursorState;
 export const MAUS_STATES = CURSOR_STATES;
-
-/** CursorAvatar ships French group labels; the app shows these instead. The
- * memberships mirror its STATE_GROUPS exactly. */
-export const STATE_GROUPS = {
-  Lifecycle: ["sleeping", "waking", "idle", "listening", "thinking", "searching", "working"],
-  Reactions: [
-    "excited",
-    "surprised",
-    "suspicious",
-    "angry",
-    "drowsy",
-    "happy",
-    "curious",
-    "confused",
-    "bored",
-    "proud",
-    "shy",
-    "sad",
-    "laughing",
-    "scared",
-    "playful",
-    "celebrate",
-  ],
-  "Agent morphs": ["orbit", "radar", "progress"],
-  "Product cycle": [
-    "spawning",
-    "humming",
-    "loading",
-    "dictating",
-    "writing",
-    "sending",
-    "receiving",
-    "uploading",
-    "notifying",
-    "alerting",
-    "dragging",
-    "bouncing",
-    "powering-down",
-  ],
-} satisfies Record<string, MausState[]>;
 
 export const MAUS_COLOR_NAMES = [
   "green",
@@ -145,32 +145,6 @@ export function normalizeState(value: string | null | undefined): MausState | nu
   if (KNOWN_STATES.has(value)) return value as MausState;
   return LEGACY_STATES[value] ?? null;
 }
-
-/**
- * The states worth offering in the appearance picker.
- *
- * The engine carries 39, but many are transient beats the app drives itself
- * (`sending`, `alerting`, `powering-down`) and make no sense as a bot's resting
- * face. More importantly, states share resting faces: `happy`, `excited` and
- * `playful` all rest on expression 2, and `curious`, `surprised` and `scared`
- * all rest on 3 — they differ in which faces they *drift* to, which a static
- * swatch cannot show. Offering them all gave 15 buttons showing 8 pictures.
- *
- * Across all 39 states there are only 11 distinct resting faces, so this is one
- * state per face, chosen for the clearest name. Every swatch looks different.
- */
-export const PICKABLE_STATES: MausState[] = [
-  "idle", // expression 0
-  "happy", // 2
-  "curious", // 3
-  "drowsy", // 4
-  "working", // 7
-  "thinking", // 8
-  "listening", // 10
-  "sleeping", // 13
-  "suspicious", // 14
-  "proud", // 15
-];
 
 type MascotMessage = {
   kind: string;

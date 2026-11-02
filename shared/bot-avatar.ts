@@ -23,16 +23,6 @@ export const MASCOT_STYLE_ASSETS = {
   pill: "pill.svg",
 } satisfies Record<MascotStyle, string>;
 
-export const MASCOT_STYLE_LABELS = {
-  peach: "Peach blob",
-  teal: "Teal friend",
-  lavender: "Lavender kitty",
-  coral: "Coral bean",
-  squircle: "Soft squircle",
-  circle: "Soft circle",
-  pill: "Soft pill",
-} satisfies Record<MascotStyle, string>;
-
 export const BOT_AVATAR_IDS = [
   "icon-01",
   "icon-02",

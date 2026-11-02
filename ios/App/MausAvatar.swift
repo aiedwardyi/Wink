@@ -1,19 +1,4 @@
-// The bot's face — the same silhouette the desktop draws.
-//
-// The desktop renders Blob Studio's "cursor" mascot from an SVG path
-// (`src/components/CursorAvatar.tsx`, `SHAPE.body`). The phone used to draw a
-// rounded blob instead, which meant a bot you know by its shape looked like a
-// different bot on the two screens. This is that path, verbatim.
-//
-// Verbatim is the point: the alternative is redrawing it by eye, which starts
-// close and drifts every time either side is touched. Copied here rather than
-// generated at build time because the phone app has no build step that could
-// read the web source, and a 4KB string is a cheap thing to keep in sync by
-// hand — it has changed once in the life of this project.
-//
-// What is NOT copied: the desktop's 25 expressions, blinking, gaze tracking
-// and motion. A 28-point avatar in a list is a silhouette and two eyes; the
-// animation engine is 1,600 lines and would show up as nothing at this size.
+// Legacy silhouette copied from the Blob Studio export and kept locally for iOS.
 import SwiftUI
 
 /// Cute static mascot pack. Duplicated from CompanionCore so the widget

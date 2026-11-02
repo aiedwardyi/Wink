@@ -51,7 +51,6 @@ const stylesCss = readFileSync(join(here, "../styles.css"), "utf8");
 
 describe("cute mascot renderer", () => {
   it("does not wrap the Cursor arrow-head path for default bot avatars", () => {
-    expect(sources["Avatar.tsx"]).not.toContain("CursorAvatar");
     expect(sources["Avatar.tsx"]).toContain("mascotSvgMarkup");
     expect(sources["Avatar.tsx"]).toContain("mascotStyle");
     expect(sources["Avatar.tsx"]).toContain("dangerouslySetInnerHTML");
@@ -64,7 +63,6 @@ describe("cute mascot renderer", () => {
     expect(sources["BotProfileAvatarCard.tsx"]).toContain("resolveBotAvatarChoice");
     expect(sources["BotProfileAvatarCard.tsx"]).toContain("max-h-[280px]");
     expect(sources["BotProfileAvatarCard.tsx"]).toContain("scrollIntoView");
-    expect(sources["BotProfileAvatarCard.tsx"]).not.toContain("PICKABLE_STATES");
     expect(sources["BotProfileAvatarCard.tsx"]).toContain('color === "white" ? "border-hairline/70" : "border-transparent"');
   });
 
