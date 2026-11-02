@@ -53,9 +53,18 @@ describe("Phone setup steps", () => {
 
   it("sends a phone to the PC for Tailscale sign-in", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("location", { hostname: "pc.fixture.ts.net" });
     await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
     expect(button("Sign In")).toBeUndefined();
     expect(host.textContent).toContain("Sign in on the PC itself.");
+  });
+
+  it("keeps Sign In in a narrow desktop window", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("ogb", { openExternal: vi.fn() });
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    expect(button("Sign In")).toBeDefined();
+    expect(host.textContent).not.toContain("Sign in on the PC itself.");
   });
 
   it("reopens Sign In after the browser closes before completion", async () => {

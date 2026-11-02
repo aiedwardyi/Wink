@@ -36,6 +36,7 @@ const help = "mt-1 break-keep text-[12px] leading-relaxed text-ink-secondary";
 export function ConnectDevices() {
   const { t } = useI18n();
   const phone = isPhone();
+  const onThisPc = Boolean(window.ogb) || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   const deviceWindow = window.ogb?.deviceWindow;
   const [status, setStatus] = useState<RemotePhoneLink | null>(null);
   const [tab, setTab] = useState<"phone" | "pc">("phone");
@@ -147,7 +148,7 @@ export function ConnectDevices() {
           {signedIn && account && <p className={help}>{t("settings.devices.signedInAs", { account })}</p>}
           {installed && !signedIn && <>
             {setup.needsApproval ? <p className={help}>{t("settings.devices.needsApproval")}</p>
-              : phone ? <p className={help}>{t("settings.devices.signInOnPc")}</p>
+              : !onThisPc ? <p className={help}>{t("settings.devices.signInOnPc")}</p>
               : setup.loginOpened ? <>
                 <p className={help}>{t("settings.devices.finishSignIn")}</p>
                 <button type="button" disabled={loginPending} onClick={() => void signIn()} className="mt-1 text-[12px] text-ink-secondary underline hover:text-ink">{t("settings.devices.signIn")}</button>
