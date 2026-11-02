@@ -17,11 +17,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'feat/devices-setup'
     runs-on: windows-latest
     timeout-minutes: 10
-    env:
-      WINK_DEVICE_PROOF_ROOT: ${{ runner.temp }}/wink-SAFE-B
-      WINK_PLAYWRIGHT: ${{ runner.temp }}/wink-SAFE-B/playwright/node_modules/playwright
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/wink-SAFE-B/browsers
-      OUT: ${{ runner.temp }}/wink-SAFE-B/evidence
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,6 +29,12 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Set proof paths
+        run: |
+          "WINK_DEVICE_PROOF_ROOT=$env:RUNNER_TEMP/wink-SAFE-B" >> $env:GITHUB_ENV
+          "WINK_PLAYWRIGHT=$env:RUNNER_TEMP/wink-SAFE-B/playwright/node_modules/playwright" >> $env:GITHUB_ENV
+          "PLAYWRIGHT_BROWSERS_PATH=$env:RUNNER_TEMP/wink-SAFE-B/browsers" >> $env:GITHUB_ENV
+          "OUT=$env:RUNNER_TEMP/wink-SAFE-B/evidence" >> $env:GITHUB_ENV
       - name: Prepare the isolated browser
         run: |
           npm install --prefix "$env:WINK_DEVICE_PROOF_ROOT/playwright" playwright@1.63.0 --no-audit --no-fund
