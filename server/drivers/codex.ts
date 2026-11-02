@@ -405,7 +405,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           const result = await request("turn/steer", {
             threadId: nativeThreadId,
             expectedTurnId: nativeTurnId,
-            input: [{ type: "text", text: `${STEER_NOTE}\n\n${text}` }],
+            input: [{ type: "text", text: state.lastText ? `${STEER_NOTE}\n\n${text}` : text }],
           });
           return result?.turnId === nativeTurnId;
         } catch {
@@ -576,7 +576,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const item = p.item ?? {};
             if (item.type === "agentMessage") {
               if (item.text?.trim()) {
-                state.lastText = item.text;
+                if (item.phase !== "commentary") state.lastText = item.text;
                 if (!state.sawStreamDelta) {
                   emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: item.text });
                 }
