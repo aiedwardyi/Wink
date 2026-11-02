@@ -34,6 +34,12 @@ export function errorReportDsn(readBaked) {
   return "";
 }
 
+/** GlitchTip host for the owner's Team page link; origin only, never the key. */
+export function crashReportsEnv(dsn) {
+  const endpoint = errorReportEndpoint(dsn);
+  return endpoint ? { WINK_CRASH_REPORTS: endpoint.origin } : {};
+}
+
 export function createErrorReports({ userData, dsn, build, platform, arch, now = Date.now, uptime = process.uptime }) {
   const pref = path.join(userData, "error-report-consent.json");
   const queue = path.join(userData, "error-report-queue.json");

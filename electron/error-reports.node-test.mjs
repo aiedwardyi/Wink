@@ -206,7 +206,7 @@ test("own startup kills skip SERVER_GONE but child crashes still report", async 
     proc.kill = () => proc.emit("exit", 1);
     proc.pid = 123;
     const serverToken = "token";
-    const context = { path, process: { resourcesPath: "test", env: {} }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
+    const context = { path, process: { resourcesPath: "test", env: {} }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
     const start = runInNewContext(`${body}\nstartServerOn`, context);
     await start(9311);
     if (outcome === "ready") proc.emit("exit", 1);
@@ -234,7 +234,15 @@ test("missing, malformed and non-object baked config cannot stop startup", async
   const reports = await import("./error-reports.mjs");
   for (const read of [() => { throw new Error("ENOENT"); }, () => JSON.parse("{"), () => null, () => ({}), () => ({ dsn: 4 })]) assert.equal(reports.errorReportDsn(read), "");
   assert.equal(reports.errorReportDsn(() => ({ dsn: "https://public@reports.example/1" })), "https://public@reports.example/1");
-  assert.match(source("./main.mjs"), /dsn: errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
+  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
+});
+
+test("the server learns the crash host but never the key", async () => {
+  const { crashReportsEnv } = await import("./error-reports.mjs");
+  assert.deepEqual(crashReportsEnv("https://public@reports.example/1"), { WINK_CRASH_REPORTS: "https://reports.example" });
+  assert.deepEqual(crashReportsEnv(""), {});
+  assert.deepEqual(crashReportsEnv("http://public@reports.example/1"), {});
+  assert.match(source("./main.mjs"), /\.\.\.crashReportsEnv\(ERROR_REPORT_DSN\),/);
 });
 
 test("README inventories opt-in destination, cap, IP visibility and all local files", () => {

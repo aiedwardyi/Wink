@@ -92,6 +92,7 @@ describe("Team settings", () => {
       if (path === "/api/remote-link") return Response.json({ url: null });
       if (path === "/api/key-uses") return Response.json({ uses: {} });
       if (path === "/api/team") return Response.json(teamBody, { status: teamStatus });
+      if (path === "/api/team/today") return Response.json({ snags: 2, bugs: 1, crashes: "https://crash.example" });
       return Response.json({ error: "no route" }, { status: 404 });
     }));
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -135,6 +136,18 @@ describe("Team settings", () => {
     expect(host.textContent).toContain("online");
   });
 
+  it("shows today's report counts for the owner", async () => {
+    await render();
+    await vi.waitFor(() => expect(labels()).toContain("Team"));
+    const team = [...host.querySelectorAll("nav button")].find((button) => button.getAttribute("aria-label") === "Team");
+    await act(async () => team!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await vi.waitFor(() => expect(host.textContent).toContain("Bot Snags"));
+    const cells = [...host.querySelectorAll("section > div > div")].map((cell) => cell.textContent);
+    expect(cells).toEqual(["OpenCrash Reports", "2Bot Snags", "1Bug Reports"]);
+    expect(host.querySelector("a[href='https://crash.example']")?.getAttribute("target")).toBe("_blank");
+    expect(host.querySelector("[title='Since midnight KST']")?.textContent).toBe("Today");
+  });
+
   it("shows an empty team when the owner has no teammates", async () => {
     teamBody = peopleStats([]);
     await render();
@@ -161,6 +174,8 @@ describe("Team settings", () => {
     await render();
     await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some((call) => call[0] === "/api/team")).toBe(true));
     expect(labels()).not.toContain("Team");
+    expect(vi.mocked(fetch).mock.calls.some((call) => call[0] === "/api/team/today")).toBe(false);
+    expect(host.textContent).not.toContain("Bot Snags");
   });
 
   it("hides Team with no Google session", async () => {
