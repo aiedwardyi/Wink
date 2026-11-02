@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { isTaskRecoveryVisible } from "@/lib/task-recovery";
-import { turnPresenceWaiting, visibleSteerEntries } from "@/lib/send-accept";
+import { turnPresenceWaiting } from "@/lib/send-accept";
 import {
   autoSpeaks,
   buzzOnReply,
@@ -1660,14 +1660,15 @@ describe("accepted send chrome", () => {
     expect(bot.busy).toBe(true);
   });
 
-  it("surfaces Sends-next for a busy follow-up before the POST queueId arrives", () => {
+  it("accepts a busy follow-up before the POST queueId arrives", () => {
     const busyBot = { ...idleBot, busy: true, activity: "working" as const };
     const next = reducer(
       { ...initialState, bots: [busyBot] },
       { type: "send", botId: busyBot.id, text: "and then", sendId: "s2" },
     );
-    expect(visibleSteerEntries(next.pendingQueued, busyBot.threadId, next.acceptedSends[busyBot.threadId])).toEqual([
-      { queueId: "s2", text: "and then" },
+    expect(next.pendingQueued[busyBot.threadId]).toBeUndefined();
+    expect(next.acceptedSends[busyBot.threadId]).toEqual([
+      { sendId: "s2", kind: "sends-next", text: "and then", at: expect.any(Number), after: undefined },
     ]);
     expect(
       turnPresenceWaiting({
@@ -1751,19 +1752,20 @@ describe("accepted send chrome", () => {
     expect(hydrated.bots[0]?.busy).toBeFalsy();
   });
 
-  it("keeps a Sends-next chip through Stop", () => {
+  it("keeps an accepted follow-up through Stop", () => {
     const busyBot = { ...idleBot, busy: true, activity: "working" as const };
     const queued = reducer(
       { ...initialState, bots: [busyBot] },
       { type: "send", botId: busyBot.id, text: "and then", sendId: "s2" },
     );
     const stopped = reducer(queued, { type: "interrupt", botId: busyBot.id });
-    expect(visibleSteerEntries(stopped.pendingQueued, busyBot.threadId, stopped.acceptedSends[busyBot.threadId])).toEqual([
-      { queueId: "s2", text: "and then" },
+    expect(stopped.pendingQueued[busyBot.threadId]).toBeUndefined();
+    expect(stopped.acceptedSends[busyBot.threadId]).toEqual([
+      { sendId: "s2", kind: "sends-next", text: "and then", at: expect.any(Number), after: undefined },
     ]);
   });
 
-  it("forgets a cancelled Sends-next chip", () => {
+  it("forgets a rejected follow-up", () => {
     const busyBot = { ...idleBot, busy: true, activity: "working" as const };
     const queued = reducer(
       { ...initialState, bots: [busyBot] },
@@ -1775,9 +1777,8 @@ describe("accepted send chrome", () => {
       threadId: busyBot.threadId,
       sendId: "s2",
     });
-    expect(visibleSteerEntries(rejected.pendingQueued, busyBot.threadId, rejected.acceptedSends[busyBot.threadId])).toEqual(
-      [],
-    );
+    expect(rejected.pendingQueued[busyBot.threadId]).toBeUndefined();
+    expect(rejected.acceptedSends[busyBot.threadId]).toBeUndefined();
   });
 
   it("clears optimistic Thinking and busy on Stop", () => {

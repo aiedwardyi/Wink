@@ -9,8 +9,6 @@ import {
 
 export const TASK_RECOVERY_FLUSH_REASONS = ["crash", "shutdown", "stop"] as const;
 
-export type TaskRecoveryFlushReason = (typeof TASK_RECOVERY_FLUSH_REASONS)[number];
-
 export type TaskRecoveryDismissal = {
   updatedAt: number;
   flushReason: string;

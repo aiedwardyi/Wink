@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildNotificationOptions,
   buildTerminalNotification,
-  canClaimGetNotified,
-  desktopNotificationHint,
   requestNotificationPermission,
   showNotification,
   terminalAttentionCopy,
@@ -203,17 +201,6 @@ describe("desktop notifications", () => {
       terminalSessionId: "session-1",
     })));
     expect(notices).toHaveLength(0);
-  });
-});
-
-describe("desktop notification copy", () => {
-  it("keeps the friends toggle line only when a toast can actually fire", () => {
-    expect(canClaimGetNotified({ toastsAvailable: true, html5: false })).toBe(true);
-    expect(canClaimGetNotified({ toastsAvailable: false, html5: true })).toBe(false);
-    expect(canClaimGetNotified({ html5: true })).toBe(true);
-    expect(canClaimGetNotified({ html5: false })).toBe(false);
-    expect(desktopNotificationHint(true)).toBe("Get notified when this bot finishes or needs input");
-    expect(desktopNotificationHint(false)).not.toMatch(/Get notified/i);
   });
 });
 

@@ -2,7 +2,6 @@
 // must not wait for POST or the SSE busy patch: startTurn still runs
 // prepareModelContext on the request path before the server flips busy.
 import { showWorkingDots } from "./turn-tail";
-import { pendingSteerEntries } from "./composer-busy";
 import type { Message } from "@/state/store";
 
 export type AcceptedSendKind = "thinking" | "sends-next";
@@ -178,16 +177,4 @@ export function shouldDropQueueChip(
   result: { cancelled?: boolean; running?: boolean } | null | undefined,
 ): boolean {
   return result?.cancelled === true && result.running !== true;
-}
-
-export function visibleSteerEntries(
-  pending: Record<string, Array<{ queueId: string; text: string }>> | undefined,
-  threadId: string | undefined,
-  accepted?: readonly AcceptedSend[],
-): Array<{ queueId: string; text: string }> {
-  const confirmed = pendingSteerEntries(pending, threadId);
-  const optimistic = (accepted ?? [])
-    .filter((entry) => entry.kind === "sends-next" && !confirmed.some((item) => item.queueId === entry.sendId))
-    .map((entry) => ({ queueId: entry.sendId, text: entry.text }));
-  return [...confirmed, ...optimistic];
 }

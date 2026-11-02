@@ -101,14 +101,6 @@ export function snapSidebarDrag(drag: SidebarLayout, deltaX: number): SidebarLay
   return { collapsed: false, width: clampSidebarWidth(proposed) };
 }
 
-export function stepSidebarWidth(current: number, key: string): number | null {
-  if (key === "Home") return SIDEBAR_MIN_WIDTH;
-  if (key === "End") return SIDEBAR_MAX_WIDTH;
-  const delta = key === "ArrowRight" ? SIDEBAR_WIDTH_STEP : key === "ArrowLeft" ? -SIDEBAR_WIDTH_STEP : 0;
-  if (delta === 0) return null;
-  return clampSidebarWidth(current + delta);
-}
-
 export function stepSidebarLayout(layout: SidebarLayout, key: string): SidebarLayout | null {
   let next: SidebarLayout;
   if (key === "Home") next = { collapsed: true, width: layout.width };
@@ -308,27 +300,5 @@ export function saveSidebarOrder(
     );
   } catch {
     // The in-memory React state still makes ordering useful this session.
-  }
-}
-
-export function loadSectionOrder(storage?: Pick<Storage, "getItem"> | null): string[] {
-  try {
-    const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;
-    return parseStringList(target?.getItem(SIDEBAR_SECTION_ORDER_KEY) ?? null);
-  } catch {
-    return [];
-  }
-}
-
-export function saveSectionOrder(
-  ids: string[],
-  storage?: Pick<Storage, "setItem"> | null,
-): void {
-  try {
-    const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;
-    const safe = [...new Set(ids.filter((id) => id.length > 0))].slice(0, 100);
-    target?.setItem(SIDEBAR_SECTION_ORDER_KEY, JSON.stringify(safe));
-  } catch {
-    // The in-memory React state still makes section order useful this session.
   }
 }

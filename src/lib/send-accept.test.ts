@@ -16,7 +16,6 @@ import {
   shouldDropQueueChip,
   splitQueuedSends,
   turnPresenceWaiting,
-  visibleSteerEntries,
   withAcceptedMessages,
 } from "./send-accept";
 
@@ -186,31 +185,6 @@ describe("accepted send bookkeeping", () => {
     expect(settleAcceptedSend(settled, "t1", "queue").t1).toEqual([
       { sendId: "think", kind: "thinking", text: "hi" },
     ]);
-  });
-});
-
-describe("visibleSteerEntries", () => {
-  it("surfaces an accepted follow-up as Sends-next before the POST queueId arrives", () => {
-    expect(
-      visibleSteerEntries(
-        { t1: [{ queueId: "q1", text: "confirmed" }] },
-        "t1",
-        [{ sendId: "s-new", kind: "sends-next", text: "soon" }],
-      ),
-    ).toEqual([
-      { queueId: "q1", text: "confirmed" },
-      { queueId: "s-new", text: "soon" },
-    ]);
-  });
-
-  it("does not duplicate a follow-up whose sendId already landed as a queueId", () => {
-    expect(
-      visibleSteerEntries(
-        { t1: [{ queueId: "s-new", text: "soon" }] },
-        "t1",
-        [{ sendId: "s-new", kind: "sends-next", text: "soon" }],
-      ),
-    ).toEqual([{ queueId: "s-new", text: "soon" }]);
   });
 });
 

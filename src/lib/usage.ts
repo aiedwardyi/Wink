@@ -70,15 +70,6 @@ export function usageDetail(u: TaskUsage): { key: MessageKey; vars: Record<strin
   return { key: "usage.detail.plain", vars };
 }
 
-/** The chip text: tokens, and cost when known. Empty string when nothing
- * has been spent — a fresh task shows no chip. */
-export function usageChip(u: TaskUsage): string {
-  if (u.turns === 0 && u.input + u.output === 0) return "";
-  const parts = [`${formatTokens(u.input + u.output)} tok`];
-  if (hasFiniteCost(u.costUsd)) parts.push(formatUsd(u.costUsd));
-  return parts.join(" · ");
-}
-
 /** How to caption a cost figure given how the engine is billed. */
 export function costCaption(billing: "metered" | "subscription" | undefined): string {
   if (billing === "subscription") return "equivalent — on your subscription, not billed";

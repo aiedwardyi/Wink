@@ -1,40 +1,9 @@
-// Split engines into Cloud (first-party catalog + Custom) and Local
-// (no catalog — inject a model). A missing `access` is Cloud so older
-// payloads stay in the top group. VibeCoder would join Local later.
-import type { InstanceInfo } from "@/state/store";
+// Featured engines and first-launch connection choices.
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
-import { showEngineRailZoo } from "./friends-chrome";
-
-export function isCustomOnly(instance: { access?: InstanceInfo["access"] } | undefined): boolean {
-  return instance?.access === "custom";
-}
-
-/** Featured engines as a visible icon list whenever more than one is present. */
-export function isEngineRailOpen(input: {
-  featuredCount: number;
-}): boolean {
-  return input.featuredCount > 1;
-}
-
-export function splitEngineRail<T>(instances: readonly T[]): {
-  subscription: T[];
-  custom: T[];
-} {
-  const subscription: T[] = [];
-  const custom: T[] = [];
-  for (const instance of instances) {
-    // SAFETY: the generic preserves the caller's row type; this check reads only driverKind.
-    if (isRetiredEngineKind((instance as { driverKind?: string }).driverKind)) continue;
-    if (isCustomOnly(instance as { access?: InstanceInfo["access"] })) custom.push(instance);
-    else subscription.push(instance);
-  }
-  return { subscription, custom };
-}
 
 // Friends featured rail — Claude, Codex, Grok, Antigravity, Meta Muse, matching
 // the DEFAULT_FLEET order so the rail leads with the same engine selection does.
 // Gemini API is not a rail engine: Gemini models live on Antigravity.
-// The local/custom zoo stays off this list (showEngineRailZoo can restore it).
 export const FRIENDS_DRIVER_ORDER = [
   "claudeAgent",
   "codex",
@@ -90,36 +59,6 @@ export function splitFriendsEngines<T>(instances: readonly T[]): {
     else if (!isRetiredEngineKind(row.driverKind)) rest.push(instance);
   }
   return { friends: orderFriendsEngines(friends), rest };
-}
-
-/** Chat-header engine rail: featured friends only, in Claude → Codex → Grok
- * → Antigravity → Meta Muse order. The zoo expander is a friends-chrome flag. */
-export function visibleFriendsRail<T extends { instanceId: string }>(
-  instances: readonly T[],
-  options: { showAll?: boolean; activeId?: string } = {},
-): { visible: T[]; hiddenCount: number } {
-  const { friends, rest } = splitFriendsEngines(instances);
-  if (!showEngineRailZoo()) {
-    return { visible: friends, hiddenCount: 0 };
-  }
-  const collapsible = friends.length > 0 && rest.length > 0;
-  if (options.showAll || !collapsible) {
-    return { visible: [...friends, ...rest], hiddenCount: 0 };
-  }
-  const visible = [...friends];
-  if (options.activeId && !visible.some((row) => row.instanceId === options.activeId)) {
-    const active = rest.find((row) => row.instanceId === options.activeId);
-    if (active) visible.push(active);
-  }
-  return { visible, hiddenCount: friends.length + rest.length - visible.length };
-}
-
-/** Quiet "Use a local model" on the selected engine when it already has
- * custom/local options. Never a rail of local engines. */
-export function showFriendsLocalZoo(input: {
-  customCount: number;
-}): boolean {
-  return input.customCount > 0;
 }
 
 // First launch with nothing connected: every shipped engine, in default-fleet
