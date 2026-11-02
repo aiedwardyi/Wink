@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { z } from "zod";
 import { useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 
@@ -17,6 +18,9 @@ export interface TeamView {
   days: string[];
   people: TeamPerson[];
 }
+
+export const teamTodaySchema = z.object({ snags: z.number(), bugs: z.number(), crashes: z.string().nullable(), crashCount: z.number().nullable() });
+export type TeamToday = z.infer<typeof teamTodaySchema>;
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -56,15 +60,21 @@ function weekHours(people: TeamPerson[]): number {
   return Math.round(sum * 10) / 10;
 }
 
-export function TeamSection({ stats }: { stats: TeamView }) {
+export function TeamSection({ stats, today }: { stats: TeamView; today?: TeamToday | null }) {
   const { t, locale } = useI18n();
   const people = stats.people;
   if (people.length === 0) {
-    return <p className="px-2 py-12 text-center text-[14px] text-ink-secondary">{t("team.empty")}</p>;
+    return (
+      <div className="flex flex-col gap-4">
+        {today && <TodayCounts today={today} />}
+        <p className="px-2 py-12 text-center text-[14px] text-ink-secondary">{t("team.empty")}</p>
+      </div>
+    );
   }
   const online = people.filter((person) => person.online).length;
   return (
     <div className="flex flex-col gap-4">
+      {today && <TodayCounts today={today} />}
       <p className="text-[14px] text-ink">{t("team.total", { hours: hoursText(weekHours(people)), online })}</p>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {people.map((person) => (
@@ -72,6 +82,36 @@ export function TeamSection({ stats }: { stats: TeamView }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function TodayCounts({ today }: { today: TeamToday }) {
+  const { t } = useI18n();
+  const cell = (big: ReactNode, label: string) => (
+    <div className="min-w-0">
+      <div className="flex h-7 items-end text-[22px] font-semibold leading-tight tracking-tight text-ink tabular-nums">{big}</div>
+      <div className="text-[12px] text-ink-secondary">{label}</div>
+    </div>
+  );
+  const crashes = today.crashes ? (
+    <a
+      href={today.crashes}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`${today.crashCount === null ? "text-[15px] font-medium " : ""}rounded-sm underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus`}
+    >
+      {today.crashCount === null ? t("teamToday.open") : today.crashCount}
+    </a>
+  ) : "-";
+  return (
+    <section className="@container/today flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-card p-4">
+      <div className="w-full shrink-0 text-[15px] font-medium text-ink @[34rem]/today:w-auto" title={t("teamToday.since")}>{t("teamToday.title")}</div>
+      <div className="flex min-w-0 flex-1 flex-wrap items-end justify-between gap-x-4 gap-y-2 @[34rem]/today:justify-end @[34rem]/today:gap-x-7">
+        {cell(crashes, t("teamToday.crashes"))}
+        {cell(String(today.snags), t("teamToday.snags"))}
+        {cell(String(today.bugs), t("teamToday.bugs"))}
+      </div>
+    </section>
   );
 }
 

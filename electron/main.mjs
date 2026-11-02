@@ -51,7 +51,7 @@ import {
   withToastCapability,
 } from "./desktop-notify.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
-import { createErrorReports, errorReportDsn } from "./error-reports.mjs";
+import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
 import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
 import { spoolTeamSnag } from "./team-snags.mjs";
 import { ERROR_SITES } from "../shared/error-report.mjs";
@@ -164,7 +164,8 @@ function deliverNotificationTarget(win, target = pendingNotificationTarget) {
   if (target === pendingNotificationTarget) pendingNotificationTarget = null;
 }
 let mainWindow = null;
-const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: errorReportDsn(() => require("./error-report-config.json")), build: require("../package.json").version, platform: process.platform, arch: process.arch });
+const ERROR_REPORT_DSN = errorReportDsn(() => require("./error-report-config.json"));
+const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
 registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
 installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
 onUpdaterFailure(errorReports.capture);
@@ -950,6 +951,7 @@ async function startServerOn(port) {
     // the boot migration has deleted
     ...workspaceCredentialEnv(childEnvCredentials),
     ...googleServerEnv(GOOGLE_CLIENT),
+    ...crashReportsEnv(ERROR_REPORT_DSN),
     ...(terminalBridgeAccess
       ? {
           OMB_TERMINAL_URL: terminalBridgeAccess.url,

@@ -294,6 +294,8 @@ import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-ow
 import { TeamReports } from "./team-reports.ts";
 import { hasReportEnrollment, sendTeamReport } from "./team-report-transport.ts";
 import { reportOwnerPost, startTeamReportOwner } from "./team-report-owner.ts";
+import { teamTodayRoute } from "./team-today.ts";
+import { crashCounter } from "./team-crashes.ts";
 import { createGoogleSync, GOOGLE_MIRROR_DIR, googleSyncRoute } from "./google-sync.ts";
 import type { PublicPhone } from "./phone-devices.ts";
 import { PhoneVisits } from "./phone-visits.ts";
@@ -411,6 +413,8 @@ if (sweepLegacyOpencodeKey() === "failed") {
 const cfg = loadConfig();
 // Before registry.load: a prewarmed engine child would inherit the token.
 const googleEnv = takeGoogleEnv(process.env);
+const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
+const crashCount = crashCounter({ origin: crashOrigin, project: process.env.WINK_CRASH_PROJECT?.trim() || null, key: () => (crashOrigin ? cfg.customKeys?.[new URL(crashOrigin).host] : null) });
 let profileSyncSettings: ProfileSyncSettings = loadProfileSyncSettings(DATA_DIR);
 const threadSyncGate = createThreadSyncV2Gate(DATA_DIR);
 if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
@@ -8251,6 +8255,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (method === "GET" && path === "/api/team") {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);
+      return json(res, reply.status, reply.body);
+    }
+    if (method === "GET" && path === "/api/team/today") {
+      const reply = await teamTodayRoute(DATA_DIR, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, crashOrigin, crashCount);
       return json(res, reply.status, reply.body);
     }
     if (method === "GET" && path === "/api/quorum") {
