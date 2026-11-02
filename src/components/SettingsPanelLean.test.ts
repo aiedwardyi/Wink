@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
-import type { Bot } from "@/state/store";
+import type { Bot, Task, TaskResumePacket } from "@/state/store";
 
 const { mockDispatch, mockConfig } = vi.hoisted(() => ({ mockDispatch: vi.fn(), mockConfig: { current: {} as { features?: { memoryNotes?: boolean } } } }));
 const chrome = vi.hoisted(() => ({ botDetailsAdvanced: false }));
@@ -81,6 +81,9 @@ const claudeBot = {
   modelSelection: { instanceId: "claude", model: "claude-3-5-sonnet", mode: "automatic" },
   messages: [],
 } as Bot;
+
+const memoryRow = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.includes("Memory File"))!;
 
 describe("SettingsPanel lean startup switch", () => {
   let host: HTMLDivElement;
@@ -210,13 +213,14 @@ describe("SettingsPanel memory and order", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads memory on mount with no click", async () => {
+  it("loads memory on mount and shows the editor on tap", async () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
     });
+    expect(host.textContent).toContain("1 line");
+    await act(async () => memoryRow(host).click());
     const box = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]');
     expect(box?.value).toBe("likes tea");
-    expect(host.querySelector('button[aria-expanded][class*="justify-between"]')).toBeNull();
   });
 
   it("shows Auto notes in the memory card, on by default, and saves it on the bot", async () => {
@@ -275,6 +279,98 @@ describe("SettingsPanel memory and order", () => {
   });
 });
 
+describe("SettingsPanel memory groups", () => {
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  const memory = [
+    "# Memory",
+    "- Ships to review-base, never main",
+    "- Uses Windows (noted 2026-10-26)",
+    "- Prefers pnpm (noted 2026-10-27)",
+    "- Short answers (noted 2026-10-28)",
+    "- Works late (noted 2026-10-29)",
+    "- Likes Servo (noted 2026-10-30)",
+    "- Lives in Seoul (noted 2026-11-01)",
+  ].join("\n");
+  const packet: TaskResumePacket = {
+    v: 1,
+    threadId: "t1",
+    botId: "bot-1",
+    goal: "Cut release 1.0.225",
+    plan: [{ step: "Build", status: "done" }, { step: "Tag", status: "active" }, { step: "Publish", status: "pending" }],
+    completed: [],
+    evidence: [],
+    artifacts: [],
+    blockers: [],
+    nextAction: "Tag the release",
+    updatedAt: 0,
+    updatedBy: "bot",
+    flushReason: "turn-end",
+    turnsAtWrite: 1,
+  };
+  const tasks: Task[] = [{ threadId: "t1", title: "Release", createdAt: 0, taskState: packet }];
+  const render = async (value: Bot) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: memory, truncated: false, topics: [] }))));
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: value })));
+    });
+  };
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    root.unmount();
+    host.remove();
+    localStorage.removeItem("omb-locale");
+    vi.unstubAllGlobals();
+  });
+
+  it("puts noted facts first, then the task and the memory file", async () => {
+    await render({ ...claudeBot, tasks });
+    const text = host.textContent ?? "";
+    const order = ["From Your Chats", "Lives in Seoul", "+1 more", "Auto Notes", "Current Task", "Memory File", "8 lines", "Project Folder"];
+    const at = order.map((label) => text.indexOf(label));
+    expect(at).not.toContain(-1);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(text).toContain("Prefers pnpm");
+    expect(text).not.toContain("Uses Windows");
+    expect(text).toContain("1 of 3 steps done");
+    expect(text).toContain("Next: Tag the release");
+    expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
+  });
+
+  it("opens the memory file on tap and closes it again", async () => {
+    await render(claudeBot);
+    const row = memoryRow(host);
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => row.click());
+    expect(host.querySelector<HTMLTextAreaElement>("textarea[aria-label=\"Memory\"]")?.value).toBe(memory);
+    expect(host.textContent).toContain("Loads at the start of every chat.");
+    await act(async () => row.click());
+    expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
+  });
+
+  it("hides the task when there is none", async () => {
+    await render(claudeBot);
+    const text = host.textContent ?? "";
+    expect(text).toContain("Memory File");
+    expect(text).not.toContain("Current Task");
+  });
+
+  it("labels the groups in Korean", async () => {
+    localStorage.setItem("omb-locale", "ko");
+    await render({ ...claudeBot, tasks });
+    const text = host.textContent ?? "";
+    for (const label of ["메모리 파일", "8줄", "+1개 더", "채팅에서", "현재 작업", "3단계 중 1단계 완료", "다음: Tag the release"]) {
+      expect(text).toContain(label);
+    }
+  });
+});
+
 interface Put {
   url: string;
   text: string;
@@ -296,6 +392,10 @@ describe("SettingsPanel memory autosave", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, id, threadId: `t-${id}` } })));
     });
+    // the memory file opens collapsed; a conflict opens it on its own
+    if (!host.querySelector("textarea[aria-label=\"Memory\"]")) {
+      await act(async () => memoryRow(host).click());
+    }
   };
   const box = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]')!;
   const status = () => host.querySelector('[role="status"]')?.textContent ?? "";
