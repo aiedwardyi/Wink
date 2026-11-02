@@ -576,7 +576,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const item = p.item ?? {};
             if (item.type === "agentMessage") {
               if (item.text?.trim()) {
-                if (item.phase === "final_answer") state.lastText = item.text;
+                if (item.phase !== "commentary") state.lastText = item.text;
                 if (!state.sawStreamDelta) {
                   emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: item.text });
                 }
