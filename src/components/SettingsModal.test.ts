@@ -273,6 +273,13 @@ describe("SettingsModal friends chrome", () => {
     expect(html).toContain("Checked ");
   });
 
+  it("keeps Start Fresh inside Advanced", () => {
+    Object.defineProperty(window, "ogb", { value: { startFresh: vi.fn() }, configurable: true, writable: true });
+    expect(markup("general")).not.toContain("Start Fresh");
+    expect(markup("general", true)).toContain("Start Fresh");
+    Object.defineProperty(window, "ogb", { value: undefined, configurable: true, writable: true });
+  });
+
   it("keeps Skin out of General and on its own Themes tab", () => {
     const general = markup("general");
     expect(general).not.toContain("Skin");

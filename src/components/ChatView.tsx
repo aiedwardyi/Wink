@@ -30,7 +30,8 @@ import {
   type InstanceInfo,
   type Message,
 } from "@/state/store";
-import { EngineSetup, setupErrorAction } from "./EngineSetup";
+import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
+import { SignedInCard, SignInCard } from "./SignInCard";
 import { BotAvatar } from "./Avatar";
 import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -39,7 +40,7 @@ import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { usePhoneHeaderNameFloor } from "@/lib/use-phone-header-name";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { showBotNewTaskControl, showComputerPanelChrome, showHeaderPencil } from "@/lib/friends-chrome";
+import { showBotNewTaskControl, showChatHeaderFind, showComputerPanelChrome, showHeaderPencil } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
@@ -216,6 +217,15 @@ export function ErrorRow({
   const now = useNow();
   if (folder) return <FolderFix folder={folder} botId={botId} onRetry={onRetry} />;
   const action = setupErrorAction(setupInstance, signIn);
+  if (setupInstance && !needsCli(setupInstance)) {
+    return (
+      <div className="flex max-w-[min(42rem,100%)] justify-start" title={message}>
+        {action === "cli"
+          ? <SignInCard instance={setupInstance} help={t("chat.signInRetryHelp")} onRetry={signIn ? onRetry : undefined} />
+          : <SignedInCard instance={setupInstance} onRetry={onRetry} />}
+      </div>
+    );
+  }
   const reset = usageLimit && !usageWait ? usageLimitReset(usageLimit.resetsAt, now) : null;
   const waiting = usageWait?.state === "waiting";
   const time = usageWait?.resumesAt == null ? "" : new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", ...(usageWait.weekly ? { weekday: "short" } : {}) }).format(usageWait.resumesAt);
@@ -1501,6 +1511,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
               <TerminalSquare size={18} />
             </button>
           )}
+          {showChatHeaderFind() && (
           <button
             onClick={() => find.toggleFind()}
             aria-label={t("chat.findInConversation")}
@@ -1513,6 +1524,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           >
             <Search size={18} />
           </button>
+          )}
           {showBotNewTaskControl() && <TaskPicker bot={bot} />}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && <CallButton bot={bot} />}
@@ -1828,6 +1840,9 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           selected one. ArrowUp-to-edit stays gated on busy because editing
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
+        {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
+          <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
+        )}
         <TaskRecoveryCard
           key={`${bot.id}:${activeTask?.threadId ?? bot.threadId}`}
           bot={bot}

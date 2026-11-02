@@ -1,5 +1,5 @@
-// GroupWizard merged members screen: checkbox picks, inline + rows with
-// engine-default models, live-count create, draft retention on failure.
+// GroupWizard one card: checkbox picks, inline + rows with engine-default
+// models, create, draft retention on failure.
 import "./ProfileFields.test-dom.ts";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -101,10 +101,7 @@ function jobInputs(host: HTMLElement): HTMLInputElement[] {
 }
 
 async function toMembers(host: HTMLElement) {
-  await act(async () => {
-    button(host, "Next").click();
-  });
-  expect(host.textContent).toContain("Add bots");
+  expect(host.querySelectorAll('button[role="checkbox"]').length).toBe(bots.filter((b) => !b.hidden).length);
 }
 
 async function flush() {
@@ -137,7 +134,7 @@ describe("GroupWizard members", () => {
       await toMembers(host);
       expect(pickRow(host, "Ada").getAttribute("aria-checked")).toBe("true");
       expect(pickRow(host, "Bo").getAttribute("aria-checked")).toBe("false");
-      expect(host.textContent).toContain("Create group · 1 bot");
+      expect(button(host, "Create").hasAttribute("disabled")).toBe(false);
     } finally {
       await act(async () => {
         root.unmount();
@@ -145,13 +142,17 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("advances from the prefilled name step to members", async () => {
+  it("shows the name, members and reply rule on one card", async () => {
     const { host, root } = await renderWizard();
     try {
-      // SAFETY: the wizard always renders the labelled name input on step 1.
+      // SAFETY: the wizard always renders the labelled name input.
       const name = host.querySelector('input[aria-label="Name your group"]') as HTMLInputElement;
-      expect(name.value).toBe("New group");
+      expect(name.value).toBe("");
+      expect(name.placeholder).toBe("Name your group");
       await toMembers(host);
+      expect(host.textContent).toContain("Everyone responds unless you @mention specific bots.");
+      expect(host.textContent).not.toContain("Step");
+      expect(host.textContent).not.toContain("Next");
     } finally {
       await act(async () => {
         root.unmount();
@@ -159,18 +160,13 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("goes back a step on Escape right after Enter on the name", async () => {
-    const { host, root } = await renderWizard();
-    const key = (target: Element | null, key: string) => target!.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+  it("creates on Enter in the name with a bot picked, named New group when blank", async () => {
+    const { host, root } = await renderWizard("b1");
     try {
       await act(async () => {
-        key(host.querySelector('input[aria-label="Name your group"]'), "Enter");
+        host.querySelector('input[aria-label="Name your group"]')!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       });
-      expect(host.textContent).toContain("Add bots");
-      await act(async () => {
-        key(document.activeElement, "Escape");
-      });
-      expect(host.querySelector('input[aria-label="Name your group"]')).not.toBeNull();
+      expect(findCreate()).toMatchObject({ name: "New group", memberIds: ["b1"] });
     } finally {
       await act(async () => {
         root.unmount();
@@ -189,7 +185,7 @@ describe("GroupWizard members", () => {
         pickRow(host, "Bo").click();
       });
       await act(async () => {
-        button(host, "Create group · 2 bots").click();
+        button(host, "Create").click();
       });
       const create = findCreate();
       expect(create).toMatchObject({
@@ -212,13 +208,13 @@ describe("GroupWizard members", () => {
     const { host, root } = await renderWizard();
     try {
       await toMembers(host);
-      expect(button(host, "Create group · 0 bots").hasAttribute("disabled")).toBe(true);
+      expect(button(host, "Create").hasAttribute("disabled")).toBe(true);
       await act(async () => {
         pickRow(host, "Ada").click();
       });
-      expect(button(host, "Create group · 1 bot").hasAttribute("disabled")).toBe(false);
+      expect(button(host, "Create").hasAttribute("disabled")).toBe(false);
       await act(async () => {
-        button(host, "Create group · 1 bot").click();
+        button(host, "Create").click();
       });
       expect(findCreate()).toMatchObject({ memberIds: ["b1"] });
     } finally {
@@ -273,7 +269,7 @@ describe("GroupWizard members", () => {
       });
       expect(dispatched).toContainEqual(expect.objectContaining({ type: "botAdded", activate: false, focusComposer: false }));
       await act(async () => {
-        button(host, "Create group · 2 bots").click();
+        button(host, "Create").click();
       });
       expect(findCreate()).toMatchObject({ memberIds: ["nb1", "nb2"] });
     } finally {
@@ -416,7 +412,7 @@ describe("GroupWizard members", () => {
         pickRow(host, "Ada").click();
       });
       await act(async () => {
-        button(host, "Create group · 1 bot").click();
+        button(host, "Create").click();
       });
       const create = findCreate();
       await act(async () => {
@@ -424,7 +420,7 @@ describe("GroupWizard members", () => {
       });
       expect(host.querySelector('[role="dialog"]')).not.toBeNull();
       expect(host.querySelector('[role="alert"]')).not.toBeNull();
-      expect(host.textContent).toContain("Add bots");
+      expect(pickRow(host, "Ada").getAttribute("aria-checked")).toBe("true");
     } finally {
       await act(async () => {
         root.unmount();

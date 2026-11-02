@@ -3,11 +3,11 @@
 // already in. Membership is the only thing this touches — the transcript
 // keeps every message a departing bot already sent.
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Plus } from "lucide-react";
 import { api, useStore, type Bot, type Group } from "@/state/store";
 import { newBotPayload, resolveWizardModel, type EnginePick } from "@/lib/group-wizard";
 import { BotPickerList } from "./BotPickerList";
 import { NewBotRow, type NewRow } from "./GroupWizard";
+import { groupResponseHint } from "@/lib/group-routing";
 import { nextMemberIds } from "@/lib/room-members";
 import { useI18n } from "@/lib/i18n";
 
@@ -190,10 +190,11 @@ export function ManageMembersPanel({
                 { key, job: "", instanceId: null, model: null, saving: false, error: null },
               ]);
             }}
-            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/50 px-3 py-2 text-[13px] font-medium text-accent hover:bg-accent/10"
+            className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
           >
-            <Plus size={15} /> {t("room.addBot")}
+            {t("groupWizard.newBot")}
           </button>
+          <p className="mt-3 text-[12.5px] text-ink-secondary">{groupResponseHint(group, bots.filter((bot) => group.memberIds.includes(bot.id)), t)}</p>
           {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
           {saveError && (
             <div role="alert" className="mt-2 text-[12px] text-danger">
@@ -213,9 +214,7 @@ export function ManageMembersPanel({
               disabled={!memberIds.length || rows.some((row) => row.saving)}
               className="flex-1 rounded-lg bg-accent py-2 text-[14px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
             >
-              {memberIds.length
-                ? t(memberIds.length === 1 ? "room.saveMembersOne" : "room.saveMembersMany", { count: memberIds.length })
-                : t("room.save")}
+              {t("room.save")}
             </button>
           </div>
         </div>

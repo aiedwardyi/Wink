@@ -66,7 +66,7 @@ describe("ManageMembersPanel Korean title", () => {
     expect(html).toContain("first-letter:uppercase");
     expect(html).toContain("Channel의 구성원 관리");
     expect(html).toContain("data-manage-create-bot");
-    expect(html).toContain("봇 추가 또는 새로 만들기");
+    expect(html).toContain("+ 새 봇");
     expect(html).not.toContain(">Manage Members<");
     expect(html).not.toContain("Manage members of Channel");
   });

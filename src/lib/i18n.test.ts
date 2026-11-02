@@ -562,8 +562,7 @@ describe("sidebar create group and bot/room chrome", () => {
   it("wires those phrases into Sidebar instead of hardcoded English", () => {
     expect(sidebar).not.toContain("NewRoomPanel");
     expect(sidebar).not.toContain('"chrome.createChannelOne"');
-    expect(groupWizard).toContain('t("groupWizard.createGroupOne")');
-    expect(groupWizard).toContain('t("groupWizard.createGroupMany", { count: picked.size })');
+    expect(groupWizard).toContain('t("groupWizard.create")');
     expect(groupWizard).toContain('t("groupWizard.addBot")');
     expect(groupWizard).toContain('t("groupWizard.addAnother")');
     expect(groupWizard).toContain('t("groupWizard.connectAi")');
@@ -886,12 +885,6 @@ describe("sidebar empty message search", () => {
     expect(translate("en", "search.noMatch", { query: "keep this query" })).toBe("No messages match “keep this query”");
     expect(translate("ko", "search.noMatch", { query: "keep this query" })).toContain("keep this query");
     expect(Object.hasOwn(catalogs.en, "keep this query")).toBe(false);
-    expect(en["room.saveMembersOne"]).toBe("Save · {count} bot");
-    expect(en["room.saveMembersMany"]).toBe("Save · {count} bots");
-    expect(ko["room.saveMembersOne"]).toBe("저장 · 봇 {count}개");
-    expect(ko["room.saveMembersMany"]).toBe("저장 · 봇 {count}개");
-    expect(ko["room.saveMembersOne"]).not.toMatch(/Save|\bbot\b/i);
-    expect(ko["room.saveMembersMany"]).not.toMatch(/Save|\bbots\b/i);
   });
 
   it("wires those phrases into SearchResults and Manage Members without t(query)", () => {
@@ -905,8 +898,6 @@ describe("sidebar empty message search", () => {
     expect(searchResults).not.toMatch(/\bt\(\s*(q|query)\s*\)/);
     expect(manageMembers).toContain('t("createBot.cancel")');
     expect(manageMembers).toContain('t("room.save")');
-    expect(manageMembers).toContain('"room.saveMembersOne"');
-    expect(manageMembers).toContain('"room.saveMembersMany"');
     expect(manageMembers).not.toMatch(/>Cancel</);
     expect(manageMembers).not.toMatch(/Save\{memberIds/);
   });
