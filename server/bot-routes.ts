@@ -20,8 +20,6 @@ import { applyEffortPick } from "./live-effort.ts";
 import type { createMemoryHealthCheck } from "./memory-health.ts";
 import { modelPickPatch } from "./pending-model.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
-import { fetchSkillFromSource } from "./skill-fetch.ts";
-import { installSkill, listSkills, readSkillFile, removeSkill, setSkillEnabled } from "./skills.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile } from "./workspace.ts";
@@ -340,21 +338,6 @@ export function createBotRoutes(deps: BotRouteDeps) {
         if (typeof body.composio !== "boolean") return json(res, 400, { error: "composio must be true or false" });
         patch.composio = body.composio;
       }
-      // per-bot gate on the app's built-in browser
-      if (body.browser !== undefined) {
-        if (typeof body.browser !== "boolean") return json(res, 400, { error: "browser must be true or false" });
-        patch.browser = body.browser;
-      }
-      // which named browser session this bot uses; null/"" = its own
-      if (body.browserProfile !== undefined) {
-        if (body.browserProfile === null || body.browserProfile === "") patch.browserProfile = undefined;
-        else if (
-          typeof body.browserProfile === "string" &&
-          (body.browserProfile === "guest" || (cfg.browserProfiles ?? []).some((profile) => profile.id === body.browserProfile))
-        ) {
-          patch.browserProfile = body.browserProfile;
-        } else return json(res, 400, { error: "browserProfile must name an existing browser profile" });
-      }
       if (body.shareTerminalWithChat !== undefined) {
         if (typeof body.shareTerminalWithChat !== "boolean") return json(res, 400, { error: "shareTerminalWithChat must be true or false" });
         patch.shareTerminalWithChat = body.shareTerminalWithChat;
@@ -479,39 +462,6 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (chiefChanges === null) return json(res, 404, { error: "no such bot" });
       if (normalizedSelection && body.holdForSwitch !== true) await applyEffortPick(store, registry, bot.id, normalizedSelection);
       return json(res, 200, { bot: wireBot(store.bot(bot.id) ?? bot) });
-    },
-    skills: async (res: ServerResponse, m: RegExpMatchArray) => {
-      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      return json(res, 200, { skills: listSkills(m[1]) });
-    },
-    addSkill: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
-      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      const parsed = z.object({ source: z.string().min(1).max(2000) }).safeParse(await readBody(req));
-      if (!parsed.success) return json(res, 400, { error: "source must be a GitHub URL or owner/repo" });
-      const fetched = await fetchSkillFromSource(parsed.data.source);
-      if ("error" in fetched) return json(res, 422, { error: fetched.error });
-      const results = fetched.skills.map((skill) => installSkill(m![1]!, skill.source, skill.files));
-      const installed = results.filter((entry): entry is Exclude<typeof entry, { error: string }> => !("error" in entry));
-      const errors = results.flatMap((entry) => ("error" in entry ? [entry.error] : []));
-      if (!installed.length) return json(res, 422, { error: errors.join("; ") || "nothing importable found" });
-      return json(res, 201, { installed, errors });
-    },
-    readSkill: async (res: ServerResponse, m: RegExpMatchArray) => {
-      const text = readSkillFile(m[1]!, m[2]!);
-      if (text === null) return json(res, 404, { error: "no such skill" });
-      return json(res, 200, { text });
-    },
-    patchSkill: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
-      const parsed = z.object({ enabled: z.boolean() }).safeParse(await readBody(req));
-      if (!parsed.success) return json(res, 400, { error: "enabled must be true or false" });
-      const result = setSkillEnabled(m[1]!, m[2]!, parsed.data.enabled);
-      if ("error" in result) return json(res, 404, { error: result.error });
-      return json(res, 200, { skill: result });
-    },
-    deleteSkill: async (res: ServerResponse, m: RegExpMatchArray) => {
-      const result = removeSkill(m[1]!, m[2]!);
-      if ("error" in result) return json(res, 404, { error: result.error });
-      return json(res, 200, { ok: true });
     },
     getMemory: async (res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });

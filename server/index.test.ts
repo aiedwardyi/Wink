@@ -17,6 +17,7 @@ import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { openSse } from "./testing/sse.ts";
 import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES } from "./attachments.ts";
 import { defaultComputerForNewBot } from "./local-routing.ts";
+import { readDecisions } from "./decision-log.ts";
 import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "./testing/harness-auth.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -3312,20 +3313,20 @@ describe("harness HTTP API", () => {
   it("keeps Teach a skill off by default and persists an explicit opt-in", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.features).toEqual({ browser: false, skillRecorder: false, showToolCalls: false, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
+    expect(before.body.features).toEqual({ skillRecorder: false, showToolCalls: false, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
 
     const saved = await api("PATCH", "/api/config", {
       features: { skillRecorder: true },
     });
     expect(saved.status).toBe(200);
-    expect(saved.body.features).toEqual({ browser: false, skillRecorder: true, showToolCalls: false, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
+    expect(saved.body.features).toEqual({ skillRecorder: true, showToolCalls: false, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
 
     const disk = JSON.parse(readFileSync(join(home, ".orbit", "config.json"), "utf8"));
     expect(disk.features).toEqual({ skillRecorder: true });
 
     const tools = await api("PATCH", "/api/config", { features: { showToolCalls: true } });
     expect(tools.status).toBe(200);
-    expect(tools.body.features).toEqual({ browser: false, skillRecorder: true, showToolCalls: true, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
+    expect(tools.body.features).toEqual({ skillRecorder: true, showToolCalls: true, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
 
     await api("PATCH", "/api/config", { features: { skillRecorder: false, showToolCalls: false } });
   });
@@ -3809,7 +3810,7 @@ describe("harness HTTP API", () => {
       expect(confirmed).toMatchObject({ status: 200, body: { outcome: "allowed-once", routineAction: "create" } });
       routineId = confirmed.body.resultId;
       await expect.poll(async () => {
-        const decisions = (await api("GET", "/api/decisions")).body.decisions;
+        const decisions = readDecisions(join(home, ".orbit"), Number.MAX_SAFE_INTEGER);
         return decisions
           .filter((decision: { requestId?: string }) => decision.requestId === proposal.requestId)
           .map((decision: { decision: string; source: string }) => `${decision.decision}:${decision.source}`)
@@ -5008,7 +5009,11 @@ describe("startTurn presence boundary", () => {
       expect(webhook.status).toBe(201);
       webhookId = webhook.body.webhook.id;
       rmSync(fakeClaudeDump, { force: true });
-      expect((await api("POST", `/api/webhooks/${webhookId}/test`, {})).status).toBe(202);
+      expect((await fetch(webhook.body.credential.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      })).status).toBe(202);
       await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
       const dump = z.object({
         mcpConfig: z.object({

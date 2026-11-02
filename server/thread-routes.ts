@@ -4,10 +4,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 
 import { readAttachment } from "./attachments.ts";
-import { DATA_DIR, EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
+import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
 import type { RequestOutcome } from "./contracts.ts";
-import { readDecisions } from "./decision-log.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -274,14 +273,6 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       }
       const limit = parsedLimit;
       return json(res, 200, readThreadEvents({ eventsDir: EVENTS_DIR, nativeDir: NATIVE_DIR, threadId, limit }));
-    },
-    decisions: async (res: ServerResponse, url: URL) => {
-      const rawLimit = url.searchParams.get("limit");
-      const parsedLimit = rawLimit === null ? undefined : Number(rawLimit);
-      if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit <= 0)) {
-        return json(res, 400, { error: "limit must be a positive whole number" });
-      }
-      return json(res, 200, { decisions: readDecisions(DATA_DIR, parsedLimit ?? 200) });
     },
   };
 }

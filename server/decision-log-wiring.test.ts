@@ -11,7 +11,6 @@
 //   4. an unattended block writes its row — the audit row that says "this
 //      would have auto-approved, and only the block stood in the way"; an
 //      Auto bot's unattended approval writes one marked unattended
-//   5. GET /api/decisions pages newest-last with ?limit=
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { DecisionRow } from "./decision-log.ts";
+import { readDecisions, type DecisionRow } from "./decision-log.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 
@@ -46,8 +45,7 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
 async function waitForDecision(pred: (r: DecisionRow) => boolean, ms = 30_000): Promise<DecisionRow | null> {
   const deadline = Date.now() + ms;
   for (;;) {
-    const { body } = await api("GET", "/api/decisions");
-    const rows: DecisionRow[] = body.decisions ?? [];
+    const rows = readDecisions(join(home, ".orbit"), Number.MAX_SAFE_INTEGER);
     const row = rows.filter(pred).at(-1);
     if (row) return row;
     if (Date.now() > deadline) return null;
@@ -329,14 +327,4 @@ posixOnly("authorization decisions are logged", () => {
     },
     90_000,
   );
-
-  it("GET /api/decisions pages newest-last and validates limit", async () => {
-    const all = (await api("GET", "/api/decisions")).body.decisions as DecisionRow[];
-    expect(all.length).toBeGreaterThanOrEqual(2);
-    const one = (await api("GET", "/api/decisions?limit=1")).body.decisions as DecisionRow[];
-    expect(one).toHaveLength(1);
-    expect(one[0]).toEqual(all.at(-1));
-    expect((await api("GET", "/api/decisions?limit=0")).status).toBe(400);
-    expect((await api("GET", "/api/decisions?limit=nope")).status).toBe(400);
-  });
 });

@@ -753,31 +753,6 @@ export async function connectionStatus(cfg: AppConfig, slugs: string[]) {
   );
 }
 
-/** Backward-compatible service disconnect: removes the Session-selected account. */
-export async function removeService(cfg: AppConfig, slug: string) {
-  if (brokerAccess() || !cfg.composio?.apiKey) {
-    const response = await brokerRequest(`/v1/connectors/${encodeURIComponent(slug)}`, { method: "DELETE" });
-    if (!response.ok) await throwBrokerError(response, `Connected apps: HTTP ${response.status}`);
-    return removalResponseSchema.parse(await response.json());
-  }
-  const session = await ensureProjectSession(cfg);
-  const params = new URLSearchParams({ limit: "50", toolkits: slug });
-  const list = await fetch(
-    `${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/toolkits?${params}`,
-    { headers: projectHeaders(cfg.composio.apiKey), signal: AbortSignal.timeout(15_000) },
-  );
-  if (!list.ok) throw new Error(await responseError(list, `Composio toolkits: HTTP ${list.status}`));
-  const body = toolkitPageSchema.parse(await list.json());
-  const id = body.items?.find((item) => item.slug?.toLowerCase() === slug.toLowerCase())?.connected_account?.id;
-  if (!id) return { removed: 0 };
-  const removed = await fetch(
-    `${apiBase()}/connected_accounts/${encodeURIComponent(id)}?revoke_on_delete=true`,
-    { method: "DELETE", headers: projectHeaders(cfg.composio.apiKey), signal: AbortSignal.timeout(30_000) },
-  );
-  if (!removed.ok) throw new Error(await responseError(removed, `Composio disconnect: HTTP ${removed.status}`));
-  return { removed: 1 };
-}
-
 /** Disconnect exactly one account after proving it belongs to this user/toolkit. */
 export async function removeAccount(cfg: AppConfig, slug: string, accountId: string) {
   if (!validAccountId(accountId)) throw inputError("Invalid connected-account ID");

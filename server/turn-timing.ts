@@ -99,11 +99,3 @@ export function startTurnTimer(meta: TurnTimingMarks = {}): TurnTimer {
     },
   };
 }
-
-export function turnTimingEnabled(): boolean {
-  return enabled();
-}
-
-export function turnTimingFile(): string {
-  return timingPath();
-}

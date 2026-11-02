@@ -81,7 +81,6 @@ import {
   detailedRepliesEnabled,
   skillRecorderEnabled,
   memoryNotesEnabled,
-  builtInBrowserEnabled,
   sweepLegacyOpencodeKey,
   syncCredentialEnv,
   withInstanceCli,
@@ -256,7 +255,6 @@ import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from
 import {
   skillsSystemPrompt,
 } from "./skills.ts";
-import "./skill-fetch.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -302,7 +300,6 @@ import { PhoneVisits } from "./phone-visits.ts";
 import { isRelayRequest } from "./phone-relay/via.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, routineBotState, routineRunCard, routineTriggerIsUnattended, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
-import { browserScreenshot, readBrowserConnection } from "./browser-connection.ts";
 import { RoutineRequestService } from "./routine-requests.ts";
 import {
   applySyncOperations,
@@ -377,7 +374,6 @@ import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { harnessPlaybookPrompt } from "./harness-playbook.ts";
 import { CREDENTIAL_PROMPT } from "./wink-guide.ts";
-import { botBrowserEnabled, browserPrompt } from "./builtin-browser.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
 import "./package-export.ts";
 import { localVmTurnPlan, shouldMountLocalComputer } from "./local-routing.ts";
@@ -595,36 +591,6 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
   };
 }
 
-/** The built-in browser, when the desktop app has one running: the proxy
- * gets the loopback host + per-boot token from the descriptor Electron
- * wrote, and the who-is-driving endpoint so a person taking the wheel in
- * the panel pauses the bot's hands. Null when there is no desktop app. */
-function browserIntegration(botId: string, profile: string | undefined) {
-  const connection = readBrowserConnection();
-  if (!connection) return null;
-  const control = controlIntegration(botId);
-  // a profile that no longer exists falls back to the bot's own session;
-  // "guest" is a throwaway session the surface forgets on switch-away
-  const profileId = profile === "guest" || (profile && (cfg.browserProfiles ?? []).some((candidate) => candidate.id === profile)) ? profile : "";
-  return {
-    connection,
-    profile: profileId,
-    integration: {
-      command: process.execPath,
-      args: [SPAWNED_PROXIES.browser],
-      env: {
-        ...AGENTS_NODE_FLAG,
-        OMB_BROWSER_URL: connection.url,
-        OMB_BROWSER_TOKEN: connection.token,
-        OMB_BROWSER_PROFILE: profileId,
-        OMB_BOT_ID: botId,
-        OMB_CONTROL_URL: control.url,
-        OMB_CONTROL_TOKEN: control.token,
-      },
-    },
-  };
-}
-
 function phoneIntegration() {
   const env: Record<string, string> = { ...AGENTS_NODE_FLAG };
   if (process.env.OMB_ADB_PATH) env.OMB_ADB_PATH = process.env.OMB_ADB_PATH;
@@ -786,7 +752,6 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
   // no agentsMcp engine: every turn 409s instead of the prompt simply saying
   // it cannot contact teammates. approvePeerComms genuinely needs the tools.
   if (bot.approvePeerComms === true) required.push("agentsMcp");
-  if (bot.browser === true) required.push("browserMcp");
   if (bot.composio === true) required.push("composioMcp");
   if (bot.computer === "cloud") required.push("computerMcp");
   if (bot.computer === "local") required.push("localComputerMcp");
@@ -5012,12 +4977,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
         integrations.phone = phoneIntegration();
       }
-      // the built-in browser: per-bot opt-in, and only to a driver that can
-      // mount it, and only while the desktop app is running its host
-      const browser = botBrowserEnabled(cfg, bot, instance.adapter.capabilities)
-        ? browserIntegration(bot.id, bot.browserProfile)
-        : null;
-      if (browser) integrations.browser = browser.integration;
       // the user's connected apps, but only to a driver that can mount
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
@@ -5379,7 +5338,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (integrations.composio
             ? " The user's connected apps (Gmail, Calendar, Slack, Notion, and the rest) are reachable through the composio tools — find the right one with COMPOSIO_SEARCH_TOOLS, read its arguments with COMPOSIO_GET_TOOL_SCHEMAS, then run it with COMPOSIO_MULTI_EXECUTE_TOOL. Reach for them before telling the user you have no access to a service."
             : "") +
-          browserPrompt(Boolean(integrations.browser)) +
           (coordinationPrompt ? ` ${coordinationPrompt}` : "") +
           credentialPrompt +
           routinePrompt +
@@ -5508,10 +5466,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // after its own turn.completed would never be torn down — it would
       // keep polling the box forever, carrying dead per-turn state. busy
       // is flipped false in the fold, so it is the honest "still running".
-      if (!previewCapture && browser) {
-        const { connection, profile } = browser;
-        previewCapture = () => browserScreenshot(connection, bot.id, fetch, profile);
-      }
       if (previewCapture && store.bot(bot.id)?.busy) {
         startScreenPoller(bot.id, previewCapture, { screenIsTheWork: instance.driverKind === "boxAgent" });
       }
@@ -6229,10 +6183,6 @@ async function runClaimedGroupMemberTurn(
   if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
     integrations.phone = phoneIntegration();
   }
-  if (botBrowserEnabled(cfg, bot, instance.adapter.capabilities)) {
-    const browser = browserIntegration(bot.id, bot.browserProfile);
-    if (browser) integrations.browser = browser.integration;
-  }
   try {
     if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
       const connection = await connectedAppsIntegration(bot.id, threadId);
@@ -6948,12 +6898,10 @@ function configStatus() {
       skillRecorder: skillRecorderEnabled(cfg),
       showToolCalls: showToolCallsEnabled(cfg),
       detailedReplies: detailedRepliesEnabled(cfg),
-      browser: builtInBrowserEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
       modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
-    browserProfiles: cfg.browserProfiles ?? [],
   };
 }
 
@@ -7360,12 +7308,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         credential: webhookCredential(ingress.baseUrl, created.webhook.endpointId, created.secret),
       });
     }
-    let webhookMatch = path.match(/^\/api\/webhooks\/([\w-]+)\/(rotate|test)$/);
+    let webhookMatch = path.match(/^\/api\/webhooks\/([\w-]+)\/rotate$/);
     if (webhookMatch && method === "POST") {
-      if (webhookMatch[2] === "test") {
-        const result = webhooks.test(webhookMatch[1], await readBody(req));
-        return result ? json(res, 202, result) : json(res, 404, { error: "no such webhook" });
-      }
       const rotated = webhooks.rotateSecret(webhookMatch[1]);
       if (!rotated) return json(res, 404, { error: "no such webhook" });
       const ingress = webhookIngressStatus();
@@ -7817,27 +7761,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true });
     }
 
-    // ── bot skills: imported Agent Skills (SKILL.md) ────────────────────
-    // Import lands DISABLED; the UI shows SKILL.md + scan warnings and a
-    // person enables after reading. See server/skills.ts for the policy.
-    m = path.match(/^\/api\/bots\/([\w-]+)\/skills$/);
-    if (m && method === "GET") {
-      return await botRoutes.skills(res, m);
-    }
-    if (m && method === "POST") {
-      return await botRoutes.addSkill(req, res, m);
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/skills\/([a-z0-9-]+)$/);
-    if (m && method === "GET") {
-      return await botRoutes.readSkill(res, m);
-    }
-    if (m && method === "PATCH") {
-      return await botRoutes.patchSkill(req, res, m);
-    }
-    if (m && method === "DELETE") {
-      return await botRoutes.deleteSkill(res, m);
-    }
-
     if (method === "GET" && path === "/api/update/state") {
       const update = await updateBridgeResponse(terminalBridgeAccess, "state");
       return json(res, update.status, update.body);
@@ -8073,27 +7996,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         else localVmLifecycleBusy.delete(SHARED_LOCAL_VM_TARGET.key);
       }
     }
-    if (method === "POST" && path === "/api/local-computer/screenshot") {
-      localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
-      return json(res, 200, {
-        image: await containerComputerScreenshot(undefined, undefined, SHARED_LOCAL_VM_TARGET),
-      });
-    }
-
     m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer$/);
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       return json(res, 200, await localVmPayload(localVmTargetForBot(bot.id)));
     }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/(run|stop|remove)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/(run|remove)$/);
     if (m && method === "POST") {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      const action = z.enum(["run", "stop", "remove"]).parse(m[2]);
+      const action = z.enum(["run", "remove"]).parse(m[2]);
       const target = localVmTargetForBot(bot.id);
       if (target.key === SHARED_LOCAL_VM_TARGET.key) {
         return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
@@ -8125,7 +8041,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         const status = await containerComputerAction(action, undefined, undefined, target);
         if (action === "run") localVmIdleFor(target).touch();
-        if (action === "stop" || action === "remove") localVmIdleFor(target).cancel();
+        if (action === "remove") localVmIdleFor(target).cancel();
         return json(res, 200, {
           ...status,
           commands: setupCommands(status.runtime, process.platform, target),
@@ -8165,13 +8081,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     // ── the fleet-wide authorization decision log ──
-    // Read-only like the inspector above: the rows were written at the
-    // request.opened fold and in answerRequest; this only reads them back,
-    // newest last, same order as thread events.
-    if (method === "GET" && path === "/api/decisions") {
-      return await threadRoutes.decisions(res, url);
-    }
-
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
     m = path.match(/^\/api\/usage\/(refresh|check)\/([\w-]+)$/);
@@ -8467,8 +8376,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           key !== "vps" &&
           key !== "rooms" &&
           key !== "localVm" &&
-          key !== "features" &&
-          key !== "browserProfiles",
+          key !== "features",
       );
       if (reloadKeys.length > 0) await reloadProviders();
       const status = configStatus();
@@ -8562,8 +8470,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/accounts\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/);
     if (m && method === "DELETE") return json(res, 200, await composio.removeAccount(cfg, m[1], m[2]));
-    m = path.match(/^\/api\/connectors\/([\w-]+)$/);
-    if (m && method === "DELETE") return json(res, 200, await composio.removeService(cfg, m[1]));
 
     // Inline credential cards never receive the credential value. Electron
     // saves it through the OS-backed store first; this route only verifies
@@ -8642,7 +8548,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       return json(res, 200, bot.cloudBackend === "vps" ? vps.closeVpsDesktopTunnel(bot.id) : { closed: false });
     }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot|remove)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|screenshot|remove)$/);
     if (m && method === "POST") {
       const botId = m[1];
       const bot = store.bot(botId);
@@ -8656,9 +8562,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       if (bot.cloudBackend === "vps") {
-        if (m[2] === "exec") {
-          return json(res, 409, { error: "the VPS console is available to the bot through its scoped computer tools" });
-        }
         if (m[2] === "provision" && bot.computer !== "cloud" && !bot.autoStartVps) {
           return json(res, 409, { error: "Auto may start this VPS only after Start VPS automatically is enabled" });
         }
@@ -8688,10 +8591,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 200, await box.joinBox(cfg, botId));
         case "sleep":
           return json(res, 200, await box.sleepBox(cfg, botId));
-        case "exec": {
-          const body = await readBody(req);
-          return json(res, 200, await box.execOnBox(cfg, botId, String(body.command ?? "")));
-        }
         case "screenshot":
           return json(res, 200, await box.screenshotBox(cfg, botId));
       }

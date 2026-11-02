@@ -469,19 +469,6 @@ export class WebhookManager {
     }
   }
 
-  test(id: string, payload: JsonValue = { event: "openmaus.test", message: "Test webhook delivery" }): WebhookReceiveResult | null {
-    const trigger = this.webhooks.find((candidate) => candidate.id === id);
-    if (!trigger) return null;
-    const eventName = trigger.eventTypes?.[0] ?? "openmaus.test";
-    return this.dispatch(trigger, {
-      payload,
-      contentType: "application/json",
-      eventName,
-      userAgent: "Wink webhook tester",
-      deliveryId: `test-${randomUUID()}`,
-    });
-  }
-
   recordRejected(endpointId: string, statusCode: number, reason: string, event: Partial<WebhookEvent> = {}): WebhookAttempt | null {
     const trigger = this.webhooks.find((candidate) => candidate.endpointId === endpointId);
     if (!trigger) return null;

@@ -121,15 +121,6 @@ export interface ProfileSyncState {
   fieldVersions: Record<string, FieldVersion>;
 }
 
-export interface ProfileSyncEnvelope {
-  format: typeof PROFILE_SYNC_FORMAT;
-  version: typeof PROFILE_SYNC_VERSION;
-  workspaceId: string;
-  deviceId: string;
-  checkpoint: string;
-  operations: ProfileSyncOperation[];
-}
-
 export interface ProfileSyncSettings {
   workspaceId: string;
   deviceId: string;
@@ -155,11 +146,6 @@ function canonicalJson(value: unknown): string {
   }).join(",")}}`;
 }
 
-export function profileSyncRevision(operations: Iterable<ProfileSyncOperation>): string {
-  const records = [...operations].map(parseSyncOperation).map(canonicalJson).sort().join("\n");
-  return createHash("sha256").update(records).digest("hex");
-}
-
 export function localIdForSyncId(map: Record<string, string>, syncId: string): string | undefined {
   return Object.entries(map).find(([, mappedId]) => mappedId === syncId)?.[0];
 }
@@ -171,39 +157,12 @@ export function bindSyncId(map: Record<string, string>, localId: string, syncId:
   map[localId] = syncId;
 }
 
-export function resolveSyncConflictValue(
-  conflicts: readonly SyncConflict[],
-  entity: SyncEntity,
-  entityId: string,
-  field: string,
-  resolutions: Record<string, string> | undefined,
-  fallback: unknown,
-): unknown {
-  const conflict = conflicts.find((candidate) => candidate.entity === entity && candidate.entityId === entityId && candidate.field === field);
-  if (!conflict) return fallback;
-  const selected = resolutions?.[conflict.id];
-  const variant = conflict.variants.find((candidate) => candidate.operationId === selected);
-  return variant ? clone(variant.value) : fallback;
-}
-
 export function flattenReviewedResolutions(
   reviewed: Record<string, Record<string, string>>,
 ): Record<string, string> {
   const flat: Record<string, string> = {};
   for (const group of Object.values(reviewed)) Object.assign(flat, group);
   return flat;
-}
-
-export function unresolvedSyncConflicts<T extends { id: string; variants: readonly { operationId: string }[] }>(
-  conflicts: readonly T[],
-  reviewedResolutions: Record<string, Record<string, string>>,
-): T[] {
-  const reviewed = flattenReviewedResolutions(reviewedResolutions);
-  return conflicts.filter((conflict) => !conflict.variants.some((variant) => variant.operationId === reviewed[conflict.id]));
-}
-
-export function seenCheckpointAfterSave(seenCheckpoint: string): string {
-  return seenCheckpoint;
 }
 
 const workspaceSchema = z.object({
@@ -473,20 +432,6 @@ export function loadOrCreateSyncWorkspace(folder: string, fallbackWorkspaceId: s
   const workspaceId = ID.parse(fallbackWorkspaceId);
   writeFileAtomic(path, `${JSON.stringify({ format: PROFILE_SYNC_FORMAT, version: PROFILE_SYNC_VERSION, workspaceId }, null, 2)}\n`);
   return workspaceId;
-}
-
-export function createSyncEnvelope(workspaceId: string, deviceId: string, operations: ProfileSyncOperation[]): ProfileSyncEnvelope {
-  const parsedWorkspace = ID.parse(workspaceId);
-  const parsedDevice = ID.parse(deviceId);
-  const safe = operations.map(parseSyncOperation);
-  return {
-    format: PROFILE_SYNC_FORMAT,
-    version: PROFILE_SYNC_VERSION,
-    workspaceId: parsedWorkspace,
-    deviceId: parsedDevice,
-    checkpoint: safe.at(-1)?.operationId ?? "",
-    operations: safe,
-  };
 }
 
 export function loadProfileSyncSettings(dataDir: string): ProfileSyncSettings {

@@ -213,7 +213,7 @@ export function narrateTool(toolName: string): string | null {
     [/^(click|type_text|press_key|scroll|computer_batch)$/, "using the computer"],
     [/^(open_url|browser_navigate)$/, "opening a page"],
     [/^browser_(read|snapshot|screenshot)$/, "reading a page"],
-    // exact ids from browser-proxy.ts, so a shell command like browser_test stays itself
+    // Exact browser tool ids keep shell commands like browser_test unchanged.
     [/^browser_(click|fill|type|press|scroll|hover|drag|select_option|wait_for|back|forward|request_takeover|state)$/, "using the browser"],
     [/^list_bots$/, "checking who's around"],
     [/^ask_bot$/, "asking a teammate"],
