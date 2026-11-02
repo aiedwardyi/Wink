@@ -193,6 +193,8 @@ if ($failure) {
   [Console]::Error.WriteLine($line)
   exit 1
 }
+# Run by name, PowerShell keeps git's 128 from the branch probe in $LASTEXITCODE outside a repo.
+exit 0
 `;
 
 // Each argument is stored with %~1 while delayed expansion is off, then

@@ -284,6 +284,19 @@ test("a failed --report leaves its error line in the report signal", { skip: !WI
   assert.equal(readFileSync(signal, "utf8"), "orbit-msg: pane is not open");
 });
 
+test("a delivered report leaves exit code 0 when PowerShell runs it by name outside a git repo", { skip: !WIN32, timeout: LIVE_TIMEOUT }, async (t) => {
+  const { dir, bin } = await installBin();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  await withMailboxStub(async (url, posts) => {
+    const status = await new Promise((resolve) => {
+      execFile("powershell", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "orbit-msg --report DONE WIDGET text; exit $LASTEXITCODE"],
+        { env: paneEnv(bin, url), cwd: dir, windowsHide: true, timeout: 60_000 }, (error) => resolve(error?.code ?? 0));
+    });
+    assert.equal(status, 0);
+    assert.match(posts[0].text, /^DONE WIDGET branch=none sha=none dirty=unknown\ntext$/);
+  });
+});
+
 test("powershell notify posts only turn-complete events with text", { skip: !WIN32, timeout: LIVE_TIMEOUT }, async (t) => {
   const { dir, bin } = await installBin();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
