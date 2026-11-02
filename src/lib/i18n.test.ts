@@ -526,7 +526,6 @@ describe("remaining P1 surfaces", () => {
     expect(sidebar).toContain('t("chrome.newChannel")');
     expect(sidebar).toContain("GroupWizard");
     expect(sidebar).not.toContain("NewRoomPanel");
-    expect(sidebar).not.toContain('t("chrome.teamMap")');
     expect(sidebar).toContain('t("chrome.resizeSidebar")');
     expect(sidebar).toContain('t("chrome.sidebarWidthPixels", { width: sidebarDisplayWidth })');
     expect(sidebar).not.toMatch(/aria-label=\{density === "icons" \? "Team map"/);
@@ -593,25 +592,13 @@ describe("sidebar create group and bot/room chrome", () => {
   });
 });
 
-describe("team map badges and export feedback", () => {
-  const teamMapPage = readFileSync(join(here, "../components/TeamMapPage.tsx"), "utf8");
-
-  it("keeps handoff badges and the export toast as complete EN+KO phrases", () => {
-    expect(en["teamMap.running"]).toBe("Running");
-    expect(ko["teamMap.running"]).toBe("실행 중");
-    expect(en["teamMap.queued"]).toBe("Queued");
-    expect(ko["teamMap.queued"]).toBe("대기 중");
-    expect(en["teamMap.connected"]).toBe("Connected");
-    expect(ko["teamMap.connected"]).toBe("연결됨");
+describe("export feedback", () => {
+  it("keeps the export toast as complete EN+KO phrases", () => {
     expect(en["chrome.botsExported"]).toBe("{count} bots exported");
     expect(ko["chrome.botsExported"]).toBe("봇 {count}개 내보냄");
   });
 
   it("wires those phrases instead of hardcoded English", () => {
-    expect(teamMapPage).toContain('t("teamMap.running")');
-    expect(teamMapPage).toContain('t("teamMap.queued")');
-    expect(teamMapPage).toContain('t("teamMap.connected")');
-    expect(teamMapPage).not.toMatch(/"Running"|"Queued"|"Connected"/);
     expect(sidebar).toContain('t(exported.members === 1 ? "chrome.botsExportedOne" : "chrome.botsExported", {');
     expect(sidebar).not.toMatch(/bots exported`/);
   });
@@ -623,8 +610,7 @@ describe("team map badges and export feedback", () => {
   });
 });
 
-describe("team map, team library, and team toasts", () => {
-  const teamMapPage = readFileSync(join(here, "../components/TeamMapPage.tsx"), "utf8");
+describe("team library and team toasts", () => {
   const teamLibrary = readFileSync(join(here, "../components/TeamLibraryPanel.tsx"), "utf8");
   const teamImport = readFileSync(join(here, "team-import.ts"), "utf8");
   // JSX text, prose attributes, and prose string branches that bypass t().
@@ -634,18 +620,6 @@ describe("team map, team library, and team toasts", () => {
     ...source.matchAll(/\b(?:aria-label|title|placeholder)=(?:"[^"]*[A-Za-z]|\{["`][^"`]*[A-Za-z])/g),
     ...source.matchAll(/(?:[?:(,[]|\|\||&&|return)\s*["`][A-Z][a-z][^"`]*["`]/g),
   ].map((match) => match[0].trim());
-
-  it("keeps every Team map string in the catalog", () => {
-    expect(hardcoded(teamMapPage)).toEqual([]);
-    expect(teamMapPage).not.toMatch(/Discard unsaved changes|shared context|Last saved|Running and queued first/);
-    expect(teamMapPage).toContain('t("chrome.teamMap")');
-    expect(teamMapPage).toContain("t(status.key)");
-    expect(en["teamMap.waitingOnYou"]).toBe("Waiting on you");
-    expect(ko["teamMap.waitingOnYou"]).toBe("사용자 응답 대기");
-    expect(en["teamMap.status.waiting"]).toBe("Waiting for you");
-    expect(ko["teamMap.status.noSignal"]).toBe("신호 없음");
-    expect(ko["teamMap.general"]).toBe("일반");
-  });
 
   it("translates the team and bot toasts in Sidebar", () => {
     expect(sidebar).toContain('t("chrome.teamRestored")');
@@ -777,8 +751,6 @@ describe("first-run core path leftovers", () => {
     expect(ko["chrome.removeFromContext"]).not.toMatch(/Remove from context/i);
     expect(en["chrome.newContextName"]).toBe("New section name");
     expect(en["chrome.channelContext"]).toBe("Section (optional)");
-    expect(en["teamMap.context"]).toBe("Shared context");
-    expect(en["teamMap.saveContext"]).toBe("Save shared context");
     expect(en["task.new"]).toBe("New task");
     expect(ko["task.new"]).toBe("새 작업");
     expect(en["task.matching"]).toContain("{count}");

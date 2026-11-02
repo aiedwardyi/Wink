@@ -22,7 +22,6 @@ const HEADERS = [
   "GroupView.tsx",
   "RemoteTerminalView.tsx",
   "RoutinesPage.tsx",
-  "TeamMapPage.tsx",
   "TerminalWorkspace.tsx",
 ];
 

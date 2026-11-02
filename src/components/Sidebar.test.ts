@@ -857,7 +857,6 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     expect(profileButton).toBeLessThan(expandedUpdate);
     expect(footer).toContain("overflow-x-hidden");
     expect(footer).not.toContain("border-t");
-    expect(footer).not.toContain('t("chrome.teamMap")');
     expect(conversations).toContain("density === \"compact\" ? 32 : 48");
     expect(conversations).toContain("gap-2 px-3 py-1.5 pr-12");
     expect(source).toContain("min-w-0 flex-1 overflow-x-hidden overflow-y-auto");

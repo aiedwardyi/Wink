@@ -57,7 +57,6 @@ const CommandPalette = lazyView(() => import("@/components/CommandPalette").then
 const LocalVmWorkspace = lazyView(() => import("@/components/LocalVmWorkspace").then((m) => ({ default: m.LocalVmWorkspace })));
 const BrowserWorkspace = lazyView(() => import("@/components/BrowserWorkspace").then((m) => ({ default: m.BrowserWorkspace })));
 const SkillRecorderPage = lazyView(() => import("@/components/SkillRecorderPage").then((m) => ({ default: m.SkillRecorderPage })));
-const TeamMapPage = lazyView(() => import("@/components/TeamMapPage").then((m) => ({ default: m.TeamMapPage })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
@@ -717,11 +716,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onTerminalAttention={openTerminalAttention}
         rigidView={Boolean(browserWorkspaceBotId || localVmWorkspaceBotId || (bot && terminalViews[bot.id] !== undefined))}
       />
-      {state.activeView === "team-map" ? (
-        <LazyView fallback={<BootFallback />}>
-          <TeamMapPage />
-        </LazyView>
-      ) : state.activeView === "routines" ? (
+      {state.activeView === "routines" ? (
         <LazyView fallback={<BootFallback />}>
           <RoutinesPage />
         </LazyView>

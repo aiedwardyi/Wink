@@ -236,16 +236,6 @@ export function reducer(state: AppState, action: Action): AppState {
         appSettingsOpen: false,
         pluginsOpen: false,
       };
-    case "showTeamMap":
-      return {
-        ...state,
-        activeView: "team-map",
-        settingsOpen: false,
-        computerOpen: false,
-        inspectorOpen: false,
-        appSettingsOpen: false,
-        pluginsOpen: false,
-      };
     case "showSkillRecorder":
       if (!skillRecorderEnabled(state.config)) return state;
       return {

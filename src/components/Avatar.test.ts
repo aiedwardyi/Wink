@@ -9,7 +9,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 const sources = {
   "GroupView.tsx": readFileSync(join(here, "GroupView.tsx"), "utf8"),
-  "TeamMapPage.tsx": readFileSync(join(here, "TeamMapPage.tsx"), "utf8"),
   "ChatView.tsx": readFileSync(join(here, "ChatView.tsx"), "utf8"),
   "Avatar.tsx": readFileSync(join(here, "Avatar.tsx"), "utf8"),
   "BotProfileAvatarCard.tsx": readFileSync(join(here, "BotProfileAvatarCard.tsx"), "utf8"),
@@ -19,7 +18,6 @@ const sources = {
 
 const botAvatarFloors = {
   "GroupView.tsx": 6,
-  "TeamMapPage.tsx": 1,
   "ChatView.tsx": 4,
 } as const;
 

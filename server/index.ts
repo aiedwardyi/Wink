@@ -143,7 +143,7 @@ import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, pendingDelegationSnapshot, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
+import { _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
 import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
@@ -253,14 +253,6 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
-import {
-  readSectionContext,
-  sectionContextKey,
-  sectionContextLabel,
-  sectionContextSystemPrompt,
-  writeSectionContext,
-  SECTION_CONTEXT_MAX_BYTES,
-} from "./section-context.ts";
 import {
   skillsSystemPrompt,
 } from "./skills.ts";
@@ -5398,7 +5390,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           CORPUS_SEARCH_INSTRUCTIONS +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
-          sectionContextSystemPrompt(bot.section) +
           (privateWorkspace ? memorySystemPrompt(bot.id) + skillsSystemPrompt(bot.id) : "") +
           skillInstructions +
           packagePlaybooks +
@@ -6344,7 +6335,6 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     CORPUS_SEARCH_INSTRUCTIONS +
-    sectionContextSystemPrompt(bot.section) +
     (workspace ? `\n${memorySystemPrompt(bot.id).trim()}${skillsSystemPrompt(bot.id)}` : "") +
     renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace) }) +
     installedPlaybookInstructions(text, bot.playbooks) +
@@ -7309,41 +7299,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 404, { error: "unknown internal endpoint" });
     }
 
-    // Live Team Map metadata. Prompts and replies never leave their
-    // transcripts: this projection carries only ids, status relationships,
-    // optional delegation labels, and timestamps.
-    if (method === "GET" && path === "/api/team-map") {
-      const visible = new Set(store.bots.filter((bot) => !bot.hidden).map((bot) => bot.id));
-      const collaborations = store.groups
-        .filter(
-          (group) =>
-            group.dm === true &&
-            group.memberIds.length === 2 &&
-            group.memberIds.every((botId) => visible.has(botId)),
-        )
-        .map((group) => ({
-          groupId: group.id,
-          botIds: [group.memberIds[0], group.memberIds[1]] as [string, string],
-          lastAt: store.messagesFor(group.threadId).at(-1)?.at ?? group.createdAt,
-        }))
-        .sort((a, b) => b.lastAt - a.lastAt);
-      const queued = pendingDelegationSnapshot().flatMap((item) => {
-        const source = item.sourceBotId
-          ? store.conversationForBot(item.sourceBotId, item.sourceThreadId)?.bot
-          : store.botByThread(item.sourceThreadId);
-        if (!source || !visible.has(source.id) || !visible.has(item.toBotId)) return [];
-        return [{ sourceBotId: source.id, targetBotId: item.toBotId, reason: item.reason }];
-      });
-      const running = [...delegationWatch.entries()].flatMap(([threadId, watch]) => {
-        if (!visible.has(watch.toBotId)) return [];
-        const channel = watch.channelId ? store.group(watch.channelId) : undefined;
-        const sourceBotId = watch.sourceBotId ?? channel?.memberIds.find((botId) => botId !== watch.toBotId);
-        if (!sourceBotId || !visible.has(sourceBotId)) return [];
-        return [{ sourceBotId, targetBotId: watch.toBotId, threadId, groupId: channel?.id }];
-      });
-      return json(res, 200, { collaborations, queued, running });
-    }
-
     // ── routines calendar ────────────────────────────────────────────────
     if (path === "/api/routines" && method === "GET") {
       const fromParam = url.searchParams.get("from");
@@ -7882,50 +7837,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "DELETE") {
       return await botRoutes.deleteSkill(res, m);
     }
-
-    // ── section context: a user-owned team brief ────────────────────────
-    // Bots receive this in their system context, but no agent tool can write
-    // it. That keeps one bot from silently changing every teammate's future
-    // turns. The section query parameter is required even for General (""),
-    // so a malformed client cannot accidentally read or replace that brief.
-    if (path === "/api/section-context" && (method === "GET" || method === "PUT")) {
-      if (!url.searchParams.has("section")) return json(res, 400, { error: "section is required" });
-      const requested = url.searchParams.get("section") ?? "";
-      const section = sectionContextKey(requested);
-      if (section.length > 60) return json(res, 400, { error: "section must be at most 60 characters" });
-      const exists =
-        section === "" ||
-        store.bots.some((bot) => !bot.hidden && sectionKey(bot.section) === section) ||
-        store.groups.some((group) => sectionKey(group.section) === section);
-      if (!exists) return json(res, 404, { error: "no such section" });
-
-      if (method === "GET") {
-        const context = readSectionContext(section);
-        return json(res, 200, {
-          section,
-          label: sectionContextLabel(section),
-          text: context?.text ?? "",
-          updatedAt: context?.updatedAt ?? null,
-          maxBytes: SECTION_CONTEXT_MAX_BYTES,
-        });
-      }
-
-      const parsed = z.object({ text: z.string() }).safeParse(await readBody(req));
-      if (!parsed.success) return json(res, 400, { error: "text must be a string" });
-      if (Buffer.byteLength(parsed.data.text, "utf8") > SECTION_CONTEXT_MAX_BYTES) {
-        return json(res, 400, { error: `section context is capped at ${SECTION_CONTEXT_MAX_BYTES / 1000}KB` });
-      }
-      const context = writeSectionContext(section, parsed.data.text);
-      return json(res, 200, {
-        ok: true,
-        section,
-        label: sectionContextLabel(section),
-        text: context?.text ?? "",
-        updatedAt: context?.updatedAt ?? null,
-        maxBytes: SECTION_CONTEXT_MAX_BYTES,
-      });
-    }
-
 
     if (method === "GET" && path === "/api/update/state") {
       const update = await updateBridgeResponse(terminalBridgeAccess, "state");

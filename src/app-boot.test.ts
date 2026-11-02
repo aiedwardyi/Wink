@@ -15,7 +15,6 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/InspectorPanel"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/RoutinesPage"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/CommandPalette"\)/);
-    expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/TeamMapPage"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/SkillRecorderPage"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/LocalVmWorkspace"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/BrowserWorkspace"\)/);

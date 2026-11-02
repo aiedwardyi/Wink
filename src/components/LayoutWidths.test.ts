@@ -65,9 +65,6 @@ vi.mock("@/state/store", async (importOriginal) => {
       if (path === "/api/connectors/connected") {
         return { services: {}, authoritative: true };
       }
-      if (path === "/api/team-map") {
-        return { collaborations: [], queued: [], running: [] };
-      }
       return {};
     }),
     useStore: () => ({
@@ -96,7 +93,6 @@ vi.mock("./DesktopCapabilities", () => ({
 
 import { Sidebar } from "./Sidebar";
 import { PluginsPanel } from "./PluginsPanel";
-import { TeamMapPage } from "./TeamMapPage";
 
 describe("Layout Widths", () => {
   let host: HTMLDivElement;
@@ -231,20 +227,5 @@ describe("Layout Widths", () => {
     expect(listWrapper).toBeTruthy();
     expect(listWrapper?.className).toContain("lg:grid-cols-2");
     expect(listWrapper?.className).not.toContain("md:grid-cols-2");
-  });
-
-  it("team map handoffs section drops max-w-[900px] so right edges line up", async () => {
-    await act(async () => {
-      root.render(createElement(I18nProvider, null, createElement(TeamMapPage)));
-    });
-
-    const handoffsTitle = [...host.querySelectorAll("h2")].find(
-      (el) => el.textContent?.trim() === translate("en", "teamMap.handoffs"),
-    );
-    expect(handoffsTitle).toBeTruthy();
-
-    const handoffsSection = handoffsTitle?.closest("section");
-    expect(handoffsSection).toBeTruthy();
-    expect(handoffsSection?.className).not.toContain("max-w-[900px]");
   });
 });
