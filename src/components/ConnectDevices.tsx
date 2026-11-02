@@ -147,6 +147,7 @@ export function ConnectDevices() {
           {signedIn && account && <p className={help}>{t("settings.devices.signedInAs", { account })}</p>}
           {installed && !signedIn && <>
             {setup.needsApproval ? <p className={help}>{t("settings.devices.needsApproval")}</p>
+              : phone ? <p className={help}>{t("settings.devices.signInOnPc")}</p>
               : setup.loginOpened ? <>
                 <p className={help}>{t("settings.devices.finishSignIn")}</p>
                 <button type="button" disabled={loginPending} onClick={() => void signIn()} className="mt-1 text-[12px] text-ink-secondary underline hover:text-ink">{t("settings.devices.signIn")}</button>

@@ -247,13 +247,18 @@ describe("remote access", () => {
       expect(run.lines).toEqual(["Remote auto: Tailscale not found, remote off"]);
     });
 
-    it("skips detection when ORBIT_REMOTE_HOST is set or ORBIT_REMOTE_AUTO=0", async () => {
-      for (const env of [{ ORBIT_REMOTE_HOST: "other.tail1234.ts.net" }, { ORBIT_REMOTE_AUTO: "0" }]) {
-        const run = detect(env, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
-        expect(await run.host).toBeUndefined();
-        expect(run.calls).toEqual([]);
-        expect(run.lines).toEqual([]);
-      }
+    it("skips detection when ORBIT_REMOTE_AUTO=0", async () => {
+      const run = detect({ ORBIT_REMOTE_AUTO: "0" }, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
+      expect(await run.host).toBeUndefined();
+      expect(run.calls).toEqual([]);
+      expect(run.lines).toEqual([]);
+    });
+
+    it("only reads status when ORBIT_REMOTE_HOST is set", async () => {
+      const run = detect({ ORBIT_REMOTE_HOST: "other.tail1234.ts.net" }, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
+      expect(await run.host).toBeUndefined();
+      expect(run.calls).toEqual(["tailscale status --json"]);
+      expect(run.lines).toEqual([]);
     });
 
     it("mints a key for the detected host", () => {

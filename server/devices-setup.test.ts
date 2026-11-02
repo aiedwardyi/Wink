@@ -135,6 +135,18 @@ describe("Devices setup detection", () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it("lists online PCs for a configured host without touching Serve", async () => {
+    const exec = vi.fn(async (_file: string, args: string[]) => args[0] === "status" ? JSON.stringify(snapshot("Running", { a: { ...peer(7, "windows"), DNSName: "laptop.tail1234.ts.net." } })) : "{}");
+    const request = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ app: "openmausbot" }));
+    try {
+      const retry = remoteHostRetry({ ORBIT_REMOTE_HOST: "home.tail1234.ts.net" }, 8799, () => {}, exec, () => {}, "linux", () => 0);
+      await retry.refresh(true);
+      expect(retry.status().state).toBe("disabled");
+      expect(await retry.devices()).toEqual([{ name: "laptop", host: "laptop.tail1234.ts.net" }]);
+      expect(exec.mock.calls.map(([, args]) => args)).toEqual([["status", "--json"]]);
+    } finally { request.mockRestore(); }
+  });
+
   it("detects a new PC on the next open-section poll and drops offline peers", async () => {
     let online = false;
     const exec = vi.fn(async (_file: string, args: string[]) => args[0] === "status" ? JSON.stringify(snapshot("Running", online ? { a: { ...peer(7, "windows"), DNSName: "laptop.tail1234.ts.net." } } : {})) : "{}");

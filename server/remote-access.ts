@@ -218,10 +218,11 @@ export async function autoRemoteHost(
   previous?: RemoteSetup,
 ): Promise<string | undefined> {
   const auto = env.ORBIT_REMOTE_AUTO?.trim().toLowerCase();
-  if (env.ORBIT_REMOTE_HOST?.trim() || (auto !== undefined && FALSY_FLAG.has(auto))) {
+  if (auto !== undefined && FALSY_FLAG.has(auto)) {
     onSetup({ state: "disabled" });
     return undefined;
   }
+  const manual = Boolean(env.ORBIT_REMOTE_HOST?.trim());
   let command: string | undefined;
   let status: z.infer<typeof tailscaleStatusSchema> | undefined;
   let installed = false;
@@ -236,11 +237,20 @@ export async function autoRemoteHost(
     }
   }
   if (!command || !status) {
+    if (manual) {
+      onSetup({ state: "disabled" });
+      return undefined;
+    }
     log("Remote auto: Tailscale not found, remote off");
     onSetup({ state: installed ? "not-running" : "missing" });
     return undefined;
   }
   const detection = tailnetDevices(status);
+  // A configured host still lists this tailnet's PCs; it just never touches Serve.
+  if (manual) {
+    onSetup({ ...detection, state: "disabled" });
+    return undefined;
+  }
   const update = (value: RemoteSetup) => onSetup({ ...detection, ...value });
   const host = cleanHost(status.Self?.DNSName?.replace(/\.$/, ""));
   if (status.BackendState !== "Running" || !host) {
@@ -331,7 +341,7 @@ export function remoteHostRetry(
     },
     refresh(open = false): Promise<void> {
       if (pending) return pending;
-      if (setup.state === "disabled" || (!open && (setup.state === "ready" || now() < nextRetryAt))) return Promise.resolve();
+      if (!open && (setup.state === "disabled" || setup.state === "ready" || now() < nextRetryAt)) return Promise.resolve();
       nextRetryAt = now() + 5_000;
       pending = autoRemoteHost(env, port, exec, logChange, platform, (value) => { setup = value; }, open ? setup : undefined)
         .then((host) => {

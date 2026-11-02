@@ -51,6 +51,13 @@ describe("Phone setup steps", () => {
     expect(writeText).toHaveBeenCalledWith(url);
   });
 
+  it("sends a phone to the PC for Tailscale sign-in", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    expect(button("Sign In")).toBeUndefined();
+    expect(host.textContent).toContain("Sign in on the PC itself.");
+  });
+
   it("reopens Sign In after the browser closes before completion", async () => {
     const openExternal = vi.fn().mockResolvedValue(true);
     vi.stubGlobal("ogb", { openExternal });
