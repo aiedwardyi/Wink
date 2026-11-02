@@ -239,7 +239,8 @@ export function createApiServer(opts: ApiOptions): Server {
       return sendJson(res, 200, JSON.stringify(hub.pcsFor(who.subHash)), cors);
     }
 
-    const teamUrl = TEAM_RE.exec(url);
+    const today = url === "/v1/team/today" && snags && opts.reports;
+    const teamUrl = TEAM_RE.exec(url) ?? (today ? [url] : null);
     if (accounts && signinOrigin && team && teamOwnerEmail && teamUrl) {
       const cors = directoryCors(headerOne(req.headers.origin));
       const peer = peerPrefix(req.socket.remoteAddress);
@@ -257,6 +258,11 @@ export function createApiServer(opts: ApiOptions): Server {
       if (!who.ok) {
         log.log("team-rejected", { peer, reason: who.error });
         return reply(res, who.status, { error: who.error }, cors);
+      }
+      if (today) {
+        const now = opts.now();
+        const start = Math.floor((now + 9 * 3_600_000) / 86_400_000) * 86_400_000 - 9 * 3_600_000;
+        return sendJson(res, 200, JSON.stringify({ start, snags: snags.countToday(now), bugs: await opts.reports!.countToday(now) }), cors);
       }
       return sendJson(res, 200, JSON.stringify(team.stats(tz)), cors);
     }

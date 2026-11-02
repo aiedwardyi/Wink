@@ -27,7 +27,8 @@ import { ProfileFields } from "./ProfileFields";
 import { Card } from "./SettingsPrimitives";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
-import { TeamSection, teamTodaySchema, type TeamToday, type TeamView } from "./TeamSection";
+import { TeamSection, type TeamView } from "./TeamSection";
+import { useTeamToday } from "@/lib/team-today";
 import { ModelIndexSection } from "./ModelIndexSection";
 import { SkinPicker } from "./SkinPicker";
 import { GeometryPicker } from "./GeometryPicker";
@@ -539,8 +540,8 @@ export function SettingsModal({
   const moreServicesShown = showSettingsMoreServices(moreServicesOpen);
   const [teamOwner, setTeamOwner] = useState(false);
   const [teamStats, setTeamStats] = useState<TeamView | null>(null);
-  const [teamToday, setTeamToday] = useState<TeamToday | null>(null);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const teamToday = useTeamToday(teamOwner && !closing, accountEmail);
   const sectionShown = useCallback(
     (entry: (typeof SECTIONS)[number]) => (entry.id !== "team" || teamOwner) && (!phone || entry.id !== "shortcuts") && sectionNavVisible(entry, q, phoneAvailable),
     [phoneAvailable, q, teamOwner, phone],
@@ -564,16 +565,13 @@ export function SettingsModal({
         const days = body?.days;
         const now = Number(body?.now);
         if (!Array.isArray(people) || !Array.isArray(days) || !Number.isFinite(now)) throw new Error("team");
-        const today = await api("/api/team/today").catch(() => null);
         if (gone) return;
         setTeamOwner(true);
         setTeamStats({ now, days, people });
-        setTeamToday(teamTodaySchema.safeParse(today).data ?? null);
       } catch {
         if (gone) return;
         setTeamOwner(false);
         setTeamStats(null);
-        setTeamToday(null);
       }
     })();
     return () => {

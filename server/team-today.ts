@@ -1,15 +1,40 @@
-// Owner's counts for today in Korea, from what the snag and report claims already filed.
+// Owner's counts for today in Korea, with local archives as the old-relay fallback.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { teamOwnerHash } from "./team-route.ts";
+import { teamIdToken, teamOwnerHash, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
+import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
 
 const DAY_MS = 24 * 60 * 60_000;
 const KST_MS = 9 * 60 * 60_000;
 const snagRow = z.object({ id: z.string(), at: z.number() });
 const filedReport = z.object({ report: z.object({ at: z.number() }) });
+const relayCounts = z.object({ start: z.int(), snags: z.int().nonnegative(), bugs: z.int().nonnegative() });
+
+interface TodayRelay {
+  base: string | null;
+  baked: string | null;
+  tokens: TeamTokenSource;
+  fetchImpl?: typeof fetch;
+}
+
+async function readRelay(options: TodayRelay | undefined, start: number) {
+  if (!options) return null;
+  const origin = teamRelayOrigin(options.base, options.baked);
+  if (!origin) return null;
+  try {
+    const token = await teamIdToken(options.tokens);
+    if (!token) return null;
+    const response = await (options.fetchImpl ?? fetch)(`${origin}/v1/team/today`, {
+      headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(ACCOUNT_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const parsed = relayCounts.safeParse(await response.json());
+    return parsed.success && parsed.data.start === start ? parsed.data : null;
+  } catch { return null; }
+}
 
 export function kstDayStart(now: number): number {
   return Math.floor((now + KST_MS) / DAY_MS) * DAY_MS - KST_MS;
@@ -51,16 +76,18 @@ export async function teamTodayRoute(
   crashes: string | null,
   crashCount: () => Promise<number | null> = async () => null,
   now: number = Date.now(),
+  relay?: TodayRelay,
 ) {
   const owner = (ownerHash ?? "").trim().toLowerCase();
   const session = (email ?? "").trim();
   if (!owner || !session || teamOwnerHash(session) !== owner) return { status: 403, body: { owner: false } };
   const start = kstDayStart(now);
+  const counts = await readRelay(relay, start);
   return {
     status: 200,
     body: {
-      snags: todaySnags(join(dataDir, "team-snags.jsonl"), start),
-      bugs: todayReports(join(dataDir, "team-report-inbox"), start),
+      snags: counts?.snags ?? todaySnags(join(dataDir, "team-snags.jsonl"), start),
+      bugs: counts?.bugs ?? todayReports(join(dataDir, "team-report-inbox"), start),
       crashes,
       crashCount: crashes ? await crashCount() : null,
     },

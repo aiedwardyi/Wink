@@ -6,6 +6,7 @@ import { z } from "zod";
 import { LABEL_RE, teamSnagSchema, type TeamSnag } from "../../shared/relay-protocol.ts";
 import { silentLogger, type Logger } from "./log.ts";
 import { readText, writeAtomic } from "./team.ts";
+import { TodayCount } from "./today.ts";
 
 const FILE = "team-snags";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -35,14 +36,22 @@ export class SnagStore {
   private queued = false;
   private readonly file: string;
   private timer?: ReturnType<typeof setInterval>;
+  private readonly filed: TodayCount;
+  private readonly perLabelPerDay: number;
+  private readonly now: () => number;
+  private readonly log: Logger;
 
   private constructor(
     dir: string,
-    private readonly perLabelPerDay: number,
-    private readonly now: () => number,
-    private readonly log: Logger,
+    perLabelPerDay: number,
+    now: () => number,
+    log: Logger,
   ) {
     this.file = join(dir, FILE);
+    this.filed = new TodayCount(join(dir, "team-snags-today"));
+    this.perLabelPerDay = perLabelPerDay;
+    this.now = now;
+    this.log = log;
   }
 
   static async open(dir: string, perLabelPerDay: number, now: () => number = Date.now, log: Logger = silentLogger): Promise<SnagStore> {
@@ -87,10 +96,14 @@ export class SnagStore {
 
   ack(ids: readonly string[]): number {
     const drop = new Set(ids);
+    // Persist the count before discarding the only remaining event time.
+    this.filed.record(this.held.filter((entry) => drop.has(entry.snag.id)).map((entry) => entry.snag), this.now());
     const removed = this.drop((entry) => drop.has(entry.snag.id));
     if (removed) void this.save();
     return removed;
   }
+
+  countToday(now = this.now()): number { return this.filed.count(now); }
 
   async close(): Promise<void> {
     clearInterval(this.timer);
