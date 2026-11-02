@@ -1,0 +1,23 @@
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { z } from "zod";
+
+import { writeFileAtomic } from "./atomic.ts";
+
+// Its own file: profile-sync.json and the Google binding are parsed strictly by older builds.
+const ANALYTICS_FILE = "analytics.json";
+
+export function loadAnalyticsConsent(dataDir: string): boolean {
+  try {
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(JSON.parse(readFileSync(join(dataDir, ANALYTICS_FILE), "utf8")));
+    return parsed.success && parsed.data.enabled;
+  } catch {
+    return false;
+  }
+}
+
+export function saveAnalyticsConsent(dataDir: string, enabled: boolean): boolean {
+  mkdirSync(dataDir, { recursive: true });
+  writeFileAtomic(join(dataDir, ANALYTICS_FILE), JSON.stringify({ enabled }, null, 2));
+  return enabled;
+}
