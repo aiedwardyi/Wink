@@ -7,6 +7,7 @@ import { EngineRow } from "./EnginesSettings";
 import { OrbitMark } from "./OrbitMark";
 import { isEmptyEngineLaunch, isFriendsCliEngine } from "@/lib/engine-rail";
 import { EngineConnect } from "./EngineConnect";
+import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { showWelcomeTiles } from "@/lib/friends-chrome";
@@ -151,7 +152,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const controls = () => [...dialog.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )];
-    controls()[0]?.focus();
+    // The analytics step must not land focus on Yes, or a held Enter opts in.
+    (step === 2 ? dialog : controls()[0])?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const focusable = controls();
@@ -181,9 +183,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return refreshInstancesRef.current();
   };
 
-  const finish = () => {
-    onDone();
-  };
+  const finish = () => setStep(2);
 
   const live = (instances ?? []).filter((instance) => !isRetiredEngineKind(instance.driverKind));
   const engines = live
@@ -205,6 +205,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       <div
         ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-labelledby="onboarding-title"
         className={`flex max-h-full w-full flex-col overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl shadow-black/60 ${
@@ -226,6 +227,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               {t("onboarding.phoneTryAgain")}
             </button>
           </div>
+        ) : step === 2 ? (
+          <OnboardingFinish onDone={onDone} />
         ) : step === 0 ? (
           <div className="flex flex-col items-center px-8 py-9">
             <div className="relative">

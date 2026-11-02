@@ -51,6 +51,7 @@ import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { SyncPanel } from "./SyncPanel";
 import { StartFreshRow } from "./StartFreshRow";
 import { ErrorReportsRow } from "./ErrorReportsRow";
+import { AnalyticsRow } from "./AnalyticsRow";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -795,6 +796,7 @@ export function SettingsModal({
                 <VibrationRow />
                 <UpdatesRow />
                 <ErrorReportsRow />
+                <AnalyticsRow />
                 <button
                   type="button"
                   aria-expanded={preferencesOpen}

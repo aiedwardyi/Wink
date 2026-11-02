@@ -46,6 +46,7 @@ import "./avatar-image.ts";
 import "./bot-profile.ts";
 import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
+import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
@@ -7497,6 +7498,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (method === "GET" && path === "/api/key-uses") {
       return json(res, 200, { uses: loadKeyUses(DATA_DIR) });
+    }
+
+    if (method === "GET" && path === "/api/analytics") {
+      return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR) });
+    }
+    if (method === "PUT" && path === "/api/analytics") {
+      const body = await readBody(req);
+      if (typeof body?.enabled !== "boolean") return json(res, 400, { error: "enabled must be a boolean" });
+      return json(res, 200, { enabled: saveAnalyticsConsent(DATA_DIR, body.enabled) });
     }
 
     // ── phone access from anywhere: pairing, phones and relay status (PC only) ──
