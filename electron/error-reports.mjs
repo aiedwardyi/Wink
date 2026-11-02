@@ -34,10 +34,10 @@ export function errorReportDsn(readBaked) {
   return "";
 }
 
-/** GlitchTip host for the owner's Team page link; origin only, never the key. */
+/** GlitchTip host and project for the owner's Team page; never the DSN key. */
 export function crashReportsEnv(dsn) {
   const endpoint = errorReportEndpoint(dsn);
-  return endpoint ? { WINK_CRASH_REPORTS: endpoint.origin } : {};
+  return endpoint ? { WINK_CRASH_REPORTS: endpoint.origin, WINK_CRASH_PROJECT: endpoint.pathname.split("/")[2] } : {};
 }
 
 export function createErrorReports({ userData, dsn, build, platform, arch, now = Date.now, uptime = process.uptime }) {

@@ -44,11 +44,12 @@ function todayReports(dir: string, start: number): number {
   return count;
 }
 
-export function teamTodayRoute(
+export async function teamTodayRoute(
   dataDir: string,
   ownerHash: string | null,
   email: string | null,
   crashes: string | null,
+  crashCount: () => Promise<number | null> = async () => null,
   now: number = Date.now(),
 ) {
   const owner = (ownerHash ?? "").trim().toLowerCase();
@@ -61,6 +62,7 @@ export function teamTodayRoute(
       snags: todaySnags(join(dataDir, "team-snags.jsonl"), start),
       bugs: todayReports(join(dataDir, "team-report-inbox"), start),
       crashes,
+      crashCount: crashes ? await crashCount() : null,
     },
   };
 }

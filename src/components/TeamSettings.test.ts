@@ -75,12 +75,14 @@ describe("Team settings", () => {
   let syncEmail: string | null = null;
   let teamStatus = 200;
   let teamBody = ownerStats;
+  let crashCount: number | null = null;
 
   beforeEach(() => {
     signedIn = true;
     syncEmail = null;
     teamStatus = 200;
     teamBody = ownerStats;
+    crashCount = null;
     vi.stubGlobal("fetch", vi.fn(async (path: string) => {
       if (path === "/api/google-account") return Response.json(signedIn ? { state: "signed-in", email: "owner@example.com" } : { state: "signed-out" });
       if (path === "/api/google-sync") {
@@ -92,7 +94,7 @@ describe("Team settings", () => {
       if (path === "/api/remote-link") return Response.json({ url: null });
       if (path === "/api/key-uses") return Response.json({ uses: {} });
       if (path === "/api/team") return Response.json(teamBody, { status: teamStatus });
-      if (path === "/api/team/today") return Response.json({ snags: 2, bugs: 1, crashes: "https://crash.example" });
+      if (path === "/api/team/today") return Response.json({ snags: 2, bugs: 1, crashes: "https://crash.example", crashCount });
       return Response.json({ error: "no route" }, { status: 404 });
     }));
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -146,6 +148,16 @@ describe("Team settings", () => {
     expect(cells).toEqual(["OpenCrash Reports", "2Bot Snags", "1Bug Reports"]);
     expect(host.querySelector("a[href='https://crash.example']")?.getAttribute("target")).toBe("_blank");
     expect(host.querySelector("[title='Since midnight KST']")?.textContent).toBe("Today");
+  });
+
+  it("shows today's crash count as the GlitchTip link", async () => {
+    crashCount = 4;
+    await render();
+    await vi.waitFor(() => expect(labels()).toContain("Team"));
+    const team = [...host.querySelectorAll("nav button")].find((button) => button.getAttribute("aria-label") === "Team");
+    await act(async () => team!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await vi.waitFor(() => expect(host.textContent).toContain("Crash Reports"));
+    expect(host.querySelector("a[href='https://crash.example']")?.textContent).toBe("4");
   });
 
   it("shows an empty team when the owner has no teammates", async () => {

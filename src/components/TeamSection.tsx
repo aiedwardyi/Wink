@@ -19,7 +19,7 @@ export interface TeamView {
   people: TeamPerson[];
 }
 
-export const teamTodaySchema = z.object({ snags: z.number(), bugs: z.number(), crashes: z.string().nullable() });
+export const teamTodaySchema = z.object({ snags: z.number(), bugs: z.number(), crashes: z.string().nullable(), crashCount: z.number().nullable() });
 export type TeamToday = z.infer<typeof teamTodaySchema>;
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -94,8 +94,13 @@ function TodayCounts({ today }: { today: TeamToday }) {
     </div>
   );
   const crashes = today.crashes ? (
-    <a href={today.crashes} target="_blank" rel="noopener noreferrer" className="rounded-sm text-[15px] font-medium underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus">
-      {t("teamToday.open")}
+    <a
+      href={today.crashes}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`${today.crashCount === null ? "text-[15px] font-medium " : ""}rounded-sm underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus`}
+    >
+      {today.crashCount === null ? t("teamToday.open") : today.crashCount}
     </a>
   ) : "-";
   return (

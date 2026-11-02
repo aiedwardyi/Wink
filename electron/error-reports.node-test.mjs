@@ -239,7 +239,8 @@ test("missing, malformed and non-object baked config cannot stop startup", async
 
 test("the server learns the crash host but never the key", async () => {
   const { crashReportsEnv } = await import("./error-reports.mjs");
-  assert.deepEqual(crashReportsEnv("https://public@reports.example/1"), { WINK_CRASH_REPORTS: "https://reports.example" });
+  assert.deepEqual(crashReportsEnv("https://public@reports.example/1"), { WINK_CRASH_REPORTS: "https://reports.example", WINK_CRASH_PROJECT: "1" });
+  assert.doesNotMatch(JSON.stringify(crashReportsEnv("https://public@reports.example/1")), /public/);
   assert.deepEqual(crashReportsEnv(""), {});
   assert.deepEqual(crashReportsEnv("http://public@reports.example/1"), {});
   assert.match(source("./main.mjs"), /\.\.\.crashReportsEnv\(ERROR_REPORT_DSN\),/);

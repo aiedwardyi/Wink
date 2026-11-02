@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { teamOwnerHash } from "./team-route.ts";
 import { kstDayStart, teamTodayRoute } from "./team-today.ts";
@@ -39,28 +39,30 @@ describe("team today", () => {
     expect(kstDayStart(Date.parse("2026-11-02T15:00:00Z"))).toBe(MIDNIGHT + 24 * 60 * 60_000);
   });
 
-  it("counts today's snags and reports and resets at midnight", () => {
+  it("counts today's snags and reports and resets at midnight", async () => {
     snags(["a", MIDNIGHT - 1], ["b", MIDNIGHT], ["c", MIDNIGHT + 60_000], ["c", MIDNIGHT + 60_000]);
     report("r1", MIDNIGHT - 60_000, MIDNIGHT + 60_000);
     report("r2", MIDNIGHT + 5_000);
     report("r3", MIDNIGHT + 9_000);
-    const before = teamTodayRoute(dir, OWNER, "owner@example.com", null, MIDNIGHT - 1);
-    expect(before).toEqual({ status: 200, body: { snags: 1, bugs: 1, crashes: null } });
-    const today = teamTodayRoute(dir, OWNER, " Owner@Example.com ", "https://crash.example", MIDNIGHT + 10_000);
-    expect(today).toEqual({ status: 200, body: { snags: 2, bugs: 2, crashes: "https://crash.example" } });
-    const tomorrow = teamTodayRoute(dir, OWNER, "owner@example.com", null, MIDNIGHT + 24 * 60 * 60_000);
-    expect(tomorrow.body).toEqual({ snags: 0, bugs: 0, crashes: null });
+    const before = await teamTodayRoute(dir, OWNER, "owner@example.com", null, undefined, MIDNIGHT - 1);
+    expect(before).toEqual({ status: 200, body: { snags: 1, bugs: 1, crashes: null, crashCount: null } });
+    const today = await teamTodayRoute(dir, OWNER, " Owner@Example.com ", "https://crash.example", async () => 7, MIDNIGHT + 10_000);
+    expect(today).toEqual({ status: 200, body: { snags: 2, bugs: 2, crashes: "https://crash.example", crashCount: 7 } });
+    const tomorrow = await teamTodayRoute(dir, OWNER, "owner@example.com", null, undefined, MIDNIGHT + 24 * 60 * 60_000);
+    expect(tomorrow.body).toEqual({ snags: 0, bugs: 0, crashes: null, crashCount: null });
   });
 
-  it("reads zero when nothing was filed", () => {
-    expect(teamTodayRoute(dir, OWNER, "owner@example.com", null, MIDNIGHT).body).toEqual({ snags: 0, bugs: 0, crashes: null });
+  it("reads zero when nothing was filed", async () => {
+    expect((await teamTodayRoute(dir, OWNER, "owner@example.com", null, undefined, MIDNIGHT)).body).toEqual({ snags: 0, bugs: 0, crashes: null, crashCount: null });
   });
 
-  it("answers only the owner", () => {
+  it("answers only the owner", async () => {
     snags(["a", MIDNIGHT]);
     const denied = { status: 403, body: { owner: false } };
-    expect(teamTodayRoute(dir, OWNER, "someone@example.com", "https://crash.example", MIDNIGHT)).toEqual(denied);
-    expect(teamTodayRoute(dir, OWNER, null, null, MIDNIGHT)).toEqual(denied);
-    expect(teamTodayRoute(dir, null, "owner@example.com", null, MIDNIGHT)).toEqual(denied);
+    const count = vi.fn(async () => 7);
+    expect(await teamTodayRoute(dir, OWNER, "someone@example.com", "https://crash.example", count, MIDNIGHT)).toEqual(denied);
+    expect(await teamTodayRoute(dir, OWNER, null, null, count, MIDNIGHT)).toEqual(denied);
+    expect(await teamTodayRoute(dir, null, "owner@example.com", null, count, MIDNIGHT)).toEqual(denied);
+    expect(count).not.toHaveBeenCalled();
   });
 });
