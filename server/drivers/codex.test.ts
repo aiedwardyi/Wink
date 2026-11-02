@@ -163,16 +163,24 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(await instance.adapter.steer!("t-steer", "late")).toBe(false);
   });
 
-  it("tells a C13 follow-up that earlier final answers stay visible", async () => {
+  it.each([false, true])("tells a C13 follow-up that earlier final answers stay visible (later commentary: %s)", async (commentary) => {
     const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/steer-after-answer.json", import.meta.url), "utf8"));
     const messages = recorded.reply.events
       .filter((event: { method: string }) => event.method === "item/completed")
       .map((event: { params: { item: { text: string; phase: string } } }) => event.params.item);
     await create({ mode: "steer", environment: { FAKE_CODEX_MESSAGES: JSON.stringify(messages) } });
+    const spawn = vi.spyOn(procs, "spawnCli");
     const dump = join(scratch, "steer.json");
     process.env.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-c13", text: recorded.stamp.prompt, system: "Wink instructions." });
     await recorder.until((e) => e.type === "content.delta");
+    const stdout = spawn.mock.results.at(-1)!.value.stdout;
+    stdout.emit("data", `${JSON.stringify(recorded.reply.events[0])}\n`);
+    if (commentary) {
+      const beforeAnswer = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/steer-before-answer.json", import.meta.url), "utf8"));
+      stdout.emit("data", `${JSON.stringify(beforeAnswer.reply.events[0])}\n`);
+    }
+    expect(recorder.events).toContainEqual(expect.objectContaining({ type: "item.completed", itemType: "assistant_text", phase: "final_answer" }));
     expect(await instance.adapter.steer!("t-c13", recorded.stamp.steer)).toBe(true);
     expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
     const calls = sentCalls(dump);
@@ -185,10 +193,27 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(recorded.reply.steer.params.input[0].text).toContain("stays visible");
     expect(recorded.reply.steer.params.input[0].text.endsWith(`\n\n${recorded.stamp.steer}`)).toBe(true);
     const texts = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
-    expect(texts).toMatchObject(messages.map(({ text, phase }: { text: string; phase: string }) => ({ text, phase })));
+    expect(texts.slice(-messages.length)).toMatchObject(messages.map(({ text, phase }: { text: string; phase: string }) => ({ text, phase })));
     expect(messages).toHaveLength(2);
     expect(messages[0].text.match(/^\d+\. /gm)).toHaveLength(40);
     expect(messages[1]).toMatchObject({ text: "CONDOR-8868", phase: "final_answer" });
+  });
+
+  it.each([0, 1, 2])("sends a steer unchanged before any final answer (%s commentary messages)", async (count) => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/steer-before-answer.json", import.meta.url), "utf8"));
+    await create({ mode: "steer" });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    const dump = join(scratch, "steer-before-answer.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-before-answer", text: recorded.stamp.prompt });
+    await recorder.until((e) => e.type === "content.delta");
+    const stdout = spawn.mock.results.at(-1)!.value.stdout;
+    for (const event of recorded.reply.events.slice(0, count)) stdout.emit("data", `${JSON.stringify(event)}\n`);
+    expect(recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toHaveLength(count);
+    expect(recorder.events.some((e) => e.type === "item.completed" && e.itemType === "assistant_text" && e.phase === "final_answer")).toBe(false);
+    expect(await instance.adapter.steer!("t-before-answer", recorded.stamp.steer)).toBe(true);
+    expect(await recorder.until((e) => e.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(sentCalls(dump).find((call) => call.method === "turn/steer")?.params.input).toEqual([{ type: "text", text: recorded.stamp.steer }]);
   });
 
   it("falls back when native steering rejects the turn", async () => {
