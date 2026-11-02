@@ -3,6 +3,12 @@
   Wink
 </h1>
 
+<h3 align="center">Context switching, in style.</h3>
+
+<p align="center">
+  Claude, Codex, Grok, Gemini and Muse in one app, at terminal speed.
+</p>
+
 <p align="center">
   <a href="https://github.com/aiedwardyi/Wink/actions/workflows/ci.yml"><img src="https://github.com/aiedwardyi/Wink/actions/workflows/ci.yml/badge.svg?branch=review-base" alt="CI"></a>
   <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest"><img src="https://img.shields.io/github/v/release/aiedwardyi/orbit-releases?label=release" alt="Latest release"></a>
@@ -10,18 +16,24 @@
 </p>
 
 <p align="center">
-  Your AI coding subscriptions, in one desktop app, at terminal speed.
-  <br>
-  Runs on the Claude Code, Codex, Gemini, Grok and Muse logins you already have. No API keys. No analytics.
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="./assets/readme/picker.png">
+    <img src="./assets/readme/picker.gif" width="825" alt="The Alt+M model picker flicking from Claude Opus 5.5 through Codex, Grok, Gemini and Muse models and back, each engine in its own color.">
+  </picture>
 </p>
+
+## Why
+
+- **Every model, one keystroke.** `Alt+M`, then arrows: up and down for the model, left and right for effort. Switch mid-thread and the thread comes along.
+- **Terminal speed.** Wink drives each engine's own CLI with the login you already have. No API keys. `Ctrl+1` to `9` for bots, `` Ctrl+` `` for the terminal.
+- **Never loses the plot.** Long threads summarize in the background, so no `/compact`. Each bot's `MEMORY.md` follows it across models and PCs.
+- **Your phone too.** The same chats over Tailscale or a [relay you host](relay/README.md), with a push when a bot needs you.
 
 <p align="center">
   <a href="https://github.com/aiedwardyi/orbit-releases/releases/latest/download/Wink-setup.exe"><b>Download for Windows</b></a> (10 / 11, x64) · <a href="https://github.com/aiedwardyi/orbit-releases/releases">All releases</a>
   <br>
   Built by <a href="https://github.com/aiedwardyi">Edward Yi</a>
 </p>
-
-<img src="./assets/readme/hero.png" alt="Wink with a team of five bots on five engines. Atlas picks up a plan from its notes and runs five workers, two of them done.">
 
 ## Tour
 
