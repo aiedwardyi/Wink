@@ -34,7 +34,7 @@ export class TodayCount {
     const held = this.read();
     const ids = new Set(held.start === start ? held.ids : []);
     for (const row of rows) if (row.at >= start && row.at < start + DAY_MS) ids.add(row.id);
-    if (held.start === start && ids.size === held.ids.length) return;
+    if ((held.start === start && ids.size === held.ids.length) || ids.size === 0) return;
     const next = { start, ids: [...ids] };
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     const temp = `${this.file}.${randomUUID()}.tmp`;

@@ -54,6 +54,18 @@ it("keeps snag counts across ack retries, restart and same-ID redelivery", async
   } finally { await store.close(); }
 });
 
+it("keeps a snag unacknowledged when its daily ledger cannot be written", async () => {
+  const dir = tempDir();
+  const store = await SnagStore.open(dir, 10, () => MIDNIGHT);
+  const snag = { id: A, at: MIDNIGHT, event: "stalled" as const, build: "1.0.225", os: "win32", teacher: "Bot", worker: "worker", pane8: "pane", label: "pane", minutes: 20, notes: [], detail: "", tail: "" };
+  mkdirSync(join(dir, "team-snags-today"));
+  try {
+    store.add("a".repeat(16), snag);
+    expect(() => store.ack([A])).toThrow();
+    expect(store.claim().map((entry) => entry.snag.id)).toEqual([A]);
+  } finally { await store.close(); }
+});
+
 it("refuses to discard reports when their daily ledger cannot be written", async () => {
   const dir = tempDir();
   mkdirSync(join(dir, "team-reports"));
