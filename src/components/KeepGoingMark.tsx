@@ -9,16 +9,10 @@ export function keepGoingMarkState(bot: Pick<Bot, "keepGoing">): KeepGoingMarkSt
   return bot.keepGoing.paused ? "paused" : "on";
 }
 
-const GLYPH_FILL = "";
 const GLYPH_STROKE = "M6 6C5.2 5.1 4.8 4.7 4.2 4.7a1.6 1.3 0 0 0 0 2.6c.6 0 1-.4 1.8-1.3s1.2-1.3 1.8-1.3a1.6 1.3 0 0 1 0 2.6c-.6 0-1-.4-1.8-1.3z";
 
 function Glyph({ color }: { color: string }) {
-  return (
-    <>
-      {GLYPH_FILL && <path fill={color} d={GLYPH_FILL} />}
-      <path fill="none" stroke={color} strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" d={GLYPH_STROKE} />
-    </>
-  );
+  return <path fill="none" stroke={color} strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" d={GLYPH_STROKE} />;
 }
 
 // Solid when on, hollow when paused; the glyph is cut out, so it shows the ground behind it.
