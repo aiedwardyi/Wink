@@ -165,7 +165,7 @@ const CLAUDE_LIMIT_RE = /^\s*(?:⎿\s+)?You['’]ve hit your [^·\n]*limit\s*·\
 const CODEX_LIMIT_RE = /^\s*■\s+You['’]ve hit your usage limit\..{0,400}?try again at (.+?)\.(?: |$)/i;
 
 const LIMIT_START = { claude: /^\s*(?:⎿\s+)?You['’]ve hit your /i, codex: /^\s*■\s+You['’]ve hit your usage limit\./i };
-const LIMIT_IDLE_RE = /^(?:What do you want to do\?|[❯›]?\s*\d+\. .+|Approaching rate limits|Switch to .+|Fast and affordable .+|gpt-.+|\d+(?:\.\d+)?% context left.*|⏵.*|[❯›?]|[─━]+|● Usage limit reached · .+|\/usage-credits .+|✻ \S+ for \d.+)$/u;
+const LIMIT_IDLE_RE = /^(?:What do you want to do\?|[❯›]?\s*\d+\. .+|Approaching rate limits|Switch to .+|Fast and affordable .+|enter select · esc back|› .*|\d+ background terminals? running · \/ps to view.*|\? for shortcuts.*|(?:gpt|GPT)-.+|\d+(?:\.\d+)?% context left.*|⏵.*|[❯›?]|[─━]+|● Usage limit reached · .+|\/usage-credits .+|✻ \S+ for \d.+)$/u;
 const CLAUDE_RESUME_RE = /^● Usage limit reached · continuing automatically at (.+?)(?: · |$)/u;
 
 function usageLimit(screenText, engine, cols = 80) {
