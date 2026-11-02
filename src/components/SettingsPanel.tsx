@@ -27,6 +27,7 @@ import { instanceSupportsLocalComputer, localComputerDisabledReason, localComput
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
+import { MemoryFile, MemoryGroup, MemoryTask, NotedLines } from "./MemoryGroups";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 
@@ -301,6 +302,12 @@ function MemoryCard({ bot }: { bot: Bot }) {
   const [topic, setTopic] = useState<{ name: string; text: string } | null>(null);
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [open, setOpen] = useState(false);
+  // a conflict needs its buttons, so it opens the file and leaves it open
+  const expanded = open || conflict !== null;
+  useEffect(() => {
+    if (conflict) setOpen(true);
+  }, [conflict]);
 
   const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
     api(`/api/bots/${botId}/memory`);
@@ -424,103 +431,120 @@ function MemoryCard({ bot }: { bot: Bot }) {
           {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
         </span>
       </div>
-      {loading && <div className="text-[13px] text-ink-secondary">Loading…</div>}
-
-      {!loading && topic && (
-        <div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate font-mono text-[12.5px] text-ink">memory/{topic.name}</span>
+      <div className="overflow-hidden rounded-xl bg-card">
+        <MemoryGroup title={t("bot.memoryFromChats")}>
+          <NotedLines text={text} />
+          <div className="mt-3 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-[14px] font-medium text-ink">{t("settings.memoryNotes.toggle")}</div>
+              <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.memoryNotes.help")}</div>
+            </div>
             <button
-              onClick={() => setTopic(null)}
-              className="shrink-0 rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
+              role="switch"
+              aria-checked={autoNotes}
+              aria-label={t("settings.memoryNotes.toggle")}
+              onClick={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
+              className={cn("relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors", autoNotes ? "bg-accent" : "bg-control")}
             >
-              Back
+              <span className={cn("absolute top-[3px] size-5 rounded-full bg-white transition-all", autoNotes ? "left-[21px]" : "left-[3px]")} />
             </button>
           </div>
-          <pre className="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap rounded-lg border border-hairline/40 bg-inset p-3 font-mono text-[12.5px] leading-relaxed text-ink">
-            {topic.text}
-          </pre>
-        </div>
-      )}
+        </MemoryGroup>
+        <MemoryTask bot={bot} />
+        <MemoryFile text={text} topics={topics.length} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
+          {expanded && (
+            <div className="px-4 pb-4">
+              <div className="mb-3 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("bot.memoryThisBotHelp")}</div>
+                {loading && <div className="text-[13px] text-ink-secondary">Loading…</div>}
 
-      {!loading && !topic && (
-        <div>
-          <textarea
-            className={cn(inputCls, "min-h-[160px] resize-y font-mono text-[12.5px] leading-relaxed")}
-            value={text}
-            placeholder={t("bot.memoryPlaceholder")}
-            aria-label={t("bot.memory")}
-            readOnly={loadFailed}
-            onChange={(e) => edit(e.target.value)}
-            onFocus={() => void refresh()}
-            onBlur={() => void flushMemory(botId)}
-          />
-          {conflict && (
-            <div role="alert" className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
-              <div>{t("bot.memoryConflict")}</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button onClick={() => void loadLatest(conflict)} className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
-                  {t("bot.memoryLoadLatest")}
-                </button>
-                <button onClick={() => keepMine(conflict)} className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
-                  {t("bot.memoryKeepMine")}
-                </button>
-              </div>
-            </div>
-          )}
-          {truncated && (
-            <div className="mt-2 text-[11.5px] text-ink-secondary">
-              Only the top loads each turn.
-            </div>
-          )}
-          {topics.length > 0 && (
-            <div className="mt-3">
-              <div className="mb-1.5 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
-                Topic files
-              </div>
-              <div className="overflow-hidden rounded-lg border border-hairline/40">
-                {topics.map((entry) => (
-                  <button
-                    key={entry.name}
-                    onClick={() => void openTopic(entry.name)}
-                    className="flex w-full items-center justify-between gap-2 border-b border-hairline/40 px-3 py-2 text-left last:border-b-0 hover:bg-control/60"
-                  >
-                    <span className="truncate font-mono text-[12.5px] text-ink">{entry.name}</span>
-                    <span className="shrink-0 text-[11.5px] text-ink-secondary">{formatBytes(entry.bytes)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+                {!loading && topic && (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-mono text-[12.5px] text-ink">memory/{topic.name}</span>
+                      <button
+                        onClick={() => setTopic(null)}
+                        className="shrink-0 rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
+                      >
+                        Back
+                      </button>
+                    </div>
+                    <pre className="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap rounded-lg border border-hairline/40 bg-inset p-3 font-mono text-[12.5px] leading-relaxed text-ink">
+                      {topic.text}
+                    </pre>
+                  </div>
+                )}
 
-      {loadFailed && (
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-danger">
-          {t("bot.memoryLoadFailed")}
-          <button
-            onClick={() => void load()}
-            className="rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
-          >
-            {t("bot.memoryRetry")}
-          </button>
-        </div>
-      )}
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-      <div className="mt-3 flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[14px] font-medium text-ink">{t("settings.memoryNotes.toggle")}</div>
-          <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.memoryNotes.help")}</div>
-        </div>
-        <button
-          role="switch"
-          aria-checked={autoNotes}
-          aria-label={t("settings.memoryNotes.toggle")}
-          onClick={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
-          className={cn("relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors", autoNotes ? "bg-accent" : "bg-control")}
-        >
-          <span className={cn("absolute top-[3px] size-5 rounded-full bg-white transition-all", autoNotes ? "left-[21px]" : "left-[3px]")} />
-        </button>
+                {!loading && !topic && (
+                  <div>
+                    <textarea
+                      className={cn(inputCls, "min-h-[160px] resize-y font-mono text-[12.5px] leading-relaxed")}
+                      value={text}
+                      placeholder={t("bot.memoryPlaceholder")}
+                      aria-label={t("bot.memory")}
+                      readOnly={loadFailed}
+                      onChange={(e) => edit(e.target.value)}
+                      onFocus={() => void refresh()}
+                      onBlur={() => void flushMemory(botId)}
+                    />
+                    {conflict && (
+                      <div role="alert" className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+                        <div>{t("bot.memoryConflict")}</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button onClick={() => void loadLatest(conflict)} className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
+                            {t("bot.memoryLoadLatest")}
+                          </button>
+                          <button onClick={() => keepMine(conflict)} className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
+                            {t("bot.memoryKeepMine")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {truncated && (
+                      <div className="mt-2 text-[11.5px] text-ink-secondary">
+                        Only the top loads each turn.
+                      </div>
+                    )}
+                    {topics.length > 0 && (
+                      <div className="mt-3">
+                        <div className="mb-1.5 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
+                          Topic files
+                        </div>
+                        <div className="overflow-hidden rounded-lg border border-hairline/40">
+                          {topics.map((entry) => (
+                            <button
+                              key={entry.name}
+                              onClick={() => void openTopic(entry.name)}
+                              className="flex w-full items-center justify-between gap-2 border-b border-hairline/40 px-3 py-2 text-left last:border-b-0 hover:bg-control/60"
+                            >
+                              <span className="truncate font-mono text-[12.5px] text-ink">{entry.name}</span>
+                              <span className="shrink-0 text-[11.5px] text-ink-secondary">{formatBytes(entry.bytes)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+            </div>
+          )}
+          {(loadFailed || error) && (
+            <div className="px-4 pb-4">
+                {loadFailed && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-danger">
+                    {t("bot.memoryLoadFailed")}
+                    <button
+                      onClick={() => void load()}
+                      className="rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
+                    >
+                      {t("bot.memoryRetry")}
+                    </button>
+                  </div>
+                )}
+                {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+            </div>
+          )}
+        </MemoryFile>
       </div>
     </div>
   );
