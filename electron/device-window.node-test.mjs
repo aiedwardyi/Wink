@@ -320,6 +320,13 @@ test("link page only navigates to the PC's own handshake", () => {
   assert.ok(page.includes("&lt;b&gt;"));
 });
 
+test("unreachable help is escaped and preserves the retry destination", () => {
+  const page = decodeURIComponent(deviceUnreachablePage({ host: "home.tail1234.ts.net", title: "Wink", heading: "Can't reach Home", help: "<Check Tailscale>", retry: "Retry" }));
+  assert.ok(page.includes("&lt;Check Tailscale&gt;"));
+  assert.ok(page.includes('location.assign("https://"+'));
+  assert.equal(page.includes("<Check Tailscale>"), false);
+});
+
 test("main process sandboxes PC windows without the app preload", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
   const open = main.slice(main.indexOf("function openDeviceWindow"), main.indexOf("function ensureDesktopWorkspace"));

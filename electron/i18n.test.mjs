@@ -70,6 +70,13 @@ describe("packaged locale", () => {
 });
 
 describe("desktop viewer copy", () => {
+  it("names the PC and Devices page in both paste instructions", () => {
+    expect(translate("en", "packaged.deviceLinkHelp", { name: "Laptop" })).toBe("On Laptop, open Settings > Devices and click Copy Link. Paste it here once.");
+    expect(translate("ko", "packaged.deviceLinkHelp", { name: "Laptop" })).toBe("Laptop에서 설정 > 기기를 열고 링크 복사를 누르세요. 여기에 한 번만 붙여넣으면 됩니다.");
+    expect(en["packaged.deviceUnreachableHelp"]).toBe("Check that it's on and Tailscale is connected.");
+    expect(ko["packaged.deviceUnreachableHelp"]).toBe("켜져 있고 Tailscale이 연결되어 있는지 확인하세요.");
+  });
+
   it("paints the error page from packaged keys and includes Malgun Gothic", () => {
     const main = readFileSync(join(import.meta.dirname, "main.mjs"), "utf8");
     expect(main).toContain('nativeText("packaged.desktopUnavailable")');

@@ -49,7 +49,7 @@ describe("Account settings", () => {
     request.mockImplementation(async (path: string) => {
       if (path === "/api/google-sync") return Response.json({ state: "signed-out" });
       if (path === "/api/phone-relay/status") return Response.json({ configured: false, available: phoneAvailable });
-      if (path === "/api/remote-link") return Response.json({ url: url || null });
+      if (path === "/api/remote-link?setup=1") return Response.json({ url: url || null });
       if (path === "/api/key-uses") return Response.json({ uses: {} });
       return Response.json({ error: `no route ${path}` }, { status: 404 });
     });
@@ -76,14 +76,14 @@ describe("Account settings", () => {
     return host.querySelector(".overflow-y-auto")!;
   }
 
-  it("orders Phone after Connections with the matching icons", async () => {
+  it("orders Devices after Connections with the matching icons", async () => {
     await render();
     const buttons = [...host.querySelectorAll("nav button")];
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Account", "General", "Connections", "Phone", "Themes", "Usage", "Model Index", "Shortcuts",
+      "Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index", "Shortcuts",
     ]);
     expect(buttons.map((button) => button.querySelector("svg")?.classList.item(1))).toEqual([
-      "lucide-user", "lucide-settings", "lucide-key-round", "lucide-smartphone", "lucide-palette", "lucide-coins", "lucide-chart-scatter", "lucide-keyboard",
+      "lucide-user", "lucide-settings", "lucide-key-round", "lucide-monitor-smartphone", "lucide-palette", "lucide-coins", "lucide-chart-scatter", "lucide-keyboard",
     ]);
   });
 
@@ -97,7 +97,7 @@ describe("Account settings", () => {
     expect(cards[1].textContent).toContain("Syncing across your PCs is off.");
     expect(pane.querySelector("[data-phone-settings]")).toBeNull();
     expect(pane.querySelector("[data-phone-access-setup]")).toBeNull();
-    expect(request.mock.calls.some(([path]) => path === "/api/remote-link" || path === "/api/phone-relay/status")).toBe(false);
+    expect(request.mock.calls.some(([path]) => path === "/api/remote-link?setup=1" || path === "/api/phone-relay/status")).toBe(false);
   });
 
   it("renders Sync as one card, not a card inside a card", async () => {
@@ -133,7 +133,7 @@ describe("Account settings", () => {
     const pane = await render("connections");
     expect(pane.textContent).not.toContain("Phone Link");
     expect(pane.textContent).not.toContain("Phone Access");
-    expect(request.mock.calls.some(([path]) => path === "/api/remote-link")).toBe(false);
+    expect(request.mock.calls.some(([path]) => path === "/api/remote-link?setup=1")).toBe(false);
     expect(request.mock.calls.some(([path]) => path === "/api/phone-relay/status")).toBe(false);
   });
 
@@ -144,9 +144,9 @@ describe("Account settings", () => {
     expect(host.querySelector("output")?.textContent).toBe("sync");
   });
 
-  it("lands the companion deep link on Phone and reveals relay setup on demand", async () => {
+  it("lands the companion deep link on Devices and reveals relay setup on demand", async () => {
     const pane = await render("companion");
-    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Phone");
+    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Devices");
     expect(pane.querySelector("[data-phone-settings]")).not.toBeNull();
     expect(pane.querySelector("#settings-profile-name")).toBeNull();
     expect(pane.querySelector("[data-phone-access-setup]")).toBeNull();
@@ -155,12 +155,12 @@ describe("Account settings", () => {
     expect(pane.querySelector("[data-phone-access-setup]")).not.toBeNull();
   });
 
-  it("shows Phone even on a packaged PC without the legacy companion service", async () => {
+  it("shows Devices even on a packaged PC without the legacy companion service", async () => {
     vi.stubGlobal("ogb", { platform: "win32", packaged: true });
     phoneAvailable = false;
     url = "";
     const pane = await render("companion");
-    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Phone");
-    expect(pane.querySelectorAll("ol > li")).toHaveLength(3);
+    expect(host.querySelector('nav [aria-current="page"]')?.getAttribute("aria-label")).toBe("Devices");
+    expect(pane.querySelectorAll("ol > li")).toHaveLength(5);
   });
 });

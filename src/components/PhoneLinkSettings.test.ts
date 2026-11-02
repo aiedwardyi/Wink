@@ -42,30 +42,117 @@ async function render(body: object) {
 }
 
 describe("Phone setup steps", () => {
-  it.each([
-    ["missing", "Tailscale isn't installed. Install it and connect.", false],
-    ["not-running", "Tailscale is offline. Open it and connect.", false],
-    ["serve-disabled", "Enable Tailscale Serve to connect your phone.", true],
-    ["checking", "Checking Tailscale...", false],
-    ["error", "Check Tailscale Serve settings. Wink will retry.", false],
-    ["ready", "Scan this code with your phone's camera", true],
-  ])("renders %s with QR and Copy Link only when ready", async (state, help, running) => {
-    await render({ url, setup: { state, enableUrl: "https://login.tailscale.com/f/serve?node=fixture" } });
-    expect(host.querySelectorAll("ol > li")).toHaveLength(3);
-    expect(host.textContent).toContain(help);
-    expect(host.querySelector('[data-phone-step="1"]')?.getAttribute("data-complete")).toBe(String(running));
-    expect(!!host.querySelector("[data-phone-link-qr] svg")).toBe(state === "ready");
-    expect(!!button("Copy Link")).toBe(state === "ready");
-    expect(!!button("Enable Serve")).toBe(state === "serve-disabled");
+  it.each(["Phone", "PC"])("keeps %s steps numbered 1-2 when This PC folds", async (tab) => {
+    await render({ url: null, setup: { state: "missing" } });
+    await act(async () => button(tab).click());
+    const numbers = () => [...host.querySelectorAll('[data-devices-settings] > ol:last-child [data-device-step]')].map((row) => row.getAttribute("data-device-step"));
+    expect(numbers()).toEqual(["1", "2"]);
+    expect(host.querySelectorAll('[data-devices-settings] > ol:first-of-type [data-device-step]')).toHaveLength(3);
+    store.api.mockResolvedValue({ url, setup: { state: "ready" } });
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(host.querySelector("[data-pc-ready]")).not.toBeNull();
+    expect(numbers()).toEqual(["1", "2"]);
+  });
+
+  it("shows one installer button and mutes every later row while missing", async () => {
+    await render({ url: null, setup: { state: "missing" } });
+    expect(host.querySelectorAll('a[href="https://tailscale.com/download"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-device-step][data-active="true"]')).toHaveLength(1);
+    expect([...host.querySelectorAll("[data-device-step]")].map((row) => row.getAttribute("data-device-step"))).toEqual(["1", "2", "3", "1", "2"]);
+  });
+
+  it("opens the login URL once and waits in the browser", async () => {
+    const openExternal = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("ogb", { platform: "win32", openExternal });
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    store.api.mockResolvedValueOnce({ url: "https://login.tailscale.com/a/fixture" });
+    await act(async () => button("Sign In").click());
+    expect(store.api).toHaveBeenCalledWith("/api/devices/sign-in", { method: "POST" });
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://login.tailscale.com/a/fixture");
+    expect(button("Sign In")).toBeUndefined();
+    expect(host.textContent).toContain("Finish in your browser.");
+  });
+
+  it("waits for machine approval without a sign-in button", async () => {
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsMachineAuth" } });
+    expect(button("Sign In")).toBeUndefined();
+    expect(host.textContent).toContain("Waiting for your Tailscale admin to approve this PC.");
+    expect(store.api.mock.calls.some(([path]) => path === "/api/devices/sign-in")).toBe(false);
+  });
+
+  it("opens Allow once after signing in here and keeps its button reachable", async () => {
+    const openExternal = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("ogb", { platform: "win32", openExternal });
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    store.api.mockResolvedValueOnce({ url: "https://login.tailscale.com/a/fixture" });
+    await act(async () => button("Sign In").click());
+    const enableUrl = "https://login.tailscale.com/f/serve?node=fixture";
+    store.api.mockResolvedValue({ url: null, setup: { state: "serve-disabled", backendState: "Running", enableUrl } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(openExternal).toHaveBeenLastCalledWith(enableUrl);
+    expect(button("Allow")).toBeDefined();
+    expect(host.textContent).toContain("Click Enable on the Tailscale page.");
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(openExternal).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps sign-in available after its request fails", async () => {
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    store.api.mockRejectedValueOnce(new Error("fixture"));
+    await act(async () => button("Sign In").click());
+    expect(button("Sign In")).toBeDefined();
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  });
+
+  it("opens exactly the Serve enable URL and shows its next instruction", async () => {
+    const enableUrl = "https://login.tailscale.com/f/serve?node=fixture";
+    const openExternal = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("ogb", { openExternal });
+    await render({ url: null, setup: { state: "serve-disabled", backendState: "Running", enableUrl } });
+    await act(async () => button("Allow").click());
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith(enableUrl);
+    expect(host.textContent).toContain("Click Enable on the Tailscale page.");
+  });
+
+  it("shows store buttons and no QR on a phone", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width") }));
+    await render({ url, setup: { state: "ready" } });
+    expect(button("App Store")).toBeDefined();
+    expect(button("Google Play")).toBeDefined();
+    expect(host.querySelector("[data-store-codes]")).toBeNull();
+    expect(host.querySelector("[data-phone-link-qr]")).toBeNull();
+  });
+
+  it("keeps the PC paste flow and Copy Link reachable with no phone", async () => {
+    const open = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("ogb", { deviceWindow: { open } });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    await render({ url, setup: { state: "ready", account: "you@example.com" }, pcs: [{ name: "Laptop", host: "laptop.tail1234.ts.net" }] });
+    await act(async () => button("PC").click());
+    expect(host.textContent).toContain("Open Wink there and do the same steps as you@example.com.");
+    await act(async () => button("Copy Link").click());
+    expect(writeText).toHaveBeenCalledWith(url);
+    await act(async () => button("Open Laptop").click());
+    expect(open).toHaveBeenCalledExactlyOnceWith("laptop.tail1234.ts.net", "Laptop");
+  });
+
+  it.each(["missing", "not-running", "serve-disabled", "checking", "error", "ready"])("renders %s with one next PC step", async (state) => {
+    await render({ url, setup: { state, backendState: state === "not-running" ? "NeedsLogin" : undefined, enableUrl: "https://login.tailscale.com/f/serve?node=fixture" } });
+    expect(host.querySelectorAll("[data-device-step]")).toHaveLength(state === "ready" ? 2 : 5);
+    expect([...host.querySelectorAll("[data-device-step]")].map((row) => Number(row.getAttribute("data-device-step")))).toEqual(state === "ready" ? [1, 2] : [1, 2, 3, 1, 2]);
+    expect(!!button("Allow")).toBe(state === "serve-disabled");
     expect(host.textContent).not.toContain(url);
+    expect(!!button("Sign In")).toBe(state === "not-running");
+    expect(host.querySelector("[data-phone-link-qr]")).toBeNull();
   });
 
   it("opens Get Tailscale through the desktop external path", async () => {
     const openExternal = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("ogb", { openExternal });
+    vi.stubGlobal("ogb", { platform: "win32", openExternal });
     await render({ url: null, setup: { state: "missing" } });
     await act(async () => button("Get Tailscale").click());
-    expect(openExternal).toHaveBeenCalledWith("https://tailscale.com/download");
+    expect(openExternal).toHaveBeenCalledWith("https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe");
   });
 
   it("keeps a browser download fallback", async () => {
@@ -78,7 +165,7 @@ describe("Phone setup steps", () => {
   it("copies the same link encoded by the local QR", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    await render({ url, setup: { state: "ready" } });
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
     const qr = document.createElement("div");
     qr.innerHTML = renderToStaticMarkup(createElement(QRCodeSVG, { value: url, size: 168, level: "M", bgColor: "#ffffff", fgColor: "#111111" }));
     expect(host.querySelector("[data-phone-link-qr] svg")?.outerHTML).toBe(qr.innerHTML);
@@ -90,15 +177,15 @@ describe("Phone setup steps", () => {
 
   it("keeps Copied through a focus refresh", async () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
-    await render({ url, setup: { state: "ready" } });
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
     await act(async () => button("Copy Link").click());
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(button("Copied")).toBeDefined();
   });
 
-  it.each(["not-running", "serve-disabled", "error", "checking"])("hides Get Tailscale when %s", async (state) => {
+  it.each(["not-running", "serve-disabled", "error", "checking"])("keeps Get Tailscale reachable when %s", async (state) => {
     await render({ url: null, setup: { state } });
-    expect(button("Get Tailscale")).toBeUndefined();
+    expect(button("Get Tailscale")).toBeDefined();
   });
 
   it("opens the relay code box only from its link", async () => {
@@ -114,7 +201,7 @@ describe("Phone setup steps", () => {
   it("hides the relay link on a remote device, where relay setup is refused", async () => {
     store.api.mockImplementation(async (path: string) => {
       if (path === "/api/phone-relay/status") throw new Error("manage phone access on this PC");
-      return { url, setup: { state: "ready" } };
+      return { url, setup: { state: "ready", phoneJoined: true } };
     });
     root = createRoot(host);
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
@@ -150,11 +237,11 @@ describe("Phone setup steps", () => {
   });
 
   it.each(["focus", "poll"])("refreshes on %s even after ready and stops on unmount", async (trigger) => {
-    await render({ url, setup: { state: "ready" } });
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
     store.api.mockResolvedValue({ url: null, setup: { state: "not-running" } });
     await act(async () => {
       if (trigger === "focus") window.dispatchEvent(new Event("focus"));
-      else await vi.advanceTimersByTimeAsync(15_000);
+      else await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(host.querySelector("[data-phone-link-qr]")).toBeNull();
     await act(async () => root!.unmount());
@@ -167,22 +254,22 @@ describe("Phone setup steps", () => {
 
   it("does not overlap slow requests and ignores a result after unmount", async () => {
     let finish!: (body: object) => void;
-    store.api.mockImplementation((path: string) => path === "/api/remote-link" ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({}));
+    store.api.mockImplementation((path: string) => path === "/api/remote-link?setup=1" ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({}));
     root = createRoot(host);
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       await vi.advanceTimersByTimeAsync(30_000);
     });
-    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link")).toHaveLength(1);
+    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(1);
     await act(async () => root!.unmount());
     root = undefined;
-    await act(async () => finish({ url, setup: { state: "ready" } }));
+    await act(async () => finish({ url, setup: { state: "ready", phoneJoined: true } }));
     expect(host.textContent).toBe("");
   });
 
   it("clears a ready QR if the request fails", async () => {
-    await render({ url, setup: { state: "ready" } });
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
     store.api.mockRejectedValue(new Error("fixture"));
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(host.querySelector("[data-phone-link-qr]")).toBeNull();
@@ -203,12 +290,12 @@ describe("Phone setup steps", () => {
     expect(store.api).toHaveBeenCalledTimes(count + 1);
   });
 
-  it("keeps today's page when no phone has opened Wink", async () => {
-    await render({ url, setup: { state: "ready" }, phones: [] });
+  it("keeps phone joined and Wink opened as separate steps", async () => {
+    await render({ url, setup: { state: "ready", phoneJoined: true }, phones: [] });
     expect(host.querySelector("[data-phone-list]")).toBeNull();
-    expect(host.querySelector('[data-phone-step="2"]')?.getAttribute("data-complete")).toBe("false");
-    expect(host.querySelector('[data-phone-step="3"]')?.getAttribute("data-complete")).toBe("false");
-    expect(host.querySelector('[data-phone-step="2"]')?.textContent).toContain("2");
+    expect(host.querySelector('[data-device-step="1"]')?.getAttribute("data-complete")).toBe("true");
+    expect(host.querySelector('[data-device-step="2"]')?.getAttribute("data-complete")).toBe("false");
+    expect(host.querySelector('[data-device-step="2"]')?.textContent).toContain("2");
   });
 
   it.each([
@@ -218,31 +305,31 @@ describe("Phone setup steps", () => {
     localStorage.setItem("omb-locale", locale);
     vi.setSystemTime(1_800_000_000_000);
     const ago = (ms: number) => 1_800_000_000_000 - ms;
-    await render({ url, setup: { state: "ready" }, phones: [
+    await render({ url, setup: { state: "ready", phoneJoined: true }, phones: [
       { id: "a", kind: "android", lastSeen: ago(5 * 60_000) },
       { id: "b", kind: "iphone", lastSeen: ago(30_000) },
       { id: "c", kind: "phone", lastSeen: ago(3 * 86_400_000) },
       { id: "d", kind: "ipad", lastSeen: ago(2 * 3_600_000) },
     ] });
     expect([...host.querySelectorAll("[data-phone-list] li")].map((row) => row.textContent)).toEqual(rows);
-    for (const step of ["1", "2", "3"]) expect(host.querySelector(`[data-phone-step="${step}"]`)?.getAttribute("data-complete")).toBe("true");
+    for (const step of ["1", "2"]) expect(host.querySelector(`[data-device-step="${step}"]`)?.getAttribute("data-complete")).toBe("true");
     expect(host.querySelectorAll(`[aria-label="${label}"]`)).toHaveLength(2);
     expect(host.querySelector("[data-phone-link-qr] svg")).not.toBeNull();
     expect(host.textContent).not.toMatch(/Mozilla|\d+\.\d+\.\d+\.\d+/);
   });
 
   it("shows a phone as soon as the next refresh sees it", async () => {
-    await render({ url, setup: { state: "ready" } });
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
     expect(host.querySelector("[data-phone-list]")).toBeNull();
-    store.api.mockResolvedValue({ url, setup: { state: "ready" }, phones: [{ id: "a", kind: "android", lastSeen: Date.now() }] });
+    store.api.mockResolvedValue({ url, setup: { state: "ready", phoneJoined: true }, phones: [{ id: "a", kind: "android", lastSeen: Date.now() }] });
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(host.querySelector("[data-phone-list]")?.textContent).toBe("Android phone · Active now");
-    expect(host.querySelector('[data-phone-step="3"]')?.getAttribute("data-complete")).toBe("true");
+    expect(host.querySelector('[data-device-step="2"]')?.getAttribute("data-complete")).toBe("true");
   });
 
   it("renders all new steps and the relay link in Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
-    await render({ url, setup: { state: "ready" } });
-    for (const text of ["이 PC에 Tailscale 설치", "휴대폰에도 Tailscale을 설치하고 같은 계정으로 로그인", "휴대폰 카메라로 이 코드를 스캔", "링크 복사", "릴레이 설정 코드가 있나요?"]) expect(host.textContent).toContain(text);
+    await render({ url, setup: { state: "ready", phoneJoined: true } });
+    for (const text of ["이 PC", "휴대폰에 Tailscale 설치", "스캔해서 Wink 열기", "링크 복사", "릴레이 설정 코드가 있나요?"]) expect(host.textContent).toContain(text);
   });
 });

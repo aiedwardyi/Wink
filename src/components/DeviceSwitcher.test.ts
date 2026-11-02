@@ -1,13 +1,20 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const store = vi.hoisted(() => ({ api: vi.fn() }));
+const store = vi.hoisted(() => ({ api: vi.fn(), dispatch: vi.fn(), useStoreDispatch: () => store.dispatch }));
 vi.mock("@/state/store", () => store);
 
 import { I18nProvider } from "@/lib/i18n";
 import { DeviceSwitcher, DeviceTag, type DeviceItem } from "./DeviceSwitcher";
+
+const roots = new Set<Root>();
+function renderRoot(host: Element) {
+  const root = createRoot(host);
+  roots.add(root);
+  return root;
+}
 
 const device = (id: string, over: Partial<DeviceItem> = {}): DeviceItem => ({
   deviceId: id,
@@ -22,10 +29,18 @@ function setPhone(phone: boolean) {
   window.matchMedia = ((query: string) => ({ matches: phone && query.includes("max-width"), media: query })) as never;
 }
 
-afterEach(() => {
+beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
+
+afterEach(async () => {
+  await act(async () => {
+    for (const root of roots) root.unmount();
+  });
+  roots.clear();
   store.api.mockReset();
+  store.dispatch.mockReset();
   delete window.ogb;
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 async function renderView(
@@ -39,7 +54,7 @@ async function renderView(
   store.api.mockResolvedValue({ devices });
   const host = document.createElement("div");
   document.body.append(host);
-  const root = createRoot(host);
+  const root = renderRoot(host);
   const node = view === DeviceTag
     ? createElement(DeviceTag)
     : createElement(DeviceSwitcher, { navigate, labeled, drawerOpen, iconOnly });
@@ -57,6 +72,28 @@ const click = (target: Element) => target.dispatchEvent(new MouseEvent("click", 
 const key = (target: Element, name: string) => target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
 
 describe("DeviceSwitcher", () => {
+  it("opens Devices from the final Connect a Device row", async () => {
+    setDesktop();
+    const { host, root } = await renderView([device("home", { current: true }), device("work")]);
+    await act(async () => click(host.querySelector("button")!));
+    const connect = host.querySelector("[data-connect-device]")!;
+    expect(connect.textContent).toBe("Connect a Device");
+    expect(connect.closest("li")).toBe(host.querySelector("ul")?.lastElementChild);
+    await act(async () => click(connect));
+    expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "companion" });
+    await act(async () => root.unmount());
+  });
+
+  it("opens Devices when the native PC opener has no local Tailscale", async () => {
+    const open = setDesktop();
+    open.mockResolvedValue(false);
+    const { host, root } = await renderView([device("home", { current: true }), device("work")]);
+    await act(async () => click(host.querySelector("button")!));
+    await act(async () => click(host.querySelector('[data-device-id="work"]')!));
+    expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "companion" });
+    await act(async () => root.unmount());
+  });
+
   it("is hidden with fewer than 2 devices", async () => {
     setPhone(true);
     const { host } = await renderView([device("home", { current: true })], vi.fn(), DeviceTag);
@@ -134,7 +171,7 @@ describe("DeviceSwitcher", () => {
     store.api.mockResolvedValue({ devices: [device("home", { current: true }), device("work")] });
     const host = document.createElement("div");
     document.body.append(host);
-    await act(async () => createRoot(host).render(createElement(I18nProvider, null, createElement(DeviceSwitcher, { labeled: true }))));
+    await act(async () => renderRoot(host).render(createElement(I18nProvider, null, createElement(DeviceSwitcher, { labeled: true }))));
     const leave = vi.fn();
     window.addEventListener("orbit:leave", leave);
     await act(async () => click(host.querySelector("button[aria-expanded]")!));

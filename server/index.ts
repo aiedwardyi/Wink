@@ -271,6 +271,7 @@ import {
   remoteKeyMatches,
   remoteLinkUrl,
   remoteHostRetry,
+  remoteLinkSetup,
 } from "./remote-access.ts";
 import {
   DEVICE_HEARTBEAT_MS,
@@ -2155,6 +2156,7 @@ function startDevicePresence(): void {
 }
 
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
+  if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
   startDevicePresence();
 });
@@ -7462,12 +7464,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     // ── phone link (this PC's own /remote?key= url, never synced) ──
     if (method === "GET" && path === "/api/remote-link") {
-      if (REMOTE_HOST === undefined) await remoteRetry.refresh();
+      const setupOpen = url.searchParams.get("setup") === "1";
+      if (setupOpen || REMOTE_HOST === undefined) await remoteRetry.refresh(setupOpen);
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
-        setup: REMOTE_HOST ? { state: "ready" } : remoteRetry.status(),
+        setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
+        ...(setupOpen ? { pcs: await remoteRetry.devices() } : {}),
         phones: phoneVisits.list(),
       });
+    }
+    if (method === "POST" && path === "/api/devices/sign-in") {
+      if (!credentials.bearerOk || !isLoopbackHost(req.headers.host)) return json(res, 403, { error: "Manage devices on this PC" });
+      return json(res, 200, await remoteRetry.signIn());
     }
     // A phone's Wink checks in while open; the PC's own window never counts.
     if (method === "POST" && path === "/api/phone-seen") {

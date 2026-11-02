@@ -143,7 +143,7 @@ describe("SettingsModal friends chrome", () => {
     expect(html).not.toContain("Cua Linux");
     expect(html).not.toContain("Hide Local VM Setup");
     expect(html).not.toMatch(/>Local VM</);
-    expect(html).toMatch(/>Phone</);
+    expect(html).toMatch(/>Devices</);
     expect(html).not.toContain("OpenMausBot");
     expect(html).not.toContain("accounts.openmausbot.com");
     expect(html).not.toContain("Browser profiles");
@@ -245,11 +245,11 @@ describe("SettingsModal friends chrome", () => {
     expect(html).toContain("Wink Day");
   });
 
-  it("orders Phone after Connections", () => {
+  it("orders Devices after Connections", () => {
     const html = markup("general");
     const nav = html.slice(html.indexOf("<nav"), html.indexOf("</nav>"));
     expect([...nav.matchAll(/<button[^>]*aria-label="([^"]+)"/g)].map((match) => match[1])).toEqual([
-      "Account", "General", "Connections", "Phone", "Themes", "Usage", "Model Index", "Shortcuts",
+      "Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index", "Shortcuts",
     ]);
   });
 
