@@ -57,21 +57,23 @@ describe("KeyboardShortcuts", () => {
     expect(html).not.toContain("Shift + M");
   });
 
-  it("names the cycle row like Cycle theme and drops the terminal note", () => {
+  it("names the page-scoped shortcuts and drops the terminal note", () => {
     const win = window as unknown as { ogb?: unknown };
     win.ogb = { terminal: {} };
     try {
       const html = renderToStaticMarkup(
         createElement(I18nProvider, null, createElement(KeyboardShortcuts)),
       );
-      expect(html).toContain(">Cycle Model Index Tab<");
+      expect(html).toContain(">Cycle Model Index Tab (in Model Index)<");
+      expect(html).toContain(">Refresh Usage (in Usage)<");
       expect(html).toContain(">Toggle Terminal<");
 
       persistPreference("ko");
       const ko = renderToStaticMarkup(
         createElement(I18nProvider, null, createElement(KeyboardShortcuts)),
       );
-      expect(ko).toContain(">모델 지표 탭 전환<");
+      expect(ko).toContain(">모델 지표 탭 전환 (모델 지표 화면에서)<");
+      expect(ko).toContain(">사용량 새로 고침 (사용량 화면에서)<");
       expect(ko).toContain(">터미널 열기 / 닫기<");
     } finally {
       delete win.ogb;
@@ -94,7 +96,7 @@ describe("KeyboardShortcuts", () => {
 
     expect(html).toContain(">Toggle Themes<");
     expect(html).toContain(">Toggle Usage<");
-    expect(html).toContain(">Refresh Usage<");
+    expect(html).toContain(">Refresh Usage (in Usage)<");
     expect(html).toContain('aria-label="Alt + R"');
     expect(html).not.toContain("New bot");
     expect(html).not.toContain("Switch to bot 1");
