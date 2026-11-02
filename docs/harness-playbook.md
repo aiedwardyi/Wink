@@ -152,7 +152,8 @@ When a worker reports done, check its work yourself before anything moves:
    typecheck, with the commands the repo's own instructions give.
 4. Don't run the full test suite or boot the app's server unless the repo's
    instructions say that's safe.
-5. Read the diff for the acceptance items. A report is a claim, not proof.
+5. Read the diff for the acceptance items. A report is a claim, not proof. An
+   unmet item fails even when the worker says it was already like that.
 6. Run new regression tests on the base commit first. They must fail with the
    exact old bug.
 7. Check numeric claims yourself. Run old and new one after the other so
