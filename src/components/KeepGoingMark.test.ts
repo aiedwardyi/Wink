@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "../App";
+import { KeepGoingMark } from "./KeepGoingMark";
 
 class FakeEventSource {
   static current: FakeEventSource | null = null;
@@ -66,6 +68,27 @@ const sidebarMark = (host: HTMLElement, id: string) =>
   host.querySelector(`[data-sidebar-row-id="${id}"] [data-sidebar-keep-going]`);
 
 describe("keep going mark", () => {
+  it("gives simultaneous solid marks separate infinity cutout masks", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement("div", null,
+      ...Array.from({ length: 24 }, (_, key) => createElement(KeepGoingMark, { key, state: "on" })),
+      createElement(KeepGoingMark, { state: "paused" }),
+    ));
+    const masks = [...host.querySelectorAll("mask")];
+    expect(masks).toHaveLength(24);
+    expect(new Set(masks.map((mask) => mask.id)).size).toBe(24);
+    for (const mask of masks) {
+      expect(mask.id).toMatch(/^kgm[a-zA-Z0-9_-]+$/);
+      expect(mask.querySelector("path")?.getAttribute("stroke")).toBe("#000");
+      expect(mask.querySelector("path")?.getAttribute("stroke-width")).toBe("1.1");
+      expect(mask.parentElement?.querySelector("circle[mask]")?.getAttribute("mask")).toBe(`url(#${mask.id})`);
+    }
+    const paused = host.querySelector("svg:last-child")!;
+    expect(paused.querySelector("mask")).toBeNull();
+    expect(paused.querySelector("circle")?.getAttribute("fill")).toBe("none");
+    expect(paused.querySelector("path")?.getAttribute("d")).toBe(masks[0].querySelector("path")?.getAttribute("d"));
+  });
+
   it("marks the avatar solid when on, hollow when paused, and not at all when off", async () => {
     const { host, unmount } = await mountApp([
       bot("on", { keepGoing: { paused: null } }),
@@ -76,7 +99,7 @@ describe("keep going mark", () => {
       await vi.waitFor(() => expect(host.querySelector('[data-sidebar-row-id="off"]')).not.toBeNull());
       expect(sidebarMark(host, "on")?.getAttribute("data-sidebar-keep-going")).toBe("on");
       expect(sidebarMark(host, "on")?.getAttribute("aria-label")).toBe("Agentic Mode on");
-      expect(sidebarMark(host, "on")?.querySelector("circle")).toBeNull();
+      expect(sidebarMark(host, "on")?.querySelector("circle[mask]")?.getAttribute("fill")).toBe("currentColor");
       expect(sidebarMark(host, "paused")?.getAttribute("data-sidebar-keep-going")).toBe("paused");
       expect(sidebarMark(host, "paused")?.getAttribute("aria-label")).toBe("Agentic Mode paused");
       expect(sidebarMark(host, "paused")?.querySelector("circle")?.getAttribute("fill")).toBe("none");
