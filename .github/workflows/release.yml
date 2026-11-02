@@ -94,8 +94,6 @@ jobs:
         env:
           ERROR_REPORT_DSN: ${{ vars.ERROR_REPORT_DSN }}
         run: node scripts/write-error-report-config.mjs
-      # CI on the tip typechecks before publish, so the release build only bundles.
-      - run: npm pkg set "scripts.build=vite build"
       - run: pnpm package:win
       - name: Verify the packaged tree and start the packaged server
         shell: bash
