@@ -846,7 +846,11 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
         }
       }, "the holding prompt");
       // a config change waits for the holder's turn, and so does the next dispatch
-      expect((await api("PATCH", "/api/instances/steerPrep", { cli: `${SERVER_DIR}/testing/../testing/fake-acp-cli.ts` })).status).toBe(200);
+      const configPath = join(home, ".orbit", "config.json");
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.instances.steerPrep.config.cli = `${SERVER_DIR}/testing/../testing/fake-acp-cli.ts`;
+      writeFileSync(configPath, JSON.stringify(config));
+      expect((await api("PUT", "/api/config", { xai: { key: "fixture-reload" } })).status).toBe(200);
 
       const first = api("POST", `/api/bots/${bot.id}/messages`, { text: "prep first" });
       // the edit route refuses while a turn-start claim is held, before it looks up the message

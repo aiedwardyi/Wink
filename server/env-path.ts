@@ -236,10 +236,7 @@ export function resetPathCacheForTests(): void {
   windowsFiles.clear();
 }
 
-/** Every `name` binary on the augmented PATH as absolute paths, in PATH
- * order (first = what a bare name would run). Used by the Engines panel's
- * "detected" dropdown and the /api/cli-candidates endpoint. A path-ish
- * name is echoed back as-is — it already IS a location. */
+/** Every `name` binary on the augmented PATH, in PATH order; a path is returned as-is. */
 export function findCliCandidates(name: string): string[] {
   if (!name || /[\n\r]/.test(name)) return [];
   if (/[/\\]/.test(name) || /^[a-zA-Z]:/.test(name)) return [name];

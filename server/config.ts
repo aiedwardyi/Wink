@@ -467,28 +467,6 @@ export function applyCredentialAllowlist(
   }
 }
 
-/** The only names a `<cli> --version` probe needs. The probe runs a binary the
- * caller names and reports what it printed, so its env is built from this list
- * rather than filtered down from ours — anything not here is not a probe's to
- * see, including whatever credential this process gains next. */
-const CLI_PROBE_ENV = [
-  "PATH", "PATHEXT", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
-  "SystemRoot", "SystemDrive", "windir", "ComSpec", "TEMP", "TMP", "TMPDIR",
-  "LANG", "LC_ALL", "TZ", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMDATA",
-  "NODE_ENV", "SHELL", "USER", "USERNAME", "LOGNAME",
-] as const;
-
-/** Build a CLI probe env from CLI_PROBE_ENV alone. Windows env names are
- * case-insensitive, so names are matched that way on every platform. */
-export function cliProbeEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const wanted = new Map(CLI_PROBE_ENV.map((name) => [name.toUpperCase(), name]));
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value !== undefined && wanted.has(key.toUpperCase())) env[key] = value;
-  }
-  return env;
-}
-
 /** Merge a partial config into ~/.orbit/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
@@ -525,60 +503,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   writeFileAtomic(p, JSON.stringify(disk, null, 2), { mode: 0o600 });
 }
 
-/** Set one instance's `config.cli` ("" clears the override back to the
- * driver default). Creating the instance entry is fine — a config-less
- * entry rides driver.defaultConfig(). Returns false for unknown instances
- * when the fleet is explicitly configured. The returned map must stay
- * PERSISTABLE: instanceConfigs() injects credential env into consuming
- * drivers' entries for the live fleet, so those injected keys are stripped
- * back out before the map is returned — otherwise saving an override would
- * copy the box token into the instances section of
- * config.json. */
-export function withInstanceCli(
-  cfg: AppConfig,
-  instanceId: string,
-  cli: string,
-): InstanceCliUpdate {
-  const next: AppConfig = structuredClone(cfg);
-  const map = instanceConfigs(next);
-  // hasOwn, not truthiness: map is a plain object literal, so
-  // map["__proto__"] resolves to Object.prototype — truthy — and the
-  // assignment below would poison EVERY object in the process (instanceId
-  // comes off the URL, where `__proto__` passes the route's [\w.-]+ regex)
-  if (!Object.hasOwn(map, instanceId)) return { ok: false, config: cfg };
-  const entry = map[instanceId];
-  const cliKey = cli.trim();
-  const currentConfig = jsonObjectSchema.safeParse(entry.config);
-  if (cliKey) {
-    const nextConfig: JsonObject = currentConfig.success ? { ...currentConfig.data } : {};
-    nextConfig.cli = cliKey;
-    entry.config = nextConfig;
-  } else if (currentConfig.success && Object.hasOwn(currentConfig.data, "cli")) {
-    const rest = { ...currentConfig.data };
-    delete rest.cli;
-    entry.config = Object.keys(rest).length ? rest : undefined;
-  }
-  for (const e of Object.values(map)) {
-    if (!e.environment) continue;
-    const injected = injectedEnvironment(next, e.driver);
-    for (const [k, v] of Object.entries(e.environment)) {
-      if (injected.get(k) === v) delete e.environment[k];
-    }
-    if (!Object.keys(e.environment).length) delete e.environment;
-  }
-  next.instances = map;
-  return { ok: true, config: next };
-}
-
-interface InstanceCliUpdate {
-  ok: boolean;
-  config: AppConfig;
-}
-
-/** The credential env instanceConfigs() injects for one driver — shared with
- * withInstanceCli() so the inject rule and the strip rule cannot drift apart.
- * Each secret goes only to the driver that actually reads it: Computer reads
- * BOX_TOKEN. */
+/** Inject credentials only into the driver that consumes them. */
 function injectedEnvironment(cfg: AppConfig, driver: string): Map<string, string> {
   const environment = new Map<string, string>();
   if (driver === "boxAgent" && cfg.box?.token) environment.set("BOX_TOKEN", cfg.box.token);
