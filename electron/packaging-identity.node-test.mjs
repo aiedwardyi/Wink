@@ -87,8 +87,8 @@ describe("packaging identity", () => {
     assert.doesNotMatch(release, /milind-soni\/openmausbot-releases/);
     assert.doesNotMatch(release, /grep -q "openmausbot-releases"/);
     assert.doesNotMatch(release, /milind-soni\/OpenMausBot/);
-    assert.match(release, /cp "release\/Wink-\$v-setup\.exe" release\/Wink-setup\.exe/);
-    assert.match(release, /cp "release\/Wink-\$v-setup\.exe" release\/Orbit-setup\.exe/);
+    assert.match(release, /cp "Wink-\$VERSION-setup\.exe" Wink-setup\.exe/);
+    assert.match(release, /cp "Wink-\$VERSION-setup\.exe" Orbit-setup\.exe/);
     assert.match(release, /--title "Wink \$VERSION"/);
   });
 
