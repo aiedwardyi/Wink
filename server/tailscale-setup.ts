@@ -20,7 +20,7 @@ export function tailscaleCommands(platform: NodeJS.Platform): string[] {
 
 export function tailnetDevices(status: TailscaleStatus) {
   const userId = status.Self?.UserID;
-  const peers = !userId ? [] : Object.values(status.Peer ?? {}).filter((peer) => peer.UserID === userId && peer.Online);
+  const peers = userId == null ? [] : Object.values(status.Peer ?? {}).filter((peer) => peer.UserID === userId && peer.Online);
   const tailnet = status.Self?.DNSName?.replace(/\.$/, "").split(".").slice(1).join(".");
   return {
     backendState: status.BackendState,

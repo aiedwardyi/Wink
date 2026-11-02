@@ -36,6 +36,7 @@ const help = "mt-1 break-keep text-[12px] leading-relaxed text-ink-secondary";
 export function ConnectDevices() {
   const { t } = useI18n();
   const phone = isPhone();
+  const deviceWindow = window.ogb?.deviceWindow;
   const [status, setStatus] = useState<RemotePhoneLink | null>(null);
   const [tab, setTab] = useState<"phone" | "pc">("phone");
   const [copied, setCopied] = useState(false);
@@ -43,24 +44,27 @@ export function ConnectDevices() {
   const [loginPending, setLoginPending] = useState(false);
   const [loginFailed, setLoginFailed] = useState(false);
   const [allowOpened, setAllowOpened] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [pcFailed, setPcFailed] = useState(false);
   const copiedTimer = useRef<number | undefined>(undefined);
   const live = useRef(true);
   const signedInHere = useRef(false);
 
   useEffect(() => {
     live.current = true;
+    let active = true;
     let pending = false;
     const load = async () => {
       if (pending || document.visibilityState === "hidden") return;
       pending = true;
       try {
         const body: RemotePhoneLink = await api("/api/remote-link?setup=1");
-        if (live.current) {
+        if (active) {
           setStatus(body);
           if (body.setup?.backendState !== "NeedsLogin") setLoginOpened(false);
         }
       } catch {
-        if (live.current) setStatus({ url: null, setup: { state: "error" } });
+        if (active) setStatus({ url: null, setup: { state: "error" } });
       } finally { pending = false; }
     };
     const timer = window.setInterval(() => void load(), 2_000);
@@ -68,13 +72,14 @@ export function ConnectDevices() {
     document.addEventListener("visibilitychange", load);
     void load();
     return () => {
+      active = false;
       live.current = false;
       window.clearInterval(timer);
       window.clearTimeout(copiedTimer.current);
       window.removeEventListener("focus", load);
       document.removeEventListener("visibilitychange", load);
     };
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     const enableUrl = status?.setup?.enableUrl;
@@ -90,7 +95,7 @@ export function ConnectDevices() {
   const phones = status?.phones ?? [];
   const pcs = status?.pcs ?? [];
   const signIn = async () => {
-    if (!setup.canSignIn || loginPending) return;
+    if ((!setup.canSignIn && !setup.loginOpened) || status?.setup?.haveNodeKey || loginPending) return;
     setLoginPending(true);
     setLoginFailed(false);
     try {
@@ -142,8 +147,11 @@ export function ConnectDevices() {
           {signedIn && account && <p className={help}>{t("settings.devices.signedInAs", { account })}</p>}
           {installed && !signedIn && <>
             {setup.needsApproval ? <p className={help}>{t("settings.devices.needsApproval")}</p>
-              : setup.loginOpened ? <p className={help}>{t("settings.devices.finishSignIn")}</p>
-              : setup.canSignIn ? <button type="button" onClick={() => void signIn()} className={`${button} mt-1`}>{t("settings.devices.signIn")}</button>
+              : setup.loginOpened ? <>
+                <p className={help}>{t("settings.devices.finishSignIn")}</p>
+                <button type="button" disabled={loginPending} onClick={() => void signIn()} className="mt-1 text-[12px] text-ink-secondary underline hover:text-ink">{t("settings.devices.signIn")}</button>
+              </>
+              : setup.canSignIn ? <button type="button" disabled={loginPending} onClick={() => void signIn()} className={`${button} mt-1`}>{t("settings.devices.signIn")}</button>
               : <p className={help}>{t(setup.help)}</p>}
             {loginFailed && <p role="alert" className={help}>{t("settings.phoneLink.notRunning")}</p>}
           </>}
@@ -175,8 +183,8 @@ export function ConnectDevices() {
               <StoreCodes phone={phone} />
             </>}
           </Step>
-          <Step n={2} done={phoneOpened} active={ready && phoneJoined && !phoneOpened} title={t("settings.devices.scanStep")} label={t("settings.phone.phoneReady")}>
-            {phoneJoined && setup.url && <div className="animate-fade-in">
+          <Step n={2} done={phoneOpened} active={ready && !phoneOpened} title={t("settings.devices.scanStep")} label={t("settings.phone.phoneReady")}>
+            {setup.url && <div className="animate-fade-in">
               {!phone && <div data-phone-link-qr className="mt-2 w-fit rounded-xl bg-white p-3" aria-label={t("settings.phoneAccess.qrLabel")}>
                 <QRCodeSVG value={setup.url} size={168} level="M" bgColor="#ffffff" fgColor="#111111" />
               </div>}
@@ -190,10 +198,16 @@ export function ConnectDevices() {
             {ready && copyButton}
           </Step>
           <Step n={2} done={false} active={ready && setup.pcOnline} title={pcs[0] ? t("settings.devices.openPc", { name: pcs[0].name }) : t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
-            {pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
-              if (window.ogb?.deviceWindow) void window.ogb.deviceWindow.open(pc.host, pc.name).catch(() => {});
-              else window.location.assign(`https://${pc.host}/`);
+            {deviceWindow && pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
+              setPcFailed(false);
+              void deviceWindow.open(pc.host, pc.name).then((opened) => {
+                if (!live.current || opened) return;
+                setPcFailed(true);
+                setStatus(null);
+                setRefresh((value) => value + 1);
+              }, () => { if (live.current) setPcFailed(true); });
             }} className={`${button} mr-2 mt-2`}>{t("settings.devices.openPc", { name: pc.name })}</button>)}
+            {pcFailed && <p role="alert" className={help}>{t("settings.phoneLink.notRunning")}</p>}
           </Step>
         </>}
       </ol>

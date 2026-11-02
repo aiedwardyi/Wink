@@ -70,6 +70,15 @@ describe("packaged locale", () => {
 });
 
 describe("desktop viewer copy", () => {
+  it.each(["en", "ko"])("keeps replacement tokens literal in %s device names", (locale) => {
+    const name = "Laptop $& $' $` $$";
+    expect(translate(locale, "packaged.deviceLinkHelp", { name })).toBe(
+      locale === "ko"
+        ? `${name}에서 설정 > 기기를 열고 링크 복사를 누르세요. 여기에 한 번만 붙여넣으면 됩니다.`
+        : `On ${name}, open Settings > Devices and click Copy Link. Paste it here once.`,
+    );
+  });
+
   it("names the PC and Devices page in both paste instructions", () => {
     expect(translate("en", "packaged.deviceLinkHelp", { name: "Laptop" })).toBe("On Laptop, open Settings > Devices and click Copy Link. Paste it here once.");
     expect(translate("ko", "packaged.deviceLinkHelp", { name: "Laptop" })).toBe("Laptop에서 설정 > 기기를 열고 링크 복사를 누르세요. 여기에 한 번만 붙여넣으면 됩니다.");

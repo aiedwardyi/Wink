@@ -152,7 +152,7 @@ export function translate(locale, key, vars) {
   let phrase = table[key] ?? catalogs.en[key] ?? key;
   if (!vars) return phrase;
   for (const [name, value] of Object.entries(vars)) {
-    phrase = phrase.replaceAll(`{${name}}`, String(value));
+    phrase = phrase.replaceAll(`{${name}}`, () => String(value));
   }
   return phrase;
 }

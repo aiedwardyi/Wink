@@ -12,6 +12,12 @@ const snapshot = (BackendState = "Running", Peer = {}) => ({
 const fake = (status: TailscaleStatus) => vi.fn(async (_file: string, args: string[]) => args[0] === "status" ? JSON.stringify(status) : "{}");
 
 describe("Devices setup detection", () => {
+  it("detects same-account peers when UserID is zero", () => {
+    const status = snapshot("Running", { phone: peer(0), pc: peer(0, "windows") });
+    status.Self.UserID = 0;
+    expect(tailnetDevices(status)).toMatchObject({ phoneJoined: true, pcs: [{ host: "phone.tail1234.ts.net" }] });
+  });
+
   it("preserves a configured host for callers outside Devices", () => {
     expect(remoteLinkSetup(host, { state: "checking" }, false)).toEqual({ state: "ready" });
     expect(remoteLinkSetup(host, { state: "disabled" }, true)).toEqual({ state: "ready" });

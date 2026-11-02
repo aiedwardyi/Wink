@@ -42,6 +42,51 @@ async function render(body: object) {
 }
 
 describe("Phone setup steps", () => {
+  it.each([undefined, false])("shows and copies a usable phone link without discovery (%s)", async (phoneJoined) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    await render({ url, setup: { state: "ready", phoneJoined } });
+    expect(host.querySelector("[data-phone-link-qr]")).not.toBeNull();
+    await act(async () => button("Copy Link").click());
+    expect(writeText).toHaveBeenCalledWith(url);
+  });
+
+  it("reopens Sign In after the browser closes before completion", async () => {
+    const openExternal = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("ogb", { openExternal });
+    await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    const loginUrl = "https://login.tailscale.com/a/fixture";
+    store.api.mockResolvedValue({ url: loginUrl });
+    await act(async () => button("Sign In").click());
+    expect(host.textContent).toContain("Finish in your browser.");
+    expect(button("Sign In")).toBeDefined();
+    await act(async () => button("Sign In").click());
+    expect(openExternal.mock.calls).toEqual([[loginUrl], [loginUrl]]);
+  });
+
+  it.each([false, true])("keeps discovered PC opening in Electron on phone=%s", async (phone) => {
+    vi.stubGlobal("ogb", undefined);
+    vi.stubGlobal("matchMedia", () => ({ matches: phone }));
+    await render({ url, setup: { state: "ready" }, pcs: [{ name: "Laptop", host: "laptop.tail1234.ts.net" }] });
+    await act(async () => button("PC").click());
+    expect(button("Open Laptop")).toBeUndefined();
+    expect(button("Copy Link")).toBeDefined();
+  });
+
+  it("refreshes setup when opening a PC finds no local tailnet", async () => {
+    const open = vi.fn().mockResolvedValue(false);
+    vi.stubGlobal("ogb", { deviceWindow: { open } });
+    await render({ url, setup: { state: "ready" }, pcs: [{ name: "Laptop", host: "laptop.tail1234.ts.net" }] });
+    await act(async () => button("PC").click());
+    store.api.mockResolvedValue({ url: null, setup: { state: "missing" } });
+    await act(async () => button("Open Laptop").click());
+    expect(store.api).toHaveBeenLastCalledWith("/api/remote-link?setup=1");
+    expect(store.api).toHaveBeenCalledTimes(3);
+    expect(host.querySelector("[data-pc-ready]")).toBeNull();
+    expect(button("Get Tailscale")).toBeDefined();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tailscale is offline. Open it and connect.");
+  });
+
   it.each(["Phone", "PC"])("keeps %s steps numbered 1-2 when This PC folds", async (tab) => {
     await render({ url: null, setup: { state: "missing" } });
     await act(async () => button(tab).click());
@@ -69,7 +114,7 @@ describe("Phone setup steps", () => {
     await act(async () => button("Sign In").click());
     expect(store.api).toHaveBeenCalledWith("/api/devices/sign-in", { method: "POST" });
     expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://login.tailscale.com/a/fixture");
-    expect(button("Sign In")).toBeUndefined();
+    expect(button("Sign In")).toBeDefined();
     expect(host.textContent).toContain("Finish in your browser.");
   });
 
@@ -144,7 +189,7 @@ describe("Phone setup steps", () => {
     expect(!!button("Allow")).toBe(state === "serve-disabled");
     expect(host.textContent).not.toContain(url);
     expect(!!button("Sign In")).toBe(state === "not-running");
-    expect(host.querySelector("[data-phone-link-qr]")).toBeNull();
+    expect(!!host.querySelector("[data-phone-link-qr]")).toBe(state === "ready");
   });
 
   it("opens Get Tailscale through the desktop external path", async () => {
