@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { catalogs } from "@/lib/i18n-catalog";
 import { saveRainbowBox } from "@/lib/rainbow-box";
-import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
+import { SKINS } from "@/lib/skins";
 import { saveTerminalPopups } from "@/lib/terminal-popups";
 import type { AppSettingsSection } from "@/state/store";
 
@@ -156,93 +156,17 @@ describe("SettingsModal friends chrome", () => {
     expect(source).not.toContain("settings.browserProfiles.title");
   });
 
-  it("offers Onyx, Dracula, and Panda Syntax in Skin alongside the shipped palettes", () => {
+  it("shows featured palettes with the remaining themes folded", () => {
     const html = markup("themes");
     expect(html).toContain("Skin");
     expect(html).not.toContain("Applies instantly and is remembered");
-    expect(html).toContain("Catppuccin Frappe");
-    expect(html).toContain("Tokyo Night");
-    expect(html).toContain("Vesper");
-    expect(html).toContain("Ledger");
-    expect(html).toContain("Onyx");
-    expect(html).toContain("Dracula");
-    expect(html).toContain("Panda Syntax");
-    expect(html).toContain("Gruvbox");
-    expect(html).toContain("Kanagawa");
-    expect(html).toContain("Peach");
-    expect(html).toContain("Coral");
-    expect(html).not.toContain("HaX0R_BLUE");
-    expect(html).not.toContain("Seaglass");
-    expect(html).toContain("Hurtado");
-    expect(html).toContain("Rosé Pine");
-    expect(html).toContain("Nord");
-    expect(html).toContain("GitHub Dimmed");
-    expect(html).toContain("TUI");
-    expect(html).toContain("TUI Black");
-    expect(html).toContain("TUI Amber");
-    expect(html).toContain("TUI Ice");
-    expect(html).toContain("TUI Slate");
-    expect(html).toContain("TUI Smoke");
-    expect(html).toContain("VS Code Dark");
-    expect(html).toContain("Studio Gray");
-    expect(html).toContain("Steel Gray");
-    expect(html).toContain("Precision");
-    expect(html).toContain("Notebook");
-    expect(html).toContain("Messenger");
-    expect(html).toContain("Community");
-    expect(html).toContain("Code Review");
-    expect(html).toContain("Blueprint");
-    expect(html).toContain("Blueprint Gray");
-    expect(html).toContain("Blueprint Charcoal");
-    expect(html).not.toContain("Cobalt");
-    expect(html).toContain('data-skin="catppuccin-frappe"');
-    expect(html).toContain('data-skin="tokyo-night"');
-    expect(html).toContain('data-skin="vesper"');
-    expect(html).toContain('data-skin="onyx"');
-    expect(html).toContain('data-skin="dracula"');
-    expect(html).toContain('data-skin="cobalt"');
-    expect(html).toContain('data-skin="gruvbox"');
-    expect(html).toContain('data-skin="kanagawa"');
-    expect(html).toContain('data-skin="peach"');
-    expect(html).toContain('data-skin="coral"');
-    expect(html).not.toContain('data-skin="haxor-blue"');
-    expect(html).not.toContain('data-skin="seaglass"');
-    expect(html).toContain('data-skin="hurtado"');
-    expect(html).toContain('data-skin="rose-pine"');
-    expect(html).toContain('data-skin="nord"');
-    expect(html).toContain('data-skin="github-dimmed"');
-    expect(html).toContain('data-skin="tui"');
-    expect(html).toContain('data-skin="tui-black"');
-    expect(html).toContain('data-skin="tui-amber"');
-    expect(html).toContain('data-skin="tui-ice"');
-    expect(html).toContain('data-skin="tui-slate"');
-    expect(html).toContain('data-skin="tui-smoke"');
-    expect(html).toContain('data-skin="vscode-dark"');
-    expect(html).toContain('data-skin="studio-gray"');
-    expect(html).toContain('data-skin="steel-gray"');
-    expect(html).toContain('data-skin="precision"');
-    expect(html).toContain('data-skin="notebook"');
-    expect(html).toContain('data-skin="messenger"');
-    expect(html).toContain('data-skin="community"');
-    expect(html).toContain('data-skin="community-light"');
-    expect(html).toContain('data-skin="code-review"');
-    expect(html).toContain('data-skin="blueprint"');
-    expect(html).toContain('data-skin="blueprint-gray"');
-    expect(html).toContain('data-skin="blueprint-charcoal"');
-    expect(html).toContain('data-skin="instrument"');
-    expect(html).toContain('data-skin="matte"');
-    expect(html).toContain('data-skin="carbon"');
-    expect(html).toContain('data-skin="pewter"');
-    expect(html).toContain('data-skin="pewter-dusk"');
-    expect(html).toContain('data-skin="pewter-night"');
-    expect(html).toContain('data-skin="coal"');
-    expect(html).toContain('data-skin="folio"');
-    expect(html).toContain('data-skin="wink"');
-    expect(html).toContain('data-skin="wink-cyber"');
-    expect(html).toContain('data-skin="wink-violet"');
-    expect(html).toContain('data-skin="wink-black"');
-    expect(html).toContain('data-skin="wink-day"');
-    expect(html).toContain("Wink Day");
+    for (const name of ["Wink", "Precision", "GitHub Dimmed", "Tokyo Night", "Kanagawa", "Terminal", "Wink Day", "Notebook"]) {
+      expect(html).toContain(`>${name}<`);
+    }
+    expect(html).toContain(`More themes (${SKINS.length - 8})`);
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('data-skin="catppuccin-frappe"');
+    expect(html).not.toContain('data-skin="servo-gray"');
   });
 
   it("orders Phone after Connections", () => {
@@ -442,16 +366,16 @@ describe("SettingsModal friends chrome", () => {
     expect(markup("themes")).toContain('title="Corners"');
   });
 
-  it("splits Skin into Dark then Light groups covering every skin", () => {
+  it("splits featured skins into Dark then Light groups", () => {
     const html = markup("themes");
     const dark = html.indexOf(">Dark<");
     const light = html.indexOf(">Light<");
     expect(dark).toBeGreaterThan(-1);
     expect(light).toBeGreaterThan(dark);
     const ids = (part: string) => [...part.matchAll(/data-skin="([a-z-]+)"/g)].map(([, id]) => id);
-    expect(ids(html.slice(dark, light))).toEqual(SKINS.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)).map((skin) => skin.id));
-    expect(ids(html.slice(light))).toEqual(SKINS.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)).map((skin) => skin.id));
-    expect(ids(html)).toHaveLength(SKINS.length);
+    expect(ids(html.slice(dark, light))).toEqual(["wink", "precision", "github-dimmed", "tokyo-night", "kanagawa", "terminal"]);
+    expect(ids(html.slice(light))).toEqual(["wink-day", "notebook"]);
+    expect(ids(html)).toHaveLength(8);
   });
 
   it("keeps Local VM, channel turns, experimental, and diagnostics inside the folded Advanced body", () => {
