@@ -3642,6 +3642,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${outsider.id}/messages`, { text: "check the room task" })).status).toBe(202);
       await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
       const outsiderToken = JSON.parse(readFileSync(fakeClaudeDump, "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+      expect((await api("POST", `/api/bots/${outsider.id}/interrupt`)).status).toBe(200);
       await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots
         .find((bot: { id: string }) => bot.id === outsider.id)?.busy, { timeout: 5_000 }).toBe(false);
       expect(await internal("GET", outsiderPath, undefined, outsiderToken)).toMatchObject({ status: 403 });
