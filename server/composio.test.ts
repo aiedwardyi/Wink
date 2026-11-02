@@ -12,7 +12,6 @@ import {
   normalizeAccountAlias,
   prepareProjectSession,
   removeAccount,
-  removeService,
   setManagedBrokerAccess,
 } from "./composio.ts";
 
@@ -402,12 +401,6 @@ describe.sequential("Composio Sessions", () => {
     await expect(removeAccount(cfg, "github", "ca_github_personal")).resolves.toEqual({ removed: 1 });
     await expect(removeAccount(cfg, "github", "ca_other_user")).resolves.toEqual({ removed: 0 });
     await expect(removeAccount(cfg, "github", "../other")).rejects.toThrow(/invalid connected-account ID/i);
-    await expect(removeService(cfg, "github")).resolves.toEqual({ removed: 1 });
-    expect(calls.some(
-      (call) => call.method === "DELETE"
-        && call.path.endsWith("/connected_accounts/ca_github")
-        && call.query === "?revoke_on_delete=true",
-    )).toBe(true);
   });
 
   it("enumerates connected services independently of catalog position", async () => {

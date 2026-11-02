@@ -557,11 +557,7 @@ export interface BotRecord {
    * start false — a shared persona must not reach the user's Gmail on
    * turn one. */
   composio?: boolean;
-  /** Whether this bot gets the app's built-in browser (the Browser tab of
-   * the computer panel). On unless switched off. */
-  browser?: boolean;
-  /** Id of a named browser profile from config.browserProfiles; absent = the
-   * bot's own private session. */
+  /** Legacy browser profile still echoed to existing clients. */
   browserProfile?: string;
   /** Allow this bot's provider to read its own Orbit terminal screen. */
   shareTerminalWithChat?: boolean;

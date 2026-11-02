@@ -21,16 +21,6 @@ export type ProviderErrorCode =
   | "upstream_outage"
   | "model_catalog_outage";
 
-export class ProviderError extends Error {
-  readonly code: ProviderErrorCode;
-
-  constructor(code: ProviderErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "ProviderError";
-    this.code = code;
-  }
-}
-
 /** Reasoning-effort levels, ascending. A union of everything any engine
  * accepts; each driver declares the subset its CLI will take. */
 export const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
@@ -250,9 +240,7 @@ export interface SendTurnInput {
     agents?: { command: string; args: string[]; env: Record<string, string> };
     /** Physical Android phone tools over authorized USB debugging. */
     phone?: { command: string; args: string[]; env: Record<string, string> };
-    /** The app's built-in browser: an MCP proxy (server/drivers/browser-proxy)
-     * that forwards to the Electron-owned WebContentsView the Browser tab
-     * shows. One tab per bot, in its own persistent session partition. */
+    /** Optional browser MCP endpoint supported by the driver. */
     browser?: { command: string; args: string[]; env: Record<string, string> };
     /** dweb network daemon: an MCP proxy exposing dweb status, repo, and
      * opencode model access as tools. url is the dweb HTTP base. */

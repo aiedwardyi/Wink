@@ -120,12 +120,6 @@
     "tests": ["server/drivers/agents-proxy.test.ts"]
   },
   {
-    "path": "server/drivers/browser-proxy.ts",
-    "reads": "Engine MCP stdio browser tool requests",
-    "status": "pending",
-    "tests": ["server/drivers/browser-proxy.test.ts"]
-  },
-  {
     "path": "server/drivers/dweb-proxy.ts",
     "reads": "Engine MCP stdio web tool requests",
     "status": "pending",

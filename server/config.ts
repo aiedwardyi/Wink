@@ -72,14 +72,6 @@ const localVmConfigSchema = z.object({
     .max(MAX_LOCAL_VM_MAX_INSTANCES)
     .optional(),
 });
-/** A named, shareable browser session ("Work", "Client A"). The id names a
- * durable Electron partition; user-controlled characters never reach it. */
-const browserProfileSchema = z.object({
-  // "guest" is the throwaway session's reserved id, never a saved profile
-  id: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/).refine((id) => id !== "guest", "guest is reserved"),
-  name: z.string().trim().min(1).max(40),
-}).strict();
-const browserProfilesSchema = z.array(browserProfileSchema).max(20);
 const featureConfigSchema = z.object({
   /** Experimental desktop workflow recorder. Hidden unless explicitly enabled. */
   skillRecorder: z.boolean().optional(),
@@ -87,8 +79,6 @@ const featureConfigSchema = z.object({
   showToolCalls: z.boolean().optional(),
   toolDetailCapture: z.boolean().optional(),
   detailedReplies: z.boolean().optional(),
-  /** The built-in per-bot browser (Browser tab). Removed: ignored. */
-  browser: z.boolean().optional(),
   /** Background notes from chat into MEMORY.md. On unless switched off. */
   memoryNotes: z.boolean().optional(),
   /** Experimental dial view of the model picker. Off unless explicitly enabled. */
@@ -147,7 +137,6 @@ const appConfigSchema = z.object({
   rooms: roomConfigSchema.optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
-  browserProfiles: browserProfilesSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
   // A bad section turns the feature off instead of discarding the whole file.
   phoneRelay: phoneRelayConfigSchema.optional().catch(undefined),
@@ -199,13 +188,10 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Product switches. Every flag defaults to off except memoryNotes. */
-  features?: { skillRecorder?: boolean; showToolCalls?: boolean; toolDetailCapture?: boolean; detailedReplies?: boolean; browser?: boolean; memoryNotes?: boolean; modelDial?: boolean };
-  /** Named browser sessions any bot can be pointed at. */
-  browserProfiles?: BrowserProfile[];
+  features?: { skillRecorder?: boolean; showToolCalls?: boolean; toolDetailCapture?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
 }
-export type BrowserProfile = z.output<typeof browserProfileSchema>;
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
 
 export function parseStoredConfig(value: JsonValue): AppConfig {
@@ -314,11 +300,6 @@ export function detailedRepliesEnabled(cfg: AppConfig): boolean {
 
 export function showToolCallsEnabled(cfg: AppConfig): boolean {
   return cfg.features?.showToolCalls === true;
-}
-
-/** The built-in browser is removed: permanently off, whatever the config says. */
-export function builtInBrowserEnabled(_cfg: AppConfig): boolean {
-  return false;
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
@@ -529,9 +510,6 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     disk[key] = merged;
   }
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
-  // the whole list is the unit of change: an add or a delete arrives as the
-  // new list, never as a per-item merge
-  if (checkedPatch.browserProfiles !== undefined) disk.browserProfiles = checkedPatch.browserProfiles;
   if (checkedPatch.instances) {
     const currentInstances = jsonObjectSchema.safeParse(disk.instances);
     const diskInstances: JsonObject = currentInstances.success ? currentInstances.data : {};

@@ -42,7 +42,6 @@ export const SPAWNED_PROXIES = {
   dweb: resolveProxy("drivers/dweb-proxy"),
   connectors: resolveProxy("connector-proxy"),
   phone: resolveProxy("drivers/phone-proxy"),
-  browser: resolveProxy("drivers/browser-proxy"),
   terminal: resolveProxy("drivers/terminal-proxy"),
 } as const;
 

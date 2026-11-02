@@ -5,17 +5,6 @@ import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 
 import type { BotRecord } from "./store.ts";
 
-export const BOT_PROFILE_PATCH_FIELDS = [
-  "name",
-  "title",
-  "description",
-  "notifications",
-  "avatarUrl",
-  "avatarCrop",
-  "voice",
-  "speakReplies",
-] as const;
-
 const profilePatchSchema = z.object({
   name: z
     .string({ error: "name must be a string" })

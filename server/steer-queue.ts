@@ -179,10 +179,6 @@ export function clearSendRunning(botId: string): void {
   runningSendIds.delete(botId);
 }
 
-export function runningSendId(botId: string): string | undefined {
-  return runningSendIds.get(botId);
-}
-
 export interface RoomDrain {
   groupId: string;
   hop: number;

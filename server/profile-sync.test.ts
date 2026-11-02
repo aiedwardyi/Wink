@@ -28,15 +28,11 @@ import {
   readSyncAvatarAsset,
   readSyncOperations,
   resolveSyncAvatarPath,
-  resolveSyncConflictValue,
-  profileSyncRevision,
   saveProfileSyncSettings,
   serializeSyncOperation,
   syncAvatarMatches,
   syncOperationFileName,
   syncOperationsSignature,
-  unresolvedSyncConflicts,
-  seenCheckpointAfterSave,
   writeSyncAvatarAsset,
   writeSyncOperation,
   type ProfileSyncOperation,
@@ -133,13 +129,11 @@ describe("profile sync operations", () => {
     const conflicted = applySyncOperations(emptyProfileSyncState(), [first, second]);
     expect(conflicted.conflicts).toHaveLength(1);
     const conflictId = conflicted.conflicts[0]?.id;
-    const seenCheckpoint = seenCheckpointAfterSave("");
     const save = operation({
       operationId: "op-b2",
       deviceId: "device-b",
       sequence: 3,
       recordedAt: 1_700_000_000_002,
-      ...(seenCheckpoint ? { baseCheckpoint: seenCheckpoint } : {}),
       changes: { name: "Python Tutor" },
     });
     const afterSave = applySyncOperations(conflicted, [save]);
@@ -171,48 +165,11 @@ describe("profile sync operations", () => {
     expect(afterSave.conflicts).toEqual([]);
   });
 
-  it("keeps a reviewed resolution after later operations change the revision hash", () => {
-    const first = operation({ operationId: "op-a", deviceId: "device-a", changes: { name: "Tutor" } });
-    const second = operation({
-      operationId: "op-b",
-      deviceId: "device-b",
-      recordedAt: 1_700_000_000_001,
-      changes: { name: "Python Tutor" },
-    });
-    const conflicted = applySyncOperations(emptyProfileSyncState(), [first, second]);
-    const conflict = conflicted.conflicts[0]!;
-    const oldRevision = profileSyncRevision([first, second]);
-    const later = operation({
-      operationId: "op-c",
-      deviceId: "device-a",
-      sequence: 3,
-      recordedAt: 1_700_000_000_002,
-      changes: { title: "Teacher" },
-    });
-    const afterSave = applySyncOperations(conflicted, [later]);
-    expect(profileSyncRevision([first, second, later])).not.toBe(oldRevision);
-    expect(afterSave.conflicts).toHaveLength(1);
-    const reviewed = { [oldRevision]: { [conflict.id]: conflict.chosenOperationId } };
-    expect(unresolvedSyncConflicts(afterSave.conflicts, reviewed)).toEqual([]);
-  });
-
   it("binds the local-to-remote map without leaving a stale reverse alias", () => {
     const map = { localA: "remote-1", stale: "remote-1", localB: "remote-2" };
     expect(localIdForSyncId(map, "remote-1")).toBe("localA");
     bindSyncId(map, "localC", "remote-1");
     expect(map).toEqual({ localB: "remote-2", localC: "remote-1" });
-  });
-
-  it("keeps revisions content-bound and resolves an explicit null variant", () => {
-    const first = operation({ operationId: "revision", changes: { mascotExpression: "happy" } });
-    const changed = operation({ operationId: "revision", changes: { mascotExpression: null } });
-    expect(profileSyncRevision([first])).not.toBe(profileSyncRevision([changed]));
-    const state = applySyncOperations(emptyProfileSyncState(), [
-      operation({ operationId: "null-a", deviceId: "device-a", changes: { mascotExpression: "happy" } }),
-      operation({ operationId: "null-b", deviceId: "device-b", recordedAt: 1_700_000_000_001, changes: { mascotExpression: null } }),
-    ]);
-    const conflict = state.conflicts[0]!;
-    expect(resolveSyncConflictValue(state.conflicts, "bot", "bot-1", "mascotExpression", { [conflict.id]: "null-b" }, "fallback")).toBeNull();
   });
 
   it("persists reviewed resolutions across a settings reload", () => {

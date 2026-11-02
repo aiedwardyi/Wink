@@ -21,7 +21,6 @@ import {
   showToolCallsEnabled,
   skillRecorderEnabled,
   memoryNotesEnabled,
-  builtInBrowserEnabled,
   sweepLegacyOpencodeKey,
   syncCredentialEnv,
   vpsSshAlias,
@@ -31,6 +30,16 @@ import {
 } from "./config.ts";
 
 describe("configuration boundaries", () => {
+  it("drops retired browser settings on read and patch", () => {
+    const legacy = {
+      browserProfiles: [{ id: "work", name: "Work" }],
+      features: { browser: true, skillRecorder: true },
+    };
+    const expected = { features: { skillRecorder: true } };
+    expect(parseStoredConfig(legacy)).toEqual(expected);
+    expect(parseConfigPatch(legacy)).toEqual(expected);
+  });
+
   it("tool detail accepts the per-PC opt-in and keeps it across other feature updates", () => {
     const patch = parseConfigPatch({ features: { toolDetailCapture: true } });
     expect(patch).toEqual({ features: { toolDetailCapture: true } });
@@ -175,18 +184,6 @@ describe("configuration boundaries", () => {
       features: { skillRecorder: true },
     });
     expect(skillRecorderEnabled({ features: { skillRecorder: true } })).toBe(true);
-    // the built-in browser is removed: off whatever the flag says
-    expect(builtInBrowserEnabled({})).toBe(false);
-    expect(builtInBrowserEnabled({ features: { skillRecorder: true } })).toBe(false);
-    expect(parseConfigPatch({ features: { browser: false } })).toEqual({ features: { browser: false } });
-    expect(builtInBrowserEnabled({ features: { browser: false } })).toBe(false);
-    expect(builtInBrowserEnabled({ features: { browser: true } })).toBe(false);
-    // named browser profiles: the list is the unit, ids are partition-safe
-    expect(parseConfigPatch({ browserProfiles: [{ id: "work", name: " Work " }] })).toEqual({
-      browserProfiles: [{ id: "work", name: "Work" }],
-    });
-    expect(() => parseConfigPatch({ browserProfiles: [{ id: "../evil", name: "x" }] })).toThrow(/browserProfiles.*id/i);
-    expect(() => parseConfigPatch({ browserProfiles: [{ id: "ok", name: "" }] })).toThrow(/browserProfiles.*name/i);
     expect(() => parseConfigPatch({ features: { skillRecorder: "yes" } })).toThrow(
       "features.skillRecorder",
     );

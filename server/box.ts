@@ -302,16 +302,6 @@ export async function sleepBox(cfg: AppConfig, botId: string) {
   return { ok: true };
 }
 
-/** Owner-scoped shell for the Computer panel's console. */
-export async function execOnBox(cfg: AppConfig, botId: string, command: string) {
-  const box = await findBox(cfg, botId);
-  if (!box) throw new Error("no computer for this bot yet");
-  const ready = await waitReady(cfg, box.id, 60_000);
-  if (!ready) throw new Error("box did not wake");
-  const out = await runCommand(cfg, box.id, String(command ?? "").slice(0, 4000));
-  return { exitCode: out.exitCode, stdout: out.stdout.slice(-4000), stderr: out.stderr.slice(-2000) };
-}
-
 // Screenshot for the Computer panel + screen-in-chat. Two hops: capture
 // to a file on the box (scrot straight to JPEG — no ImageMagick startup
 // unless a downscale is actually needed), then read the bytes back.
