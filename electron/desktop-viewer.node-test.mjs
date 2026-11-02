@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 
@@ -32,13 +31,6 @@ test("opens as an independent window that cannot cover the app as a sheet", () =
   assert.equal(options.modal, false);
   assert.ok(options.width >= 760);
   assert.ok(options.height >= 520);
-});
-
-test("main process does not parent the desktop viewer over the app window", () => {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const open = main.slice(main.indexOf("function openDesktopViewer"), main.indexOf("function ensureDesktopWorkspace"));
-  assert.equal(open.includes("desktopViewerWindowOptions"), true);
-  assert.equal(/parent:\s*owner/.test(open), false);
 });
 
 test("allows only same-origin viewer navigation", () => {

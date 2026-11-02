@@ -96,21 +96,6 @@ type SkillRecordingPayload = {
     toasts?: { available: boolean };
   };
 
-  interface DesktopWorkspaceBounds {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }
-
-  interface DesktopWorkspaceState {
-    contextId: string;
-    open: boolean;
-    status: "opening" | "ready" | "error" | "closed";
-    interactive: boolean;
-    code?: "load-failed" | "renderer-gone";
-  }
-
   interface TerminalRun {
     t: string;
     fg?: number | string;
@@ -195,12 +180,6 @@ type SkillRecordingPayload = {
       };
       /** Arms one user-initiated display capture request from this frame. */
       beginScreenPreviewIntent(): boolean;
-      screenFrame(): Promise<string | null>;
-      androidDevice?: {
-        status(): Promise<AndroidDeviceStatus>;
-        frame(serial: string): Promise<{ serial: string; dataUrl: string }>;
-        input(serial: string, payload: AndroidDeviceInput): Promise<void>;
-      };
       /** Start native dictation. Call mode supplies endpointMs so silence
        * finalizes a turn; composer dictation omits it and remains manual. */
       speechStart(options?: { endpointMs?: number }): Promise<void>;
@@ -284,36 +263,9 @@ type SkillRecordingPayload = {
         openTerminal?: boolean;
         terminalSessionId?: string;
       }) => void): () => void;
-      /** Opens a live desktop as a sandboxed window owned by Orbit. */
-      desktopViewer?: {
-        open(url: string, title: string, contextId: string): Promise<boolean>;
-        /** Closes the live-desktop window, but only when it belongs to this bot. */
-        close(contextId: string): Promise<boolean>;
-        /** The current viewer state, for a panel to initialize from on mount. */
-        currentState(): Promise<{ open: boolean; contextId: string | null }>;
-        onState(cb: (state: { open: boolean; contextId: string | null }) => void): () => void;
-      };
       /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
       deviceWindow?: {
         open(host: string, name: string): Promise<boolean>;
-      };
-      /** Two Local VM viewers embedded in one app window. URLs are accepted
-       * only by main-process validation and never return over this bridge. */
-      desktopWorkspace?: {
-        open(input: {
-          contextId: string;
-          url: string;
-          title: string;
-          bounds: DesktopWorkspaceBounds;
-        }): Promise<DesktopWorkspaceState>;
-        layout(items: Array<{
-          contextId: string;
-          bounds: DesktopWorkspaceBounds;
-          visible: boolean;
-        }>): Promise<boolean>;
-        setInteractive(contextId: string | null): Promise<boolean>;
-        close(contextId?: string): Promise<boolean>;
-        onState(cb: (state: DesktopWorkspaceState) => void): () => void;
       };
       /** Native folder picker; resolves null when the user cancels. */
       pickFolder?(current?: string): Promise<string | null>;
@@ -384,34 +336,3 @@ export interface CompanionAccountState {
   endpoint?: string;
   message?: string;
 }
-
-export type AndroidUsbDevice = {
-  serial: string;
-  state: string;
-  connection: "usb";
-  model: string;
-  product?: string;
-  transportId?: string;
-};
-
-export type AndroidDeviceStatus = {
-  available: boolean;
-  reasonCode?: "adb-unavailable" | "adb-failed";
-  message?: string;
-  devices: AndroidUsbDevice[];
-};
-
-export type AndroidDeviceInput =
-  | { type: "tap"; x: number; y: number; width: number; height: number }
-  | {
-      type: "swipe";
-      fromX: number;
-      fromY: number;
-      toX: number;
-      toY: number;
-      durationMs: number;
-      width: number;
-      height: number;
-    }
-  | { type: "key"; key: string; width?: number; height?: number }
-  | { type: "text"; text: string; width?: number; height?: number };

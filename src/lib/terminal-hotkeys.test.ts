@@ -16,7 +16,7 @@ describe("web terminal toggle", () => {
 
   it("keeps the chat, bot, group and overlay guards on the same toggle", () => {
     expect(app).toContain(
-      'if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen || localVmWorkspaceBotId) return;',
+      'if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen) return;',
     );
     expect(app).toContain("if (terminalOpen) closeTerminal();");
     expect(app).toContain("else openTerminal();");

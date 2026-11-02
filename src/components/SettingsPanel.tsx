@@ -1,14 +1,13 @@
-import { ChevronDown, ChevronLeft, Crown, FolderOpen, X } from "lucide-react";
+import { ChevronLeft, FolderOpen, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
-import { CloudBackendPicker } from "./CloudBackendPicker";
 import { WorkingFolderField } from "./WorkingFolderField";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { memoryNotesEnabled } from "@/lib/feature-flags";
-import { showBotDetailsAdvanced, showDisabledShareTerminal } from "@/lib/friends-chrome";
+import { showBotVoiceAndStartupSettings, showDisabledShareTerminal } from "@/lib/friends-chrome";
 import {
   dropMemory,
   editMemory,
@@ -21,9 +20,7 @@ import {
   type MemoryLatest,
 } from "@/lib/memory-drafts";
 import { requestNotificationPermission } from "@/lib/notify";
-import { botUsage, costCaption, formatTokens, formatUsd, hasFiniteCost } from "@/lib/usage";
 import { shortPath } from "@/lib/short-path";
-import { instanceSupportsLocalComputer, localComputerDisabledReason, localComputerSelectable } from "@/lib/local-computer";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
@@ -43,47 +40,6 @@ function Field({
       <div className="mb-1.5 text-[13px] text-ink-secondary">{label}</div>
       {children}
     </label>
-  );
-}
-
-/** What this bot has spent across its tasks. Cost is captioned by how the
- * engine is billed — on a subscription the figure is an equivalent. */
-function BotUsageCard({ bot }: { bot: Bot }) {
-  const { state, dispatch } = useStore();
-  const usage = botUsage(bot);
-  const instance = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
-  if (usage.turns === 0) return null;
-  return (
-    <div className="rounded-xl bg-card p-4">
-      <div className="flex items-baseline justify-between">
-        <div className="text-[15px] font-medium text-ink">Usage</div>
-        <button
-          onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
-          className="text-[12px] text-ink-secondary hover:text-ink"
-        >
-          All Bots →
-        </button>
-      </div>
-      <div className="mt-3 grid grid-cols-3 gap-3 text-[13px]">
-        <div>
-          <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Turns</div>
-          <div className="mt-0.5 tabular-nums text-ink">{usage.turns}</div>
-        </div>
-        <div>
-          <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Tokens</div>
-          <div className="mt-0.5 tabular-nums text-ink" title={`${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`}>
-            {formatTokens(usage.input + usage.output)}
-          </div>
-        </div>
-        <div>
-          <div className="text-[11.5px] uppercase tracking-wide text-ink-secondary">Cost</div>
-          <div className="mt-0.5 tabular-nums text-ink">{hasFiniteCost(usage.costUsd) ? formatUsd(usage.costUsd) : "—"}</div>
-        </div>
-      </div>
-      <div className="mt-2 text-[12px] text-ink-secondary">
-        {hasFiniteCost(usage.costUsd) ? `Cost ${costCaption(instance?.snapshot.billing)}.` : "This engine doesn't report a price; tokens are counted."}
-      </div>
-    </div>
   );
 }
 
@@ -553,27 +509,19 @@ function MemoryCard({ bot }: { bot: Bot }) {
 export function SettingsPanel({
   bot,
   closing = false,
-  defaultAdvancedOpen = false,
 }: {
   bot: Bot;
   closing?: boolean;
-  /** Start with Advanced expanded (tests). */
-  defaultAdvancedOpen?: boolean;
 }) {
   const { state, dispatch } = useStore();
   const { t } = useI18n();
-  const { capabilities } = useDesktopCapabilities();
   const panelRef = useRef<HTMLElement>(null);
   const restoreFocusOnClose = useRef(false);
   const avatarRequest = state.settingsAvatarRequest ?? 0;
   const [avatarOpen, setAvatarOpen] = useState(avatarRequest > 0);
   const seenAvatarRequest = useRef(0);
   const avatarSectionRef = useRef<HTMLDivElement>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(defaultAdvancedOpen);
-  const providerSupportsLocal = instanceSupportsLocalComputer(state.instances, bot);
-  const localSelectable = localComputerSelectable({ capabilities, providerSupportsLocal });
-  const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | "local" | null>(null);
-  const localDisabledReason = localComputerDisabledReason({ capabilities, providerSupportsLocal });
+  const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
   const patch = (
     p: Partial<
       Pick<
@@ -582,20 +530,14 @@ export function SettingsPanel({
         | "title"
         | "description"
         | "notifications"
-        | "computer"
-        | "cloudBackend"
-        | "autoStartVps"
         | "color"
         | "mascotExpression"
         | "mascotStyle"
         | "avatarUrl"
         | "avatarCrop"
         | "autoApprove"
-        | "autoReview"
         | "speakReplies"
         | "voice"
-        | "chiefOfStaff"
-        | "approvePeerComms"
         | "composio"
         | "shareTerminalWithChat"
         | "leanStartup"
@@ -607,15 +549,11 @@ export function SettingsPanel({
   const activeState = stateForBot(bot);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
-  const canAutoReview = engine?.capabilities?.approvalReview === true;
-  const canCoordinate = engine?.capabilities?.agentsMcp === true;
-  const canUseVps = engine?.capabilities?.computerMcp === true && engine.driverKind !== "boxAgent";
   const desktopTerminal = Boolean(window.ogb?.terminal);
   const serverHasTerminal = state.config?.features?.terminalHost === true;
   const terminalShared =
     bot.shareTerminalWithChat === true || (bot.shareTerminalWithChat !== false && (desktopTerminal || serverHasTerminal));
   const shareTerminalDisabled = !terminalShared && !desktopTerminal && !serverHasTerminal;
-  const sectionName = bot.section?.trim() || "General";
   useEffect(() => {
     if (avatarRequest === 0 || avatarRequest === seenAvatarRequest.current) return;
     seenAvatarRequest.current = avatarRequest;
@@ -829,24 +767,9 @@ export function SettingsPanel({
 
           <KeepGoingRow bot={bot} />
 
-          {showBotDetailsAdvanced() && (
+          {showBotVoiceAndStartupSettings() && (
             <>
-          <button
-            type="button"
-            aria-expanded={advancedOpen}
-            onClick={() => setAdvancedOpen((open) => !open)}
-            className="flex w-full items-center justify-between rounded-xl border border-hairline/40 bg-card px-4 py-3 text-left hover:bg-control/60"
-          >
-            <span>
-              <span className="block text-[14px] font-medium text-ink">Advanced</span>
-            </span>
-            <ChevronDown
-              size={16}
-              className={cn("text-ink-secondary transition-transform", advancedOpen && "rotate-180")}
-            />
-          </button>
-
-          {advancedOpen && engine?.driverKind === "claudeAgent" && (
+          {engine?.driverKind === "claudeAgent" && (
             <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
               <div>
                 <div className="text-[15px] font-medium text-ink">{t("bot.leanStartup")}</div>
@@ -871,178 +794,7 @@ export function SettingsPanel({
             </div>
           )}
 
-          {advancedOpen && (
-            <div className={cn(
-              "rounded-xl border p-4",
-              bot.chiefOfStaff ? "border-accent/40 bg-accent/10" : "border-hairline/40 bg-card",
-            )}>
-            <div className="flex items-center gap-3">
-              <span className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                bot.chiefOfStaff ? "bg-accent text-accent-ink" : "bg-control text-ink-secondary",
-              )}>
-                <Crown size={17} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-[15px] font-medium text-ink">Chief of Staff</div>
-                <div className="text-[11.5px] text-ink-secondary">One for {sectionName}</div>
-              </div>
-              <button
-                role="switch"
-                aria-checked={Boolean(bot.chiefOfStaff)}
-                aria-label="Chief of Staff"
-                onClick={() => patch({ chiefOfStaff: !bot.chiefOfStaff })}
-                className={cn(
-                  "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
-                  bot.chiefOfStaff ? "bg-accent" : "bg-control",
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-                    bot.chiefOfStaff ? "left-[21px]" : "left-[3px]",
-                  )}
-                />
-              </button>
-            </div>
-            {!canCoordinate && (
-              <div className="mt-3 text-[13px] leading-relaxed text-ink-secondary">
-                {t("chrome.cannotContactTeammates")}
-              </div>
-            )}
-            </div>
-          )}
-
-          {advancedOpen && (
-            <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div>
-              <div className="text-[15px] font-medium text-ink">
-                Ask me before contacting other bots
-              </div>
-            </div>
-            <button
-              role="switch"
-              aria-checked={Boolean(bot.approvePeerComms)}
-              aria-label="Ask Me Before Contacting Other Bots"
-              onClick={() => patch({ approvePeerComms: !bot.approvePeerComms })}
-              className={cn(
-                "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
-                bot.approvePeerComms ? "bg-accent" : "bg-control",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-                  bot.approvePeerComms ? "left-[21px]" : "left-[3px]",
-                )}
-              />
-            </button>
-            </div>
-          )}
-
-          {advancedOpen && (
-            <div className="rounded-xl bg-card p-4">
-            <div className="text-[15px] font-medium text-ink">Computer</div>
-            <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
-              {([
-                ["cloud", "Cloud"],
-                ["vm", "Local VM"],
-                ["local", "This Computer"],
-                ["off", "Off"],
-              ] as const).map(([mode, label], i) => (
-                <button
-                  key={mode}
-                  disabled={mode === "local" && !localSelectable}
-                  title={mode === "local" && !localSelectable ? localDisabledReason ?? undefined : undefined}
-                  onClick={() => {
-                    if (mode === bot.computer) return;
-                    if (mode === "local" && bot.autoApprove) setLocalAutoWarning("local");
-                    else patch({ computer: mode });
-                  }}
-                  className={cn(
-                    "flex-1 py-1.5 text-[13px] capitalize",
-                    i > 0 && "border-l border-hairline/40",
-                    mode === "local" && !localSelectable && "cursor-not-allowed opacity-40",
-                    bot.computer === mode
-                      ? "bg-control text-ink"
-                      : "text-ink-secondary hover:bg-control/60 hover:text-ink",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            {(!bot.computer || bot.computer === "cloud") && (
-              <>
-                <CloudBackendPicker
-                  value={bot.cloudBackend ?? "box"}
-                  vpsSupported={canUseVps}
-                  onChange={(backend) => patch({ cloudBackend: backend })}
-                />
-                {!bot.computer && bot.cloudBackend === "vps" && (
-                  <div className="mt-3 flex items-center justify-between gap-4 rounded-lg bg-inset px-3 py-2.5">
-                    <div className="min-w-0">
-                      <div className="text-[13px] text-ink">Start VPS Automatically</div>
-                    </div>
-                    <button
-                      role="switch"
-                      aria-checked={Boolean(bot.autoStartVps)}
-                      aria-label="Start VPS Automatically"
-                      onClick={() => patch({ autoStartVps: !bot.autoStartVps })}
-                      className={cn(
-                        "relative h-6 w-11 shrink-0 rounded-full transition-colors",
-                        bot.autoStartVps ? "bg-accent" : "bg-control",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "absolute top-[3px] size-[18px] rounded-full bg-white transition-all",
-                          bot.autoStartVps ? "left-[22px]" : "left-[4px]",
-                        )}
-                      />
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-            </div>
-          )}
-
-          {advancedOpen && <BotUsageCard bot={bot} />}
-
-          {advancedOpen && (
-            <div className="rounded-xl bg-card p-4">
-            <div className="text-[15px] font-medium text-ink">Review Routine Approvals</div>
-            <div className="mt-3 flex gap-1 rounded-lg bg-inset p-0.5">
-              {(
-                [
-                  ["off", "Off", "Every undecided approval waits for you."],
-                  ["shadow", "Watch", "Record the review without answering the card."],
-                  ["enforce", "On", "Answer only reviews that return a strict approval."],
-                ] as const
-              ).map(([value, label, hint]) => {
-                const current = bot.autoReview === "shadow" || bot.autoReview === "enforce" ? bot.autoReview : "off";
-                const disabled = value !== "off" && !canAutoReview;
-                return (
-                  <button
-                    key={value}
-                    title={disabled ? "Not supported by this engine" : hint}
-                    disabled={disabled}
-                    onClick={() => patch({ autoReview: value })}
-                    className={cn(
-                      "flex-1 rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2.5 py-1.5 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-40",
-                      current === value ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
-                    )}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            </div>
-          )}
-
-          {advancedOpen && <VoiceSettings bot={bot} onPatch={patch} />}
+          <VoiceSettings bot={bot} onPatch={patch} />
             </>
           )}
 
@@ -1054,7 +806,6 @@ export function SettingsPanel({
       onCancel={() => setLocalAutoWarning(null)}
       onConfirm={() => {
         if (localAutoWarning === "auto") patch({ autoApprove: true, acknowledgeLocalAuto: true });
-        if (localAutoWarning === "local") patch({ computer: "local", acknowledgeLocalAuto: true });
         setLocalAutoWarning(null);
       }}
     />

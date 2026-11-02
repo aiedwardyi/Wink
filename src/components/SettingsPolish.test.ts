@@ -118,9 +118,6 @@ vi.mock("./LocalComputerAutoWarning", () => ({
   LocalComputerAutoWarning: () => null,
 }));
 
-vi.mock("./CloudBackendPicker", () => ({
-  CloudBackendPicker: () => null,
-}));
 
 import { UsageSection } from "./UsageSection";
 import { SettingsModal } from "./SettingsModal";

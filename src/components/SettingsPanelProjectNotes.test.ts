@@ -38,7 +38,6 @@ vi.mock("./VoiceSettings", () => ({ VoiceSettings: () => null }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- The avatar picker is outside the notes field.
 vi.mock("./BotProfileAvatarCard", () => ({ BotProfileAvatarCard: () => null }));
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Cloud backend choices are outside the notes field.
-vi.mock("./CloudBackendPicker", () => ({ CloudBackendPicker: () => null }));
 
 import { SettingsPanel } from "./SettingsPanel";
 

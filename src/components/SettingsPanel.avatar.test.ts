@@ -73,9 +73,6 @@ vi.mock("./LocalComputerAutoWarning", () => ({
 }));
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Cloud backend choices are outside the avatar block.
-vi.mock("./CloudBackendPicker", () => ({
-  CloudBackendPicker: () => null,
-}));
 
 import { SettingsPanel } from "./SettingsPanel";
 

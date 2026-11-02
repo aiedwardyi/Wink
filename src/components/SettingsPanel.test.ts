@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import type { Bot } from "@/state/store";
 
-const chrome = vi.hoisted(() => ({ botDetailsAdvanced: false, disabledShareTerminal: false }));
+const chrome = vi.hoisted(() => ({ voiceAndStartupSettings: false, disabledShareTerminal: false }));
 
 const storeMock = vi.hoisted(() => ({ dispatch: vi.fn() }));
 
@@ -22,7 +22,7 @@ vi.mock("@/lib/friends-chrome", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/friends-chrome")>();
   return {
     ...actual,
-    showBotDetailsAdvanced: () => chrome.botDetailsAdvanced,
+    showBotVoiceAndStartupSettings: () => chrome.voiceAndStartupSettings,
     showDisabledShareTerminal: () => chrome.disabledShareTerminal,
   };
 });
@@ -84,10 +84,6 @@ vi.mock("./LocalComputerAutoWarning", () => ({
   LocalComputerAutoWarning: () => null,
 }));
 
-vi.mock("./CloudBackendPicker", () => ({
-  CloudBackendPicker: () => null,
-}));
-
 const bot = {
   id: "bot-1",
   threadId: "t1",
@@ -112,14 +108,14 @@ describe("SettingsPanel friends effort", () => {
   });
 
   afterEach(() => {
-    chrome.botDetailsAdvanced = false;
+    chrome.voiceAndStartupSettings = false;
   });
 
   it("does not bury a blank Effort control — Advanced stays off the idle surface", async () => {
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot, defaultAdvancedOpen: true })),
+      createElement(I18nProvider, null, createElement(SettingsPanel, { bot })),
     );
     expect(html).not.toContain("Advanced");
     expect(html).not.toContain("Computer, coordination, browser, approvals, voice, and usage");
@@ -128,20 +124,6 @@ describe("SettingsPanel friends effort", () => {
     expect(html).not.toContain("Effort, computer");
   });
 
-  it("keeps Chief of Staff switchable on an engine that cannot coordinate", async () => {
-    chrome.botDetailsAdvanced = true;
-    const { SettingsPanel } = await import("./SettingsPanel");
-    const { I18nProvider } = await import("@/lib/i18n");
-    const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot, defaultAdvancedOpen: true })),
-    );
-    const fromLabel = html.slice(html.indexOf('aria-label="Chief of Staff"'));
-    const buttonTag = fromLabel.slice(0, fromLabel.indexOf(">"));
-
-    expect(buttonTag).not.toContain("disabled");
-    expect(html).toContain("This engine cannot contact teammates yet");
-    expect(html).not.toContain("Choose a Claude or ACP engine");
-  });
 
   it("keeps a null task pin on the private workspace in the remembered-folder notice", async () => {
     const { SettingsPanel } = await import("./SettingsPanel");
@@ -153,33 +135,20 @@ describe("SettingsPanel friends effort", () => {
       tasks: [{ threadId: "t1", cwd: null }],
     } as Bot;
     const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot: homePinned, defaultAdvancedOpen: true })),
+      createElement(I18nProvider, null, createElement(SettingsPanel, { bot: homePinned })),
     );
     expect(html).toContain("Next task uses");
     expect(html).toContain("private workspace");
     expect(html).not.toContain("This task stays in /work/orbit");
   });
 
-  it("keeps peer comms switchable on an engine that cannot coordinate", async () => {
-    chrome.botDetailsAdvanced = true;
-    const { SettingsPanel } = await import("./SettingsPanel");
-    const { I18nProvider } = await import("@/lib/i18n");
-    const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot, defaultAdvancedOpen: true })),
-    );
-    const fromLabel = html.slice(html.indexOf('aria-label="Ask Me Before Contacting Other Bots"'));
-    const buttonTag = fromLabel.slice(0, fromLabel.indexOf(">"));
-
-    expect(buttonTag).not.toContain("disabled");
-    expect(html).not.toContain("This engine cannot contact other bots");
-  });
 
   it("offers no per-bot Browser switch even with Advanced open", async () => {
-    chrome.botDetailsAdvanced = true;
+    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot, defaultAdvancedOpen: true })),
+      createElement(I18nProvider, null, createElement(SettingsPanel, { bot })),
     );
     expect(html).not.toContain("Give This Bot a Built-in Browser");
   });
@@ -242,24 +211,24 @@ describe("SettingsPanel lean startup", () => {
   });
 
   afterEach(() => {
-    chrome.botDetailsAdvanced = false;
+    chrome.voiceAndStartupSettings = false;
   });
 
   it("keeps Load Skills & Plugins off the idle surface", async () => {
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot, defaultAdvancedOpen: true })),
+      createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })),
     );
     expect(html).not.toContain("Load Skills");
   });
 
   it("shows Load skills and plugins on by default with no hint", async () => {
-    chrome.botDetailsAdvanced = true;
+    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
-      createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot, defaultAdvancedOpen: true })),
+      createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })),
     );
     expect(html).toContain("Load Skills &amp; Plugins");
     expect(html).toContain('aria-label="Load Skills &amp; Plugins"');
@@ -270,14 +239,14 @@ describe("SettingsPanel lean startup", () => {
   });
 
   it("shows off when leanStartup is true", async () => {
-    chrome.botDetailsAdvanced = true;
+    chrome.voiceAndStartupSettings = true;
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
       createElement(
         I18nProvider,
         null,
-        createElement(SettingsPanel, { bot: { ...claudeBot, leanStartup: true } as Bot, defaultAdvancedOpen: true }),
+        createElement(SettingsPanel, { bot: { ...claudeBot, leanStartup: true } }),
       ),
     );
     const labelAt = html.indexOf('aria-label="Load Skills');

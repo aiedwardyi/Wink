@@ -89,11 +89,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 function markup(
   section: AppSettingsSection = "general",
   defaultAdvancedOpen = false,
-  defaultMoreServicesOpen = false,
 ) {
   mock.section = section;
   return renderToStaticMarkup(
-    createElement(SettingsModal, { defaultAdvancedOpen, defaultMoreServicesOpen }),
+    createElement(SettingsModal, { defaultAdvancedOpen }),
   );
 }
 
@@ -454,48 +453,16 @@ describe("SettingsModal friends chrome", () => {
     expect(ids(html)).toHaveLength(SKINS.length);
   });
 
-  it("keeps Local VM, channel turns, experimental, and diagnostics inside the folded Advanced body", () => {
-    const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
-    const marker = "data-settings-advanced";
-    const start = source.indexOf(marker);
-    expect(start).toBeGreaterThan(-1);
-    const advanced = source.slice(start);
-    expect(advanced).toContain("<LocalComputerSection");
-    expect(advanced).toContain("settings.channelTurns.title");
-    expect(advanced).toContain("<ExperimentalFeaturesRow");
-    expect(advanced).toContain("<DiagnosticsRow");
-    const before = source.slice(0, start);
-    expect(before).not.toContain("<LocalComputerSection");
-    expect(before).not.toContain("settings.channelTurns.title");
-    expect(before).not.toContain("<ExperimentalFeaturesRow");
-    expect(before).not.toContain("<DiagnosticsRow");
-  });
 
-  it("keeps optional connections inside the More services body", () => {
-    const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
-    const marker = "data-settings-more-services";
-    const start = source.indexOf(marker);
-    expect(start).toBeGreaterThan(-1);
-    const more = source.slice(start);
-    expect(more).toContain("<TranscriptionSettings");
-    expect(more).toContain('section="box"');
-    expect(more).toContain("<VpsConnection");
-    expect(more).toContain('section="composio"');
-    const before = source.slice(0, start);
-    expect(before).not.toContain('section="gemini"');
-    expect(before).not.toContain('section="opencodeGo"');
-    expect(before).not.toContain("<TranscriptionSettings");
-    expect(before).not.toContain('section="box"');
-    expect(before).not.toContain("<VpsConnection");
-  });
+
+
 });
 
 describe("friends settings chrome has no OpenMausBot docs", () => {
   it("strips OpenMausBot-named help links from settings chrome", () => {
     const apiKeys = readFileSync(join(here, "ApiKeys.tsx"), "utf8");
-    const linux = readFileSync(join(here, "LinuxLocalControl.tsx"), "utf8");
     const settings = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
-    for (const source of [apiKeys, linux, settings]) {
+    for (const source of [apiKeys, settings]) {
       expect(source).not.toContain("OpenMausBot");
       expect(source).not.toContain("openmausbot");
       expect(source).not.toContain("milind-soni");

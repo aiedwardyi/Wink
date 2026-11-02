@@ -27,7 +27,6 @@ import { GlobalTooltip } from "@/components/GlobalTooltip";
 import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
-import { showComputerPanelChrome } from "@/lib/friends-chrome";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
@@ -48,13 +47,11 @@ import { useMonoHud } from "@/lib/use-mono-hud";
 const Onboarding = lazyView(() => import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })));
 const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
 const PluginsPanel = lazyView(() => import("@/components/PluginsPanel").then((m) => ({ default: m.PluginsPanel })));
-const ComputerPanel = lazyView(() => import("@/components/ComputerPanel").then((m) => ({ default: m.ComputerPanel })));
 const InspectorPanel = lazyView(() => import("@/components/InspectorPanel").then((m) => ({ default: m.InspectorPanel })));
 const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((m) => ({ default: m.SettingsModal })));
 const RoutinesPage = lazyView(() => import("@/components/RoutinesPage").then((m) => ({ default: m.RoutinesPage })));
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
-const LocalVmWorkspace = lazyView(() => import("@/components/LocalVmWorkspace").then((m) => ({ default: m.LocalVmWorkspace })));
 const SkillRecorderPage = lazyView(() => import("@/components/SkillRecorderPage").then((m) => ({ default: m.SkillRecorderPage })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
@@ -125,26 +122,20 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const [terminalViews, setTerminalViews] = useState<Record<string, boolean>>({});
   const [paneHotkey, setPaneHotkey] = useState<{ n: number } | null>(null);
   const [paneFocus, setPaneFocus] = useState<{ sessionId: string } | null>(null);
-  const [localVmWorkspaceBotId, setLocalVmWorkspaceBotId] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
-  const terminalOpen = Boolean(bot && terminalViews[bot.id] && state.activeView === "chat" && !localVmWorkspaceBotId);
+  const terminalOpen = Boolean(bot && terminalViews[bot.id] && state.activeView === "chat");
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
   const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
-  const closeWorkspaces = useCallback(() => {
-    setLocalVmWorkspaceBotId(null);
-    dispatch({ type: "toggleComputer", open: false });
-  }, [dispatch]);
   const openTerminalPane = useCallback((sessionId: string) => {
-    closeWorkspaces();
     openTerminal();
     setPaneFocus({ sessionId });
-  }, [closeWorkspaces, openTerminal]);
+  }, [openTerminal]);
   const clearTerminalAttention = (attention: Pick<TerminalAttention, "botId" | "sessionId">) => {
     const key = terminalAttentionKey(attention.botId, attention.sessionId);
     const sessions = pendingTerminalAcknowledgements.current.get(attention.botId);
@@ -165,7 +156,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     if (terminalOpen && bot?.id === attention.botId && document.hasFocus()) acknowledgeTerminalAttention(attention);
   };
   const openTerminalNotification = (target: NotificationTarget) => {
-    if (target.openTerminal) closeWorkspaces();
     openNotificationTarget(dispatch, target, latestState.current);
     if (target.openTerminal) setTerminalViews((views) => ({ ...views, [target.botId]: true }));
     if (target.openTerminal && target.terminalSessionId) setPaneFocus({ sessionId: target.terminalSessionId });
@@ -183,8 +173,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       acknowledgeTerminalAttention(attention);
       return;
     }
-    setLocalVmWorkspaceBotId(null);
-    dispatch({ type: "toggleComputer", open: false });
     openNotificationTarget(
       dispatch,
       { botId: attention.botId, threadId: target.threadId, openTerminal: true },
@@ -225,7 +213,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     drawerOpen ||
     paletteOpen ||
     state.settingsOpen ||
-    state.computerOpen ||
     state.inspectorOpen ||
     state.appSettingsOpen ||
     state.pluginsOpen ||
@@ -368,8 +355,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       const current = latestState.current;
       openNotificationTarget(dispatch, target, current);
       if (target.openTerminal) {
-        setLocalVmWorkspaceBotId(null);
-        dispatch({ type: "toggleComputer", open: false });
         setTerminalViews((views) => ({ ...views, [target.botId]: true }));
         if (target.terminalSessionId) setPaneFocus({ sessionId: target.terminalSessionId });
         const attention = target.terminalSessionId
@@ -448,44 +433,23 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     setDrawerOpen(false);
   }, [state.selectedId, state.activeView, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
 
-  useEffect(() => {
-    if (
-      localVmWorkspaceBotId &&
-      (state.activeView !== "chat" || state.selectedId !== localVmWorkspaceBotId)
-    ) {
-      setLocalVmWorkspaceBotId(null);
-    }
-  }, [localVmWorkspaceBotId, state.activeView, state.selectedId]);
-
-  const openLocalVmWorkspace = (botId: string) => {
-    dispatch({ type: "toggleComputer", open: false });
-    setLocalVmWorkspaceBotId(botId);
-  };
-
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
   useLayoutEffect(() => {
-    dispatch({ type: "setWorkspaceOpen", open: Boolean(localVmWorkspaceBotId || terminalOpen) });
-  }, [localVmWorkspaceBotId, terminalOpen, dispatch]);
-
-  const openComputerFromWorkspace = (botId: string) => {
-    setLocalVmWorkspaceBotId(null);
-    dispatch({ type: "select", id: botId });
-    dispatch({ type: "toggleComputer", open: true });
-  };
+    dispatch({ type: "setWorkspaceOpen", open: terminalOpen });
+  }, [terminalOpen, dispatch]);
 
   const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || (!noEngines && state.bots.length === 0));
   const secondaryViewOpen =
     onboardingOpen ||
     state.activeView !== "chat" ||
     terminalOpen ||
-    Boolean(localVmWorkspaceBotId) ||
     paletteOpen ||
     Boolean(sidebarOverlay) ||
     state.appSettingsOpen ||
     state.pluginsOpen ||
     createBotSheetOpen ||
-    Boolean(bot && (state.settingsOpen || state.inspectorOpen || (showComputerPanelChrome() && state.computerOpen)));
+    Boolean(bot && (state.settingsOpen || state.inspectorOpen));
   useStaleBuildReload(state.connected, secondaryViewOpen);
 
   const swipeStageRef = usePhoneSwipe(bot?.id, !terminalOpen && !nativeViewOverlayOpen, (id) => dispatch({ type: "select", id }), menuButtonRef);
@@ -573,12 +537,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     const layers: BackLayer[] = [];
     const add = (open: boolean, key: string, close: () => void) => { if (open) layers.push({ key, close }); };
     add(state.activeView !== "chat", `view:${state.activeView}`, () => dispatch({ type: "select", id: state.selectedId }));
-    add(Boolean(localVmWorkspaceBotId), `vm:${localVmWorkspaceBotId}`, () => setLocalVmWorkspaceBotId(null));
     add(terminalOpen, `terminal:${bot?.id}`, closeTerminal);
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
     add(Boolean(sidebarOverlay), `sidebar:${sidebarOverlay}`, () => window.dispatchEvent(new Event("orbit:close-sidebar-overlay")));
     add(state.settingsOpen, "settings", () => dispatch({ type: "toggleSettings", open: false }));
-    add(state.computerOpen, "computer", () => dispatch({ type: "toggleComputer", open: false }));
     add(state.inspectorOpen, "inspector", () => dispatch({ type: "toggleInspector", open: false }));
     add(state.appSettingsOpen, "app-settings", () => dispatch({ type: "toggleAppSettings", open: false }));
     add(state.pluginsOpen, "plugins", () => dispatch({ type: "togglePlugins", open: false }));
@@ -599,7 +561,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       if (document.querySelector("[data-media-viewer]")) return;
       if (event.repeat || event.isComposing) return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.code !== "Backquote") return;
-      if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen || localVmWorkspaceBotId) return;
+      if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen) return;
       event.preventDefault();
       event.stopPropagation();
       if (terminalOpen) closeTerminal();
@@ -607,37 +569,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     };
     window.addEventListener("keydown", toggleTerminal, true);
     return () => window.removeEventListener("keydown", toggleTerminal, true);
-  }, [bot?.id, group?.id, state.activeView, nativeViewOverlayOpen, localVmWorkspaceBotId, terminalOpen]);
+  }, [bot?.id, group?.id, state.activeView, nativeViewOverlayOpen, terminalOpen]);
 
   // ChatView stays mounted under the terminal and across bot switches, so its header menus are told to close.
   useEffect(() => {
     window.dispatchEvent(new Event("orbit:close-worker-menu"));
     window.dispatchEvent(new Event("orbit:close-model-picker"));
   }, [terminalOpen, state.activeView, state.selectedId]);
-
-  // The viewer outlives ComputerPanel and can target any bot, so release control
-  // here (always mounted) when a bot's viewer closes. release() is idempotent.
-  useEffect(() => {
-    return window.ogb?.desktopViewer?.onState((viewer) => {
-      if (viewer.open || !viewer.contextId) return;
-      const botId = viewer.contextId;
-      void fetch(`/api/bots/${botId}/computer/control`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "release" }),
-      })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((snap) => {
-          if (snap) dispatch({ type: "computerControl", botId, held: snap.held === true, helpReason: snap.helpReason ?? null });
-        })
-        .catch(() => {});
-      void fetch(`/api/bots/${botId}/computer/viewer-close`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      }).catch(() => {});
-    });
-  }, [dispatch]);
 
   return (
     <div className="flex h-full flex-col">
@@ -693,7 +631,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onOverlayChange={setSidebarOverlay}
         onClose={closeDrawer}
         onTerminalAttention={openTerminalAttention}
-        rigidView={Boolean(localVmWorkspaceBotId || (bot && terminalViews[bot.id] !== undefined))}
+        rigidView={Boolean(bot && terminalViews[bot.id] !== undefined)}
       />
       {state.activeView === "routines" ? (
         <LazyView fallback={<BootFallback />}>
@@ -702,15 +640,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       ) : state.activeView === "skill-recorder" ? (
         <LazyView fallback={<BootFallback />}>
           <SkillRecorderPage />
-        </LazyView>
-      ) : localVmWorkspaceBotId ? (
-        <LazyView fallback={<BootFallback />}>
-          <LocalVmWorkspace
-            primaryBotId={localVmWorkspaceBotId}
-            overlayOpen={nativeViewOverlayOpen}
-            onClose={() => setLocalVmWorkspaceBotId(null)}
-            onOpenComputer={openComputerFromWorkspace}
-          />
         </LazyView>
       ) : noEngines ? (
         <LazyView fallback={<BootFallback />}>
@@ -759,11 +688,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           </LazyView>
         )}
       </Presence>
-      {showComputerPanelChrome() && state.computerOpen && bot && (
-        <LazyView overlay>
-          <ComputerPanel bot={bot} onOpenVmWorkspace={openLocalVmWorkspace} />
-        </LazyView>
-      )}
       {state.inspectorOpen && bot && (
         <LazyView overlay>
           <InspectorPanel bot={bot} />

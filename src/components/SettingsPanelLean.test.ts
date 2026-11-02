@@ -7,11 +7,11 @@ import { I18nProvider } from "@/lib/i18n";
 import type { Bot, Task, TaskResumePacket } from "@/state/store";
 
 const { mockDispatch, mockConfig } = vi.hoisted(() => ({ mockDispatch: vi.fn(), mockConfig: { current: {} as { features?: { memoryNotes?: boolean } } } }));
-const chrome = vi.hoisted(() => ({ botDetailsAdvanced: false }));
+const chrome = vi.hoisted(() => ({ voiceAndStartupSettings: false }));
 
 vi.mock("@/lib/friends-chrome", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/friends-chrome")>()),
-  showBotDetailsAdvanced: () => chrome.botDetailsAdvanced,
+  showBotVoiceAndStartupSettings: () => chrome.voiceAndStartupSettings,
 }));
 
 vi.mock("@/state/store", async (importOriginal) => {
@@ -63,10 +63,6 @@ vi.mock("./LocalComputerAutoWarning", () => ({
   LocalComputerAutoWarning: ({ open }: { open: boolean }) => (open ? createElement("div", { "data-local-warning": "" }) : null),
 }));
 
-vi.mock("./CloudBackendPicker", () => ({
-  CloudBackendPicker: () => null,
-}));
-
 import { SettingsPanel } from "./SettingsPanel";
 
 const claudeBot = {
@@ -95,18 +91,18 @@ describe("SettingsPanel lean startup switch", () => {
     document.body.append(host);
     root = createRoot(host);
     (window as any).ogb = {};
-    chrome.botDetailsAdvanced = true;
+    chrome.voiceAndStartupSettings = true;
   });
 
   afterEach(() => {
-    chrome.botDetailsAdvanced = false;
+    chrome.voiceAndStartupSettings = false;
     root.unmount();
     host.remove();
   });
 
   it("off saves leanStartup true", async () => {
     await act(async () => {
-      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot, defaultAdvancedOpen: true })));
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
     });
     const toggle = host.querySelector('button[aria-label="Load Skills & Plugins"]');
     expect(toggle?.getAttribute("aria-checked")).toBe("true");
@@ -123,7 +119,7 @@ describe("SettingsPanel lean startup switch", () => {
   it("on saves leanStartup false", async () => {
     await act(async () => {
       root.render(
-        createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, leanStartup: true } as Bot, defaultAdvancedOpen: true })),
+        createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, leanStartup: true } })),
       );
     });
     const toggle = host.querySelector('button[aria-label="Load Skills & Plugins"]');

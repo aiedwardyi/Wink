@@ -20,7 +20,7 @@ vi.mock("@/lib/friends-chrome", async (original) => ({
   showAvatarImageGenerate: () => true,
 }));
 
-import { ApiKeyRow, SavedKeys } from "./ApiKeys";
+import { SavedKeys } from "./ApiKeys";
 import { VoiceSettings } from "./VoiceSettings";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 
@@ -61,8 +61,6 @@ async function removeSavedKey() {
 
 const bot = { id: "bot", name: "Bot", color: "blue" } as Bot;
 const rows: [string, () => ReactElement][] = [
-  ["composioApiKey", () => createElement(ApiKeyRow, { section: "composio" })],
-  ["boxToken", () => createElement(ApiKeyRow, { section: "box" })],
   ["ttsKey", () => createElement(VoiceSettings, { bot, onPatch: vi.fn() })],
   ["openaiImageApiKey", () => createElement(BotProfileAvatarCard, { bot, activeState: "idle", mascotMotion: null, onPatch: vi.fn() })],
 ];
@@ -108,16 +106,6 @@ it.each(rows)("saves remote Settings %s through the owner's credential route", a
   expect(dispatch.mock.calls.at(-1)?.[0].config).toEqual(state.config);
 });
 
-it("clears a remote Settings key through the encrypted route", async () => {
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ saved: true, config: state.config })));
-  vi.stubGlobal("fetch", fetchMock);
-  await mount(createElement(ApiKeyRow, { section: "box" }));
-  await act(async () => (host.querySelector('input[type="password"]')!.nextElementSibling as HTMLButtonElement).click());
-  const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-  expect(path).toBe("/api/credentials");
-  expect(JSON.parse(init.body as string)).toEqual({ target: "boxToken", value: "" });
-});
-
 it("removes a remote saved custom key through the encrypted route", async () => {
   const fetchMock = vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/key-uses" ? { uses: {} } : { saved: true, config: state.config })));
   vi.stubGlobal("fetch", fetchMock);
@@ -133,7 +121,7 @@ it("preserves the owner desktop Settings preload path", async () => {
   Object.assign(window, { ogb: { setCredential } });
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-  await mount(createElement(ApiKeyRow, { section: "box" }));
+  await mount(createElement(VoiceSettings, { bot, onPatch: vi.fn() }));
   await saveInput();
   expect(setCredential).toHaveBeenCalledOnce();
   expect(fetchMock).not.toHaveBeenCalled();
@@ -141,7 +129,7 @@ it("preserves the owner desktop Settings preload path", async () => {
 
 it("keeps the remote Settings input until encrypted storage confirms the save", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ saved: false, config: state.config }))));
-  await mount(createElement(ApiKeyRow, { section: "box" }));
+  await mount(createElement(VoiceSettings, { bot, onPatch: vi.fn() }));
   await saveInput();
   expect(dispatch).not.toHaveBeenCalled();
   expect(Boolean((host.querySelector('input[type="password"]') as HTMLInputElement).value)).toBe(true);

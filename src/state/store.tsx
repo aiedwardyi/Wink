@@ -178,7 +178,6 @@ export function reducer(state: AppState, action: Action): AppState {
           groups: action.groups,
           olderPatches: {},
           snapshots: state.snapshots + 1,
-          computerControl: action.computerControl,
           terminalAttention: Object.fromEntries(
             Object.entries(state.terminalAttention).filter(([, attention]) => action.bots.some((bot) => bot.id === attention.botId)),
           ),
@@ -231,7 +230,6 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         activeView: "routines",
         settingsOpen: false,
-        computerOpen: false,
         inspectorOpen: false,
         appSettingsOpen: false,
         pluginsOpen: false,
@@ -242,7 +240,6 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         activeView: "skill-recorder",
         settingsOpen: false,
-        computerOpen: false,
         inspectorOpen: false,
         appSettingsOpen: false,
         pluginsOpen: false,
@@ -593,21 +590,12 @@ export function reducer(state: AppState, action: Action): AppState {
     case "screenFrame":
       return {
         ...withMascotMotion(state, action.botId, "success"),
-        screens: { ...state.screens, [action.botId]: { png: action.png, mime: action.mime } },
         provisioning: { ...state.provisioning, [action.botId]: false },
       };
     case "provisioning":
       return {
         ...(action.on ? withMascotMotion(state, action.botId, "launch") : state),
         provisioning: { ...state.provisioning, [action.botId]: action.on },
-      };
-    case "computerControl":
-      return {
-        ...state,
-        computerControl: {
-          ...state.computerControl,
-          [action.botId]: { held: action.held, helpReason: action.helpReason },
-        },
       };
     case "setModel":
       return updateBot(state, action.botId, (b) =>
@@ -624,7 +612,7 @@ export function reducer(state: AppState, action: Action): AppState {
           : state),
         error: action.message,
       };
-    // bot settings, the computer panel, and app settings share the right slot
+    // Bot settings and app settings share the right slot.
     case "toggleSettings": {
       const open = action.open ?? !state.settingsOpen;
       return {
@@ -632,7 +620,6 @@ export function reducer(state: AppState, action: Action): AppState {
         settingsOpen: open,
         settingsAvatarRequest: !open ? 0 : action.avatar ? (state.settingsAvatarRequest ?? 0) + 1 : 0,
         settingsKeepGoingRequest: !open ? 0 : action.keepGoing ? (state.settingsKeepGoingRequest ?? 0) + 1 : 0,
-        computerOpen: open ? false : state.computerOpen,
         inspectorOpen: open ? false : state.inspectorOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
       };
@@ -682,23 +669,12 @@ export function reducer(state: AppState, action: Action): AppState {
         groups: state.groups.map((g) => (g.id === state.selectedId ? { ...g, unread: false } : g)),
       };
     }
-    case "toggleComputer": {
-      const open = action.open ?? !state.computerOpen;
-      return {
-        ...state,
-        computerOpen: open,
-        settingsOpen: open ? false : state.settingsOpen,
-        inspectorOpen: open ? false : state.inspectorOpen,
-        appSettingsOpen: open ? false : state.appSettingsOpen,
-      };
-    }
     case "toggleInspector": {
       const open = action.open ?? !state.inspectorOpen;
       return {
         ...state,
         inspectorOpen: open,
         settingsOpen: open ? false : state.settingsOpen,
-        computerOpen: open ? false : state.computerOpen,
         appSettingsOpen: open ? false : state.appSettingsOpen,
       };
     }
@@ -708,7 +684,6 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         ...appSettingsNavigation(state, action),
         settingsOpen: open ? false : state.settingsOpen,
-        computerOpen: open ? false : state.computerOpen,
         inspectorOpen: open ? false : state.inspectorOpen,
         pluginsOpen: open ? false : state.pluginsOpen,
       };
@@ -1031,7 +1006,6 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         createBotOpen: true,
         settingsOpen: false,
-        computerOpen: false,
         inspectorOpen: false,
         appSettingsOpen: false,
         pluginsOpen: false,
@@ -1084,14 +1058,11 @@ export const initialState: AppState = {
   settingsAvatarRequest: 0,
   settingsKeepGoingRequest: 0,
   pluginsOpen: false,
-  computerOpen: false,
   inspectorOpen: false,
   appSettingsOpen: false,
   appSettingsSection: "general",
   appSettingsPage: false,
-  screens: {},
   provisioning: {},
-  computerControl: {},
   focusMessage: null,
   connected: false,
   hydrated: false,
@@ -2162,12 +2133,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // No boundary means the no-hello fallback; there is nothing to validate.
         if (boundary === undefined ? !snapshot : !snapshotCoversHello(snapshot?.cursor, boundary)) snapshot = await chatSnapshot();
         if (!alive || boundary !== snapshotBoundary || rehydrateRequested) return;
-        const { bots, groups, computerControl } = snapshot;
+        const { bots, groups } = snapshot;
         rawDispatch({
           type: "hydrate",
           bots,
           groups: groups ?? [],
-          computerControl: computerControl ?? {},
           sidebarOrder: loadSidebarOrder(),
         });
         // Snapshot has busy, not StreamState.signal. Without SSE replay a
@@ -2463,14 +2433,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "computer":
           rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
-          break;
-        case "computer-control":
-          rawDispatch({
-            type: "computerControl",
-            botId: frame.botId,
-            held: frame.held === true,
-            helpReason: typeof frame.helpReason === "string" ? frame.helpReason : null,
-          });
           break;
         case "queue.cancelled":
           for (const send of frame.sends ?? []) {
