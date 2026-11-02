@@ -1,0 +1,218 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+
+import { useI18n, type Translate } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
+import { devicesSetup } from "@/lib/devices-setup";
+import type { RemotePhoneLink } from "@/lib/phone-setup";
+import { isPhone } from "@/lib/phone-swipe";
+import { api } from "@/state/store";
+import { button, GetTailscaleLink, openOutside, StepMark, StoreCodes, StoreLinks } from "./DeviceSetupParts";
+
+function activeText(lastSeen: number, now: number, t: Translate): string {
+  const minutes = Math.floor(Math.max(0, now - lastSeen) / 60000);
+  if (minutes < 2) return t("settings.phone.activeNow");
+  if (minutes < 60) return t("settings.phone.activeMinutes", { n: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("settings.phone.activeHours", { n: hours });
+  return t("settings.phone.activeDays", { n: Math.floor(hours / 24) });
+}
+
+function Step({ n, done, active, title, label, children }: { n: number; done: boolean; active: boolean; title: string; label: string; children?: ReactNode }) {
+  return (
+    <li data-device-step={n} data-complete={done} data-active={active} className="flex items-start gap-3">
+      <StepMark done={done} step={n} label={label} muted={!done && !active} />
+      <div className="min-w-0 flex-1">
+        <h3 className={cn("pt-1 text-[13px] font-medium", done || active ? "text-ink" : "text-ink-secondary")}>{title}</h3>
+        {children}
+      </div>
+    </li>
+  );
+}
+
+const help = "mt-1 break-keep text-[12px] leading-relaxed text-ink-secondary";
+
+export function ConnectDevices() {
+  const { t } = useI18n();
+  const phone = isPhone();
+  const onThisPc = Boolean(window.ogb) || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  const deviceWindow = window.ogb?.deviceWindow;
+  const [status, setStatus] = useState<RemotePhoneLink | null>(null);
+  const [tab, setTab] = useState<"phone" | "pc">("phone");
+  const [copied, setCopied] = useState(false);
+  const [loginOpened, setLoginOpened] = useState(false);
+  const [loginPending, setLoginPending] = useState(false);
+  const [loginFailed, setLoginFailed] = useState(false);
+  const [allowOpened, setAllowOpened] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [pcFailed, setPcFailed] = useState(false);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  const live = useRef(true);
+  const signedInHere = useRef(false);
+
+  useEffect(() => {
+    live.current = true;
+    let active = true;
+    let pending = false;
+    const load = async () => {
+      if (pending || document.visibilityState === "hidden") return;
+      pending = true;
+      try {
+        const body: RemotePhoneLink = await api("/api/remote-link?setup=1");
+        if (active) {
+          setStatus(body);
+          if (body.setup?.backendState !== "NeedsLogin") setLoginOpened(false);
+        }
+      } catch {
+        if (active) setStatus({ url: null, setup: { state: "error" } });
+      } finally { pending = false; }
+    };
+    const timer = window.setInterval(() => void load(), 2_000);
+    window.addEventListener("focus", load);
+    document.addEventListener("visibilitychange", load);
+    void load();
+    return () => {
+      active = false;
+      live.current = false;
+      window.clearInterval(timer);
+      window.clearTimeout(copiedTimer.current);
+      window.removeEventListener("focus", load);
+      document.removeEventListener("visibilitychange", load);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
+    const enableUrl = status?.setup?.enableUrl;
+    if (!signedInHere.current || status?.setup?.state !== "serve-disabled" || !enableUrl || !window.ogb?.openExternal) return;
+    signedInHere.current = false;
+    void window.ogb.openExternal(enableUrl).then(() => {
+      if (live.current) setAllowOpened(true);
+    }, () => {});
+  }, [status?.setup?.state, status?.setup?.enableUrl, loginOpened]);
+
+  const setup = devicesSetup(status, loginOpened || loginPending);
+  const { installed, signedIn, ready, account, phoneJoined, phoneOpened } = setup;
+  const phones = status?.phones ?? [];
+  const pcs = status?.pcs ?? [];
+  const signIn = async () => {
+    if ((!setup.canSignIn && !setup.loginOpened) || status?.setup?.haveNodeKey || loginPending) return;
+    setLoginPending(true);
+    setLoginFailed(false);
+    try {
+      const { url }: { url: string | null } = await api("/api/devices/sign-in", { method: "POST" });
+      if (!url) throw new Error("No sign-in URL");
+      if (window.ogb?.openExternal) await window.ogb.openExternal(url);
+      else window.open(url, "_blank", "noopener,noreferrer");
+      if (live.current) {
+        signedInHere.current = true;
+        setLoginOpened(true);
+      }
+    } catch {
+      if (live.current) setLoginFailed(true);
+    } finally { if (live.current) setLoginPending(false); }
+  };
+  const copy = async () => {
+    if (!setup.url) return;
+    try {
+      await navigator.clipboard.writeText(setup.url);
+      setCopied(true);
+      window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1200);
+    } catch {}
+  };
+  const copyButton = <button type="button" onClick={() => void copy()} className={`${button} mt-2`}>
+    {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+    {copied ? t("settings.phoneLink.copied") : t("settings.phoneLink.copy")}
+  </button>;
+
+  return (
+    <div data-devices-settings>
+      {phoneOpened && <ul data-phone-list className="mb-3 flex flex-col gap-1.5">
+        {phones.map((item) => <li key={item.id} className="text-[13px] text-ink">
+          {t(`settings.phone.kind.${item.kind}`)}<span className="text-ink-secondary"> · {activeText(item.lastSeen, Date.now(), t)}</span>
+        </li>)}
+      </ul>}
+      <p className="break-keep text-[13px] leading-relaxed text-ink-secondary">{t("settings.devices.b.intro")}</p>
+      {ready ? <div data-pc-ready data-complete className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-secondary">
+        <StepMark done step={1} label={t("settings.phone.pcReady")} />
+        <span className="text-ink">{t("settings.devices.thisPc")}</span>
+        {account && <span>· {t("settings.devices.signedInAs", { account })}</span>}
+        <span>· <GetTailscaleLink /></span>
+      </div> : <ol className="mt-3 flex flex-col gap-2">
+        <Step n={1} done={installed} active={!installed} title={t("settings.phone.getTailscale")} label={t("settings.phone.pcReady")}>
+          {setup.state === "missing" ? <GetTailscaleLink primary /> : <div className="mt-1"><GetTailscaleLink /></div>}
+          {setup.state === "checking" && <p className={help}>{t(setup.help)}</p>}
+        </Step>
+        <Step n={2} done={signedIn} active={installed && !signedIn} title={t("settings.devices.signIn")} label={t("settings.phone.pcReady")}>
+          {signedIn && account && <p className={help}>{t("settings.devices.signedInAs", { account })}</p>}
+          {installed && !signedIn && <>
+            {setup.needsApproval ? <p className={help}>{t("settings.devices.needsApproval")}</p>
+              : !onThisPc ? <p className={help}>{t("settings.devices.signInOnPc")}</p>
+              : setup.loginOpened ? <>
+                <p className={help}>{t("settings.devices.finishSignIn")}</p>
+                <button type="button" disabled={loginPending} onClick={() => void signIn()} className="mt-1 text-[12px] text-ink-secondary underline hover:text-ink">{t("settings.devices.signIn")}</button>
+              </>
+              : setup.canSignIn ? <button type="button" disabled={loginPending} onClick={() => void signIn()} className={`${button} mt-1`}>{t("settings.devices.signIn")}</button>
+              : <p className={help}>{t(setup.help)}</p>}
+            {loginFailed && <p role="alert" className={help}>{t("settings.phoneLink.notRunning")}</p>}
+          </>}
+        </Step>
+        <Step n={3} done={false} active={signedIn} title={t("settings.devices.allow")} label={t("settings.phone.pcReady")}>
+          {signedIn && (setup.state === "serve-disabled" && status?.setup?.enableUrl ? <>
+            <a href={status.setup.enableUrl} target="_blank" rel="noreferrer" onClick={(event) => {
+              openOutside(event, status.setup!.enableUrl!);
+              setAllowOpened(true);
+            }} className={`${button} mt-1`}>{t("settings.devices.allowButton")}</a>
+            {allowOpened && <p className={help}>{t("settings.devices.allowHelp")}</p>}
+          </> : <p className={help}>{t(setup.help)}</p>)}
+        </Step>
+      </ol>}
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-hairline/40 pt-3">
+        <h3 className="text-[13px] font-medium text-ink">{t("settings.devices.add")}</h3>
+        <div role="radiogroup" aria-label={t("settings.devices.add")} className="flex gap-1 rounded-lg bg-inset p-0.5">
+          {(["phone", "pc"] as const).map((id) => <button key={id} type="button" role="radio" aria-checked={tab === id} onClick={() => setTab(id)}
+            className={cn("min-w-16 rounded-md px-3 py-1.5 text-center text-[13px] font-medium transition-colors", tab === id ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}>
+            {t(`settings.devices.${id}`)}
+          </button>)}
+        </div>
+      </div>
+      <ol key={tab} className="animate-fade-in mt-3 flex flex-col gap-3">
+        {tab === "phone" ? <>
+          <Step n={1} done={phoneJoined} active={ready && !phoneJoined} title={t("settings.devices.phoneStep")} label={t("settings.phone.phoneReady")}>
+            {phoneJoined ? <div className="mt-1"><StoreLinks /></div> : <>
+              <p className={help}>{account ? t("settings.devices.phoneHelp", { account }) : t("settings.devices.phoneHelpSame")}</p>
+              <StoreCodes phone={phone} />
+            </>}
+          </Step>
+          <Step n={2} done={phoneOpened} active={ready && !phoneOpened} title={t("settings.devices.scanStep")} label={t("settings.phone.phoneReady")}>
+            {setup.url && <div className="animate-fade-in">
+              {!phone && <div data-phone-link-qr className="mt-2 w-fit rounded-xl bg-white p-3" aria-label={t("settings.phoneAccess.qrLabel")}>
+                <QRCodeSVG value={setup.url} size={168} level="M" bgColor="#ffffff" fgColor="#111111" />
+              </div>}
+              {copyButton}
+            </div>}
+          </Step>
+        </> : <>
+          <Step n={1} done={setup.pcOnline} active={ready && !setup.pcOnline} title={t("settings.devices.pcStep")} label={t("settings.devices.pcStep")}>
+            <p className={help}>{account ? t("settings.devices.pcHelp", { account }) : t("settings.devices.pcHelpSame")}</p>
+            <div className="mt-1"><GetTailscaleLink /></div>
+            {ready && copyButton}
+          </Step>
+          {deviceWindow && <Step n={2} done={false} active={ready && setup.pcOnline} title={pcs[0] ? t("settings.devices.openPc", { name: pcs[0].name }) : t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
+            {pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
+              setPcFailed(false);
+              void deviceWindow.open(pc.host, pc.name).then((opened) => {
+                if (!live.current || opened) return;
+                setPcFailed(true);
+                setStatus(null);
+                setRefresh((value) => value + 1);
+              }, () => { if (live.current) setPcFailed(true); });
+            }} className={`${button} mr-2 mt-2`}>{t("settings.devices.openPc", { name: pc.name })}</button>)}
+            {pcFailed && <p role="alert" className={help}>{t("settings.phoneLink.notRunning")}</p>}
+          </Step>}
+        </>}
+      </ol>
+    </div>
+  );
+}

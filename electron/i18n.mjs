@@ -18,12 +18,12 @@ const en = {
   "packaged.connecting": "Connecting to the bot server…",
   "packaged.chooseFolder": "Choose project folder",
   "packaged.exportDiagnostics": "Export diagnostics",
-  "packaged.deviceLinkHelp": "On that PC, copy the phone link from Settings and paste it here. You only need to do this once.",
+  "packaged.deviceLinkHelp": "On {name}, open Settings > Devices and click Copy Link. Paste it here once.",
   "packaged.deviceLinkSubmit": "Open",
   "packaged.deviceLinkInvalid": "That is not this PC's phone link.",
-  "packaged.deviceUnreachable": "Can't reach {name} right now",
+  "packaged.deviceUnreachable": "Can't reach {name}",
+  "packaged.deviceUnreachableHelp": "Check that it's on and Tailscale is connected.",
   "packaged.deviceRetry": "Retry",
-  "packaged.deviceTailnetUnknown": "Tailscale must be running on this PC to open your other PCs.",
   "packaged.deviceFileFailed": "Couldn't download that file from the other PC.",
   "native.copyLink": "Copy Link",
   "native.copyImage": "Copy Image",
@@ -63,12 +63,12 @@ const ko = {
   "packaged.connecting": "봇 서버에 연결하는 중…",
   "packaged.chooseFolder": "프로젝트 폴더 선택",
   "packaged.exportDiagnostics": "진단 내보내기",
-  "packaged.deviceLinkHelp": "해당 PC의 설정에서 휴대폰 링크를 복사해 여기에 붙여넣으세요. 한 번만 하면 됩니다.",
+  "packaged.deviceLinkHelp": "{name}에서 설정 > 기기를 열고 링크 복사를 누르세요. 여기에 한 번만 붙여넣으면 됩니다.",
   "packaged.deviceLinkSubmit": "열기",
   "packaged.deviceLinkInvalid": "이 PC의 휴대폰 링크가 아닙니다.",
-  "packaged.deviceUnreachable": "지금은 {name}에 연결할 수 없습니다",
+  "packaged.deviceUnreachable": "{name}에 연결할 수 없습니다",
+  "packaged.deviceUnreachableHelp": "켜져 있고 Tailscale이 연결되어 있는지 확인하세요.",
   "packaged.deviceRetry": "다시 시도",
-  "packaged.deviceTailnetUnknown": "다른 PC를 열려면 이 PC에서 Tailscale이 실행 중이어야 합니다.",
   "packaged.deviceFileFailed": "다른 PC에서 파일을 내려받지 못했습니다.",
   "native.copyLink": "링크 복사",
   "native.copyImage": "이미지 복사",
@@ -144,7 +144,7 @@ export function translate(locale, key, vars) {
   let phrase = table[key] ?? catalogs.en[key] ?? key;
   if (!vars) return phrase;
   for (const [name, value] of Object.entries(vars)) {
-    phrase = phrase.replaceAll(`{${name}}`, String(value));
+    phrase = phrase.replaceAll(`{${name}}`, () => String(value));
   }
   return phrase;
 }

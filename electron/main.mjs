@@ -1161,13 +1161,11 @@ async function openDeviceLinkedFile(devices, target, name) {
 
 async function openDeviceWindow(rawHost, rawName) {
   const tailnet = await localTailnet();
-  if (!tailnet) {
-    dialog.showErrorBox("Wink", nativeText("packaged.deviceTailnetUnknown"));
-    return false;
-  }
+  if (!tailnet) return false;
   const url = deviceWindowUrl(rawHost, tailnet);
   openOrFocus(deviceWindows, url.origin, () => {
     const title = deviceWindowTitle(rawName, url.hostname);
+    const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 64) : url.hostname;
     const win = new BrowserWindow({
       ...desktopViewerWindowOptions(),
       // Shown at once: an offline PC never fires ready-to-show.
@@ -1185,7 +1183,7 @@ async function openDeviceWindow(rawHost, rawName) {
       host: url.host,
       title,
       heading: title,
-      help: nativeText("packaged.deviceLinkHelp"),
+      help: nativeText("packaged.deviceLinkHelp", { name }),
       placeholder: `https://${url.host}/remote?key=...`,
       submit: nativeText("packaged.deviceLinkSubmit"),
       invalid: nativeText("packaged.deviceLinkInvalid"),
@@ -1233,7 +1231,6 @@ async function openDeviceWindow(rawHost, rawName) {
     win.webContents.on("will-redirect", (event, target) => {
       if (!sameDesktopViewerOrigin(target, url.origin)) event.preventDefault();
     });
-    const name = Object.prototype.toString.call(rawName) === "[object String]" && rawName.trim() ? rawName.trim().slice(0, 64) : url.hostname;
     deviceLoads.set(win, watchDeviceLoad(win.webContents, {
       host: url.hostname,
       url: url.toString(),
@@ -1241,6 +1238,7 @@ async function openDeviceWindow(rawHost, rawName) {
         host: url.host,
         title,
         heading: nativeText("packaged.deviceUnreachable", { name }),
+        help: nativeText("packaged.deviceUnreachableHelp"),
         retry: nativeText("packaged.deviceRetry"),
       }),
       log: slog,

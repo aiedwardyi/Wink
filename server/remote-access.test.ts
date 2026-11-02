@@ -247,13 +247,18 @@ describe("remote access", () => {
       expect(run.lines).toEqual(["Remote auto: Tailscale not found, remote off"]);
     });
 
-    it("skips detection when ORBIT_REMOTE_HOST is set or ORBIT_REMOTE_AUTO=0", async () => {
-      for (const env of [{ ORBIT_REMOTE_HOST: "other.tail1234.ts.net" }, { ORBIT_REMOTE_AUTO: "0" }]) {
-        const run = detect(env, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
-        expect(await run.host).toBeUndefined();
-        expect(run.calls).toEqual([]);
-        expect(run.lines).toEqual([]);
-      }
+    it("skips detection when ORBIT_REMOTE_AUTO=0", async () => {
+      const run = detect({ ORBIT_REMOTE_AUTO: "0" }, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
+      expect(await run.host).toBeUndefined();
+      expect(run.calls).toEqual([]);
+      expect(run.lines).toEqual([]);
+    });
+
+    it("only reads status when ORBIT_REMOTE_HOST is set", async () => {
+      const run = detect({ ORBIT_REMOTE_HOST: "other.tail1234.ts.net" }, { "status --json": running, "serve status --json": "{}", [SERVE]: "" });
+      expect(await run.host).toBeUndefined();
+      expect(run.calls).toEqual(["tailscale status --json"]);
+      expect(run.lines).toEqual([]);
     });
 
     it("mints a key for the detected host", () => {
@@ -285,7 +290,7 @@ describe("Phone Link setup", () => {
       stdout: `Serve is not enabled on your tailnet.\nTo enable, visit:\n${enableUrl}\n`,
     });
     expect(await autoRemoteHost({}, 8799, fake(error), quiet, "linux", (value) => { setup = value; })).toBeUndefined();
-    expect(setup).toEqual({ state: "serve-disabled", enableUrl });
+    expect(setup).toMatchObject({ state: "serve-disabled", enableUrl });
   });
 
   it.each([
@@ -298,13 +303,13 @@ describe("Phone Link setup", () => {
   ])("refuses an untrusted setup URL %s", async (url) => {
     let setup: RemoteSetup | undefined;
     await autoRemoteHost({}, 8799, fake(new Error(`Serve is not enabled on your tailnet. ${url}`)), quiet, "linux", (value) => { setup = value; });
-    expect(setup).toEqual({ state: "serve-disabled" });
+    expect(setup).toMatchObject({ state: "serve-disabled" });
   });
 
   it("does not offer an enable URL for an unrelated Serve failure", async () => {
     let setup: RemoteSetup | undefined;
     await autoRemoteHost({}, 8799, fake(new Error(`connection failed ${enableUrl}`)), quiet, "linux", (value) => { setup = value; });
-    expect(setup).toEqual({ state: "error" });
+    expect(setup).toMatchObject({ state: "error" });
   });
 
   it.each([
@@ -319,7 +324,7 @@ describe("Phone Link setup", () => {
   it.each(["Stopped", "NeedsLogin"])("reports Tailscale %s with a start/connect step", async (BackendState) => {
     let setup: RemoteSetup | undefined;
     await autoRemoteHost({}, 8799, async () => JSON.stringify({ BackendState }), quiet, "linux", (value) => { setup = value; });
-    expect(setup).toEqual({ state: "not-running" });
+    expect(setup).toMatchObject({ state: "not-running" });
   });
 
   it.each(["missing", "not-running", "serve-disabled"])("recovers from %s without restarting or overlapping detection", async (initial) => {
@@ -342,7 +347,7 @@ describe("Phone Link setup", () => {
     expect(calls).toBe(firstCalls);
     now = 5_000;
     await Promise.all([retry.refresh(), retry.refresh()]);
-    expect(retry.status()).toEqual({ state: "ready" });
+    expect(retry.status()).toMatchObject({ state: "ready" });
     expect(hosts).toEqual([HOST]);
     expect(calls - firstCalls).toBe(3);
     now = 10_000;
@@ -353,7 +358,7 @@ describe("Phone Link setup", () => {
   it("keeps explicit auto-off from starting Tailscale", async () => {
     const retry = remoteHostRetry({ ORBIT_REMOTE_AUTO: "0" }, 8799, () => { throw new Error("unexpected host"); }, async () => { throw new Error("unexpected command"); }, quiet);
     await retry.refresh();
-    expect(retry.status()).toEqual({ state: "disabled" });
+    expect(retry.status()).toMatchObject({ state: "disabled" });
   });
 
   it("picks up a Tailscale that starts after Wink without a request", async () => {
@@ -376,7 +381,7 @@ describe("Phone Link setup", () => {
       up = true;
       await vi.advanceTimersByTimeAsync(30_000);
       expect(hosts).toEqual([HOST]);
-      expect(retry.status()).toEqual({ state: "ready" });
+      expect(retry.status()).toMatchObject({ state: "ready" });
       calls.length = 0;
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(calls).toEqual([]);
@@ -396,17 +401,17 @@ describe("Phone Link setup", () => {
       });
       const retry = remoteHostRetry({}, 8799, (host) => hosts.push(host), exec, quiet, "linux");
       await retry.refresh();
-      expect(retry.status()).toEqual({ state: initial });
+      expect(retry.status()).toMatchObject({ state: initial });
       expect(vi.getTimerCount()).toBe(1);
       state = "error";
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(retry.status()).toEqual({ state: "error" });
+      expect(retry.status()).toMatchObject({ state: "error" });
       expect(hosts).toEqual([]);
       expect(vi.getTimerCount()).toBe(1);
       state = "ready";
       await vi.advanceTimersByTimeAsync(30_000);
       expect(hosts).toEqual([HOST]);
-      expect(retry.status()).toEqual({ state: "ready" });
+      expect(retry.status()).toMatchObject({ state: "ready" });
       expect(vi.getTimerCount()).toBe(0);
       exec.mockClear();
       await vi.advanceTimersByTimeAsync(5 * 60_000);
@@ -434,7 +439,7 @@ describe("Phone Link setup", () => {
       up = true;
       if (state === "disabled") env.ORBIT_REMOTE_AUTO = "0";
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(retry.status()).toEqual({ state });
+      expect(retry.status()).toMatchObject({ state });
       expect(vi.getTimerCount()).toBe(0);
       const first = calls;
       await vi.advanceTimersByTimeAsync(5 * 60_000);

@@ -133,7 +133,11 @@ export const SECTION_PHRASE_KEYS = {
     "engines.none",
   ],
   companion: [
-    "settings.section.companion",
+    "settings.section.devices",
+    "settings.devices.b.intro",
+    "settings.devices.add",
+    "settings.devices.signIn",
+    "settings.devices.allow",
     "settings.phone.intro",
     "settings.phone.step1",
     "settings.phone.step2",

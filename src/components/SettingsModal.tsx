@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, Palette, Search, Settings, Smartphone, Terminal, User, Users, X } from "lucide-react";
+import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Search, Settings, Terminal, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
@@ -51,7 +51,7 @@ const SECTIONS: Array<{
   { id: "account", icon: User },
   { id: "general", icon: Settings },
   { id: "connections", icon: KeyRound },
-  { id: "companion", icon: Smartphone },
+  { id: "companion", icon: MonitorSmartphone },
   { id: "themes", icon: Palette, shortcut: "Alt+T" },
   { id: "usage", icon: Coins, shortcut: "Alt+U" },
   { id: "team", icon: Users },
@@ -67,7 +67,7 @@ const SECTION_KEY = {
   themes: "settings.section.themes",
   shortcuts: "settings.section.shortcuts",
   engines: "settings.section.engines",
-  companion: "settings.section.companion",
+  companion: "settings.section.devices",
   usage: "settings.section.usage",
   team: "settings.section.team",
   "models-index": "settings.section.modelsIndex",
@@ -446,7 +446,7 @@ export function SettingsModal({
   const [query, setQuery] = useState("");
   const [preferencesOpen, setPreferencesOpen] = useState(defaultAdvancedOpen);
   const q = query.trim().toLowerCase();
-  const phoneAvailable = !phone || Boolean(window.ogb);
+  const phoneAvailable = true;
   const [teamOwner, setTeamOwner] = useState(false);
   const [teamStats, setTeamStats] = useState<TeamView | null>(null);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
@@ -561,7 +561,10 @@ export function SettingsModal({
         tabIndex={-1}
         // h-* alone overflows the 600x480 window floor above and below; max-h-full
         // hands the excess to the content pane, which is the only thing that scrolls.
-        className="animate-pop-in flex h-[560px] max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col"
+        className={cn(
+          "animate-pop-in flex max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col",
+          section === "companion" ? "h-[720px] md:h-[768px]" : "h-[560px]",
+        )}
       >
         {phone && (
           <div data-settings-underlay className={cn("flex min-h-0 min-w-0 flex-1 flex-col", page && "absolute inset-0")}>

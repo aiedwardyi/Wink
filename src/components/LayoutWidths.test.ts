@@ -50,6 +50,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
     ...actual,
+    useStoreDispatch: () => () => undefined,
     api: vi.fn(async (path: string) => {
       if (path === "/api/connectors/catalog") {
         return {

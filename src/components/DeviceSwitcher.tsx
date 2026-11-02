@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, Laptop, Monitor, Pencil } from "lucide-react";
+import { Check, Laptop, Monitor, Pencil, Plus } from "lucide-react";
 
 import { leaveFor } from "@/lib/back-navigation";
 import { useI18n } from "@/lib/i18n";
@@ -8,7 +8,7 @@ import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
-import { api } from "@/state/store";
+import { api, useStoreDispatch } from "@/state/store";
 
 export interface DeviceItem {
   deviceId: string;
@@ -74,6 +74,7 @@ export function DeviceSwitcher({
   drawerOpen?: boolean;
 }) {
   const { t } = useI18n();
+  const dispatch = useStoreDispatch();
   const deviceWindow = window.ogb?.deviceWindow;
   const visible = labeled || Boolean(deviceWindow);
   const [devices, reload] = useDevices(visible);
@@ -148,7 +149,9 @@ export function DeviceSwitcher({
                     onClick={() => {
                       if (device.current) return close();
                       if (!deviceWindow) return navigate(`https://${device.host}/`);
-                      void deviceWindow.open(device.host, device.name).catch(() => {});
+                      void deviceWindow.open(device.host, device.name).then((opened) => {
+                        if (!opened) dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
+                      }).catch(() => {});
                       close();
                     }}
                     className={cn(
@@ -184,6 +187,15 @@ export function DeviceSwitcher({
                 </li>
               ),
             )}
+            <li className="mt-1 border-t border-hairline/40 pt-1">
+              <button type="button" data-connect-device onClick={() => {
+                close();
+                dispatch({ type: "toggleAppSettings", open: true, section: "companion" });
+              }} className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink-secondary hover:bg-raised/70 hover:text-ink">
+                <Plus size={16} className="shrink-0" />
+                <span>{t("settings.devices.connect")}</span>
+              </button>
+            </li>
           </ul>
     </>
   );

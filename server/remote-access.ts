@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { parseJson, type JsonValue } from "./schema.ts";
+import { loginText, signInTailscale, tailnetDevices, tailscaleCommands, tailscaleStatusSchema, winkPeers } from "./tailscale-setup.ts";
 
 export const REMOTE_KEY_FILE = "remote-key.json";
 export const REMOTE_COOKIE = "orbit_remote";
@@ -163,20 +164,12 @@ const execText: ExecText = (file, args) =>
     });
   });
 
-const tailscaleStatusSchema = z.object({
-  BackendState: z.string(),
-  Self: z.object({ DNSName: z.string() }).optional(),
-});
 const serveStatusSchema = z.object({
   TCP: z.record(z.string(), z.unknown()).optional(),
   Web: z.record(z.string(), z.object({
     Handlers: z.record(z.string(), z.object({ Proxy: z.string().optional() })).optional(),
   })).optional(),
 });
-
-function tailscaleCommands(platform: NodeJS.Platform): string[] {
-  return platform === "win32" ? ["tailscale", "C:\\Program Files\\Tailscale\\tailscale.exe"] : ["tailscale"];
-}
 
 function proxiesToPort(proxy: string | undefined, port: number): boolean {
   const match = proxy?.match(/^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)\/?$/);
@@ -186,6 +179,16 @@ function proxiesToPort(proxy: string | undefined, port: number): boolean {
 export interface RemoteSetup {
   state: "checking" | "disabled" | "missing" | "not-running" | "serve-disabled" | "error" | "ready";
   enableUrl?: string;
+  backendState?: string;
+  haveNodeKey?: boolean;
+  account?: string;
+  phoneJoined?: boolean;
+  https?: boolean;
+  pcs?: { name: string; host: string }[];
+}
+
+export function remoteLinkSetup(host: string | undefined, setup: RemoteSetup, open: boolean): RemoteSetup {
+  return host && (!open || setup.state === "disabled") ? { state: "ready" } : setup;
 }
 
 function commandOutput(error: unknown): string {
@@ -212,12 +215,14 @@ export async function autoRemoteHost(
   log: (line: string) => void = console.log,
   platform: NodeJS.Platform = process.platform,
   onSetup: (setup: RemoteSetup) => void = () => {},
+  previous?: RemoteSetup,
 ): Promise<string | undefined> {
   const auto = env.ORBIT_REMOTE_AUTO?.trim().toLowerCase();
-  if (env.ORBIT_REMOTE_HOST?.trim() || (auto !== undefined && FALSY_FLAG.has(auto))) {
+  if (auto !== undefined && FALSY_FLAG.has(auto)) {
     onSetup({ state: "disabled" });
     return undefined;
   }
+  const manual = Boolean(env.ORBIT_REMOTE_HOST?.trim());
   let command: string | undefined;
   let status: z.infer<typeof tailscaleStatusSchema> | undefined;
   let installed = false;
@@ -232,38 +237,53 @@ export async function autoRemoteHost(
     }
   }
   if (!command || !status) {
+    if (manual) {
+      onSetup({ state: "disabled" });
+      return undefined;
+    }
     log("Remote auto: Tailscale not found, remote off");
     onSetup({ state: installed ? "not-running" : "missing" });
     return undefined;
   }
-  const host = cleanHost(status.Self?.DNSName.replace(/\.$/, ""));
+  const detection = tailnetDevices(status);
+  // A configured host still lists this tailnet's PCs; it just never touches Serve.
+  if (manual) {
+    onSetup({ ...detection, state: "disabled" });
+    return undefined;
+  }
+  const update = (value: RemoteSetup) => onSetup({ ...detection, ...value });
+  const host = cleanHost(status.Self?.DNSName?.replace(/\.$/, ""));
   if (status.BackendState !== "Running" || !host) {
     log(`Remote auto: Tailscale not logged in (${status.BackendState}), remote off`);
-    onSetup({ state: "not-running" });
+    update({ state: "not-running" });
+    return undefined;
+  }
+  if (previous?.state === "serve-disabled" && detection.https === false && previous.https === false) {
+    update({ state: "serve-disabled", enableUrl: previous.enableUrl });
     return undefined;
   }
   try {
     const serve = serveStatusSchema.parse(parseJson((await exec(command, ["serve", "status", "--json"])).trim() || "{}"));
     const web = serve.Web?.[`${host}:443`];
     if (proxiesToPort(web?.Handlers?.["/"]?.Proxy, port)) {
-      onSetup({ state: "ready" });
+      update({ state: "ready" });
       return host;
     }
     if (web || serve.TCP?.["443"] !== undefined) {
       log(`Remote auto: ${host}:443 already serves something else, remote off`);
-      onSetup({ state: "error" });
+      update({ state: "error" });
       return undefined;
     }
     await exec(command, ["serve", "--bg", "--https=443", `http://127.0.0.1:${port}`]);
-    onSetup({ state: "ready" });
+    update({ state: "ready" });
     return host;
   } catch (error) {
     const output = commandOutput(error);
     if (/(?:Serve|HTTPS) is not enabled/i.test(output)) {
       const enableUrl = serveEnableUrl(output);
-      onSetup({ state: "serve-disabled", ...(enableUrl ? { enableUrl } : {}) });
+      update({ state: "serve-disabled", ...(enableUrl ? { enableUrl } : {}) });
     } else {
-      onSetup({ state: "error" });
+      update({ state: "error" });
     }
     log(`Remote auto: tailscale serve failed, remote off: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -286,17 +306,44 @@ export function remoteHostRetry(
   let nextRetryAt = 0;
   let poll: ReturnType<typeof setInterval> | undefined;
   let logged = "";
+  let loginPending: Promise<{ url: string | null }> | undefined;
+  let peersPending: Promise<{ name: string; host: string }[]> | undefined;
+  let peersAt = 0;
+  let peersKey = "";
+  let peers: { name: string; host: string }[] = [];
   const logChange = (line: string) => {
     if (line !== logged) log(line);
     logged = line;
   };
   const retry = {
     status: () => setup,
-    refresh(): Promise<void> {
+    signIn() {
+      if (env.ORBIT_REMOTE_HOST?.trim() || FALSY_FLAG.has(env.ORBIT_REMOTE_AUTO?.trim().toLowerCase() ?? "on")) return Promise.resolve({ url: null });
+      loginPending ??= signInTailscale(exec, platform, exec === execText ? loginText : exec).finally(() => { loginPending = undefined; });
+      return loginPending;
+    },
+    async devices() {
+      if (setup.backendState !== "Running") return [];
+      const key = JSON.stringify([setup.account, setup.pcs]);
+      if (key !== peersKey) {
+        peersAt = 0;
+        peersKey = key;
+      }
+      if (now() >= peersAt) {
+        peersPending ??= winkPeers(setup.pcs ?? []).then((value) => {
+          peers = value;
+          peersAt = now() + 2_000;
+          return value;
+        }).finally(() => { peersPending = undefined; });
+        await peersPending;
+      }
+      return peers.filter((pc) => setup.pcs?.some((candidate) => candidate.host === pc.host));
+    },
+    refresh(open = false): Promise<void> {
       if (pending) return pending;
-      if (setup.state === "ready" || setup.state === "disabled" || now() < nextRetryAt) return Promise.resolve();
+      if (!open && (setup.state === "disabled" || setup.state === "ready" || now() < nextRetryAt)) return Promise.resolve();
       nextRetryAt = now() + 5_000;
-      pending = autoRemoteHost(env, port, exec, logChange, platform, (value) => { setup = value; })
+      pending = autoRemoteHost(env, port, exec, logChange, platform, (value) => { setup = value; }, open ? setup : undefined)
         .then((host) => {
           // Tailscale often starts after Wink at login, and only Phone Link would ask again.
           if (setup.state === "missing" || setup.state === "not-running" || setup.state === "error") poll ??= setInterval(() => void retry.refresh(), REMOTE_POLL_MS).unref();

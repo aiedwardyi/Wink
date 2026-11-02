@@ -6,7 +6,13 @@ export interface RemotePhoneLink {
   setup?: {
     state: "checking" | "disabled" | "missing" | "not-running" | "serve-disabled" | "error" | "ready";
     enableUrl?: string;
+    backendState?: string;
+    haveNodeKey?: boolean;
+    account?: string;
+    phoneJoined?: boolean;
+    https?: boolean;
   };
+  pcs?: { name: string; host: string }[];
   phones?: { id: string; kind: "android" | "iphone" | "ipad" | "phone"; lastSeen: number }[];
 }
 

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { settingsSectionMatches } from "./settings-search";
 
 describe("settings section search", () => {
+  it.each(["Devices", "기기", "Sign In", "접근 허용"])("finds Devices by %s", (query) => {
+    expect(settingsSectionMatches("companion", query)).toBe(true);
+  });
+
   it("matches Korean section labels and body keywords, not only English nav labels", () => {
     expect(settingsSectionMatches("general", "일반")).toBe(true);
     expect(settingsSectionMatches("general", "업데이트")).toBe(true);
