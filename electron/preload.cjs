@@ -156,12 +156,6 @@ contextBridge.exposeInMainWorld("ogb", {
   /** PNG bytes of the clipboard image, or null. A screenshot paste can reach
    * the page as 0 bytes on Windows, so the composer reads it again here. */
   readClipboardImage: () => ipcRenderer.invoke("desktop:clipboard-image"),
-  /** {mic} TCC status strings: granted|denied|not-determined|unknown.
-   * No screen field — macOS 15+ caches that status per-process, so any
-   * value here would lie for the whole session after a grant. */
-  permStatus: () => ipcRenderer.invoke("perm:status"),
-  /** Triggers the macOS microphone prompt; resolves true when granted. */
-  permRequestMic: () => ipcRenderer.invoke("perm:request-mic"),
   /** Opens System Settings on the given privacy pane: mic|screen|speech. */
   permOpenSettings: (pane) => ipcRenderer.invoke("perm:open-settings", pane),
 
@@ -236,25 +230,6 @@ contextBridge.exposeInMainWorld("ogb", {
       const handler = (_event, state) => cb(state);
       ipcRenderer.on("desktop-workspace:state", handler);
       return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
-    },
-  },
-  /** The built-in browser: a native page view per bot that the Browser tab
-   * positions over its own rectangle. Bots drive it through their tools; the
-   * person drives it by clicking into the view. */
-  browser: {
-    available: () => ipcRenderer.invoke("browser:available"),
-    state: (botId) => ipcRenderer.invoke("browser:state", botId),
-    layout: (botId, bounds, profile, mode) => ipcRenderer.invoke("browser:layout", botId, bounds, profile, mode),
-    navigate: (botId, url) => ipcRenderer.invoke("browser:navigate", botId, url),
-    back: (botId) => ipcRenderer.invoke("browser:back", botId),
-    forward: (botId) => ipcRenderer.invoke("browser:forward", botId),
-    /** Wipe a named profile's logins, storage and cache after it is deleted. */
-    forgetProfile: (profileId) => ipcRenderer.invoke("browser:forget-profile", profileId),
-    close: (botId) => ipcRenderer.invoke("browser:close", botId),
-    onState: (cb) => {
-      const handler = (_event, state) => cb(state);
-      ipcRenderer.on("browser:state", handler);
-      return () => ipcRenderer.removeListener("browser:state", handler);
     },
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */

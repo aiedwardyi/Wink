@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, BrowserWindow, Notification, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -115,10 +115,6 @@ const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.
 const { desktopViewerUrl, desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
-const { createBrowserSurfaceManager } = require("./browser-surface.cjs");
-const { browserProfilePartition } = require("./browser-snapshot.cjs");
-const { createBrowserHost } = require("./browser-host.cjs");
-const { createCuaConnectionStore: createDescriptorStore } = require("./cua-connection.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -138,16 +134,6 @@ const deviceLinkPages = new WeakMap();
 const deviceLoads = new WeakMap();
 let desktopWorkspaceManager = null;
 let desktopWorkspaceOwner = null;
-// The built-in browser surface (Browser tab of the computer panel): views
-// live in this process; bots reach them through the loopback host whose
-// address and per-boot token the descriptor file hands to the harness.
-let browserSurface = null;
-let browserSurfaceOwner = null;
-let browserHost = null;
-const browserConnectionStore = createDescriptorStore({
-  getUserData: () => app.getPath("userData"),
-  fileName: "browser-connection.json",
-});
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let pendingNotificationTarget = parseNotificationTargetFromCommandLine(process.argv);
 // Queued before any second-instance, so a later jump list click wins.
@@ -279,8 +265,7 @@ function activateMainWindow() {
   const target = liveMainWindow(mainWindow);
   if (!target) {
     if (!startupWindowCreated) return;
-    const next = createWindow();
-    if (!app.isPackaged || packagedBootPhase === BOOT_READY) void startBrowserSurface(next);
+    createWindow();
     return;
   }
   activateExistingWindow([target]);
@@ -1444,121 +1429,6 @@ function desktopWorkspaceForEvent(event, create = false) {
   return create ? ensureDesktopWorkspace(owner) : desktopWorkspaceManager;
 }
 
-/** The built-in browser: WebContentsViews per bot inside the app window,
- * plus the loopback host the bot's tools call. The host (and the token in
- * the descriptor) lives for the whole process; the surface belongs to a
- * window and is rebuilt for every window created — macOS keeps the app
- * alive with none open, and `activate` makes a new one. Never blocks the
- * window: without it the Browser tab simply reports itself unavailable. */
-async function startBrowserSurface(owner) {
-  if (!owner || owner.isDestroyed()) return;
-  if (browserSurfaceOwner === owner) return;
-  if (browserSurface && browserSurfaceOwner && browserSurfaceOwner !== owner) {
-    try {
-      browserSurface.closeAll();
-    } catch {}
-    browserSurface = null;
-  }
-  browserSurfaceOwner = owner;
-  const surface = createBrowserSurfaceManager({
-    owner,
-    createView: (options) => new WebContentsView(options),
-    notify: (state) => {
-      if (!owner.isDestroyed() && !owner.webContents.isDestroyed()) owner.webContents.send("browser:state", state);
-    },
-  });
-  browserSurface = surface;
-  try {
-    if (!browserHost) {
-      browserHost = createBrowserHost({ manager: () => browserSurface });
-      await browserHost.start();
-      browserConnectionStore.persist(browserHost.descriptor());
-    }
-    if (owner.isDestroyed() || browserSurfaceOwner !== owner) {
-      if (browserSurface === surface) {
-        try {
-          surface.closeAll();
-        } catch {}
-        browserSurface = null;
-      }
-      if (browserSurfaceOwner === owner) browserSurfaceOwner = null;
-      return;
-    }
-    // A renderer reload or crash loses the panel that positioned the views;
-    // hide them until a mounted Browser tab lays them out again. The pages
-    // themselves stay alive — a bot mid-task must not lose its tab.
-    owner.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-      if (isMainFrame && !isInPlace) browserSurface?.hideAll();
-    });
-    owner.webContents.on("render-process-gone", () => browserSurface?.hideAll());
-    owner.once("closed", () => {
-      surface.closeAll();
-      if (browserSurface === surface) browserSurface = null;
-      if (browserSurfaceOwner === owner) browserSurfaceOwner = null;
-    });
-    slog(`browser surface ready for window ${owner.id} (host ${browserHost.url})`);
-  } catch (error) {
-    slog(`browser surface unavailable: ${error?.message ?? error}`);
-    if (browserSurfaceOwner === owner) {
-      browserSurface = null;
-      browserSurfaceOwner = null;
-    }
-  }
-}
-
-function browserSurfaceForEvent(event) {
-  const owner = mainWindow;
-  if (!owner || owner.isDestroyed() || event.sender !== owner.webContents) {
-    throw new Error("The browser is available only to the main app window");
-  }
-  if (!browserSurface) throw new Error("The built-in browser is unavailable");
-  return browserSurface;
-}
-
-ipcMain.handle("browser:available", () => Boolean(browserSurface && browserHost?.url));
-ipcMain.handle("browser:state", (event, botId) => browserSurfaceForEvent(event).state(botId));
-ipcMain.handle("browser:layout", (event, botId, bounds, profile, mode) =>
-  browserSurfaceForEvent(event).layout(
-    botId,
-    bounds ?? null,
-    Object.prototype.toString.call(profile) === "[object String]" ? profile : undefined,
-    mode === "expanded" ? "expanded" : "compact",
-  ),
-);
-ipcMain.handle("browser:forward", async (event, botId) => {
-  const result = await browserSurfaceForEvent(event).forward(botId);
-  return { url: result.url, title: result.title };
-});
-ipcMain.handle("browser:navigate", async (event, botId, url) => {
-  const result = await browserSurfaceForEvent(event).navigate(botId, url);
-  return { url: result.url, title: result.title };
-});
-ipcMain.handle("browser:back", async (event, botId) => {
-  const result = await browserSurfaceForEvent(event).back(botId);
-  return { url: result.url, title: result.title };
-});
-ipcMain.handle("browser:close", (event, botId) => browserSurfaceForEvent(event).close(botId));
-// Deleting a profile: every bot's view on it goes, then its cookies, storage
-// and cache. The partition directory itself is left for Chromium to reuse
-// (removing it while the session object lives is the EBUSY trap every
-// Electron app with profiles has hit); nothing identifying remains in it.
-ipcMain.handle("browser:forget-profile", async (event, profileId) => {
-  const surface = browserSurfaceForEvent(event);
-  const id = String(profileId ?? "");
-  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || id === "guest") throw new Error("That browser profile id is invalid");
-  const dropped = surface.forgetProfile(id);
-  const ses = session.fromPartition(browserProfilePartition(id));
-  await ses.clearStorageData();
-  await ses.clearCache();
-  try {
-    await ses.clearAuthCache();
-  } catch {}
-  try {
-    ses.closeAllConnections();
-  } catch {}
-  return { dropped };
-});
-
 ipcMain.on("screen:preview-intent", (event) => {
   event.returnValue = displayMediaGuard.begin(event.senderFrame);
 });
@@ -1812,7 +1682,6 @@ function revealPackagedApp(win = mainWindow) {
     if (target.isDestroyed()) return;
     target.loadURL(packagedWindowHref());
   }
-  if (serverReady && !target.isDestroyed()) void startBrowserSurface(target);
 }
 
 async function runPackagedSmoke(win) {
@@ -2145,21 +2014,6 @@ ipcMain.handle("desktop-viewer:state-now", () => ({
   contextId: desktopViewerContextId,
 }));
 
-ipcMain.handle("perm:status", () => ({
-  mic:
-    nativeActions.appleMediaPermissions
-      ? systemPreferences.getMediaAccessStatus?.("microphone") ?? "unknown"
-      : "unsupported",
-}));
-ipcMain.handle("perm:request-mic", async () => {
-  if (!nativeActions.appleMediaPermissions) return false;
-  try {
-    return await systemPreferences.askForMediaAccess("microphone");
-  } catch {
-    return false;
-  }
-});
-
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
 ipcMain.handle("perm:open-settings", (_event, pane) => {
@@ -2409,7 +2263,6 @@ app.whenReady().then(async () => {
   if (resetFailed) void dialog.showMessageBox(win, { type: "info", message: nativeText("settings.startFresh.error") });
   slog(`window shown packaged=${app.isPackaged} serverReady=${serverReady} uptime=${process.uptime().toFixed(2)}s`);
   startUpdater(win, nativeText);
-  if (!app.isPackaged) void startBrowserSurface(win);
   // Register before the packaged harness wait: on Darwin, closing the
   // connecting window does not quit, and a dock click in that interval
   // must be able to open a new one.
@@ -2529,9 +2382,6 @@ app.on("before-quit", (e) => {
     if (!window.isDestroyed()) window.hide();
   }
   const terminalsStopped = terminalHost.dispose();
-  try {
-    browserSurface?.closeAll();
-  } catch {}
   const cleanup = Promise.race([
     Promise.all([
       terminalsStopped,
@@ -2543,7 +2393,6 @@ app.on("before-quit", (e) => {
           serverProc = null;
         }),
       stopCua().catch(() => {}),
-      browserHost?.stop().catch(() => {}) ?? Promise.resolve(),
       terminalBridge.close().catch(() => {}),
       // Both listeners reachable from outside the app are owned children.
       // Shut the connector down first, then the sidecar, without changing the

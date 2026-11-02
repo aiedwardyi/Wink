@@ -5,7 +5,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const LOCALE_IDS = ["en", "ko"];
 export const LOCALE_PREFERENCES = ["system", "en", "ko"];
 export const DEFAULT_PREFERENCE = "system";
 

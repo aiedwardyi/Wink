@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEV_WINDOWS_APP_USER_MODEL_ID,
   WINDOWS_APP_USER_MODEL_ID,
-  canClaimDesktopToasts,
   handleDesktopNotify,
   parseNotifyPayload,
   shouldShowDesktopToast,
@@ -141,16 +140,6 @@ describe("taskbarBusyIndicator", () => {
 
   it("clears the taskbar progress when idle", () => {
     expect(taskbarBusyIndicator(false)).toEqual({ progress: -1, mode: "none" });
-  });
-});
-
-describe("canClaimDesktopToasts", () => {
-  it("claims Get notified only when a real delivery path exists", () => {
-    expect(canClaimDesktopToasts({ nativeSupported: true })).toBe(true);
-    expect(canClaimDesktopToasts({ html5Available: true, html5Permission: "granted" })).toBe(true);
-    expect(canClaimDesktopToasts({ html5Available: true, html5Permission: "default" })).toBe(true);
-    expect(canClaimDesktopToasts({ html5Available: true, html5Permission: "denied" })).toBe(false);
-    expect(canClaimDesktopToasts({})).toBe(false);
   });
 });
 

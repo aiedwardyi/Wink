@@ -11,7 +11,6 @@ function normalizedPlatform(platform) {
 function nativeDesktopActions(platform) {
   const appleNative = normalizedPlatform(platform) === "darwin";
   return Object.freeze({
-    appleMediaPermissions: appleNative,
     applePrivacySettings: appleNative,
     appleSpeech: appleNative,
   });
