@@ -58,12 +58,10 @@ import {
   containerComputerAction,
   containerComputerExists,
   containerComputerMcp,
-  containerComputerScreenshot,
   containerComputerStatus,
   containerRuntimeStatus,
   perBotLocalVmTarget,
   SHARED_LOCAL_VM_TARGET,
-  setupCommands,
   type LocalVmTarget,
   type Runtime,
 } from "./container-computer.ts";
@@ -140,7 +138,10 @@ import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
+import { CommsCallers } from "./comms-caller.ts";
+import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
+import { turnRegistry } from "./turn-registry.ts";
+import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
 import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
@@ -551,7 +552,9 @@ googleAccount.onIdToken(googlePhotoChanged);
 /** Constant-time bearer check for the internal comms endpoints. The token
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
+const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined): boolean {
+  if (commsCallers.resolve(header)) return true;
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -584,7 +587,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
       OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
       OMB_BOT_ID: botId,
       OMB_THREAD_ID: threadId,
-      OMB_COMMS_TOKEN: COMMS_TOKEN,
+      OMB_COMMS_TOKEN: commsCallers.token(botId, threadId),
       OMB_TURN_DEPTH: String(depth),
       OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
     },
@@ -632,7 +635,6 @@ function connectedAppsIntegration(botId: string, threadId: string) {
 const computerControl = new ComputerControl((botId, snapshot) => {
   broadcast({ kind: "computer-control", botId, held: snapshot.held, helpReason: snapshot.helpReason });
 });
-const controlLeaseIdSchema = z.string().min(16).max(120).regex(/^[A-Za-z0-9_-]+$/);
 
 /** The loopback endpoint a bot's computer proxy polls before acting. */
 function controlIntegration(botId: string) {
@@ -656,7 +658,7 @@ const peerReplyComm = new Map<string, NonNullable<Message["comm"]>>();
 function peerAttribution(sender?: BotRecord, channel?: GroupRecord): Pick<StartTurnOptions, "peerSender" | "peerComm"> {
   if (!sender) return {};
   return {
-    peerSender: { botId: sender.id, name: sender.name, color: sender.color },
+    peerSender: { botId: sender.id, name: sender.name, color: sender.color, chiefOfStaff: sender.chiefOfStaff },
     peerComm: channel
       ? { groupId: channel.id, withBotId: sender.id, withName: sender.name, withColor: sender.color }
       : undefined,
@@ -671,7 +673,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -693,7 +695,7 @@ function askBotAndWait(
     }).then(() => undefined),
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
-      const taskId = newId();
+      const taskId = peer.taskId ?? newId();
       watchDelegatedTurn(threadId, { channelId: peer.channel?.id, toBotId: targetBotId, taskId, sourceThreadId: peer.sourceThreadId, sourceBotId: peer.sender.id, ask: true });
       return taskId;
     },
@@ -1691,9 +1693,6 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   // a peer approval naming this bot can never be meaningfully answered
   // now, and its caller would otherwise wait out the 15-minute timeout
   cancelPeerApprovalsFor(bot.id);
-  discardDelegations(commsBus, bot.threadId);
-  // the call above clears this bot's own thread; room queues live on the room
-  // thread instead, so they outlive the bot record unless dropped by owner
   discardDelegationsFrom(commsBus, bot.id);
   computerControl.forget(bot.id);
   paneWake.forgetBot(bot.id);
@@ -2928,6 +2927,7 @@ const watchdog = new TurnWatchdog({
       stallErrorActivity(bot, minutes, Boolean(store.groupByThread(turn.threadId))),
     );
     finalizeDelegationWatch(turn.threadId, false, "", "Delegated turn stalled and was stopped");
+    const stalledTurnId = turnRegistry.current(turn.threadId)?.turnId;
     turnUsage.delete(turn.threadId);
     roomStallCompletions.stall(turn.threadId);
     // ACP interruption settles within five seconds; other adapters settle
@@ -2936,6 +2936,10 @@ const watchdog = new TurnWatchdog({
     // clears it first when the adapter responds.
     const release = setTimeout(() => {
       providerReload.settled(turn.threadId);
+      if (stalledTurnId && turnRegistry.get(stalledTurnId)) {
+        if (settleMail(store, turn.threadId, stalledTurnId, false, "interrupted")) paneWake.noteArrived(turn.botId, turn.threadId);
+        turnRegistry.settle(stalledTurnId);
+      }
       const group = store.groupByThread(turn.threadId);
       const speaker = groupSpeakers.get(turn.threadId);
       if (group && group.busyBotId === turn.botId && speaker?.botId === turn.botId) {
@@ -3057,6 +3061,7 @@ bus.subscribe((event: RuntimeEvent) => {
     botByThread: (threadId) => store.botByThread(threadId),
     claimed: (botId) => turnStartClaims.has(botId),
     adopt: (botId, threadId, turnId) => {
+      turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0 });
       store.setActivity(botId, "working", threadId);
       dispatchedThreads.set(botId, threadId);
       liveTurnIdByThread.set(threadId, turnId);
@@ -3122,8 +3127,6 @@ const localVmLeases = new LocalVmLeasePool(30 * 60_000);
 const localVmLifecycleBusy = new Set<string>();
 const localVmThreadTargets = new Map<string, LocalVmTarget>();
 const localVmActiveThreads = new Map<string, string>();
-let localVmImageBusy = false;
-let localVmProvisionBusy = false;
 let localVmModeChangeBusy = false;
 const activeVpsThreads = new Map<string, string>();
 const LOCAL_VM_IDLE_MS = 8 * 60 * 60_000;
@@ -3142,7 +3145,7 @@ function localVmIdleFor(target: LocalVmTarget): LocalVmIdleTimer {
   if (idle) return idle;
   idle = new LocalVmIdleTimer(
     LOCAL_VM_IDLE_MS,
-    () => localVmImageBusy || localVmLifecycleBusy.has(target.key) || localVmActiveThreads.has(target.key),
+    () => localVmLifecycleBusy.has(target.key) || localVmActiveThreads.has(target.key),
     async () => {
       localVmLifecycleBusy.add(target.key);
       try {
@@ -3250,6 +3253,10 @@ bus.subscribe((event: RuntimeEvent) => {
 
   switch (event.type) {
     case "turn.started":
+      if (event.turnId) {
+        turnRegistry.started(event.turnId, event.threadId);
+        bindPeerTurn(event.threadId, event.turnId);
+      }
       limitWaits.bind(event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
       break;
@@ -3960,7 +3967,9 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     // harness (Node's default), which in the packaged app kills the server
     // child. Every delegation failure has to land as a chip instead.
     const targetThreadId = store.bot(toBotId)?.threadId;
-    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId });
+    const ask = findDelegationReceipt(taskId)?.kind === "ask" ? true : undefined;
+    updateReceipt(taskId, { state: "running", status: "running" });
+    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask });
     let failureReported = false;
     const reportStartFailure = (error: unknown) => {
       if (failureReported) return;
@@ -3972,13 +3981,13 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
       const bot = store.bot(toBotId);
       const why = error instanceof Error ? error.message : String(error);
       const reported = targetThreadId
-        && finalizeDelegationWatch(
+        ? finalizeDelegationWatch(
           targetThreadId,
           false,
           "",
           `Delegated turn could not start — ${why.slice(0, 120)}`,
-        );
-      if (!targetThreadId) failUnwatchedDelegation(taskId, sourceThreadId, toBotId, bot?.name ?? toBotId, `Delegated turn could not start: ${why.slice(0, 120)}`);
+        )
+        : failUnwatchedDelegation(taskId, sourceThreadId, toBotId, bot?.name ?? toBotId, `error: delegation to @${bot?.name ?? toBotId} could not start — ${why.slice(0, 120)}`, commsBus);
       const source = store.conversationForBot(sourceBotId, sourceThreadId)?.bot;
       if (!source) return;
       // a second row after one was written is the same dead handoff twice
@@ -3995,6 +4004,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     };
     return startTurn(toBotId, text, {
       commsDepth,
+      commsAsk: ask,
       unattended: isUnattended(sourceBotId),
       transcriptText,
       ...peerAttribution(store.bot(sourceBotId) ?? undefined, channel),
@@ -4012,17 +4022,18 @@ bus.subscribe((event: RuntimeEvent) => {
   clearAskBudget(event.threadId);
   peerTurnSource.delete(event.threadId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
-  // A turn that failed or was interrupted drops its queue rather than
-  // firing it later: the user who hit Stop does not expect the delegations
-  // that turn queued to run anyway, minutes later, on an unrelated turn.
-  if (!event.ok) discardDelegations(commsBus, event.threadId, sourceBotId);
+  if (event.turnId) {
+    if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
+    turnRegistry.settle(event.turnId);
+  }
+  drainQueuedSends();
+  if (!event.ok || event.stopReason === "cancelled" || event.stopReason === "interrupted") discardDelegations(commsBus, event.threadId, sourceBotId, event.turnId);
   else drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn, sourceBotId);
   settledGroupSpeakers.delete(event.threadId);
   // A settling bot frees itself as a delegation TARGET too: handoffs that
-  // found it busy earlier were kept queued (bounded retries) on their own
-  // source threads, and this is the moment they get their retry.
+  // found it busy remain ready on their source threads.
   const settledBot = store.botByThread(event.threadId);
-  if (settledBot) drainWaitingOn(commsBus, approvalBus, settledBot.id, runDelegatedTurn, event.threadId);
+  if (settledBot) drainWaitingOn(commsBus, approvalBus, runDelegatedTurn);
 });
 
 // ── steer-queue drain: messages sent while the bot was busy ────────────
@@ -4050,13 +4061,13 @@ bus.subscribe((event: RuntimeEvent) => {
 function paneNotesPending(threadId: string): boolean {
   const bot = store.botByThread(threadId);
   const deliveredId = bot ? store.taskByThread(bot.id, threadId)?.paneNotesDeliveredId : undefined;
-  return paneNotesSinceLastUserTurn(store.activePath(threadId), new Set(), deliveredId ?? undefined, true).length > 0;
+  return hasUnreadReplyWake(store, threadId) || paneNotesSinceLastUserTurn(store.activePath(threadId), new Set(), deliveredId ?? undefined, true).length > 0;
 }
 
 // A pane note wakes its teacher with a control-plane turn: cardContinuation
 // keeps it from reading as the user's words; destructive/sensitive still card.
 const paneWake = new PaneWakeScheduler({
-  enabled: (botId, threadId) => paneWakeEnabled(store, botId, threadId),
+  enabled: (botId, threadId) => hasUnreadReplyWake(store, threadId) || paneWakeEnabled(store, botId, threadId),
   paused: (botId) => store.bot(botId)?.paneWakePaused === true,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId) || limitWaits.held(botId),
   hasNotes: paneNotesPending,
@@ -4078,6 +4089,7 @@ const paneWake = new PaneWakeScheduler({
       }
     });
   },
+  admit: (botId, threadId) => admitPaneWake(store, botId, threadId, commsBus.replyUnwoken),
   warn: (line) => console.warn(line),
 });
 
@@ -4106,7 +4118,10 @@ const noteSteer = new NoteSteerer({
   },
   messages: (threadId) => store.activePath(threadId),
   deliveredId: (botId, threadId) => store.taskByThread(botId, threadId)?.paneNotesDeliveredId ?? undefined,
-  markDelivered: (botId, threadId, noteId) => store.markPaneNotesDelivered(botId, threadId, noteId),
+  markDelivered: (botId, threadId, noteId) => {
+    markSteeredMail(store, threadId, noteId, liveTurnIdByThread.get(threadId) ?? "");
+    store.markPaneNotesDelivered(botId, threadId, noteId);
+  },
   wake: (botId, threadId, paneId) => paneWake.noteArrived(botId, threadId, paneId),
 });
 
@@ -4115,7 +4130,7 @@ function drainQueuedSends() {
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
     // a send that never runs leaves no turn.completed to rerun a taken-over handoff
     const rerunIfIdle = () =>
-      continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, botId, runDelegatedTurn), botHasActiveTurn);
+      continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, runDelegatedTurn), botHasActiveTurn);
     if (room) {
       // a room thread's turn.completed never re-drains this bot either
       void enqueueDrainedRoomTurn(botId, threadId, room).then(rerunIfIdle);
@@ -4846,7 +4861,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     composeUserTurnPrompt(text, turnOpts),
     ...folded,
   ].join("\n\n");
-  let { notes: paneNotes, newestId: newestPaneNoteId } = paneNotesForTurn(
+  let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
     task.paneNotesDeliveredId ?? undefined,
@@ -4859,7 +4874,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
-  const turnNotes = [...paneNotes, ...routineCards, ...syncNotes];
+  const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
+  const turnNotes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5051,7 +5067,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           throw new Error("this model engine cannot use the Local VM — choose Claude or an ACP engine, or select another computer destination");
         }
         const localVmTarget = localVmTargetForBot(bot.id);
-        if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(localVmTarget.key)) {
+        if (localVmModeChangeBusy || localVmLifecycleBusy.has(localVmTarget.key)) {
           throw new Error("this Local VM is being started, stopped, or replaced — wait for setup to finish");
         }
         // Claim before the first await. The lifecycle route performs its
@@ -5264,6 +5280,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -5383,7 +5400,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...paneNotes, ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
+              const notes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -5433,6 +5450,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // it certifies nothing and the next turn still sees it as unseeded
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;
       if (started.turnId && systemSeed) systemSeed.turnId = started.turnId;
+      markMailRead(store, threadId, mailParts, started.turnId ?? "");
+      markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       if (currentTurnEpoch(bot.id) !== epoch) return;
@@ -5450,6 +5469,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       }
     } catch (e) {
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
+      turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
       releaseLocalVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
@@ -5931,7 +5951,7 @@ function enqueueDrainedRoomTurn(
 // comms bus: passed into the visibility helpers in comms-visibility.ts so
 // they can mirror messages + chips without re-deriving SSE plumbing. Same
 // shape every comms entry point uses (ask_bot, delegate_bot).
-const commsBus: CommsBus = { store, broadcast, deviceId: profileSyncSettings.deviceId, wakeSender: (botId, threadId) => paneWake.noteArrived(botId, threadId), replyUnwoken: (botId, detail) => teamSnags?.record({ event: "reply-unwoken", key: botId, bot: botId, detail }) };
+const commsBus: CommsBus = { senderBusy: botHasActiveTurn, store, broadcast, deviceId: profileSyncSettings.deviceId, wakeSender: (botId, threadId) => paneWake.noteArrived(botId, threadId), replyUnwoken: (botId, detail) => teamSnags?.record({ event: "reply-unwoken", key: botId, bot: botId, detail }) };
 
 // approval bus: peer-approval.ts only needs to push cards and broadcast
 // them — its pending map lives in the module so the two respond endpoints
@@ -6138,9 +6158,11 @@ async function runClaimedGroupMemberTurn(
       return true;
     }
   }
+  const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : null,
     prepared.transcript.map((message) => message.text).join("\n"),
+    ...roomMail.map((part) => part.text),
   ].filter((value) => value !== null).join("\n\n");
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
@@ -6315,6 +6337,7 @@ async function runClaimedGroupMemberTurn(
     // through startClaimedTurn, which recycles the native session after
     // Orbit compaction or a pre-compact fat soak.
     keepRoomTurnInstruction = true;
+    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop });
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6335,6 +6358,7 @@ async function runClaimedGroupMemberTurn(
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+        markMailRead(store, threadId, roomMail, started.turnId ?? "");
         if (started.turnId && currentTurnEpoch(bot.id) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
         if (reply.claim(started.turnId)) finish("settled");
       })
@@ -6810,17 +6834,6 @@ bus.subscribe((event: RuntimeEvent) => {
   }
 });
 
-async function localVmPayload(target: LocalVmTarget) {
-  const status = await containerComputerStatus(undefined, undefined, target);
-  return {
-    ...status,
-    commands: setupCommands(status.runtime, process.platform, target),
-    idle_timeout_ms: LOCAL_VM_IDLE_MS,
-    mode: localVmMode(cfg),
-    max_instances: localVmMaxInstances(cfg),
-  };
-}
-
 async function existingPerBotLocalVmCount(runtime: Runtime) {
   const targets = [...new Map(store.bots.map((bot) => {
     const target = perBotLocalVmTarget(bot.id);
@@ -6918,6 +6931,8 @@ const groupRoutes = createGroupRoutes({
   releaseInterruptedBot,
 });
 const internalRoutes = createInternalRoutes({
+  runDelegatedTurn,
+  resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
   utilityParentPort,
   googleAccount,
@@ -7198,7 +7213,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // turn.completed. Returns immediately (the caller does not wait).
       const delegationMatch = method === "GET" ? path.match(/^\/api\/internal\/delegations\/([\w-]{4,64})$/) : null;
       if (delegationMatch) {
-        return await internalRoutes.delegationStatus(res, delegationMatch, url);
+        return await internalRoutes.delegationStatus(res, delegationMatch, url, req);
       }
       if (method === "POST" && path === "/api/internal/delegate-bot") {
         return await internalRoutes.delegateBot(req, res);
@@ -7725,20 +7740,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botRoutes.patch(req, res, m);
     }
 
-    if (method === "POST" && path === "/api/local-computer/interrupt") {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      await Promise.allSettled(
-        store.bots
-          .filter((bot) => bot.computer === "local")
-          .map((bot) =>
-            registry.get(bot.modelSelection.instanceId)?.adapter.interruptTurn(bot.threadId),
-          )
-          .filter((turn): turn is Promise<void> => Boolean(turn)),
-      );
-      return json(res, 200, { ok: true });
-    }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);
@@ -7932,118 +7933,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { bot: fresh });
     }
 
-    // what the user's machine can host: which runtime is installed, whether
-    // its daemon is up, and whether the desktop image and container exist
-    if (method === "GET" && path === "/api/local-computer") {
-      return json(res, 200, await localVmPayload(SHARED_LOCAL_VM_TARGET));
-    }
-    m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove)$/);
-    if (m && method === "POST") {
-      // Requiring JSON makes these localhost lifecycle mutations non-simple
-      // browser requests. A hostile web page cannot submit them with a form,
-      // and its cross-origin JSON request is stopped by the browser preflight
-      // because this server deliberately emits no CORS permission.
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      const action = z.enum(["pull", "run", "start", "stop", "remove"]).parse(m[1]);
-      if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(SHARED_LOCAL_VM_TARGET.key)) {
-        return json(res, 409, { error: "another Local VM setup action is still running" });
-      }
-      if (localVmMode(cfg) === "per-bot" && action === "run") {
-        return json(res, 409, { error: "Per-bot mode creates each desktop from that bot's Computer panel" });
-      }
-      const vmOwner = localVmLeaseFor(SHARED_LOCAL_VM_TARGET).current(localVmOwnerBusy);
-      if (vmOwner && (action === "stop" || action === "remove" || action === "run")) {
-        return json(res, 409, { error: "the Local VM is being used by a bot — stop that turn first" });
-      }
-      if (action === "pull") localVmImageBusy = true;
-      else localVmLifecycleBusy.add(SHARED_LOCAL_VM_TARGET.key);
-      try {
-        const status = await containerComputerAction(action, undefined, undefined, SHARED_LOCAL_VM_TARGET);
-        if (action === "run" || action === "start") localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
-        if (action === "stop" || action === "remove") localVmIdleFor(SHARED_LOCAL_VM_TARGET).cancel();
-        return json(res, 200, {
-          ...status,
-          commands: setupCommands(status.runtime, process.platform, SHARED_LOCAL_VM_TARGET),
-          idle_timeout_ms: LOCAL_VM_IDLE_MS,
-          mode: localVmMode(cfg),
-          max_instances: localVmMaxInstances(cfg),
-        });
-      } finally {
-        if (action === "pull") localVmImageBusy = false;
-        else localVmLifecycleBusy.delete(SHARED_LOCAL_VM_TARGET.key);
-      }
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer$/);
-    if (m && method === "GET") {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      return json(res, 200, await localVmPayload(localVmTargetForBot(bot.id)));
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/(run|remove)$/);
-    if (m && method === "POST") {
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      const action = z.enum(["run", "remove"]).parse(m[2]);
-      const target = localVmTargetForBot(bot.id);
-      if (target.key === SHARED_LOCAL_VM_TARGET.key) {
-        return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Local VM" });
-      }
-      if (localVmImageBusy || localVmModeChangeBusy || localVmLifecycleBusy.has(target.key)) {
-        return json(res, 409, { error: "this bot's Local VM setup action is still running" });
-      }
-      if (action === "run" && localVmProvisionBusy) {
-        return json(res, 409, { error: "another per-bot Local VM is being created — retry after it finishes" });
-      }
-      const vmOwner = localVmLeaseFor(target).current(localVmOwnerBusy);
-      if (vmOwner) return json(res, 409, { error: "this bot is using its Local VM — stop the turn first" });
-      // Fence this target, and the cross-target capacity decision for creates,
-      // before the first await so two requests cannot both pass the limit.
-      localVmLifecycleBusy.add(target.key);
-      if (action === "run") localVmProvisionBusy = true;
-      try {
-        if (action === "run") {
-          const before = await containerComputerStatus(undefined, undefined, target);
-          if (!before.runtime) return json(res, 409, { error: before.problem ?? "No container runtime is installed" });
-          if (!(await containerComputerExists(before.runtime, target))) {
-            const count = await existingPerBotLocalVmCount(before.runtime);
-            if (count >= localVmMaxInstances(cfg)) {
-              return json(res, 409, {
-                error: `The per-bot Local VM limit is ${localVmMaxInstances(cfg)} — delete an unused bot VM or raise the limit in App Settings`,
-              });
-            }
-          }
-        }
-        const status = await containerComputerAction(action, undefined, undefined, target);
-        if (action === "run") localVmIdleFor(target).touch();
-        if (action === "remove") localVmIdleFor(target).cancel();
-        return json(res, 200, {
-          ...status,
-          commands: setupCommands(status.runtime, process.platform, target),
-          idle_timeout_ms: LOCAL_VM_IDLE_MS,
-          mode: localVmMode(cfg),
-          max_instances: localVmMaxInstances(cfg),
-        });
-      } finally {
-        if (action === "run") localVmProvisionBusy = false;
-        localVmLifecycleBusy.delete(target.key);
-      }
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/local-computer\/screenshot$/);
-    if (m && method === "POST") {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      const target = localVmTargetForBot(bot.id);
-      localVmIdleFor(target).touch();
-      return json(res, 200, {
-        image: await containerComputerScreenshot(undefined, undefined, target),
-      });
-    }
-
     // identity handshake for the packaged app's port fallback: the forked
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
@@ -8166,7 +8055,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, reply.status, reply.body);
     }
     if (method === "GET" && path === "/api/team/today") {
-      const reply = await teamTodayRoute(DATA_DIR, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, crashOrigin, crashCount);
+      const reply = await teamTodayRoute(DATA_DIR, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, crashOrigin, crashCount, Date.now(), {
+        base: phoneAccess.base(), baked: googleEnv.teamRelay, tokens: googleAccount,
+      });
       return json(res, reply.status, reply.body);
     }
     if (method === "GET" && path === "/api/quorum") {
@@ -8201,7 +8092,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (changingLocalVmMode) localVmModeChangeBusy = true;
       try {
         if (changingLocalVmMode) {
-          if (localVmActiveThreads.size > 0 || localVmLifecycleBusy.size > 0 || localVmImageBusy) {
+          if (localVmActiveThreads.size > 0 || localVmLifecycleBusy.size > 0) {
             return json(res, 409, { error: "stop Local VM turns and setup actions before changing the Local VM isolation mode" });
           }
           if (localVmMode(cfg) === "per-bot" && patch.localVm?.mode === "shared") {
@@ -8403,113 +8294,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.connectorCard(req, res, m, url, method);
     }
 
-    // ── the bot's cloud computer (Box) ──
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);
-    if (m && method === "GET") {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      return bot.cloudBackend === "vps"
-        ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
-        : json(res, 200, { backend: "box", ...(await box.boxStatus(cfg, bot.id)) });
-    }
-    // Who is driving this bot's computer. GET is the panel's initial read;
-    // POST take/release/dismiss-help are the person's three moves. The bot
-    // has no verb here at all — its only voice is the internal help plea.
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/control$/);
-    if (m) {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      if (method === "GET") return json(res, 200, computerControl.snapshot(bot.id));
-      if (method === "POST") {
-        // JSON-only for the same anti-form-POST reason as every other
-        // computer mutation below.
-        if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-          return json(res, 415, { error: "content-type must be application/json" });
-        }
-        const body = await readBody(req);
-        const action = String(body.action ?? "");
-        const leaseResult =
-          body.controlLeaseId === undefined
-            ? null
-            : controlLeaseIdSchema.safeParse(body.controlLeaseId);
-        if (leaseResult && !leaseResult.success) {
-          return json(res, 400, { error: "controlLeaseId is invalid" });
-        }
-        const controlLeaseId = leaseResult?.data;
-        if (action === "take" && controlLeaseId) {
-          const result = computerControl.acquireLease(bot.id, controlLeaseId);
-          return json(res, 200, {
-            ...result.snapshot,
-            owned: result.owned,
-            acquired: result.acquired,
-          });
-        }
-        if (action === "release" && controlLeaseId) {
-          const result = computerControl.releaseLease(bot.id, controlLeaseId);
-          return json(res, 200, { ...result.snapshot, released: result.released });
-        }
-        if (action === "take") return json(res, 200, computerControl.take(bot.id));
-        if (action === "release") return json(res, 200, computerControl.release(bot.id));
-        if (action === "dismiss-help") return json(res, 200, computerControl.dismissHelp(bot.id));
-        return json(res, 400, { error: "action must be take, release, or dismiss-help" });
-      }
-      return json(res, 405, { error: "method not allowed" });
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/viewer-close$/);
-    if (m && method === "POST") {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      return json(res, 200, bot.cloudBackend === "vps" ? vps.closeVpsDesktopTunnel(bot.id) : { closed: false });
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|screenshot|remove)$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/join$/);
     if (m && method === "POST") {
       const botId = m[1];
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      // Requiring JSON makes every computer mutation a non-simple browser
-      // request (same reasoning as the Local VM lifecycle routes above): a
-      // hostile page cannot submit it with a form, and its cross-origin JSON
-      // request dies in the preflight this server never answers. Applied to
-      // both backends — the Box branch runs commands too.
+      // JSON makes this a non-simple browser request, so a hostile page
+      // cannot submit it with a form or pass the cross-origin preflight.
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       if (bot.cloudBackend === "vps") {
-        if (m[2] === "provision" && bot.computer !== "cloud" && !bot.autoStartVps) {
-          return json(res, 409, { error: "Auto may start this VPS only after Start VPS automatically is enabled" });
+        if (refuseVpsJoin(req.headers, relay)) {
+          return json(res, 409, {
+            error: "VPS live desktop control is currently available in the desktop app; the SSH viewer is loopback-only",
+          });
         }
-        if ((m[2] === "sleep" || m[2] === "remove") && (bot.busy || activeVpsThreads.has(botId))) {
-          return json(res, 409, { error: "the VPS computer is being used by this bot — interrupt the turn first" });
-        }
-        if (m[2] === "join") {
-          if (refuseVpsJoin(req.headers, relay)) {
-            return json(res, 409, {
-              error: "VPS live desktop control is currently available in the desktop app; the SSH viewer is loopback-only",
-            });
-          }
-          return json(res, 200, await vps.vpsComputerJoin(cfg, botId));
-        }
-        if (m[2] === "screenshot") return json(res, 200, await vps.vpsComputerScreenshot(cfg, botId));
-        const action = m[2] === "provision" ? "provision" : m[2] === "remove" ? "remove" : "stop";
-        return json(res, 200, await vps.vpsComputerAction(action, cfg, botId));
+        return json(res, 200, await vps.vpsComputerJoin(cfg, botId));
       }
-      if (m[2] === "remove") {
-        // Boxes sleep and wake; only the VPS backend has a container to remove.
-        return json(res, 409, { error: "the cloud Box backend has no container to remove — use sleep instead" });
-      }
-      switch (m[2]) {
-        case "provision":
-          return json(res, 200, await box.provisionBox(cfg, botId, bot.name));
-        case "join":
-          return json(res, 200, await box.joinBox(cfg, botId));
-        case "sleep":
-          return json(res, 200, await box.sleepBox(cfg, botId));
-        case "screenshot":
-          return json(res, 200, await box.screenshotBox(cfg, botId));
-      }
+      return json(res, 200, await box.joinBox(cfg, botId));
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for

@@ -1,15 +1,4 @@
-// Async peer handoff (delegate_bot).
-//
-// A bot that finishes one task can hand the NEXT task to a peer without
-// blocking its own turn — the source bot's turn.completed fires after it
-// settles, and the queued delegation runs then. The peer gets a fresh
-// depth-1 turn (depth cap still blocks A→B→C chains, see index.ts).
-//
-// Visiblity rides on the same comms-visibility helpers ask_bot uses
-// (channel mirror + 1:1 chips) so a delegated exchange looks like an
-// exchanged one. The optional approval gate (A2) is checked at drain
-// time, never at queue time, because the user might have just turned
-// approvePeerComms on between queueing and draining.
+// Durable peer handoffs and their turn-scoped queues.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,7 +6,11 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
-import { claimDelegationWake, releaseDelegationWake } from "./comms-budget.ts";
+import { findDelegationReceipt, loadDelegationReceipts, recordDelegationReceipt, receiptSnapshot, resetDelegationReceipts } from "./delegation-ledger.ts";
+import { terminalMailState, type MailDestination, type MailState } from "./mail-types.ts";
+import { recoverHandedMail } from "./mail-index.ts";
+import { publishPeerReply, replyDestinations, wakeForPeerReply } from "./peer-reply-publication.ts";
+import { turnRegistry } from "./turn-registry.ts";
 import {
   commLink,
   getOrCreateChannel,
@@ -26,14 +19,12 @@ import {
   mirrorReply,
   noteMessageFrom,
   patchDelegationChip,
-  postPeerReply,
   settleDelegationChip,
   trackDelegationChip,
   type CommsBus,
 } from "./comms-visibility.ts";
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
-import { asksSender } from "./delegate-askback.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
 import { askSwitchedText } from "./peer-takeover.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -52,14 +43,15 @@ export interface DelegationItem {
 }
 
 interface PendingDelegationItem extends DelegationItem {
+  kind?: "ask" | "delegation";
+  turnId?: string;
+  seq?: number;
   /** The bot that queued this item. Required for shared room threads. */
   fromBotId?: string;
   /** Stable acknowledgement key for crash-safe removal from the queue —
    * and the task id the delegating bot uses with check/wait_delegation. */
   id: string;
-  /** Busy-target retries so far. The item stays queued (not canceled) while
-   * the target is busy, and is retried when any of the target's turns
-   * settles — up to MAX_BUSY_ATTEMPTS. */
+  /** Busy settles observed; waiting has no retry cap. */
   attempts: number;
   /** Set on the rerun of a handoff the user took over: whose message it was. */
   takenOverBy?: string;
@@ -67,11 +59,8 @@ interface PendingDelegationItem extends DelegationItem {
   approved?: boolean;
 }
 
-export type DelegationOutcome = "done" | "failed" | "denied" | "busy_gave_up" | "dropped" | "error";
+export type DelegationOutcome = "done" | "failed" | "denied" | "busy_gave_up" | "dropped" | "error" | "queued" | "running";
 
-/** The durable terminal record of one handoff: what the delegating bot reads
- * back with check_delegation / wait_delegation. Bounded and pruned — this is
- * a receipt drawer, not a transcript. */
 export interface DelegationReceipt {
   id: string;
   sourceThreadId: string;
@@ -81,7 +70,17 @@ export interface DelegationReceipt {
   /** the peer's reply on success; the failure name otherwise (bounded) */
   result?: string;
   finishedAt: number;
+  kind?: "ask" | "delegation";
+  deliver?: "queued" | "now";
+  state?: MailState;
+  source?: { botId: string; threadId: string; turnId: string };
+  target?: { botId: string; threadId?: string; turnId?: string };
+  seq?: number;
+  publish?: MailDestination[];
+  fallback?: string;
 }
+
+export { findDelegationReceipt, recordDelegationReceipt } from "./delegation-ledger.ts";
 
 export type QueueResult = "ok" | "no_target" | "self" | "too_deep" | "too_many";
 
@@ -99,67 +98,14 @@ export interface QueuedDelegation {
   id?: string;
 }
 
-/** Per source-thread queue. Persisted to delegations.json on every change
- * and reloaded at boot: a handoff queued right before a restart runs after
- * it. (Provider PERMISSIONS still die with the process — nobody can answer
- * for an unattended bot — but queued work is not a permission; the target
- * and approvePeerComms are re-checked at drain time as always.) */
 const pendingDelegations = new Map<string, PendingDelegationItem[]>();
-const drainingThreads = new Set<string>();
-/** Threads whose drain was requested WHILE a drain was already running.
- * Dropping such a request loses real work: the waiting-on retry fires the
- * moment a busy target settles, and that can land mid-drain. */
-const queuedRedrains = new Set<string>();
-/** Same, for drains scoped to the handoffs waiting on one bot. */
-const queuedWaitingRedrains = new Map<string, Set<string>>();
+const dispatchingTargets = new Set<string>();
+const approvingItems = new Set<string>();
+let readySeq = 0;
 const DELEGATIONS_FILE = join(DATA_DIR, "delegations.json");
-const RECEIPTS_FILE = join(DATA_DIR, "delegation-receipts.json");
-const MAX_RECEIPTS = 100;
-const RECEIPT_MAX_AGE_MS = 48 * 60 * 60 * 1000;
-const RESULT_MAX_CHARS = 16_000;
 const persistedFromBotId = z.string().min(1).optional().catch(undefined);
-export const MAX_BUSY_ATTEMPTS = 3;
 /** Dispatched handoffs by id, so a taken-over turn can queue the same one again. */
 const runningDelegations = new Map<string, { sourceThreadId: string; item: PendingDelegationItem }>();
-
-let receipts: DelegationReceipt[] = [];
-
-function saveReceipts(): void {
-  try {
-    writeFileAtomic(RECEIPTS_FILE, JSON.stringify(receipts, null, 2), { mode: 0o600 });
-  } catch (error) {
-    console.error("delegations: could not persist receipts", error);
-  }
-}
-
-// no tool reads past the cut, so the marker names no place to find the rest
-const boundedResult = (result: string) =>
-  result.length > RESULT_MAX_CHARS
-    ? `${result.slice(0, RESULT_MAX_CHARS)}\n\n[reply cut: first ${RESULT_MAX_CHARS} of ${result.length} chars]`
-    : result;
-
-/** Record one terminal outcome. Newest first; pruned by count and age so the
- * drawer can never grow without bound. */
-export function recordDelegationReceipt(receipt: Omit<DelegationReceipt, "finishedAt"> & { finishedAt?: number }): void {
-  const now = Date.now();
-  const bounded: DelegationReceipt = {
-    id: receipt.id,
-    sourceThreadId: receipt.sourceThreadId,
-    toBotId: receipt.toBotId,
-    toBotName: receipt.toBotName,
-    status: receipt.status,
-    finishedAt: receipt.finishedAt ?? now,
-  };
-  if (receipt.result !== undefined) bounded.result = boundedResult(redactSecretsInText(receipt.result));
-  receipts = [bounded, ...receipts.filter((existing) => existing.id !== bounded.id)]
-    .filter((existing) => now - existing.finishedAt <= RECEIPT_MAX_AGE_MS)
-    .slice(0, MAX_RECEIPTS);
-  saveReceipts();
-}
-
-export function findDelegationReceipt(id: string): DelegationReceipt | null {
-  return receipts.find((receipt) => receipt.id === id) ?? null;
-}
 
 export const DELEGATION_PREFIX_MIN = 8;
 
@@ -168,7 +114,7 @@ export type DelegationIdMatch = { id: string } | { error: "too_short" | "ambiguo
 /** Full ids pass through; a prefix only matches the caller's own thread, so it never reaches another bot's task. */
 export function resolveDelegationId(input: string, sourceThreadId: string, runningIds: Iterable<string> = []): DelegationIdMatch {
   const own = new Set<string>([
-    ...receipts.filter((receipt) => receipt.sourceThreadId === sourceThreadId).map((receipt) => receipt.id),
+    ...receiptSnapshot().filter((receipt) => receipt.sourceThreadId === sourceThreadId).map((receipt) => receipt.id),
     ...(pendingDelegations.get(sourceThreadId) ?? []).map((item) => item.id),
     ...runningIds,
   ]);
@@ -191,9 +137,9 @@ export function pendingDelegationInfo(id: string): { sourceThreadId: string; toB
 /** Queued by the asking bot's running turn: it sends only when that turn ends,
  * so a wait inside the same turn could never see it run. */
 function queuedThisTurn(id: string, fromBotId: string): boolean {
-  for (const [sourceThreadId, items] of pendingDelegations) {
+  for (const items of pendingDelegations.values()) {
     const item = items.find((candidate) => candidate.id === id);
-    if (item) return item.attempts === 0 && item.takenOverBy === undefined && item.fromBotId === fromBotId && !drainingThreads.has(sourceThreadId);
+    if (item) return findDelegationReceipt(id)?.state === "held" && item.fromBotId === fromBotId;
   }
   return false;
 }
@@ -216,47 +162,24 @@ export async function pollDelegation(
   const deadline = Date.now() + waitMs;
   for (;;) {
     const receipt = findDelegationReceipt(taskId);
-    if (receipt) {
+    if (receipt && (!receipt.state || terminalMailState(receipt.state))) {
       if (receipt.sourceThreadId !== fromThreadId) return { code: 403, body: { error: "that task belongs to a different conversation" } };
       return { code: 200, body: { status: receipt.status, toBotName: receipt.toBotName, result: receipt.result ?? "" } };
     }
     const stillQueued = pendingDelegationInfo(taskId);
     const watched = running(taskId);
-    const owner = stillQueued?.sourceThreadId ?? watched?.sourceThreadId;
+    const owner = stillQueued?.sourceThreadId ?? watched?.sourceThreadId ?? receipt?.sourceThreadId;
     if (!owner) return { code: 404, body: { error: "unknown task id - delegation receipts are kept for about 48 hours" } };
     if (owner !== fromThreadId) return { code: 403, body: { error: "that task belongs to a different conversation" } };
     const toBotName = botName(stillQueued?.toBotId ?? watched?.toBotId ?? "");
     if (stillQueued && queuedThisTurn(taskId, fromBotId)) return { code: 200, body: { status: "queued", toBotName, sameTurn: true } };
-    if (Date.now() >= deadline) return { code: 200, body: { status: watched ? "running" : "queued", toBotName } };
+    if (Date.now() >= deadline) return { code: 200, body: { status: watched || receipt?.state === "running" || receipt?.state === "dispatching" ? "running" : "queued", toBotName } };
     await new Promise((wake) => setTimeout(wake, 500));
   }
 }
 
-/** Source threads holding a handoff that already waited on this busy bot at
- * least once, or a taken-over rerun - the set a target's settling turn re-drains. Fresh items
- * (attempts 0) are excluded: they run when their SOURCE turn settles, and
- * draining them early would start the peer before the delegator finished. */
-export function threadsWaitingOn(toBotId: string): string[] {
-  return [...pendingDelegations.entries()]
-    .filter(([, items]) => items.some((item) => waitsOn(item, toBotId)))
-    .map(([threadId]) => threadId);
-}
-
-const waitsOn = (item: PendingDelegationItem, toBotId: string) =>
-  item.toBotId === toBotId && (item.attempts > 0 || item.takenOverBy !== undefined);
-
-/** `toBotId` is idle again: run only the handoffs waiting on it, never a
- * source's fresh ones. */
-export function drainWaitingOn(
-  bus: CommsBus,
-  approvalBus: ApprovalBus,
-  toBotId: string,
-  runTarget: Parameters<typeof drainDelegations>[3],
-  exceptThreadId?: string,
-): void {
-  for (const threadId of threadsWaitingOn(toBotId)) {
-    if (threadId !== exceptThreadId) drainDelegations(bus, approvalBus, threadId, runTarget, undefined, toBotId);
-  }
+export function drainWaitingOn(bus: CommsBus, approvalBus: ApprovalBus, runTarget: Parameters<typeof drainDelegations>[3]): void {
+  pumpReady(bus, approvalBus, runTarget);
 }
 
 function savePending(): void {
@@ -270,6 +193,9 @@ function savePending(): void {
 /** Load what a previous process left queued. Missing or corrupt → empty. */
 export function _loadPending(): void {
   pendingDelegations.clear();
+  runningDelegations.clear();
+  dispatchingTargets.clear();
+  approvingItems.clear();
   try {
     const raw = JSON.parse(readFileSync(DELEGATIONS_FILE, "utf8")) as Record<string, unknown>;
     for (const [threadId, list] of Object.entries(raw)) {
@@ -292,6 +218,11 @@ export function _loadPending(): void {
         const fromBotId = persistedFromBotId.parse(item.fromBotId);
         if (fromBotId) loaded.fromBotId = fromBotId;
         if (typeof item.reason === "string") loaded.reason = item.reason;
+        if (typeof item.turnId === "string") loaded.turnId = item.turnId;
+        if (typeof item.seq === "number" && Number.isFinite(item.seq)) loaded.seq = item.seq;
+        if (item.kind === "ask" || item.kind === "delegation") loaded.kind = item.kind;
+        if (item.approved === true) loaded.approved = true;
+        if (typeof item.takenOverBy === "string") loaded.takenOverBy = item.takenOverBy;
         return [loaded];
       });
       if (items.length) pendingDelegations.set(threadId, items);
@@ -299,32 +230,9 @@ export function _loadPending(): void {
   } catch {
     /* fresh install, or unreadable — start empty */
   }
-  receipts = [];
-  try {
-    const rawReceipts = JSON.parse(readFileSync(RECEIPTS_FILE, "utf8"));
-    if (Array.isArray(rawReceipts)) {
-      const now = Date.now();
-      const loaded: DelegationReceipt[] = [];
-      for (const value of rawReceipts) {
-        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-        // SAFETY: the Partial view only names candidate fields; every one is
-        // narrowed below before a receipt is constructed from the narrowed
-        // locals, so nothing unvalidated survives into `receipts`.
-        const candidate = value as Partial<DelegationReceipt>;
-        const { id, sourceThreadId, toBotId, toBotName, status, result, finishedAt } = candidate;
-        if (typeof id !== "string" || !id) continue;
-        if (typeof sourceThreadId !== "string" || typeof toBotId !== "string") continue;
-        if (typeof toBotName !== "string" || typeof status !== "string") continue;
-        if (!Number.isFinite(finishedAt) || now - finishedAt! > RECEIPT_MAX_AGE_MS) continue;
-        const receipt: DelegationReceipt = { id, sourceThreadId, toBotId, toBotName, status, finishedAt: finishedAt! };
-        if (typeof result === "string") receipt.result = result;
-        loaded.push(receipt);
-      }
-      receipts = loaded.slice(0, MAX_RECEIPTS);
-    }
-  } catch {
-    /* no receipts yet */
-  }
+  loadDelegationReceipts();
+  readySeq = Math.max(0, ...receiptSnapshot().map((row) => row.seq ?? 0));
+
 }
 
 /** Source threads with something queued — what a boot drain iterates. */
@@ -352,23 +260,15 @@ function appendDelegationActivity(
   sourceThreadId: string,
   tool: NonNullable<Message["tool"]>,
   from?: BotRecord | null,
+  taskId?: string,
 ): Message {
   const activity: Omit<Message, "id" | "at"> = { role: "bot", kind: "activity", tool };
+  const receipt = taskId ? findDelegationReceipt(taskId) : undefined;
+  if (receipt) activity.comm = { groupId: "", withBotId: receipt.toBotId, withName: receipt.toBotName, withColor: "", taskId, mailKey: `${taskId}:status:${sourceThreadId}`, state: receipt.state, deliver: receipt.deliver };
   if (from && sourceThreadId !== from.threadId) {
     activity.from = { botId: from.id, name: from.name, color: from.color };
   }
   return bus.store.appendMessage(sourceThreadId, activity);
-}
-
-/** Show a handoff's state on its queued chip; append a row only if it has none. */
-function reportDelegation(
-  bus: CommsBus,
-  sourceThreadId: string,
-  itemId: string,
-  tool: NonNullable<Message["tool"]>,
-  from?: BotRecord | null,
-): void {
-  if (!patchDelegationChip(bus, itemId, tool)) appendDelegationActivity(bus, sourceThreadId, tool, from);
 }
 
 /** Validate and enqueue a delegation. Pushes a "Queued for @B" chip to the
@@ -379,6 +279,7 @@ export function queueDelegation(
   item: DelegationItem,
   maxDepth: number,
   sourceThreadId = from.threadId,
+  options: { kind?: "ask" | "delegation"; ready?: boolean; approved?: boolean } = {},
 ): QueuedDelegation {
   if (item.toBotId === from.id) return { result: "self" };
   if (item.depth >= maxDepth) return { result: "too_deep" };
@@ -388,7 +289,7 @@ export function queueDelegation(
   // Async handoff removes the backpressure that ask_bot got for free by
   // making the caller wait. Without a cap, one turn can queue unboundedly
   // and fan out into as many real turns on the next settle.
-  if (list.length >= MAX_QUEUED_PER_THREAD) return { result: "too_many" };
+  if (options.kind !== "ask" && list.filter((item) => item.kind !== "ask").length >= MAX_QUEUED_PER_THREAD) return { result: "too_many" };
   const id = newId();
   // The handoff prompt and its label are bot-authored and outlive the turn on
   // disk — scrub them the way the transcript copy of the same strings is.
@@ -397,23 +298,22 @@ export function queueDelegation(
     message: redactSecretsInText(item.message),
     id,
     fromBotId: from.id,
+    turnId: turnRegistry.current(sourceThreadId)?.turnId,
+    kind: options.kind ?? "delegation",
+    approved: options.approved,
     attempts: 0,
   };
   if (queued.reason !== undefined) queued.reason = redactSecretsInText(queued.reason);
+  acceptPeerTask(from, target, sourceThreadId, queued.kind!, "held", id);
+  if (options.ready) readyItem(queued);
   list.push(queued);
   pendingDelegations.set(sourceThreadId, list);
   savePending();
   const label = `Queued for @${target.name}, sends when this reply ends${item.reason ? `: ${item.reason}` : ""}`;
-  trackDelegationChip(id, sourceThreadId, appendDelegationActivity(bus, sourceThreadId, { name: label }, from).id);
+  trackDelegationChip(id, sourceThreadId, appendDelegationActivity(bus, sourceThreadId, { name: label }, from, id).id);
   return { result: "ok", id };
 }
 
-/** Drain queued delegations for a source thread (called on its
- * turn.completed). Each item is processed independently: a deny, a busy
- * target, or an error in one does not stop the rest. The actual start
- * of the target turn is delegated to `runTarget` so delegations.ts
- * stays free of harness-level concerns (commsDepth is the only thing
- * the caller needs). */
 export function drainDelegations(
   bus: CommsBus,
   approvalBus: ApprovalBus,
@@ -431,80 +331,93 @@ export function drainDelegations(
   sourceBotId?: string,
   waitingOn?: string,
 ): void {
-  if (drainingThreads.has(threadId)) {
-    if (waitingOn) queuedWaitingRedrains.set(threadId, (queuedWaitingRedrains.get(threadId) ?? new Set()).add(waitingOn));
-    else queuedRedrains.add(threadId);
-    return;
+  for (const item of pendingDelegations.get(threadId) ?? []) {
+    if (sourceBotId && item.fromBotId !== sourceBotId) continue;
+    if (!waitingOn && findDelegationReceipt(item.id)?.state === "held") readyItem(item);
   }
-  const list = pendingDelegations.get(threadId);
-  if (!list?.length) return;
-  const privateSourceId = bus.store.botByThread(threadId)?.id;
-  const itemSourceId = (item: PendingDelegationItem) => item.fromBotId ?? privateSourceId;
-  const inScope = (item: PendingDelegationItem) =>
-    (!sourceBotId || itemSourceId(item) === sourceBotId) && (!waitingOn || waitsOn(item, waitingOn));
-  const snapshot = list.filter(inScope);
-  if (!snapshot.length) return;
-  drainingThreads.add(threadId);
-  void (async () => {
-    for (const item of snapshot) {
-      // a discard while this drain awaited approval already settled the item
-      if (!pendingDelegations.get(threadId)?.some((pending) => pending.id === item.id)) continue;
-      let outcome: "settled" | "requeued" = "settled";
-      // a roster edit between queue and drain must not anonymise the status
-      let sender: BotRecord | null = null;
-      try {
-        const fromId = itemSourceId(item);
-        sender = fromId ? bus.store.bot(fromId) : null;
-        const from = fromId ? bus.store.conversationForBot(fromId, threadId)?.bot ?? null : null;
-        if (!from) throw new Error("source bot no longer belongs to this conversation");
-        outcome = await processOne(bus, approvalBus, from, threadId, item, runTarget);
-      } catch (error) {
-        const why = error instanceof Error ? error.message : String(error);
-        recordDelegationReceipt({
-          id: item.id,
-          sourceThreadId: threadId,
-          toBotId: item.toBotId,
-          toBotName: bus.store.bot(item.toBotId)?.name ?? item.toBotId,
-          status: "error",
-          result: why.slice(0, 200),
-        });
-        try {
-          reportDelegation(
-            bus,
-            threadId,
-            item.id,
-            { name: `error: delegation failed — ${why.slice(0, 120)}`, ok: false },
-            sender,
-          );
-        } catch (reportError) {
-          console.error("delegation failed and could not be reported", reportError);
-        }
-      } finally {
-        // A requeued item (busy target, retries left) stays for the drain
-        // that the target's own settling turn will trigger.
-        if (outcome !== "requeued") acknowledgeDelegation(threadId, item.id);
+  savePending();
+  pumpReady(bus, approvalBus, runTarget);
+}
+
+export function acceptPeerTask(from: BotRecord, target: BotRecord, threadId: string, kind: "ask" | "delegation", state: MailState, id = newId()): string {
+  recordDelegationReceipt({ id, sourceThreadId: threadId, toBotId: target.id, toBotName: target.name, status: "queued", kind, deliver: "queued", state,
+    source: { botId: from.id, threadId, turnId: turnRegistry.current(threadId)?.turnId ?? "" }, target: { botId: target.id, ...(state === "dispatching" ? { threadId: target.threadId } : {}) } });
+  return id;
+}
+
+function readyItem(item: PendingDelegationItem): void {
+  const receipt = findDelegationReceipt(item.id);
+  item.seq ??= ++readySeq;
+  if (receipt) recordDelegationReceipt({ ...receipt, status: "queued", state: "ready", seq: item.seq });
+}
+
+function pumpReady(bus: CommsBus, approvalBus: ApprovalBus, runTarget: Parameters<typeof drainDelegations>[3]): void {
+  const ready = [...pendingDelegations].flatMap(([threadId, items]) => items.map((item) => ({ threadId, item })))
+    .filter(({ item }) => findDelegationReceipt(item.id)?.state === "ready")
+    .sort((a, b) => (a.item.seq ?? 0) - (b.item.seq ?? 0));
+  for (const { threadId, item } of ready) {
+    if (!pendingDelegations.get(threadId)?.some((candidate) => candidate.id === item.id) || findDelegationReceipt(item.id)?.state !== "ready") continue;
+    if (approvingItems.has(item.id)) continue;
+    const from = item.fromBotId ? bus.store.conversationForBot(item.fromBotId, threadId)?.bot : bus.store.botByThread(threadId);
+    const target = bus.store.bot(item.toBotId);
+    if (!from || !target) {
+      failQueued(bus, threadId, item, from ? `error: delegation to ${item.toBotId} failed — no such bot` : "error: delegation failed — source bot no longer belongs to this conversation");
+      continue;
+    }
+    if (from.approvePeerComms && !item.approved) {
+      approvingItems.add(item.id);
+      updateReceipt(item.id, { state: "approval" });
+      void requestPeerApproval(approvalBus, from, target, item.message, item.kind === "ask" ? "ask_bot" : "delegate_bot", threadId).then((verdict) => {
+        if (findDelegationReceipt(item.id)?.state !== "approval") return;
+        if (verdict !== "allow") return failQueued(bus, threadId, item, "the user denied this handoff", "denied");
+        item.approved = true;
+        updateReceipt(item.id, { state: "ready" });
+        savePending();
+      }).catch((error) => failQueued(bus, threadId, item, failedLine(error))).finally(() => {
+        approvingItems.delete(item.id);
+        pumpReady(bus, approvalBus, runTarget);
+      });
+      continue;
+    }
+    if (target.busy || bus.senderBusy?.(target.id, target.threadId) || hasQueuedSends(target.id) || dispatchingTargets.has(target.id)) {
+      if (item.takenOverBy === undefined) {
+        item.attempts++;
+        savePending();
+        patchDelegationChip(bus, item.id, { name: `Delegation to @${target.name} waiting - they're busy` });
       }
+      continue;
     }
-  })().finally(() => {
-    drainingThreads.delete(threadId);
-    // A later turn may have queued and settled while this thread was
-    // waiting for approval. Only items OUTSIDE our snapshot warrant a fresh
-    // drain — re-draining a just-requeued item would burn its bounded busy
-    // retries in milliseconds instead of once per target settle.
-    const redrainRequested = queuedRedrains.delete(threadId);
-    const waitingRedrains = queuedWaitingRedrains.get(threadId) ?? [];
-    queuedWaitingRedrains.delete(threadId);
-    const snapshotIds = new Set(snapshot.map((item) => item.id));
-    const hasNewItems = pendingDelegations.get(threadId)?.some(
-      (item) => inScope(item) && !snapshotIds.has(item.id),
-    ) ?? false;
-    if (redrainRequested) {
-      drainDelegations(bus, approvalBus, threadId, runTarget, sourceBotId);
-    } else if (hasNewItems) {
-      drainDelegations(bus, approvalBus, threadId, runTarget, sourceBotId, waitingOn);
-    }
-    for (const toBotId of waitingRedrains) drainDelegations(bus, approvalBus, threadId, runTarget, undefined, toBotId);
-  });
+    dispatchingTargets.add(target.id);
+    updateReceipt(item.id, { state: "dispatching", status: "running", target: { botId: target.id, threadId: target.threadId } });
+    void processOne(bus, from, threadId, item, runTarget).catch((error) => failQueued(bus, threadId, item, failedLine(error))).finally(() => {
+      acknowledgeDelegation(threadId, item.id);
+      dispatchingTargets.delete(item.toBotId);
+      pumpReady(bus, approvalBus, runTarget);
+    });
+  }
+}
+
+export function updateReceipt(id: string, patch: Partial<DelegationReceipt>): void {
+  const receipt = findDelegationReceipt(id);
+  if (receipt) recordDelegationReceipt({ ...receipt, ...patch });
+}
+
+export function bindPeerTurn(threadId: string, turnId: string): void {
+  for (const receipt of receiptSnapshot()) {
+    if (receipt.target?.threadId !== threadId || receipt.state !== "dispatching" && receipt.state !== "running") continue;
+    updateReceipt(receipt.id, { state: "running", status: "running", target: { ...receipt.target, turnId } });
+  }
+}
+
+const failedLine = (error: unknown) => `error: delegation failed — ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`;
+
+function failQueued(bus: CommsBus, threadId: string, item: PendingDelegationItem, result: string, status: DelegationOutcome = "failed"): void {
+  acknowledgeDelegation(threadId, item.id);
+  finishDelegatedTurn(bus, { taskId: item.id, toBotId: item.toBotId, sourceThreadId: threadId, sourceBotId: item.fromBotId }, false, "", result);
+  if (status === "denied") {
+    updateReceipt(item.id, { status, state: "refused" });
+    patchDelegationChip(bus, item.id, { name: `Delegation to @${bus.store.bot(item.toBotId)?.name ?? item.toBotId} denied by user`, ok: false });
+  }
 }
 
 /** Remove one terminal handoff only after approval/dispatch has settled. */
@@ -519,13 +432,15 @@ function acknowledgeDelegation(threadId: string, itemId: string): void {
 
 /** Drop a thread's queued handoffs without running them, telling the user
  * they were dropped. Used when the queueing turn failed or was interrupted. */
-export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?: string): void {
+export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?: string, turnId?: string): void {
   const list = pendingDelegations.get(threadId);
   if (!list?.length) return;
   const privateSourceId = bus.store.botByThread(threadId)?.id;
-  const dropped = sourceBotId
-    ? list.filter((item) => (item.fromBotId ?? privateSourceId) === sourceBotId)
-    : list;
+  const scoped = Boolean(sourceBotId || turnId);
+  const dropped = list.filter((item) => (!sourceBotId || (item.fromBotId ?? privateSourceId) === sourceBotId)
+    && (!turnId || item.turnId === turnId)
+    && (!scoped || findDelegationReceipt(item.id)?.state === "held"
+      || Boolean(turnId) && ["ready", "approval"].includes(findDelegationReceipt(item.id)?.state ?? "")));
   if (!dropped.length) return;
   const remaining = list.filter((item) => !dropped.includes(item));
   if (remaining.length) pendingDelegations.set(threadId, remaining);
@@ -562,13 +477,29 @@ export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?
   }
 }
 
-/** Drop what a previous process queued but never ran. Its source turn died
- * with that process — the same condition that makes an interrupted turn drop
- * its queue — so draining at boot starts real turns on the user's tokens for a
- * request nobody is present to receive. Returns how many threads were cleared. */
 export function discardOrphanedDelegations(bus: CommsBus): number {
   const threads = pendingThreads();
-  for (const threadId of threads) discardDelegations(bus, threadId);
+  for (const receipt of receiptSnapshot()) {
+    if (receipt.state === "finishing") {
+      publishPeerReply(bus, receipt, true);
+      recordDelegationReceipt({ ...receipt, state: receipt.status === "done" ? "done" : "failed" });
+    } else if (receipt.state && !terminalMailState(receipt.state)) {
+      const queued = receipt.state === "held" || receipt.state === "ready" || receipt.state === "approval";
+      finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: receipt.toBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", queued ? `Delegation to @${receipt.toBotName} dropped - the turn did not finish` : "interrupted by a restart");
+      if (queued) {
+        updateReceipt(receipt.id, { status: "dropped", state: "dropped" });
+        patchDelegationChip(bus, receipt.id, { name: `Delegation to @${receipt.toBotName} dropped - the turn did not finish`, ok: false });
+      }
+    }
+  }
+  for (const threadId of threads) {
+    for (const item of pendingDelegations.get(threadId) ?? []) {
+      if (!findDelegationReceipt(item.id)) recordDelegationReceipt({ id: item.id, sourceThreadId: threadId, toBotId: item.toBotId, toBotName: bus.store.bot(item.toBotId)?.name ?? item.toBotId, status: "dropped", result: "the delegating turn did not finish" });
+    }
+  }
+  pendingDelegations.clear();
+  savePending();
+  recoverHandedMail(bus.store);
   return threads.length;
 }
 
@@ -581,12 +512,23 @@ export function discardDelegationsFrom(bus: CommsBus, sourceBotId: string): void
       .filter((queued) => queued.sourceBotId === sourceBotId)
       .map((queued) => queued.sourceThreadId),
   );
-  for (const threadId of threads) discardDelegations(bus, threadId, sourceBotId);
+  for (const threadId of threads) {
+    const held = (pendingDelegations.get(threadId) ?? []).filter((item) => item.fromBotId === sourceBotId && ["held", "ready", "approval"].includes(findDelegationReceipt(item.id)?.state ?? "held"));
+    for (const item of held) {
+      acknowledgeDelegation(threadId, item.id);
+      updateReceipt(item.id, { status: "dropped", state: "dropped", result: "source bot deleted" });
+      patchDelegationChip(bus, item.id, { name: `Delegation to @${bus.store.bot(item.toBotId)?.name ?? item.toBotId} dropped - the turn did not finish`, ok: false });
+    }
+  }
+  for (const receipt of receiptSnapshot()) {
+    if (receipt.toBotId !== sourceBotId || !receipt.state || terminalMailState(receipt.state)) continue;
+    finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: sourceBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", `error: delegation to ${receipt.toBotId} failed — no such bot`);
+    acknowledgeDelegation(receipt.sourceThreadId, receipt.id);
+  }
 }
 
 async function processOne(
   bus: CommsBus,
-  approvalBus: ApprovalBus,
   from: BotRecord,
   sourceThreadId: string,
   item: PendingDelegationItem,
@@ -600,139 +542,18 @@ async function processOne(
     sourceBotId: string,
     transcriptText?: string,
   ) => void | Promise<void>,
-): Promise<"settled" | "requeued"> {
-  let sender = from;
-  let target = bus.store.bot(item.toBotId);
-  if (!target) {
-    recordDelegationReceipt({
-      id: item.id,
-      sourceThreadId,
-      toBotId: item.toBotId,
-      toBotName: item.toBotId,
-      status: "error",
-      result: "no such bot",
-    });
-    reportDelegation(
-      bus,
-      sourceThreadId,
-      item.id,
-      { name: `error: delegation to ${item.toBotId} failed — no such bot`, ok: false },
-      sender,
-    );
-    return "settled";
-  }
+): Promise<void> {
+  const sender = from;
+  const target = bus.store.bot(item.toBotId);
+  if (!target) throw new Error("no such bot");
   const rerun = item.takenOverBy !== undefined;
-  // the user's own queued words go first, and waiting here costs no retry
-  if (rerun && (target.busy || hasQueuedSends(target.id))) return "requeued";
-  if (!rerun && target.busy) {
-    item.attempts += 1;
-    if (item.attempts < MAX_BUSY_ATTEMPTS) {
-      savePending();
-      reportDelegation(
-        bus,
-        sourceThreadId,
-        item.id,
-        { name: `Delegation to @${target.name} waiting — they're busy (retry ${item.attempts}/${MAX_BUSY_ATTEMPTS} when they finish)` },
-        sender,
-      );
-      return "requeued";
-    }
-    recordDelegationReceipt({
-      id: item.id,
-      sourceThreadId,
-      toBotId: target.id,
-      toBotName: target.name,
-      status: "busy_gave_up",
-      result: `@${target.name} stayed busy through ${MAX_BUSY_ATTEMPTS} retries`,
-    });
-    reportDelegation(
-      bus,
-      sourceThreadId,
-      item.id,
-      { name: `Delegation to @${target.name} canceled — still busy after ${MAX_BUSY_ATTEMPTS} retries`, ok: false },
-      sender,
-    );
-    return "settled";
-  }
-  if (sender.approvePeerComms && !(rerun && item.approved)) {
-    const verdict = await requestPeerApproval(
-      approvalBus,
-      sender,
-      target,
-      item.message,
-      "delegate_bot",
-      sourceThreadId,
-    );
-    // A discard while the approval sat already settled this item; reporting a
-    // verdict now would contradict its dropped receipt with a second status.
-    if (!pendingDelegations.get(sourceThreadId)?.some((pending) => pending.id === item.id)) return "settled";
-    if (verdict !== "allow") {
-      recordDelegationReceipt({
-        id: item.id,
-        sourceThreadId,
-        toBotId: target.id,
-        toBotName: target.name,
-        status: "denied",
-        result: "the user denied this handoff",
-      });
-      reportDelegation(
-        bus,
-        sourceThreadId,
-        item.id,
-        { name: `Delegation to @${target.name} denied by user`, ok: false },
-        sender,
-      );
-      return "settled";
-    }
-    item.approved = true;
-    // The approval could have been sitting for up to 15 minutes. Everything
-    // checked above is a stale snapshot now: re-read both bots and re-check
-    // busy, or an allow can start a second turn on a bot that is mid-turn —
-    // and mirror a "Messaged @X" chip for an exchange that never happens.
-    const current = bus.store.bot(item.toBotId);
-    const currentSender = bus.store.conversationForBot(from.id, sourceThreadId)?.bot;
-    if (!current || !currentSender) return "settled";
-    if (rerun && (current.busy || hasQueuedSends(current.id))) return "requeued";
-    if (current.busy) {
-      item.attempts += 1;
-      if (item.attempts < MAX_BUSY_ATTEMPTS) {
-        savePending();
-        reportDelegation(
-          bus,
-          sourceThreadId,
-          item.id,
-          { name: `Delegation to @${current.name} waiting — they're busy (retry ${item.attempts}/${MAX_BUSY_ATTEMPTS} when they finish)` },
-          currentSender,
-        );
-        return "requeued";
-      }
-      recordDelegationReceipt({
-        id: item.id,
-        sourceThreadId,
-        toBotId: current.id,
-        toBotName: current.name,
-        status: "busy_gave_up",
-        result: `@${current.name} stayed busy through ${MAX_BUSY_ATTEMPTS} retries`,
-      });
-      reportDelegation(
-        bus,
-        sourceThreadId,
-        item.id,
-        { name: `Delegation to @${current.name} canceled — still busy after ${MAX_BUSY_ATTEMPTS} retries`, ok: false },
-        currentSender,
-      );
-      return "settled";
-    }
-    sender = currentSender;
-    target = current;
-  }
   if (rerun) {
     const channel = getOrCreateChannel(bus.store, sender, target);
     const prompt = `${delegatedPrompt(sender, item)}\n\nYour earlier reply went to ${item.takenOverBy} because they messaged you mid-turn, so answer @${sender.name} now.`;
     noteMessageFrom(bus, sender, target, channel);
     runningDelegations.set(item.id, { sourceThreadId, item });
     await runTarget(item.toBotId, prompt, item.depth + 1, sourceThreadId, channel, item.id, sender.id, `Answering ${sender.name}'s earlier request`);
-    return "settled";
+    return;
   }
   const channel = getOrCreateChannel(bus.store, sender, target);
   const body = channel.threadId === sourceThreadId ? undefined : item.message;
@@ -740,16 +561,16 @@ async function processOne(
   mirrorExchange(bus, sender, target, item.message, channel, sourceThreadId, !delivered);
   runningDelegations.set(item.id, { sourceThreadId, item });
   await runTarget(item.toBotId, delegatedPrompt(sender, item), item.depth + 1, sourceThreadId, channel, item.id, sender.id, `${item.message}${reasonLine(item)}`);
-  return "settled";
 }
 
 const reasonLine = (item: PendingDelegationItem) => item.reason ? `\n\n[Reason: ${item.reason}]` : "";
 
 const delegatedPrompt = (sender: BotRecord, item: PendingDelegationItem) =>
-  peerMessagePrompt(sender, `${item.message}${reasonLine(item)}`, "delegation");
+  peerMessagePrompt(sender, `${item.message}${reasonLine(item)}`, item.kind === "ask" ? "ask" : "delegation");
 
 /** A delegated turn on the target's own thread, watched until it ends. */
 export interface DelegatedTurn {
+  inline?: true;
   channelId?: string;
   toBotId: string;
   taskId?: string;
@@ -808,70 +629,47 @@ export function finishDelegatedTurn(
   if (turn.taskId) runningDelegations.delete(turn.taskId);
   const target = bus.store.bot(turn.toBotId);
   if (ok && turn.takenOverBy !== undefined && running && target && running.item.takenOverBy === undefined) {
-    // same id: check/wait_delegation read queued, then running, then the answer
     const list = pendingDelegations.get(running.sourceThreadId) ?? [];
-    list.push({ ...running.item, takenOverBy: turn.takenOverBy });
+    const rerun = { ...running.item, takenOverBy: turn.takenOverBy };
+    readyItem(rerun);
+    list.push(rerun);
     pendingDelegations.set(running.sourceThreadId, list);
     savePending();
     return true;
   }
+  const existing = turn.taskId ? findDelegationReceipt(turn.taskId) : null;
+  if (existing?.state && terminalMailState(existing.state)) return false;
   const pointer = ok && turn.takenOverBy !== undefined
-    ? `${target?.name ?? turn.toBotId} answered ${turn.takenOverBy} in its own chat instead`
-    : undefined;
-  // The receipt is written before any mirror short-circuits: the delegating
-  // bot's check/wait_delegation must see a terminal state even when the
-  // channel or target is gone.
-  if (turn.taskId && turn.sourceThreadId) {
-    recordDelegationReceipt({
-      id: turn.taskId,
-      sourceThreadId: turn.sourceThreadId,
-      toBotId: turn.toBotId,
-      toBotName: target?.name ?? turn.toBotId,
-      status: ok ? "done" : "failed",
-      result: pointer ?? (ok ? reply : failureName),
-    });
-  }
+    ? `${target?.name ?? turn.toBotId} answered ${turn.takenOverBy} in its own chat instead` : undefined;
   const channel = turn.channelId ? bus.store.group(turn.channelId) : undefined;
-  if (!target) return false;
-  // The sender's chip is where the human is waiting, and the target runs in
-  // its own 1:1 - so the sender never hears back without this.
-  let reported = false;
-  if (turn.sourceThreadId) {
-    reported = settleDelegationChip(
-      bus,
-      target,
-      turn.sourceThreadId,
-      channel,
-      turn.taskId,
-      pointer ?? (ok ? `@${target.name} replied` : failureName),
-      ok,
-    );
+  const sender = turn.sourceBotId ? bus.store.bot(turn.sourceBotId) : turn.sourceThreadId ? bus.store.botByThread(turn.sourceThreadId) : undefined;
+  if (turn.taskId && turn.sourceThreadId) {
+    const terminal: DelegationReceipt = {
+      ...existing, id: turn.taskId, sourceThreadId: turn.sourceThreadId, toBotId: turn.toBotId,
+      toBotName: target?.name ?? existing?.toBotName ?? turn.toBotId,
+      status: ok ? "done" : "failed", state: ok ? "done" : "failed", result: redactSecretsInText(pointer ?? (ok ? reply : failureName)),
+      finishedAt: Date.now(), kind: existing?.kind ?? (turn.ask ? "ask" : "delegation"), deliver: existing?.deliver ?? "queued",
+      source: existing?.source ?? (sender ? { botId: sender.id, threadId: turn.sourceThreadId, turnId: "" } : undefined),
+    };
+    terminal.publish = replyDestinations(bus, terminal, !!pointer);
+    recordDelegationReceipt({ ...terminal, state: "finishing" });
+    publishPeerReply(bus, terminal);
+    recordDelegationReceipt(terminal);
+    if (target) settleDelegationChip(bus, target, turn.sourceThreadId, channel, turn.taskId, pointer ?? (ok ? `@${target.name} replied` : failureName), ok);
+    if (!turn.inline && !pointer) wakeForPeerReply(bus, terminal);
+    return terminal.publish.length > 0;
   }
-  const sender = turn.sourceBotId ? bus.store.bot(turn.sourceBotId) : undefined;
-  if (ok && !pointer && sender && turn.sourceThreadId) {
-    const shouldWake = Boolean(running && !turn.ask && bus.wakeSender
-      && bus.store.taskByThread(sender.id, turn.sourceThreadId) && !bus.store.groupByThread(turn.sourceThreadId)
-      && channel && asksSender(reply, sender.name));
-    const wake = shouldWake && claimDelegationWake(turn.sourceThreadId);
-    const posted = postPeerReply(bus, sender, target, reply, channel, turn.sourceThreadId, wake);
-    if (wake && !posted) releaseDelegationWake(turn.sourceThreadId);
-    if (posted && wake) {
-      bus.wakeSender!(sender.id, turn.sourceThreadId);
-    }
-    else if (shouldWake) bus.replyUnwoken?.(sender.id, wake ? "reply post failed" : "wake budget spent");
-  }
-  if (!channel) return reported;
-  if (pointer) mirrorActivity(bus, target, channel, pointer, true, ownChat(target));
-  else if (ok && reply.trim()) mirrorReply(bus, target, reply, channel);
-  else if (ok) mirrorActivity(bus, target, channel, "Delegated turn completed", true);
-  else mirrorActivity(bus, target, channel, failureName, false);
-  return reported;
+  if (target && ok && reply.trim()) mirrorReply(bus, target, reply, channel);
+  else if (target) mirrorActivity(bus, target, channel, failureName, false);
+  return false;
 }
 
 /** A dispatched handoff whose target had no thread to watch: settle it as failed. */
-export function failUnwatchedDelegation(taskId: string, sourceThreadId: string, toBotId: string, toBotName: string, result: string): void {
+export function failUnwatchedDelegation(taskId: string, sourceThreadId: string, toBotId: string, toBotName: string, result: string, bus?: CommsBus): boolean {
   runningDelegations.delete(taskId);
+  if (bus) return finishDelegatedTurn(bus, { taskId, sourceThreadId, toBotId, sourceBotId: findDelegationReceipt(taskId)?.source?.botId }, false, "", result);
   recordDelegationReceipt({ id: taskId, sourceThreadId, toBotId, toBotName, status: "failed", result });
+  return false;
 }
 
 /** Test helper: how many items remain queued for a thread. */
@@ -882,9 +680,9 @@ export function _pendingCount(threadId: string): number {
 /** Test helper: forget the in-memory queue (a simulated restart). */
 export function _resetPending(): void {
   pendingDelegations.clear();
-  drainingThreads.clear();
-  queuedRedrains.clear();
-  queuedWaitingRedrains.clear();
+  dispatchingTargets.clear();
+  approvingItems.clear();
+  readySeq = 0;
   runningDelegations.clear();
-  receipts = [];
+  resetDelegationReceipts();
 }

@@ -5,15 +5,7 @@ export function showSettingsSearch(): boolean {
   return false;
 }
 
-export function showSettingsAdvancedSection(): boolean {
-  return false;
-}
-
-export function showBotDetailsAdvanced(): boolean {
-  return false;
-}
-
-export function showComputerPanelChrome(): boolean {
+export function showBotVoiceAndStartupSettings(): boolean {
   return false;
 }
 
@@ -57,11 +49,6 @@ export function showAvatarShapeOptions(): boolean {
 
 /** Avatars-only collapse and Comfortable / Compact / Avatars-only. Resize replaces them. */
 export function showSidebarDensityControls(): boolean {
-  return false;
-}
-
-/** AssemblyAI, Box, VPS, and self-host stay in code, off the Connections page. */
-export function showSettingsMoreServicesSection(): boolean {
   return false;
 }
 

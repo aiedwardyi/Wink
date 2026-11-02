@@ -3098,16 +3098,6 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/bots/${bot.id}`);
   });
 
-  it("offers an idempotent stop boundary for active local turns", async () => {
-    const unsupported = await api("POST", "/api/local-computer/interrupt");
-    expect(unsupported).toEqual({
-      status: 415,
-      body: { error: "content-type must be application/json" },
-    });
-    const stopped = await api("POST", "/api/local-computer/interrupt", {});
-    expect(stopped).toEqual({ status: 200, body: { ok: true } });
-  });
-
   it("persists an answered onboarding card", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
@@ -3296,35 +3286,15 @@ describe("harness HTTP API", () => {
     await api("PATCH", "/api/config", { features: { skillRecorder: false, showToolCalls: false } });
   });
 
-  it("keeps shared Local VM mode by default and resolves isolated targets per bot when enabled", async () => {
-    const first = (await api("POST", "/api/bots")).body.bot;
-    const second = (await api("POST", "/api/bots")).body.bot;
+  it("keeps shared Local VM mode by default and saves per-bot mode when enabled", async () => {
     const before = await api("GET", "/api/config");
     expect(before.body.localVm).toEqual({ mode: "shared", maxInstances: 2 });
-
-    const shared = await api("GET", `/api/bots/${first.id}/local-computer`);
-    expect(shared.status).toBe(200);
-    expect(shared.body).toMatchObject({ mode: "shared", target_key: "shared" });
 
     const saved = await api("PATCH", "/api/config", {
       localVm: { mode: "per-bot", maxInstances: 3 },
     });
     expect(saved.status).toBe(200);
     expect(saved.body.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
-
-    const [firstStatus, secondStatus] = await Promise.all([
-      api("GET", `/api/bots/${first.id}/local-computer`),
-      api("GET", `/api/bots/${second.id}/local-computer`),
-    ]);
-    expect(firstStatus.body).toMatchObject({ mode: "per-bot", max_instances: 3 });
-    expect(secondStatus.body).toMatchObject({ mode: "per-bot", max_instances: 3 });
-    expect(firstStatus.body.target_key).not.toBe(secondStatus.body.target_key);
-    expect(firstStatus.body.container_name).not.toBe(secondStatus.body.container_name);
-    expect(firstStatus.body.workspace_path).not.toBe(secondStatus.body.workspace_path);
-
-    const invalid = await api("PATCH", "/api/config", { localVm: { maxInstances: 5 } });
-    expect(invalid.status).toBe(400);
-    expect(invalid.body.error).toContain("localVm.maxInstances");
 
     const disk = JSON.parse(readFileSync(join(home, ".orbit", "config.json"), "utf8"));
     expect(disk.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
@@ -3567,8 +3537,8 @@ describe("harness HTTP API", () => {
         sameTurn: z.boolean().optional(),
         error: z.string().optional(),
       });
-      const internal = async (method: string, path: string, body?: InternalBody) => {
-        const headers = new Headers({ authorization: `Bearer ${token}` });
+      const internal = async (method: string, path: string, body?: InternalBody, bearer = token) => {
+        const headers = new Headers({ authorization: `Bearer ${bearer}` });
         if (body) headers.set("content-type", "application/json");
         const response = await fetch(`${BASE}${path}`, {
           method,
@@ -3632,26 +3602,20 @@ describe("harness HTTP API", () => {
       );
       expect(checked).toMatchObject({ status: 200, body: { status: "queued" } });
 
-      for (const request of [
-        internal("POST", "/api/internal/ask-bot", {
-          fromBotId: outsider.id,
-          fromThreadId: room.threadId,
-          toBotId: target.id,
-          message: "not a member",
-        }),
-        internal("POST", "/api/internal/delegate-bot", {
-          fromBotId: outsider.id,
-          fromThreadId: room.threadId,
-          toBotId: target.id,
-          message: "not a member",
-        }),
-        internal(
-          "GET",
-          `/api/internal/delegations/${taskId}?fromBotId=${outsider.id}&fromThreadId=${room.threadId}`,
-        ),
-      ]) {
-        expect((await request).status).toBe(403);
-      }
+      // the caller is the token's bot: a spoofed body id still acts as the member
+      const outsiderPath = `/api/internal/delegations/${taskId}?fromBotId=${outsider.id}&fromThreadId=${room.threadId}`;
+      expect(await internal("GET", outsiderPath)).toMatchObject({ status: 200, body: { status: "queued" } });
+      expect((await api("PATCH", `/api/bots/${outsider.id}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${outsider.id}/messages`, { text: "check the room task" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+      const outsiderToken = JSON.parse(readFileSync(fakeClaudeDump, "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
+      expect((await api("POST", `/api/bots/${outsider.id}/interrupt`)).status).toBe(200);
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots
+        .find((bot: { id: string }) => bot.id === outsider.id)?.busy, { timeout: 5_000 }).toBe(false);
+      expect(await internal("GET", outsiderPath, undefined, outsiderToken)).toMatchObject({ status: 403 });
 
       expect((await api("PATCH", `/api/bots/${source.id}`, {
         modelSelection: { instanceId: "claudeHappy", model: "claude-sonnet-5" },
@@ -4747,96 +4711,9 @@ describe("resumable event stream", () => {
   });
 });
 
-describe("computer control API (who is driving)", () => {
-  let botId = "";
-
-  beforeAll(async () => {
-    const created = await api("POST", "/api/bots", {});
-    botId = created.body.bot.id;
-  });
-
-  it("starts disengaged", async () => {
-    const res = await api("GET", `/api/bots/${botId}/computer/control`);
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ held: false, helpReason: null, heldSinceMs: null });
-  });
-
-  it("take → held, broadcast on the wire, release → disengaged", async () => {
-    const sse = await openSse(`${BASE}/api/events`);
-    try {
-      const took = await api("POST", `/api/bots/${botId}/computer/control`, { action: "take" });
-      expect(took.status).toBe(200);
-      expect(took.body.held).toBe(true);
-      const frame = await sse.until(
-        (f) => f.kind === "computer-control" && f.botId === botId && f.held === true,
-      );
-      expect(frame.helpReason).toBeNull();
-      const hydrated = await api("GET", "/api/bots");
-      expect(hydrated.body.computerControl[botId]).toEqual({ held: true, helpReason: null });
-      const released = await api("POST", `/api/bots/${botId}/computer/control`, { action: "release" });
-      expect(released.body.held).toBe(false);
-    } finally {
-      sse.close();
-    }
-  });
-
-  it("atomically owns and conditionally releases a workspace lease without returning its id", async () => {
-    const owner = "lease_5b6bbbd2-b88b-4c50-a748-ec87f332662f";
-    const other = "lease_ed602995-306f-480a-8817-e8d8c8fe7d90";
-    const took = await api("POST", `/api/bots/${botId}/computer/control`, {
-      action: "take",
-      controlLeaseId: owner,
-    });
-    expect(took.body).toMatchObject({ held: true, owned: true, acquired: true });
-    expect(JSON.stringify(took.body)).not.toContain(owner);
-
-    const blocked = await api("POST", `/api/bots/${botId}/computer/control`, {
-      action: "take",
-      controlLeaseId: other,
-    });
-    expect(blocked.body).toMatchObject({ held: true, owned: false, acquired: false });
-
-    const wrongRelease = await api("POST", `/api/bots/${botId}/computer/control`, {
-      action: "release",
-      controlLeaseId: other,
-    });
-    expect(wrongRelease.body).toMatchObject({ held: true, released: false });
-
-    const released = await api("POST", `/api/bots/${botId}/computer/control`, {
-      action: "release",
-      controlLeaseId: owner,
-    });
-    expect(released.body).toMatchObject({ held: false, released: true });
-    expect(JSON.stringify(released.body)).not.toContain(owner);
-  });
-
-  it("rejects malformed workspace leases without echoing them", async () => {
-    const invalid = "bad lease value";
-    const res = await api("POST", `/api/bots/${botId}/computer/control`, {
-      action: "take",
-      controlLeaseId: invalid,
-    });
-    expect(res.status).toBe(400);
-    expect(JSON.stringify(res.body)).not.toContain(invalid);
-  });
-
-  it("refuses an unknown action and an unknown bot", async () => {
-    const bad = await api("POST", `/api/bots/${botId}/computer/control`, { action: "hijack" });
-    expect(bad.status).toBe(400);
-    const ghost = await api("GET", "/api/bots/nope/computer/control");
-    expect(ghost.status).toBe(404);
-  });
-
-  it("refuses a form-shaped POST — control mutations are JSON-only", async () => {
-    const res = await fetch(`${BASE}/api/bots/${botId}/computer/control`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "action=take",
-    });
-    expect(res.status).toBe(415);
-  });
-
+describe("internal computer control", () => {
   it("keeps the internal who-is-driving endpoint behind the boot token", async () => {
+    const botId = (await api("POST", "/api/bots", {})).body.bot.id;
     const res = await fetch(`${BASE}/api/internal/computer-control?botId=${botId}`);
     expect(res.status).toBe(401);
   });
@@ -5179,7 +5056,7 @@ describe("startTurn presence boundary", () => {
     }
   });
 
-  it("does not announce a wait when startTurn rejects a busy target", async () => {
+  it("queues an ask to a busy target without dispatching it", async () => {
     const source = (await api("POST", "/api/bots", {})).body.bot;
     const target = (await api("POST", "/api/bots", {})).body.bot;
     const hanging = await hangingModel();
@@ -5235,16 +5112,17 @@ describe("startTurn presence boundary", () => {
         }),
       });
       expect(asked.status).toBe(200);
-      const body = z.object({ busy: z.boolean().optional(), text: z.string().optional() }).parse(await asked.json());
-      expect(body.busy === true || (body.text ?? "").includes("already working")).toBe(true);
+      const body = z.object({ taskId: z.string(), text: z.string() }).parse(await asked.json());
+      expect(body.text).toContain(`@Busy target is working on it. Task id: ${body.taskId}.`);
       expect(stream.frames.filter(
         (frame) => frame.kind === "turn.dispatch" && frame.threadId === target.threadId,
       ).length).toBe(before);
     } finally {
       stream.close();
       await api("POST", `/api/bots/${source.id}/interrupt`, {}).catch(() => undefined);
-      await api("POST", `/api/bots/${target.id}/interrupt`, {}).catch(() => undefined);
+      // deleting the source first drops the queued ask, so it never dispatches during cleanup
       await api("DELETE", `/api/bots/${source.id}`).catch(() => undefined);
+      await api("POST", `/api/bots/${target.id}/interrupt`, {}).catch(() => undefined);
       await api("DELETE", `/api/bots/${target.id}`).catch(() => undefined);
     }
   });

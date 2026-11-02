@@ -85,7 +85,7 @@ interface ServerLine {
   re: RegExp;
   pick: (m: RegExpExecArray) => [MessageKey, Record<string, string | number>];
   /** fixed English the server must keep writing, in `file`; the drift guard scans for it */
-  file: "comms-visibility.ts" | "delegations.ts" | "index.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
+  file: "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
   needles: string[];
 }
 
@@ -93,7 +93,7 @@ interface ServerLine {
 export const SERVER_LINES: ServerLine[] = [
   { re: /^Message to @(.+)$/, pick: (m) => ["chat.messageToBot", { name: m[1] }], file: "comms-visibility.ts", needles: ["Message to @"] },
   { re: /^Message from @(.+)$/, pick: (m) => ["chat.messageFromBot", { name: m[1] }], file: "comms-visibility.ts", needles: ["Message from @"] },
-  { re: /^Reply from @(.+)$/, pick: (m) => ["chat.replyFromBot", { name: m[1] }], file: "comms-visibility.ts", needles: ["Reply from @"] },
+  { re: /^Reply from @(.+)$/, pick: (m) => ["chat.replyFromBot", { name: m[1] }], file: "peer-reply-publication.ts", needles: ["Reply from @"] },
   {
     re: /^Queued for @(.+?), sends when this reply ends(?:: ([\s\S]*))?$/,
     pick: (m) => (m[2] === undefined ? ["chat.delegation.queued", { name: m[1] }] : ["chat.delegation.queuedReason", { name: m[1], reason: m[2] }]),
@@ -126,18 +126,20 @@ export const SERVER_LINES: ServerLine[] = [
     needles: [" queued delegation", " dropped \u2014 the turn did not finish"],
   },
   {
-    re: /^Delegation to @(.+?) waiting \u2014 they're busy \(retry (\d+)\/(\d+) when they finish\)$/,
-    pick: (m) => ["chat.delegation.waiting", { name: m[1], attempt: m[2], max: m[3] }],
+    re: /^Delegation to @(.+?) waiting (?:\u2014 they're busy \(retry (\d+)\/(\d+) when they finish\)|- they're busy)$/,
+    pick: (m) => (m[2] === undefined ? ["chat.delegation.waitingBusy", { name: m[1] }] : ["chat.delegation.waiting", { name: m[1], attempt: m[2], max: m[3] }]),
     file: "delegations.ts",
-    needles: [" waiting \u2014 they're busy (retry ", " when they finish)"],
+    needles: [" waiting - they're busy"],
   },
+  // stored rows only: the server no longer gives up on a busy target
   {
     re: /^Delegation to @(.+?) canceled \u2014 still busy after (\d+) retries$/,
     pick: (m) => ["chat.delegation.canceled", { name: m[1], count: m[2] }],
     file: "delegations.ts",
-    needles: [" canceled \u2014 still busy after ", " retries"],
+    needles: [],
   },
   { re: /^Delegation to @(.+) denied by user$/, pick: (m) => ["chat.delegation.denied", { name: m[1] }], file: "delegations.ts", needles: [" denied by user"] },
+  { re: /^the user denied this handoff$/, pick: () => ["chat.delegation.deniedHandoff", {}], file: "delegations.ts", needles: ["the user denied this handoff"] },
   { re: /^Delivered to @(.+)$/, pick: (m) => ["chat.delegation.delivered", { name: m[1] }], file: "delegations.ts", needles: ["Delivered to @"] },
   { re: /^@(.+) replied$/, pick: (m) => ["chat.delegation.replied", { name: m[1] }], file: "delegations.ts", needles: ["@${target.name} replied"] },
   {
@@ -147,7 +149,14 @@ export const SERVER_LINES: ServerLine[] = [
     needles: [" answered ", " in its own chat instead"],
   },
   { re: /^Delegated turn did not finish$/, pick: () => ["chat.delegation.turnDidNotFinish", {}], file: "delegations.ts", needles: ["Delegated turn did not finish"] },
-  { re: /^Delegated turn completed$/, pick: () => ["chat.delegation.turnCompleted", {}], file: "delegations.ts", needles: ["Delegated turn completed"] },
+  { re: /^Delegated turn completed$/, pick: () => ["chat.delegation.turnCompleted", {}], file: "peer-reply-publication.ts", needles: ["Delegated turn completed"] },
+  { re: /^interrupted by a restart$/, pick: () => ["chat.delegation.interrupted", {}], file: "delegations.ts", needles: ["interrupted by a restart"] },
+  {
+    re: /^@(.+?) finished task (\S+) in ([\s\S]+)$/,
+    pick: (m) => ["chat.delegation.finishedInRoom", { name: m[1], id: m[2], room: m[3] }],
+    file: "peer-reply-publication.ts",
+    needles: [" finished task ", " in ${room.name}"],
+  },
   {
     re: /^(?:Agentic Mode paused: two tries made no progress|Keep going paused: two tries in a row made no progress on the approved steps)$/,
     pick: () => ["chat.keepGoingPaused", {}],

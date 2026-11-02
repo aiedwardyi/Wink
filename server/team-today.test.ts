@@ -65,4 +65,30 @@ describe("team today", () => {
     expect(await teamTodayRoute(dir, null, "owner@example.com", null, count, MIDNIGHT)).toEqual(denied);
     expect(count).not.toHaveBeenCalled();
   });
+
+  it("prefers owner-wide counts and keeps zero authoritative", async () => {
+    snags(["a", MIDNIGHT]);
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ start: MIDNIGHT, snags: 0, bugs: 4 }));
+    const tokens = { idToken: () => null, freshIdToken: async () => "fixture-token" };
+    const relay = { base: "example.test", baked: null, tokens, fetchImpl };
+    const reply = await teamTodayRoute(dir, OWNER, "owner@example.com", null, undefined, MIDNIGHT, relay);
+    expect(reply.body).toMatchObject({ snags: 0, bugs: 4 });
+    expect(fetchImpl).toHaveBeenCalledWith("https://relay.example.test/v1/team/today", expect.objectContaining({ headers: { authorization: "Bearer fixture-token" }, redirect: "error" }));
+    await teamTodayRoute(dir, OWNER, "peer@example.com", null, undefined, MIDNIGHT, relay);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["old-relay", "offline", "invalid", "yesterday", "no-token"])("falls back to local counts for %s", async (failure) => {
+    snags(["a", MIDNIGHT]);
+    report("r1", MIDNIGHT);
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      if (failure === "offline") throw new Error("offline");
+      if (failure === "old-relay") return new Response("not found", { status: 404 });
+      return Response.json({ start: failure === "yesterday" ? MIDNIGHT - 86_400_000 : MIDNIGHT, snags: failure === "invalid" ? -1 : 8, bugs: 7 });
+    });
+    const tokens = { idToken: () => null, freshIdToken: async () => failure === "no-token" ? null : "fixture-token" };
+    const reply = await teamTodayRoute(dir, OWNER, "owner@example.com", null, undefined, MIDNIGHT, { base: "example.test", baked: null, tokens, fetchImpl });
+    expect(reply.body).toMatchObject({ snags: 1, bugs: 1 });
+    if (failure === "no-token") expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

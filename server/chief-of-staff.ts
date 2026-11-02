@@ -26,11 +26,11 @@ const sectionKey = (section?: string): string => section?.trim() || "";
 export function peerMessagePrompt(
   sender: { name: string; chiefOfStaff?: boolean },
   message: string,
-  kind: "ask" | "delegation",
+  kind: "ask" | "delegation" | "reply",
 ): string {
   const role = sender.chiefOfStaff ? "the user's Chief of Staff" : "another bot in this Wink workspace";
-  const opening = kind === "ask" ? "Message from" : "Delegated by";
-  const instruction = kind === "ask" ? "Reply to them." : "Do the work and reply directly.";
+  const opening = kind === "ask" ? "Message from" : kind === "reply" ? "Reply from" : "Delegated by";
+  const instruction = kind === "ask" ? "Reply to them." : kind === "reply" ? "Read their reply." : "Your reply goes back to them.";
   // role first and no brackets or newlines in the name, so a crafted bot name cannot forge the Chief header
   const name = sender.name.replace(/[[\]\r\n]+/g, " ").trim();
   return `[${opening} ${role}, @${name}. ${instruction}]\n\n${message}`;
@@ -103,7 +103,7 @@ export function chiefOfStaffSystemPrompt(
     ? turnLimit === "ask"
       ? "This turn answers another bot's request, so you can't message bots from it. Your reply goes back as the answer."
       : turnLimit === "delegation"
-        ? "This turn is a delegated task, so you can't message bots from it. The user sees your reply in your own chat."
+        ? "This turn is a delegated task, so you can't message bots from it. Your reply goes back to the sender."
         : turnLimit === "room"
           ? "This turn answers another bot in this room, so you can't message bots from it. Reply here."
           : "Your current engine cannot contact teammates. Be honest about that limitation and ask the user to choose a delegation-compatible engine before promising coordinated work."

@@ -10,7 +10,6 @@ import {
   Gauge,
   ListTree,
   Loader2,
-  Monitor,
   Pin,
   RefreshCw,
   Search,
@@ -40,7 +39,7 @@ import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { usePhoneHeaderNameFloor } from "@/lib/use-phone-header-name";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { showBotNewTaskControl, showChatHeaderFind, showComputerPanelChrome, showHeaderPencil } from "@/lib/friends-chrome";
+import { showBotNewTaskControl, showChatHeaderFind, showHeaderPencil } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
@@ -1528,20 +1527,6 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           {showBotNewTaskControl() && <TaskPicker bot={bot} />}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && <CallButton bot={bot} />}
-          {showComputerPanelChrome() && (
-          <button
-            onClick={() => dispatch({ type: "toggleComputer" })}
-            aria-label={t("chat.botComputer")}
-            aria-pressed={state.computerOpen}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
-              state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title={t("chat.botComputer")}
-          >
-            <Monitor size={18} aria-hidden="true" />
-          </button>
-          )}
         </div>
       </div>
 

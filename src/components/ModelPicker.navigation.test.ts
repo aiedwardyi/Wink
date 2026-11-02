@@ -74,17 +74,17 @@ afterEach(async () => {
 });
 
 describe("ModelPicker cross navigation", () => {
-  it.each([false, true])("keeps Servo's open selector in Precision (contained %s)", async (contained) => {
+  it.each([["mono-hud", false], ["mono-hud", true], ["servo-gray", false], ["servo-gray", true]] as const)("keeps %s's open selector in Precision (contained %s)", async (skin, contained) => {
     mock.instances = [engine("claude", "claudeAgent", ["claude-opus-5-5"])];
     try {
-      applySkin("mono-hud");
+      applySkin(skin);
       await mount({ instanceId: "claude", model: "claude-opus-5-5" }, true, contained);
       expect(document.querySelector(".model-cross-backdrop")?.getAttribute("data-skin")).toBe("precision");
       expect(document.querySelector('[aria-haspopup="dialog"]')?.hasAttribute("data-skin")).toBe(false);
-      expect(document.documentElement.dataset.skin).toBe("mono-hud");
+      expect(document.documentElement.dataset.skin).toBe(skin);
       await act(async () => applySkin("precision"));
       expect(document.querySelector(".model-cross-backdrop")?.hasAttribute("data-skin")).toBe(false);
-      await act(async () => applySkin("mono-hud"));
+      await act(async () => applySkin(skin));
       expect(document.querySelector(".model-cross-backdrop")?.getAttribute("data-skin")).toBe("precision");
       await act(async () => applySkin("wink"));
       expect(document.querySelector(".model-cross-backdrop")?.hasAttribute("data-skin")).toBe(false);

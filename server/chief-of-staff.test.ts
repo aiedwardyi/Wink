@@ -21,7 +21,7 @@ describe("peerMessagePrompt", () => {
   it.each(["ask", "delegation"] as const)("marks a stored Chief on the %s path", (kind) => {
     const prompt = peerMessagePrompt({ name: "Wink", chiefOfStaff: true }, "QA on Opus", kind);
     const opening = kind === "ask" ? "Message from" : "Delegated by";
-    const instruction = kind === "ask" ? "Reply to them." : "Do the work and reply directly.";
+    const instruction = kind === "ask" ? "Reply to them." : "Your reply goes back to them.";
     expect(prompt).toBe(`[${opening} the user's Chief of Staff, @Wink. ${instruction}]\n\nQA on Opus`);
   });
 
@@ -30,7 +30,7 @@ describe("peerMessagePrompt", () => {
     for (const chief of [false, undefined]) {
       const prompt = peerMessagePrompt({ name: "Helper", chiefOfStaff: chief }, message, kind);
       const opening = kind === "ask" ? "Message from" : "Delegated by";
-      const instruction = kind === "ask" ? "Reply to them." : "Do the work and reply directly.";
+      const instruction = kind === "ask" ? "Reply to them." : "Your reply goes back to them.";
       expect(prompt).toBe(`[${opening} another bot in this Wink workspace, @Helper. ${instruction}]\n\n${message}`);
     }
   });
@@ -309,10 +309,10 @@ describe("a turn that answers another bot", () => {
     expect(prompt).not.toContain("Use ask_bot");
   });
 
-  it("says a delegated task shows up in this bot's own chat", () => {
+  it("says a delegated task replies to its sender", () => {
     const prompt = chiefOfStaffSystemPrompt("chief", bots, false, "", false, false, "delegation");
     expect(prompt).toContain("This turn is a delegated task, so you can't message bots from it.");
-    expect(prompt).toContain("The user sees your reply in your own chat.");
+    expect(prompt).toContain("Your reply goes back to the sender.");
     expect(prompt).not.toContain("goes back as the answer");
     expect(prompt).not.toContain("delegation-compatible engine");
     expect(prompt).not.toContain("shared room");

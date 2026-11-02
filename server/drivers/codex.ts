@@ -159,6 +159,15 @@ type StdioMcpServer = { command: string; args: string[]; env: Record<string, str
 // Codex up to 0.140 cut MCP calls at 120 s; ask_bot and wait_delegation each run up to 240 s.
 const AGENTS_TOOL_TIMEOUT_SEC = 300;
 
+const MCP_ENV_RUNNER = [
+  'const pairs = JSON.parse(process.argv[1]); const env = { ...process.env };',
+  'for (const key of Object.keys(env)) if (key.startsWith("WINK_MCP_")) delete env[key];',
+  'for (const [key, scoped] of pairs) env[key] = process.env[scoped];',
+  'const child = require("node:child_process").spawn(process.argv[2], process.argv.slice(3), { env, stdio: "inherit", windowsHide: true });',
+  'child.on("error", () => process.exit(1)); child.on("exit", (code) => process.exit(code ?? 1));',
+  'for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => child.kill(signal));',
+].join(" ");
+
 function mountMcpServer(
   appServerArgs: string[],
   env: Record<string, string | undefined>,
@@ -166,14 +175,19 @@ function mountMcpServer(
   server: StdioMcpServer,
   toolTimeoutSec?: number,
 ): void {
-  Object.assign(env, server.env);
+  const pairs = Object.entries(server.env).map(([key, value]) => {
+    const scoped = `WINK_MCP_${name.toUpperCase()}_${key}`;
+    env[scoped] = value;
+    return [key, scoped];
+  });
+  env.ELECTRON_RUN_AS_NODE = "1";
   const prefix = `mcp_servers.${name}`;
   appServerArgs.push(
-    "-c", `${prefix}.command=${JSON.stringify(server.command)}`,
-    "-c", `${prefix}.args=${JSON.stringify(server.args)}`,
+    "-c", `${prefix}.command=${JSON.stringify(process.execPath)}`,
+    "-c", `${prefix}.args=${JSON.stringify(["-e", MCP_ENV_RUNNER, JSON.stringify(pairs), server.command, ...server.args])}`,
     // Values stay in the child environment; argv contains names only so
     // credentials never appear in process listings or diagnostics.
-    "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(server.env))}`,
+    "-c", `${prefix}.env_vars=${JSON.stringify(["ELECTRON_RUN_AS_NODE", ...pairs.map(([, scoped]) => scoped)])}`,
     "-c", `${prefix}.default_tools_approval_mode="auto"`,
   );
   if (toolTimeoutSec) appServerArgs.push("-c", `${prefix}.tool_timeout_sec=${toolTimeoutSec}`);
@@ -315,15 +329,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "terminal", turn.integrations.terminal);
         }
         if (turn.integrations?.phone) {
-          const bridge = turn.integrations.phone;
-          Object.assign(env, bridge.env);
-          const prefix = "mcp_servers.openmausbot_phone";
-          appServerArgs.push(
-            "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
-            "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
-            "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
-            "-c", `${prefix}.default_tools_approval_mode="auto"`,
-          );
+          mountMcpServer(appServerArgs, env, "openmausbot_phone", turn.integrations.phone);
         }
 
         const child = spawnCli(config.cli, appServerArgs, {

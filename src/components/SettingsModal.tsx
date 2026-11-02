@@ -1,33 +1,25 @@
-// App settings, as a real modal with sections rather than one long panel.
-// Per-bot settings (persona, model, computer) stay in SettingsPanel — this
-// is the stuff shared by every bot: who you are, your keys, and the
-// machine your bots can borrow.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, Monitor, Palette, Search, Settings, MonitorSmartphone, Terminal, User, Users, X } from "lucide-react";
+import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Search, Settings, Terminal, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
 import {
-  showSettingsAdvancedSection,
   showSettingsEnginesNav,
   showSettingsHotkeyHints,
-  showSettingsMoreServicesSection,
   showSettingsSearch,
 } from "@/lib/friends-chrome";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
-  showSettingsAdvancedControls,
-  showSettingsMoreServices,
 } from "@/lib/settings-chrome";
-import { ApiKeyRow, SavedKeys, VpsConnection } from "./ApiKeys";
+import { SavedKeys } from "./ApiKeys";
 import { updaterActions, useManualCheck, useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
-import { LocalComputerSection } from "./LocalComputerSection";
 import { ProfileFields } from "./ProfileFields";
 import { Card } from "./SettingsPrimitives";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
-import { TeamSection, teamTodaySchema, type TeamToday, type TeamView } from "./TeamSection";
+import { TeamSection, type TeamView } from "./TeamSection";
+import { useTeamToday } from "@/lib/team-today";
 import { ModelIndexSection } from "./ModelIndexSection";
 import { SkinPicker } from "./SkinPicker";
 import { GeometryPicker } from "./GeometryPicker";
@@ -37,8 +29,6 @@ import { LanguagePicker } from "./LanguagePicker";
 import { useI18n } from "@/lib/i18n";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
 import { PhoneNotificationSettings } from "./PhoneNotificationSettings";
-import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
-import { TranscriptionSettings } from "./TranscriptionSettings";
 import { loadSidebarSide, saveSidebarSide, type SidebarSide } from "@/lib/sidebar-preferences";
 import { isPhone, saveVibration, vibrationEnabled } from "@/lib/phone-swipe";
 import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-box";
@@ -68,7 +58,6 @@ const SECTIONS: Array<{
   { id: "models-index", icon: ChartScatter, shortcut: "Alt+I" },
   { id: "shortcuts", icon: Keyboard },
   { id: "engines", icon: Terminal },
-  { id: "computer", icon: Monitor },
 ];
 
 const SECTION_KEY = {
@@ -79,7 +68,6 @@ const SECTION_KEY = {
   shortcuts: "settings.section.shortcuts",
   engines: "settings.section.engines",
   companion: "settings.section.devices",
-  computer: "settings.section.computer",
   usage: "settings.section.usage",
   team: "settings.section.team",
   "models-index": "settings.section.modelsIndex",
@@ -380,77 +368,6 @@ function RainbowBoxRow() {
   );
 }
 
-function ExperimentalFeaturesRow() {
-  const { t } = useI18n();
-  const { state, dispatch } = useStore();
-  const skillRecorder = skillRecorderEnabled(state.config);
-  const modelDial = modelDialEnabled(state.config);
-  const [saving, setSaving] = useState<"skillRecorder" | "modelDial" | null>(null);
-  const [error, setError] = useState("");
-
-  const toggle = async (feature: "skillRecorder" | "modelDial", next: boolean) => {
-    if (saving) return;
-    setSaving(feature);
-    setError("");
-    try {
-      const config: ConfigStatus = await api("/api/config", {
-        method: "PATCH",
-        body: JSON.stringify({ features: { [feature]: next } }),
-      });
-      dispatch({ type: "configStatus", config });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("settings.experimental.saveError"));
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  return (
-    <Card
-      title={t("settings.experimental.title")}
-      subtitle={t("settings.experimental.subtitle")}
-    >
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[14px] font-medium text-ink">{t("settings.experimental.skill")}</div>
-          <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">
-            {t("settings.experimental.skillHelp")}
-          </div>
-        </div>
-        <button
-          role="switch"
-          aria-checked={skillRecorder}
-          aria-label={t("settings.experimental.skillAria")}
-          disabled={saving !== null}
-          onClick={() => void toggle("skillRecorder", !skillRecorder)}
-          className={`${cnSwitch(skillRecorder)} disabled:cursor-wait disabled:opacity-50`}
-        >
-          <span className={cnKnob(skillRecorder)} />
-        </button>
-      </div>
-      <div className="mt-4 flex items-center justify-between gap-4 border-t border-hairline/30 pt-4">
-        <div className="min-w-0">
-          <div className="text-[14px] font-medium text-ink">{t("settings.experimental.modelDial")}</div>
-          <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">
-            {t("settings.experimental.modelDialHelp")}
-          </div>
-        </div>
-        <button
-          role="switch"
-          aria-checked={modelDial}
-          aria-label={t("settings.experimental.modelDialAria")}
-          disabled={saving !== null}
-          onClick={() => void toggle("modelDial", !modelDial)}
-          className={`${cnSwitch(modelDial)} disabled:cursor-wait disabled:opacity-50`}
-        >
-          <span className={cnKnob(modelDial)} />
-        </button>
-      </div>
-      {error ? <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p> : null}
-    </Card>
-  );
-}
-
 const cnSwitch = (on: boolean) =>
   `relative h-6 w-11 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-control"}`;
 const cnKnob = (on: boolean) =>
@@ -459,7 +376,7 @@ const cnKnob = (on: boolean) =>
 /** Writes a redacted diagnostics file to a location the user picks. The
  * report holds versions, configured-or-not booleans and the server.log tail —
  * never credential values (the desktop shell does not read secret fields). */
-function DiagnosticsRow() {
+export function DiagnosticsRow() {
   const { t } = useI18n();
   const [exporting, setExporting] = useState(false);
   const [result, setResult] = useState<{ kind: "success" | "error"; message: string } | null>(null);
@@ -508,13 +425,10 @@ function DiagnosticsRow() {
 export function SettingsModal({
   closing = false,
   defaultAdvancedOpen = false,
-  defaultMoreServicesOpen = false,
 }: {
   closing?: boolean;
   /** Start with Advanced expanded (tests). */
   defaultAdvancedOpen?: boolean;
-  /** Start with More services expanded (tests). */
-  defaultMoreServicesOpen?: boolean;
 }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -530,17 +444,13 @@ export function SettingsModal({
   const dialogRef = useRef<HTMLDivElement>(null);
   useSettingsSwipe(dialogRef, phone && !closing, phone && page ? section : false, back);
   const [query, setQuery] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(defaultAdvancedOpen);
   const [preferencesOpen, setPreferencesOpen] = useState(defaultAdvancedOpen);
-  const [moreServicesOpen, setMoreServicesOpen] = useState(defaultMoreServicesOpen);
   const q = query.trim().toLowerCase();
   const phoneAvailable = true;
-  const advancedShown = showSettingsAdvancedControls(advancedOpen);
-  const moreServicesShown = showSettingsMoreServices(moreServicesOpen);
   const [teamOwner, setTeamOwner] = useState(false);
   const [teamStats, setTeamStats] = useState<TeamView | null>(null);
-  const [teamToday, setTeamToday] = useState<TeamToday | null>(null);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const teamToday = useTeamToday(teamOwner && !closing, accountEmail);
   const sectionShown = useCallback(
     (entry: (typeof SECTIONS)[number]) => (entry.id !== "team" || teamOwner) && (!phone || entry.id !== "shortcuts") && sectionNavVisible(entry, q, phoneAvailable),
     [phoneAvailable, q, teamOwner, phone],
@@ -564,16 +474,13 @@ export function SettingsModal({
         const days = body?.days;
         const now = Number(body?.now);
         if (!Array.isArray(people) || !Array.isArray(days) || !Number.isFinite(now)) throw new Error("team");
-        const today = await api("/api/team/today").catch(() => null);
         if (gone) return;
         setTeamOwner(true);
         setTeamStats({ now, days, people });
-        setTeamToday(teamTodaySchema.safeParse(today).data ?? null);
       } catch {
         if (gone) return;
         setTeamOwner(false);
         setTeamStats(null);
-        setTeamToday(null);
       }
     })();
     return () => {
@@ -803,37 +710,6 @@ export function SettingsModal({
                     <StartFreshRow />
                   </div>
                 )}
-                {showSettingsAdvancedSection() && (
-                  <>
-                <button
-                  type="button"
-                  aria-expanded={advancedShown}
-                  onClick={() => setAdvancedOpen((open) => !open)}
-                  className="flex w-full items-center justify-between rounded-xl border border-hairline/40 bg-card px-4 py-3 text-left hover:bg-control/60"
-                >
-                  <span>
-                    <span className="block text-[14px] font-medium text-ink">{t("settings.advanced.title")}</span>
-                    <span className="mt-0.5 block text-[12px] text-ink-secondary">
-                      {t("settings.advanced.subtitle")}
-                    </span>
-                  </span>
-                  <ChevronDown
-                    size={16}
-                    className={cn("text-ink-secondary transition-transform", advancedShown && "rotate-180")}
-                  />
-                </button>
-                {advancedShown && (
-                  <div data-settings-advanced className="flex flex-col gap-4">
-                    <LocalComputerSection />
-                    <Card title={t("settings.channelTurns.title")} subtitle={t("settings.channelTurns.subtitle")}>
-                      <RoomTurnTimeoutSettings />
-                    </Card>
-                    <ExperimentalFeaturesRow />
-                    <DiagnosticsRow />
-                  </div>
-                )}
-                  </>
-                )}
               </>
             )}
 
@@ -842,35 +718,6 @@ export function SettingsModal({
                 <div className="flex flex-col gap-4">
                   <EnginesSettings />
                   <SavedKeys />
-                  {showSettingsMoreServicesSection() && (
-                    <>
-                  <button
-                    type="button"
-                    aria-expanded={moreServicesShown}
-                    onClick={() => setMoreServicesOpen((open) => !open)}
-                    className="flex w-full items-center justify-between rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-left hover:bg-control/60"
-                  >
-                    <span className="text-[13px] font-medium text-ink">{t("settings.connections.moreServices")}</span>
-                    <ChevronDown
-                      size={16}
-                      className={cn("text-ink-secondary transition-transform", moreServicesShown && "rotate-180")}
-                    />
-                  </button>
-                  {moreServicesShown && (
-                    <div data-settings-more-services className="flex flex-col gap-4">
-                      <TranscriptionSettings />
-                      <ApiKeyRow section="box" />
-                      <VpsConnection />
-                      <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
-                        <summary className="cursor-pointer text-[13px] text-ink-secondary">{t("settings.connections.selfHost")}</summary>
-                        <div className="mt-3">
-                          <ApiKeyRow section="composio" />
-                        </div>
-                      </details>
-                    </div>
-                  )}
-                    </>
-                  )}
                 </div>
               </Card>
             )}
@@ -889,8 +736,6 @@ export function SettingsModal({
                 <EnginesSettings />
               </Card>
             )}
-
-            {showSettingsAdvancedSection() && section === "computer" && <LocalComputerSection />}
 
             {section === "usage" && <UsageSection />}
             {section === "team" && teamStats && (

@@ -29,10 +29,10 @@ describe("turn setup", () => {
     }).outputText;
     const dispatchAdapterTurn = vi.fn(async () => true);
     const snapshot = vi.fn(() => new Promise(() => {}));
-    const run = new Function("deps", `return (async () => { const { checkpoints, checkpointCwd, bot, threadId, currentTurnEpoch, epoch, rewound, watchdog, dispatchAdapterTurn } = deps; ${script} })();`);
+    const run = new Function("deps", `return (async () => { const { checkpoints, checkpointCwd, bot, threadId, currentTurnEpoch, epoch, rewound, watchdog, turnRegistry, commsDepth, dispatchAdapterTurn } = deps; ${script} })();`);
     const pending = run({
       checkpoints: { snapshot }, checkpointCwd: "/project", bot: { id: "bot" }, threadId: "thread",
-      currentTurnEpoch: () => 1, epoch: 1, rewound: false, watchdog: { watch: vi.fn() }, dispatchAdapterTurn,
+      currentTurnEpoch: () => 1, epoch: 1, rewound: false, watchdog: { watch: vi.fn() }, turnRegistry: { prepare: vi.fn() }, commsDepth: 0, dispatchAdapterTurn,
     });
     await Promise.resolve();
     expect(snapshot).not.toHaveBeenCalled();

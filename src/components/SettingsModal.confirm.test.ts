@@ -29,10 +29,6 @@ vi.mock("@/state/store", async (importOriginal) => ({
   useStore: () => ({ state, dispatch }),
   api,
 }));
-vi.mock("@/lib/friends-chrome", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/friends-chrome")>()),
-  showSettingsAdvancedSection: () => true,
-}));
 vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({ capabilities: { host: { platform: "win32" } }, ready: true }),
 }));
@@ -42,8 +38,6 @@ import { SettingsModal } from "./SettingsModal";
 
 it.each([
   ["connections", "Remove the Saved Key", "Remove the Saved Key"],
-  ["general", "Delete VM", "Delete"],
-  ["general", "Delete and Recreate", "Replace"],
 ])("keeps %s / %s confirmation focus above Settings", async (section, triggerLabel, confirmLabel) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   applyLocale("en");

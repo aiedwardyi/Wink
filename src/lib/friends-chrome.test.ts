@@ -6,15 +6,12 @@ import { describe, expect, it } from "vitest";
 import {
   showAvatarImageGenerate,
   showAvatarShapeOptions,
-  showBotDetailsAdvanced,
+  showBotVoiceAndStartupSettings,
   showBotNewTaskControl,
   showChannelCallControl,
   showChannelNewTaskControl,
   showCommunityRepoLink,
-  showComputerPanelChrome,
-  showSettingsAdvancedSection,
   showSettingsSearch,
-  showSettingsMoreServicesSection,
   showSettingsEnginesNav,
   showUsagePerBotTable,
   showSidebarDensityControls,
@@ -40,7 +37,6 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const components = join(here, "../components");
-const app = readFileSync(join(here, "../App.tsx"), "utf8");
 const settingsModal = readFileSync(join(components, "SettingsModal.tsx"), "utf8");
 const settingsPanel = readFileSync(join(components, "SettingsPanel.tsx"), "utf8");
 const chatView = readFileSync(join(components, "ChatView.tsx"), "utf8");
@@ -59,11 +55,9 @@ function sourceBetween(source: string, start: string, end: string): string {
 }
 
 describe("friends chrome flags", () => {
-  it("keeps Advanced, Computer, tasks, call, Teach/Routines, and avatar extras off the idle surface", () => {
+  it("keeps voice, tasks, call, Teach/Routines, and avatar extras off the idle surface", () => {
     expect(showSettingsSearch()).toBe(false);
-    expect(showSettingsAdvancedSection()).toBe(false);
-    expect(showBotDetailsAdvanced()).toBe(false);
-    expect(showComputerPanelChrome()).toBe(false);
+    expect(showBotVoiceAndStartupSettings()).toBe(false);
     expect(showChannelNewTaskControl()).toBe(false);
     expect(showChannelCallControl()).toBe(false);
     expect(showSidebarTeachSkill()).toBe(false);
@@ -73,7 +67,6 @@ describe("friends chrome flags", () => {
     expect(showAvatarImageGenerate()).toBe(false);
     expect(showAvatarShapeOptions()).toBe(false);
     expect(showSidebarDensityControls()).toBe(false);
-    expect(showSettingsMoreServicesSection()).toBe(false);
     expect(showSettingsEnginesNav()).toBe(false);
     expect(showUsagePerBotTable()).toBe(false);
     expect(showBotMenuCopy()).toBe(false);
@@ -89,24 +82,15 @@ describe("friends chrome flags", () => {
 });
 
 describe("friends chrome call sites keep the feature code", () => {
-  it("gates Settings search and Advanced instead of deleting them", () => {
+  it("keeps Settings search and Engines gated", () => {
     expect(settingsModal).toContain("showSettingsSearch()");
-    expect(settingsModal).toContain("showSettingsAdvancedSection()");
-    expect(settingsModal).toContain("showSettingsMoreServicesSection()");
     expect(settingsModal).toContain("showSettingsEnginesNav()");
-    expect(settingsModal).toContain("data-settings-advanced");
-    expect(settingsModal).toContain("data-settings-more-services");
-    expect(settingsModal).toContain("<LocalComputerSection");
-    expect(settingsModal).toContain("<ExperimentalFeaturesRow");
-    expect(settingsModal).toContain("<DiagnosticsRow");
     expect(settingsModal).toContain("settings.searchAria");
   });
 
-  it("gates Bot details Advanced instead of deleting Chief of Staff, computer, and voice", () => {
-    expect(settingsPanel).toContain("showBotDetailsAdvanced()");
-    expect(settingsPanel).toContain('aria-label="Chief of Staff"');
+  it("keeps voice and startup settings gated", () => {
+    expect(settingsPanel).toContain("showBotVoiceAndStartupSettings()");
     expect(settingsPanel).toContain("<VoiceSettings");
-    expect(settingsPanel).toContain("<BotUsageCard");
   });
 
   it("gates the Usage per-bot table instead of deleting it", () => {
@@ -127,13 +111,9 @@ describe("friends chrome call sites keep the feature code", () => {
     expect(types).not.toContain('"newTask"');
   });
 
-  it("gates the Computer panel and bot new-task control in chat chrome", () => {
+  it("keeps the bot new-task control gated in chat chrome", () => {
     expect(chatView).toContain("showBotNewTaskControl()");
-    expect(chatView).toContain("showComputerPanelChrome()");
     expect(chatView).toContain("<TaskPicker");
-    expect(chatView).toContain('type: "toggleComputer"');
-    expect(app).toContain("showComputerPanelChrome()");
-    expect(app).toContain("<ComputerPanel");
   });
 
   it("gates channel call and new-task chrome without removing the components", () => {

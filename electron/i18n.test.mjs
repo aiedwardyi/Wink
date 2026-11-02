@@ -69,7 +69,7 @@ describe("packaged locale", () => {
   });
 });
 
-describe("desktop viewer copy", () => {
+describe("device link copy", () => {
   it.each(["en", "ko"])("keeps replacement tokens literal in %s device names", (locale) => {
     const name = "Laptop $& $' $` $$";
     expect(translate(locale, "packaged.deviceLinkHelp", { name })).toBe(
@@ -85,14 +85,4 @@ describe("desktop viewer copy", () => {
     expect(en["packaged.deviceUnreachableHelp"]).toBe("Check that it's on and Tailscale is connected.");
     expect(ko["packaged.deviceUnreachableHelp"]).toBe("켜져 있고 Tailscale이 연결되어 있는지 확인하세요.");
   });
-
-  it("paints the error page from packaged keys and includes Malgun Gothic", () => {
-    const main = readFileSync(join(import.meta.dirname, "main.mjs"), "utf8");
-    expect(main).toContain('nativeText("packaged.desktopUnavailable")');
-    expect(main).toContain('nativeText("packaged.liveDesktopFailed")');
-    expect(main).toContain('nativeText("packaged.openInBrowser")');
-    expect(main).toContain('nativeText("packaged.liveDesktop")');
-    expect(main).toMatch(/desktopViewerErrorPage[\s\S]*uiFontStack\(\)/);
-  });
 });
-

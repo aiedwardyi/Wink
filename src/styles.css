@@ -2216,7 +2216,7 @@ html[lang="ko"] {
   --radius-xl: 8px;
 }
 
-@scope ([data-skin="precision"], [data-skin="mono-hud"]) to ([data-skin]) {
+@scope ([data-skin="precision"], [data-skin="mono-hud"], [data-skin="servo-gray"]) to ([data-skin]) {
   [data-orbit-message] {
     border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 68%, transparent);
     padding-block: 0.5rem;
@@ -2278,6 +2278,53 @@ html[lang="ko"] {
     "Malgun Gothic", system-ui, sans-serif;
   --radius-lg: 4px;
   --radius-xl: 6px;
+}
+
+/* Servo's gauges on a gray stage, with Dimmed's type and bubble surfaces. */
+[data-skin="servo-gray"] {
+  --color-app: #353a42;
+  --color-panel: #2d333b;
+  --color-raised: #373e47;
+  --color-raised-hover: #444c56;
+  --color-card: #2d333b;
+  --color-inset: #272c33;
+  --color-control: #373e47;
+  --color-hairline: #59616c;
+
+  --color-ink: #e3e8ee;
+  --color-ink-secondary: #c4cbd3;
+
+  --color-accent: #dce1e7;
+  --color-accent-border: #edf0f4;
+  --color-accent-text: #edf0f4;
+  --color-focus: #edf0f4;
+  --color-accent-ink: #353a42;
+  --color-bubble-user: #373e47;
+
+  --color-success: #d2d8df;
+  --color-danger: #e3e8ee;
+  --color-danger-ink: #353a42;
+  --color-warning: #cbd2da;
+  --color-scrollbar: #6b747f;
+  --color-maus-line: #c4cbd3;
+
+  --font-sans: var(--font-geist) "Inter", -apple-system, "BlinkMacSystemFont", "SF Pro Text",
+    "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 4px;
+  --radius-xl: 8px;
+  --hud-composer-background: linear-gradient(160deg, #414850, #353c44 60%, #2d333b);
+}
+
+@scope ([data-skin="servo-gray"]) to ([data-skin]) {
+  [data-orbit-message="bot"] [data-orbit-message-content] {
+    background: var(--color-card);
+    padding: 10px 14px;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    border: 0;
+    box-shadow: none;
+  }
 }
 
 /* ── Community ─────────────────────────────────────────────────────────────
@@ -2733,8 +2780,8 @@ html[lang="ko"] {
   --color-scrollbar: #65717e;
   --color-maus-line: #d8e0e8;
 
-  --font-sans: "Bahnschrift", "Segoe UI", -apple-system, BlinkMacSystemFont,
-    "Malgun Gothic", system-ui, sans-serif;
+  --font-sans: var(--font-geist) "Inter", -apple-system, "BlinkMacSystemFont", "SF Pro Text",
+    "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
   --radius-lg: 4px;
   --radius-xl: 8px;
 }
@@ -2771,8 +2818,8 @@ html[lang="ko"] {
   --color-scrollbar: #4f5c69;
   --color-maus-line: #b7c4d0;
 
-  --font-sans: "Bahnschrift", "Segoe UI", -apple-system, BlinkMacSystemFont,
-    "Malgun Gothic", system-ui, sans-serif;
+  --font-sans: var(--font-geist) "Inter", -apple-system, "BlinkMacSystemFont", "SF Pro Text",
+    "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
   --radius-lg: 4px;
   --radius-xl: 8px;
 }
@@ -2789,7 +2836,7 @@ html[lang="ko"] {
   color: var(--color-accent-text);
   border-bottom: 1px solid var(--color-hairline);
   padding-bottom: 3px;
-  font-family: "Bahnschrift", "Segoe UI", "Malgun Gothic", sans-serif;
+  font-family: var(--font-sans);
   letter-spacing: 0.01em;
 }
 
@@ -3074,8 +3121,8 @@ html[lang="ko"] {
 }
 
 /* ── Pewter ────────────────────────────────────────────────────────────────
-   Mid gray and ice blue in Manrope. Nothing is filled: turns, composer, and
-   the selected row are drawn as rounded outlines on one flat ground.
+   Mid gray and ice blue in Manrope. Turns and composer are drawn in outline;
+   the selected row rests on a soft fill.
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="pewter-dusk"],
 [data-skin="pewter-night"],
@@ -3232,8 +3279,9 @@ html[lang="ko"] {
   }
 
   [data-sidebar-row] > .bg-raised {
-    background: transparent;
-    border-color: var(--color-accent-border);
+    background: var(--color-raised);
+    border-color: transparent;
+    border-radius: 0;
   }
 
   [data-choice-signal] {
@@ -3903,6 +3951,7 @@ html[lang="ko"] {
 :root[data-shape="boxy"]:is(
   [data-skin="precision"],
   [data-skin="mono-hud"],
+  [data-skin="servo-gray"],
   [data-skin="notebook"],
   [data-skin="messenger"],
   [data-skin="community"],

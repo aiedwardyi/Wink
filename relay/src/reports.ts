@@ -8,6 +8,7 @@ import { accountRequestSchema, type Accounts } from "./accounts.ts";
 import { writeAtomic } from "./team.ts";
 import { redactSecretsInText } from "../../shared/redact.ts";
 import { safeImageMetadata } from "../../shared/image-metadata.ts";
+import { TodayCount } from "./today.ts";
 
 const envelopeSchema = z.strictObject({ auth: accountRequestSchema, signature: z.string().length(86).regex(/^[A-Za-z0-9_-]+$/), report: teamReportSchema });
 export const heldReportSchema = z.strictObject({
@@ -33,10 +34,12 @@ export class ReportStore {
   private readonly owner: string;
   private writes: Promise<unknown> = Promise.resolve();
   private held?: Map<string, StoredReport>;
+  private readonly filed: TodayCount;
 
   constructor(dir: string, ownerEmail: string) {
     this.dir = join(dir, "team-reports");
     this.owner = reportOwnerHash(ownerEmail);
+    this.filed = new TodayCount(join(dir, "team-reports-today"));
   }
 
   private async entries(now: number): Promise<StoredReport[]> {
@@ -49,6 +52,7 @@ export class ReportStore {
         if ((await stat(file)).size > REPORT_MAX_BYTES) throw new Error("report store entry too large");
         let entry = z.union([storedReportSchema, filedReportSchema]).parse(JSON.parse(await readFile(file, "utf8")));
         if (entry.filed && "report" in entry) {
+          this.filed.record([entry.report], now);
           entry = tombstone(entry);
           await writeAtomic(file, JSON.stringify(entry));
         }
@@ -122,9 +126,15 @@ export class ReportStore {
   ack(ids: string[], now = Date.now()): Promise<void> {
     return this.serial(async () => {
       for (const entry of await this.entries(now)) {
-        if (ids.includes(entryId(entry))) await this.put(tombstone(entry));
+        if (!ids.includes(entryId(entry))) continue;
+        if ("report" in entry) this.filed.record([entry.report], now);
+        await this.put(tombstone(entry));
       }
     });
+  }
+
+  countToday(now = Date.now()): Promise<number> {
+    return this.serial(async () => { await this.entries(now); return this.filed.count(now); });
   }
 
   async close(): Promise<void> { await this.writes; }

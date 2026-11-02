@@ -9,6 +9,13 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 
+function openDeviceWindowSource(main) {
+  const start = main.indexOf("function openDeviceWindow");
+  const end = main.indexOf('ipcMain.on("screen:preview-intent"', start + 1);
+  assert.ok(start >= 0 && end > start, "openDeviceWindow slice bounds not found");
+  return main.slice(start, end);
+}
+
 class FakeWindow extends EventEmitter {
   destroyed = false;
   minimized = false;
@@ -329,7 +336,7 @@ test("unreachable help is escaped and preserves the retry destination", () => {
 
 test("main process sandboxes PC windows without the app preload", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const open = main.slice(main.indexOf("function openDeviceWindow"), main.indexOf("function ensureDesktopWorkspace"));
+  const open = openDeviceWindowSource(main);
   assert.ok(DEVICE_WINDOW_PARTITION.startsWith("persist:"));
   assert.ok(open.includes("partition: DEVICE_WINDOW_PARTITION"));
   assert.ok(open.includes("sandbox: true"));
@@ -344,7 +351,7 @@ test("main process sandboxes PC windows without the app preload", () => {
 
 test("main process sends a main-frame 403 to its window's watcher", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const open = main.slice(main.indexOf("function openDeviceWindow"), main.indexOf("function ensureDesktopWorkspace"));
+  const open = openDeviceWindowSource(main);
   assert.ok(open.includes('statusCode === 403 && resourceType === "mainFrame"'));
   assert.ok(open.includes("deviceLoads.get(target)?.refused(href)"));
 });
@@ -424,7 +431,7 @@ test("a failed or aborted linked file download leaves no partial file", async (t
 
 test("main process downloads PC linked files instead of opening the browser", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const open = main.slice(main.indexOf("function openDeviceWindow"), main.indexOf("function ensureDesktopWorkspace"));
+  const open = openDeviceWindowSource(main);
   assert.ok(open.includes("deviceLinkedFileName(target, url.origin)"));
   assert.ok(main.includes("await saveDeviceLinkedFile(response, filePath)"));
   assert.ok(main.includes('nativeText("packaged.deviceFileFailed")'));

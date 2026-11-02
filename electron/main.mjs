@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startCua, stopCua, registerCuaIpc, setCuaStateListener } from "./cua.mjs";
-import { createAndroidDeviceController } from "./android-device.mjs";
 import { assemblyAICredential, mintAssemblyAIStreamingToken } from "./assemblyai.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import {
@@ -112,9 +111,8 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
   "./screen-preview.cjs",
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
-const { desktopViewerUrl, desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
+const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
-const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -126,14 +124,9 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 if (!app.isPackaged && process.env.OMB_USER_DATA) app.setPath("userData", process.env.OMB_USER_DATA);
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
-let desktopViewerWindow = null;
-let desktopViewerOwner = null;
-let desktopViewerContextId = null;
 const deviceWindows = new Map();
 const deviceLinkPages = new WeakMap();
 const deviceLoads = new WeakMap();
-let desktopWorkspaceManager = null;
-let desktopWorkspaceOwner = null;
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let pendingNotificationTarget = parseNotificationTargetFromCommandLine(process.argv);
 // Queued before any second-instance, so a later jump list click wins.
@@ -1113,7 +1106,6 @@ function buildErrorPage({ allPortsOccupied }) {
 const SERVER_BOOT_TIMEOUT_MS = 60_000;
 
 let cuaReady = Promise.resolve({ mode: "unavailable", reason: "not-started" });
-const androidDevice = createAndroidDeviceController({ resourcesPath: process.resourcesPath });
 const displayMediaGuard = createDisplayMediaGuard();
 let displayMediaRequestCount = 0;
 
@@ -1129,128 +1121,6 @@ function respondToDisplayMediaRequest(callback, response) {
   if (error && response.video) {
     console.error("[screen-preview] failed to deliver selected source:", error);
   }
-}
-
-function notifyDesktopViewer(open) {
-  if (!desktopViewerOwner?.isDestroyed()) {
-    desktopViewerOwner.send("desktop-viewer:state", {
-      open,
-      contextId: desktopViewerContextId,
-    });
-  }
-}
-
-function desktopViewerErrorPage(message, retryUrl) {
-  const escape = (value) =>
-    String(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
-  const title = nativeText("packaged.desktopUnavailable");
-  const heading = nativeText("packaged.liveDesktopFailed");
-  const open = nativeText("packaged.openInBrowser");
-  return (
-    "data:text/html;charset=utf-8," +
-    encodeURIComponent(`<!doctype html><html lang="${uiLocale()}"><meta name="color-scheme" content="dark"><title>${escape(title)}</title>
-      <body style="margin:0;display:grid;place-items:center;height:100vh;background:#070707;color:#f5f5f5;font:14px ${uiFontStack()}">
-        <main style="max-width:420px;padding:32px;text-align:center"><h2 style="margin:0 0 10px;font-size:18px">${escape(heading)}</h2>
-        <p style="margin:0 0 20px;color:#a1a1aa;line-height:1.5">${escape(message)}</p>
-        <a href="${escape(retryUrl)}" target="_blank" rel="noreferrer" style="display:inline-block;border-radius:9px;background:#fff;color:#111;padding:9px 14px;text-decoration:none;font-weight:600">${escape(open)}</a></main>
-      </body></html>`)
-  );
-}
-
-function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
-  if (!owner || owner.isDestroyed()) throw new Error("The Wink window is unavailable");
-  const url = desktopViewerUrl(rawUrl);
-  const titleCandidate = Object.prototype.toString.call(rawTitle) === "[object String]" ? rawTitle.trim() : "";
-  const title = titleCandidate ? titleCandidate.slice(0, 80) : nativeText("packaged.liveDesktop");
-
-  const nextContextId =
-    Object.prototype.toString.call(contextId) === "[object String]" ? contextId.slice(0, 120) : null;
-
-  // Desktop URLs contain rotating access tokens. A newly minted URL replaces
-  // the old viewer instead of being retained anywhere after its window closes.
-  // Clear the ref first so the stale window's close handler no-ops; on a bot
-  // change, tell the previous bot to release (same-bot reopen stays quiet).
-  if (desktopViewerWindow && !desktopViewerWindow.isDestroyed()) {
-    const previous = desktopViewerWindow;
-    const previousOwner = desktopViewerOwner;
-    const previousContextId = desktopViewerContextId;
-    desktopViewerWindow = null;
-    previous.close();
-    if (previousContextId !== nextContextId && previousOwner && !previousOwner.isDestroyed()) {
-      previousOwner.send("desktop-viewer:state", { open: false, contextId: previousContextId });
-    }
-  }
-  desktopViewerOwner = owner.webContents;
-  desktopViewerContextId = nextContextId;
-
-  const viewer = new BrowserWindow({
-    ...desktopViewerWindowOptions(),
-    title,
-    icon: APP_ICON,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      // Keep provider cookies away from the app renderer and discard them on
-      // app exit. The secret-bearing URL is sufficient to authenticate.
-      partition: "openmausbot-desktop-viewer",
-    },
-  });
-  desktopViewerWindow = viewer;
-  const viewerOrigin = url.origin;
-
-  // VNC needs rendering, keyboard/mouse input and WebSockets — never host
-  // camera, microphone, geolocation, notifications, USB, or other privileged
-  // browser capabilities in this remote-content window.
-  viewer.webContents.session.setPermissionCheckHandler(() => false);
-  viewer.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-
-  viewer.on("ready-to-show", () => viewer.show());
-  viewer.on("closed", () => {
-    if (desktopViewerWindow !== viewer) return;
-    desktopViewerWindow = null;
-    // The panel drops its "viewer open" state and releases control on this.
-    notifyDesktopViewer(false);
-    desktopViewerOwner = null;
-    desktopViewerContextId = null;
-  });
-  viewer.on("page-title-updated", (event) => {
-    event.preventDefault();
-    viewer.setTitle(title);
-  });
-  viewer.webContents.setWindowOpenHandler(({ url: target }) => {
-    try {
-      const external = desktopViewerUrl(target);
-      void shell.openExternal(external.toString());
-    } catch {
-      // Ignore non-web and insecure URLs from the remote viewer.
-    }
-    return { action: "deny" };
-  });
-  viewer.webContents.on("will-navigate", (event, target) => {
-    if (sameDesktopViewerOrigin(target, viewerOrigin)) return;
-    event.preventDefault();
-    try {
-      void shell.openExternal(desktopViewerUrl(target).toString());
-    } catch {
-      // Keep privileged or malformed navigation out of the viewer.
-    }
-  });
-  viewer.webContents.on("did-fail-load", (_event, code, description, failedUrl, isMainFrame) => {
-    if (!isMainFrame || code === -3 || viewer.isDestroyed() || failedUrl.startsWith("data:")) return;
-    void viewer.loadURL(desktopViewerErrorPage(description || "The viewer did not respond.", url.toString()));
-  });
-
-  notifyDesktopViewer(true);
-  void viewer.loadURL(url.toString()).catch((error) => {
-    if (viewer.isDestroyed()) return;
-    void viewer.loadURL(desktopViewerErrorPage(error?.message ?? "The viewer did not respond.", url.toString()));
-  });
-  return true;
 }
 
 let cachedTailnet = "";
@@ -1377,56 +1247,6 @@ async function openDeviceWindow(rawHost, rawName) {
     return win;
   }, (existing) => deviceLoads.get(existing)?.reloadIfStuck());
   return true;
-}
-
-function ensureDesktopWorkspace(owner) {
-  if (!owner || owner.isDestroyed()) throw new Error("The Wink window is unavailable");
-  if (desktopWorkspaceManager) {
-    if (desktopWorkspaceOwner !== owner) {
-      throw new Error("The desktop workspace belongs to another app window");
-    }
-    return desktopWorkspaceManager;
-  }
-
-  desktopWorkspaceOwner = owner;
-  const manager = createDesktopWorkspaceManager({
-    owner,
-    createView: (options) => new WebContentsView(options),
-    partitionPrefix: `openmausbot-desktop-workspace-${randomUUID()}`,
-    notify: (state) => {
-      if (!owner.isDestroyed() && !owner.webContents.isDestroyed()) {
-        owner.webContents.send("desktop-workspace:state", state);
-      }
-    },
-  });
-  desktopWorkspaceManager = manager;
-
-  // Native child views outlive the renderer DOM unless we explicitly tear
-  // them down. Reloads, renderer crashes and owner destruction all close both
-  // panes without retaining their secret-bearing noVNC URLs.
-  owner.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-    if (isMainFrame && !isInPlace) manager.closeAll();
-  });
-  owner.webContents.on("render-process-gone", () => manager.closeAll());
-  owner.once("closed", () => {
-    manager.closeAll();
-    if (desktopWorkspaceManager === manager) {
-      desktopWorkspaceManager = null;
-      desktopWorkspaceOwner = null;
-    }
-  });
-  return manager;
-}
-
-function desktopWorkspaceForEvent(event, create = false) {
-  const owner = mainWindow;
-  if (!owner || owner.isDestroyed() || event.sender !== owner.webContents) {
-    throw new Error("The desktop workspace is available only to the main app window");
-  }
-  if (desktopWorkspaceManager && desktopWorkspaceOwner !== owner) {
-    throw new Error("The desktop workspace belongs to another app window");
-  }
-  return create ? ensureDesktopWorkspace(owner) : desktopWorkspaceManager;
 }
 
 ipcMain.on("screen:preview-intent", (event) => {
@@ -1782,17 +1602,6 @@ async function runPackagedSmoke(win) {
     }
 }
 
-// Local-control screen preview — served from the main process so the Screen
-// Recording permission prompt attributes to the app, never the server
-ipcMain.handle("screen:frame", async () => {
-  if (process.platform !== "darwin") return null;
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width: 1280, height: 800 },
-  });
-  return sources[0]?.thumbnail.toDataURL() ?? null;
-});
-
 // Onboarding permission checks. Status reads are free; the mic request
 // pops the real TCC prompt attributed to the app.
 //
@@ -1804,7 +1613,7 @@ ipcMain.handle("screen:frame", async () => {
 // plain executables no longer appear in the Settings pane at all; and
 // Sequoia+ re-prompts periodically regardless, so a pre-grant expires.
 // The one reliable path is the first real in-process capture
-// (screen:frame above / getDisplayMedia via the handler below) — macOS
+// (getDisplayMedia via the handler below). macOS
 // prompts then, attributed correctly, at the moment of actual use. The
 // perm:open-settings deep link stays as the repair path for denials.
 // Copy the engine command, then open a blank terminal. Renderer-controlled
@@ -1966,53 +1775,8 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
   return true;
 });
 
-// The Box VNC viewer must be a top-level page for its token exchange. A
-// sandboxed modal BrowserWindow satisfies that requirement while keeping the
-// live desktop inside Orbit instead of sending the person to a browser.
-ipcMain.handle("desktop-viewer:open", (event, rawUrl, title, contextId) => {
-  const owner = BrowserWindow.fromWebContents(event.sender);
-  return openDesktopViewer(owner, rawUrl, title, contextId);
-});
-
 // Another PC's Orbit opens beside this one; picking it again focuses that window.
 ipcMain.handle("device-window:open", (_event, host, name) => openDeviceWindow(host, name));
-
-// Two Local VM desktops share the existing app BrowserWindow. The renderer
-// supplies only layout and intent; URL validation, sandboxing, session
-// isolation and the one-interactive-pane invariant stay in the main process.
-ipcMain.handle("desktop-workspace:open", (event, input) =>
-  desktopWorkspaceForEvent(event, true).open(input),
-);
-ipcMain.handle("desktop-workspace:layout", (event, items) => {
-  const manager = desktopWorkspaceForEvent(event);
-  if (!manager) return false;
-  return manager.layout(items);
-});
-ipcMain.handle("desktop-workspace:set-interactive", (event, contextId) => {
-  const manager = desktopWorkspaceForEvent(event);
-  if (!manager) return contextId == null;
-  return manager.setInteractive(contextId);
-});
-ipcMain.handle("desktop-workspace:close", (event, contextId) => {
-  const manager = desktopWorkspaceForEvent(event);
-  if (!manager) return true;
-  return manager.close(contextId);
-});
-
-// Close only when the caller owns the current viewer — otherwise one bot's
-// "Hand control back" would close (and release) another bot's viewer.
-ipcMain.handle("desktop-viewer:close", (_event, contextId) => {
-  const scoped = Object.prototype.toString.call(contextId) === "[object String]" ? contextId : null;
-  if (scoped !== desktopViewerContextId) return false;
-  if (desktopViewerWindow && !desktopViewerWindow.isDestroyed()) desktopViewerWindow.close();
-  return true;
-});
-
-// Lets a (re)mounted panel seed viewer-open state instead of defaulting to false.
-ipcMain.handle("desktop-viewer:state-now", () => ({
-  open: Boolean(desktopViewerWindow && !desktopViewerWindow.isDestroyed()),
-  contextId: desktopViewerContextId,
-}));
 
 // macOS never re-prompts a denied permission — the only path is System
 // Settings; deep-link straight to the right privacy pane.
@@ -2199,7 +1963,6 @@ app.whenReady().then(async () => {
   if (app.isPackaged) app.setAsDefaultProtocolClient(PACKAGE_INSTALL_SCHEME);
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   registerCuaIpc();
-  androidDevice.registerIpc(ipcMain);
   registerUpdaterIpc();
   errorReports.start();
   // Display capture remains user-initiated. The renderer first sends a
