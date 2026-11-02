@@ -42,8 +42,7 @@ describe("Onboarding engine check", () => {
     };
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       if (url.endsWith("/sign-out")) authenticated = false;
-      return new Response(JSON.stringify(url.includes("cli-candidates") ? { candidates: [] }
-        : { instances: [{ ...instance, snapshot: { state: "available", authenticated } }] }));
+      return new Response(JSON.stringify({ instances: [{ ...instance, snapshot: { state: "available", authenticated } }] }));
     }));
     const host = document.createElement("div");
     const root = createRoot(host);

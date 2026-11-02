@@ -28,7 +28,6 @@ import {
   type AutomaticCandidate,
   type AutomaticCapability,
 } from "./automatic-selection.ts";
-import * as checkpoints from "./checkpoints.ts";
 import { appendDecision } from "./decision-log.ts";
 import "./bot-cwd.ts";
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
@@ -84,7 +83,6 @@ import {
   memoryNotesEnabled,
   sweepLegacyOpencodeKey,
   syncCredentialEnv,
-  withInstanceCli,
   vpsSshAlias,
   DATA_DIR,
   DOWNLOADS_DIR,
@@ -100,8 +98,7 @@ import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
 import { summaryInstance } from "./summary-instance.ts";
-import { findCliCandidates, resetPathCache } from "./env-path.ts";
-import { testCliBinary } from "./cli-probe.ts";
+import { resetPathCache } from "./env-path.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { watchAskHold } from "./ask-hold.ts";
 import "./ask-user.ts";
@@ -256,9 +253,6 @@ import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
-import {
-  skillsSystemPrompt,
-} from "./skills.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 import { LocalVmLease, LocalVmLeasePool } from "./local-vm-lease.ts";
@@ -3138,9 +3132,6 @@ let localVmImageBusy = false;
 let localVmProvisionBusy = false;
 let localVmModeChangeBusy = false;
 const activeVpsThreads = new Map<string, string>();
-// A restore mutates and cleans a project work tree. Claim the bot across the
-// entire async Git operation so a turn cannot start in that folder midway.
-const checkpointRestoreLeases = new Set<string>();
 const LOCAL_VM_IDLE_MS = 8 * 60 * 60_000;
 const localVmIdles = new Map<string, LocalVmIdleTimer>();
 
@@ -4475,11 +4466,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (!opts?.limitWaitId && turnStartedByUser(opts)) limitWaits.cancel(botId);
   if (!opts?.limitWaitId && (opts?.keepGoingWake || opts?.paneNoteWake) && limitWaits.held(botId)) throw busyRejection("waiting for usage reset");
-  if (checkpointRestoreLeases.has(botId)) {
-    throw Object.assign(new Error("this bot's project files are being restored — wait for the restore to finish"), {
-      status: 409,
-    });
-  }
   if (bot.busy) throw busyRejection("the bot is already working — interrupt it first");
   const threadId = opts?.threadId ?? bot.threadId;
   // Every dispatch funnels through here, so this is where the driver's own
@@ -5019,6 +5005,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const privateWorkspace = worksInWorkspace ? ensureWorkspace(bot.id) : undefined;
       const skillInstructions = renderSkillInstructions(selectedSkills, {
         includeRoot: worksInWorkspace && opts?.runOn !== "cloud",
+        workspace: privateWorkspace,
       });
       const packagePlaybooks = installedPlaybookInstructions(text, bot.playbooks);
       // An explicit working folder wins for new tasks. With no pin, a
@@ -5061,14 +5048,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           ? store.pinTaskCwd(bot.id, threadId, resolvedProject ?? privateWorkspace)
           : null;
       const cwd = pinnedCwd ?? undefined;
-      // The user's own folder rather than the app-owned private workspace:
-      // the only one worth naming to the model or snapshotting.
-      const projectFolder = cwd && cwd !== privateWorkspace ? cwd : undefined;
-      // Checkpoint explicit project folders, where a bot can overwrite the
-      // user's work. Its private OpenMaus workspace is app-owned and changes
-      // on nearly every ordinary chat; snapshotting it would add hidden disk
-      // and process overhead without a user project to restore.
-      const checkpointCwd = projectFolder;
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
       const dwebUrl = process.env.DWEB_URL?.trim();
@@ -5292,13 +5271,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const reactPrompt = integrations.agents ? ` ${reactionToolGuidance()}` : "";
       const showImagePrompt = integrations.agents ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
 
-      // (activeVpsThreads was already claimed above, before the provision or
-      // reuse await, so the backend guards saw this turn the whole time.)
-      // Wait immediately before dispatch: resources are already claimed, but
-      // the engine cannot edit the project until the snapshot has settled.
-      // snapshot() absorbs failures, so checkpointing may delay but never fail
-      // a turn.
-      if (checkpointCwd) await checkpoints.snapshot(bot.id, checkpointCwd, `turn ${threadId.slice(0, 8)}`);
       if (currentTurnEpoch(bot.id) !== epoch) {
         releaseLocalVmThread(threadId);
         if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
@@ -5375,7 +5347,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           CORPUS_SEARCH_INSTRUCTIONS +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
-          (privateWorkspace ? memorySystemPrompt(bot.id) + skillsSystemPrompt(bot.id) : "") +
+          (privateWorkspace ? memorySystemPrompt(bot.id) : "") +
           skillInstructions +
           packagePlaybooks +
           harnessPlaybookPrompt(Boolean(integrations.terminal)) +
@@ -6317,8 +6289,8 @@ async function runClaimedGroupMemberTurn(
     projectFolderPrompt(cwd, workspace) +
     (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
     CORPUS_SEARCH_INSTRUCTIONS +
-    (workspace ? `\n${memorySystemPrompt(bot.id).trim()}${skillsSystemPrompt(bot.id)}` : "") +
-    renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace) }) +
+    (workspace ? `\n${memorySystemPrompt(bot.id).trim()}` : "") +
+    renderSkillInstructions(selectedSkills, { includeRoot: Boolean(workspace), workspace }) +
     installedPlaybookInstructions(text, bot.playbooks) +
     harnessPlaybookPrompt(Boolean(integrations.terminal));
 
@@ -7023,7 +6995,6 @@ const botRoutes = createBotRoutes({
   projectNotesCheck,
   memoryHealthCheck,
   activeVpsThreads,
-  checkpointRestoreLeases,
   resumePaneWakes,
 });
 const botChatRoutes = createBotChatRoutes({
@@ -7868,20 +7839,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botRoutes.memoryTopic(res, m);
     }
 
-    // ── workspace checkpoints: per-turn shadow-git snapshots ────────────
-    // The list endpoint is the source of truth (turns store nothing), and
-    // `enabled` tells the UI whether snapshots can happen here at all —
-    // false for refused folders (home, Desktop…), a missing git, or a bot
-    // whose checkpoints failed earlier this session.
-    m = path.match(/^\/api\/bots\/([\w-]+)\/checkpoints$/);
-    if (m && method === "GET") {
-      return await botRoutes.listCheckpoints(res, m, url);
-    }
-    m = path.match(/^\/api\/bots\/([\w-]+)\/checkpoints\/restore$/);
-    if (m && method === "POST") {
-      return await botRoutes.restoreCheckpoint(req, res, m);
-    }
-
     // onboarding/ask cards persist their answered/dismissed state
     m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -8209,73 +8166,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const instances = withRateLimits(await describeInstances(probe));
       rememberAutomaticAvailability(instances);
       return json(res, 200, { instances });
-    }
-
-    // ── CLI binary discovery for the Engines "detected" dropdown ──
-    // ?name=claude → absolute paths of every `claude` on the augmented PATH,
-    // in PATH order (first = what a bare name runs). Polled when the user
-    // opens the Custom picker so a just-installed CLI appears without a restart.
-    if (method === "GET" && path === "/api/cli-candidates") {
-      const name = url.searchParams.get("name") ?? "";
-      resetPathCache();
-      return json(res, 200, { candidates: findCliCandidates(name) });
-    }
-
-    // ── pre-save CLI probe: does this path actually run? ──
-    // POST {cli, driver} → spawn `<cli> --version` with the same PATH the
-    // turn itself would use. A miss here (typo, missing exec bit, a binary
-    // the GUI app can't see) means every turn would fail, so the UI asks
-    // before saving rather than registering a dead engine.
-    if (method === "POST" && path === "/api/cli-test") {
-      // same gate as the local-VM lifecycle routes: this executes a local
-      // binary, so a hostile page must not be able to submit it as a simple
-      // text/plain cross-origin request
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      const body = await readBody(req);
-      const cli = typeof body?.cli === "string" ? body.cli.trim() : "";
-      if (!cli || /[\n\r]/.test(cli)) return json(res, 400, { error: "cli must be a non-empty path" });
-      const driver = typeof body?.driver === "string" ? BUILT_IN_DRIVERS.find((d) => d.driverKind === body.driver) : undefined;
-      // Probe the exact configured wrapper plus --version. The child env is
-      // built from an allowlist and the probe refuses a scripted argument, so
-      // this endpoint cannot be steered into reading an inherited secret back
-      // out through its own response.
-      const probe = await testCliBinary(cli, driver);
-      return json(res, 200, probe);
-    }
-
-    // ── per-instance CLI path override (custom builds / versioned bins) ──
-    // PATCH /api/instances/:id {cli: "/path/to/cli" | ""} — "" reverts to the
-    // driver default. Running turns keep their current connection.
-    const instancePatch = /^\/api\/instances\/([\w.-]+)$/.exec(path);
-    if (method === "PATCH" && instancePatch) {
-      // same non-simple-request gate as the local-VM lifecycle routes
-      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "content-type must be application/json" });
-      }
-      const body = await readBody(req);
-      if (typeof body?.cli !== "string") return json(res, 400, { error: "cli must be a string" });
-      if (/[\n\r]/.test(body.cli)) return json(res, 400, { error: "cli must not contain newlines" });
-      if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
-      providerConfigBusy = true;
-      try {
-        const result = withInstanceCli(cfg, instancePatch[1], body.cli);
-        if (!result.ok) return json(res, 404, { error: `unknown instance "${instancePatch[1]}"` });
-        // persist the whole instances map this rebuild produced — a fresh
-        // saveConfig({instances}) merge would re-derive defaults identically,
-        // but writing the resolved map keeps disk and runtime in lockstep
-        saveConfig({ instances: result.config.instances });
-        Object.assign(cfg, loadConfig());
-        await reloadProviders();
-        // rescan BEFORE describe(): the response's cliCandidates are computed
-        // from the memoized PATH, so resetting after would answer this request
-        // with the pre-reset cache
-        resetPathCache();
-        return json(res, 200, { instances: withRateLimits(await registry.describe({ rescan: true })) });
-      } finally {
-        providerConfigBusy = false;
-      }
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──
