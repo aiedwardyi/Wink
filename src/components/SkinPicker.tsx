@@ -4,13 +4,15 @@
 // `[data-skin]` rather than `:root[data-skin]` — any element can open a skin
 // context for its own subtree, so the miniature styles itself and can never
 // drift from what picking it actually does.
-import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
 import { LIGHT_SKIN_IDS, SKINS, SKIN_CHANGE_EVENT, applySkin, readSkin, type SkinId } from "@/lib/skins";
 import { useI18n } from "@/lib/i18n";
 import { showSkinTaglines } from "@/lib/friends-chrome";
 import { cn } from "@/lib/cn";
 import { Section } from "./SettingsPrimitives";
+
+const FEATURED_SKIN_IDS: readonly SkinId[] = ["wink", "precision", "github-dimmed", "tokyo-night", "kanagawa", "terminal", "wink-day", "notebook"];
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected
@@ -76,6 +78,10 @@ export function SkinPicker() {
   const [active, setActive] = useState<SkinId>(
     () => (document.documentElement.dataset.skin as SkinId) || readSkin(),
   );
+  const [expanded, setExpanded] = useState(false);
+  // A theme picked from the open fold stays put until the fold closes, so keyboard focus is not lost.
+  const [picked, setPicked] = useState<SkinId | null>(null);
+  const moreId = useId();
 
   // The theme-cycle hotkey calls applySkin() directly, outside this
   // component's own onClick - without this, the checkmark would go stale.
@@ -85,55 +91,77 @@ export function SkinPicker() {
     return () => window.removeEventListener(SKIN_CHANGE_EVENT, onChange);
   }, []);
 
-  const groups = [
-    { key: "settings.skin.dark", skins: SKINS.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)) },
-    { key: "settings.skin.light", skins: SKINS.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)) },
+  const featured = FEATURED_SKIN_IDS.map((id) => SKINS.find((skin) => skin.id === id)!);
+  if (!FEATURED_SKIN_IDS.includes(active) && active !== picked) {
+    const current = SKINS.find((skin) => skin.id === active);
+    if (current) featured.push(current);
+  }
+  const extra = SKINS.filter((skin) => !featured.includes(skin));
+  const groups = (skins: typeof SKINS) => [
+    { key: "settings.skin.dark", skins: skins.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)) },
+    { key: "settings.skin.light", skins: skins.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)) },
   ] as const;
+
+  const renderGroups = (items: typeof SKINS, folded = false) => groups(items).filter(({ skins }) => skins.length > 0).map(({ key, skins }) => (
+    <Section key={key} title={t(key)}>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {skins.map((skin) => {
+          const selected = skin.id === active;
+          return (
+            <button
+              key={skin.id}
+              type="button"
+              onClick={() => {
+                applySkin(skin.id);
+                setActive(skin.id);
+                setPicked(folded ? skin.id : null);
+              }}
+              aria-pressed={selected}
+              className={cn(
+                "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
+                selected
+                  ? "border-accent-border bg-control"
+                  : "border-hairline/60 hover:border-hairline hover:bg-control/50",
+              )}
+            >
+              <Miniature skin={skin.id} />
+              <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-ink">{skin.name}</div>
+                  {showSkinTaglines() && (
+                    <div className="mt-0.5 text-[11px] leading-snug text-ink-secondary">
+                      {t(`settings.skin.${skin.id}.tagline`)}
+                    </div>
+                  )}
+                </div>
+                {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </Section>
+  ));
 
   return (
     <div className="flex flex-col gap-4">
-      {groups.map(({ key, skins }) => (
-        <Section key={key} title={t(key)}>
-          {/* Four columns on a wide settings card. Five columns left a leftover
-              trio once the dark skins joined the set; wrapping a short last row
-              is better than shrinking the miniatures. */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {skins.map((skin) => {
-              const selected = skin.id === active;
-              return (
-                <button
-                  key={skin.id}
-                  type="button"
-                  onClick={() => {
-                    applySkin(skin.id);
-                    setActive(skin.id);
-                  }}
-                  aria-pressed={selected}
-                  className={cn(
-                    "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
-                    selected
-                      ? "border-accent-border bg-control"
-                      : "border-hairline/60 hover:border-hairline hover:bg-control/50",
-                  )}
-                >
-                  <Miniature skin={skin.id} />
-                  <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-medium text-ink">{skin.name}</div>
-                      {showSkinTaglines() && (
-                        <div className="mt-0.5 text-[11px] leading-snug text-ink-secondary">
-                          {t(`settings.skin.${skin.id}.tagline`)}
-                        </div>
-                      )}
-                    </div>
-                    {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </Section>
-      ))}
+      {renderGroups(featured)}
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={moreId}
+        onClick={() => {
+          setExpanded(!expanded);
+          setPicked(null);
+        }}
+        className="flex min-h-11 items-center justify-between gap-2 rounded-lg border border-hairline/60 px-3 py-2 text-left text-[13px] font-medium text-ink hover:bg-control/50"
+      >
+        {t("settings.skin.more", { count: extra.length })}
+        <ChevronDown size={16} className={cn("shrink-0 transition-transform", expanded && "rotate-180")} />
+      </button>
+      <div id={moreId} hidden={!expanded} className={expanded ? "flex flex-col gap-4" : undefined}>
+        {expanded && renderGroups(extra, true)}
+      </div>
     </div>
   );
 }
