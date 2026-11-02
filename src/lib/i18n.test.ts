@@ -973,7 +973,7 @@ describe("plan usage", () => {
     expect(usageSection).toContain('"usage.limits.cachedAsOf"');
     expect(usageSection).not.toContain('"usage.limits.unavailable"');
     expect(planUsageBar).toContain("t(phrase.key, phrase.vars)");
-    expect(planUsageBar).toContain("showReset && resetCompact(window.resetsAt, now)");
+    expect(planUsageBar).toContain("t(compactReset.key, compactReset.vars)");
     expect(usageSection).not.toMatch(/Resets in/);
     expect(planUsageBar).not.toMatch(/Resets in/);
     expect(usageSection).not.toMatch(/% used/);
