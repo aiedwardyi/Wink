@@ -586,8 +586,16 @@ describe("ModelDial", () => {
       document.removeEventListener("touchmove", swipe);
     });
 
+    it("cancels touch moves so a flick leaves no fling to eat the next tap", async () => {
+      media({ phone: true });
+      await mount();
+      const move = new window.TouchEvent("touchmove", { bubbles: true, cancelable: true });
+      document.querySelector("[data-dial-pick]")!.dispatchEvent(move);
+      expect(move.defaultPrevented).toBe(true);
+    });
+
     it("ticks once per model or effort step, never on open or a clamped step", async () => {
-      const vibrate = vi.fn(() => true);
+      const vibrate = vi.fn((_pattern: VibratePattern) => true);
       Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
       media({ phone: true });
       await mount();
@@ -602,10 +610,9 @@ describe("ModelDial", () => {
       await drag(-200, 0);
       await drag(-200, 0);
       expect(effort()).toBe("max");
-      expect(vibrate).toHaveBeenCalledTimes(4);
+      expect(vibrate.mock.calls.map(([pattern]) => pattern)).toEqual([10, 10, 10, [10, 40, 30]]);
       await drag(-200, 0);
       expect(vibrate).toHaveBeenCalledTimes(4);
-      expect(vibrate).toHaveBeenLastCalledWith(10);
     });
 
     it("stays still under reduced motion and where vibrate is missing", async () => {

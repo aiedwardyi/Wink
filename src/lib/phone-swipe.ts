@@ -104,10 +104,10 @@ export function saveVibration(on: boolean, storage?: Pick<Storage, "setItem"> | 
   }
 }
 
-export function hapticTick(win: typeof window = window, storage?: Pick<Storage, "getItem"> | null): void {
+export function hapticTick(win: typeof window = window, storage?: Pick<Storage, "getItem"> | null, pattern: VibratePattern = 10): void {
   if (!isPhone(win) || reducedMotion(win) || !vibrationEnabled(storage)) return;
   try {
-    win.navigator.vibrate?.(10);
+    win.navigator.vibrate?.(pattern);
   } catch {
     /* ignore */
   }

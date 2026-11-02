@@ -25,6 +25,8 @@ const PHONE_PITCH = 66;
 const PHONE_MIN: [number, number] = [390, 800];
 // A mouse window's phone layout stops growing sideways here, so cards never stretch.
 const MOUSE_ROOM = 480;
+// Landing on max buzzes twice, the second longer.
+const MAX_BUZZ = [10, 40, 30];
 // Overdrive's outer arc: a segment every 12 deg, minus three under the effort label and one under the max pointer.
 const RING = Array.from({ length: 30 }, (_, k) => 270 + k * 12).filter((a) => Math.abs(a - 450) > 12 && a !== 366);
 
@@ -286,8 +288,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
 
   useLayoutEffect(() => {
     const moved = shown.current.i !== undefined && shown.current.i !== index;
-    if (phone && (moved || (shown.current.i !== undefined && shown.current.effort !== effort?.label))) hapticTick();
     const landed = max && shown.current.effort !== "max" && shown.current.i !== undefined;
+    if (phone && (moved || (shown.current.i !== undefined && shown.current.effort !== effort?.label))) hapticTick(window, undefined, landed ? MAX_BUZZ : undefined);
     const write = () => {
       const text = barText.current!;
       const word = document.createElement("b");
