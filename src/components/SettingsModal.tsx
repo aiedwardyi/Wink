@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, Monitor, Palette, Search, Settings, Smartphone, Terminal, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
-import { builtInBrowserEnabled, detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
+import { detailedRepliesEnabled, modelDialEnabled, showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
 import {
   showSettingsAdvancedSection,
   showSettingsEnginesNav,
@@ -384,13 +384,11 @@ function ExperimentalFeaturesRow() {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const skillRecorder = skillRecorderEnabled(state.config);
-  const browser = builtInBrowserEnabled(state.config);
   const modelDial = modelDialEnabled(state.config);
-  const desktopBrowser = Boolean(window.ogb?.browser);
-  const [saving, setSaving] = useState<"skillRecorder" | "browser" | "modelDial" | null>(null);
+  const [saving, setSaving] = useState<"skillRecorder" | "modelDial" | null>(null);
   const [error, setError] = useState("");
 
-  const toggle = async (feature: "skillRecorder" | "browser" | "modelDial", next: boolean) => {
+  const toggle = async (feature: "skillRecorder" | "modelDial", next: boolean) => {
     if (saving) return;
     setSaving(feature);
     setError("");
@@ -448,28 +446,6 @@ function ExperimentalFeaturesRow() {
           <span className={cnKnob(modelDial)} />
         </button>
       </div>
-      {browser ? (
-      <div className="mt-4 flex items-center justify-between gap-4 border-t border-hairline/30 pt-4">
-        <div className="min-w-0">
-          <div className="text-[14px] font-medium text-ink">{t("settings.experimental.browser")}</div>
-          <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">
-            {desktopBrowser
-              ? t("settings.experimental.browserHelp")
-              : t("settings.experimental.browserNeedsDesktop")}
-          </div>
-        </div>
-        <button
-          role="switch"
-          aria-checked={browser}
-          aria-label={t("settings.experimental.browserAria")}
-          disabled={saving !== null || (!browser && !desktopBrowser)}
-          onClick={() => void toggle("browser", !browser)}
-          className={`${cnSwitch(browser)} disabled:cursor-wait disabled:opacity-50`}
-        >
-          <span className={cnKnob(browser)} />
-        </button>
-      </div>
-      ) : null}
       {error ? <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p> : null}
     </Card>
   );

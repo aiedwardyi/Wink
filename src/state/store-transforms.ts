@@ -68,7 +68,6 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     customKeys: frame.customKeys,
     profile: frame.profile,
     features: frame.features,
-    browserProfiles: frame.browserProfiles,
   };
 }
 

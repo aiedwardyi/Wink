@@ -55,7 +55,6 @@ const RoutinesPage = lazyView(() => import("@/components/RoutinesPage").then((m)
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const LocalVmWorkspace = lazyView(() => import("@/components/LocalVmWorkspace").then((m) => ({ default: m.LocalVmWorkspace })));
-const BrowserWorkspace = lazyView(() => import("@/components/BrowserWorkspace").then((m) => ({ default: m.BrowserWorkspace })));
 const SkillRecorderPage = lazyView(() => import("@/components/SkillRecorderPage").then((m) => ({ default: m.SkillRecorderPage })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
@@ -127,21 +126,17 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const [paneHotkey, setPaneHotkey] = useState<{ n: number } | null>(null);
   const [paneFocus, setPaneFocus] = useState<{ sessionId: string } | null>(null);
   const [localVmWorkspaceBotId, setLocalVmWorkspaceBotId] = useState<string | null>(null);
-  // the Browser tab, expanded into the main column (the small preview in
-  // the panel hands off to this and back)
-  const [browserWorkspaceBotId, setBrowserWorkspaceBotId] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
-  const terminalOpen = Boolean(bot && terminalViews[bot.id] && state.activeView === "chat" && !browserWorkspaceBotId && !localVmWorkspaceBotId);
+  const terminalOpen = Boolean(bot && terminalViews[bot.id] && state.activeView === "chat" && !localVmWorkspaceBotId);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
   const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
   const closeWorkspaces = useCallback(() => {
-    setBrowserWorkspaceBotId(null);
     setLocalVmWorkspaceBotId(null);
     dispatch({ type: "toggleComputer", open: false });
   }, [dispatch]);
@@ -188,7 +183,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       acknowledgeTerminalAttention(attention);
       return;
     }
-    setBrowserWorkspaceBotId(null);
     setLocalVmWorkspaceBotId(null);
     dispatch({ type: "toggleComputer", open: false });
     openNotificationTarget(
@@ -374,7 +368,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       const current = latestState.current;
       openNotificationTarget(dispatch, target, current);
       if (target.openTerminal) {
-        setBrowserWorkspaceBotId(null);
         setLocalVmWorkspaceBotId(null);
         dispatch({ type: "toggleComputer", open: false });
         setTerminalViews((views) => ({ ...views, [target.botId]: true }));
@@ -468,25 +461,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     dispatch({ type: "toggleComputer", open: false });
     setLocalVmWorkspaceBotId(botId);
   };
-  const openBrowserWorkspace = (botId: string) => {
-    dispatch({ type: "toggleComputer", open: false });
-    setBrowserWorkspaceBotId(botId);
-  };
-  const closeBrowserWorkspace = () => {
-    setBrowserWorkspaceBotId(null);
-    dispatch({ type: "toggleComputer", open: true });
-  };
-  useEffect(() => {
-    if (browserWorkspaceBotId && (state.activeView !== "chat" || state.selectedId !== browserWorkspaceBotId)) {
-      setBrowserWorkspaceBotId(null);
-    }
-  }, [browserWorkspaceBotId, state.activeView, state.selectedId]);
 
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
   useLayoutEffect(() => {
-    dispatch({ type: "setWorkspaceOpen", open: Boolean(browserWorkspaceBotId || localVmWorkspaceBotId || terminalOpen) });
-  }, [browserWorkspaceBotId, localVmWorkspaceBotId, terminalOpen, dispatch]);
+    dispatch({ type: "setWorkspaceOpen", open: Boolean(localVmWorkspaceBotId || terminalOpen) });
+  }, [localVmWorkspaceBotId, terminalOpen, dispatch]);
 
   const openComputerFromWorkspace = (botId: string) => {
     setLocalVmWorkspaceBotId(null);
@@ -499,7 +479,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     onboardingOpen ||
     state.activeView !== "chat" ||
     terminalOpen ||
-    Boolean(browserWorkspaceBotId || localVmWorkspaceBotId) ||
+    Boolean(localVmWorkspaceBotId) ||
     paletteOpen ||
     Boolean(sidebarOverlay) ||
     state.appSettingsOpen ||
@@ -593,7 +573,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     const layers: BackLayer[] = [];
     const add = (open: boolean, key: string, close: () => void) => { if (open) layers.push({ key, close }); };
     add(state.activeView !== "chat", `view:${state.activeView}`, () => dispatch({ type: "select", id: state.selectedId }));
-    add(Boolean(browserWorkspaceBotId), `browser:${browserWorkspaceBotId}`, () => setBrowserWorkspaceBotId(null));
     add(Boolean(localVmWorkspaceBotId), `vm:${localVmWorkspaceBotId}`, () => setLocalVmWorkspaceBotId(null));
     add(terminalOpen, `terminal:${bot?.id}`, closeTerminal);
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
@@ -620,7 +599,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       if (document.querySelector("[data-media-viewer]")) return;
       if (event.repeat || event.isComposing) return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.code !== "Backquote") return;
-      if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen || browserWorkspaceBotId || localVmWorkspaceBotId) return;
+      if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen || localVmWorkspaceBotId) return;
       event.preventDefault();
       event.stopPropagation();
       if (terminalOpen) closeTerminal();
@@ -628,7 +607,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     };
     window.addEventListener("keydown", toggleTerminal, true);
     return () => window.removeEventListener("keydown", toggleTerminal, true);
-  }, [bot?.id, group?.id, state.activeView, nativeViewOverlayOpen, browserWorkspaceBotId, localVmWorkspaceBotId, terminalOpen]);
+  }, [bot?.id, group?.id, state.activeView, nativeViewOverlayOpen, localVmWorkspaceBotId, terminalOpen]);
 
   // ChatView stays mounted under the terminal and across bot switches, so its header menus are told to close.
   useEffect(() => {
@@ -714,7 +693,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onOverlayChange={setSidebarOverlay}
         onClose={closeDrawer}
         onTerminalAttention={openTerminalAttention}
-        rigidView={Boolean(browserWorkspaceBotId || localVmWorkspaceBotId || (bot && terminalViews[bot.id] !== undefined))}
+        rigidView={Boolean(localVmWorkspaceBotId || (bot && terminalViews[bot.id] !== undefined))}
       />
       {state.activeView === "routines" ? (
         <LazyView fallback={<BootFallback />}>
@@ -723,10 +702,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       ) : state.activeView === "skill-recorder" ? (
         <LazyView fallback={<BootFallback />}>
           <SkillRecorderPage />
-        </LazyView>
-      ) : browserWorkspaceBotId && bot && bot.id === browserWorkspaceBotId ? (
-        <LazyView fallback={<BootFallback />}>
-          <BrowserWorkspace bot={bot} onClose={closeBrowserWorkspace} />
         </LazyView>
       ) : localVmWorkspaceBotId ? (
         <LazyView fallback={<BootFallback />}>
@@ -786,7 +761,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       </Presence>
       {showComputerPanelChrome() && state.computerOpen && bot && (
         <LazyView overlay>
-          <ComputerPanel bot={bot} onOpenVmWorkspace={openLocalVmWorkspace} onExpandBrowser={openBrowserWorkspace} />
+          <ComputerPanel bot={bot} onOpenVmWorkspace={openLocalVmWorkspace} />
         </LazyView>
       )}
       {state.inspectorOpen && bot && (

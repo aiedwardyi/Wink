@@ -71,7 +71,7 @@ import type { OptionCardData, Message, Group, Bot, InstanceInfo, AppState, StopH
 
 export type { MausColor } from "@/lib/mascot";
 export type { RoutineRunCardData } from "../../shared/routine-run";
-export type { OptionCardData, ConnectorCardData, SecretRequestCardData, Message, GroupDefaultResponder, Group, GroupTask, ModelSelection, Task, TaskResumePacket, TaskUsage, Bot, TerminalAttention, TerminalAttentionMap, ConfigStatus, BrowserProfile, ConfigStatusFrame, EngineInstall, RateLimitReport, InstanceInfo, AppSettingsSection, AppState, BotAnnouncement, Action, PeripheralSnapshotLoad } from "./store-types";
+export type { OptionCardData, ConnectorCardData, SecretRequestCardData, Message, GroupDefaultResponder, Group, GroupTask, ModelSelection, Task, TaskResumePacket, TaskUsage, Bot, TerminalAttention, TerminalAttentionMap, ConfigStatus, ConfigStatusFrame, EngineInstall, RateLimitReport, InstanceInfo, AppSettingsSection, AppState, BotAnnouncement, Action, PeripheralSnapshotLoad } from "./store-types";
 export { shownModelSelection, terminalAttentionKey, terminalAttentionForBot, terminalAttentionCount, configStatusFromFrame, visibleNotificationThread, autoSpeaks, shouldClearSelectedUnread } from "./store-transforms";
 
 /** The visible conversation: walk parentId links from the active leaf back
@@ -1041,11 +1041,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case "duplicateBot":
     case "createGroup":
     case "deleteGroup":
-    case "createRoutine":
     case "updateRoutine":
     case "deleteRoutine":
-    case "runRoutine":
-    case "cancelRoutineRun":
     case "markRoutineRunSeen":
     // the dispatch wrapper holds the target in a ref until hydrate
     case "notificationSwitchPending":
@@ -1450,9 +1447,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // All other actions keep their existing optimistic behavior.
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
-        case "createRoutine":
-          api("/api/routines", { method: "POST", body: JSON.stringify(action.input) }).catch(showError);
-          break;
         case "updateRoutine":
           api(`/api/routines/${action.routineId}`, {
             method: "PATCH",
@@ -1461,12 +1455,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "deleteRoutine":
           api(`/api/routines/${action.routineId}`, { method: "DELETE" }).catch(showError);
-          break;
-        case "runRoutine":
-          api(`/api/routines/${action.routineId}/run`, { method: "POST" }).catch(showError);
-          break;
-        case "cancelRoutineRun":
-          api(`/api/routine-runs/${action.runId}/cancel`, { method: "POST" }).catch(showError);
           break;
         case "markRoutineRunSeen":
           api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);

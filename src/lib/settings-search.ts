@@ -47,7 +47,6 @@ export const SECTION_PHRASE_KEYS = {
     "settings.phoneNotifications.help",
     "settings.experimental.title",
     "settings.experimental.skill",
-    "settings.experimental.browser",
     "settings.updates.title",
     "settings.diagnostics.title",
     "settings.advanced.title",

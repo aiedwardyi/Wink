@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { builtInBrowserEnabled, memoryNotesEnabled, showToolCallsEnabled, skillRecorderEnabled } from "./feature-flags";
+import { memoryNotesEnabled, showToolCallsEnabled, skillRecorderEnabled } from "./feature-flags";
 
 describe("experimental feature flags", () => {
   it("keeps Teach a skill hidden by default", () => {
@@ -35,13 +35,5 @@ describe("experimental feature flags", () => {
     expect(memoryNotesEnabled({ features: { memoryNotes: false } }, {})).toBe(false);
     expect(memoryNotesEnabled({ features: { memoryNotes: false } }, { memoryNotes: true })).toBe(true);
     expect(memoryNotesEnabled({ features: {} }, { memoryNotes: false })).toBe(false);
-  });
-
-  it("keeps the built-in browser off even when switched on", () => {
-    expect(builtInBrowserEnabled(null)).toBe(false);
-    expect(builtInBrowserEnabled({})).toBe(false);
-    expect(builtInBrowserEnabled({ features: {} })).toBe(false);
-    expect(builtInBrowserEnabled({ features: { browser: false } })).toBe(false);
-    expect(builtInBrowserEnabled({ features: { browser: true } })).toBe(false);
   });
 });

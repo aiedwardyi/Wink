@@ -25,7 +25,6 @@ vi.mock("./DesktopCapabilities", () => ({
 }));
 vi.mock("./RoutinesPage", () => ({ RoutineEditor: () => null }));
 vi.mock("./AndroidDevicePanel", () => ({ AndroidDevicePanel: () => null, useAndroidUsbDevices: () => ({ devices: [] }) }));
-vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => null }));
 vi.mock("./LocalScreenPreview", () => ({ LocalScreenPreview: () => null }));
 
 import { ComputerPanel } from "./ComputerPanel";

@@ -88,10 +88,6 @@ vi.mock("./AndroidDevicePanel", () => ({
   useAndroidUsbDevices: () => ({ devices: [] }),
 }));
 
-vi.mock("./BrowserPanel", () => ({
-  BrowserPanel: () => null,
-}));
-
 import { ComputerPanel } from "./ComputerPanel";
 
 const bot = {

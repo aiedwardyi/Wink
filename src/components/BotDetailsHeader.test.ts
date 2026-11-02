@@ -26,7 +26,7 @@ function headerBlock(source: string, startMarker: string, endMarker: string): st
 }
 
 const chatHeader = headerBlock(chatView, "{/* Header */}", "{findOpen &&");
-const computerHeader = headerBlock(computerPanel, "{/* Header */}", '{panelView === "browser" &&');
+const computerHeader = headerBlock(computerPanel, "{/* Header */}", '{panelView === "android" && androidConnected ?');
 
 describe("QA 17 one Bot-details header entry", () => {
   it("does not render usage or working-folder chips in the ChatView header", () => {
@@ -99,10 +99,9 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(computerHeader).not.toMatch(/type:\s*"toggleSettings"/);
   });
 
-  it("keeps Computer/Android/Browser tabs and the Computer panel close control", () => {
+  it("keeps Computer/Android tabs and the Computer panel close control", () => {
     expect(computerHeader).toContain('setPanelView("computer")');
     expect(computerHeader).toContain('setPanelView("android")');
-    expect(computerHeader).toContain('setPanelView("browser")');
     expect(computerHeader).toContain('type: "toggleComputer"');
     expect(computerHeader).toContain("<X size={18} />");
   });
