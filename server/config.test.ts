@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   applyCredentialAllowlist,
-  cliProbeEnvironment,
   DATA_DIR,
   instanceConfigs,
   isValidSshAlias,
@@ -24,7 +23,6 @@ import {
   sweepLegacyOpencodeKey,
   syncCredentialEnv,
   vpsSshAlias,
-  withInstanceCli,
   WORKSPACE_CREDENTIAL_ENV,
   type AppConfig,
 } from "./config.ts";
@@ -262,64 +260,7 @@ describe("default fleet", () => {
   });
 });
 
-describe("Instance CLI override", () => {
-  it("sets, replaces, and clears config.cli on a default-fleet instance", () => {
-    const cfg: AppConfig = {};
-    const set = withInstanceCli(cfg, "claude", "/opt/claude-2.1/bin/claude");
-    expect(set.ok).toBe(true);
-    expect(set.config.instances!.claude.config).toEqual({ cli: "/opt/claude-2.1/bin/claude" });
-
-    const replaced = withInstanceCli(set.config, "claude", "~/bin/claude");
-    expect(replaced.config.instances!.claude.config).toEqual({ cli: "~/bin/claude" });
-
-    const cleared = withInstanceCli(replaced.config, "claude", "");
-    expect(cleared.config.instances!.claude.config).toBeUndefined();
-  });
-
-  it("preserves sibling config keys when clearing only cli", () => {
-    const cfg: AppConfig = {
-      instances: { claude: { driver: "claudeAgent", config: { cli: "/x/claude", permissionMode: "bypassPermissions" } } },
-    };
-    const cleared = withInstanceCli(cfg, "claude", "");
-    expect(cleared.config.instances!.claude.config).toEqual({ permissionMode: "bypassPermissions" });
-  });
-
-  it("leaves the original config untouched and rejects unknown instances", () => {
-    const cfg: AppConfig = { instances: { codex: { driver: "codex" } } };
-    const result = withInstanceCli(cfg, "codex", "/new/codex");
-    expect(result.config.instances!.codex.config).toEqual({ cli: "/new/codex" });
-    expect(cfg.instances!.codex.config).toBeUndefined();
-
-    expect(withInstanceCli(cfg, "nope", "/x").ok).toBe(false);
-  });
-
-  it("never persists the credential env instanceConfigs injects", () => {
-    // instanceConfigs() copies each credential into its consuming driver's
-    // environment for the live fleet; withInstanceCli must strip those pairs
-    // back out, or saving a CLI override would copy secrets into the
-    // instances section of config.json.
-    const cfg: AppConfig = {
-      xai: { key: "SECRET-XAI" },
-      gemini: { apiKey: "SECRET-GEMINI" },
-      box: { token: "SECRET-BOX" },
-      instances: {
-        claude: { driver: "claudeAgent" },
-        grokApi: { driver: "grok" },
-        gemini: { driver: "geminiAgent" },
-        computer: { driver: "boxAgent" },
-      },
-    };
-    const set = withInstanceCli(cfg, "claude", "/opt/claude");
-    expect(set.ok).toBe(true);
-    for (const entry of Object.values(set.config.instances!)) {
-      expect(entry.environment ?? {}).toEqual({});
-    }
-    // user-authored env survives
-    const custom = { instances: { claude: { driver: "claudeAgent", environment: { MY_FLAG: "1" } } } };
-    const kept = withInstanceCli(custom, "claude", "/x");
-    expect(kept.config.instances!.claude.environment).toEqual({ MY_FLAG: "1" });
-  });
-
+describe("stored instance configuration", () => {
   it("keeps every raw retired and foreign entry through load and save", () => {
     const raw = {
       grokApi: { driver: "grok", displayName: "Grok API" },
@@ -343,11 +284,9 @@ describe("Instance CLI override", () => {
         instances: { claude: { driver: "claudeAgent" }, ...raw },
       }),
     );
-    const result = withInstanceCli(loadConfig(), "claude", "/opt/claude");
-    saveConfig({ instances: result.config.instances });
-    const { claude, muse, ...rest } = loadConfig().instances!;
-    expect(claude).toEqual({ driver: "claudeAgent", config: { cli: "/opt/claude" } });
-    expect(muse).toEqual({ driver: "museAgent" });
+    saveConfig({ instances: loadConfig().instances });
+    const { claude, ...rest } = loadConfig().instances!;
+    expect(claude).toEqual({ driver: "claudeAgent" });
     expect(rest).toEqual(raw);
   });
 });
@@ -701,16 +640,6 @@ describe("workspace credential env strip", () => {
     };
     applyCredentialAllowlist(env);
     expect(env).toEqual({ NEWPROVIDER_TOKEN_LIMIT: "4096" });
-  });
-
-  it("builds a CLI probe env from names only, never from what the process holds", () => {
-    const env = cliProbeEnvironment({
-      PATH: "/usr/bin",
-      HOME: "/home/e",
-      ACME_API_KEY: "a key nobody has added to the lists yet",
-      ...Object.fromEntries([...PROVIDER_CREDENTIAL_ENV, ...WORKSPACE_CREDENTIAL_ENV].map((n) => [n, "secret"])),
-    });
-    expect(Object.keys(env).sort()).toEqual(["HOME", "PATH"]);
   });
 
   it("covers the box token and voice key, which no engine CLI may inherit", () => {

@@ -9,7 +9,6 @@ import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
-import * as checkpoints from "./checkpoints.ts";
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -42,7 +41,6 @@ type BotRouteDeps = {
   projectNotesCheck: ReturnType<typeof createProjectNotesCheck>;
   memoryHealthCheck: ReturnType<typeof createMemoryHealthCheck>;
   activeVpsThreads: Map<string, string>;
-  checkpointRestoreLeases: Set<string>;
   resumePaneWakes: (botId: string) => void;
 };
 
@@ -64,7 +62,6 @@ export function createBotRoutes(deps: BotRouteDeps) {
     projectNotesCheck,
     memoryHealthCheck,
     activeVpsThreads,
-    checkpointRestoreLeases,
     resumePaneWakes,
   } = deps;
   return {
@@ -499,41 +496,6 @@ export function createBotRoutes(deps: BotRouteDeps) {
       const text = readMemoryTopic(m[1], name);
       if (text === null) return json(res, 404, { error: "no such topic file" });
       return json(res, 200, { name, text });
-    },
-    listCheckpoints: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {
-      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
-      const cwd = url.searchParams.get("cwd") ?? "";
-      if (!cwd.trim()) return json(res, 400, { error: "cwd query parameter required" });
-      return json(res, 200, {
-        checkpoints: await checkpoints.listCheckpoints(m[1]!, cwd),
-        enabled: await checkpoints.checkpointsEnabled(m[1]!, cwd),
-      });
-    },
-    restoreCheckpoint: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      const parsed = z
-        .object({ cwd: z.string().min(1), hash: z.string().regex(/^[0-9a-f]{40}$/) })
-        .safeParse(await readBody(req));
-      if (!parsed.success) {
-        return json(res, 400, { error: "cwd (absolute path) and hash (full 40-character checkpoint hash) required" });
-      }
-      // Claim synchronously with the busy check. startTurn checks the same
-      // lease before reserving the bot, so no turn can enter during the
-      // awaited Git operation.
-      if (bot.busy) return json(res, 409, { error: "the bot is working - stop the turn before restoring files" });
-      if (checkpointRestoreLeases.has(bot.id)) {
-        return json(res, 409, { error: "this bot's project files are already being restored" });
-      }
-      checkpointRestoreLeases.add(bot.id);
-      let result: checkpoints.RestoreResult;
-      try {
-        result = await checkpoints.restore(bot.id, parsed.data.cwd, parsed.data.hash);
-      } finally {
-        checkpointRestoreLeases.delete(bot.id);
-      }
-      if (!result.ok) return json(res, 400, { error: result.error });
-      return json(res, 200, { ok: true });
     },
   };
 }
