@@ -1,6 +1,6 @@
-// 2-screen New group wizard: name, then members. Existing bots check off
-// in one list; + New bot rows expand inline for described bots. Drafts live
-// in component state so a failed create keeps everything.
+// One-card New group: name, members, the reply rule. Existing bots check
+// off in one list; + New bot rows expand inline for described bots. Drafts
+// live in component state so a failed create keeps everything.
 import { useEffect, useRef, useState } from "react";
 
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
@@ -41,24 +41,17 @@ export function GroupWizard({
 }) {
   const { t } = useI18n();
   const { state, dispatch, refreshInstances } = useStore();
-  const [step, setStep] = useState<1 | 2>(1);
-  const [name, setName] = useState(() => t("groupWizard.namePrefill"));
+  const [name, setName] = useState("");
   const [picked, setPicked] = useState<Set<string>>(() => (preselectBotId ? new Set([preselectBotId]) : new Set()));
   const [rows, setRows] = useState<NewRow[]>([]);
   const [addedNew, setAddedNew] = useState(0);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!closing) nameRef.current?.focus();
   }, [closing]);
-
-  // step 1's focused field unmounts on Next, and Escape only reaches the overlay from inside it
-  useEffect(() => {
-    if (step === 2 && !dialogRef.current?.contains(document.activeElement)) dialogRef.current?.focus();
-  }, [step]);
 
   useEffect(() => {
     void refreshInstances?.();
@@ -69,10 +62,10 @@ export function GroupWizard({
   // Zero bots: lead with the create form instead of an empty list and a
   // hidden + row — nothing to discover, just describe the first bot.
   useEffect(() => {
-    if (step === 2 && bots.length === 0) {
+    if (bots.length === 0) {
       setRows((prev) => (prev.length === 0 ? [{ key: nextRowKey++, job: "", instanceId: null, model: null, saving: false, error: null }] : prev));
     }
-  }, [step, bots.length]);
+  }, [bots.length]);
   const toggle = (id: string) =>
     setPicked((prev) => {
       const next = new Set(prev);
@@ -123,111 +116,76 @@ export function GroupWizard({
     });
   };
 
-  const onKey = (event: React.KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      if (step === 1) onClose();
-      else setStep(1);
-    }
-  };
-
   return (
     <div
       data-closing={closing || undefined}
       inert={closing}
       className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
-      onKeyDown={onKey}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        onClose();
+      }}
     >
       <div
-        ref={dialogRef}
         role={closing ? undefined : "dialog"}
         aria-modal={!closing || undefined}
         aria-labelledby="group-wizard-title"
         tabIndex={-1}
         className="animate-pop-in w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
       >
-        <div className="mb-1 flex items-center justify-between">
-          <div id="group-wizard-title" className="text-[15px] font-semibold text-ink">{t("groupWizard.title")}</div>
-          <div className="text-[12px] text-ink-secondary">{t("groupWizard.stepOf", { step })}</div>
+        <div id="group-wizard-title" className="mb-3 text-[15px] font-semibold text-ink">{t("groupWizard.title")}</div>
+        <input
+          ref={nameRef}
+          autoFocus
+          maxLength={100}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") createGroup();
+          }}
+          placeholder={t("groupWizard.nameTitle")}
+          aria-label={t("groupWizard.nameTitle")}
+          className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
+        />
+
+        <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="" />
+
+        {rows.map((row, rowIndex) => (
+          <NewBotRow
+            key={row.key}
+            row={row}
+            preferIndex={addedNew + rowIndex}
+            instances={state.instances}
+            onPatch={(patch) => patchRow(row.key, patch)}
+            onAdd={(pick) => void addBot(row, pick)}
+          />
+        ))}
+
+        <button
+          onClick={() => setRows((prev) => [...prev, { key: nextRowKey++, job: "", instanceId: null, model: null, saving: false, error: null }])}
+          className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
+        >
+          {rows.length === 0 && addedNew === 0 ? t("groupWizard.newBot") : t("groupWizard.addAnother")}
+        </button>
+
+        <p className="mt-3 text-[12.5px] text-ink-secondary">{t("room.hint.everyone")}</p>
+
+        {createError && <div role="alert" className="mt-2 text-[12.5px] text-danger">{createError}</div>}
+
+        <div className="mt-3 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70">
+            {t("groupWizard.cancel")}
+          </button>
+          <button
+            onClick={createGroup}
+            disabled={picked.size < 1 || creating}
+            className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
+          >
+            {t("groupWizard.create")}
+          </button>
         </div>
-
-        {step === 1 && (
-          <>
-            <div className="mb-1 mt-2 text-[14px] font-medium text-ink">{t("groupWizard.nameTitle")}</div>
-            <p className="mb-2 text-[12.5px] text-ink-secondary">{t("groupWizard.nameHelper")}</p>
-            <input
-              ref={nameRef}
-              autoFocus
-              maxLength={100}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") setStep(2);
-              }}
-              aria-label={t("groupWizard.nameTitle")}
-              className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={onClose}
-                className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70"
-              >
-                {t("groupWizard.cancel")}
-              </button>
-              <button
-                onClick={() => setStep(2)}
-                className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110"
-              >
-                {t("groupWizard.next")}
-              </button>
-            </div>
-          </>
-        )}
-
-        {step === 2 && (
-          <>
-            <div className="mb-1 mt-2 text-[14px] font-medium text-ink">{t("groupWizard.addBotsTitle")}</div>
-            <p className="mb-2 text-[12.5px] text-ink-secondary">{t("groupWizard.membersHelper")}</p>
-
-            <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="" />
-
-            {rows.map((row, rowIndex) => (
-              <NewBotRow
-                key={row.key}
-                row={row}
-                preferIndex={addedNew + rowIndex}
-                instances={state.instances}
-                onPatch={(patch) => patchRow(row.key, patch)}
-                onAdd={(pick) => void addBot(row, pick)}
-              />
-            ))}
-
-            <button
-              onClick={() => setRows((prev) => [...prev, { key: nextRowKey++, job: "", instanceId: null, model: null, saving: false, error: null }])}
-              className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
-            >
-              {rows.length === 0 && addedNew === 0 ? t("groupWizard.newBot") : t("groupWizard.addAnother")}
-            </button>
-
-            {createError && <div role="alert" className="mt-2 text-[12.5px] text-danger">{createError}</div>}
-
-            <div className="mt-3 flex justify-end gap-2">
-              <button onClick={() => setStep(1)} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70">
-                {t("groupWizard.back")}
-              </button>
-              <button
-                onClick={createGroup}
-                disabled={picked.size < 1 || creating}
-                className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-40"
-              >
-                {picked.size === 1
-                  ? t("groupWizard.createGroupOne")
-                  : t("groupWizard.createGroupMany", { count: picked.size })}
-              </button>
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
