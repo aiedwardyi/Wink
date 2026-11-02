@@ -112,12 +112,6 @@ export function taskbarBusyIndicator(busy) {
     : { progress: -1, mode: "none" };
 }
 
-export function canClaimDesktopToasts({ nativeSupported, html5Available, html5Permission } = {}) {
-  if (nativeSupported === true) return true;
-  if (html5Available !== true) return false;
-  return html5Permission !== "denied";
-}
-
 export function withToastCapability(capabilities, nativeSupported) {
   return { ...capabilities, toasts: { available: nativeSupported === true } };
 }

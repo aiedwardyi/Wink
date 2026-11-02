@@ -11,15 +11,13 @@ const {
 } = require("./capabilities.cjs");
 
 describe("desktop capabilities", () => {
-  it("keeps Apple permissions, Settings, and speech actions unreachable on Linux", () => {
+  it("keeps Apple Settings and speech actions unreachable on Linux", () => {
     expect(nativeDesktopActions("linux")).toEqual({
-      appleMediaPermissions: false,
       applePrivacySettings: false,
       appleSpeech: false,
     });
     expect(nativeDesktopActions("win32")).toEqual(nativeDesktopActions("linux"));
     expect(nativeDesktopActions("darwin")).toEqual({
-      appleMediaPermissions: true,
       applePrivacySettings: true,
       appleSpeech: true,
     });

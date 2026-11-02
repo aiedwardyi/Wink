@@ -1,14 +1,5 @@
 export const UTILITY_SHUTDOWN_TYPE = "openmausbot:shutdown";
 
-export function isUtilityShutdownMessage(message) {
-  return Boolean(
-    message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      message.type === UTILITY_SHUTDOWN_TYPE,
-  );
-}
-
 /** Ask an Electron utilityProcess to stop so its own SIGTERM-equivalent
  * cleanup (disposeAll / killCliTree) can run. Windows `kill()` is
  * TerminateProcess and skips that path; postMessage is the portable stop. */

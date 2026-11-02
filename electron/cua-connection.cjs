@@ -7,9 +7,6 @@ function createCuaConnectionStore({
   fileSystem = fs,
   temporaryId = randomUUID,
   processId = process.pid,
-  // The same atomic, private-mode write serves every Electron-owned
-  // descriptor the harness reads (cua-connection.json, browser-connection.json).
-  fileName = "cua-connection.json",
 }) {
   let connection = null;
 
@@ -21,7 +18,7 @@ function createCuaConnectionStore({
     persist(next) {
       const userData = getUserData();
       fileSystem.mkdirSync(userData, { recursive: true });
-      const descriptorPath = path.join(userData, fileName);
+      const descriptorPath = path.join(userData, "cua-connection.json");
       const temporaryPath = `${descriptorPath}.${processId}.${temporaryId()}.tmp`;
       let handle;
 

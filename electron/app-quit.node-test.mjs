@@ -21,8 +21,8 @@ function quitFixture(pendingUpdateInstall = true) {
     app, process: { once() {} }, closeGuard: { leave() {} }, keepAwake: { stop() {} }, nativeActions: {}, stopRecorder() {},
     errorReports: { stop() {} },
     BrowserWindow: { getAllWindows: () => [0, 1, 2].map((id) => ({ isDestroyed: () => id === 2, hide: () => calls.push(`hide-${id}`) })) },
-    terminalHost: { dispose() { calls.push("dispose"); return disposed; } }, browserSurface: null, serverProc: null,
-    stopUtilityChild: async () => {}, stopCua: async () => {}, browserHost: null, terminalBridge: { close: async () => {} }, stopDesktopCompanion: async () => {},
+    terminalHost: { dispose() { calls.push("dispose"); return disposed; } }, serverProc: null,
+    stopUtilityChild: async () => {}, stopCua: async () => {}, terminalBridge: { close: async () => {} }, stopDesktopCompanion: async () => {},
     consumePendingUpdateInstall: () => pendingUpdateInstall, applyPendingUpdateInstall: () => { calls.push("install"); return true; }, completeQuitAfterCleanup,
     setTimeout(callback, ms) { timers.push({ callback, ms }); return { unref() {} }; },
   });

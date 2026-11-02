@@ -16,6 +16,10 @@ function sourceBetween(source, start, end) {
 }
 
 describe("packaged cold launch does not hide the window behind the harness", () => {
+  it("does not start a built-in browser on launch or activation", () => {
+    expect(main).not.toMatch(/\b(?:startBrowserSurface|createBrowserHost|createBrowserSurfaceManager)\b/);
+  });
+
   it("wires phone keep-awake before waiting for server readiness", () => {
     const startOn = sourceBetween(main, "async function startServerOn(", "async function startServerPackaged(");
     expect(startOn).toContain("keepAwake.setPhoneServer(proc)");
@@ -75,7 +79,6 @@ describe("packaged cold launch does not hide the window behind the harness", () 
     expect(reveal).toMatch(/packagedBootPhase = serverReady \? BOOT_READY : BOOT_FAILED/);
     expect(reveal).toContain("createWindow()");
     expect(reveal).toMatch(/target\.isDestroyed\(\)/);
-    expect(reveal).toContain("startBrowserSurface(target)");
   });
 
   it("registers activate before the packaged harness wait", () => {
@@ -91,19 +94,6 @@ describe("packaged cold launch does not hide the window behind the harness", () 
   it("does not consume orbit://install on the connecting page", () => {
     const deliver = sourceBetween(main, "function deliverPackageInstall(", "function queuePackageInstall(");
     expect(deliver).toContain("shouldDeliverPackageInstall(");
-  });
-
-  it("starts the browser surface at most once per window", () => {
-    const start = sourceBetween(main, "async function startBrowserSurface(owner) {", "function browserSurfaceForEvent");
-    expect(start).toMatch(/browserSurfaceOwner === owner/);
-    expect(start).toMatch(/owner.isDestroyed\(\) \|\| browserSurfaceOwner !== owner/);
-    expect(start).toMatch(/if \(browserSurfaceOwner === owner\) \{\s*browserSurface = null/);
-  });
-
-  it("does not start the built-in browser host until the real UI is revealed", () => {
-    const create = sourceBetween(main, "function createWindow() {", "function revealPackagedApp(");
-    expect(create).not.toContain("void startBrowserSurface(win)");
-    expect(main).toMatch(/function revealPackagedApp\([\s\S]*startBrowserSurface/);
   });
 
   it("runs packaged smoke against the harness URL, not the connecting page", () => {

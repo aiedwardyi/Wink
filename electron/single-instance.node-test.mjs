@@ -76,7 +76,6 @@ function activationHarness(mainWindow, windows, { startupWindowCreated = true } 
   assert.ok(activate);
   const events = new Map();
   const created = [];
-  const surfaces = [];
   const channels = [];
   const context = vm.createContext({
     ...singleInstance,
@@ -92,9 +91,6 @@ function activationHarness(mainWindow, windows, { startupWindowCreated = true } 
     parseNotificationTargetFromCommandLine,
     channelFromCommandLine,
     switchUpdateChannel: (channel) => channels.push(channel),
-    BOOT_READY: "ready",
-    packagedBootPhase: "ready",
-    startBrowserSurface: (win) => surfaces.push(win),
     createWindow: () => {
       const win = fakeWindow({ loading: true });
       context.mainWindow = win;
@@ -103,7 +99,7 @@ function activationHarness(mainWindow, windows, { startupWindowCreated = true } 
     },
   });
   vm.runInContext(`${notification}\n${handlers}\n${activate[0]}`, context);
-  return { context, events, created, surfaces, channels };
+  return { context, events, created, channels };
 }
 
 const packageUrl = "https://github.com/acme/bots/blob/main/bot.md";
@@ -151,9 +147,8 @@ for (const event of ["second-instance", "open-url"]) {
   test(`${event} during startup leaves the first window to startup and delivers there`, () => {
     const harness = activationHarness(null, [], { startupWindowCreated: false });
     activate(harness, event);
-    const { context, created, surfaces } = harness;
+    const { context, created } = harness;
     assert.equal(created.length, 0);
-    assert.deepEqual(surfaces, []);
 
     const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
     const startup = source.match(/const win = createWindow\(\);\s*startupWindowCreated = true;/);
@@ -180,7 +175,7 @@ for (const event of ["second-instance", "open-url", "activate"]) {
       const aux = fakeWindow({ focused: true });
       const harness = activationHarness(mainWindow, [aux]);
       activate(harness, event);
-      const { context, created, surfaces } = harness;
+      const { context, created } = harness;
       assert.equal(created.length, 1);
       const next = created[0];
       assert.strictEqual(context.mainWindow, next);
@@ -188,7 +183,6 @@ for (const event of ["second-instance", "open-url", "activate"]) {
       assert.equal(context.pendingPackageInstallUrl, packageUrl);
       assert.deepEqual(context.pendingNotificationTarget, notificationTarget);
       assert.deepEqual(next.calls, []);
-      assert.deepEqual(surfaces, [next]);
 
       context.aux = aux;
       vm.runInContext("deliverPackageInstall(aux); deliverNotificationTarget(aux);", context);

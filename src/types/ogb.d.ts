@@ -250,12 +250,6 @@ type SkillRecordingPayload = {
         readText(): Promise<string>;
         writeText(text: string): Promise<void>;
       };
-      /** {mic} TCC status: granted|denied|not-determined|unknown. Screen
-       * status is deliberately absent — macOS 15+ caches it per-process,
-       * so it lies for the whole session after a grant. */
-      permStatus(): Promise<{ mic: string }>;
-      /** Triggers the macOS microphone prompt; resolves true when granted. */
-      permRequestMic(): Promise<boolean>;
       /** Opens System Settings on a privacy pane: mic|screen|speech|accessibility. */
       permOpenSettings(pane: "mic" | "screen" | "speech" | "accessibility"): Promise<void>;
       /** Copies an engine install command and opens a blank terminal. False
