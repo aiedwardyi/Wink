@@ -332,8 +332,6 @@ export function pendingThreads(): string[] {
   return [...pendingDelegations.keys()];
 }
 
-/** Read-only metadata for the local Team Map. Task prompts stay private;
- * the UI only needs to know who handed work to whom and the optional label. */
 export function pendingDelegationSnapshot(): PendingDelegationSnapshot[] {
   return [...pendingDelegations.entries()].flatMap(([sourceThreadId, items]) =>
     items.map((item) => {

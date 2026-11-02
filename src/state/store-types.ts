@@ -458,7 +458,7 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat - a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines" | "skill-recorder";
+  activeView: "chat" | "routines" | "skill-recorder";
   /** a bot workspace covers the conversation surface while activeView stays "chat" */
   workspaceOpen: boolean;
   routines: Routine[];
@@ -549,7 +549,6 @@ export type Action =
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
   | { type: "showRoutines" }
-  | { type: "showTeamMap" }
   | { type: "showSkillRecorder" }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinePatched"; routine: Routine }
