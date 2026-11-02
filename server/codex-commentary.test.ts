@@ -60,6 +60,7 @@ function chat(threadId: string) {
   const deps: Record<string, unknown> = {
     turnSummaries, takePeerReplyStamp, peerReplyComm, lastReply: new Map(), markChatLatency: () => {},
     store: {
+      messagesFor: () => messages,
       patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => {
         patches.push(patch);
         Object.assign(messages.find((message) => message.id === id)!, patch);
@@ -132,6 +133,34 @@ describe("a turn's commentary after its final answer", () => {
     for (const event of events) view.feed(event);
     expect(view.shown()).toEqual([commentary, "Still checking."]);
     expect(view.patches).toEqual([]);
+  });
+
+  it("keeps the one-line answer to a steered message after the final answer", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/codex/steer-reply-commentary.json", import.meta.url), "utf8"));
+    const items: Array<{ text: string; phase: string }> = recorded.reply.events.map((event: { params: { item: { text: string; phase: string } } }) => event.params.item);
+    expect(items.map((item) => item.phase)).toEqual(["commentary", "commentary", "final_answer"]);
+    for (const [threadId, queueId, shown] of [["t-steer", undefined, [recorded.stamp.steer, items[1].text, items[2].text]], ["t-folded", "queue-1", [recorded.stamp.steer, items[2].text]]] as const) {
+      const events = await codexTurn(threadId, items);
+      const view = chat(threadId);
+      const [first, ...rest] = events.filter(isText);
+      view.feed(first);
+      const steered: Message = { id: "user-b", at: 1, role: "user", kind: "text", text: recorded.stamp.steer, steered: true };
+      if (queueId) steered.queueId = queueId;
+      view.messages.push(steered);
+      for (const event of rest) view.feed(event);
+      view.feed(events.find((e) => e.type === "turn.completed")!);
+      expect(view.shown(), threadId).toEqual(shown);
+      await instance?.dispose();
+      instance = undefined;
+    }
+  });
+
+  it("hides the next turn's commentary after a steer that got no reply", async () => {
+    const events = await codexTurn("t-stale", [{ text: commentary, phase: "commentary" }, { text: final, phase: "final_answer" }]);
+    const view = chat("t-stale");
+    view.messages.push({ id: "user-b", at: 1, role: "user", kind: "text", text: "also check the logs", steered: true }, { id: "user-c", at: 2, role: "user", kind: "text", text: "next question" });
+    for (const event of events) view.feed(event);
+    expect(view.shown()).toEqual(["also check the logs", "next question", final]);
   });
 
   it("gives a peer turn's Reply-to stamp to the final, not the hidden commentary", async () => {
