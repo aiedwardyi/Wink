@@ -162,9 +162,15 @@ describe("harness playbook", () => {
     );
   });
 
+  it("sizes heavy local runs to the PC", () => {
+    expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain(
+      "- Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive.",
+    );
+  });
+
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13014);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13168);
   });
 
   it("fills the worktree path from the configured root", () => {
