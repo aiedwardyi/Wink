@@ -99,15 +99,6 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** Arms exactly one display-media request from the current renderer frame. */
   beginScreenPreviewIntent: () => ipcRenderer.sendSync("screen:preview-intent"),
-  /** One frame of this computer's screen as a data: URL when supported. */
-  screenFrame: () => ipcRenderer.invoke("screen:frame"),
-  /** Physical USB Android devices. Network ADB is deliberately excluded. */
-  androidDevice: {
-    status: () => ipcRenderer.invoke("android-device:status"),
-    frame: (serial) => ipcRenderer.invoke("android-device:frame", serial),
-    input: (serial, payload) =>
-      ipcRenderer.invoke("android-device:input", serial, payload).then(() => undefined),
-  },
   speechStart: (options) => ipcRenderer.invoke("speech:start", options),
   speechStop: () => ipcRenderer.invoke("speech:stop"),
   speechFinish: () => ipcRenderer.invoke("speech:finish"),
@@ -205,32 +196,9 @@ contextBridge.exposeInMainWorld("ogb", {
     ipcRenderer.on("desktop:notification-click", handler);
     return () => ipcRenderer.removeListener("desktop:notification-click", handler);
   },
-  /** Live VNC/noVNC in a sandboxed window owned by the app window. */
-  desktopViewer: {
-    open: (url, title, contextId) => ipcRenderer.invoke("desktop-viewer:open", url, title, contextId),
-    close: (contextId) => ipcRenderer.invoke("desktop-viewer:close", contextId),
-    currentState: () => ipcRenderer.invoke("desktop-viewer:state-now"),
-    onState: (cb) => {
-      const handler = (_event, state) => cb(state);
-      ipcRenderer.on("desktop-viewer:state", handler);
-      return () => ipcRenderer.removeListener("desktop-viewer:state", handler);
-    },
-  },
   /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
   deviceWindow: {
     open: (host, name) => ipcRenderer.invoke("device-window:open", host, name),
-  },
-  /** Two sandboxed Local VM viewers embedded in the owning app window. */
-  desktopWorkspace: {
-    open: (input) => ipcRenderer.invoke("desktop-workspace:open", input),
-    layout: (items) => ipcRenderer.invoke("desktop-workspace:layout", items),
-    setInteractive: (contextId) => ipcRenderer.invoke("desktop-workspace:set-interactive", contextId),
-    close: (contextId) => ipcRenderer.invoke("desktop-workspace:close", contextId),
-    onState: (cb) => {
-      const handler = (_event, state) => cb(state);
-      ipcRenderer.on("desktop-workspace:state", handler);
-      return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
-    },
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),

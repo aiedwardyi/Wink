@@ -99,7 +99,7 @@ describe("skin overlay chrome", () => {
     expect(main).toContain("skinThemeSource");
     expect(main).not.toContain("waitsForSkinSync");
     expect(main).not.toContain("skinSyncFallback");
-    const create = main.slice(main.indexOf("function createWindow()"), main.indexOf("ipcMain.handle(\"screen:frame\""));
+    const create = main.slice(main.indexOf("function createWindow()"), main.indexOf("ipcMain.handle(\"engine:open-terminal\""));
     expect(create).toContain("nativeTheme.themeSource = skinThemeSource(persistedSkin)");
     expect(create).not.toMatch(/if \(isKnownSkin\(persistedSkin\)\) \{\s*nativeTheme\.themeSource/);
     expect(create).toContain("setBackgroundColor");

@@ -433,7 +433,6 @@ export type AppSettingsSection =
   | "shortcuts"
   | "engines"
   | "companion"
-  | "computer"
   | "usage"
   | "team"
   | "models-index"
@@ -462,20 +461,13 @@ export interface AppState {
   /** Bumps when the chat header's keep going mark asks bot details to show that switch. */
   settingsKeepGoingRequest: number;
   pluginsOpen: boolean;
-  computerOpen: boolean;
   /** the per-thread event inspector (runtime stream + native protocol tee) */
   inspectorOpen: boolean;
   appSettingsOpen: boolean;
   appSettingsSection: AppSettingsSection;
   appSettingsPage: boolean;
-  /** latest live frame of a bot's computer, per botId */
-  screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
   provisioning: Record<string, boolean>;
-  /** who is driving each bot's computer: held = the person has the wheel
-   * (the bot's hands are refused server-side); helpReason = the bot's open
-   * plea for the person to take over */
-  computerControl: Record<string, { held: boolean; helpReason: string | null }>;
   /** a search hit to scroll to once its thread is on screen; nonce lets the
    * same message be focused twice in a row */
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean; query?: string } | null;
@@ -532,7 +524,7 @@ export type Action =
       type: "hydrate";
       bots: Bot[];
       groups: Group[];
-      computerControl: Record<string, { held: boolean; helpReason: string | null }>;
+      computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
       sidebarOrder: SidebarOrder;
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
@@ -663,7 +655,6 @@ export type Action =
   | { type: "messagePatched"; threadId: string; message: Message }
   | { type: "screenFrame"; botId: string; png: string; mime: string }
   | { type: "provisioning"; botId: string; on: boolean }
-  | { type: "computerControl"; botId: string; held: boolean; helpReason: string | null }
   | { type: "setModel"; botId: string; selection: ModelSelection; holdForSwitch?: boolean; onApplied?: (bot: Bot) => void; onFailure?: () => void }
   | { type: "interrupt"; botId: string; until?: number; onSettled?: () => void; switchThreadId?: string; onStopped?: (result: { stopped: boolean; returned: unknown[] }) => void; onFailure?: () => void }
   | { type: "stopReleased"; botId: string; until: number }
@@ -671,7 +662,6 @@ export type Action =
   | { type: "error"; message: string | null }
   | { type: "toggleSettings"; open?: boolean; avatar?: boolean; keepGoing?: boolean }
   | { type: "togglePlugins"; open?: boolean }
-  | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleInspector"; open?: boolean }
   | { type: "setWorkspaceOpen"; open: boolean }
   | { type: "windowActivated" }

@@ -14,7 +14,6 @@ const acceptedSends: AcceptedSends = {};
 const here = dirname(fileURLToPath(import.meta.url));
 const chatView = readFileSync(join(here, "ChatView.tsx"), "utf8");
 const phoneHeaderName = readFileSync(join(here, "..", "lib", "use-phone-header-name.ts"), "utf8");
-const computerPanel = readFileSync(join(here, "ComputerPanel.tsx"), "utf8");
 const settingsPanel = readFileSync(join(here, "SettingsPanel.tsx"), "utf8");
 
 function headerBlock(source: string, startMarker: string, endMarker: string): string {
@@ -26,7 +25,6 @@ function headerBlock(source: string, startMarker: string, endMarker: string): st
 }
 
 const chatHeader = headerBlock(chatView, "{/* Header */}", "{findOpen &&");
-const computerHeader = headerBlock(computerPanel, "{/* Header */}", '{panelView === "android" && androidConnected ?');
 
 describe("QA 17 one Bot-details header entry", () => {
   it("does not render usage or working-folder chips in the ChatView header", () => {
@@ -86,29 +84,17 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(chatHeader).toContain("flex max-w-full shrink-0 flex-wrap items-center justify-end");
   });
 
-  it("hides Computer and new-task chrome from the ChatView header", () => {
-    expect(chatHeader).toContain("showComputerPanelChrome()");
+  it("keeps new-task chrome hidden in the ChatView header", () => {
     expect(chatHeader).toContain("showBotNewTaskControl()");
     expect(chatHeader).toContain("<TaskPicker");
-    expect(chatHeader).toContain('type: "toggleComputer"');
   });
 
-  it("does not keep a Bot-settings gear on the ComputerPanel header", () => {
-    expect(computerHeader).not.toContain('title="Bot settings"');
-    expect(computerHeader).not.toContain("<Settings");
-    expect(computerHeader).not.toMatch(/type:\s*"toggleSettings"/);
-  });
 
-  it("keeps Computer/Android tabs and the Computer panel close control", () => {
-    expect(computerHeader).toContain('setPanelView("computer")');
-    expect(computerHeader).toContain('setPanelView("android")');
-    expect(computerHeader).toContain('type: "toggleComputer"');
-    expect(computerHeader).toContain("<X size={18} />");
-  });
 
-  it("keeps WorkingFolder and BotUsageCard on SettingsPanel", () => {
+
+
+  it("keeps WorkingFolder on SettingsPanel", () => {
     expect(settingsPanel).toContain("<WorkingFolder bot={bot} />");
-    expect(settingsPanel).toContain("{advancedOpen && <BotUsageCard bot={bot} />}");
   });
 });
 
@@ -177,9 +163,6 @@ vi.mock("./LocalComputerAutoWarning", () => ({
   LocalComputerAutoWarning: () => null,
 }));
 
-vi.mock("./CloudBackendPicker", () => ({
-  CloudBackendPicker: () => null,
-}));
 
 const botWithUsage = {
   id: "bot-1",
@@ -250,7 +233,7 @@ describe("SettingsPanel still owns folder and usage", () => {
       createElement(
         I18nProvider,
         null,
-        createElement(SettingsPanel, { bot: botWithUsage, defaultAdvancedOpen: true }),
+        createElement(SettingsPanel, { bot: botWithUsage }),
       ),
     );
     expect(html).toContain("Project Folder");
@@ -258,7 +241,6 @@ describe("SettingsPanel still owns folder and usage", () => {
     expect(html).not.toContain("Working folder");
     expect(html).not.toContain("Where this bot runs its shell and file tools.");
     expect(html).not.toContain("All Bots");
-    expect(settingsPanel).toContain("{advancedOpen && <BotUsageCard bot={bot} />}");
   });
 
   it("keeps a pinned-elsewhere folder path in monospace", async () => {

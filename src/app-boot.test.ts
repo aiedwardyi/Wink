@@ -7,30 +7,25 @@ const here = dirname(fileURLToPath(import.meta.url));
 const app = readFileSync(join(here, "App.tsx"), "utf8");
 
 describe("first-chat boot keeps off-screen panels out of the initial module graph", () => {
-  it("lazy-loads settings, computer, plugins, and other secondary surfaces", () => {
+  it("lazy-loads settings, plugins, and other secondary surfaces", () => {
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/SettingsPanel"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/SettingsModal"\)/);
-    expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/ComputerPanel"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/PluginsPanel"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/InspectorPanel"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/RoutinesPage"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/CommandPalette"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/SkillRecorderPage"\)/);
-    expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/LocalVmWorkspace"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/CreateBotSheet"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/Onboarding"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/NoEngines"\)/);
     expect(app).not.toMatch(/= lazy\(/);
     expect(app).not.toMatch(/^import \{ SettingsPanel/m);
-    expect(app).not.toMatch(/^import \{ ComputerPanel/m);
     expect(app).not.toMatch(/^import \{ CommandPalette/m);
   });
 
-  it("still mounts chat chrome eagerly and keeps Computer behind the friends gate", () => {
+  it("still mounts chat chrome eagerly", () => {
     expect(app).toMatch(/^import \{ Sidebar \} from "@\/components\/Sidebar";/m);
     expect(app).toMatch(/^import \{ ChatView \} from "@\/components\/ChatView";/m);
-    expect(app).toContain("<ComputerPanel");
-    expect(app).toContain("showComputerPanelChrome()");
     expect(app).toContain("<LazyView");
   });
 
@@ -56,7 +51,7 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
     expect(app).toMatch(/<CommandPalette onOpenChange=\{setPaletteOpen\} \/>/);
     expect(app).not.toMatch(/paletteReady/);
     expect(app).toMatch(/CreateBotSheet required=\{!noEngines && state\.bots\.length === 0\} closing=\{closing\} \/>[\s\S]*?<\/LazyView>/);
-    expect(app.match(/<LazyView overlay>/g)?.length).toBeGreaterThanOrEqual(7);
+    expect(app.match(/<LazyView overlay>/g)?.length).toBeGreaterThanOrEqual(6);
   });
 });
 

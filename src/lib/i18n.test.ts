@@ -576,11 +576,6 @@ describe("sidebar create group and bot/room chrome", () => {
     expect(sidebar).not.toMatch(/\|\| "You"}/);
   });
 
-  it("shares the teammates line with Bot details instead of a second hardcoded copy", () => {
-    expect(settingsPanel).toContain('t("chrome.cannotContactTeammates")');
-    expect(settingsPanel).not.toMatch(/This engine cannot contact teammates yet/);
-    expect(settingsPanel).not.toMatch(/This engine cannot contact other bots/);
-  });
 });
 
 describe("export feedback", () => {

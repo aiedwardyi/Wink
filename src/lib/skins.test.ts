@@ -1158,15 +1158,10 @@ describe("dark ink skins", () => {
       textToken: "--color-danger",
       surfaceToken: "--color-card",
     },
-    {
-      file: "src/components/ApiKeys.tsx",
-      snippet: "bg-danger text-danger-ink hover:brightness-110",
-      textToken: "--color-danger-ink",
-      surfaceToken: "--color-danger",
-    },
+
   ] as const;
 
-  it("gives ApiKeys clear buttons and danger pairings WCAG AA contrast", () => {
+  it("gives danger pairings WCAG AA contrast", () => {
     const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
     for (const row of DANGER_PAIRINGS) {
       const source = readFileSync(join(repoRoot, row.file), "utf8");
@@ -1174,21 +1169,10 @@ describe("dark ink skins", () => {
     }
 
     const chip = DANGER_PAIRINGS.find((p) => p.file.endsWith("GroupView.tsx"))!;
-    const clear = DANGER_PAIRINGS.find((p) => p.file.endsWith("ApiKeys.tsx"))!;
 
     // Rest surface in gruvbox: RoomToolChip on app
     expect.soft(contrast(cssToken("gruvbox", chip.textToken)!, cssToken("gruvbox", chip.surfaceToken)!)).toBeGreaterThanOrEqual(4.5);
 
-    // bg-danger with text-danger-ink in gruvbox and catppuccin-frappe, both at rest and on hover
-    const gruvFill = cssToken("gruvbox", clear.surfaceToken)!;
-    const gruvInk = cssToken("gruvbox", clear.textToken)!;
-    expect.soft(contrast(gruvInk, gruvFill)).toBeGreaterThanOrEqual(4.5);
-    expect.soft(contrast(brightness110(gruvInk), brightness110(gruvFill))).toBeGreaterThanOrEqual(4.5);
-
-    const frappeFill = cssToken("catppuccin-frappe", clear.surfaceToken)!;
-    const frappeInk = cssToken("catppuccin-frappe", clear.textToken)!;
-    expect.soft(contrast(frappeInk, frappeFill)).toBeGreaterThanOrEqual(4.5);
-    expect.soft(contrast(brightness110(frappeInk), brightness110(frappeFill))).toBeGreaterThanOrEqual(4.5);
   });
 
   it("keeps red danger text readable at rest and on hover across all skins", () => {

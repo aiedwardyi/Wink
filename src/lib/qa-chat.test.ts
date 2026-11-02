@@ -35,7 +35,7 @@ describe("qa chat copy", () => {
   });
 
   it("names the tab when a link opens settings for one job", () => {
-    for (const file of ["components/ComputerPanel.tsx", "components/PluginsPanel.tsx"]) {
+    for (const file of ["components/PluginsPanel.tsx"]) {
       const opens = read(file).match(/\{ type: "toggleAppSettings", open: true[^}]*\}/g) ?? [];
       expect(opens.length).toBeGreaterThan(0);
       for (const open of opens) expect(open).toContain("section:");
