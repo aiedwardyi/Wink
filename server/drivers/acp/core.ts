@@ -22,6 +22,7 @@ import { applyCredentialAllowlist } from "../../config.ts";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../procs.ts";
 import { captureToolDetail } from "../../tool-detail.ts";
 import { decodeInjectId, LOCAL_HOSTS } from "../local-inject.ts";
+import type { CliText, CliTextContext } from "../cli-text.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { inputDigest } from "../../repeat-detector.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
@@ -255,6 +256,8 @@ export interface AcpSupport {
      * foreign shape themselves — core never interprets it. */
     sessionResult?: unknown;
   }): Promise<void>;
+  /** One-shot text for summaries, outside any ACP session. */
+  text?(ctx: CliTextContext): CliText;
 }
 
 /**
@@ -402,6 +405,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       };
 
       await refreshModels();
+      const text = support.text?.({ cli: async () => effectiveCli(), env: () => childEnv() });
       const listeners = new Set<RuntimeEventListener>();
       type SteerResult = { taken: boolean; afterReply?: boolean };
       interface Turn {
@@ -1522,12 +1526,16 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             return () => listeners.delete(listener);
           },
         },
+        generateText: text?.generateText,
+        textModel: text?.textModel,
+        textTimeoutMs: text?.textTimeoutMs,
         prepare: async () => {
           if (!input.enabled || disposed) return;
           await beginHandshakePrewarm();
         },
         dispose: async () => {
           disposed = true;
+          text?.dispose();
           discardHandshakeWarm();
           discardIdle();
           for (const { stop } of active.values()) stop();

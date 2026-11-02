@@ -28,6 +28,7 @@ import { execCli, killCliTree, spawnCli } from "../../procs.ts";
 import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
+import type { CliText, CliTextContext } from "../cli-text.ts";
 import { finishNative } from "../native.ts";
 import { museUsageReport } from "../rate-limits.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
@@ -75,6 +76,8 @@ export interface MspSupport {
   wslResolveCli?: (cli: string, probeEnv: NodeJS.ProcessEnv) => Promise<string | null>;
   /** Idle TTL for a prewarmed host (default 60s). Tests may shorten. */
   warmIdleMs?: number;
+  /** One-shot text for summaries, outside any MSP session. */
+  text?(ctx: CliTextContext): CliText;
 }
 
 const decodeConfig = (raw: unknown): MspMuseConfig => {
@@ -307,6 +310,14 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         support.transformEnv?.(env, config);
         return env;
       };
+
+      const text = support.text?.({
+        cli: async () => {
+          if (!(await ensureCli(childEnv()))) throw new Error(`${support.displayName} CLI not found`);
+          return effectiveCli();
+        },
+        env: childEnv,
+      });
 
       const listeners = new Set<RuntimeEventListener>();
       interface Turn {
@@ -1173,6 +1184,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             if (!gated) lastSnapshot = ready;
             return ready;
           }),
+        generateText: text?.generateText,
+        textModel: text?.textModel,
+        textTimeoutMs: text?.textTimeoutMs,
         prepare: async () => {
           if (!input.enabled || disposed) return;
           preparing ??= runPrepare().finally(() => {
@@ -1182,6 +1196,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         },
         dispose: async () => {
           disposed = true;
+          text?.dispose();
           discardWarm();
           for (const child of [...children]) {
             try {

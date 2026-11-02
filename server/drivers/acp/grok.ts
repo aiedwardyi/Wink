@@ -3,16 +3,17 @@
 // (~/.grok/auth.json), NOT the xAI API key (that driver is drivers/grok.ts).
 // The generic protocol runtime lives in acp/core.ts; this file is only the
 // per-harness quirks. Verified against grok 1.0.0.
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 import type { ModelCatalog } from "../../contracts.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { createAcpDriver, type AcpSupport } from "./core.ts";
 import { accountLabel, storedAccount, storedSignIn } from "../auth-status.ts";
+import { createCliText, type CliTextRun } from "../cli-text.ts";
 
 export const STATIC_GROK_MODELS: ModelCatalog = {
   default: "grok-4.6",
@@ -287,6 +288,27 @@ export function clearGrokAuthHashCache(path?: string): void {
   else authHashByPath.clear();
 }
 
+const GROK_TEXT_MODEL = "grok-4.6";
+const GROK_TEXT_TIMEOUT_MS = 90_000;
+
+const grokTextSchema = z.object({ text: z.string(), stopReason: z.string(), cwd: z.string().optional() });
+
+function parseGrokText(stdout: string): string {
+  const result = grokTextSchema.parse(JSON.parse(stdout));
+  if (result.stopReason !== "end_turn" || !result.text.trim()) throw new Error("Grok text returned no text");
+  return result.text.trim();
+}
+
+/** grok -p always saves a session under the folder it ran in. */
+function removeGrokTextSession({ cwd, stdout, env }: CliTextRun): void {
+  const dirs = new Set([cwd]);
+  try {
+    const reported = grokTextSchema.parse(JSON.parse(stdout)).cwd;
+    if (reported && resolve(reported).toLowerCase() === resolve(cwd).toLowerCase()) dirs.add(reported);
+  } catch { /* killed before output */ }
+  for (const dir of dirs) rmSync(join(grokHome(env), "sessions", encodeURIComponent(dir)), { recursive: true, force: true });
+}
+
 const GROK_COMPACTION_UPDATES = new Set(["auto_compact_started", "compaction_checkpoint", "auto_compact_completed"]);
 
 export const grokSupport: AcpSupport = {
@@ -419,6 +441,22 @@ export const grokSupport: AcpSupport = {
       ...(Number.isSafeInteger(window) && window > 0 ? { contextWindow: window } : {}),
     };
   },
+  text: ({ cli, env }) => createCliText({
+    name: "Grok",
+    model: GROK_TEXT_MODEL,
+    timeoutMs: GROK_TEXT_TIMEOUT_MS,
+    command: async (promptFile) => ({
+      cli: await cli(),
+      args: [
+        "--prompt-file", promptFile, "--output-format", "json", "--verbatim",
+        "-m", GROK_TEXT_MODEL, "--reasoning-effort", "low",
+        "--max-turns", "1", "--disable-web-search", "--no-subagents", "--no-plan",
+      ],
+      env: { ...env(), GROK_MEMORY: "0" },
+    }),
+    parse: parseGrokText,
+    cleanup: removeGrokTextSession,
+  }),
 };
 
 export const GrokAgentDriver = createAcpDriver(grokSupport);

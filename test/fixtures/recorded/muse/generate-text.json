@@ -1,0 +1,605 @@
+{
+  "stamp": {
+    "engine": "muse",
+    "cliVersion": "1.4.14",
+    "recordedAt": "2026-11-02T05:00:30.820Z",
+    "sourcePc": "home",
+    "source": "muse exec --json with the driver's text argv; real JSONL records, ids redacted",
+    "model": "muse-spark-1.3",
+    "effort": "low",
+    "prompt": "Return exactly: SUMMARY\nKeep the pending research open until the memory budgets are verified.",
+    "args": [
+      "exec",
+      "--json",
+      "--prompt-file",
+      "<prompt-file>",
+      "--no-session-log",
+      "--model",
+      "muse-spark-1.3",
+      "--reasoning-effort",
+      "low",
+      "--max-model-steps",
+      "1",
+      "--disable-web-tools",
+      "--disable-shell",
+      "--disable-write",
+      "--disable-request-user-input",
+      "--disable-reminders",
+      "--no-foreign-personal-context",
+      "--approval-judge",
+      "off"
+    ]
+  },
+  "reply": {
+    "lines": [
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 1,
+        "recorded_at": 1780531400000000,
+        "record_type": "reconciliation",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "runtime.command.accepted",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "command_accepted",
+          "command_id": "<redacted>",
+          "client_id": null,
+          "command_kind": "turn.submit"
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 2,
+        "recorded_at": 1780531400000001,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "session.run.linked",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "session_run_linked",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 3,
+        "recorded_at": 1780531400000002,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "run.model.configured",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run_model_configured",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "provider_id": "meta",
+          "profile_id": "tbh",
+          "model_id": "muse-spark-1.3",
+          "display_label": "muse-spark-1.3",
+          "source": "startup"
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 4,
+        "recorded_at": 1780531400000004,
+        "record_type": "status",
+        "durability": "ephemeral",
+        "causation_id": "<redacted>",
+        "payload_type": "turn.input.user",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "turn_input_user",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "prompt": "Return exactly: SUMMARY\nKeep the pending research open until the memory budgets are verified."
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 5,
+        "recorded_at": 1780531400000006,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "run.lifecycle.started",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run_started",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "prompt": "Return exactly: SUMMARY\nKeep the pending research open until the memory budgets are verified."
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 6,
+        "recorded_at": 1780531400000008,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.stream.linked",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_stream_linked",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 7,
+        "recorded_at": 1780531400000010,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.proposed",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "proposed",
+            "task_id": "<redacted>",
+            "task_kind": "model.meta.response"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 8,
+        "recorded_at": 1780531400000012,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.accepted",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "accepted",
+            "task_id": "<redacted>"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 9,
+        "recorded_at": 1780531400000014,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.scheduled",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "scheduled",
+            "task_id": "<redacted>",
+            "idempotency_key": "model:<redacted>:<redacted>"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 10,
+        "recorded_at": 1780531400000016,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.side_effect_intent",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "side_effect_intent",
+            "task_id": "<redacted>",
+            "operation": "model.meta.response",
+            "idempotency_key": "model:<redacted>:<redacted>",
+            "policy_decision": "not_applicable",
+            "cancellation_handle": null,
+            "parent_task_id": null
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 11,
+        "recorded_at": 1780531400000018,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.started",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "started",
+            "task_id": "<redacted>"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 12,
+        "recorded_at": 1780531400000020,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.status",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "status",
+            "task_id": "<redacted>",
+            "message": "opening meta model stream attempt 1/10",
+            "details": {
+              "phase": "opening_stream",
+              "facets": [
+                {
+                  "kind": "external_attempt",
+                  "system": "meta",
+                  "operation": "model.response",
+                  "attempt": 1,
+                  "max_attempts": 10
+                },
+                {
+                  "kind": "producer",
+                  "detail": {
+                    "kind": "provider",
+                    "provider": "meta"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 13,
+        "recorded_at": 1780531400000022,
+        "record_type": "status",
+        "durability": "ephemeral",
+        "causation_id": "<redacted>",
+        "payload_type": "run.output.delta",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run_output_delta",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "text": "SUMMARY"
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 14,
+        "recorded_at": 1780531400000024,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.status",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "status",
+            "task_id": "<redacted>",
+            "message": "completed meta model stream attempt 1/10",
+            "details": {
+              "phase": "stream_succeeded",
+              "facets": [
+                {
+                  "kind": "external_attempt",
+                  "system": "meta",
+                  "operation": "model.response",
+                  "attempt": 1,
+                  "max_attempts": 10,
+                  "error_kind": "stream_succeeded"
+                },
+                {
+                  "kind": "producer",
+                  "detail": {
+                    "kind": "provider",
+                    "provider": "meta",
+                    "request_id": "<redacted>",
+                    "response_id": "resp_6ae818ec2967c457429844ad",
+                    "model": "muse-spark-1.3-contributor",
+                    "stream": {
+                      "bytes_read": 234742,
+                      "wire_events_seen": 11,
+                      "last_wire_event_type": "response.completed",
+                      "eof": false,
+                      "eof_buffer_len": 0,
+                      "time_to_first_event_ms": 452,
+                      "bytes_before_first_event": 0,
+                      "request_gzip": false,
+                      "request_wire_bytes": 108768,
+                      "request_logical_bytes": 108768
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 15,
+        "recorded_at": 1780531400000026,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "task.lifecycle.completed",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "task_lifecycle",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "task_stream": {
+            "kind": "task",
+            "id": "<redacted>"
+          },
+          "task_id": "<redacted>",
+          "event": {
+            "kind": "completed",
+            "task_id": "<redacted>"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "exec.usage",
+          "id": "<redacted>"
+        },
+        "sequence": 1,
+        "recorded_at": 1780531400000028,
+        "record_type": "status",
+        "durability": "ephemeral",
+        "causation_id": "<redacted>",
+        "payload_type": "run.usage",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run_usage",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "models": [
+            {
+              "model": "muse-spark-1.3",
+              "input_tokens": 23193,
+              "cached_tokens": 0,
+              "output_tokens": 27,
+              "reasoning_tokens": 16,
+              "calls": 1
+            }
+          ],
+          "calls": 1,
+          "completed_calls": 1,
+          "failed_calls": 0,
+          "cancelled_calls": 0,
+          "children_included": false,
+          "allowance": {
+            "tier": null,
+            "window": {
+              "used_percent": 1,
+              "resets_at_ms": 1793604366000
+            },
+            "weekly": {
+              "used_percent": 0,
+              "resets_at_ms": 1794182400000
+            },
+            "as_of_ms": 1793595630586,
+            "source": "stream"
+          }
+        }
+      },
+      {
+        "schema_version": 1,
+        "id": "<redacted>",
+        "stream": {
+          "kind": "session",
+          "id": "<redacted>"
+        },
+        "sequence": 16,
+        "recorded_at": 1780531400000028,
+        "record_type": "event",
+        "durability": "durable",
+        "causation_id": "<redacted>",
+        "payload_type": "run.terminal.completed",
+        "payload_schema_version": 1,
+        "payload": {
+          "kind": "run_terminal",
+          "command_id": "<redacted>",
+          "run_stream": {
+            "kind": "run",
+            "id": "<redacted>"
+          },
+          "terminal": "completed",
+          "text": "SUMMARY",
+          "reason": null
+        }
+      }
+    ]
+  }
+}
