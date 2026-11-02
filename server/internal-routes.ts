@@ -11,12 +11,14 @@ import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { claimAsk, MAX_ASKS_PER_TURN } from "./comms-budget.ts";
-import { getOrCreateChannel, mirrorExchange, mirrorReply, postPeerReply, type CommsBus } from "./comms-visibility.ts";
+import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import { appendDecision } from "./decision-log.ts";
-import { pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult } from "./delegations.ts";
+import { acceptPeerTask, drainWaitingOn, finishDelegatedTurn, pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult, type drainDelegations } from "./delegations.ts";
+import { handMail, toolMailResult } from "./mail.ts";
+import { turnRegistry } from "./turn-registry.ts";
 import { generateImageFile, generateImageRequestSchema } from "./generate-image.ts";
 import { googleAccountRoute, type GoogleAccount } from "./google-account.ts";
 import { json, readBody } from "./http-helpers.ts";
@@ -39,7 +41,9 @@ type InternalRouteDeps = {
   MAX_COMMS_DEPTH: number;
   MAX_WORKSPACE_BOTS: number;
   computerControl: ComputerControl;
-  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string }) => Promise<AskReply>;
+  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string }) => Promise<AskReply>;
+  runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
+  resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   store: Store;
   keepGoing: KeepGoing;
@@ -65,6 +69,12 @@ type InternalRouteDeps = {
 };
 
 export function createInternalRoutes(deps: InternalRouteDeps) {
+  const caller = (req: IncomingMessage | undefined, botId: string, threadId: string) => deps.resolveCommsCaller
+    ? deps.resolveCommsCaller(req?.headers?.authorization) : { botId, threadId };
+  const handReply = (botId: string, threadId: string, taskId: string) => {
+    const turn = turnRegistry.current(threadId);
+    if (turn?.botId === botId) handMail(deps.store, threadId, taskId, turn.turnId, randomUUID());
+  };
   const {
     cfg,
     utilityParentPort,
@@ -265,7 +275,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     },
     askBot: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const fromBotId = String(body.fromBotId ?? "");
+      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      if (!source) return json(res, 403, { error: "unknown sender" });
+      const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
       const depth = Number(body.depth ?? 0) || 0;
@@ -274,14 +286,13 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
       const target = store.bot(toBotId);
       if (!target) return json(res, 404, { error: "no such bot" });
-      if (target.busy) return json(res, 200, { busy: true });
       // An unknown sender used to fall through: no mirroring AND no
       // approval, while still running the peer turn. That made an
       // unresolvable id the cheapest way past the gate, so it is now a
       // hard refusal - every peer turn has an accountable sender.
       const from = store.bot(fromBotId);
       if (!from) return json(res, 403, { error: "unknown sender" });
-      const fromThreadId = String(body.fromThreadId ?? from.threadId);
+      const fromThreadId = source.threadId || from.threadId;
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
@@ -294,6 +305,12 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       let currentFrom = from;
       let currentTarget = target;
+      const queueAsk = (approved = false) => {
+        const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved });
+        if (queued.id && deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, toBotId, deps.runDelegatedTurn);
+        return json(res, 200, { botName: currentTarget.name, taskId: queued.id, shown: false, text: `@${currentTarget.name} is working on it. Task id: ${queued.id}. Collect the reply with wait_delegation; do not ask again.` });
+      };
+      if (target.busy) return queueAsk();
 
       // the exchange is mirrored into a bot⇄bot channel: it shows up in
       // the sidebar like any room, keeps the pair's full history, and the
@@ -324,24 +341,25 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         if (!connectorThread(freshFrom.id, fromThreadId)) {
           return json(res, 404, { error: "source task no longer exists" });
         }
-        if (freshTarget.busy) return json(res, 200, { busy: true });
         currentFrom = freshFrom;
         currentTarget = freshTarget;
+        if (freshTarget.busy) return queueAsk(true);
       }
       const channel = getOrCreateChannel(store, currentFrom, currentTarget);
       mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
       const prefixed = peerMessagePrompt(currentFrom, message, "ask");
+      const taskId = acceptPeerTask(commsBus, currentFrom, currentTarget, fromThreadId, "ask", "dispatching");
       const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId, {
         sender: currentFrom,
         channel,
         sourceThreadId: fromThreadId,
         transcriptText: message,
+        taskId,
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) return json(res, 200, { botName: currentTarget.name, text: reply.text, taskId: reply.taskId, shown: false });
-      // a harness note (no text, no start) is not the peer's message
-      if (reply.replied) mirrorReply(commsBus, currentTarget, reply.text, channel);
-      const shown = reply.replied && postPeerReply(commsBus, currentFrom, currentTarget, reply.text, channel, fromThreadId);
+      const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true }, reply.replied, reply.text, reply.text);
+      if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId);
       return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
     },
     react: async (req: IncomingMessage, res: ServerResponse) => {
@@ -484,9 +502,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, (e as { status?: number }).status ?? 500, { error: (e as Error).message });
       }
     },
-    delegationStatus: async (res: ServerResponse, delegationMatch: RegExpMatchArray, url: URL) => {
-      const fromBotId = String(url.searchParams.get("fromBotId") ?? "");
-      const fromThreadId = String(url.searchParams.get("fromThreadId") ?? "");
+    delegationStatus: async (res: ServerResponse, delegationMatch: RegExpMatchArray, url: URL, req?: IncomingMessage) => {
+      const source = caller(req, String(url.searchParams.get("fromBotId") ?? ""), String(url.searchParams.get("fromThreadId") ?? ""));
+      if (!source) return json(res, 403, { error: "unknown sender" });
+      const fromBotId = source.botId;
+      const fromThreadId = source.threadId;
       const from = store.bot(fromBotId);
       if (!from || !connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "unknown sender" });
       const runningIds = [...delegationWatch.values()].filter((watch) => watch.sourceThreadId === fromThreadId && watch.taskId).map((watch) => watch.taskId!);
@@ -508,11 +528,17 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         (id) => [...delegationWatch.values()].find((watch) => watch.taskId === id),
         (botId) => store.bot(botId)?.name ?? botId,
       );
+      if (polled.code === 200 && "result" in polled.body) {
+        const turn = turnRegistry.current(fromThreadId);
+        polled.body.result = toolMailResult(store, fromThreadId, taskId, polled.body.result, turn?.botId === fromBotId ? { turnId: turn.turnId, requestId: randomUUID() } : undefined);
+      }
       return json(res, polled.code, polled.body);
     },
     delegateBot: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const fromBotId = String(body.fromBotId ?? "");
+      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      if (!source) return json(res, 403, { error: "unknown sender" });
+      const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
       const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
@@ -522,7 +548,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!from) return json(res, 404, { error: "no such bot" });
       const target = store.bot(toBotId);
       if (!target) return json(res, 404, { error: "no such bot" });
-      const fromThreadId = String(body.fromThreadId ?? from.threadId);
+      const fromThreadId = source.threadId || from.threadId;
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }

@@ -1,6 +1,7 @@
 import type { ModelCatalog } from "./contracts.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { isWakeNote } from "./pane-wake.ts";
+import { mailReplayText } from "./mail.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import type { Message, OptionCardData } from "./store.ts";
@@ -490,6 +491,8 @@ function replayUnits(
   return messages.slice(offset).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = offset + index;
     if (excludeIds.has(message.id)) return [];
+    const mail = mailReplayText(message);
+    if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "" }] : [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : body;

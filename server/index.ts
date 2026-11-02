@@ -143,7 +143,10 @@ import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
-import { _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
+import { CommsCallers } from "./comms-caller.ts";
+import { claimReplyWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
+import { turnRegistry } from "./turn-registry.ts";
+import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
 import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
@@ -556,7 +559,9 @@ googleAccount.onIdToken(googlePhotoChanged);
 /** Constant-time bearer check for the internal comms endpoints. The token
  * is high-entropy and loopback-only, so a timing oracle is a long shot —
  * but the compare costs nothing to make safe. */
+const commsCallers = new CommsCallers();
 function authorizedComms(header: string | string[] | undefined): boolean {
+  if (commsCallers.resolve(header)) return true;
   const expected = Buffer.from(`Bearer ${COMMS_TOKEN}`);
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -589,7 +594,7 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
       OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
       OMB_BOT_ID: botId,
       OMB_THREAD_ID: threadId,
-      OMB_COMMS_TOKEN: COMMS_TOKEN,
+      OMB_COMMS_TOKEN: commsCallers.token(botId, threadId),
       OMB_TURN_DEPTH: String(depth),
       OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
     },
@@ -661,7 +666,7 @@ const peerReplyComm = new Map<string, NonNullable<Message["comm"]>>();
 function peerAttribution(sender?: BotRecord, channel?: GroupRecord): Pick<StartTurnOptions, "peerSender" | "peerComm"> {
   if (!sender) return {};
   return {
-    peerSender: { botId: sender.id, name: sender.name, color: sender.color },
+    peerSender: { botId: sender.id, name: sender.name, color: sender.color, chiefOfStaff: sender.chiefOfStaff },
     peerComm: channel
       ? { groupId: channel.id, withBotId: sender.id, withName: sender.name, withColor: sender.color }
       : undefined,
@@ -676,7 +681,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -698,7 +703,7 @@ function askBotAndWait(
     }).then(() => undefined),
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
-      const taskId = newId();
+      const taskId = peer.taskId ?? newId();
       watchDelegatedTurn(threadId, { channelId: peer.channel?.id, toBotId: targetBotId, taskId, sourceThreadId: peer.sourceThreadId, sourceBotId: peer.sender.id, ask: true });
       return taskId;
     },
@@ -1696,9 +1701,6 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   // a peer approval naming this bot can never be meaningfully answered
   // now, and its caller would otherwise wait out the 15-minute timeout
   cancelPeerApprovalsFor(bot.id);
-  discardDelegations(commsBus, bot.threadId);
-  // the call above clears this bot's own thread; room queues live on the room
-  // thread instead, so they outlive the bot record unless dropped by owner
   discardDelegationsFrom(commsBus, bot.id);
   computerControl.forget(bot.id);
   paneWake.forgetBot(bot.id);
@@ -3061,6 +3063,7 @@ bus.subscribe((event: RuntimeEvent) => {
     botByThread: (threadId) => store.botByThread(threadId),
     claimed: (botId) => turnStartClaims.has(botId),
     adopt: (botId, threadId, turnId) => {
+      turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0 });
       store.setActivity(botId, "working", threadId);
       dispatchedThreads.set(botId, threadId);
       liveTurnIdByThread.set(threadId, turnId);
@@ -3257,6 +3260,10 @@ bus.subscribe((event: RuntimeEvent) => {
 
   switch (event.type) {
     case "turn.started":
+      if (event.turnId) {
+        turnRegistry.started(event.turnId, event.threadId);
+        bindPeerTurn(event.threadId, event.turnId);
+      }
       limitWaits.bind(event.threadId, event.turnId);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
       break;
@@ -3967,7 +3974,9 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     // harness (Node's default), which in the packaged app kills the server
     // child. Every delegation failure has to land as a chip instead.
     const targetThreadId = store.bot(toBotId)?.threadId;
-    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId });
+    const ask = findDelegationReceipt(taskId)?.kind === "ask" ? true : undefined;
+    updateReceipt(taskId, { state: "running", status: "running" });
+    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask });
     let failureReported = false;
     const reportStartFailure = (error: unknown) => {
       if (failureReported) return;
@@ -3979,13 +3988,13 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
       const bot = store.bot(toBotId);
       const why = error instanceof Error ? error.message : String(error);
       const reported = targetThreadId
-        && finalizeDelegationWatch(
+        ? finalizeDelegationWatch(
           targetThreadId,
           false,
           "",
           `Delegated turn could not start — ${why.slice(0, 120)}`,
-        );
-      if (!targetThreadId) failUnwatchedDelegation(taskId, sourceThreadId, toBotId, bot?.name ?? toBotId, `Delegated turn could not start: ${why.slice(0, 120)}`);
+        )
+        : failUnwatchedDelegation(taskId, sourceThreadId, toBotId, bot?.name ?? toBotId, `Delegated turn could not start: ${why.slice(0, 120)}`, commsBus);
       const source = store.conversationForBot(sourceBotId, sourceThreadId)?.bot;
       if (!source) return;
       // a second row after one was written is the same dead handoff twice
@@ -4002,6 +4011,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     };
     return startTurn(toBotId, text, {
       commsDepth,
+      commsAsk: ask,
       unattended: isUnattended(sourceBotId),
       transcriptText,
       ...peerAttribution(store.bot(sourceBotId) ?? undefined, channel),
@@ -4019,15 +4029,16 @@ bus.subscribe((event: RuntimeEvent) => {
   clearAskBudget(event.threadId);
   peerTurnSource.delete(event.threadId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
-  // A turn that failed or was interrupted drops its queue rather than
-  // firing it later: the user who hit Stop does not expect the delegations
-  // that turn queued to run anyway, minutes later, on an unrelated turn.
-  if (!event.ok) discardDelegations(commsBus, event.threadId, sourceBotId);
+  if (event.turnId) {
+    if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
+    turnRegistry.settle(event.turnId);
+  }
+  drainQueuedSends();
+  if (!event.ok || event.stopReason === "cancelled" || event.stopReason === "interrupted") discardDelegations(commsBus, event.threadId, sourceBotId, event.turnId);
   else drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn, sourceBotId);
   settledGroupSpeakers.delete(event.threadId);
   // A settling bot frees itself as a delegation TARGET too: handoffs that
-  // found it busy earlier were kept queued (bounded retries) on their own
-  // source threads, and this is the moment they get their retry.
+  // found it busy remain ready on their source threads.
   const settledBot = store.botByThread(event.threadId);
   if (settledBot) drainWaitingOn(commsBus, approvalBus, settledBot.id, runDelegatedTurn, event.threadId);
 });
@@ -4057,13 +4068,13 @@ bus.subscribe((event: RuntimeEvent) => {
 function paneNotesPending(threadId: string): boolean {
   const bot = store.botByThread(threadId);
   const deliveredId = bot ? store.taskByThread(bot.id, threadId)?.paneNotesDeliveredId : undefined;
-  return paneNotesSinceLastUserTurn(store.activePath(threadId), new Set(), deliveredId ?? undefined, true).length > 0;
+  return hasUnreadReplyWake(store, threadId) || paneNotesSinceLastUserTurn(store.activePath(threadId), new Set(), deliveredId ?? undefined, true).length > 0;
 }
 
 // A pane note wakes its teacher with a control-plane turn: cardContinuation
 // keeps it from reading as the user's words; destructive/sensitive still card.
 const paneWake = new PaneWakeScheduler({
-  enabled: (botId, threadId) => paneWakeEnabled(store, botId, threadId),
+  enabled: (botId, threadId) => hasUnreadReplyWake(store, threadId) || paneWakeEnabled(store, botId, threadId),
   paused: (botId) => store.bot(botId)?.paneWakePaused === true,
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId) || limitWaits.held(botId),
   hasNotes: paneNotesPending,
@@ -4085,6 +4096,7 @@ const paneWake = new PaneWakeScheduler({
       }
     });
   },
+  admit: (_botId, threadId) => claimReplyWake(store, threadId),
   warn: (line) => console.warn(line),
 });
 
@@ -4113,7 +4125,10 @@ const noteSteer = new NoteSteerer({
   },
   messages: (threadId) => store.activePath(threadId),
   deliveredId: (botId, threadId) => store.taskByThread(botId, threadId)?.paneNotesDeliveredId ?? undefined,
-  markDelivered: (botId, threadId, noteId) => store.markPaneNotesDelivered(botId, threadId, noteId),
+  markDelivered: (botId, threadId, noteId) => {
+    markSteeredMail(store, threadId, noteId, liveTurnIdByThread.get(threadId) ?? "");
+    store.markPaneNotesDelivered(botId, threadId, noteId);
+  },
   wake: (botId, threadId, paneId) => paneWake.noteArrived(botId, threadId, paneId),
 });
 
@@ -4858,7 +4873,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     composeUserTurnPrompt(text, turnOpts),
     ...folded,
   ].join("\n\n");
-  let { notes: paneNotes, newestId: newestPaneNoteId } = paneNotesForTurn(
+  let { notes: paneNotes, newestId: newestPaneNoteId, ids: paneNoteIds, tokens: paneTokens } = paneNotesForTurn(
     activeMessages,
     skipTranscript,
     task.paneNotesDeliveredId ?? undefined,
@@ -4871,7 +4886,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
-  const turnNotes = [...paneNotes, ...routineCards, ...syncNotes];
+  const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
+  const turnNotes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5290,6 +5306,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -5459,6 +5476,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // it certifies nothing and the next turn still sees it as unseeded
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;
       if (started.turnId && systemSeed) systemSeed.turnId = started.turnId;
+      markMailRead(store, threadId, mailParts, started.turnId ?? "");
+      markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       if (currentTurnEpoch(bot.id) !== epoch) return;
@@ -5476,6 +5495,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       }
     } catch (e) {
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
+      turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
       releaseLocalVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
@@ -5957,7 +5977,7 @@ function enqueueDrainedRoomTurn(
 // comms bus: passed into the visibility helpers in comms-visibility.ts so
 // they can mirror messages + chips without re-deriving SSE plumbing. Same
 // shape every comms entry point uses (ask_bot, delegate_bot).
-const commsBus: CommsBus = { store, broadcast, deviceId: profileSyncSettings.deviceId, wakeSender: (botId, threadId) => paneWake.noteArrived(botId, threadId), replyUnwoken: (botId, detail) => teamSnags?.record({ event: "reply-unwoken", key: botId, bot: botId, detail }) };
+const commsBus: CommsBus = { senderBusy: botHasActiveTurn, store, broadcast, deviceId: profileSyncSettings.deviceId, wakeSender: (botId, threadId) => paneWake.noteArrived(botId, threadId), replyUnwoken: (botId, detail) => teamSnags?.record({ event: "reply-unwoken", key: botId, bot: botId, detail }) };
 
 // approval bus: peer-approval.ts only needs to push cards and broadcast
 // them — its pending map lives in the module so the two respond endpoints
@@ -6164,9 +6184,11 @@ async function runClaimedGroupMemberTurn(
       return true;
     }
   }
+  const roomMail = mailForTurn(store, threadId, [], modelContextWindow);
   const roomContext = [
     prepared.compacted && durableTaskRecordText ? durableTaskRecordText : null,
     prepared.transcript.map((message) => message.text).join("\n"),
+    ...roomMail.map((part) => part.text),
   ].filter((value) => value !== null).join("\n\n");
   // One turn per bot at a time, across BOTH engines. Without this a bot
   // could run its 1:1 turn and a room turn concurrently, creating two provider
@@ -6341,6 +6363,7 @@ async function runClaimedGroupMemberTurn(
     // through startClaimedTurn, which recycles the native session after
     // Orbit compaction or a pre-compact fat soak.
     keepRoomTurnInstruction = true;
+    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop });
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6361,6 +6384,7 @@ async function runClaimedGroupMemberTurn(
     })
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+        markMailRead(store, threadId, roomMail, started.turnId ?? "");
         if (started.turnId && currentTurnEpoch(bot.id) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
         if (reply.claim(started.turnId)) finish("settled");
       })
@@ -6944,6 +6968,8 @@ const groupRoutes = createGroupRoutes({
   releaseInterruptedBot,
 });
 const internalRoutes = createInternalRoutes({
+  runDelegatedTurn,
+  resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
   utilityParentPort,
   googleAccount,
@@ -7225,7 +7251,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // turn.completed. Returns immediately (the caller does not wait).
       const delegationMatch = method === "GET" ? path.match(/^\/api\/internal\/delegations\/([\w-]{4,64})$/) : null;
       if (delegationMatch) {
-        return await internalRoutes.delegationStatus(res, delegationMatch, url);
+        return await internalRoutes.delegationStatus(res, delegationMatch, url, req);
       }
       if (method === "POST" && path === "/api/internal/delegate-bot") {
         return await internalRoutes.delegateBot(req, res);

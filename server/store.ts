@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } 
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { indexMailRow } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR } from "./config.ts";
@@ -179,7 +180,7 @@ export interface Message {
   /** Stable client identity for at-most-once chat POST retries. */
   sendId?: string;
   /** group threads: which member said this (sender attribution). */
-  from?: { botId: string; name: string; color: string };
+  from?: { botId: string; name: string; color: string; chiefOfStaff?: boolean };
   origin?: string;
   quiet?: true;
   snagIds?: string[];
@@ -191,7 +192,15 @@ export interface Message {
    * "message" and "reply" carry the sent message or the reply as `text`, except
    * a "message" chip in the channel itself, which shows it already; "from" is the
    * receiving side's chip and has none. */
-  comm?: { groupId: string; withBotId: string; withName: string; withColor: string; peer?: "message" | "reply" | "from"; wake?: true };
+  comm?: {
+    groupId: string; withBotId: string; withName: string; withColor: string;
+    peer?: "message" | "reply" | "from"; wake?: true;
+    taskId?: string;
+    mailKey?: string;
+    deliver?: "queued" | "now";
+    state?: import("./mail-types.ts").MailState;
+    read?: import("./mail-types.ts").MailRead;
+  };
   /** user messages sent while the bot was mid-turn, waiting in the
    * steer-queue to auto-send on settle. Cleared when the drain consumes
    * them; a true stranded by a restart is inert because the client only
@@ -270,6 +279,7 @@ export interface GroupRecord {
  * task's session and quietly undo the whole thing. */
 export interface TaskRecord {
   threadId: ThreadId;
+  mailUnread?: string[];
   title: string;
   createdAt: number;
   /** provider-native continuation per instance, for THIS task only */
@@ -1241,11 +1251,19 @@ export class Store {
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
     const t = this.thread(threadId);
+    if (message.comm?.mailKey) {
+      const existing = t.messages.find((row) => row.comm?.mailKey === message.comm!.mailKey);
+      if (existing) {
+        if (existing.comm?.peer === "reply") this.indexMail(threadId, existing);
+        return existing;
+      }
+    }
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
     t.messages.push(full);
     t.activeLeafId = full.id;
     this.beforeWrite(threadId);
     this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    if (full.comm?.mailKey && full.comm.peer === "reply") this.indexMail(threadId, full);
     if (full.kind === "screen") {
       for (const pruned of this.pruneScreenFrames(t)) {
         this.persistThread(threadId, [{ kind: "row", value: pruned }], () => mdb.updateMessage(threadId, pruned));
@@ -1364,8 +1382,15 @@ export class Store {
     t.messages[idx] = redactBotAuthored({ ...t.messages[idx], ...patch, card: patch.card ?? t.messages[idx].card });
     this.beforeWrite(threadId);
     this.persistThread(threadId, [{ kind: "row", value: t.messages[idx] }], () => mdb.updateMessage(threadId, t.messages[idx]));
+    if (t.messages[idx].comm?.mailKey && t.messages[idx].comm?.peer === "reply") this.indexMail(threadId, t.messages[idx]);
     this.emit({ type: "message.patch", threadId, message: t.messages[idx] });
     return t.messages[idx];
+  }
+
+  private indexMail(threadId: string, row: Message): void {
+    const bot = this.botByThread(threadId);
+    const task = bot && this.taskByThread(bot.id, threadId);
+    if (task && indexMailRow(task, row)) this.saveBots();
   }
 
   bot(id: string) {
