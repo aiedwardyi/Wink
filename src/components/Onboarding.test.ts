@@ -42,4 +42,8 @@ describe("onboarding empty-engine path", () => {
   it("lets an empty-engine launch skip into the shell", () => {
     expect(source).toContain("open: finish");
   });
+
+  it("keeps Shift+Tab from the focused last-step dialog inside the trap", () => {
+    expect(source).toContain("document.activeElement === first || document.activeElement === dialog");
+  });
 });
