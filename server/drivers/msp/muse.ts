@@ -2,7 +2,12 @@
 // muse driver it replaces — stored configs key on the kind, so the fleet
 // swap is one import change in drivers/builtIn.ts. WSL plumbing is shared
 // with the ACP driver by import, never duplicated.
+import { z } from "zod";
+
 import type { ModelCatalog } from "../../contracts.ts";
+import { toWslPath } from "../../env-path.ts";
+import { isWslCommand } from "../../wsl-gate.ts";
+import { createCliText } from "../cli-text.ts";
 import {
   classifyMuseError,
   MuseAgentDriver,
@@ -40,6 +45,25 @@ export const MSP_MUSE_EFFORT_LEVELS = [
   "max",
 ] as const;
 
+const MUSE_TEXT_TIMEOUT_MS = 90_000;
+
+const museTerminalSchema = z.object({
+  payload_type: z.literal("run.terminal.completed"),
+  payload: z.object({ terminal: z.string(), text: z.string().nullish() }),
+});
+
+function parseMuseText(stdout: string): string {
+  let text = "";
+  for (const line of stdout.split(/\r?\n/)) {
+    let record: unknown;
+    try { record = JSON.parse(line); } catch { continue; }
+    const terminal = museTerminalSchema.safeParse(record);
+    if (terminal.success) text = terminal.data.payload.terminal === "completed" ? terminal.data.payload.text?.trim() ?? "" : "";
+  }
+  if (!text) throw new Error("Muse text returned no text");
+  return text;
+}
+
 export const MspMuseAgentDriver = createMspDriver({
   driverKind: "museAgent",
   displayName: "Meta Muse",
@@ -59,4 +83,23 @@ export const MspMuseAgentDriver = createMspDriver({
   classifyError: classifyMuseError,
   wslProbeWrapper: museWslFallbackCli,
   wslResolveCli: resolveWslMuseCli,
+  text: ({ cli, env }) => createCliText({
+    name: "Muse",
+    model: MSP_MUSE_MODELS.default,
+    timeoutMs: MUSE_TEXT_TIMEOUT_MS,
+    command: async (promptFile) => {
+      const command = await cli();
+      return {
+        cli: command,
+        args: [
+          "exec", "--json", "--prompt-file", isWslCommand(command) ? toWslPath(promptFile) : promptFile, "--no-session-log",
+          "--model", MSP_MUSE_MODELS.default, "--reasoning-effort", "low", "--max-model-steps", "1",
+          "--disable-web-tools", "--disable-shell", "--disable-write", "--disable-request-user-input",
+          "--disable-reminders", "--no-foreign-personal-context", "--approval-judge", "off",
+        ],
+        env: env(),
+      };
+    },
+    parse: parseMuseText,
+  }),
 });

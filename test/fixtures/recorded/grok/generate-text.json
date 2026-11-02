@@ -1,0 +1,59 @@
+{
+  "stamp": {
+    "engine": "grok",
+    "cliVersion": "1.0.70",
+    "recordedAt": "2026-11-02T04:58:06.594Z",
+    "sourcePc": "home",
+    "source": "grok headless one-shot with the driver's text argv; real json result, ids and cwd redacted",
+    "model": "grok-4.6",
+    "effort": "low",
+    "prompt": "Return exactly: SUMMARY\nKeep the pending research open until the memory budgets are verified.",
+    "args": [
+      "--prompt-file",
+      "<prompt-file>",
+      "--output-format",
+      "json",
+      "--verbatim",
+      "-m",
+      "grok-4.6",
+      "--reasoning-effort",
+      "low",
+      "--max-turns",
+      "1",
+      "--disable-web-search",
+      "--no-subagents",
+      "--no-plan"
+    ]
+  },
+  "reply": {
+    "result": {
+      "text": "SUMMARY",
+      "stopReason": "end_turn",
+      "sessionId": "<redacted>",
+      "requestId": "<redacted>",
+      "cwd": "<redacted>",
+      "thought": "The response will be exactly \"SUMMARY\". Pending research remains open until memory budgets are verified.",
+      "usage": {
+        "input_tokens": 28639,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 110,
+        "reasoning_tokens": 109,
+        "total_tokens": 28749
+      },
+      "num_turns": 1,
+      "total_cost_usd": 0.01969892,
+      "total_cost_usd_ticks": 196989200,
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 28639,
+          "outputTokens": 110,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 1,
+          "costUSD": 0.01969892
+        }
+      }
+    }
+  }
+}
