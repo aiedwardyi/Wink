@@ -97,12 +97,17 @@ export function handMail(store: MailStore, threadId: string, taskId: string, tur
 export function toolMailResult(store: MailStore, threadId: string, taskId: string, result: string | undefined, turn?: { turnId: string; requestId: string }): string | undefined {
   const row = store.messagesFor(threadId).find((row) => row.comm?.taskId === taskId && row.comm.peer === "reply");
   if (!row) return result;
-  const read = row.comm?.read;
-  if (read?.state === "handed" || read?.state === "read" && (read.upto ?? row.text?.length ?? 0) >= (row.text?.length ?? 0)) return "already in your context";
-  const offset = read?.upto ?? 0;
   const full = row.text ?? result ?? "";
+  const read = row.comm?.read;
+  if (read?.state === "handed" && (!turn || read.turnId !== turn.turnId)
+    || read?.state === "read" && (read.upto ?? full.length) >= full.length) return "already in your context";
+  const offset = read?.state === "handed" ? read.handedUpto ?? full.length : read?.upto ?? 0;
+  if (offset >= full.length) return "already in your context";
   const text = full.slice(offset, offset + 16_000);
-  if (turn) handMail(store, threadId, taskId, turn.turnId, turn.requestId, offset + text.length);
+  if (turn) {
+    if (read?.state === "handed") store.patchMessage(threadId, row.id, { comm: { ...row.comm!, read: { ...read, requestId: turn.requestId, handedUpto: offset + text.length, at: Date.now() } } });
+    else handMail(store, threadId, taskId, turn.turnId, turn.requestId, offset + text.length);
+  }
   return offset + text.length < full.length ? `${text}\n\n[Reply continues; check_delegation ${taskId}]` : text;
 }
 

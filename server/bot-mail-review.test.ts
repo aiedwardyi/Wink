@@ -60,6 +60,28 @@ it("collects an oversized tool reply in bounded chunks without losing its tail",
   expect(collected).toBe(text);
 });
 
+it.each([[0, true], [37, true], [0, false], [37, false]] as const)("collects successive tool chunks in one turn (committed: %s, clean: %s)", (offset, clean) => {
+  const text = "0123456789".repeat(3200) + "tail";
+  const row = reply(text);
+  if (offset) markMailRead(store, from.threadId, [{ id: row.id, upto: offset }], "fold");
+  let collected = "";
+  while (collected.length < text.length - offset) {
+    const result = toolMailResult(store, from.threadId, "reply-task", text.slice(0, 16_000), { turnId: "pull", requestId: `request-${collected.length}` })!;
+    const chunk = result.split("\n\n[Reply continues;")[0];
+    expect(chunk).toBe(text.slice(offset + collected.length, offset + collected.length + 16_000));
+    collected += chunk;
+    expect(toolMailResult(store, from.threadId, "reply-task", text, { turnId: "other", requestId: "other" })).toBe("already in your context");
+  }
+  expect(collected).toBe(text.slice(offset));
+  expect(toolMailResult(store, from.threadId, "reply-task", text, { turnId: "pull", requestId: "again" })).toBe("already in your context");
+  settleMail(store, from.threadId, "pull", clean, clean ? undefined : "interrupted");
+  if (clean) expect(unreadMail(store, from.threadId)).toEqual([]);
+  else {
+    expect(unreadMail(store, from.threadId)[0].comm?.read?.upto ?? 0).toBe(offset);
+    expect(mailForTurn(store, from.threadId)[0].text).toContain(text.slice(offset));
+  }
+});
+
 it("keeps a long pane reply's omitted tail available for later folds", () => {
   const row = reply("answer ".repeat(1200));
   store.patchMessage(from.threadId, row.id, { comm: { ...row.comm!, wake: true } });
