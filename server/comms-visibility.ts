@@ -3,6 +3,7 @@
 // (delegate_bot) and any future peer flow reuse the same UX without a copy.
 
 import { type BotRecord, type GroupRecord, type Message, type Store } from "./store.ts";
+import { findDelegationReceipt } from "./delegation-ledger.ts";
 
 /** What a peer-exchange helper needs from the outside world:
  * the store (for persisted messages + groups) and the SSE broadcasters
@@ -11,6 +12,7 @@ export interface CommsBus {
   store: Store;
   deviceId?: string;
   wakeSender?: (botId: string, threadId: string) => void;
+  senderBusy?: (botId: string, threadId: string) => boolean;
   /** A delegated reply that asks its sender something could not wake it. */
   replyUnwoken?: (botId: string, detail: string) => void;
   /** SSE broadcast (kind: "message" envelope). */
@@ -57,10 +59,13 @@ export function patchDelegationChip(
   comm?: CommLink,
   text?: string,
 ): boolean {
-  const chip = itemId ? delegationChips.get(itemId) : undefined;
+  const receipt = itemId ? findDelegationReceipt(itemId) : null;
+  const saved = receipt && bus.store.messagesFor(receipt.sourceThreadId).find((row) => row.comm?.mailKey === `${itemId}:status:${receipt.sourceThreadId}`);
+  const chip = itemId ? delegationChips.get(itemId) ?? (saved ? { threadId: receipt!.sourceThreadId, messageId: saved.id } : undefined) : undefined;
   if (!itemId || !chip) return false;
   const patch: Partial<Message> = { tool };
-  if (comm) patch.comm = comm;
+  const previous = bus.store.messagesFor(chip.threadId).find((row) => row.id === chip.messageId)?.comm;
+  if (comm || previous) patch.comm = { ...previous!, ...comm, ...(receipt ? { taskId: receipt.id, state: receipt.state, mailKey: previous?.mailKey } : {}) };
   if (text) patch.text = text;
   if (!bus.store.patchMessage(chip.threadId, chip.messageId, patch)) return false;
   if (tool.ok !== undefined) delegationChips.delete(itemId);
@@ -125,33 +130,6 @@ export function noteMessageFrom(bus: CommsBus, from: BotRecord, target: BotRecor
       ? { groupId: channel.id, withBotId: from.id, withName: from.name, withColor: from.color, peer: "from" }
       : undefined,
   });
-}
-
-/** Show `target`'s reply under the sender's message in the thread it was asked
- * from. False when nothing was posted: no reply, no channel, or the asking
- * thread is the channel, which already gets the reply from `mirrorReply`. */
-export function postPeerReply(
-  bus: CommsBus,
-  from: BotRecord,
-  target: BotRecord,
-  reply: string,
-  channel: GroupRecord | undefined,
-  sourceThreadId = from.threadId,
-  wake = false,
-): boolean {
-  const comm = commLink(channel, target);
-  if (!comm || !reply.trim() || channel?.threadId === sourceThreadId) return false;
-  const row: Omit<Message, "id" | "at"> = {
-    role: "bot",
-    kind: "activity",
-    tool: { name: `Reply from @${target.name}` },
-    comm: { ...comm, peer: "reply", ...(wake ? { wake: true as const } : {}) },
-    text: reply,
-  };
-  if (wake) row.origin = bus.deviceId;
-  if (sourceThreadId !== from.threadId) row.from = { botId: from.id, name: from.name, color: from.color };
-  bus.store.appendMessage(sourceThreadId, row);
-  return true;
 }
 
 /** Close a handoff's loop in the sender's thread: patch its chip in place, or

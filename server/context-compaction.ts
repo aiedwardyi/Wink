@@ -1,6 +1,7 @@
 import type { ModelCatalog } from "./contracts.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { isWakeNote } from "./pane-wake.ts";
+import { mailReplayText } from "./mail.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import type { Message, OptionCardData } from "./store.ts";
@@ -54,6 +55,7 @@ interface ReplayUnit {
   card?: true;
   /** a tool chip, until its run is folded into one line */
   chip?: { name: string; ok: boolean; speaker: string; speakerId: string };
+  mailUpto?: number;
 }
 
 interface ModelContextMessage {
@@ -294,14 +296,14 @@ export function paneNotesSinceLastUserTurn(messages: Message[], excludeIds: Read
   return pendingPaneNotes(messages, excludeIds, deliveredId, wakeOnly).map((note) => note.text);
 }
 
-function pendingPaneNotes(messages: Message[], excludeIds: ReadonlySet<string>, deliveredId?: string, wakeOnly = false): Array<{ id: string; text: string }> {
-  const notes: Array<{ id: string; text: string }> = [];
+function pendingPaneNotes(messages: Message[], excludeIds: ReadonlySet<string>, deliveredId?: string, wakeOnly = false): Array<{ id: string; text: string; mail?: boolean }> {
+  const notes: Array<{ id: string; text: string; mail?: boolean }> = [];
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId) break;
     if (excludeIds.has(message.id)) continue;
     if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
-    if ((wakeOnly ? isWakeNote(message) : isContextNote(message)) && message.text?.trim()) notes.unshift({ id: message.id, text: wakeNoteText(message) });
+    if ((wakeOnly ? isWakeNote(message) : isContextNote(message)) && message.text?.trim()) notes.unshift({ id: message.id, text: wakeNoteText(message), ...(message.comm?.mailKey && message.comm.peer === "reply" ? { mail: true } : {}) });
   }
   return notes;
 }
@@ -351,7 +353,7 @@ function routineCardLanded(card: RoutineRunCardData): boolean {
 }
 
 /** Oldest first, up to what leaves history room for a summary; a lone oversized note is clipped. */
-function fitPaneNotes(notes: Array<{ id: string; text: string }>, contextWindow: number): Array<{ id: string; text: string }> {
+function fitPaneNotes(notes: Array<{ id: string; text: string; mail?: boolean }>, contextWindow: number): Array<{ id: string; text: string }> {
   const budget = contextBudget(contextWindow);
   const cap = budget - Math.floor(budget * SUMMARY_BUDGET_SHARE);
   const sent: Array<{ id: string; text: string }> = [];
@@ -359,7 +361,7 @@ function fitPaneNotes(notes: Array<{ id: string; text: string }>, contextWindow:
   for (const note of notes) {
     const tokens = messageTokens(note);
     if (used + tokens > cap) {
-      if (!sent.length) sent.push({ ...note, text: clipText(note.text, Math.max(1, cap - 6)) });
+      if (!sent.length && !note.mail) sent.push({ ...note, text: clipText(note.text, Math.max(1, cap - 6)) });
       break;
     }
     used += tokens;
@@ -457,6 +459,8 @@ function replayUnits(
   referenceMessages: Message[],
   includeSpeakers: boolean,
   startIndex?: number,
+  deferredMail: NonNullable<ContextCompactionV1["deferredMail"]> = [],
+  throughMail: NonNullable<ContextCompactionV1["deferredMail"]> = [],
 ): ReplayUnit[] {
   const messagesById = new Map(startIndex === undefined ? referenceMessages.map((message) => [message.id, message]) : []);
   // A lazy stand-in for the full map: get() finds rows on demand, values() yields only speakers (all reactorName reads).
@@ -487,9 +491,15 @@ function replayUnits(
     };
   }
   const offset = startIndex ?? 0;
-  return messages.slice(offset).flatMap((message, index): ReplayUnit[] => {
-    const pathIndex = offset + index;
+  const pending = new Map(deferredMail.map((row) => [row.id, row.upto]));
+  const through = new Map(throughMail.map((row) => [row.id, row.upto]));
+  const from = pending.size ? 0 : offset;
+  return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
+    const pathIndex = from + index;
+    if (pathIndex < offset && !pending.has(message.id)) return [];
     if (excludeIds.has(message.id)) return [];
+    const mail = mailReplayText(message, pending.get(message.id) ?? 0, through.get(message.id));
+    if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "", mailUpto: through.get(message.id) ?? message.comm?.read?.upto ?? message.text?.length ?? 0 }] : [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
       const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : body;
@@ -668,7 +678,7 @@ function spanUnits(input: {
   userName?: string;
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
-}, startIndex: number, endIndex: number): ReplayUnit[] {
+}, startIndex: number, endIndex: number, deferredMail?: ContextCompactionV1["deferredMail"], throughMail?: ContextCompactionV1["deferredMail"]): ReplayUnit[] {
   return foldToolRuns(
     replayUnits(
       input.messages,
@@ -676,7 +686,10 @@ function spanUnits(input: {
       input.userName ?? "User",
       input.referenceMessages ?? input.messages,
       input.includeSpeakers ?? false,
-    ).filter((unit) => unit.pathIndex > startIndex && unit.pathIndex <= endIndex),
+      startIndex + 1,
+      deferredMail,
+      throughMail,
+    ).filter((unit) => unit.pathIndex <= endIndex),
     input.includeSpeakers ?? false,
   );
 }
@@ -913,6 +926,7 @@ export type CompactionPlan =
       contextWindow: number;
       estimatedTokensBefore: number;
       transcript: ModelContextMessage[];
+      deferredMail?: ContextCompactionV1["deferredMail"];
     }
   | {
       needed: false;
@@ -954,6 +968,7 @@ export function planCompaction(input: {
     input.referenceMessages ?? input.messages,
     input.includeSpeakers ?? false,
     previous ? previous.coveredIndex + 1 : 0,
+    previous?.value.deferredMail,
   );
   // A grown window keeps the summary and only allows a bigger tail; replaying
   // the covered history re-summarized a whole day at once.
@@ -983,10 +998,18 @@ export function planCompaction(input: {
     old = units;
     tail = [];
   }
-  const coveredThroughIndex = old.at(-1)?.pathIndex ?? previous?.coveredIndex;
-  if (coveredThroughIndex === undefined) {
+  const coveredThroughIndex = Math.max(old.at(-1)?.pathIndex ?? -1, previous?.coveredIndex ?? -1);
+  if (coveredThroughIndex < 0) {
     return { needed: false, status: "failed", error: "Context summarization found no durable message boundary." };
   }
+  // A covered reply may be delivered after this summary is written.
+  const deferredMail = input.messages.slice(0, coveredThroughIndex + 1).flatMap((message, index) => {
+    if (!message.comm?.mailKey || message.comm.peer !== "reply" || !message.text) return [];
+    const prior = previous?.value.deferredMail?.find((row) => row.id === message.id);
+    if (previous && index <= previous.coveredIndex && !prior) return [];
+    const upto = old.find((unit) => unit.id === message.id)?.mailUpto ?? prior?.upto ?? 0;
+    return upto < message.text.length ? [{ id: message.id, upto }] : [];
+  });
   return {
     needed: true,
     previous,
@@ -999,6 +1022,7 @@ export function planCompaction(input: {
     contextWindow,
     estimatedTokensBefore: Math.max(1, currentTokens),
     transcript: currentTranscript,
+    ...(deferredMail.length ? { deferredMail } : {}),
   };
 }
 
@@ -1055,12 +1079,13 @@ function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompa
     v: CONTEXT_COMPACTION_VERSION,
     summary,
     coveredThroughId: plan.coveredThrough.id,
-    firstKeptId: plan.tail[0]?.id ?? null,
+    firstKeptId: plan.tail.find((unit) => !plan.deferredMail?.some((row) => row.id === unit.id))?.id ?? null,
     contextWindow: plan.contextWindow,
     estimatedTokensBefore: plan.estimatedTokensBefore,
     sourceMessageCount: (plan.previous?.value.sourceMessageCount ?? 0) + plan.old.length,
   };
   if (plan.previous) compaction.previousCompactionId = plan.previous.messageId;
+  if (plan.deferredMail?.length) compaction.deferredMail = plan.deferredMail;
   return compaction;
 }
 
@@ -1119,7 +1144,7 @@ export async function prepareModelContext(input: {
     if (isFallbackSummary(chain)) {
       const good = repairTarget(input.messages)?.good ?? null;
       previousText = good ? redactSecretsInText(good.value.summary) : "";
-      history = spanUnits(input, good?.coveredIndex ?? -1, old.at(-1)?.pathIndex ?? previous?.coveredIndex ?? -1);
+      history = spanUnits(input, good?.coveredIndex ?? -1, Math.max(old.at(-1)?.pathIndex ?? -1, previous?.coveredIndex ?? -1), good?.value.deferredMail, plan.deferredMail);
     }
     return fallbackSummary({
       previousSummary: previousText,
@@ -1239,7 +1264,7 @@ export async function repairModelContext(input: {
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
-  const history = spanUnits(input, good?.coveredIndex ?? -1, target.coveredIndex);
+  const history = spanUnits(input, good?.coveredIndex ?? -1, target.coveredIndex, good?.value.deferredMail, target.value.deferredMail);
   const segment = await summarizeSegment({
     messages: input.messages,
     previous: good,
@@ -1263,6 +1288,7 @@ export async function repairModelContext(input: {
     contextWindow,
     estimatedTokensBefore: target.value.estimatedTokensBefore,
     sourceMessageCount: target.value.sourceMessageCount,
+    ...(target.value.deferredMail?.length ? { deferredMail: target.value.deferredMail } : {}),
   };
   if (good) compaction.previousCompactionId = good.messageId;
   const validated = readContextCompaction({ value: compaction });

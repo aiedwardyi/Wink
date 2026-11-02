@@ -16,12 +16,26 @@ export interface PaneWakeDeps {
   /** A burst was dropped because the bot closed all its panes. */
   skipped?(botId: string, threadId: string): void;
   wake(botId: string, threadId: string): void;
+  admit?(botId: string, threadId: string): boolean;
   warn(line: string): void;
   now?(): number;
 }
 
 export function isWakeNote(message: Message): boolean {
-  return !message.quiet && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
+  return !message.quiet && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
+}
+
+export function paneNoteWaiting(store: Pick<Store, "bot" | "taskByThread" | "activePath">, botId: string, threadId: string): boolean {
+  if (store.bot(botId)?.shareTerminalWithChat === false) return false;
+  const deliveredId = store.taskByThread(botId, threadId)?.paneNotesDeliveredId;
+  const messages = store.activePath(threadId);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.id === deliveredId) break;
+    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (message.kind === "note" && isWakeNote(message) && message.text?.trim()) return true;
+  }
+  return false;
 }
 
 export function paneWakeEnabled(store: Store, botId: string, threadId: string): boolean {
@@ -154,6 +168,7 @@ export class PaneWakeScheduler {
       entry.timer.unref?.();
       return;
     }
+    if (this.deps.admit && !this.deps.admit(botId, threadId)) return;
     this.wakes.set(botId, [...recent, now]);
     this.deps.wake(botId, threadId);
   }

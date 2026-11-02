@@ -13,6 +13,7 @@ const contextCompactionV1Schema = z.object({
   contextWindow: z.number().int().positive(),
   estimatedTokensBefore: z.number().int().positive(),
   sourceMessageCount: z.number().int().nonnegative(),
+  deferredMail: z.array(z.object({ id: idSchema, upto: z.number().int().nonnegative() })).optional(),
 }).strict();
 
 export type ContextCompactionV1 = z.infer<typeof contextCompactionV1Schema>;
