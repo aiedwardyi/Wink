@@ -293,6 +293,7 @@ test("a delivered report leaves exit code 0 when PowerShell runs it by name outs
         { env: paneEnv(bin, url), cwd: dir, windowsHide: true, timeout: 60_000 }, (error) => resolve(error?.code ?? 0));
     });
     assert.equal(status, 0);
+    assert.equal(posts.length, 1);
     assert.match(posts[0].text, /^DONE WIDGET branch=none sha=none dirty=unknown\ntext$/);
   });
 });
