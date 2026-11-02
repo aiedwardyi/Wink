@@ -10,7 +10,6 @@ import {
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { credentialErrorMessage, saveCredential } from "@/lib/credentials";
 import { useI18n } from "@/lib/i18n";
-import { showEmptyKeysCard } from "@/lib/friends-chrome";
 import { Section } from "./SettingsPrimitives";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -65,11 +64,10 @@ export function SavedKeys() {
       .catch((e) => setError(credentialErrorMessage(e, t)));
   };
 
-  if (saved.length === 0 && !showEmptyKeysCard()) return null;
+  if (saved.length === 0) return null;
 
   return (
     <Section title={t("keys.title")}>
-      {saved.length === 0 && <div className="px-1 text-[12px] text-ink-secondary">{t("keys.empty")}</div>}
       {saved.map(({ id, label }) => {
         const use = uses[id];
         const bot = use && state.bots.find((b) => b.id === use.botId);

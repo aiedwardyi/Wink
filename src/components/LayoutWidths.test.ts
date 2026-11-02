@@ -39,7 +39,7 @@ const { mockState } = vi.hoisted(() => {
         rooms: { turnTimeoutMinutes: 5 },
         localVm: { mode: "shared", maxInstances: 1 },
         profile: { name: "", email: "" },
-        features: { skillRecorder: false, showToolCalls: false },
+        features: { showToolCalls: false },
       },
       mascotMotion: null,
     },

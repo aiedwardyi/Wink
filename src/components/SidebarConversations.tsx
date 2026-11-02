@@ -104,7 +104,7 @@ function GroupListItem({
   const { t, locale } = useI18n();
   const { state, dispatch } = useStore();
   const showToolCalls = showToolCallsEnabled(state.config);
-  const selected = state.activeView === "chat" && state.selectedId === group.id;
+  const selected = state.selectedId === group.id;
   const members = group.memberIds
     .map((id) => state.bots.find((b) => b.id === id))
     .filter((b): b is Bot => Boolean(b));
@@ -287,7 +287,7 @@ function BotListItem({
   const { state, dispatch } = useStore();
   const [renaming, setRenaming] = useState(false);
   const density: SidebarDensity = listDensity === "comfortable" && !sidebarPriorityFor(bot) ? "compact" : listDensity;
-  const selected = state.activeView === "chat" && state.selectedId === bot.id;
+  const selected = state.selectedId === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const iconOnly = density === "icons";
   useEffect(() => {

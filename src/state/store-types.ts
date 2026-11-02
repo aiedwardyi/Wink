@@ -4,8 +4,7 @@ import type { BotAvatarChoice, BotAvatarCrop } from "../../shared/bot-avatar";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { ToolDetail } from "../../shared/tool-detail";
-import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
-import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
+import type { Routine, RoutineRun } from "@/lib/routines";
 import type { NotificationTarget, TerminalAttentionReason } from "@/lib/notify";
 import type { SidebarOrder } from "@/lib/sidebar-order";
 import type { BotUpdatePatch } from "./bot-patch-queue";
@@ -348,7 +347,7 @@ export interface ConfigStatus {
   /** who's using the app - collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; avatarUrl?: string; googlePhoto?: boolean };
   /** Opt-in flags. Absent means off, except memoryNotes. */
-  features?: { skillRecorder: boolean; showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; terminalHost?: boolean; modelDial?: boolean };
 }
 
 export type ConfigStatusFrame = Pick<
@@ -431,7 +430,6 @@ export type AppSettingsSection =
   | "connections"
   | "themes"
   | "shortcuts"
-  | "engines"
   | "companion"
   | "usage"
   | "team"
@@ -445,14 +443,10 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat - a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "routines" | "skill-recorder";
-  /** a bot workspace covers the conversation surface while activeView stays "chat" */
+  /** a bot workspace covers the conversation surface */
   workspaceOpen: boolean;
   routines: Routine[];
   routineRuns: RoutineRun[];
-  webhooks: WebhookTrigger[];
-  webhookAttempts: WebhookAttempt[];
-  webhookIngress: WebhookIngressStatus | null;
   createBotOpen: boolean;
   composerFocusBotId: string | null;
   settingsOpen: boolean;
@@ -528,18 +522,10 @@ export type Action =
       sidebarOrder: SidebarOrder;
     }
   | { type: "olderMessages"; threadId: string; before: string; messages: Message[]; hasMore: boolean }
-  | { type: "showRoutines" }
-  | { type: "showSkillRecorder" }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinePatched"; routine: Routine }
   | { type: "routineDeleted"; routineId: string }
   | { type: "routineRunPatched"; run: RoutineRun }
-  | { type: "webhooksHydrated"; webhooks: WebhookTrigger[]; attempts: WebhookAttempt[]; ingress: WebhookIngressStatus }
-  | { type: "webhookPatched"; webhook: WebhookTrigger }
-  | { type: "webhookAttempted"; attempt: WebhookAttempt }
-  | { type: "webhookDeleted"; webhookId: string }
-  | { type: "updateRoutine"; routineId: string; patch: Partial<RoutineInput> }
-  | { type: "deleteRoutine"; routineId: string }
   | { type: "markRoutineRunSeen"; runId: string }
   | { type: "groupPatched"; group: Partial<Group> & { id: string } }
   | { type: "groupDeleted"; groupId: string }
@@ -568,10 +554,7 @@ export type Action =
       patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId" | "section">>;
     }
   | { type: "deleteGroup"; groupId: string }
-  | { type: "newGroupTask"; groupId: string }
   | { type: "switchGroupTask"; groupId: string; threadId: string }
-  | { type: "renameGroupTask"; groupId: string; threadId: string; title: string }
-  | { type: "deleteGroupTask"; groupId: string; threadId: string }
   | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string; message?: Message }
   | { type: "interruptGroup"; groupId: string }
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
@@ -620,8 +603,6 @@ export type Action =
   | { type: "switchTask"; botId: string; threadId: string; generation?: number }
   | { type: "notificationSwitchPending"; target: NotificationTarget }
   | { type: "taskSwitched"; bot: Bot; generation?: number }
-  | { type: "renameTask"; botId: string; threadId: string; title: string }
-  | { type: "deleteTask"; botId: string; threadId: string }
   | { type: "taskPacket"; threadId: string; packet: TaskResumePacket }
   | { type: "resumeTask"; botId: string; threadId: string; onSettled?: (error: string | null, pending?: boolean) => void }
   | {

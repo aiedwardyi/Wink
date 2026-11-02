@@ -1,7 +1,6 @@
 // Double-click a title to rename it in place. Settings still exists for
 // the rest of the profile - this is just the fast path for the name.
 import { useEffect, useState } from "react";
-import { Pencil } from "lucide-react";
 
 import { nextRename } from "@/lib/rename";
 import { cn } from "@/lib/cn";
@@ -14,7 +13,6 @@ export function RenameTitle({
   editing: controlledEditing,
   onEditingChange,
   onActivate,
-  showEditButton = false,
   className,
   inputClassName,
 }: {
@@ -25,8 +23,6 @@ export function RenameTitle({
   onEditingChange?: (editing: boolean) => void;
   /** Optional single-click action for locations where the title opens a profile. */
   onActivate?: () => void;
-  /** Pencil beside the title. With onActivate, the pencil opens that profile. */
-  showEditButton?: boolean;
   className?: string;
   inputClassName?: string;
 }) {
@@ -86,31 +82,18 @@ export function RenameTitle({
     setMode(true);
   };
 
-  if (showEditButton || onActivate) {
+  if (onActivate) {
     return (
       <span className="flex min-w-0 items-center gap-0.5">
-        {onActivate ? (
-          <button
-            type="button"
-            onClick={onActivate}
-            aria-label={t("chat.openProfile", { name: value })}
-            className={cn("min-w-0 truncate text-left", className)}
-            title={t("rename.openProfile")}
-          >
-            {value}
-          </button>
-        ) : (
-          <span className={cn("min-w-0 truncate", className)}>{value}</span>
-        )}
-        {showEditButton && <button
+        <button
           type="button"
-          onClick={onActivate ?? startRename}
-          aria-label={onActivate ? t("chat.openProfile", { name: value }) : t("rename.named", { name: value })}
-          title={onActivate ? t("rename.openProfile") : t("rename.agent")}
-          className="flex size-10 shrink-0 items-center justify-center rounded text-ink-secondary opacity-70 hover:bg-raised hover:text-ink hover:opacity-100"
+          onClick={onActivate}
+          aria-label={t("chat.openProfile", { name: value })}
+          className={cn("min-w-0 truncate text-left", className)}
+          title={t("rename.openProfile")}
         >
-          <Pencil size={12} />
-        </button>}
+          {value}
+        </button>
       </span>
     );
   }

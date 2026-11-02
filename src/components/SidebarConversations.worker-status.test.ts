@@ -18,7 +18,7 @@ it.each(["en", "ko"] as const)("counts two working and one waiting, then restore
   const launches: Message[] = workers.map(([nick, session], index) => ({ id: `launch-${nick}`, at: index + 1, role: "bot", kind: "launch", text: `Launched ${nick} | Muse 1.3 | high\nSession: ${session}` }));
   const waiting: Message = { id: "waiting", at: 4, role: "bot", kind: "note", text: "[pane cccccccc] [GUIDE | Muse 1.3 | high] from Ada (ada): BLOCKED GUIDE branch=x sha=y dirty=no" };
   const bot = { id: "ada", name: "Ada", threadId: "thread", messages: [...launches, waiting], modelSelection: { instanceId: "muse", model: "muse-spark-1.3" } } as Bot;
-  store.state = { bots: [bot], instances: [{ instanceId: "muse", driverKind: "museAgent", models: { options: [{ id: "muse-spark-1.3", label: "Muse 1.3" }] } }], config: {}, terminalAttention: {}, terminalPanes: { ada: workers.map(([nick]) => `${nick} | Muse 1.3 | high`) }, routineRuns: [], activeView: "chat", selectedId: "ada" };
+  store.state = { bots: [bot], instances: [{ instanceId: "muse", driverKind: "museAgent", models: { options: [{ id: "muse-spark-1.3", label: "Muse 1.3" }] } }], config: {}, terminalAttention: {}, terminalPanes: { ada: workers.map(([nick]) => `${nick} | Muse 1.3 | high`) }, routineRuns: [], selectedId: "ada" };
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   const render = async () => { await act(async () => root.render(createElement(BotListItem, { bot, density: "comfortable", onMenu: () => {} }))); };
@@ -42,7 +42,7 @@ it("says 7 workers with seven panes open", async () => {
   const nicks = Array.from({ length: 7 }, (_, i) => `W${i}`);
   const launches: Message[] = nicks.map((nick, index) => ({ id: `launch-${nick}`, at: index + 1, role: "bot", kind: "launch", text: `Launched ${nick} | Muse 1.3 | high\nSession: ${index}0000000-1` }));
   const bot = { id: "ada", name: "Ada", threadId: "thread", messages: launches, modelSelection: { instanceId: "muse", model: "muse-spark-1.3" } } as Bot;
-  store.state = { bots: [bot], instances: [], config: {}, terminalAttention: {}, terminalPanes: { ada: nicks.map((nick) => `${nick} | Muse 1.3 | high`) }, routineRuns: [], activeView: "chat", selectedId: "ada" };
+  store.state = { bots: [bot], instances: [], config: {}, terminalAttention: {}, terminalPanes: { ada: nicks.map((nick) => `${nick} | Muse 1.3 | high`) }, routineRuns: [], selectedId: "ada" };
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   try {

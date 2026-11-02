@@ -5,10 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { GroupWizard } from "@/components/GroupWizard";
-import { RoutineEditor } from "@/components/RoutinesPage";
 import { I18nProvider } from "@/lib/i18n";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
-import { StoreProvider, type Bot } from "@/state/store";
+import { StoreProvider } from "@/state/store";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -120,17 +119,4 @@ describe("a surface reopened during its fade takes focus again", () => {
     expect(document.activeElement).toBe(field());
   });
 
-  it("focuses the routine name field again when the editor reopens", async () => {
-    // SAFETY: the editor reads only id and name from the bot list.
-    const bots = [{ id: "b1", name: "Scout" }] as Bot[];
-    const render = (closing: boolean) =>
-      act(async () => root.render(createElement(StoreProvider, null, createElement(RoutineEditor, { bots, closing, onClose: () => {} }))));
-    const field = () => input('input[placeholder="Morning research brief"]');
-    await render(false);
-    expect(document.activeElement).toBe(field());
-    await render(true);
-    blurInert();
-    await render(false);
-    expect(document.activeElement).toBe(field());
-  });
 });

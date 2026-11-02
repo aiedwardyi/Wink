@@ -498,34 +498,6 @@ describe("RoutineManager", () => {
     expect(h.manager.listRuns()[0]).toMatchObject({ triggerSource: "manual", manual: true });
   });
 
-  it("opens webhook jobs in the assigned bot's live chat", async () => {
-    const h = harness();
-    const receivedAt = new Date(2026, 7, 17, 8, 2).getTime();
-    const queued = h.manager.enqueueWebhook({
-      webhookId: "hook-1",
-      webhookName: "New ticket",
-      prompt: "Handle ticket 42",
-      botId: "maus-webhook",
-      runOn: "cloud",
-      deliveryId: "delivery-42",
-      receivedAt,
-    });
-    await h.manager.tick();
-
-    expect(queued).toMatchObject({
-      routineId: "hook-1",
-      webhookId: "hook-1",
-      deliveryId: "delivery-42",
-      triggerSource: "webhook",
-      scheduledFor: receivedAt,
-    });
-    expect(queued).not.toHaveProperty("durationMinutes");
-    expect(h.started).toEqual([{ botId: "maus-webhook", threadId: "thread-1", prompt: "Handle ticket 42" }]);
-    expect(h.runOns).toEqual(["cloud"]);
-    expect(h.triggerSources).toEqual(["webhook"]);
-    expect(h.taskActivations).toEqual([true]);
-  });
-
   it("folds provider lifecycle events into the calendar receipt", async () => {
     const h = harness();
     const routine = h.manager.create({

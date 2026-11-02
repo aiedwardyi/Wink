@@ -95,8 +95,6 @@ describe("what it may not", () => {
       ["GET", "/api/devices"],
       ["GET", "/api/companion"],
       ["POST", "/api/local-computer/start"],
-      ["POST", "/api/webhooks"],
-      ["POST", "/api/webhooks/wh_1/rotate"],
       ["DELETE", "/api/connectors/gmail"],
       ["POST", "/api/teams/import"],
     ] as Array<[string, string]>) {

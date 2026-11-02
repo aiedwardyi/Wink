@@ -11,7 +11,6 @@ export type SidebarLayout = {
   width: number;
 };
 
-export const SIDEBAR_DENSITY_KEY = "openmausbot.sidebarDensity";
 export const SIDEBAR_WIDTH_KEY = "openmausbot.sidebarWidth";
 export const SIDEBAR_COLLAPSED_KEY = "openmausbot.sidebarCollapsed";
 export const SIDEBAR_COLLAPSED_SECTIONS_KEY = "openmausbot.sidebarCollapsedSections.v1";
@@ -32,39 +31,6 @@ export const SIDEBAR_INLINE_BREAKPOINT = 768;
 export const CHAT_MIN_WIDTH = 420;
 /** Mirrors the `w-[400px]` on SettingsPanel's aside; a test keeps the two in step. */
 export const DETAILS_PANEL_WIDTH = 400;
-
-export function parseSidebarDensity(value: string | null): SidebarDensity {
-  switch (value) {
-    case "comfortable":
-    case "compact":
-    case "icons":
-      return value;
-    default:
-      return "comfortable";
-  }
-}
-
-export function loadSidebarDensity(storage?: Pick<Storage, "getItem"> | null): SidebarDensity {
-  try {
-    const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;
-    return parseSidebarDensity(target?.getItem(SIDEBAR_DENSITY_KEY) ?? null);
-  } catch {
-    return "comfortable";
-  }
-}
-
-export function saveSidebarDensity(
-  density: SidebarDensity,
-  storage?: Pick<Storage, "setItem"> | null,
-): void {
-  try {
-    const target = storage === undefined ? (globalThis.localStorage ?? null) : storage;
-    target?.setItem(SIDEBAR_DENSITY_KEY, density);
-  } catch {
-    // Private browsing and locked-down webviews may reject localStorage.
-    // The in-memory React state still makes the control useful this session.
-  }
-}
 
 export function clampSidebarWidth(value: number): number {
   if (!Number.isFinite(value)) return SIDEBAR_DEFAULT_WIDTH;

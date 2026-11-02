@@ -45,9 +45,9 @@ describe("detailed replies", () => {
   });
 
   it("saves the flag without dropping sibling feature settings", () => {
-    config.saveConfig({ features: { showToolCalls: true, skillRecorder: true } });
+    config.saveConfig({ features: { showToolCalls: true, modelDial: true } });
     config.saveConfig({ features: { detailedReplies: true } });
-    expect(config.loadConfig().features).toEqual({ showToolCalls: true, skillRecorder: true, detailedReplies: true });
+    expect(config.loadConfig().features).toEqual({ showToolCalls: true, modelDial: true, detailedReplies: true });
     config.saveConfig({ features: { detailedReplies: false } });
     expect(config.detailedRepliesEnabled(config.loadConfig())).toBe(false);
     expect(config.showToolCallsEnabled(config.loadConfig())).toBe(true);

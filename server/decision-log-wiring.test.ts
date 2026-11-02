@@ -1,16 +1,13 @@
 // The decision log is only as good as its wiring: every row is written at
 // the request.opened fold or in answerRequest, and both of those keep
 // working (cards keep appearing, approvals keep flowing) even when the
-// logging silently rots away. So, in the style of unattended.test.ts,
+// logging silently rots away.
 // these run the real server against the fake ACP CLI and assert the ROWS,
 // not the behavior the rows describe:
 //
 //   1. a rule-matched auto-approval writes a row naming the rule
 //   2. a card and the human's answer write two rows (allow and deny)
 //   3. an answer that could not be delivered writes NO approval row
-//   4. an unattended block writes its row — the audit row that says "this
-//      would have auto-approved, and only the block stood in the way"; an
-//      Auto bot's unattended approval writes one marked unattended
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,33 +62,6 @@ async function waitForBotCard(botId: string, ms = 30_000) {
         m.kind === "options" && m.card?.requestId && !m.card.answered,
     );
     if (card) return card;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return null;
-}
-
-/** A live permission card on a THREAD — webhook turns run in detached
- * tasks, so their cards never appear on the bot's open conversation. */
-async function waitForThreadCard(threadId: string, ms = 30_000) {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    const { body } = await api("GET", `/api/threads/${threadId}/messages`);
-    const card = (body.messages ?? []).find(
-      (m: { kind: string; card?: { requestId?: string } }) => m.kind === "options" && m.card?.requestId,
-    );
-    if (card) return card;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return null;
-}
-
-/** The detached task a webhook delivery created. */
-async function waitForRunThread(runId: string, ms = 20_000) {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    const { body } = await api("GET", "/api/routines");
-    const run = (body.runs ?? []).find((r: { id: string }) => r.id === runId);
-    if (run?.threadId) return run.threadId as string;
     await new Promise((r) => setTimeout(r, 250));
   }
   return null;
@@ -255,75 +225,6 @@ posixOnly("authorization decisions are logged", () => {
 
       const approved = await waitForDecision((r) => r.decision === "user-approved" && r.requestId === requestId, 5_000);
       expect(approved, "an approval was logged for a command that never ran").toBeNull();
-    },
-    90_000,
-  );
-
-  it(
-    "an unattended block writes the row that says a grant was withheld",
-    async () => {
-      // An Ask bot with the exact key granted: an attended turn would sail
-      // straight through, so the only thing carding this one is the
-      // unattended block — which is precisely what the row must say.
-      const bot = await makePermissionBot({ name: "Nightshift", alwaysAllow: ["shell:echo"] });
-
-      const hook = await api("POST", "/api/webhooks", {
-        name: "Nightly build",
-        prompt: "Handle the incoming build event",
-        botId: bot.id,
-        runOn: "maus",
-      });
-      expect(hook.status).toBe(201);
-      const delivered = await fetch(hook.body.credential.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "failed" }),
-      });
-      expect(delivered.status).toBe(202);
-      const { runId } = (await delivered.json()) as { runId: string };
-
-      const threadId = await waitForRunThread(runId);
-      expect(threadId, "the webhook never started a task").toBeTruthy();
-      const card = await waitForThreadCard(threadId!);
-      expect(card, "the webhook turn auto-approved instead of asking").not.toBeNull();
-
-      const row = await waitForDecision((r) => r.threadId === threadId && r.decision === "card-shown");
-      expect(row, "the unattended block never reached the decision log").not.toBeNull();
-      expect(row!.source).toBe("unattended-block");
-      expect(row!.rule).toBe("shell:echo");
-      expect(row!.unattended).toBe(true);
-      expect(row!.botId).toBe(bot.id);
-    },
-    90_000,
-  );
-
-  it(
-    "an Auto bot's unattended approval writes a row marked unattended",
-    async () => {
-      const bot = await makePermissionBot({ name: "Nightowl", autoApprove: true });
-
-      const hook = await api("POST", "/api/webhooks", {
-        name: "Nightly bench",
-        prompt: "Handle the incoming build event",
-        botId: bot.id,
-        runOn: "maus",
-      });
-      expect(hook.status).toBe(201);
-      const delivered = await fetch(hook.body.credential.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "failed" }),
-      });
-      expect(delivered.status).toBe(202);
-      const { runId } = (await delivered.json()) as { runId: string };
-
-      const threadId = await waitForRunThread(runId);
-      expect(threadId, "the webhook never started a task").toBeTruthy();
-      const row = await waitForDecision((r) => r.threadId === threadId && r.decision === "auto-approved");
-      expect(row, "the webhook turn never auto-approved").not.toBeNull();
-      expect(row!.source).toBe("auto-mode");
-      expect(row!.unattended).toBe(true);
-      expect(row!.botId).toBe(bot.id);
     },
     90_000,
   );

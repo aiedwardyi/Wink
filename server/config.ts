@@ -73,8 +73,6 @@ const localVmConfigSchema = z.object({
     .optional(),
 });
 const featureConfigSchema = z.object({
-  /** Experimental desktop workflow recorder. Hidden unless explicitly enabled. */
-  skillRecorder: z.boolean().optional(),
   /** Show each tool run in the transcript. Off unless explicitly enabled. */
   showToolCalls: z.boolean().optional(),
   toolDetailCapture: z.boolean().optional(),
@@ -188,7 +186,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Product switches. Every flag defaults to off except memoryNotes. */
-  features?: { skillRecorder?: boolean; showToolCalls?: boolean; toolDetailCapture?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
 }
@@ -284,10 +282,6 @@ export function localVmMode(cfg: AppConfig): "shared" | "per-bot" {
 
 export function localVmMaxInstances(cfg: AppConfig): number {
   return cfg.localVm?.maxInstances ?? DEFAULT_LOCAL_VM_MAX_INSTANCES;
-}
-
-export function skillRecorderEnabled(cfg: AppConfig): boolean {
-  return cfg.features?.skillRecorder === true;
 }
 
 export function memoryNotesEnabled(cfg: AppConfig, bot?: { memoryNotes?: boolean } | null): boolean {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, Loader2, LockKeyhole, Sparkles, TerminalSquare } from "lucide-react";
+import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
 import { EngineSetup } from "./EngineSetup";
@@ -10,7 +10,6 @@ import { EngineConnect } from "./EngineConnect";
 import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
-import { showWelcomeTiles } from "@/lib/friends-chrome";
 import { ProviderMark } from "./ProviderIcons";
 
 const CORE_DRIVERS = new Set(["grokAgent", "claudeAgent", "codex"]);
@@ -84,16 +83,6 @@ function SetupRow({ instance, onConnected }: { instance: InstanceInfo; onConnect
         intent={instance.access === "custom" ? "inject" : "cloud"}
       />
     </StatusRow>
-  );
-}
-
-function Principle({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
-  return (
-    <div className="rounded-xl border border-hairline/30 bg-card p-3.5 text-left">
-      <span className="flex size-7 items-center justify-center rounded-lg bg-control text-ink-secondary">{icon}</span>
-      <div className="mt-2.5 text-[13px] font-semibold text-ink">{title}</div>
-      <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">{text}</div>
-    </div>
   );
 }
 
@@ -239,13 +228,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p className="mt-1.5 max-w-[420px] text-center text-[13.5px] leading-relaxed text-ink-secondary">
               {t("onboarding.welcomeBody")}
             </p>
-            {showWelcomeTiles() && (
-              <div className="mt-6 grid w-full grid-cols-3 gap-2.5">
-                <Principle icon={<TerminalSquare size={14} />} title={t("onboarding.principle.engines.title")} text={t("onboarding.principle.engines.text")} />
-                <Principle icon={<LockKeyhole size={14} />} title={t("onboarding.principle.local.title")} text={t("onboarding.principle.local.text")} />
-                <Principle icon={<Sparkles size={14} />} title={t("onboarding.principle.teammates.title")} text={t("onboarding.principle.teammates.text")} />
-              </div>
-            )}
+
             {instancesError && (
               <div role="alert" className="mt-4 w-full rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-[12.5px] text-danger">
                 {instancesError} {t("onboarding.enginesErrorHint")}

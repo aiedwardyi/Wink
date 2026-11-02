@@ -31,14 +31,13 @@ export function routineRinging(
   return runs.some((run) => runInChat(run, threadId, tasks));
 }
 
-/** App settings and plugins cover the chat while activeView stays "chat". */
+/** App settings and plugins cover the chat. */
 export function routineChatOnScreen(view: {
-  activeView: string;
   workspaceOpen: boolean;
   appSettingsOpen: boolean;
   pluginsOpen: boolean;
 }): boolean {
-  return view.activeView === "chat" && !view.workspaceOpen && !view.appSettingsOpen && !view.pluginsOpen;
+  return !view.workspaceOpen && !view.appSettingsOpen && !view.pluginsOpen;
 }
 
 /** anyChatNeedsYou for the ring: any listed chat but the open one. */

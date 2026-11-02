@@ -49,10 +49,8 @@ const SettingsPanel = lazyView(() => import("@/components/SettingsPanel").then((
 const PluginsPanel = lazyView(() => import("@/components/PluginsPanel").then((m) => ({ default: m.PluginsPanel })));
 const InspectorPanel = lazyView(() => import("@/components/InspectorPanel").then((m) => ({ default: m.InspectorPanel })));
 const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((m) => ({ default: m.SettingsModal })));
-const RoutinesPage = lazyView(() => import("@/components/RoutinesPage").then((m) => ({ default: m.RoutinesPage })));
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
-const SkillRecorderPage = lazyView(() => import("@/components/SkillRecorderPage").then((m) => ({ default: m.SkillRecorderPage })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
@@ -128,7 +126,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? fallbackStartupBot(state.bots, state.groups));
   useMonoHud(bot, state.instances);
-  const terminalOpen = Boolean(bot && terminalViews[bot.id] && state.activeView === "chat");
+  const terminalOpen = Boolean(bot && terminalViews[bot.id]);
   // stable: a fresh one re-renders the whole transcript on every chat and terminal switch
   const botId = bot?.id;
   const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
@@ -393,7 +391,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     return () => worker.removeEventListener("message", onMessage);
   }, [dispatch]);
   const shown = group ?? bot;
-  const shownThread = state.hydrated && state.activeView === "chat" && shown?.messages?.length ? shown.threadId : undefined;
+  const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
   // No deps: a warm tap onto the chat already on screen changes nothing here but still needs its paint time.
   useEffect(() => noteChatShown(shownThread));
 
@@ -424,14 +422,10 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [state.connected]);
 
   // Picking a conversation closes the drawer: on a phone the chat is what you
-  // asked for, and leaving the list up would hide it. Watching activeView too
-  // catches re-selecting the bot that is already current from another view —
-  // the reducer switches the view without changing selectedId. pluginsOpen,
-  // settingsOpen and appSettingsOpen cover the same idea from a different
-  // trigger: close the drawer whenever an action opens something over the chat.
+  // asked for, and leaving the list up would hide it.
   useEffect(() => {
     setDrawerOpen(false);
-  }, [state.selectedId, state.activeView, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
+  }, [state.selectedId, state.pluginsOpen, state.settingsOpen, state.appSettingsOpen]);
 
   // the workspace paints before a passive effect would run, and an unread frame
   // landing in that gap would clear a badge for a chat nobody can see
@@ -442,7 +436,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || (!noEngines && state.bots.length === 0));
   const secondaryViewOpen =
     onboardingOpen ||
-    state.activeView !== "chat" ||
     terminalOpen ||
     paletteOpen ||
     Boolean(sidebarOverlay) ||
@@ -459,7 +452,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   };
   const drawerShellRef = useDrawerSwipe(drawerOpen && !sidebarOverlay, sidebarOnRight ? "right" : "left", closeDrawer);
 
-  const chatShown = Boolean(bot && state.activeView === "chat" && !terminalOpen);
+  const chatShown = Boolean(bot && !terminalOpen);
   useEffect(() => {
     if (bot && terminalOpen) rememberTerminalOpened(bot.id);
   }, [bot?.id, terminalOpen]);
@@ -536,7 +529,6 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     }));
     const layers: BackLayer[] = [];
     const add = (open: boolean, key: string, close: () => void) => { if (open) layers.push({ key, close }); };
-    add(state.activeView !== "chat", `view:${state.activeView}`, () => dispatch({ type: "select", id: state.selectedId }));
     add(terminalOpen, `terminal:${bot?.id}`, closeTerminal);
     add(drawerOpen, "drawer", () => setDrawerOpen(false));
     add(Boolean(sidebarOverlay), `sidebar:${sidebarOverlay}`, () => window.dispatchEvent(new Event("orbit:close-sidebar-overlay")));
@@ -561,7 +553,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       if (document.querySelector("[data-media-viewer]")) return;
       if (event.repeat || event.isComposing) return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.code !== "Backquote") return;
-      if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || state.activeView !== "chat" || nativeViewOverlayOpen) return;
+      if (!backquoteTogglesTerminal(Boolean(window.ogb), Boolean(window.ogb?.terminal)) || !bot || group || nativeViewOverlayOpen) return;
       event.preventDefault();
       event.stopPropagation();
       if (terminalOpen) closeTerminal();
@@ -569,13 +561,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     };
     window.addEventListener("keydown", toggleTerminal, true);
     return () => window.removeEventListener("keydown", toggleTerminal, true);
-  }, [bot?.id, group?.id, state.activeView, nativeViewOverlayOpen, terminalOpen]);
+  }, [bot?.id, group?.id, nativeViewOverlayOpen, terminalOpen]);
 
   // ChatView stays mounted under the terminal and across bot switches, so its header menus are told to close.
   useEffect(() => {
     window.dispatchEvent(new Event("orbit:close-worker-menu"));
     window.dispatchEvent(new Event("orbit:close-model-picker"));
-  }, [terminalOpen, state.activeView, state.selectedId]);
+  }, [terminalOpen, state.selectedId]);
 
   return (
     <div className="flex h-full flex-col">
@@ -633,15 +625,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         onTerminalAttention={openTerminalAttention}
         rigidView={Boolean(bot && terminalViews[bot.id] !== undefined)}
       />
-      {state.activeView === "routines" ? (
-        <LazyView fallback={<BootFallback />}>
-          <RoutinesPage />
-        </LazyView>
-      ) : state.activeView === "skill-recorder" ? (
-        <LazyView fallback={<BootFallback />}>
-          <SkillRecorderPage />
-        </LazyView>
-      ) : noEngines ? (
+      {noEngines ? (
         <LazyView fallback={<BootFallback />}>
           <NoEngines />
         </LazyView>

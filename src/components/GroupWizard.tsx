@@ -32,17 +32,15 @@ let nextRowKey = 1;
 
 export function GroupWizard({
   onClose,
-  preselectBotId,
   closing = false,
 }: {
   onClose: () => void;
-  preselectBotId?: string;
   closing?: boolean;
 }) {
   const { t } = useI18n();
   const { state, dispatch, refreshInstances } = useStore();
   const [name, setName] = useState("");
-  const [picked, setPicked] = useState<Set<string>>(() => (preselectBotId ? new Set([preselectBotId]) : new Set()));
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [rows, setRows] = useState<NewRow[]>([]);
   const [addedNew, setAddedNew] = useState(0);
   const [creating, setCreating] = useState(false);

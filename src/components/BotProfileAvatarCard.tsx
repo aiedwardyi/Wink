@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ImagePlus, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { ImagePlus, Loader2, Trash2 } from "lucide-react";
 
-import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
-import { credentialErrorMessage, saveCredential } from "@/lib/credentials";
+import type { Bot } from "@/state/store";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -13,29 +12,20 @@ import {
   type MausMotion,
   type MausState,
 } from "@/lib/mascot";
-import { showAvatarFormatsHint, showAvatarImageGenerate, showAvatarShapeOptions } from "@/lib/friends-chrome";
+import { showAvatarFormatsHint } from "@/lib/friends-chrome";
 import {
-  BOT_AVATAR_CROPS,
   BOT_AVATAR_LABELS,
   BOT_AVATAR_PICKER_ORDER,
   botAvatarUrlFromStoredPath,
   isBotAvatarId,
   resolveBotAvatarChoice,
   type BotAvatarChoice,
-  type BotAvatarCrop,
 } from "../../shared/bot-avatar";
 import { BotAvatar } from "./Avatar";
 
 type AvatarPatch = Partial<
   Pick<Bot, "avatarCrop" | "avatarUrl" | "color" | "mascotExpression" | "mascotStyle">
 >;
-
-const CROP_KEY = {
-  mascot: "bot.cropMascot",
-  circle: "bot.cropCircle",
-  rounded: "bot.cropRounded",
-  square: "bot.cropSquare",
-} as const satisfies Record<BotAvatarCrop, "bot.cropMascot" | "bot.cropCircle" | "bot.cropRounded" | "bot.cropSquare">;
 
 const AVATAR_LABEL_KEYS: Partial<Record<BotAvatarChoice, MessageKey>> = {
   "icon-36": "bot.avatarCalm",
@@ -66,13 +56,8 @@ export function BotProfileAvatarCard({
   onPatch: (patch: AvatarPatch) => void;
 }) {
   const { t } = useI18n();
-  const { state, dispatch, flushBotPatches } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
-  const [imageKey, setImageKey] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
-  const [direction, setDirection] = useState("");
-  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rejected, setRejected] = useState(false);
   const crop = bot.avatarCrop ?? "mascot";
@@ -80,7 +65,6 @@ export function BotProfileAvatarCard({
   const pickerButtonRefs = useRef<Partial<Record<BotAvatarChoice, HTMLButtonElement | null>>>({});
   const cropRef = useRef(crop);
   cropRef.current = crop;
-  const imageConfigured = state.config?.imageGen?.configured === true;
 
   useEffect(() => {
     const button = pickerButtonRefs.current[selectedAvatar];
@@ -113,50 +97,6 @@ export function BotProfileAvatarCard({
   const removeImage = () => {
     setError(null);
     onPatch({ avatarUrl: null, avatarCrop: "mascot" });
-  };
-
-  const saveImageKey = async () => {
-    const key = imageKey.trim();
-    if (!key) return;
-    setSavingKey(true);
-    setError(null);
-    try {
-      const status: ConfigStatus = await saveCredential("openaiImageApiKey", key);
-      dispatch({ type: "configStatus", config: status });
-      setImageKey("");
-    } catch (saveError) {
-      setError(credentialErrorMessage(saveError, t));
-    } finally {
-      setSavingKey(false);
-    }
-  };
-
-  const generate = async () => {
-    setGenerating(true);
-    setError(null);
-    try {
-      // Generation reads the bot's identity and crop server-side. Commit any
-      // debounced profile edits first, then feed the generated avatar back
-      // through the same serialized mutation lane as upload/remove.
-      const cropAtStart = cropRef.current;
-      await flushBotPatches(bot.id);
-      const result: { avatarUrl: string; bot: Bot } = await api(`/api/bots/${bot.id}/avatar/generate`, {
-        method: "POST",
-        body: JSON.stringify({ prompt: direction.trim() }),
-      });
-      const latestCrop = cropRef.current;
-      onPatch({
-        avatarUrl: result.avatarUrl,
-        avatarCrop:
-          latestCrop === cropAtStart
-            ? (result.bot.avatarCrop ?? "circle")
-            : latestCrop,
-      });
-    } catch (generateError) {
-      setError(generateError instanceof Error ? generateError.message : String(generateError));
-    } finally {
-      setGenerating(false);
-    }
   };
 
   return (
@@ -200,7 +140,7 @@ export function BotProfileAvatarCard({
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={uploading || generating}
+            disabled={uploading}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
           >
             {uploading ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
@@ -210,7 +150,7 @@ export function BotProfileAvatarCard({
             <button
               type="button"
               onClick={removeImage}
-              disabled={uploading || generating}
+              disabled={uploading}
               aria-label={t("bot.removeAvatar")}
               title={t("bot.removeAvatarTitle")}
               className="flex size-10 items-center justify-center rounded-lg text-ink-secondary hover:bg-control hover:text-danger disabled:opacity-50"
@@ -220,31 +160,6 @@ export function BotProfileAvatarCard({
           )}
         </div>
         {(showAvatarFormatsHint() || rejected) && <div className="mt-1.5 text-[11.5px] text-ink-secondary">{t("bot.avatarFormats")}</div>}
-
-        {showAvatarShapeOptions() && (
-          <>
-        <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
-          {t("bot.avatarShape")}
-        </div>
-        <div className="grid grid-cols-4 overflow-hidden rounded-lg border border-hairline/40">
-          {BOT_AVATAR_CROPS.map((candidate, index) => (
-            <button
-              key={candidate}
-              type="button"
-              aria-pressed={crop === candidate}
-              onClick={() => onPatch({ avatarCrop: candidate })}
-              className={cn(
-                "py-1.5 text-[12.5px]",
-                index > 0 && "border-l border-hairline/40",
-                crop === candidate ? "bg-control text-ink" : "text-ink-secondary hover:bg-control/60 hover:text-ink",
-              )}
-            >
-              {t(CROP_KEY[candidate])}
-            </button>
-          ))}
-        </div>
-          </>
-        )}
 
         {crop === "mascot" && (
           <>
@@ -312,89 +227,6 @@ export function BotProfileAvatarCard({
               </>
             )}
           </>
-        )}
-
-        {showAvatarImageGenerate() && (
-        <div className="mt-5 border-t border-hairline/40 pt-4">
-          <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
-            <Sparkles size={14} className="text-accent" /> {t("bot.generateTitle")}
-          </div>
-          <div className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">
-            {t("bot.generateHelp")}
-          </div>
-
-          {!imageConfigured ? (
-            <div className="mt-3">
-              <div className="flex gap-2">
-                <input
-                  type="password"
-                  value={imageKey}
-                  onChange={(event) => setImageKey(event.target.value)}
-                  onKeyDown={(event) => event.key === "Enter" && void saveImageKey()}
-                  placeholder={t("bot.imageKeyPlaceholder")}
-                  aria-label={t("bot.imageKeyAria")}
-                  autoComplete="off"
-                  className="min-w-0 flex-1 rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[12.5px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => void saveImageKey()}
-                  disabled={savingKey || !imageKey.trim()}
-                  className="flex w-[72px] items-center justify-center gap-1.5 rounded-lg bg-control text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-50"
-                >
-                  {savingKey ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} /> {t("bot.save")}</>}
-                </button>
-              </div>
-              <div className="mt-1.5 text-[11px] text-ink-secondary">{t("bot.imageKeyStored")}</div>
-            </div>
-          ) : (
-            <div className="mt-3">
-              <textarea
-                value={direction}
-                onChange={(event) => setDirection(event.target.value.slice(0, 400))}
-                maxLength={400}
-                placeholder={t("bot.generateDirection", { name: bot.title || bot.name })}
-                aria-label={t("bot.generateDirectionAria")}
-                className="min-h-[72px] w-full resize-none rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[12.5px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-              />
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="text-[11px] tabular-nums text-ink-secondary">{direction.length}/400</span>
-                <button
-                  type="button"
-                  onClick={() => void generate()}
-                  disabled={generating || uploading}
-                  className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:brightness-110 disabled:opacity-50"
-                >
-                  {generating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  {generating ? t("bot.generating") : t("bot.generateAvatar")}
-                </button>
-              </div>
-              <details className="mt-3 rounded-lg border border-hairline/40 bg-inset px-3 py-2">
-                <summary className="cursor-pointer text-[11.5px] text-ink-secondary">{t("bot.replaceImageKey")}</summary>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    type="password"
-                    value={imageKey}
-                    onChange={(event) => setImageKey(event.target.value)}
-                    onKeyDown={(event) => event.key === "Enter" && void saveImageKey()}
-                    placeholder={t("bot.replaceKeyPlaceholder")}
-                    aria-label={t("bot.replaceKeyAria")}
-                    autoComplete="off"
-                    className="min-w-0 flex-1 rounded-lg border border-hairline/40 bg-card px-3 py-2 text-[12px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void saveImageKey()}
-                    disabled={savingKey || !imageKey.trim()}
-                    className="flex w-[72px] items-center justify-center gap-1.5 rounded-lg bg-control text-[12px] text-ink hover:bg-raised-hover disabled:opacity-50"
-                  >
-                    {savingKey ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} /> {t("bot.save")}</>}
-                  </button>
-                </div>
-              </details>
-            </div>
-          )}
-        </div>
         )}
 
         {error && <div role="alert" className="mt-3 text-[12px] text-danger">{error}</div>}

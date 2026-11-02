@@ -80,7 +80,7 @@ describe("replacement snapshot boundary", () => {
         onSnapshotRequired: async () => {
           const chatReady = await loadSnapshotBoundary(
             async () => {},
-            [{ key: "webhooks", load: async () => Promise.reject(new Error("webhooks unavailable")) }],
+            [{ key: "routines", load: async () => Promise.reject(new Error("routines unavailable")) }],
             (part, error) => scheduleRetry(part.key, error),
           );
           if (chatReady) {
@@ -109,7 +109,7 @@ describe("replacement snapshot boundary", () => {
     expect(applied).toEqual([
       { kind: "message", threadId: "bot-thread", message: { id: "user-1" } },
     ]);
-    expect(scheduleRetry).toHaveBeenCalledWith("webhooks", expect.any(Error));
+    expect(scheduleRetry).toHaveBeenCalledWith("routines", expect.any(Error));
     expect(sources).toHaveLength(1);
     expect(sources[0]!.close).not.toHaveBeenCalled();
     stop();
@@ -232,30 +232,21 @@ describe("notification routing", () => {
 
   it("identifies only the exact chat thread currently on screen", () => {
     expect(visibleNotificationThread({
-      activeView: "chat",
       selectedId: "bot-1",
       bots,
       groups,
     })).toBe("main-thread");
     expect(visibleNotificationThread({
-      activeView: "chat",
       selectedId: "room-1",
       bots,
       groups,
     })).toBe("room-thread");
-    expect(visibleNotificationThread({
-      activeView: "routines",
-      selectedId: "bot-1",
-      bots,
-      groups,
-    })).toBeNull();
   });
 
   it("clears unread only when that exact conversation is visible", () => {
     const owner = { id: "bot-1", unread: true };
-    const visible = { activeView: "chat" as const, selectedId: "bot-1", workspaceOpen: false };
+    const visible = { selectedId: "bot-1", workspaceOpen: false };
     expect(shouldClearSelectedUnread(visible, owner, true)).toBe(true);
-    expect(shouldClearSelectedUnread({ ...visible, activeView: "routines" }, owner, true)).toBe(false);
     expect(shouldClearSelectedUnread({ ...visible, selectedId: "room-1" }, owner, true)).toBe(false);
     expect(shouldClearSelectedUnread({ ...visible, workspaceOpen: true }, owner, true)).toBe(false);
     expect(shouldClearSelectedUnread(visible, { ...owner, unread: false }, true)).toBe(false);
@@ -263,7 +254,7 @@ describe("notification routing", () => {
 
   it("does not clear unread on a window that is hidden or unfocused, even with the chat on screen", () => {
     const owner = { id: "bot-1", unread: true };
-    const visible = { activeView: "chat" as const, selectedId: "bot-1", workspaceOpen: false };
+    const visible = { selectedId: "bot-1", workspaceOpen: false };
     expect(shouldClearSelectedUnread(visible, owner, false)).toBe(false);
   });
 
@@ -295,8 +286,6 @@ describe("notification routing", () => {
   it("clears the badge when a workspace closes over the visible chat", () => {
     const open = { ...initialState, bots: [coveredBot], selectedId: "bot-1", workspaceOpen: true };
     expect(reducer(open, { type: "setWorkspaceOpen", open: false }).bots[0]?.unread).toBe(false);
-    const away = { ...open, activeView: "routines" as const };
-    expect(reducer(away, { type: "setWorkspaceOpen", open: false }).bots[0]?.unread).toBe(true);
     const room = { ...initialState, groups: [coveredRoom], selectedId: "room-1", workspaceOpen: true };
     expect(reducer(room, { type: "setWorkspaceOpen", open: false }).groups[0]?.unread).toBe(false);
   });
@@ -323,8 +312,6 @@ describe("notification routing", () => {
   it("leaves the badge alone on focus regain when the chat is covered or not on screen", () => {
     const covered = { ...initialState, bots: [coveredBot], selectedId: "bot-1", workspaceOpen: true };
     expect(reducer(covered, { type: "windowActivated" }).bots[0]?.unread).toBe(true);
-    const away = { ...initialState, bots: [coveredBot], selectedId: "bot-1", workspaceOpen: false, activeView: "routines" as const };
-    expect(reducer(away, { type: "windowActivated" }).bots[0]?.unread).toBe(true);
   });
 });
 
@@ -422,7 +409,7 @@ describe("config status frames", () => {
         localVm: { mode: "per-bot", maxInstances: 3 },
         tts: { configured: true, ready: true, voice: "Ada" },
         profile: { name: "Ian", email: "ian@example.test" },
-        features: { skillRecorder: true },
+        features: { modelDial: true },
       }),
     ).toEqual({
       xai: { configured: true },
@@ -434,85 +421,8 @@ describe("config status frames", () => {
       localVm: { mode: "per-bot", maxInstances: 3 },
       tts: { configured: true, ready: true, voice: "Ada" },
       profile: { name: "Ian", email: "ian@example.test" },
-      features: { skillRecorder: true },
+      features: { modelDial: true },
     });
-  });
-});
-
-describe("task rename", () => {
-  it("updates the task title in local state immediately", () => {
-    const bot = {
-      id: "echo",
-      threadId: "t1",
-      name: "Echo",
-      title: "",
-      description: "",
-      notifications: true,
-      color: "green",
-      unread: false,
-      modelSelection: { instanceId: "x", model: "y" },
-      messages: [],
-      tasks: [
-        { threadId: "t1", title: "New task", createdAt: 1 },
-        { threadId: "t2", title: "Other", createdAt: 2 },
-      ],
-    } satisfies Bot;
-    const next = reducer(
-      { ...initialState, bots: [bot] },
-      { type: "renameTask", botId: bot.id, threadId: "t1", title: "Renamed" },
-    );
-    expect(next.bots[0]?.tasks?.find((task) => task.threadId === "t1")?.title).toBe("Renamed");
-    expect(next.bots[0]?.tasks?.find((task) => task.threadId === "t2")?.title).toBe("Other");
-  });
-
-  it("updates a channel task title in local state immediately", () => {
-    const group = {
-      id: "room",
-      threadId: "room-task-1",
-      name: "Launch",
-      memberIds: [],
-      defaultResponder: { kind: "everyone" },
-      bulletin: "",
-      unread: false,
-      createdAt: 1,
-      messages: [],
-      tasks: [
-        { threadId: "room-task-1", title: "New task", createdAt: 1 },
-        { threadId: "room-task-2", title: "Other", createdAt: 2 },
-      ],
-    } satisfies Group;
-    const next = reducer(
-      { ...initialState, groups: [group] },
-      { type: "renameGroupTask", groupId: group.id, threadId: "room-task-1", title: "Renamed" },
-    );
-    expect(next.groups[0]?.tasks?.find((task) => task.threadId === "room-task-1")?.title).toBe("Renamed");
-    expect(next.groups[0]?.tasks?.find((task) => task.threadId === "room-task-2")?.title).toBe("Other");
-  });
-});
-
-describe("Teach a skill feature flag", () => {
-  const config = configStatusFromFrame({
-    composio: { configured: false },
-    box: { configured: false },
-    vps: { configured: false, sshAlias: "" },
-    rooms: { turnTimeoutMinutes: 5 },
-    localVm: { mode: "shared", maxInstances: 2 },
-    features: { skillRecorder: true },
-  });
-
-  it("does not open the recorder while the experiment is disabled", () => {
-    expect(reducer(initialState, { type: "showSkillRecorder" }).activeView).toBe("chat");
-  });
-
-  it("opens after opt-in and returns to chat when disabled", () => {
-    const enabled = reducer({ ...initialState, config }, { type: "showSkillRecorder" });
-    expect(enabled.activeView).toBe("skill-recorder");
-
-    const disabled = reducer(enabled, {
-      type: "configStatus",
-      config: { ...config, features: { skillRecorder: false } },
-    });
-    expect(disabled.activeView).toBe("chat");
   });
 });
 
@@ -1007,7 +917,7 @@ describe("job-first bot creation", () => {
   });
 
   it("keeps the current conversation when a bot is created from a group", () => {
-    const state = { ...initialState, activeView: "chat" as const, selectedId: "group-1" };
+    const state = { ...initialState, selectedId: "group-1" };
     const bot = {
       id: "group-bot",
       threadId: "group-thread",
@@ -1023,7 +933,6 @@ describe("job-first bot creation", () => {
     const added = reducer(state, { type: "botAdded", bot, activate: false, focusComposer: false });
 
     expect(added.selectedId).toBe("group-1");
-    expect(added.activeView).toBe("chat");
     expect(added.bots[0]?.id).toBe(bot.id);
   });
 
@@ -1876,7 +1785,7 @@ describe("auto-speak", () => {
 });
 
 describe("reply buzz", () => {
-  const screen = { activeView: "chat" as const, selectedId: "bot-1", bots: [{ id: "bot-1", threadId: "t1" }], groups: [] };
+  const screen = { selectedId: "bot-1", bots: [{ id: "bot-1", threadId: "t1" }], groups: [] };
   const reply = { threadId: "t1", message: { role: "bot", kind: "text" } };
 
   it("buzzes once for a finished reply in the open chat", () => {
@@ -1893,7 +1802,6 @@ describe("reply buzz", () => {
     buzzOnReply({ ...reply, message: { role: "bot", kind: "reasoning" } }, screen, true, buzz);
     buzzOnReply({ ...reply, imported: true }, screen, true, buzz);
     buzzOnReply({ ...reply, message: { role: "bot", kind: "text", summarized: true } }, screen, true, buzz);
-    buzzOnReply(reply, { ...screen, activeView: "routines" as const }, true, buzz);
     expect(buzz).not.toHaveBeenCalled();
   });
 });

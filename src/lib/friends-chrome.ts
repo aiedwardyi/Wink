@@ -1,32 +1,11 @@
 /** Friends-desktop chrome: hide power-user surfaces without deleting them.
  * Flip a function to true to put that control back on the idle UI. */
 
-export function showSettingsSearch(): boolean {
-  return false;
-}
-
 export function showBotVoiceAndStartupSettings(): boolean {
   return false;
 }
 
-// One chat per bot: the server follows the newest chat, so synced ones stay reachable.
-export function showBotNewTaskControl(): boolean {
-  return false;
-}
-
-export function showChannelNewTaskControl(): boolean {
-  return false;
-}
-
 export function showChannelCallControl(): boolean {
-  return false;
-}
-
-export function showSidebarTeachSkill(): boolean {
-  return false;
-}
-
-export function showSidebarRoutines(): boolean {
   return false;
 }
 
@@ -35,52 +14,14 @@ export function showSidebarPhone(): boolean {
   return false;
 }
 
-export function showCommunityRepoLink(): boolean {
-  return false;
-}
-
-export function showAvatarImageGenerate(): boolean {
-  return false;
-}
-
-export function showAvatarShapeOptions(): boolean {
-  return false;
-}
-
-/** Avatars-only collapse and Comfortable / Compact / Avatars-only. Resize replaces them. */
-export function showSidebarDensityControls(): boolean {
-  return false;
-}
-
-/** Engines is folded into Connections. Flip to restore a separate tab. */
-export function showSettingsEnginesNav(): boolean {
-  return false;
-}
 
 /** Per-bot tokens/turns/cost table under Settings → Usage. */
 export function showUsagePerBotTable(): boolean {
   return false;
 }
 
-export function showSkinTaglines(): boolean {
-  return false;
-}
-
-export function showWelcomeTiles(): boolean {
-  return false;
-}
-
-/** Alt+T/U/I hints in the Settings nav and Alt+Shift+I on Model Index. The keys still work. */
-export function showSettingsHotkeyHints(): boolean {
-  return false;
-}
-
 /** Share Terminal with Chat where it can't be turned on (phone, browser). */
 export function showDisabledShareTerminal(): boolean {
-  return false;
-}
-
-export function showEmptyKeysCard(): boolean {
   return false;
 }
 
@@ -93,28 +34,11 @@ export function showBotMenuCopy(): boolean {
   return false;
 }
 
-export function showBotMenuMakeGroup(): boolean {
-  return false;
-}
-
 export function showNewMenuExport(): boolean {
   return false;
 }
 
-export function showNewMenuTeams(): boolean {
-  return false;
-}
-
-export function showGroupMenuCopyId(): boolean {
-  return false;
-}
-
 export function showPhoneDrawerCollapse(): boolean {
-  return false;
-}
-
-
-export function showHeaderPencil(): boolean {
   return false;
 }
 
@@ -124,9 +48,5 @@ export function showChatHeaderFind(): boolean {
 }
 
 export function showTouchPickerLegend(): boolean {
-  return false;
-}
-
-export function showHoverPin(): boolean {
   return false;
 }

@@ -27,11 +27,10 @@ describe("routine rings", () => {
   it("treats app settings and plugins as covering the chat", () => {
     const onScreen = ring.routineChatOnScreen;
     expect(typeof onScreen).toBe("function");
-    const view = { activeView: "chat", workspaceOpen: false, appSettingsOpen: false, pluginsOpen: false };
+    const view = { workspaceOpen: false, appSettingsOpen: false, pluginsOpen: false };
     expect(onScreen?.(view)).toBe(true);
     expect(onScreen?.({ ...view, appSettingsOpen: true })).toBe(false);
     expect(onScreen?.({ ...view, pluginsOpen: true })).toBe(false);
-    expect(onScreen?.({ ...view, activeView: "routines" })).toBe(false);
     expect(onScreen?.({ ...view, workspaceOpen: true })).toBe(false);
   });
 });

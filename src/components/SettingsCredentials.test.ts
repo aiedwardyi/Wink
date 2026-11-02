@@ -15,14 +15,8 @@ vi.mock("@/state/store", async (original) => ({
   ...(await original<typeof import("@/state/store")>()),
   useStore: () => ({ state, dispatch, flushBotPatches: vi.fn() }),
 }));
-vi.mock("@/lib/friends-chrome", async (original) => ({
-  ...(await original<typeof import("@/lib/friends-chrome")>()),
-  showAvatarImageGenerate: () => true,
-}));
-
 import { SavedKeys } from "./ApiKeys";
 import { VoiceSettings } from "./VoiceSettings";
-import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -62,7 +56,6 @@ async function removeSavedKey() {
 const bot = { id: "bot", name: "Bot", color: "blue" } as Bot;
 const rows: [string, () => ReactElement][] = [
   ["ttsKey", () => createElement(VoiceSettings, { bot, onPatch: vi.fn() })],
-  ["openaiImageApiKey", () => createElement(BotProfileAvatarCard, { bot, activeState: "idle", mascotMotion: null, onPatch: vi.fn() })],
 ];
 
 it("localizes credential failures for every Settings save and removal in English and Korean, preserving unknown errors", async () => {

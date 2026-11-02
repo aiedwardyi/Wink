@@ -94,7 +94,7 @@ describe("pre-start policy", () => {
   });
 
   it("is wired to the chat being shown and remembers every terminal open", () => {
-    expect(app).toContain('const chatShown = Boolean(bot && state.activeView === "chat" && !terminalOpen);');
+    expect(app).toContain('const chatShown = Boolean(bot && !terminalOpen);');
     expect(app).toContain("if (bot && terminalOpen) rememberTerminalOpened(bot.id);");
     expect(app).toContain("bridge: window.ogb?.terminal,");
     expect(app).toContain("measure: () => conversationRef.current?.getBoundingClientRect(),");

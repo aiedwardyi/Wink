@@ -7,7 +7,6 @@ import { StoreProvider, useStore, type Bot, type Group, type Message } from "@/s
 import { I18nProvider } from "@/lib/i18n";
 import { en, ko } from "@/lib/i18n-catalog";
 import { applySkin } from "@/lib/skins";
-import * as friendsChrome from "@/lib/friends-chrome";
 import { EXTENDED_REACTIONS } from "../../shared/reactions";
 
 import { ChatView } from "./ChatView";
@@ -366,21 +365,6 @@ describe("message menu in 1:1 chats", () => {
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
     expect(messageMenu()?.querySelector("[data-menu-pin]")?.textContent).toBe("Unpin message");
     await act(async () => { document.querySelector("[data-menu-pin]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    expect(pinnedChatId()).toBe("");
-  });
-
-  it("restores hover unpin when its gate is enabled", async () => {
-    vi.spyOn(friendsChrome, "showHoverPin").mockReturnValue(true);
-    const messages = [botMsg("b1", "hover target")];
-    const host = await mountChat(bot(messages));
-    await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
-    await act(async () => { document.querySelector("[data-menu-pin]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    expect(pinnedChatId()).toBe("b1");
-
-    await renderChat!(botWithPin(messages, "b1"));
-    const hover = host.querySelector('[data-mid="b1"] button[aria-label="Unpin message"]')!;
-    expect(hover).not.toBeNull();
-    await act(async () => { hover.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     expect(pinnedChatId()).toBe("");
   });
 

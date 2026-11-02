@@ -68,12 +68,12 @@ vi.mock("@/state/store", async (importOriginal) => {
 
 import { GroupWizard } from "./GroupWizard";
 
-async function renderWizard(preselectBotId?: string) {
+async function renderWizard() {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(createElement(GroupWizard, { onClose: () => undefined, preselectBotId }));
+    root.render(createElement(GroupWizard, { onClose: () => undefined }));
   });
   const dialog = host.querySelector('[role="dialog"]');
   if (!(dialog instanceof HTMLElement)) throw new Error("wizard did not render");
@@ -128,19 +128,6 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
-  it("checks a preselected bot on the members step", async () => {
-    const { host, root } = await renderWizard("b1");
-    try {
-      await toMembers(host);
-      expect(pickRow(host, "Ada").getAttribute("aria-checked")).toBe("true");
-      expect(pickRow(host, "Bo").getAttribute("aria-checked")).toBe("false");
-      expect(button(host, "Create").hasAttribute("disabled")).toBe(false);
-    } finally {
-      await act(async () => {
-        root.unmount();
-      });
-    }
-  });
 
   it("shows the name, members and reply rule on one card", async () => {
     const { host, root } = await renderWizard();
@@ -161,8 +148,9 @@ describe("GroupWizard members", () => {
   });
 
   it("creates on Enter in the name with a bot picked, named New group when blank", async () => {
-    const { host, root } = await renderWizard("b1");
+    const { host, root } = await renderWizard();
     try {
+      await act(async () => pickRow(host, "Ada").click());
       await act(async () => {
         host.querySelector('input[aria-label="Name your group"]')!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       });

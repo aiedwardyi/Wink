@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, AtSign, Check, ChevronDown, ChevronRight, Crown, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, PinOff, Plus, RefreshCw, Search, Users, X } from "lucide-react";
+import { ArrowDown, AtSign, Check, ChevronDown, ChevronRight, Crown, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, Users, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -39,8 +39,7 @@ import { TaskRecoveryCard } from "./TaskRecoveryCard";
 import { roomRecoveryBusy, roomRecoveryPacket } from "@/lib/task-recovery";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReconnectingCue } from "./ReconnectingCue";
-import { GroupTaskPicker } from "./TaskPicker";
-import { showChannelCallControl, showChannelNewTaskControl, showHoverPin } from "@/lib/friends-chrome";
+import { showChannelCallControl } from "@/lib/friends-chrome";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
@@ -273,30 +272,6 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: Bo
       />
       <span className="text-[11px] font-medium text-ink-secondary">{name}</span>
     </div>
-  );
-}
-
-/** Pin toggle for one room message — one pin per room, patchGroup path. */
-function PinToggle({ group, message }: { group: Group; message: Message }) {
-  const { t } = useI18n();
-  const { dispatch } = useStore();
-  const pinned = group.pinnedMessageId === message.id;
-  return (
-    <button
-      onClick={() =>
-        dispatch({
-          type: "patchGroup",
-          groupId: group.id,
-          patch: { pinnedMessageId: pinned ? "" : message.id },
-        })
-      }
-      aria-label={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-      aria-pressed={pinned}
-      className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-      title={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-    >
-      {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-    </button>
   );
 }
 
@@ -582,7 +557,7 @@ export const Transcript = memo(function Transcript({
                     >
                       <MessageSquareReply size={14} />
                     </button>
-                    {showHoverPin() && <PinToggle group={group} message={m} />}
+
                   </div>
                 )}
                 <div
@@ -623,7 +598,7 @@ export const Transcript = memo(function Transcript({
                     >
                       <MessageSquareReply size={14} />
                     </button>
-                    {showHoverPin() && <PinToggle group={group} message={m} />}
+
                   </div>
                 )}
                 <ReactionChips
@@ -832,7 +807,6 @@ function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: ()
     </button>
   );
 }
-
 
 type RoomSetupFields = {
   setupPending?: boolean;
@@ -1212,7 +1186,7 @@ export function GroupView({ group }: { group: Group }) {
     `group:${group.id}:${group.threadId}`,
     group.messages,
   );
-  // same toggle the hover Pin button dispatches, so other devices sync it
+  // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     dispatch({
       type: "patchGroup",
@@ -1595,7 +1569,7 @@ export function GroupView({ group }: { group: Group }) {
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
           <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
-          {!setupPending && !group.dm && showChannelNewTaskControl() && <GroupTaskPicker group={group} />}
+
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />

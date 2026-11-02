@@ -112,24 +112,6 @@ contextBridge.exposeInMainWorld("ogb", {
     ipcRenderer.on("speech:end", handler);
     return () => ipcRenderer.removeListener("speech:end", handler);
   },
-  /** A local-first demonstration recorder. Global events stay in main; the
-   * renderer receives only the privacy-filtered event stream. */
-  skillRecorder: {
-    permissions: () => ipcRenderer.invoke("skill-recorder:permissions"),
-    start: () => ipcRenderer.invoke("skill-recorder:start"),
-    stop: () => ipcRenderer.invoke("skill-recorder:stop"),
-    save: (payload) => ipcRenderer.invoke("skill-recorder:save", payload),
-    onEvent: (cb) => {
-      const handler = (_event, value) => cb(value);
-      ipcRenderer.on("skill-recorder:event", handler);
-      return () => ipcRenderer.removeListener("skill-recorder:event", handler);
-    },
-    onEnd: (cb) => {
-      const handler = (_event, value) => cb(value);
-      ipcRenderer.on("skill-recorder:end", handler);
-      return () => ipcRenderer.removeListener("skill-recorder:end", handler);
-    },
-  },
   transcription: {
     status: () => ipcRenderer.invoke("assemblyai:status"),
     setKey: (value) => ipcRenderer.invoke("assemblyai:set-key", value),

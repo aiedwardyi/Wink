@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Search, Settings, Terminal, User, Users, X } from "lucide-react";
+import { ChartScatter, ChevronDown, ChevronLeft, ChevronRight, Coins, Keyboard, KeyRound, MonitorSmartphone, Palette, Settings, User, Users, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { detailedRepliesEnabled, showToolCallsEnabled } from "@/lib/feature-flags";
-import {
-  showSettingsEnginesNav,
-  showSettingsHotkeyHints,
-  showSettingsSearch,
-} from "@/lib/friends-chrome";
 import {
   friendsSettingsNavVisible,
   resolvedAppSettingsSection,
@@ -57,7 +52,6 @@ const SECTIONS: Array<{
   { id: "team", icon: Users },
   { id: "models-index", icon: ChartScatter, shortcut: "Alt+I" },
   { id: "shortcuts", icon: Keyboard },
-  { id: "engines", icon: Terminal },
 ];
 
 const SECTION_KEY = {
@@ -66,7 +60,6 @@ const SECTION_KEY = {
   connections: "settings.section.connections",
   themes: "settings.section.themes",
   shortcuts: "settings.section.shortcuts",
-  engines: "settings.section.engines",
   companion: "settings.section.devices",
   usage: "settings.section.usage",
   team: "settings.section.team",
@@ -76,10 +69,9 @@ const SECTION_KEY = {
 
 function sectionNavVisible(
   section: (typeof SECTIONS)[number],
-  query: string,
   phoneAvailable: boolean,
 ): boolean {
-  return friendsSettingsNavVisible(section.id, query, { phoneAvailable });
+  return friendsSettingsNavVisible(section.id, { phoneAvailable });
 }
 
 function isMissingUpdateConfig(message?: string): boolean {
@@ -443,17 +435,15 @@ export function SettingsModal({
   useBackLayer(!closing && phone && page, back);
   const dialogRef = useRef<HTMLDivElement>(null);
   useSettingsSwipe(dialogRef, phone && !closing, phone && page ? section : false, back);
-  const [query, setQuery] = useState("");
   const [preferencesOpen, setPreferencesOpen] = useState(defaultAdvancedOpen);
-  const q = query.trim().toLowerCase();
   const phoneAvailable = true;
   const [teamOwner, setTeamOwner] = useState(false);
   const [teamStats, setTeamStats] = useState<TeamView | null>(null);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const teamToday = useTeamToday(teamOwner && !closing, accountEmail);
   const sectionShown = useCallback(
-    (entry: (typeof SECTIONS)[number]) => (entry.id !== "team" || teamOwner) && (!phone || entry.id !== "shortcuts") && sectionNavVisible(entry, q, phoneAvailable),
-    [phoneAvailable, q, teamOwner, phone],
+    (entry: (typeof SECTIONS)[number]) => (entry.id !== "team" || teamOwner) && (!phone || entry.id !== "shortcuts") && sectionNavVisible(entry, phoneAvailable),
+    [phoneAvailable, teamOwner, phone],
   );
   const visibleSections = SECTIONS.filter(sectionShown);
 
@@ -594,29 +584,7 @@ export function SettingsModal({
           <div id="app-settings-title" className="px-2 pb-2 pt-1 text-[15px] font-semibold text-ink max-md:hidden">
             {t("settings.title")}
           </div>
-          {showSettingsSearch() && (
-          <div className="mb-1.5 flex items-center gap-2 rounded-lg bg-control/70 px-2.5 py-1.5">
-            <Search size={14} className="shrink-0 text-ink-secondary" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Escape") return;
-                e.stopPropagation();
-                if (query) setQuery("");
-                else dispatch({ type: "toggleAppSettings", open: false });
-              }}
-              placeholder={t("settings.search")}
-              aria-label={t("settings.searchAria")}
-              className="w-full bg-transparent text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
-            />
-          </div>
-          )}
-          {visibleSections.length === 0 && (
-            <div className="px-2.5 py-4 text-[12.5px] leading-relaxed text-ink-secondary">
-              {t("settings.noMatch", { query: query.trim() })}
-            </div>
-          )}
+
           <div className="flex flex-col gap-0.5 max-md:flex-row max-md:justify-between max-md:gap-1 max-md:overflow-x-auto">
             {visibleSections.map(({ id, icon: Icon, shortcut }) => (
               <button
@@ -632,11 +600,7 @@ export function SettingsModal({
               >
                 <Icon size={15} />
                 <span className="-mr-1.5 min-w-0 flex-1 truncate max-md:hidden">{t(SECTION_KEY[id])}</span>
-                {shortcut && showSettingsHotkeyHints() && (
-                  <kbd className="ml-auto shrink-0 font-mono text-[10px] tracking-wide text-ink-secondary/55 max-md:hidden">
-                    {shortcut}
-                  </kbd>
-                )}
+
               </button>
             ))}
           </div>
@@ -731,11 +695,6 @@ export function SettingsModal({
               </>
             )}
 
-            {showSettingsEnginesNav() && section === "engines" && (
-              <Card title={t("settings.engines.title")} subtitle={t("settings.engines.subtitle")}>
-                <EnginesSettings />
-              </Card>
-            )}
 
             {section === "usage" && <UsageSection />}
             {section === "team" && teamStats && (

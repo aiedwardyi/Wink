@@ -6,7 +6,7 @@ import { I18nProvider } from "@/lib/i18n";
 import { StoreProvider, useStore, type ConfigStatus } from "@/state/store";
 import { SettingsModal } from "@/components/SettingsModal";
 const boundary = Date.parse("2026-11-03T00:00:00+09:00");
-const config: ConfigStatus = { composio: { configured: false }, gemini: { configured: false }, box: { configured: false }, vps: { configured: false, sshAlias: "" }, rooms: { turnTimeoutMinutes: 5 }, localVm: { mode: "shared", maxInstances: 1 }, profile: { name: "Edward", email: "" }, features: { skillRecorder: false, showToolCalls: false } };
+const config: ConfigStatus = { composio: { configured: false }, gemini: { configured: false }, box: { configured: false }, vps: { configured: false, sshAlias: "" }, rooms: { turnTimeoutMinutes: 5 }, localVm: { mode: "shared", maxInstances: 1 }, profile: { name: "Edward", email: "" }, features: { showToolCalls: false } };
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>, fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 function View({ tick = 0 }) {
   const { state, dispatch } = useStore();

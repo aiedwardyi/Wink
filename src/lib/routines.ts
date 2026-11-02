@@ -58,13 +58,3 @@ export interface RoutineRun {
   createdAt: number;
   seenAt?: number;
 }
-
-export interface RoutineInput {
-  name: string;
-  prompt: string;
-  botId: string;
-  runOn?: RoutineRunOn;
-  enabled?: boolean;
-  schedule: RoutineSchedule;
-  durationMinutes?: number;
-}

@@ -64,11 +64,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function ShowRoutines() {
+function ShowSettings() {
   const { dispatch, state } = useStore();
   useEffect(() => {
-    if (state.hydrated && state.activeView === "chat") dispatch({ type: "showRoutines" });
-  }, [dispatch, state.hydrated, state.activeView]);
+    if (state.hydrated) dispatch({ type: "toggleAppSettings", open: true });
+  }, [dispatch, state.hydrated]);
   return null;
 }
 
@@ -273,12 +273,12 @@ describe("Sidebar needs-you glow", () => {
     }
   });
 
-  it("glows the collapsed control for a routine on the selected chat while Routines covers it", async () => {
+  it("glows the collapsed control for a routine on the selected chat while Settings covers it", async () => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
     const { host, unmount } = await mountSidebar(
       { bots: [bot("ringer", [])], groups: [] },
       [run("ringer", "ringer-thread")],
-      createElement(ShowRoutines),
+      createElement(ShowSettings),
     );
     try {
       const expand = () => host.querySelector('button[aria-label="Expand sidebar, a routine rang"]');
