@@ -3098,8 +3098,6 @@ describe("harness HTTP API", () => {
     await api("DELETE", `/api/bots/${bot.id}`);
   });
 
-
-
   it("persists an answered onboarding card", async () => {
     const { body } = await api("GET", "/api/bots");
     const bot = body.bots[0];
