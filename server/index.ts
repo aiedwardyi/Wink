@@ -8158,7 +8158,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, reply.status, reply.body);
     }
     if (method === "GET" && path === "/api/team/today") {
-      const reply = await teamTodayRoute(DATA_DIR, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, crashOrigin, crashCount);
+      const reply = await teamTodayRoute(DATA_DIR, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, crashOrigin, crashCount, Date.now(), {
+        base: phoneAccess.base(), baked: googleEnv.teamRelay, tokens: googleAccount,
+      });
       return json(res, reply.status, reply.body);
     }
     if (method === "GET" && path === "/api/quorum") {
