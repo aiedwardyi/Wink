@@ -236,6 +236,12 @@ describe("ModelPicker friends chip", () => {
     expect(html).not.toMatch(/<span[^>]*>Claude<\/span>/);
   });
 
+  it("shapes the chip as a light bevel tile, not a pill", () => {
+    const trigger = markup().match(/<button[^>]*aria-haspopup="dialog"[^>]*>/)?.[0] ?? "";
+    expect(trigger).toContain("rounded-[3px] [corner-shape:bevel]");
+    expect(trigger).not.toContain("rounded-full");
+  });
+
   it("shows effort beside the model name wearing the family accent", () => {
     const html = markup({ instanceId: "grok", model: "grok-4.6", mode: "automatic", effort: "high" });
     expect(chipText(html)).toContain("Grok 4.6 High");
