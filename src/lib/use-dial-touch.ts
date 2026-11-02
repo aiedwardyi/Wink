@@ -104,6 +104,11 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, index: number, 
     };
     // The picker's own touch stepper and the phone sidebar swipe listen above the dial.
     const hold = (event: TouchEvent) => event.stopPropagation();
+    // An uncancelled move lets Chrome fling, and the tap that stops a fling never clicks.
+    const pin = (event: TouchEvent) => {
+      hold(event);
+      event.preventDefault();
+    };
 
     el.addEventListener("pointerdown", onDown);
     el.addEventListener("pointermove", onMove);
@@ -111,7 +116,7 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, index: number, 
     el.addEventListener("pointercancel", onUp);
     el.addEventListener("click", onClick, true);
     el.addEventListener("touchstart", hold, { passive: true });
-    el.addEventListener("touchmove", hold, { passive: true });
+    el.addEventListener("touchmove", pin, { passive: false });
     return () => {
       cancelAnimationFrame(frame);
       el.removeEventListener("pointerdown", onDown);
@@ -120,7 +125,7 @@ export function useDialTouch(ref: RefObject<HTMLElement | null>, index: number, 
       el.removeEventListener("pointercancel", onUp);
       el.removeEventListener("click", onClick, true);
       el.removeEventListener("touchstart", hold);
-      el.removeEventListener("touchmove", hold);
+      el.removeEventListener("touchmove", pin);
     };
   }, [ref]);
 }
