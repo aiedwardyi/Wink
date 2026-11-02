@@ -168,9 +168,15 @@ describe("harness playbook", () => {
     );
   });
 
+  it("fails an unmet acceptance item even when it predates the change", () => {
+    expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain(
+      "An unmet item fails even when the worker says it was already like that.",
+    );
+  });
+
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13168);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13243);
   });
 
   it("fills the worktree path from the configured root", () => {
