@@ -1667,10 +1667,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             }
             // result.usage is this invocation's total — one process per turn,
             // so it is the turn's figure (settle adds any held result).
-            if (o.is_error === true && !hasLiveBackgroundWork(session)) {
+            if (o.is_error === true) {
               const errors = Array.isArray(o.errors) ? o.errors.filter((error: unknown) => typeof error === "string") : [];
               const text = [typeof o.result === "string" ? o.result : "", ...errors].join("\n");
-              if (classifyError({ text }).reason === "auth") closeSession(threadId, "authentication failed");
+              if (classifyError({ text }).reason === "auth") {
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true });
+                if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
+              }
             }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null, claudeUsage(o.usage));
             break;

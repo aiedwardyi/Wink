@@ -78,6 +78,8 @@
 //                      way the real CLI reads it — the driver writes it to a
 //                      private temp file and deletes it when the turn settles,
 //                      so a test cannot open it after the fact.
+//   FAKE_CLAUDE_REPLY_FIXTURE  path to a JSON array of recorded stream-json
+//                      messages, written after init in place of the reply
 //   FAKE_CLAUDE_AUTH   in (default) | out | unsupported | malformed |
 //                      inherited-api-key — what `auth status` reports
 //   FAKE_CLAUDE_PROMPT_LOG  path; every stdin message is appended as a JSON
@@ -649,6 +651,14 @@ const playTurn = (prompt: JsonValue) => {
   if (mode === "exit-early") {
     process.stderr.write("fake-claude: simulated crash before result\n");
     process.exit(3);
+  }
+  const replyFixture = process.env.FAKE_CLAUDE_REPLY_FIXTURE;
+  if (replyFixture) {
+    out({ type: "system", subtype: "init", session_id: sessionId, model });
+    for (const message of JSON.parse(readFileSync(replyFixture, "utf8"))) out(message);
+    turnRunning = false;
+    finishIfDone();
+    return;
   }
   if (mode.startsWith("auth-recovery") && !authReady) {
     out({ type: "system", subtype: "init", session_id: sessionId, model });

@@ -403,6 +403,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.FAKE_CLAUDE_WAKE_DELAY_MS;
     delete process.env.FAKE_CLAUDE_NOTIFY_REPEAT_MS;
     delete process.env.FAKE_CLAUDE_AUTH_GATE;
+    delete process.env.FAKE_CLAUDE_REPLY_FIXTURE;
     delete process.env.FAKE_CLAUDE_STEER_LOG;
     delete process.env.FAKE_CLAUDE_NARRATION_TEXT;
     delete process.env.FAKE_CLAUDE_PROMPT_LOG;
@@ -1916,6 +1917,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(readFileSync(dump, "utf8")).toBe(dumpBefore);
     expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(2);
     expect(recorder.events.filter((e) => e.type === "turn.completed")).toHaveLength(2);
+  });
+
+  it("turns a recorded signed-out reply into a sign-in error", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/signed-out.json", import.meta.url), "utf8"));
+    const fixture = join(scratch, "signed-out.json");
+    writeFileSync(fixture, JSON.stringify(recorded.reply.messages));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-signed-out", text: "hi" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toMatchObject([{ turnId, message: "Claude is not signed in.", setup: true }]);
+    expect(recorder.events.some((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toBe(false);
+    expect(done).toMatchObject({ turnId, ok: false });
   });
 
   it("reloads login after an auth error while resuming the same conversation", async () => {
