@@ -76,16 +76,18 @@ export function teamSnagNote(snags: ClaimedSnag[], file: string, timeZone?: stri
   return [...parts, pointer].join("\n\n");
 }
 
-/** The default section's Chief gets a note that cannot schedule a wake. */
+const ownerChief = (store: Store) => store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section)) ?? store.bots.find((bot) => bot.chiefOfStaff);
+
+/** The default section's Chief, else the first Chief, gets a note that cannot schedule a wake. */
 export function postChiefNote(store: Store, deviceId: string | undefined, text: string, ids?: string[], reportIds?: string[]): boolean {
-  const chief = store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section));
+  const chief = ownerChief(store);
   if (!chief) return false;
   store.appendMessage(chief.threadId, { role: "bot", kind: "note", text, origin: deviceId, quiet: true, ...(ids ? { snagIds: ids } : {}), ...(reportIds ? { reportIds } : {}) });
   return true;
 }
 
 export function chiefSnagIds(store: Store): Set<string> {
-  const chief = store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section));
+  const chief = ownerChief(store);
   const threads = chief ? new Set([chief.threadId, ...store.tasks(chief.id).map((task) => task.threadId)]) : [];
   const ids = new Set<string>();
   for (const threadId of threads) {
@@ -97,7 +99,7 @@ export function chiefSnagIds(store: Store): Set<string> {
 }
 
 export function chiefReportIds(store: Store): Set<string> {
-  const chief = store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section));
+  const chief = ownerChief(store);
   const threads = chief ? new Set([chief.threadId, ...store.tasks(chief.id).map((task) => task.threadId)]) : [];
   return new Set([...threads].flatMap((threadId) => store.messagesFor(threadId).flatMap((message) => message.reportIds ?? [])));
 }

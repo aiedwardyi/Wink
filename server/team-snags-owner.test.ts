@@ -137,6 +137,17 @@ describe("team snag owner", () => {
     expect(readFileSync(opts.file, "utf8").trim().split("\n")).toHaveLength(1);
   });
 
+  it("posts and acks when the only Chief sits in a named section", async () => {
+    const chief = store.patchBot(store.createBot().id, { section: "Orbit" })!;
+    store.setChiefOfStaff(chief.id);
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ snags: [snag] }));
+    const opts = { ...options(fetchImpl, []), postedIds: () => chiefSnagIds(store), post: (text: string, ids: string[]) => postChiefNote(store, "this-pc", text, ids) };
+    expect(await claimTeamSnags(opts)).toBe(1);
+    expect(store.messagesFor(chief.threadId).at(-1)?.snagIds).toEqual([snag.id]);
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith("/ack"))).toHaveLength(1);
+    expect(chiefSnagIds(store)).toEqual(new Set([snag.id]));
+  });
+
   it.each(["throws", "http"])("retries a failed ack without repeating the file or note after a restart: %s", async (failure) => {
     let first = true;
     const fetchImpl = vi.fn<typeof fetch>(async (url) => {

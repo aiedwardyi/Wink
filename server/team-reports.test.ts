@@ -252,10 +252,21 @@ describe("private team reporting", () => {
     expect(held.report.missing.filter((line) => line.includes("refused"))).toHaveLength(3);
   });
 
+  it("posts and acks when the only Chief sits in a named section", async () => {
+    const f = await fixture();
+    f.ownerStore.patchBot(f.chief.id, { section: "Orbit" });
+    await f.service.handle({ ...f.args, action: "send" });
+    expect(await claimTeamReports(f.ownerOptions)).toBe(1);
+    expect(f.ownerStore.messagesFor(f.chief.threadId).at(-1)?.text).toContain("Team report");
+    expect(await f.relay.claim(Date.now() + 11 * 60_000)).toHaveLength(0);
+  });
+
   it("never claims filing if the owner cannot post a note or persist a receipt", async () => {
     const f = await fixture();
     await f.service.handle({ ...f.args, action: "send" });
-    expect(await claimTeamReports({ ...f.ownerOptions, post: () => false })).toBe(0);
+    const warn = vi.fn();
+    expect(await claimTeamReports({ ...f.ownerOptions, post: () => false, warn })).toBe(0);
+    expect(warn).toHaveBeenCalledOnce();
     expect(await f.relay.claim(Date.now() + 11 * 60_000)).toHaveLength(1);
     expect(await claimTeamReports({ ...f.ownerOptions, email: () => "someone@example.test" })).toBe(0);
   });
