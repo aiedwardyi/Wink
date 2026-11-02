@@ -587,7 +587,7 @@ describe("dark Blueprint skins", () => {
       }
       const body = css.match(new RegExp(`\\[data-skin="${skin.id}"\\]\\s*\\{([^}]*)\\}`))?.[1] ?? "";
       expect(body).toMatch(/color-scheme:\s*dark/);
-      expect(body).toContain('"Bahnschrift"');
+      expect(body).toContain('var(--font-geist) "Inter"');
     }
     expect(cssToken("blueprint-gray", "--color-app")).not.toBe(cssToken("blueprint-charcoal", "--color-app"));
   });
@@ -1434,9 +1434,9 @@ describe("skin persistence", () => {
     expect(extras).toHaveLength(0);
   });
 
-  it("swaps the extra style tag between the tool skins and Servo", () => {
+  it.each(["mono-hud", "servo-gray"] as const)("swaps the extra style tag between the tool skins and %s", (id) => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({})));
-    applySkin("mono-hud");
+    applySkin(id);
     expect(extras.map((el) => el.dataset.skinExtra)).toEqual(["mono-hud"]);
     applySkin("modal");
     expect(extras.map((el) => el.dataset.skinExtra)).toEqual(["tool"]);

@@ -107,6 +107,7 @@ export const SECTION_PHRASE_KEYS = {
     "settings.skin.claude.tagline",
     "settings.skin.precision.tagline",
     "settings.skin.mono-hud.tagline",
+    "settings.skin.servo-gray.tagline",
     "settings.skin.notebook.tagline",
     "settings.skin.messenger.tagline",
     "settings.skin.community.tagline",

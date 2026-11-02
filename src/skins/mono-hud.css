@@ -4,7 +4,7 @@
 /* The composer's top edge is a six-segment effort gauge, lit from the
    data-hud-effort that useMonoHud() stamps on the root. One keyframe name per
    level, so a new level replays the latch and the same level stays still. */
-@scope ([data-skin="mono-hud"]) to ([data-skin]) {
+@scope ([data-skin="mono-hud"], [data-skin="servo-gray"]) to ([data-skin]) {
   :scope {
     --hud-line: #ffffff1f;
     --hud-dim: #ffffff1c;
@@ -20,7 +20,7 @@
 
   [data-orbit-composer-frame] {
     border-radius: 12px;
-    background: linear-gradient(160deg, #1a1c21, #111216 60%, #0d0e11);
+    background: var(--hud-composer-background, linear-gradient(160deg, #1a1c21, #111216 60%, #0d0e11));
     box-shadow: inset 0 0 0 1px var(--hud-line);
   }
 

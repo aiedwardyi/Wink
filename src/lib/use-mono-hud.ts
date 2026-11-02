@@ -6,7 +6,8 @@ import { useSkin } from "./skins";
 
 /** Servo's composer gauge reads the open bot's effort from data-hud-effort on the root. */
 export function useMonoHud(bot: Bot | undefined, instances: InstanceInfo[]): void {
-  const on = useSkin() === "mono-hud";
+  const skin = useSkin();
+  const on = skin === "mono-hud" || skin === "servo-gray";
   const selection = on && bot ? shownModelSelection(bot) : undefined;
   const effort = selection && displayedChipEffort(instances.find((item) => item.instanceId === selection.instanceId), selection.model, selection.effort);
   useEffect(() => {

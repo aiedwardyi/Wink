@@ -51,6 +51,7 @@ export const SKIN_IDS = [
   "claude",
   "precision",
   "mono-hud",
+  "servo-gray",
   "notebook",
   "messenger",
   "community",
@@ -121,6 +122,7 @@ export const SKINS: readonly Skin[] = [
   { id: "claude", name: "Claude", tagline: "Warm black, serif replies, quiet chrome." },
   { id: "precision", name: "Precision", tagline: "Compact issue discussion, cool charcoal." },
   { id: "mono-hud", name: "Servo", tagline: "Black HUD, white gauges, color only in the marks." },
+  { id: "servo-gray", name: "Servo Gray", tagline: "Gray HUD, white gauges, quiet conversation bubbles." },
   { id: "notebook", name: "Notebook", tagline: "Document calm, paper and ink." },
   { id: "messenger", name: "Messenger", tagline: "Blue bubbles, clear conversation." },
   { id: "community", name: "Community", tagline: "Sender-first shared space, slate dark." },
@@ -217,7 +219,7 @@ export function readSkin(): SkinId {
  */
 export function applySkin(id: SkinId): void {
   document.documentElement.dataset.skin = id;
-  const kind = TOOL_SKIN_IDS.has(id) ? "tool" : id === "mono-hud" ? id : "";
+  const kind = TOOL_SKIN_IDS.has(id) ? "tool" : id === "mono-hud" || id === "servo-gray" ? "mono-hud" : "";
   const extra = document.head.querySelector<HTMLElement>("style[data-skin-extra]");
   if (extra && extra.dataset.skinExtra !== kind) extra.remove();
   if (kind && extra?.dataset.skinExtra !== kind) {

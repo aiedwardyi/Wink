@@ -308,7 +308,7 @@ export function ModelPickerControl({
   );
 
   const dialog = (
-    <div className="model-cross-backdrop animate-fade-in" data-skin={skin === "mono-hud" ? DEFAULT_SKIN : undefined} data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
+    <div className="model-cross-backdrop animate-fade-in" data-skin={skin === "mono-hud" || skin === "servo-gray" ? DEFAULT_SKIN : undefined} data-picker-family={family} data-contained={contained || undefined} data-closing={presence.closing || undefined} inert={presence.closing} onMouseDown={(event) => {
       if (event.target === event.currentTarget || (event.target instanceof Element && event.target.matches(".model-cross-plane, .model-cross-stage"))) close();
     }}>
       <div
