@@ -123,7 +123,7 @@ Wink has no analytics. This is everything it listens on, sends and stores.
 
 **Stores**
 
-- `~/.orbit` (or `OMB_DATA_DIR`): bots, chats (`messages.db`), each bot's `MEMORY.md`, task records, attachments, redacted engine event logs, phone pairing keys, a decision log, and checkpoints (a shadow git snapshot before each turn in a project folder). `orbit-msg` lives in `~/.orbit/bin`.
+- `~/.orbit` (or `OMB_DATA_DIR`): bots, chats (`messages.db`), each bot's `MEMORY.md`, task records, attachments, redacted engine event logs, phone pairing keys, and a decision log. `orbit-msg` lives in `~/.orbit/bin`.
 - `%APPDATA%\orbit-desktop`: Wink's own API keys in `credentials.bin`, encrypted with the Windows credential store through Electron `safeStorage`, the updater's install ID, and logs. It also holds Electron's browser data: local storage (UI settings and unsent drafts), plus the cookies and logins of the bots' built-in browser and of the windows that open your other PCs.
 - In the same userData folder: `error-report-consent.json` (consent), `error-report-queue.json` (pending reports), `error-report-budget.json` (daily upload count and backoff), and `error-report-active` (previous-run marker). These files are not synced by Wink.
 - Outside those, only while needed: `~/.gemini/config/mcp_config.json` during Antigravity turns (restored after) and a temp `mcp.json` per Claude turn (deleted after). Picking a local model for Grok adds it to `~/.grok/config.toml`, with that server's API key if it has one, and the entry stays.
@@ -148,7 +148,7 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 - Windows 10 or 11, x64
 - At least one engine CLI with an active login
-- [Git for Windows](https://gitforwindows.org) on the PATH, for workers and checkpoints
+- [Git for Windows](https://gitforwindows.org) on the PATH, for workers
 - Optional: [Tailscale](https://tailscale.com) on the PC and phone, for phone access (the free plan works)
 - To build: Node.js 24+ and pnpm 10.33
 

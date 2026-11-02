@@ -254,10 +254,7 @@ beforeAll(async () => {
         config: { user_id: body.user_id },
       }));
     }
-    if (req.headers.authorization === "Bearer box_slow") {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    }
-    const ok = req.headers.authorization === "Bearer box_good" || req.headers.authorization === "Bearer box_slow";
+    const ok = req.headers.authorization === "Bearer box_good";
     res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
     res.end(JSON.stringify(ok ? { ok: true, boxes: [] } : { ok: false, code: "unauthorized" }));
   });
@@ -281,11 +278,6 @@ beforeAll(async () => {
       OMB_SSE_HEARTBEAT_MS: "50",
       FAKE_CLAUDE_MODE: "hang",
       FAKE_CLAUDE_DUMP: fakeClaudeDump,
-      // credentials the desktop shell could have injected at boot: one the
-      // known lists name, one nobody has added yet. Neither is any spawned
-      // child's to read (see the /api/cli-test probe test).
-      MINIMAX_API_KEY: "minimax-must-not-leak",
-      ACME_API_KEY: "acme-must-not-leak",
       // every settling fake turn also reports the account's subscription windows
       FAKE_CLAUDE_RATE_LIMITS: "1",
     },
@@ -3259,33 +3251,6 @@ describe("harness HTTP API", () => {
     expect(nothing.status).toBe(400);
   });
 
-  it("keeps a Claude turn running when Muse connection settings change", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
-    try {
-      expect((await api("PATCH", `/api/bots/${bot.id}`, {
-        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
-      })).status).toBe(200);
-      rmSync(fakeClaudeDump, { force: true });
-      expect((await api("POST", `/api/bots/${bot.id}/messages`, {
-        text: "Keep this task recoverable",
-      })).status).toBe(202);
-      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
-      expect(storedTaskPacket(bot.threadId).flushReason).toBe("progress");
-
-      expect((await api("PATCH", "/api/instances/muse", { cli: "muse-preset" })).status).toBe(200);
-
-      expect(storedTaskPacket(bot.threadId).flushReason).toBe("progress");
-      const refreshed = (await api("GET", "/api/bots?messages=0")).body.bots.find(
-        (candidate: { id: string }) => candidate.id === bot.id,
-      );
-      expect(refreshed?.busy).toBe(true);
-    } finally {
-      await api("POST", `/api/bots/${bot.id}/interrupt`);
-      await api("DELETE", `/api/bots/${bot.id}`);
-      await api("PATCH", "/api/instances/muse", { cli: "" });
-    }
-  });
-
   it("validates and persists the global room turn timeout", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
@@ -4779,111 +4744,6 @@ describe("resumable event stream", () => {
         stream.close();
       }
     }
-  });
-});
-
-/** A probe target spawnable as itself: POSIX honours the shebang, and win32
- * resolveCliSpawn parses it into `node <script>`. */
-const writeProbeWrapper = (name: string, body: string): string => {
-  const script = join(home, `${name}.mjs`);
-  writeFileSync(script, `#!/usr/bin/env node\n${body}`, { mode: 0o755 });
-  return script;
-};
-
-describe("instance CLI override API", () => {
-  it("round-trips a set, clear, and rejects bad input", async () => {
-    // ghost is the fixture's one shadow instance (unknown driver)
-    const set = await api("PATCH", "/api/instances/ghost", { cli: "/opt/ghost/wrapper sub" });
-    expect(set.status).toBe(200);
-    const setRow = set.body.instances.find((i: any) => i.instanceId === "ghost");
-    expect(setRow.cli).toBe("/opt/ghost/wrapper sub");
-
-    // persisted for real: the next fleet rebuild reads it back
-    const cleared = await api("PATCH", "/api/instances/ghost", { cli: "" });
-    expect(cleared.status).toBe(200);
-    const clearedRow = cleared.body.instances.find((i: any) => i.instanceId === "ghost");
-    expect(clearedRow.cli).toBeUndefined();
-
-    expect((await api("PATCH", "/api/instances/nope", { cli: "/x" })).status).toBe(404);
-    expect((await api("PATCH", "/api/instances/ghost", { cli: 42 })).status).toBe(400);
-    expect((await api("PATCH", "/api/instances/ghost", { cli: "/x\ny" })).status).toBe(400);
-  });
-
-  it("echoes a path-ish name back as the only cli candidate", async () => {
-    const res = await api("GET", "/api/cli-candidates?name=/opt/definitely/not/here");
-    expect(res.status).toBe(200);
-    expect(res.body.candidates).toEqual(["/opt/definitely/not/here"]);
-    expect((await api("GET", "/api/cli-candidates?name=")).body.candidates).toEqual([]);
-  });
-
-  it("reports a missing binary as a failed probe with install info", async () => {
-    const res = await api("POST", "/api/cli-test", { cli: "/no/such/binary-anywhere", driver: "claudeAgent" });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.message).toContain("isn't installed");
-    expect(res.body.install?.docsUrl).toBe("https://claude.com/claude-code");
-  });
-
-  it("probes the complete wrapper with fixed arguments and no inherited credentials", async () => {
-    const script = writeProbeWrapper(
-      "cli-wrapper-probe",
-      `if (process.argv.slice(2).join(" ") !== "fixed --version") process.exit(9);\nif (process.env.COMPOSIO_API_KEY) process.exit(8);\nconsole.log("wrapper-ok");\n`,
-    );
-    const cli = `${JSON.stringify(script)} fixed`;
-    const res = await api("POST", "/api/cli-test", { cli });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, version: "wrapper-ok" });
-  });
-
-  it("gives the probe child no credential, known or not, and never echoes one back", async () => {
-    const script = writeProbeWrapper(
-      "cli-credential-probe",
-      `const names = Object.keys(process.env).filter((k) => /key|token|secret/i.test(k));\n` +
-        `console.log(names.length ? "leaked " + names.sort().join(",") : "no-credentials");\n`,
-    );
-    const cli = JSON.stringify(script);
-    const res = await api("POST", "/api/cli-test", { cli });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, version: "no-credentials" });
-  });
-
-  it("still probes a bare CLI name resolved on the augmented PATH", async () => {
-    // the probe validates the command before spawning it; a bare name is the
-    // shape every default engine config uses
-    const res = await api("POST", "/api/cli-test", { cli: "node" });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, version: process.version });
-  });
-
-  it("refuses a scripted argument instead of running it as a probe", async () => {
-    const exe = JSON.stringify(process.execPath);
-    // three spellings of one capability: an inline payload, a bare `sh -c id`
-    // whose tokens are both ordinary words, and a script sitting on disk
-    const cases = [`${exe} -e "console.log(1)"`, `${exe} -c id`, `${exe} --import /tmp/payload`, `${exe} ${JSON.stringify(writeProbeWrapper("cli-inert", ""))}`];
-    for (const cli of cases) {
-      const res = await api("POST", "/api/cli-test", { cli });
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(false);
-      expect(res.body.message).toContain("a subcommand, a long flag, or a non-script path");
-    }
-  });
-
-  it("reports excessive probe output without presenting install guidance", async () => {
-    const script = writeProbeWrapper("cli-noisy-probe", `process.stdout.write("x".repeat(70 * 1024));\n`);
-    const cli = JSON.stringify(script);
-    const res = await api("POST", "/api/cli-test", { cli, driver: "claudeAgent" });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.message).toContain("more than 64 KiB");
-    expect(res.body.install).toBeUndefined();
-  });
-
-  it("rejects overlapping provider configuration writes", async () => {
-    const slowConfigWrite = api("PUT", "/api/config", { box: { token: "box_slow" } });
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    const overlapping = await api("PATCH", "/api/instances/ghost", { cli: "/tmp/ghost-overlap" });
-    expect(overlapping.status).toBe(409);
-    expect((await slowConfigWrite).status).toBe(200);
   });
 });
 

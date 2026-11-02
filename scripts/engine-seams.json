@@ -96,12 +96,6 @@
     "tests": ["server/drivers/boxagent.test.ts"]
   },
   {
-    "path": "server/cli-probe.ts",
-    "reads": "Engine CLI --version stdout and failure stderr",
-    "status": "pending",
-    "tests": []
-  },
-  {
     "path": "server/tool-detail.ts",
     "reads": "Engine tool rawInput, paths, commands, output and edits",
     "status": "pending",
