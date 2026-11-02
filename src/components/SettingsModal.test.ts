@@ -49,7 +49,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           rooms: { turnTimeoutMinutes: 5 },
           localVm: { mode: "shared", maxInstances: 1 },
           profile: { name: "", email: "" },
-          features: { skillRecorder: false, showToolCalls: false },
+          features: { showToolCalls: false },
         },
       },
       dispatch: () => undefined,
@@ -269,14 +269,6 @@ describe("SettingsModal friends chrome", () => {
     expect(html).not.toMatch(/>Engines</);
   });
 
-  it("opens Engines as the unified Connections page", () => {
-    const html = markup("engines");
-    expect(html).not.toContain("Gemini API Key");
-    expect(html).not.toContain("OpenCode API key");
-    expect(html).not.toContain("More Services");
-    expect(html).not.toMatch(/>Engines</);
-  });
-
   it("compresses Language into a segmented row and Profile into compact chrome", () => {
     const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
     const picker = readFileSync(join(here, "LanguagePicker.tsx"), "utf8");
@@ -323,11 +315,6 @@ describe("SettingsModal friends chrome", () => {
     expect(connections).not.toContain("<PhoneLinkSettings");
     expect(connections).not.toContain("<PhoneAccessSettings");
     expect(connections).not.toContain("<PhoneNotificationSettings");
-    const search = readFileSync(join(here, "../lib/settings-search.ts"), "utf8");
-    const generalKeys = search.slice(search.indexOf("  general: ["), search.indexOf("  themes: ["));
-    expect(generalKeys).toContain("settings.phoneNotifications.title");
-    const accountKeys = search.slice(search.indexOf("  account: ["), search.indexOf("  shortcuts: ["));
-    expect(accountKeys).not.toContain("settings.phoneNotifications.title");
   });
 
   it("hides phone notifications in the desktop app", () => {

@@ -96,7 +96,6 @@ function skinToken(id: string, name: string): string {
   throw new Error(`Token ${name} missing for skin ${id}`);
 }
 
-
 describe("skins", () => {
   it("insets Claude bot replies only when Boxy geometry is active", () => {
     expect(css).toMatch(
@@ -235,7 +234,6 @@ describe("skins", () => {
     expect(SKINS.map((s) => s.id).sort()).toEqual([...SKIN_IDS].sort());
     for (const skin of SKINS) {
       expect(skin.name.length).toBeGreaterThan(0);
-      expect(skin.tagline.length).toBeGreaterThan(0);
     }
   });
 
@@ -1180,7 +1178,6 @@ describe("dark ink skins", () => {
     const allSkins = ["default", ...SKIN_IDS];
 
     const sidebarSrc = readFileSync(join(repoRoot, "src/components/Sidebar.tsx"), "utf8");
-    const taskSrc = readFileSync(join(repoRoot, "src/components/TaskPicker.tsx"), "utf8");
     const avatarSrc = readFileSync(join(repoRoot, "src/components/BotProfileAvatarCard.tsx"), "utf8");
     const compSrc = readFileSync(join(repoRoot, "src/components/CompanionSection.tsx"), "utf8");
 
@@ -1236,10 +1233,6 @@ describe("dark ink skins", () => {
       expect.soft(contrast(danger, deleteRest), `${skin} Sidebar chrome.delete rest`).toBeGreaterThanOrEqual(4.5);
       expect.soft(contrast(danger, deleteHover), `${skin} Sidebar chrome.delete hover`).toBeGreaterThanOrEqual(4.5);
 
-      // Icon-only control 1: TaskPicker delete button
-      const taskHover = taskSrc.includes("hover:bg-danger/10") ? blend(danger, card, 0.1) : raised;
-      expect.soft(contrast(danger, taskHover), `${skin} TaskPicker hover`).toBeGreaterThanOrEqual(3.0);
-
       // Icon-only control 2: BotProfileAvatarCard remove button
       const avatarHover = avatarSrc.includes("hover:bg-danger/10") ? blend(danger, card, 0.1) : control;
       expect.soft(contrast(danger, avatarHover), `${skin} BotProfileAvatarCard hover`).toBeGreaterThanOrEqual(3.0);
@@ -1249,7 +1242,6 @@ describe("dark ink skins", () => {
       expect.soft(contrast(danger, compHover), `${skin} CompanionSection hover`).toBeGreaterThanOrEqual(3.0);
     }
   });
-
 
   it("maintains WCAG AA contrast between secondary ink and controls in dark skins", () => {
     for (const skin of DARK_INK_SKINS) {

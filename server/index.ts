@@ -77,7 +77,6 @@ import {
   saveConfig,
   showToolCallsEnabled,
   detailedRepliesEnabled,
-  skillRecorderEnabled,
   memoryNotesEnabled,
   sweepLegacyOpencodeKey,
   syncCredentialEnv,
@@ -366,9 +365,7 @@ import "./team-library.ts";
 import "./bot-package.ts";
 import "./team-manifest.ts";
 import "./thread-events.ts";
-import { listenWebhookIngress, webhookCredential, type WebhookIngress } from "./webhook-ingress.ts";
 import { memberTurnSelection } from "./member-turn.ts";
-import { WebhookManager } from "./webhooks.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { harnessPlaybookPrompt } from "./harness-playbook.ts";
@@ -386,7 +383,6 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
-const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
 const MIME: Record<string, string> = {
   ".html": "text/html",
@@ -1688,7 +1684,6 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   stopScreenPoller(bot.id);
   activeVpsThreads.delete(bot.id);
   routines!.disableForBot(bot.id);
-  webhooks.disableForBot(bot.id);
   lastReply.delete(bot.threadId);
   // a peer approval naming this bot can never be meaningfully answered
   // now, and its caller would otherwise wait out the 15-minute timeout
@@ -5819,36 +5814,6 @@ function resolveAndSendRoutine(
   return sendRoutineResolution(res, result);
 }
 
-// Webhook definitions are independent from calendar schedules, but every
-// delivery joins the same RoutineManager queue. That keeps unattended work
-// ordered behind a busy MAUS and gives webhook runs the same durable receipts.
-const webhooks = new WebhookManager({
-  emit: broadcast,
-  botState: (botId) => {
-    const bot = store.bot(botId);
-    return !bot ? "missing" : botHasActiveTurn(botId) ? "busy" : "ready";
-  },
-  enqueue: (input) => routines!.enqueueWebhook(input),
-  cancelQueued: (webhookId, message) => routines!.cancelQueuedWebhook(webhookId, message),
-  pendingRuns: (webhookId) => routines!.activeWebhookRunCount(webhookId),
-});
-
-let webhookIngress: WebhookIngress | null = null;
-let webhookIngressError: string | null = null;
-try {
-  webhookIngress = await listenWebhookIngress(webhooks, { port: WEBHOOK_PORT });
-  console.log(`wink webhook receiver on ${webhookIngress.baseUrl}`);
-} catch (error) {
-  webhookIngressError = error instanceof Error ? error.message : String(error);
-  console.error(`wink webhook receiver unavailable: ${webhookIngressError}`);
-}
-
-const webhookIngressStatus = () => ({
-  available: Boolean(webhookIngress),
-  baseUrl: webhookIngress?.baseUrl ?? `http://127.0.0.1:${WEBHOOK_PORT}`,
-  ...(webhookIngressError ? { error: webhookIngressError } : {}),
-});
-
 // ── config hot-reload ─────────────────────────────────────────────────
 // ── group turn engine ──────────────────────────────────────────────────
 // Room messages go to the configured default responder unless the user
@@ -5946,7 +5911,6 @@ function enqueueDrainedRoomTurn(
   );
   return groupQueues.get(room.groupId) ?? Promise.resolve();
 }
-
 
 // comms bus: passed into the visibility helpers in comms-visibility.ts so
 // they can mirror messages + chips without re-deriving SSE plumbing. Same
@@ -6887,7 +6851,6 @@ function configStatus() {
       maxInstances: localVmMaxInstances(cfg),
     },
     features: {
-      skillRecorder: skillRecorderEnabled(cfg),
       showToolCalls: showToolCallsEnabled(cfg),
       detailedReplies: detailedRepliesEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
@@ -7283,44 +7246,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         : routines!.markSeen(runMatch[1]);
       if (live && bot && inFlight) releaseInterruptedBot(bot.id, runThread(live) ?? bot.threadId);
       return run ? json(res, 200, { run }) : json(res, 404, { error: "no such active run" });
-    }
-
-    // ── independent webhook triggers ────────────────────────────────────
-    // Management stays on the app-only server. Actual deliveries land on a
-    // second, webhook-only loopback listener so Funnel or a future hosted
-    // relay never has to expose the rest of OpenMausBot's control surface.
-    if (path === "/api/webhooks" && method === "GET") {
-      return json(res, 200, { webhooks: webhooks.list(), attempts: webhooks.listAttempts(), ingress: webhookIngressStatus() });
-    }
-    if (path === "/api/webhooks" && method === "POST") {
-      const created = webhooks.create(await readBody(req));
-      const ingress = webhookIngressStatus();
-      return json(res, 201, {
-        webhook: created.webhook,
-        ingress,
-        credential: webhookCredential(ingress.baseUrl, created.webhook.endpointId, created.secret),
-      });
-    }
-    let webhookMatch = path.match(/^\/api\/webhooks\/([\w-]+)\/rotate$/);
-    if (webhookMatch && method === "POST") {
-      const rotated = webhooks.rotateSecret(webhookMatch[1]);
-      if (!rotated) return json(res, 404, { error: "no such webhook" });
-      const ingress = webhookIngressStatus();
-      return json(res, 200, {
-        webhook: rotated.webhook,
-        ingress,
-        credential: webhookCredential(ingress.baseUrl, rotated.webhook.endpointId, rotated.secret),
-      });
-    }
-    webhookMatch = path.match(/^\/api\/webhooks\/([\w-]+)$/);
-    if (webhookMatch && method === "PATCH") {
-      const webhook = webhooks.update(webhookMatch[1], await readBody(req));
-      return webhook ? json(res, 200, { webhook }) : json(res, 404, { error: "no such webhook" });
-    }
-    if (webhookMatch && method === "DELETE") {
-      return webhooks.remove(webhookMatch[1])
-        ? json(res, 200, { ok: true })
-        : json(res, 404, { error: "no such webhook" });
     }
 
     // ── events stream ──
@@ -8445,7 +8370,6 @@ hostShutdown = () => {
   void phoneAccess.stop();
   watchdog.stop();
   routines?.stop();
-  webhookIngress?.server.close();
   summaryBuild.dispose();
   summaryRepair.dispose();
   memoryPass.dispose();

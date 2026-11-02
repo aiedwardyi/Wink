@@ -39,7 +39,7 @@ import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { usePhoneHeaderNameFloor } from "@/lib/use-phone-header-name";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { showBotNewTaskControl, showChatHeaderFind, showHeaderPencil } from "@/lib/friends-chrome";
+import { showChatHeaderFind } from "@/lib/friends-chrome";
 import { stateForBot } from "@/lib/mascot";
 import { transcriptIdleAfterOnboarding } from "@/lib/conversation-preview";
 import { composerIsBusy, splitQueuedSends, turnPresenceWaiting, withAcceptedMessages } from "@/lib/send-accept";
@@ -68,7 +68,6 @@ import { MediaViewerProvider } from "./MediaViewerProvider";
 import { ModelPicker } from "./ModelPicker";
 import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
-import { TaskPicker } from "./TaskPicker";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
@@ -935,7 +934,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
     `bot:${bot.id}:${bot.threadId}`,
     bot.messages,
   );
-  // same toggle the hover Pin button dispatches, so other devices sync it
+  // Profile patches sync the pin to other devices.
   const togglePin = (message: Message) => {
     dispatch({
       type: "updateBot",
@@ -1467,7 +1466,6 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
               value={bot.name}
               onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
               onActivate={() => dispatch({ type: "toggleSettings", open: true })}
-              showEditButton={showHeaderPencil()}
               className="truncate text-[15px] font-semibold text-ink"
               inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
             />
@@ -1524,7 +1522,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
             <Search size={18} />
           </button>
           )}
-          {showBotNewTaskControl() && <TaskPicker bot={bot} />}
+
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && <CallButton bot={bot} />}
         </div>

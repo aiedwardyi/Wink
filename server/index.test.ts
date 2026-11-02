@@ -25,8 +25,6 @@ const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const PORT = 18800 + Math.floor(Math.random() * 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
-const WEBHOOK_PORT = 39000 + Math.floor(Math.random() * 10_000);
-const WEBHOOK_BASE = `http://127.0.0.1:${WEBHOOK_PORT}`;
 
 let child: ChildProcess;
 /** stands in for the box provider so config saving never touches the network */
@@ -269,7 +267,6 @@ beforeAll(async () => {
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(PORT),
-      OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_STATIC_DIR: staticDir,
@@ -3265,27 +3262,6 @@ describe("harness HTTP API", () => {
     await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
   });
 
-  it("keeps Teach a skill off by default and persists an explicit opt-in", async () => {
-    const before = await api("GET", "/api/config");
-    expect(before.status).toBe(200);
-    expect(before.body.features).toEqual({ skillRecorder: false, showToolCalls: false, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
-
-    const saved = await api("PATCH", "/api/config", {
-      features: { skillRecorder: true },
-    });
-    expect(saved.status).toBe(200);
-    expect(saved.body.features).toEqual({ skillRecorder: true, showToolCalls: false, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
-
-    const disk = JSON.parse(readFileSync(join(home, ".orbit", "config.json"), "utf8"));
-    expect(disk.features).toEqual({ skillRecorder: true });
-
-    const tools = await api("PATCH", "/api/config", { features: { showToolCalls: true } });
-    expect(tools.status).toBe(200);
-    expect(tools.body.features).toEqual({ skillRecorder: true, showToolCalls: true, detailedReplies: false, memoryNotes: true, terminalHost: false, modelDial: false });
-
-    await api("PATCH", "/api/config", { features: { skillRecorder: false, showToolCalls: false } });
-  });
-
   it("keeps shared Local VM mode by default and saves per-bot mode when enabled", async () => {
     const before = await api("GET", "/api/config");
     expect(before.body.localVm).toEqual({ mode: "shared", maxInstances: 2 });
@@ -4026,58 +4002,6 @@ describe("harness HTTP API", () => {
     expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatarUrl: "", googlePhoto: false });
   });
 
-  it("creates an independent webhook, accepts a delivery, deduplicates it, and rotates its secret", async () => {
-    const bots = await api("GET", "/api/bots");
-    const created = await api("POST", "/api/webhooks", {
-      name: "Incoming build",
-      prompt: "Review the incoming build event",
-      botId: bots.body.bots[0].id,
-      runOn: "maus",
-    });
-    expect(created.status).toBe(201);
-    expect(created.body.ingress).toMatchObject({ available: true, baseUrl: WEBHOOK_BASE });
-    expect(created.body.credential.url).toMatch(new RegExp(`^${WEBHOOK_BASE}/hooks/wh_`));
-
-    const listed = await api("GET", "/api/webhooks");
-    expect(listed.body.webhooks).toHaveLength(1);
-    expect(listed.body.attempts).toEqual([]);
-    expect(JSON.stringify(listed.body)).not.toContain(created.body.credential.secret);
-
-    const deliver = () => fetch(created.body.credential.url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "idempotency-key": "build-42" },
-      body: JSON.stringify({ status: "failed", build: 42 }),
-    });
-    const first = await deliver();
-    expect(first.status).toBe(202);
-    const accepted = await first.json() as { runId: string; accepted: boolean; duplicate: boolean };
-    expect(accepted).toMatchObject({ accepted: true, duplicate: false });
-    const retry = await deliver();
-    expect(retry.status).toBe(202);
-    expect(await retry.json()).toMatchObject({ accepted: true, duplicate: true, runId: accepted.runId });
-
-    const afterDelivery = await api("GET", "/api/webhooks");
-    expect(afterDelivery.body.attempts.map((attempt: { outcome: string }) => attempt.outcome)).toEqual(["accepted", "duplicate"]);
-
-    const receipts = await api("GET", "/api/routines");
-    expect(receipts.body.runs.find((run: { id: string }) => run.id === accepted.runId)).toMatchObject({
-      triggerSource: "webhook",
-      deliveryId: "build-42",
-      routineName: "Incoming build",
-    });
-
-    const rotated = await api("POST", `/api/webhooks/${created.body.webhook.id}/rotate`);
-    expect(rotated.status).toBe(200);
-    expect(rotated.body.credential.url).not.toBe(created.body.credential.url);
-    expect((await deliver()).status).toBe(401);
-
-    expect((await api("DELETE", `/api/webhooks/${created.body.webhook.id}`)).status).toBe(200);
-    expect((await api("GET", "/api/webhooks")).body.webhooks).toHaveLength(0);
-    if (process.platform !== "win32") {
-      expect(statSync(join(home, ".orbit", "webhooks.json")).mode & 0o777).toBe(0o600);
-    }
-  });
-
   it("stores Gemini credentials as a configured-only status", async () => {
     try {
       const put = await api("PUT", "/api/config", { gemini: { apiKey: "gemini-secret" } });
@@ -4732,83 +4656,6 @@ describe("startTurn presence boundary", () => {
     return hanging;
   };
 
-  const chatRoutineElsewhere = async (bot: { id: string; threadId: string }) => {
-    let webhookId = "";
-    const stream = await openSse(`${BASE}/api/events`);
-    try {
-      // Bot task creation returns the existing chat; a webhook can still create another task.
-      const webhook = await api("POST", "/api/webhooks", {
-        name: "Viewed task",
-        prompt: "keep running",
-        botId: bot.id,
-        runOn: "maus",
-      });
-      expect(webhook.status).toBe(201);
-      webhookId = webhook.body.webhook.id;
-      rmSync(fakeClaudeDump, { force: true });
-      expect((await fetch(webhook.body.credential.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      })).status).toBe(202);
-      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
-      const dump = z.object({
-        mcpConfig: z.object({
-          mcpServers: z.object({
-            agents: z.object({ env: z.object({ OMB_COMMS_TOKEN: z.string() }) }),
-          }),
-        }),
-      }).parse(JSON.parse(readFileSync(fakeClaudeDump, "utf8")));
-      const internalHeaders = {
-        authorization: `Bearer ${dump.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN}`,
-        "content-type": "application/json",
-      };
-      const current = (await api("GET", "/api/bots?messages=0")).body.bots.find(
-        (candidate: { id: string }) => candidate.id === bot.id,
-      );
-      const viewed = z.object({ threadId: z.string() }).passthrough().parse(current).threadId;
-      expect(viewed).not.toBe(bot.threadId);
-      await stream.until(
-        (frame) => frame.kind === "runtime" && frame.event?.type === "turn.started" && frame.event?.threadId === viewed,
-      );
-      expect((await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: viewed })).status).toBe(200);
-      await expect.poll(async () => {
-        const state = (await api("GET", "/api/bots?messages=0")).body.bots.find(
-          (candidate: { id: string }) => candidate.id === bot.id,
-        );
-        return state?.busy;
-      }, { timeout: 10_000 }).toBe(false);
-
-      const proposed = await fetch(`${BASE}/api/internal/routine-requests`, {
-        method: "POST",
-        headers: internalHeaders,
-        body: JSON.stringify({
-          fromBotId: bot.id,
-          fromThreadId: bot.threadId,
-          action: "create",
-          routine: {
-            name: "Morning brief",
-            instructions: "keep running",
-            runOn: "maus",
-            schedule: { type: "once", at: new Date(Date.now() + 86_400_000).toISOString() },
-            durationMinutes: 15,
-          },
-        }),
-      });
-      expect(proposed.status).toBe(201);
-      const proposal = z.object({ requestId: z.string() }).passthrough().parse(await proposed.json());
-      const confirmed = await api("POST", `/api/threads/${bot.threadId}/respond`, {
-        requestId: proposal.requestId,
-        behavior: "allow",
-      });
-      expect(confirmed).toMatchObject({ status: 200, body: { outcome: "allowed-once", routineAction: "create" } });
-      return { routineId: z.string().parse(confirmed.body.resultId), viewed };
-    } finally {
-      stream.close();
-      if (webhookId) await api("DELETE", `/api/webhooks/${webhookId}`).catch(() => undefined);
-    }
-  };
-
   it("announces a new wait when resumeTask calls startTurn", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const hanging = await hangingModel();
@@ -4846,124 +4693,6 @@ describe("startTurn presence boundary", () => {
       await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
     }
   });
-
-  it("names the routine thread, not the viewed task, as the working thread", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
-    const hanging = await hangingModel();
-    let routineId = "";
-    try {
-      expect((await api("PATCH", `/api/bots/${bot.id}`, {
-        modelSelection: { instanceId: "claude", model: hanging.models.default },
-      })).status).toBe(200);
-      const created = await chatRoutineElsewhere(bot);
-      routineId = created.routineId;
-      const viewed = created.viewed;
-      const stream = await openSse(`${BASE}/api/events`);
-      try {
-        const run = await api("POST", `/api/routines/${routineId}/run`);
-        expect(run.status).toBe(201);
-        await expect.poll(async () => {
-          const runs = (await api("GET", "/api/routines")).body.runs as Array<{
-            id: string;
-            sourceThreadId?: string;
-            status: string;
-          }>;
-          const current = runs.find((candidate) => candidate.id === run.body.run.id);
-          return current?.sourceThreadId === bot.threadId && current?.status === "running";
-        }).toBe(true);
-        const live = ((await api("GET", "/api/routines")).body.runs as Array<{
-          id: string;
-          threadId?: string;
-          sourceThreadId?: string;
-        }>).find((candidate) => candidate.id === run.body.run.id)!;
-        expect(live.threadId).toBeUndefined();
-        expect(live.sourceThreadId).toBe(bot.threadId);
-        expect(live.sourceThreadId).not.toBe(viewed);
-        const dispatched = await stream.until(
-          (frame) => frame.kind === "turn.dispatch" && frame.threadId === live.sourceThreadId,
-        );
-        expect(dispatched.threadId).toBe(live.sourceThreadId);
-        await stream.until(
-          (frame) => frame.kind === "runtime" && frame.event?.type === "turn.started" && frame.event?.threadId === live.sourceThreadId,
-        );
-        const snapshot = (await api("GET", "/api/bots?messages=0")).body.bots.find(
-          (candidate: { id: string }) => candidate.id === bot.id,
-        );
-        expect(snapshot.busy).toBe(true);
-        expect(snapshot.threadId).toBe(viewed);
-        expect(snapshot.workingThreadId).toBe(live.sourceThreadId);
-      } finally {
-        stream.close();
-      }
-    } finally {
-      await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
-      if (routineId) await api("DELETE", `/api/routines/${routineId}`).catch(() => undefined);
-      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
-    }
-  }, 30_000);
-
-  it("hands back a send queued on a task the open chat moved away from", async () => {
-    const bot = (await api("POST", "/api/bots")).body.bot;
-    const hanging = await hangingModel();
-    let routineId = "";
-    const snapshot = async () => (await api("GET", "/api/bots?messages=0")).body.bots.find(
-      (candidate: { id: string }) => candidate.id === bot.id,
-    );
-    try {
-      expect((await api("PATCH", `/api/bots/${bot.id}`, {
-        modelSelection: { instanceId: "claude", model: hanging.models.default },
-      })).status).toBe(200);
-      const created = await chatRoutineElsewhere(bot);
-      routineId = created.routineId;
-      const viewed = created.viewed;
-      const stream = await openSse(`${BASE}/api/events`);
-      try {
-        const run = await api("POST", `/api/routines/${routineId}/run`);
-        expect(run.status).toBe(201);
-        await expect.poll(async () => {
-          const runs = (await api("GET", "/api/routines")).body.runs as Array<{
-            id: string;
-            sourceThreadId?: string;
-            status: string;
-          }>;
-          const current = runs.find((candidate) => candidate.id === run.body.run.id);
-          return current?.sourceThreadId === bot.threadId && current?.status === "running";
-        }).toBe(true);
-        const live = ((await api("GET", "/api/routines")).body.runs as Array<{
-          id: string;
-          threadId?: string;
-          sourceThreadId?: string;
-        }>).find((candidate) => candidate.id === run.body.run.id)!;
-        expect(live.threadId).toBeUndefined();
-        expect(live.sourceThreadId).toBe(bot.threadId);
-        const routineThread = live.sourceThreadId!;
-        // dispatch is announced before the engine owns the turn; a Stop in that gap has no session to kill
-        const started = (threadId: string) => stream.until(
-          (frame) => frame.kind === "runtime" && frame.event?.type === "turn.started" && frame.event?.threadId === threadId,
-        );
-        await started(routineThread);
-
-        const queued = await api("POST", `/api/bots/${bot.id}/messages`, { text: "after the routine" });
-        expect(queued.body.queued).toBe(true);
-        expect((await api("POST", `/api/bots/${bot.id}/tasks/${routineThread}`)).status).toBe(200);
-        const stopped = await api("POST", `/api/bots/${bot.id}/interrupt`, {});
-        expect(stopped.status).toBe(200);
-        expect(stopped.body.returned).toEqual([
-          { threadId: viewed, queueId: queued.body.queueId, text: "after the routine" },
-        ]);
-        await expect.poll(async () => (await snapshot())?.busy, { timeout: 10_000 }).toBe(false);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        expect(await snapshot()).toMatchObject({ busy: false, threadId: routineThread });
-        expect(stream.frames.some((frame) => frame.kind === "turn.dispatch" && frame.threadId === viewed)).toBe(false);
-      } finally {
-        stream.close();
-      }
-    } finally {
-      await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
-      if (routineId) await api("DELETE", `/api/routines/${routineId}`).catch(() => undefined);
-      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
-    }
-  }, 30_000);
 
   it("announces a new wait when a delegated ask starts a turn", async () => {
     const source = (await api("POST", "/api/bots", {})).body.bot;

@@ -145,9 +145,8 @@ function reconcileSnapshotQueues(
 /** The exact conversation currently on screen. A focused window is not
  * enough to suppress an alert when its actionable card is in another task. */
 export function visibleNotificationThread(
-  state: NotificationRoutingState & Pick<AppState, "activeView" | "selectedId">,
+  state: NotificationRoutingState & Pick<AppState, "selectedId">,
 ): string | null {
-  if (state.activeView !== "chat") return null;
   return (
     state.bots.find((candidate) => candidate.id === state.selectedId)?.threadId ??
     state.groups.find((candidate) => candidate.id === state.selectedId)?.threadId ??
@@ -164,14 +163,13 @@ export function autoSpeaks(frame: { imported?: boolean; message?: { role?: strin
  * if it is the one on screen - an idle client watching over someone's
  * shoulder must not silently clear the badge the active device hasn't seen. */
 export function shouldClearSelectedUnread(
-  state: Pick<AppState, "activeView" | "selectedId" | "workspaceOpen">,
+  state: Pick<AppState, "selectedId" | "workspaceOpen">,
   owner: { id: string; unread?: boolean },
   windowActive: boolean,
 ): boolean {
   return Boolean(
     owner.unread &&
       windowActive &&
-      state.activeView === "chat" &&
       !state.workspaceOpen &&
       state.selectedId === owner.id,
   );

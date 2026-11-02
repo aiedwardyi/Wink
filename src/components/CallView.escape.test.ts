@@ -24,7 +24,7 @@ vi.mock("@/state/store", async (importOriginal) => {
           rooms: { turnTimeoutMinutes: 5 },
           localVm: { mode: "shared", maxInstances: 1 },
           profile: { name: "", email: "" },
-          features: { skillRecorder: false, showToolCalls: false },
+          features: { showToolCalls: false },
         },
       },
       dispatch: (action: Action) => { mock.dispatched.push(action); },

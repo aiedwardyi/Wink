@@ -5,14 +5,11 @@ import {
   ArrowDownToLine,
   BellDot,
   Bot as BotIcon,
-  CalendarDays,
   Check,
-  ClipboardCopy,
   Copy,
   Crown,
   FolderMinus,
   FolderPlus,
-  Library,
   Loader2,
   Pencil,
   PanelLeftClose,
@@ -24,7 +21,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Sparkles,
   Settings,
   Trash2,
   Users,
@@ -50,8 +46,8 @@ import { InitialsAvatar, profileInitials } from "./Avatar";
 import { useManualCheck, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
-import { showToolCallsEnabled, skillRecorderEnabled } from "@/lib/feature-flags";
-import { showBotMenuCopy, showBotMenuMakeGroup, showGroupMenuCopyId, showNewMenuExport, showNewMenuTeams, showPhoneDrawerCollapse, showSidebarDensityControls, showSidebarPhone, showSidebarRoutines, showSidebarTeachSkill } from "@/lib/friends-chrome";
+import { showToolCallsEnabled } from "@/lib/feature-flags";
+import { showBotMenuCopy, showNewMenuExport, showPhoneDrawerCollapse, showSidebarPhone } from "@/lib/friends-chrome";
 import { nextRename } from "@/lib/rename";
 import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -65,16 +61,13 @@ import {
   fitSidebarWidth,
   loadCollapsedSections,
   loadSidebarCollapsed,
-  loadSidebarDensity,
   loadSidebarOrder,
   loadSidebarWidth,
   saveCollapsedSections,
   saveSidebarCollapsed,
-  saveSidebarDensity,
   saveSidebarOrder,
   saveSidebarWidth,
   SIDEBAR_COLLAPSED_WIDTH,
-  SIDEBAR_ICONS_WIDTH,
   SIDEBAR_INLINE_BREAKPOINT,
   SIDEBAR_MAX_WIDTH,
   restoreSidebarDragWidth,
@@ -310,16 +303,7 @@ function RoomContextMenu({
         <FolderPlus size={16} className="text-ink-secondary" />
         {t("chrome.moveToContext")}
       </button>
-      {showGroupMenuCopyId() && <button
-        onClick={() => {
-          void navigator.clipboard?.writeText(group.threadId);
-          onClose();
-        }}
-        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
-      >
-        <ClipboardCopy size={16} className="text-ink-secondary" />
-        {t("chrome.copyConversationId")}
-      </button>}
+
       <button
         onClick={() => {
           dispatch({ type: "deleteGroup", groupId: group.id });
@@ -475,14 +459,12 @@ function BotContextMenu({
   closing,
   onClose,
   onMoveToSection,
-  onMakeGroup,
   onDeleteRequest,
 }: {
   menu: MenuState;
   closing: boolean;
   onClose: () => void;
   onMoveToSection: (botId: string) => void;
-  onMakeGroup: (botId: string) => void;
   onDeleteRequest: (bot: Bot) => void;
 }) {
   const { t } = useI18n();
@@ -577,10 +559,6 @@ function BotContextMenu({
         showBotMenuCopy() && item(<Copy size={16} className="text-ink-secondary" />, t("chrome.duplicate"), () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
-        showBotMenuMakeGroup() && divider("d2"),
-        showBotMenuMakeGroup() && item(<Users size={16} className="text-ink-secondary" />, t("chrome.makeGroupWithBot"), () => {
-          onMakeGroup(bot.id);
-        }),
         divider("d3"),
         item(<Trash2 size={16} />, t("chrome.delete"), () => onDeleteRequest(bot), {
           danger: true,
@@ -627,7 +605,7 @@ export function Sidebar({
   const [roomMenu, setRoomMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [roomSectionPicker, setRoomSectionPicker] = useState<{ groupId: string; x: number; y: number } | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
-  const [wizard, setWizard] = useState<{ preselectBotId?: string } | null>(null);
+  const [wizard, setWizard] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
   const [teamInstallUrl, setTeamInstallUrl] = useState<string | null>(null);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
@@ -645,7 +623,6 @@ export function Sidebar({
   const roomSectionPickerPresence = usePresence(roomSectionPicker);
   const wizardPresence = usePresence(wizard);
   const [query, setQuery] = useState("");
-  const [densityState, setDensityState] = useState<SidebarDensity>(() => loadSidebarDensity());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
   const [collapsedSections, setCollapsedSections] = useState(() => new Set(loadCollapsedSections()));
   const sidebarSide = useSidebarSide();
@@ -671,17 +648,10 @@ export function Sidebar({
     }
     lastCollapsedUnread.current = collapsedUnread;
   }, [collapsedUnread]);
-  const density: SidebarDensity = sidebarCollapsed
-    ? "icons"
-    : showSidebarDensityControls() ? densityState : "comfortable";
-  const [lastExpandedDensity, setLastExpandedDensity] = useState<Exclude<SidebarDensity, "icons">>(() => {
-    const saved = loadSidebarDensity();
-    return saved === "icons" ? "comfortable" : saved;
-  });
-  const [densityOpen, setDensityOpen] = useState(false);
+  const density: SidebarDensity = sidebarCollapsed ? "icons" : "comfortable";
   const backOverlay = deleteTarget ? "delete" : sectionPicker ? "section" : roomSectionPicker ? "room-section"
     : menu ? "menu" : roomMenu ? "room-menu" : wizard ? "wizard" : archivedBotsOpen ? "archived"
-    : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : densityOpen ? "density" : null;
+    : teamLibraryOpen ? "team-library" : plusOpen ? "plus" : null;
   useEffect(() => {
     onOverlayChange?.(backOverlay);
   }, [backOverlay, onOverlayChange]);
@@ -692,11 +662,10 @@ export function Sidebar({
       else if (roomSectionPicker) setRoomSectionPicker(null);
       else if (menu) setMenu(null);
       else if (roomMenu) setRoomMenu(null);
-      else if (wizard) setWizard(null);
+      else if (wizard) setWizard(false);
       else if (archivedBotsOpen) setArchivedBotsOpen(false);
       else if (teamLibraryOpen) { setTeamLibraryOpen(false); setTeamInstallUrl(null); }
       else if (plusOpen) setPlusOpen(false);
-      else setDensityOpen(false);
     };
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
@@ -720,7 +689,7 @@ export function Sidebar({
   const viewportWidth = useSidebarViewportWidth(dockedAsideWidth);
   const sidebarDisplayWidth = displaySidebarWidth({
     collapsed: sidebarCollapsed,
-    width: !sidebarCollapsed && density === "icons" ? SIDEBAR_ICONS_WIDTH : fitSidebarWidth(sidebarWidth, viewportWidth, dockedAsideWidth),
+    width: fitSidebarWidth(sidebarWidth, viewportWidth, dockedAsideWidth),
   });
 
   const applySidebarLayout = (next: SidebarLayout) => {
@@ -736,18 +705,7 @@ export function Sidebar({
     saveSidebarCollapsed(next.collapsed);
   };
 
-  const setDensity = (next: SidebarDensity) => {
-    setDensityState(next);
-    if (next !== "icons") setLastExpandedDensity(next);
-    // Search is hidden in avatar-only mode. Keeping its value would silently
-    // filter bots, rooms, and message results with no visible way to clear it.
-    else setQuery("");
-    saveSidebarDensity(next);
-    setDensityOpen(false);
-  };
-
   const onSidebarResizeStart = (event: PointerEvent<HTMLDivElement>) => {
-    if (!sidebarCollapsedRef.current && density === "icons") return;
     resizeFrom.current = {
       x: event.clientX,
       width: sidebarCollapsedRef.current ? sidebarWidthRef.current : fitSidebarWidth(sidebarWidthRef.current, viewportWidth, dockedAsideWidth),
@@ -794,7 +752,6 @@ export function Sidebar({
     setResizing(false);
   };
   const onSidebarResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!sidebarCollapsedRef.current && density === "icons") return;
     // Same mirroring as the pointer drag: on the right, "toward the edge" is Left.
     const key = sidebarOnRight
       ? event.key === "ArrowRight" ? "ArrowLeft" : event.key === "ArrowLeft" ? "ArrowRight" : event.key
@@ -910,20 +867,10 @@ export function Sidebar({
   }, [sidebarCollapsed]);
 
   const toggleCollapsed = () => {
-    if (density === "icons") {
-      if (sidebarCollapsed) {
-        focusSearchAfterExpand.current = true;
-        const next = { width: sidebarWidthRef.current, collapsed: false };
-        applySidebarLayout(next);
-        persistSidebarLayout(next);
-      }
-      setDensity(lastExpandedDensity);
-    } else {
-      setLastExpandedDensity(density);
-      const next = { width: sidebarWidthRef.current, collapsed: true };
-      applySidebarLayout(next);
-      persistSidebarLayout(next);
-    }
+    if (sidebarCollapsed) focusSearchAfterExpand.current = true;
+    const next = { width: sidebarWidthRef.current, collapsed: !sidebarCollapsed };
+    applySidebarLayout(next);
+    persistSidebarLayout(next);
   };
 
   // Esc closes the drawer, mirroring ApiKeys.tsx:75-85. Bound only while the
@@ -938,15 +885,6 @@ export function Sidebar({
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [open, onClose]);
-
-  useEffect(() => {
-    if (!densityOpen) return;
-    const closeDensityMenu = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDensityOpen(false);
-    };
-    window.addEventListener("keydown", closeDensityMenu);
-    return () => window.removeEventListener("keydown", closeDensityMenu);
-  }, [densityOpen]);
 
   useEffect(() => {
     return window.ogb?.onPackageInstall?.((url) => {
@@ -1607,54 +1545,7 @@ export function Sidebar({
               </span>
             )}
           </button>}
-          {showSidebarDensityControls() && (
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setDensityOpen((value) => !value)}
-              aria-label={t("chrome.sidebarDensity")}
-              aria-expanded={densityOpen}
-              className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
-              title={t("chrome.sidebarDensity")}
-            >
-              <span aria-hidden="true" className="flex size-5 flex-col items-center justify-center gap-[3px]">
-                <span className="h-px w-3.5 rounded-full bg-current" />
-                <span className="h-px w-2.5 rounded-full bg-current" />
-                <span className="h-px w-3.5 rounded-full bg-current" />
-              </span>
-            </button>
-            <Presence open={densityOpen}>
-              {(closing) => (
-                <>
-                  {!closing && <div className="fixed inset-0 z-30" onMouseDown={() => setDensityOpen(false)} />}
-                  <div data-closing={closing || undefined} inert={closing} className={cn(
-                    "animate-pop-in absolute top-full z-40 mt-1 w-40 overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60",
-                    density === "icons" && !sidebarOnRight ? "left-0" : "right-0",
-                  )}>
-                    {(["comfortable", "compact", "icons"] as const).map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => setDensity(option)}
-                        className={cn(
-                          "flex w-full items-center justify-between px-3 py-2 text-left text-[13px] hover:bg-raised/70",
-                          density === option ? "text-accent" : "text-ink",
-                        )}
-                      >
-                        {option === "icons"
-                          ? t("chrome.densityAvatars")
-                          : option === "compact"
-                            ? t("chrome.densityCompact")
-                            : t("chrome.densityComfortable")}
-                        {density === option && <Check size={14} />}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </Presence>
-          </div>
-          )}
+
           <button
             ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}
@@ -1685,7 +1576,7 @@ export function Sidebar({
                   <button
                     onClick={() => {
                       setPlusOpen(false);
-                      setWizard({});
+                      setWizard(true);
                     }}
                     className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
                   >
@@ -1703,16 +1594,7 @@ export function Sidebar({
                     {exportingTeam ? <Loader2 size={16} className="animate-spin text-ink-secondary" /> : <ArrowDownToLine size={16} className="text-ink-secondary" />}
                     {exportingTeam ? t("chrome.exporting") : t("chrome.exportAllBots")}
                   </button>}
-                  {showNewMenuTeams() && <button
-                    onClick={() => {
-                      setPlusOpen(false);
-                      setTeamLibraryOpen(true);
-                    }}
-                    className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
-                  >
-                    <Library size={16} className="text-ink-secondary" />
-                    {t("chrome.teams")}
-                  </button>}
+
                   {archivedBots.length > 0 && (
                     <button
                       onClick={() => {
@@ -1885,39 +1767,7 @@ export function Sidebar({
             <UpdateButton />
           </div>
         )}
-        {showSidebarTeachSkill() && skillRecorderEnabled(state.config) && (
-          <button
-            onClick={() => dispatch({ type: "showSkillRecorder" })}
-            aria-label={density === "icons" ? t("chrome.teachSkill") : undefined}
-            title={density === "icons" ? t("chrome.teachSkill") : undefined}
-            className={cn(
-              "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
-              density === "icons" ? "justify-center px-2" : "gap-3 px-3",
-              state.activeView === "skill-recorder" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
-            )}
-          >
-            <Sparkles size={20} className={state.activeView === "skill-recorder" ? "text-accent" : "text-ink-secondary"} />
-            <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>{t("chrome.teachSkill")}</span>
-          </button>
-        )}
-        {showSidebarRoutines() && (
-        <button
-          onClick={() => dispatch({ type: "showRoutines" })}
-          aria-label={density === "icons" ? t("chrome.routines") : undefined}
-          title={density === "icons" ? t("chrome.routines") : undefined}
-          className={cn(
-            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
-            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
-            state.activeView === "routines" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
-          )}
-        >
-          <CalendarDays size={20} className={state.activeView === "routines" ? "text-accent" : "text-ink-secondary"} />
-          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>{t("chrome.routines")}</span>
-          {state.routineRuns.some((run) => ["failed", "missed"].includes(run.status) && !run.seenAt) && (
-            <span className="size-2 rounded-full bg-danger" />
-          )}
-        </button>
-        )}
+
         {showPhone && density === "icons" && (
           <SidebarPhoneButton
             density={density}
@@ -1964,7 +1814,6 @@ export function Sidebar({
           closing={menuPresence.closing}
           onClose={() => setMenu(null)}
           onMoveToSection={(botId) => menu && setSectionPicker({ botId, x: menu.x, y: menu.y })}
-          onMakeGroup={(botId) => setWizard({ preselectBotId: botId })}
           onDeleteRequest={(bot) => setDeleteTarget(bot)}
         />
       )}
@@ -2011,7 +1860,7 @@ export function Sidebar({
         />
       )}
       {wizardPresence.value && (
-        <GroupWizard preselectBotId={wizardPresence.value.preselectBotId} closing={wizardPresence.closing} onClose={() => setWizard(null)} />
+        <GroupWizard closing={wizardPresence.closing} onClose={() => setWizard(false)} />
       )}
       <Presence open={archivedBotsOpen}>
         {(closing) => (

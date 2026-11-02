@@ -6,7 +6,6 @@ import {
   SIDEBAR_COLLAPSED_KEY,
   SIDEBAR_COLLAPSED_SECTIONS_KEY,
   SIDEBAR_COLLAPSED_WIDTH,
-  SIDEBAR_DENSITY_KEY,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -21,17 +20,14 @@ import {
   fitSidebarWidth,
   loadCollapsedSections,
   loadSidebarCollapsed,
-  loadSidebarDensity,
   loadSidebarOrder,
   loadSidebarSide,
   loadSidebarWidth,
   parseSidebarCollapsed,
-  parseSidebarDensity,
   parseSidebarSide,
   parseSidebarWidth,
   saveCollapsedSections,
   saveSidebarCollapsed,
-  saveSidebarDensity,
   saveSidebarOrder,
   saveSidebarSide,
   restoreSidebarDragWidth,
@@ -39,24 +35,6 @@ import {
   snapSidebarDrag,
   stepSidebarLayout,
 } from "./sidebar-preferences";
-
-describe("sidebar density preferences", () => {
-  it("accepts the three supported layouts and rejects stale values", () => {
-    expect(parseSidebarDensity("comfortable")).toBe("comfortable");
-    expect(parseSidebarDensity("compact")).toBe("compact");
-    expect(parseSidebarDensity("icons")).toBe("icons");
-    expect(parseSidebarDensity("tiny")).toBe("comfortable");
-    expect(parseSidebarDensity(null)).toBe("comfortable");
-  });
-
-  it("loads and saves without making storage availability a launch dependency", () => {
-    const setItem = vi.fn();
-    saveSidebarDensity("icons", { setItem });
-    expect(setItem).toHaveBeenCalledWith(SIDEBAR_DENSITY_KEY, "icons");
-    expect(loadSidebarDensity({ getItem: () => "compact" })).toBe("compact");
-    expect(loadSidebarDensity({ getItem: () => { throw new Error("blocked"); } })).toBe("comfortable");
-  });
-});
 
 describe("sidebar side preferences", () => {
   it("accepts left and right and rejects stale values", () => {

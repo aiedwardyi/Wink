@@ -118,7 +118,6 @@ The relay ingress `http.Server` marks every socket it accepts (`markRelaySocket`
 | `server/linked-files.ts:247` linked files | Bearer or remote cookie | Pass `bearerOk=false` and the device check via relay. |
 | `server/index.ts:1952` device record host | Tailnet host | Unchanged in v1; publishing the relay host for the device picker is a follow-up. |
 | `server/early-listen.ts:33` early static | No Host gate | Relay client starts only after `setHandler`/`createServer` (`server/index.ts:10161-10168`). |
-| `server/webhook-ingress.ts:157` | Separate loopback listener | Never reachable: relay ingress dispatches only to `handleRequest`. |
 | `req.socket.remoteAddress` | Not used for trust today (grep) | Must stay unused; relay sockets have none. |
 
 Rate limits: pairing redeem 10/min per peer IP and 30/min per PC, on top of the 5 guess burn. Relay: phone connections 20/s burst 60 per source IP, 256 concurrent per label, 16 idle data channels per label, 6 control auth attempts/min per IP, enroll 5/h per IP, status 60/min per IP. Relay logs carry event, label, /24 of peer IP, byte counts, duration; never payload, never ClientHello bytes beyond SNI; journald kept 7 days.

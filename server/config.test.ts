@@ -18,7 +18,6 @@ import {
   roomTurnTimeoutMinutes,
   saveConfig,
   showToolCallsEnabled,
-  skillRecorderEnabled,
   memoryNotesEnabled,
   sweepLegacyOpencodeKey,
   syncCredentialEnv,
@@ -31,9 +30,9 @@ describe("configuration boundaries", () => {
   it("drops retired browser settings on read and patch", () => {
     const legacy = {
       browserProfiles: [{ id: "work", name: "Work" }],
-      features: { browser: true, skillRecorder: true },
+      features: { browser: true, modelDial: true },
     };
-    const expected = { features: { skillRecorder: true } };
+    const expected = { features: { modelDial: true } };
     expect(parseStoredConfig(legacy)).toEqual(expected);
     expect(parseConfigPatch(legacy)).toEqual(expected);
   });
@@ -174,17 +173,6 @@ describe("configuration boundaries", () => {
     });
     expect(localVmMode({ localVm: { mode: "per-bot" } })).toBe("per-bot");
     expect(localVmMaxInstances({ localVm: { maxInstances: 3 } })).toBe(3);
-  });
-
-  it("keeps experimental features off by default and accepts an explicit opt-in", () => {
-    expect(skillRecorderEnabled({})).toBe(false);
-    expect(parseConfigPatch({ features: { skillRecorder: true } })).toEqual({
-      features: { skillRecorder: true },
-    });
-    expect(skillRecorderEnabled({ features: { skillRecorder: true } })).toBe(true);
-    expect(() => parseConfigPatch({ features: { skillRecorder: "yes" } })).toThrow(
-      "features.skillRecorder",
-    );
   });
 
   it("keeps auto notes on by default and saves the switch per PC", () => {

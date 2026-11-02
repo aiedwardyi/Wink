@@ -15,7 +15,7 @@ const config: ConfigStatus = {
   rooms: { turnTimeoutMinutes: 5 },
   localVm: { mode: "shared", maxInstances: 1 },
   profile: { name: "Edward", email: "" },
-  features: { skillRecorder: false, showToolCalls: false },
+  features: { showToolCalls: false },
 };
 
 const days = Array.from({ length: 14 }, (_, index) => {

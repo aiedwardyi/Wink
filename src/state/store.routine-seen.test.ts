@@ -81,7 +81,6 @@ async function mount(kind: "plugins" | "appSettings") {
       return Response.json({ bots: [{ id: "ringer", threadId: "ringer-thread", name: "ringer", messages: [] }], groups: [] });
     }
     if (url.startsWith("/api/routines")) return Response.json({ routines: [], runs: [run] });
-    if (url.startsWith("/api/webhooks")) return Response.json({ webhooks: [], attempts: [], ingress: null });
     if (url.startsWith("/api/instances")) return Response.json({ instances: [] });
     return Response.json({});
   }));

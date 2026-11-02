@@ -12,9 +12,7 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/SettingsModal"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/PluginsPanel"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/InspectorPanel"\)/);
-    expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/RoutinesPage"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/CommandPalette"\)/);
-    expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/SkillRecorderPage"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/CreateBotSheet"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/Onboarding"\)/);
     expect(app).toMatch(/lazyView\(\(\) => import\("@\/components\/NoEngines"\)/);
@@ -58,7 +56,7 @@ describe("first-chat boot keeps off-screen panels out of the initial module grap
 describe("update reload", () => {
   it("waits while a secondary view or sidebar flow is open", () => {
     const open = app.match(/const secondaryViewOpen =([\s\S]*?);/)?.[1] ?? "";
-    for (const flag of ["onboardingOpen", 'state.activeView !== "chat"', "terminalOpen", "paletteOpen", "sidebarOverlay", "state.appSettingsOpen", "state.pluginsOpen", "createBotSheetOpen"]) {
+    for (const flag of ["onboardingOpen", "terminalOpen", "paletteOpen", "sidebarOverlay", "state.appSettingsOpen", "state.pluginsOpen", "createBotSheetOpen"]) {
       expect(open).toContain(flag);
     }
     expect(app).toContain("useStaleBuildReload(state.connected, secondaryViewOpen)");

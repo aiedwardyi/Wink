@@ -26,7 +26,6 @@ import { createBotPatchQueue } from "./bot-patch-queue";
 import { createViewedReplies } from "./viewed-replies";
 import { canPrefetchChat, firstChatPeripherals, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
-import { skillRecorderEnabled } from "@/lib/feature-flags";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { openLiveEvents, snapshotCoversHello } from "@/lib/live-events";
@@ -105,7 +104,7 @@ const NOTIFY_TOAST_MS = 2 * 60_000;
 /** Buzz once for a settled bot reply in the chat on screen, never for imported history. */
 export function buzzOnReply(
   frame: { threadId: string; imported?: boolean; message?: { role?: string; kind?: string; summarized?: boolean } },
-  state: NotificationRoutingState & Pick<AppState, "activeView" | "selectedId">,
+  state: NotificationRoutingState & Pick<AppState, "selectedId">,
   pageVisible: boolean,
   buzz: () => void = hapticTick,
 ): void {
@@ -225,25 +224,6 @@ export function reducer(state: AppState, action: Action): AppState {
       const waiting = Object.entries(patches).filter(([id]) => !page.has(id));
       return { ...state, bots, groups, olderPatches: { ...state.olderPatches, [action.threadId]: Object.fromEntries(waiting) } };
     }
-    case "showRoutines":
-      return {
-        ...state,
-        activeView: "routines",
-        settingsOpen: false,
-        inspectorOpen: false,
-        appSettingsOpen: false,
-        pluginsOpen: false,
-      };
-    case "showSkillRecorder":
-      if (!skillRecorderEnabled(state.config)) return state;
-      return {
-        ...state,
-        activeView: "skill-recorder",
-        settingsOpen: false,
-        inspectorOpen: false,
-        appSettingsOpen: false,
-        pluginsOpen: false,
-      };
     case "routinesHydrated":
       return { ...state, routines: action.routines, routineRuns: action.runs };
     case "routinePatched": {
@@ -263,29 +243,6 @@ export function reducer(state: AppState, action: Action): AppState {
         ? state.routineRuns.map((run) => (run.id === action.run.id ? action.run : run))
         : [action.run, ...state.routineRuns];
       return { ...state, routineRuns: runs.sort((a, b) => b.scheduledFor - a.scheduledFor) };
-    }
-    case "webhooksHydrated":
-      return { ...state, webhooks: action.webhooks, webhookAttempts: action.attempts, webhookIngress: action.ingress };
-    case "webhookPatched": {
-      const exists = state.webhooks.some((webhook) => webhook.id === action.webhook.id);
-      return {
-        ...state,
-        webhooks: exists
-          ? state.webhooks.map((webhook) => (webhook.id === action.webhook.id ? action.webhook : webhook))
-          : [action.webhook, ...state.webhooks],
-      };
-    }
-    case "webhookDeleted":
-      return {
-        ...state,
-        webhooks: state.webhooks.filter((webhook) => webhook.id !== action.webhookId),
-        webhookAttempts: state.webhookAttempts.filter((attempt) => attempt.webhookId !== action.webhookId),
-      };
-    case "webhookAttempted": {
-      const attempts = state.webhookAttempts.some((attempt) => attempt.id === action.attempt.id)
-        ? state.webhookAttempts.map((attempt) => attempt.id === action.attempt.id ? action.attempt : attempt)
-        : [...state.webhookAttempts, action.attempt];
-      return { ...state, webhookAttempts: attempts.slice(-2_000) };
     }
     case "groupPatched": {
       const exists = state.groups.some((g) => g.id === action.group.id);
@@ -330,10 +287,6 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         config: action.config,
-        activeView:
-          state.activeView === "skill-recorder" && !skillRecorderEnabled(action.config)
-            ? "chat"
-            : state.activeView,
       };
     case "select": {
       // reselecting the conversation a workspace covers does not reveal it
@@ -341,12 +294,11 @@ export function reducer(state: AppState, action: Action): AppState {
       if (state.groups.some((g) => g.id === action.id)) {
         return {
           ...state,
-          activeView: "chat",
           selectedId: action.id,
           groups: covered ? state.groups : state.groups.map((g) => (g.id === action.id ? { ...g, unread: false } : g)),
         };
       }
-      const selected = withMascotMotion({ ...state, activeView: "chat", selectedId: action.id }, action.id, "switch");
+      const selected = withMascotMotion({ ...state, selectedId: action.id }, action.id, "switch");
       return covered ? selected : updateBot(selected, action.id, (b) => ({ ...b, unread: false }));
     }
     // optimistic card settle; the server's message.patch confirms it later
@@ -374,7 +326,6 @@ export function reducer(state: AppState, action: Action): AppState {
         // An HTTP create/import response and its SSE broadcast can race. Fold
         // both paths without ever showing the same bot twice.
         bots: [action.bot, ...state.bots.filter((bot) => bot.id !== action.bot.id)],
-        activeView: activate ? "chat" : state.activeView,
         selectedId: activate ? action.bot.id : state.selectedId,
         createBotOpen: false,
         composerFocusBotId: activate && action.focusComposer ? action.bot.id : state.composerFocusBotId,
@@ -484,7 +435,7 @@ export function reducer(state: AppState, action: Action): AppState {
         // Ordinary bot patches omit messages and must preserve the current
         // transcript. A task switch is different: its full bot event carries
         // the new transcript, which must replace the previous task before the
-        // webhook's streamed messages begin arriving.
+        // the task's streamed messages begin arriving.
         messages:
           switchedThread && Array.isArray(action.bot.messages)
             ? action.bot.messages
@@ -646,7 +597,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (state.workspaceOpen === action.open) return state;
       const next = { ...state, workspaceOpen: action.open };
       // closing the workspace puts the selected conversation back on screen
-      if (action.open || next.activeView !== "chat") return next;
+      if (action.open) return next;
       return {
         ...next,
         bots: next.bots.map((b) => (b.id === next.selectedId ? { ...b, unread: false } : b)),
@@ -656,7 +607,7 @@ export function reducer(state: AppState, action: Action): AppState {
     // the window just regained focus/visibility with an unread chat still
     // on screen - that is the user reading it, same as opening it fresh
     case "windowActivated": {
-      if (state.activeView !== "chat" || state.workspaceOpen) return state;
+      if (state.workspaceOpen) return state;
       // Runs inside focus/visibilitychange, which React renders synchronously
       // before the restored window's first frame.
       const selectedUnread =
@@ -920,19 +871,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return action.generation === undefined
         ? state
         : { ...state, taskSwitches: { ...state.taskSwitches, [action.botId]: action.generation } };
-    case "deleteTask":
     case "resumeTask":
-    case "newGroupTask":
     case "switchGroupTask":
-    case "deleteGroupTask":
       return state;
-    case "renameTask":
-      return updateBot(state, action.botId, (bot) => ({
-        ...bot,
-        tasks: (bot.tasks ?? []).map((task) =>
-          task.threadId === action.threadId ? { ...task, title: action.title } : task,
-        ),
-      }));
     case "taskPacket":
       return {
         ...state,
@@ -949,20 +890,6 @@ export function reducer(state: AppState, action: Action): AppState {
             task.threadId === action.threadId ? { ...task, taskState: action.packet } : task,
           ),
         })),
-      };
-    case "renameGroupTask":
-      return {
-        ...state,
-        groups: state.groups.map((group) =>
-          group.id === action.groupId
-            ? {
-                ...group,
-                tasks: (group.tasks ?? []).map((task) =>
-                  task.threadId === action.threadId ? { ...task, title: action.title } : task,
-                ),
-              }
-            : group,
-        ),
       };
     case "taskSwitched": {
       if (action.generation !== undefined && state.taskSwitches[action.bot.id] !== action.generation) return state;
@@ -1015,8 +942,6 @@ export function reducer(state: AppState, action: Action): AppState {
     case "duplicateBot":
     case "createGroup":
     case "deleteGroup":
-    case "updateRoutine":
-    case "deleteRoutine":
     case "markRoutineRunSeen":
     // the dispatch wrapper holds the target in a ref until hydrate
     case "notificationSwitchPending":
@@ -1045,13 +970,9 @@ export const initialState: AppState = {
   instances: [],
   config: null,
   selectedId: "",
-  activeView: "chat",
   workspaceOpen: false,
   routines: [],
   routineRuns: [],
-  webhooks: [],
-  webhookAttempts: [],
-  webhookIngress: null,
   createBotOpen: false,
   composerFocusBotId: null,
   settingsOpen: false,
@@ -1418,15 +1339,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // All other actions keep their existing optimistic behavior.
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
-        case "updateRoutine":
-          api(`/api/routines/${action.routineId}`, {
-            method: "PATCH",
-            body: JSON.stringify(action.patch),
-          }).catch(showError);
-          break;
-        case "deleteRoutine":
-          api(`/api/routines/${action.routineId}`, { method: "DELETE" }).catch(showError);
-          break;
         case "markRoutineRunSeen":
           api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);
           break;
@@ -1734,7 +1646,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "setWorkspaceOpen": {
-          if (action.open || stateRef.current.activeView !== "chat") break;
+          if (action.open) break;
           const selected = stateRef.current.selectedId;
           const shown = stateRef.current.bots.find((b) => b.id === selected);
           const shownGroup = stateRef.current.groups.find((g) => g.id === selected);
@@ -1746,7 +1658,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "windowActivated": {
-          if (stateRef.current.activeView !== "chat" || stateRef.current.workspaceOpen) break;
+          if (stateRef.current.workspaceOpen) break;
           const selected = stateRef.current.selectedId;
           const shown = stateRef.current.bots.find((b) => b.id === selected);
           const shownGroup = stateRef.current.groups.find((g) => g.id === selected);
@@ -1956,37 +1868,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "notificationSwitchPending":
           pendingNotificationSwitch.current = action.target;
           break;
-        case "renameTask":
-          api(`/api/bots/${action.botId}/tasks/${action.threadId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ title: action.title }),
-          }).catch(showError);
-          break;
-        case "deleteTask":
-          api(`/api/bots/${action.botId}/tasks/${action.threadId}`, { method: "DELETE" })
-            .then((r: any) => r?.bot && dispatch({ type: "taskSwitched", bot: r.bot }))
-            .catch(showError);
-          break;
-        // Channel tasks mirror bot tasks, but hydrate the whole channel so
-        // switching atomically replaces its transcript, folder and pin.
-        case "newGroupTask":
-          api(`/api/groups/${action.groupId}/tasks`, { method: "POST", body: "{}" })
-            .then((r: any) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
-            .catch(showError);
-          break;
         case "switchGroupTask":
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "POST" })
-            .then((r: any) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
-            .catch(showError);
-          break;
-        case "renameGroupTask":
-          api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, {
-            method: "PATCH",
-            body: JSON.stringify({ title: action.title }),
-          }).catch(showError);
-          break;
-        case "deleteGroupTask":
-          api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "DELETE" })
             .then((r: any) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
           break;
@@ -2028,7 +1911,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let prefetchedChat: Promise<any> | null = null;
     let prefetchStarted = false;
     let snapshotBoundary: string | undefined;
-    type PeripheralKey = "instances" | "config" | "routines" | "webhooks";
+    type PeripheralKey = "instances" | "config" | "routines";
     type PeripheralPart = {
       key: PeripheralKey;
       request: () => Promise<() => void>;
@@ -2068,14 +1951,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         request: async () => {
           const { routines, runs } = await api("/api/routines");
           return () => rawDispatch({ type: "routinesHydrated", routines: routines ?? [], runs: runs ?? [] });
-        },
-      },
-      {
-        key: "webhooks",
-        request: async () => {
-          const { webhooks, attempts, ingress } = await api("/api/webhooks");
-          return () =>
-            rawDispatch({ type: "webhooksHydrated", webhooks, attempts: attempts ?? [], ingress });
         },
       },
     ];
@@ -2229,12 +2104,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       else if (frame.kind === "config") bumpPeripheralVersion("config", "instances");
       else if (frame.kind === "routine" || frame.kind === "routine.deleted" || frame.kind === "routine.run") {
         bumpPeripheralVersion("routines");
-      } else if (
-        frame.kind === "webhook" ||
-        frame.kind === "webhook.attempt" ||
-        frame.kind === "webhook.deleted"
-      ) {
-        bumpPeripheralVersion("webhooks");
       }
       switch (frame.kind) {
         case "turn.dispatch":
@@ -2370,15 +2239,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "routine.run":
           rawDispatch({ type: "routineRunPatched", run: frame.run });
-          break;
-        case "webhook":
-          rawDispatch({ type: "webhookPatched", webhook: frame.webhook });
-          break;
-        case "webhook.attempt":
-          rawDispatch({ type: "webhookAttempted", attempt: frame.attempt });
-          break;
-        case "webhook.deleted":
-          rawDispatch({ type: "webhookDeleted", webhookId: frame.webhookId });
           break;
         case "runtime": {
           const event = frame.event;

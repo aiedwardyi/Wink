@@ -27,13 +27,12 @@ describe("chat snapshot prefetch", () => {
 });
 
 describe("first chat snapshot keeps engine describe off the composer path", () => {
-  it("loads config, routines, and webhooks with chat — not instances", () => {
+  it("loads config and routines with chat", () => {
     expect(firstChatPeripherals([
       { key: "instances" },
       { key: "config" },
       { key: "routines" },
-      { key: "webhooks" },
-    ]).map((part) => part.key)).toEqual(["config", "routines", "webhooks"]);
+    ]).map((part) => part.key)).toEqual(["config", "routines"]);
     expect(isFirstChatPeripheral("instances")).toBe(false);
     expect(isFirstChatPeripheral("config")).toBe(true);
   });

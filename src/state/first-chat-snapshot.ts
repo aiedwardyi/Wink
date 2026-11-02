@@ -1,6 +1,6 @@
 /** Peripherals that may ride the first chat snapshot. Engine describe
  * (`instances`) walks PATH and CLI `--version`; keep it off composer paint. */
-export const FIRST_CHAT_PERIPHERAL_KEYS = ["config", "routines", "webhooks"] as const;
+export const FIRST_CHAT_PERIPHERAL_KEYS = ["config", "routines"] as const;
 export const DEFERRED_INSTANCE_IDLE_MS = 800;
 
 export function canPrefetchChat(location: Pick<Location, "protocol" | "hostname">): boolean {

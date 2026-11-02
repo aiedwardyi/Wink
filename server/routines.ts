@@ -593,65 +593,6 @@ export class RoutineManager {
     return { ...run };
   }
 
-  /** Queue an event-driven job without inventing a calendar schedule. Webhook
-   * definitions live in their own store; the execution receipt deliberately
-   * reuses this manager so busy-bot ordering, task creation and VM routing stay
-   * identical for every unattended job. */
-  enqueueWebhook(input: {
-    webhookId: string;
-    webhookName: string;
-    prompt: string;
-    botId: string;
-    runOn: RoutineRunOn;
-    deliveryId: string;
-    receivedAt: number;
-  }): RoutineRun {
-    if (this.options.botState(input.botId) === "missing") {
-      throw Object.assign(new Error("The assigned bot no longer exists"), { status: 410 });
-    }
-    const run: RoutineRun = {
-      id: randomUUID(),
-      routineId: input.webhookId,
-      routineName: input.webhookName,
-      prompt: input.prompt,
-      botId: input.botId,
-      runOn: input.runOn,
-      scheduledFor: input.receivedAt,
-      status: "queued",
-      manual: false,
-      triggerSource: "webhook",
-      webhookId: input.webhookId,
-      deliveryId: input.deliveryId,
-      createdAt: this.now(),
-    };
-    this.runs.push(run);
-    if (this.runs.length > MAX_RUNS) this.runs.splice(0, this.runs.length - MAX_RUNS);
-    this.save();
-    this.emitRun(run);
-    queueMicrotask(() => void this.tick());
-    return { ...run };
-  }
-
-  activeWebhookRunCount(webhookId: string): number {
-    return this.runs.filter(
-      (run) => run.webhookId === webhookId && ["queued", "running", "waiting"].includes(run.status),
-    ).length;
-  }
-
-  cancelQueuedWebhook(webhookId: string, message: string): void {
-    let changed = false;
-    for (const run of this.runs) {
-      if (run.webhookId !== webhookId || run.status !== "queued") continue;
-      run.status = "cancelled";
-      run.attention = undefined;
-      run.finishedAt = this.now();
-      run.error = message.slice(0, 500);
-      this.emitRun(run);
-      changed = true;
-    }
-    if (changed) this.save();
-  }
-
   async cancelRun(id: string): Promise<RoutineRun | null> {
     const run = this.runs.find((r) => r.id === id);
     if (!run || !["queued", "running", "waiting"].includes(run.status)) return null;

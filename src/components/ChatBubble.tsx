@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Pin, PinOff, RefreshCw, Webhook } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -10,7 +10,6 @@ import { FileAttachmentRows } from "./FileAttachmentRow";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { contextClickKind, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest, type MessageMenuTarget } from "./MessageMenu";
 import { cn } from "@/lib/cn";
-import { showHoverPin } from "@/lib/friends-chrome";
 import { useThreadMessage } from "@/lib/message-pages";
 import { detectChatOptions } from "@/lib/chat-options";
 import { ChatOptionChips } from "./ChatOptionChips";
@@ -418,21 +417,7 @@ const Bubble = memo(function Bubble({
             >
               <MessageSquareReply size={14} />
             </button>
-            {showHoverPin() && <button
-              onClick={() =>
-                dispatch({
-                  type: "updateBot",
-                  botId,
-                  patch: { pinnedMessageId: pinned ? "" : message.id },
-                })
-              }
-              aria-label={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-              aria-pressed={pinned}
-              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-              title={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-            >
-              {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>}
+
           </div>
         )}
         <div
@@ -534,21 +519,7 @@ const Bubble = memo(function Bubble({
             >
               <MessageSquareReply size={14} />
             </button>
-            {showHoverPin() && <button
-              onClick={() =>
-                dispatch({
-                  type: "updateBot",
-                  botId,
-                  patch: { pinnedMessageId: pinned ? "" : message.id },
-                })
-              }
-              aria-label={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-              aria-pressed={pinned}
-              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-              title={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-            >
-              {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>}
+
           </div>
         )}
         {!message.placeholder && (

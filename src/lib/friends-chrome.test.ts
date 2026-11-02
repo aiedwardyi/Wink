@@ -4,45 +4,23 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  showAvatarImageGenerate,
-  showAvatarShapeOptions,
   showBotVoiceAndStartupSettings,
-  showBotNewTaskControl,
   showChannelCallControl,
-  showChannelNewTaskControl,
-  showCommunityRepoLink,
-  showSettingsSearch,
-  showSettingsEnginesNav,
   showUsagePerBotTable,
-  showSidebarDensityControls,
   showSidebarPhone,
-  showSidebarRoutines,
-  showSidebarTeachSkill,
-  showSkinTaglines,
-  showWelcomeTiles,
-  showSettingsHotkeyHints,
   showDisabledShareTerminal,
-  showEmptyKeysCard,
   showAvatarFormatsHint,
   showBotMenuCopy,
-  showBotMenuMakeGroup,
   showNewMenuExport,
-  showNewMenuTeams,
-  showGroupMenuCopyId,
   showPhoneDrawerCollapse,
-  showHeaderPencil,
   showTouchPickerLegend,
-  showHoverPin,
 } from "./friends-chrome";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const components = join(here, "../components");
-const settingsModal = readFileSync(join(components, "SettingsModal.tsx"), "utf8");
 const settingsPanel = readFileSync(join(components, "SettingsPanel.tsx"), "utf8");
-const chatView = readFileSync(join(components, "ChatView.tsx"), "utf8");
 const groupView = readFileSync(join(components, "GroupView.tsx"), "utf8");
 const sidebar = readFileSync(join(components, "Sidebar.tsx"), "utf8");
-const teamLibrary = readFileSync(join(components, "TeamLibraryPanel.tsx"), "utf8");
 const avatarCard = readFileSync(join(components, "BotProfileAvatarCard.tsx"), "utf8");
 
 function sourceBetween(source: string, start: string, end: string): string {
@@ -55,38 +33,19 @@ function sourceBetween(source: string, start: string, end: string): string {
 }
 
 describe("friends chrome flags", () => {
-  it("keeps voice, tasks, call, Teach/Routines, and avatar extras off the idle surface", () => {
-    expect(showSettingsSearch()).toBe(false);
+  it("keeps voice, call, and parked extras off the idle surface", () => {
     expect(showBotVoiceAndStartupSettings()).toBe(false);
-    expect(showChannelNewTaskControl()).toBe(false);
     expect(showChannelCallControl()).toBe(false);
-    expect(showSidebarTeachSkill()).toBe(false);
-    expect(showSidebarRoutines()).toBe(false);
     expect(showSidebarPhone()).toBe(false);
-    expect(showCommunityRepoLink()).toBe(false);
-    expect(showAvatarImageGenerate()).toBe(false);
-    expect(showAvatarShapeOptions()).toBe(false);
-    expect(showSidebarDensityControls()).toBe(false);
-    expect(showSettingsEnginesNav()).toBe(false);
     expect(showUsagePerBotTable()).toBe(false);
     expect(showBotMenuCopy()).toBe(false);
-    expect(showBotMenuMakeGroup()).toBe(false);
     expect(showNewMenuExport()).toBe(false);
-    expect(showNewMenuTeams()).toBe(false);
-    expect(showGroupMenuCopyId()).toBe(false);
     expect(showPhoneDrawerCollapse()).toBe(false);
-    expect(showHeaderPencil()).toBe(false);
     expect(showTouchPickerLegend()).toBe(false);
-    expect(showHoverPin()).toBe(false);
   });
 });
 
 describe("friends chrome call sites keep the feature code", () => {
-  it("keeps Settings search and Engines gated", () => {
-    expect(settingsModal).toContain("showSettingsSearch()");
-    expect(settingsModal).toContain("showSettingsEnginesNav()");
-    expect(settingsModal).toContain("settings.searchAria");
-  });
 
   it("keeps voice and startup settings gated", () => {
     expect(settingsPanel).toContain("showBotVoiceAndStartupSettings()");
@@ -101,51 +60,21 @@ describe("friends chrome call sites keep the feature code", () => {
     expect(usage).toContain("Cost");
   });
 
-  it("hides the bot chat picker so every bot has one chat", () => {
-    expect(showBotNewTaskControl()).toBe(false);
-    const taskPicker = readFileSync(join(components, "TaskPicker.tsx"), "utf8");
-    const store = readFileSync(join(here, "../state/store.tsx"), "utf8");
-    const types = readFileSync(join(here, "../state/store-types.ts"), "utf8");
-    expect(taskPicker).not.toContain('type: "newTask"');
-    expect(store).not.toContain('"newTask"');
-    expect(types).not.toContain('"newTask"');
-  });
-
-  it("keeps the bot new-task control gated in chat chrome", () => {
-    expect(chatView).toContain("showBotNewTaskControl()");
-    expect(chatView).toContain("<TaskPicker");
-  });
-
-  it("gates channel call and new-task chrome without removing the components", () => {
-    expect(groupView).toContain("showChannelNewTaskControl()");
+  it("gates channel call chrome without removing the component", () => {
     expect(groupView).toContain("showChannelCallControl()");
-    expect(groupView).toContain("<GroupTaskPicker");
     expect(groupView).toContain("<GroupCallButton");
   });
 
-  it("gates Teach a skill, Routines, community repo, GPT Image 2, and avatar shapes", () => {
-    expect(sidebar).toContain("showSidebarTeachSkill()");
-    expect(sidebar).toContain("showSidebarRoutines()");
+  it("keeps phone setup parked and avatar upload, colors, and styles available", () => {
     expect(sidebar).toContain("showSidebarPhone()");
-    expect(sidebar).toContain('t("chrome.teachSkill")');
-    expect(sidebar).toContain('t("chrome.routines")');
-    expect(teamLibrary).toContain("showCommunityRepoLink()");
-    expect(teamLibrary).toContain('t("teamLibrary.communityRepo")');
-    expect(avatarCard).toContain("showAvatarImageGenerate()");
-    expect(avatarCard).toContain("showAvatarShapeOptions()");
-    expect(avatarCard).toContain('t("bot.generateTitle")');
-    expect(avatarCard).toContain("BOT_AVATAR_CROPS");
     expect(avatarCard).toContain('t("bot.uploadImage")');
     expect(avatarCard).toContain("MAUS_COLOR_NAMES");
     expect(avatarCard).toContain("BOT_AVATAR_PICKER_ORDER");
     expect(avatarCard).toContain("mascotStyle");
   });
 
-  it("gates sidebar density toys and keeps a drag-resize handle plus the create menu", () => {
-    expect(sidebar).toContain("showSidebarDensityControls()");
+  it("keeps a drag-resize handle, collapse control, and create menu", () => {
     expect(sidebar).toContain('t("chrome.collapseSidebar")');
-    expect(sidebar).toContain('t("chrome.sidebarDensity")');
-    expect(sidebar).toContain('t("chrome.densityAvatars")');
     expect(sidebar).toContain('t("chrome.resizeSidebar")');
     expect(sidebar).toContain("data-sidebar-resize");
     const resizeHandle = sourceBetween(
@@ -176,12 +105,10 @@ describe("friends chrome call sites keep the feature code", () => {
     expect(resizeCancel).not.toContain("saveSidebarWidth");
     expect(resizeCancel).not.toContain("saveSidebarCollapsed");
     const resizeStart = sourceBetween(sidebar, "const onSidebarResizeStart", "const onSidebarResizeMove");
-    expect(resizeStart).toContain("if (!sidebarCollapsedRef.current && density === \"icons\") return");
     expect(resizeStart).toContain("setPointerCapture");
     expect(resizeStart).toContain("fitSidebarWidth(sidebarWidthRef.current, viewportWidth, dockedAsideWidth)");
     expect(resizeStart).toContain("sidebarCollapsedRef.current ? sidebarWidthRef.current");
     const resizeKey = sourceBetween(sidebar, "const onSidebarResizeKeyDown", "useEffect(() => {");
-    expect(resizeKey).toContain("if (!sidebarCollapsedRef.current && density === \"icons\") return");
     // arrows must move the width the separator shows, not the saved one behind it
     expect(resizeKey).toContain("fitSidebarWidth(sidebarWidthRef.current, viewportWidth, dockedAsideWidth)");
     expect(sidebar).toContain("dockedDetailsWidth(");
@@ -215,21 +142,11 @@ describe("friends chrome call sites keep the feature code", () => {
 });
 
 describe("declutter settings flags", () => {
-  it("hides first-run and Settings extras behind flags that keep the code", () => {
-    expect(showSkinTaglines()).toBe(false);
-    expect(showWelcomeTiles()).toBe(false);
-    expect(showSettingsHotkeyHints()).toBe(false);
+  it("keeps avatar hints and disabled terminal sharing parked", () => {
     expect(showDisabledShareTerminal()).toBe(false);
-    expect(showEmptyKeysCard()).toBe(false);
     expect(showAvatarFormatsHint()).toBe(false);
     const read = (name: string) => readFileSync(join(components, name), "utf8");
-    expect(read("SkinPicker.tsx")).toContain("showSkinTaglines() && (");
-    expect(read("Onboarding.tsx")).toContain("showWelcomeTiles() && (");
-    expect(settingsModal).toContain("shortcut && showSettingsHotkeyHints() && (");
-    expect(read("ModelIndexSection.tsx")).toContain("showSettingsHotkeyHints() && (");
     expect(settingsPanel).toContain("(!shareTerminalDisabled || showDisabledShareTerminal()) && (");
-    expect(read("ApiKeys.tsx")).toContain("saved.length === 0 && !showEmptyKeysCard()");
-    expect(read("ApiKeys.tsx")).toContain('t("keys.empty")');
     expect(avatarCard).toContain("(showAvatarFormatsHint() || rejected) && ");
     expect(read("ProfileFields.tsx")).toContain("(showAvatarFormatsHint() || rejected) && ");
   });

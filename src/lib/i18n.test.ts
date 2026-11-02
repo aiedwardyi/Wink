@@ -14,8 +14,6 @@ import {
   translate,
 } from "./i18n";
 import { teamImportPreview } from "./team-import";
-import { SKIN_IDS } from "./skins";
-import { SECTION_PHRASE_KEYS } from "./settings-search";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -46,7 +44,6 @@ const approvalCard = readFileSync(join(here, "../components/ApprovalCard.tsx"), 
 const pendingApproval = readFileSync(join(here, "../components/PendingApproval.tsx"), "utf8");
 const secretRequestCard = readFileSync(join(here, "../components/SecretRequestCard.tsx"), "utf8");
 const modelPicker = readFileSync(join(here, "../components/ModelPicker.tsx"), "utf8");
-const taskPicker = readFileSync(join(here, "../components/TaskPicker.tsx"), "utf8");
 const renameTitle = readFileSync(join(here, "../components/RenameTitle.tsx"), "utf8");
 const enginesSettings = readFileSync(join(here, "../components/EnginesSettings.tsx"), "utf8");
 const searchResults = readFileSync(join(here, "../components/SearchResults.tsx"), "utf8");
@@ -57,10 +54,8 @@ const planUsageBar = readFileSync(join(here, "../components/PlanUsageBar.tsx"), 
 const usageLib = readFileSync(join(here, "usage.ts"), "utf8");
 const chatPlanMeters = readFileSync(join(here, "../components/ChatPlanMeters.tsx"), "utf8");
 const composer = readFileSync(join(here, "../components/Composer.tsx"), "utf8");
-const routinesPage = readFileSync(join(here, "../components/RoutinesPage.tsx"), "utf8");
 const noEngines = readFileSync(join(here, "../components/NoEngines.tsx"), "utf8");
 const onboarding = readFileSync(join(here, "../components/Onboarding.tsx"), "utf8");
-const skinPicker = readFileSync(join(here, "../components/SkinPicker.tsx"), "utf8");
 
 function hardcodedKoreanParticles(text: string): string[] {
   return [...text.matchAll(/\{\w+\}["'”’»」』)\]〉》]*([가-힣]+(?:\([가-힣]+\))?)(?=$|\s|\p{P})/gu)]
@@ -172,7 +167,6 @@ describe("catalogs", () => {
       ["composer.roomLead", "{name}에 메시지"],
       ["room.hint.lead", "답변할 봇을 고르려면 @로 언급하세요."],
       ["chat.conversationAria", "대화 상대: {name}"],
-      ["settings.noMatch", "“{query}” 검색 결과가 없습니다"],
       ["palette.noMatch", "“{query}” 검색 결과가 없습니다"],
       ["search.noMatch", "“{query}” 검색 결과에 메시지가 없습니다"],
       ["bot.rememberedFolderNextTask", "다음 작업 폴더: {folder}"],
@@ -436,22 +430,6 @@ describe("connected apps and bot details Korean coverage", () => {
 
 describe("Friends Routine naming and one Stop", () => {
   it("uses Routine as the product name, not Tasks & routines", () => {
-    expect(en["chrome.routines"]).toBe("Routines");
-    expect(ko["chrome.routines"]).toBe("루틴");
-    expect(en["chrome.routines"]).not.toMatch(/Task/i);
-    expect(ko["chrome.routines"]).not.toMatch(/작업/);
-    expect(en["routine.runNow"]).toBe("Run now");
-    expect(ko["routine.runNow"]).toBe("지금 실행");
-    expect(en["routine.queuing"]).toBe("Queuing this routine…");
-    expect(ko["routine.queuing"]).toBe("이 루틴을 대기열에 넣는 중…");
-    expect(en["routine.queuedNamed"]).toBe("{name} is queued.");
-    expect(ko["routine.queuedNamed"]).toBe("{name} 루틴이 대기 중입니다.");
-    expect(en["routine.runningNamed"]).toBe("{name} is running.");
-    expect(ko["routine.runningNamed"]).toBe("{name} 루틴이 실행 중입니다.");
-    expect(en["routine.waitingNamed"]).toBe("{name} needs your input.");
-    expect(ko["routine.waitingNamed"]).toBe("{name} 루틴에 사용자 입력이 필요합니다.");
-    expect(en["routine.openThread"]).toBe("Open this routine thread");
-    expect(ko["routine.openThread"]).toBe("이 루틴 대화 열기");
     expect(en["chat.routineQueuedElsewhere"]).toBe("{name} is queued on this bot.");
     expect(ko["chat.routineQueuedElsewhere"]).toBe("이 봇에서 {name} 루틴이 대기 중입니다.");
     expect(en["chat.routineRunningElsewhere"]).toBe("{name} is running in another thread on this bot.");
@@ -466,23 +444,12 @@ describe("Friends Routine naming and one Stop", () => {
     expect(ko["chat.backToChat"]).toBe("대화로 돌아가기");
     expect(en["task.running"]).toBe("Running");
     expect(ko["task.running"]).toBe("실행 중");
-    expect(en["routine.pageHelp"]).toBe("On this PC, a routine runs in the chat it came from. Cloud routines start a fresh conversation.");
-    expect(ko["routine.pageHelp"]).toBe("이 PC의 루틴은 만들어진 대화에서 실행되고, 클라우드 루틴은 새 대화를 시작합니다.");
     expect(translate("en", "chat.routineRunningElsewhere", { name: "keep this name" })).toContain("keep this name");
     expect(translate("ko", "chat.routineRunningElsewhere", { name: "keep this name" })).toContain("keep this name");
     expect(Object.hasOwn(catalogs.en, "keep this name")).toBe(false);
   });
 
-  it("wires Routine copy into the sidebar and calendar, and keeps a single Stop in the composer", () => {
-    expect(sidebar).toContain('t("chrome.routines")');
-    expect(routinesPage).toContain('t("chrome.routines")');
-    expect(routinesPage).toContain('t("routine.pageHelp")');
-    expect(routinesPage).toContain('t("routine.runNow")');
-    expect(routinesPage).toContain('t("routine.openThread")');
-    expect(routinesPage).not.toMatch(/Tasks &amp; routines|Tasks & routines/);
-    expect(routinesPage).not.toMatch(/>Run now</);
-    expect(routinesPage).not.toMatch(/>Open task</);
-    expect(taskPicker).toContain('t("task.running")');
+  it("wires routine thread links and keeps a single Stop in the composer", () => {
     expect(chatView).toContain('t("chat.routineRunningElsewhere"');
     expect(chatView).toContain('t("chat.openRoutineThread")');
     expect(composer).toContain('t("composer.stop")');
@@ -657,13 +624,6 @@ describe("empty-engine first launch copy", () => {
     expect(ko["noEngines.body"]).not.toMatch(/Your bots need one of these/i);
   });
 
-  it("names every shipped engine in the onboarding principle", () => {
-    for (const name of ["Claude", "Codex", "Gemini", "Grok", "Muse"]) {
-      expect(en["onboarding.principle.engines.text"]).toContain(name);
-      expect(ko["onboarding.principle.engines.text"]).toContain(name);
-    }
-  });
-
   it("wires that path into NoEngines and first-run onboarding", () => {
     expect(noEngines).toContain('t("noEngines.title")');
     expect(noEngines).toContain('t("noEngines.body")');
@@ -732,10 +692,6 @@ describe("first-run core path leftovers", () => {
     expect(en["chrome.removeFromContext"]).toBe("Remove from section");
     expect(ko["chrome.removeFromContext"]).not.toMatch(/Remove from context/i);
     expect(en["chrome.newContextName"]).toBe("New section name");
-    expect(en["task.new"]).toBe("New task");
-    expect(ko["task.new"]).toBe("새 작업");
-    expect(en["task.matching"]).toContain("{count}");
-    expect(ko["task.matching"]).toContain("{count}");
     expect(en["chat.startConversation"]).toContain("Send a message");
     expect(ko["chat.startConversation"]).not.toMatch(/Send a message/i);
     expect(en["model.automatic"]).toBe("Current model");
@@ -767,8 +723,6 @@ describe("first-run core path leftovers", () => {
     expect(en["usage.limits.pending"]).toBe("Appears after your next {name} message.");
     expect(en["usage.limits.pending"]).not.toBe(en["usage.limits.notReported"]);
     expect(Object.hasOwn(en, "usage.limits.unavailable")).toBe(false);
-    expect(en["engines.setCli"]).toBe("Set engine path…");
-    expect(ko["engines.setCli"]).toBe("엔진 경로 지정…");
     expect(en["connections.connected"]).toBe("Connected");
     expect(ko["connections.connected"]).toBe("연결됨");
     expect(en["engines.unavailable"]).toBe("Unavailable");
@@ -791,9 +745,6 @@ describe("first-run core path leftovers", () => {
     expect(sidebar).toContain('t("chrome.removeFromContext")');
     expect(sidebar).toContain('t("palette.noMatch"');
     expect(sidebar).not.toMatch(/Remove from context/);
-    expect(taskPicker).toContain('t("task.new")');
-    expect(taskPicker).toContain('t("palette.noMatch"');
-    expect(taskPicker).not.toMatch(/>New task</);
     expect(renameTitle).toContain('t("rename.named"');
     expect(renameTitle).toContain('t("chat.openProfile"');
     expect(chatView).toContain('t("createBot.cancel")');
@@ -1076,37 +1027,6 @@ describe("execution timeline chrome", () => {
   });
 });
 
-describe("skin picker taglines", () => {
-  it("keeps a tagline key for every skin in EN and KO", () => {
-    for (const id of SKIN_IDS) {
-      const key = `settings.skin.${id}.tagline` as const;
-      expect(Object.hasOwn(en, key)).toBe(true);
-      expect(Object.hasOwn(ko, key)).toBe(true);
-      expect(en[key].length).toBeGreaterThan(0);
-      expect(ko[key].length).toBeGreaterThan(0);
-    }
-    expect(en["settings.skin.midnight.tagline"]).toBe("The original. Cool and dark.");
-    expect(ko["settings.skin.midnight.tagline"]).toBe("오리지널. 차갑고 어두운.");
-    expect(en["settings.skin.cobalt.tagline"]).toBe("Warm charcoal, mint lamp.");
-    expect(ko["settings.skin.cobalt.tagline"]).toBe("따뜻한 차콜, 민트 조명.");
-  });
-
-  it("wires every tagline into SkinPicker instead of the raw skin.tagline field", () => {
-    expect(skinPicker).toContain("t(`settings.skin.${skin.id}.tagline`)");
-    expect(skinPicker).not.toMatch(/skin\.id === "ledger" \? t\(/);
-    expect(skinPicker).not.toMatch(/:\s*skin\.tagline\s*[}]/);
-  });
-
-  it("keeps every skin tagline searchable from Settings, so a future skin can't render but stay unsearchable", () => {
-    for (const id of SKIN_IDS) {
-      const key = `settings.skin.${id}.tagline` as const;
-      expect(SECTION_PHRASE_KEYS.themes).toContain(key);
-      expect(SECTION_PHRASE_KEYS.general).not.toContain(key);
-    }
-  });
-});
-
-
 describe("routine alarm copy", () => {
   it("words the routine card, ringing row and Open in chat in English and Korean", () => {
     const phrases = [
@@ -1120,7 +1040,6 @@ describe("routine alarm copy", () => {
       ["routine.rowRang", "Career: routine rang", "Career: 루틴 알람이 울렸어요"],
       ["routine.openBotList", "Open bot list, a routine rang", "봇 목록 열기, 루틴 알람이 울렸어요"],
       ["routine.expandSidebar", "Expand sidebar, a routine rang", "사이드바 펼치기, 루틴 알람이 울렸어요"],
-      ["routine.openInChat", "Open in chat", "대화에서 보기"],
     ] as const;
     const vars = { time: "08:00", error: "No engine", name: "Career" };
     const korean = resolveLocale("system", "ko-KR");

@@ -60,7 +60,6 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(phoneHeaderName).toContain('querySelector("[data-chat-terminal]")');
     expect(chatHeader).toContain("data-chat-terminal");
     expect(chatHeader).toContain('className="min-w-0 flex-1 overflow-hidden max-md:hidden"');
-    expect(chatHeader).toContain("showEditButton={showHeaderPencil()}");
   });
 
   it("labels the Chief crown without a text pill on desktop and phone", () => {
@@ -83,15 +82,6 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(chatHeader).toContain("rounded-md p-1.5 hover:bg-raised max-md:hidden");
     expect(chatHeader).toContain("flex max-w-full shrink-0 flex-wrap items-center justify-end");
   });
-
-  it("keeps new-task chrome hidden in the ChatView header", () => {
-    expect(chatHeader).toContain("showBotNewTaskControl()");
-    expect(chatHeader).toContain("<TaskPicker");
-  });
-
-
-
-
 
   it("keeps WorkingFolder on SettingsPanel", () => {
     expect(settingsPanel).toContain("<WorkingFolder bot={bot} />");
@@ -162,7 +152,6 @@ vi.mock("./BotProfileAvatarCard", () => ({
 vi.mock("./LocalComputerAutoWarning", () => ({
   LocalComputerAutoWarning: () => null,
 }));
-
 
 const botWithUsage = {
   id: "bot-1",
@@ -290,4 +279,3 @@ describe("SettingsPanel still owns folder and usage", () => {
     expect(chatView).toContain("<ModelPicker bot={bot}");
   });
 });
-
