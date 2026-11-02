@@ -5,7 +5,7 @@
 //
 // The fake is a shebang script — the same constraint codex.cmd itself
 // hits on Windows. resolveCliSpawn covers both, so these run everywhere.
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -514,7 +514,42 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.argv.join(" ")).toContain("mcp_servers.openmausbot_connectors.command");
     expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("per-boot-token");
-    expect(seen.env.OMB_COMMS_TOKEN).toBe("per-boot-token");
+    expect(seen.env.WINK_MCP_OPENMAUSBOT_CONNECTORS_OMB_COMMS_TOKEN).toBe("per-boot-token");
+  });
+
+  it("isolates each MCP server's credentials with terminal sharing enabled", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/codex/mcp-env-turn.json", import.meta.url), "utf8"));
+    const messages = recorded.reply.events.filter((event: { method: string }) => event.method === "item/completed")
+      .map((event: { params: { item: object } }) => event.params.item);
+    await create({ mode: "bench-quiet", environment: { FAKE_CODEX_MESSAGES: JSON.stringify(messages) } });
+    const dump = join(scratch, "isolated-mcp.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const server = (token: string, bot: string) => ({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write(JSON.stringify({token:process.env.OMB_COMMS_TOKEN,bot:process.env.OMB_BOT_ID}))"],
+      env: { OMB_COMMS_TOKEN: token, OMB_BOT_ID: bot, ELECTRON_RUN_AS_NODE: "1" },
+    });
+    await instance.adapter.sendTurn({ threadId: "isolated", text: recorded.stamp.prompt, integrations: {
+      composio: server("connector-token", "connector"), agents: server("scoped-token", "sender"), terminal: server("global-token", "terminal"),
+      browser: server("browser-token", "browser"), phone: server("phone-token", "phone"), localComputer: server("computer-token", "computer"),
+    } });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const config = new Map<string, unknown>(seen.argv.filter((arg: string) => arg.startsWith("mcp_servers.")).map((arg: string) => {
+      const at = arg.indexOf("=");
+      return [arg.slice(0, at), JSON.parse(arg.slice(at + 1))];
+    }));
+    for (const [name, token, bot] of [["openmausbot_connectors", "connector-token", "connector"], ["agents", "scoped-token", "sender"], ["terminal", "global-token", "terminal"],
+      ["browser", "browser-token", "browser"], ["openmausbot_phone", "phone-token", "phone"], ["computer", "computer-token", "computer"]]) {
+      const prefix = `mcp_servers.${name}`;
+      const keys = config.get(`${prefix}.env_vars`) as string[];
+      const env = Object.fromEntries(keys.map((key) => [key, seen.env[key]]));
+      const reply = spawnSync(config.get(`${prefix}.command`) as string, config.get(`${prefix}.args`) as string[], { env, encoding: "utf8", windowsHide: true });
+      expect(reply.status).toBe(0);
+      expect(JSON.parse(reply.stdout)).toEqual({ token, bot });
+      expect(seen.argv.join(" ")).not.toContain(token);
+    }
+    expect(recorder.events).toContainEqual(expect.objectContaining({ type: "item.completed", phase: "final_answer", text: messages.at(-1).text }));
   });
 
   it("mounts peer-agent comms without placing the comms token in argv", async () => {
@@ -548,7 +583,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.argv).toContain("mcp_servers.agents.tool_timeout_sec=300");
     expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("peer-comms-secret");
-    expect(seen.env.OMB_COMMS_TOKEN).toBe("peer-comms-secret");
+    expect(seen.env.WINK_MCP_AGENTS_OMB_COMMS_TOKEN).toBe("peer-comms-secret");
     expect(instance.adapter.capabilities.agentsMcp).toBe(true);
   });
 
@@ -576,7 +611,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.argv.join(" ")).toContain("/tmp/container-mcp.js");
     expect(seen.argv.join(" ")).toContain("OMB_VM_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("vm-secret");
-    expect(seen.env.OMB_VM_TOKEN).toBe("vm-secret");
+    expect(seen.env.WINK_MCP_COMPUTER_OMB_VM_TOKEN).toBe("vm-secret");
   });
 
   it("mounts the remote computer proxy without placing its token in argv", async () => {
@@ -598,8 +633,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.argv.join(" ")).toContain("computer-proxy");
     expect(seen.argv.join(" ")).toContain("OGB_BOX_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("remote-secret");
-    expect(seen.env.OGB_BOX_ID).toBe("box-123");
-    expect(seen.env.OGB_BOX_TOKEN).toBe("remote-secret");
+    expect(seen.env.WINK_MCP_COMPUTER_OGB_BOX_ID).toBe("box-123");
+    expect(seen.env.WINK_MCP_COMPUTER_OGB_BOX_TOKEN).toBe("remote-secret");
   });
 
   it("sends the local provider when the picker id is custom-encoded", async () => {

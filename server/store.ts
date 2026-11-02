@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } 
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { indexMailRow } from "./mail-index.ts";
+import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR } from "./config.ts";
@@ -2041,6 +2041,7 @@ export class Store {
       tasks.splice(at < 0 ? tasks.length : at, 0, record);
       bot.tasks = tasks;
     }
+    rebuildMailIndex(record, messages);
     if (followed) bot.threadId = threadId;
     if (bot.threadId === threadId) bot.resumeCursors = {};
     if (followed && empty) {
@@ -2102,6 +2103,7 @@ export class Store {
             const message = structuredClone(change.value as Message);
             const exists = db.prepare("SELECT 1 FROM messages WHERE thread_id = ? AND id = ?").get(threadId, message.id);
             if (!mdb.applySyncedRows(threadId, [message], undefined, db)) continue;
+            indexMailRow(task, message);
             if (cached) {
               const at = cached.messages.findIndex((row) => row.id === message.id);
               if (at < 0) cached.messages.push(message);

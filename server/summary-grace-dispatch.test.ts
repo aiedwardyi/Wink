@@ -65,6 +65,7 @@ describe("summary grace dispatch", () => {
     ["dispatch", "image", true, "setup note"],
     ["dispatch", "image", false, "wait note"],
     ["dispatch", "paste", true, "background"],
+    ["dispatch", "image", true, "mail"],
   ] as const)("waits after the %s fold adds a late %s (pinned system %s, event %s)", async (fold, kind, pinnedSystem, event) => {
     const messages: Message[] = Array.from({ length: 70 }, (_, index) => [
       { id: `u${index}`, at: index * 2, role: "user", kind: "text", text: `request ${index}` },
@@ -159,7 +160,7 @@ describe("summary grace dispatch", () => {
         foldQueuedSends, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace,
         clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {}, paneNoteTurnThreads: new Set(),
-        mailForTurn: () => [], markMailRead() {}, markPaneMailRead() {},
+        mailForTurn: () => event === "mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead() {},
         opensHostFiles: () => false, privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
@@ -195,6 +196,10 @@ describe("summary grace dispatch", () => {
       await dispatched;
       expect(sendTurn).toHaveBeenCalledOnce();
       const turn = sendTurn.mock.calls[0]![0];
+      if (event === "mail") {
+        expect(turn.text).toContain("folded peer reply");
+        expect(scope.markMailRead).toHaveBeenCalledWith(store, "thread", [{ id: "reply", text: "folded peer reply", upto: 17 }], "turn");
+      }
       expect(turn.resumeCursor).toBe(event === "background" ? "session" : undefined);
       if (event === "wait send" || event === "prepare send") {
         const text = event === "wait send" ? "sent while waiting" : "sent while preparing";

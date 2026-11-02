@@ -8,6 +8,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { findDelegationReceipt, loadDelegationReceipts, recordDelegationReceipt, receiptSnapshot, resetDelegationReceipts } from "./delegation-ledger.ts";
 import { terminalMailState, type MailDestination, type MailState } from "./mail-types.ts";
+import { recoverHandedMail } from "./mail-index.ts";
 import { publishPeerReply, replyDestinations, wakeForPeerReply } from "./peer-reply-publication.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import {
@@ -435,10 +436,11 @@ export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?
   const list = pendingDelegations.get(threadId);
   if (!list?.length) return;
   const privateSourceId = bus.store.botByThread(threadId)?.id;
-  // a scoped discard is a failed turn: ready work belongs to an earlier turn that finished
   const scoped = Boolean(sourceBotId || turnId);
   const dropped = list.filter((item) => (!sourceBotId || (item.fromBotId ?? privateSourceId) === sourceBotId)
-    && (!scoped || findDelegationReceipt(item.id)?.state === "held" && (!turnId || item.turnId === turnId)));
+    && (!turnId || item.turnId === turnId)
+    && (!scoped || findDelegationReceipt(item.id)?.state === "held"
+      || Boolean(turnId) && ["ready", "approval"].includes(findDelegationReceipt(item.id)?.state ?? "")));
   if (!dropped.length) return;
   const remaining = list.filter((item) => !dropped.includes(item));
   if (remaining.length) pendingDelegations.set(threadId, remaining);
@@ -497,13 +499,7 @@ export function discardOrphanedDelegations(bus: CommsBus): number {
   }
   pendingDelegations.clear();
   savePending();
-  const threadIds = new Set([
-    ...bus.store.bots.flatMap((bot) => (bot.tasks ?? []).map((task) => task.threadId)),
-    ...bus.store.groups.flatMap((group) => [group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]),
-  ]);
-  for (const threadId of threadIds) for (const row of bus.store.messagesFor(threadId)) {
-    if (row.comm?.read?.state === "handed") bus.store.patchMessage(threadId, row.id, { comm: { ...row.comm, read: row.comm.read.upto ? { ...row.comm.read, state: "read" } : undefined } });
-  }
+  recoverHandedMail(bus.store);
   return threads.length;
 }
 

@@ -71,9 +71,9 @@ type InternalRouteDeps = {
 export function createInternalRoutes(deps: InternalRouteDeps) {
   const caller = (req: IncomingMessage | undefined, botId: string, threadId: string) => deps.resolveCommsCaller
     ? deps.resolveCommsCaller(req?.headers?.authorization) : { botId, threadId };
-  const handReply = (botId: string, threadId: string, taskId: string) => {
+  const handReply = (botId: string, threadId: string, taskId: string, turnId?: string) => {
     const turn = turnRegistry.current(threadId);
-    if (turn?.botId === botId) handMail(deps.store, threadId, taskId, turn.turnId, randomUUID());
+    if (turn?.botId === botId && turn.turnId === turnId) handMail(deps.store, threadId, taskId, turn.turnId, randomUUID());
   };
   const {
     cfg,
@@ -293,6 +293,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const from = store.bot(fromBotId);
       if (!from) return json(res, 403, { error: "unknown sender" });
       const fromThreadId = source.threadId || from.threadId;
+      const requestingTurn = turnRegistry.current(fromThreadId)?.turnId;
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
@@ -359,7 +360,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) return json(res, 200, { botName: currentTarget.name, text: reply.text, taskId: reply.taskId, shown: false });
       const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true }, reply.replied, reply.text, reply.text);
-      if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId);
+      if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
       return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
     },
     react: async (req: IncomingMessage, res: ServerResponse) => {
@@ -520,6 +521,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       }
       const taskId = resolved.id;
       const waitMs = Math.min(Math.max(Number(url.searchParams.get("wait_ms")) || 0, 0), 240_000);
+      const requestingTurn = turnRegistry.current(fromThreadId)?.turnId;
       const polled = await pollDelegation(
         taskId,
         from.id,
@@ -530,7 +532,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       );
       if (polled.code === 200 && "result" in polled.body) {
         const turn = turnRegistry.current(fromThreadId);
-        polled.body.result = toolMailResult(store, fromThreadId, taskId, polled.body.result, turn?.botId === fromBotId ? { turnId: turn.turnId, requestId: randomUUID() } : undefined);
+        polled.body.result = toolMailResult(store, fromThreadId, taskId, polled.body.result, turn?.botId === fromBotId && turn.turnId === requestingTurn ? { turnId: turn.turnId, requestId: randomUUID() } : undefined);
       }
       return json(res, polled.code, polled.body);
     },

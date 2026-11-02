@@ -109,7 +109,7 @@ it("keeps the unreturned tail of a clipped tool result unread", () => {
   const text = "report line\n".repeat(1800);
   reply(text);
   const result = `${text.slice(0, 16000)}\n\n[reply cut]`;
-  expect(toolMailResult(store, bot.threadId, "task", result, { turnId: "turn", requestId: "request" })).toBe(result);
+  expect(toolMailResult(store, bot.threadId, "task", result, { turnId: "turn", requestId: "request" })).toBe(`${text.slice(0, 16000)}\n\n[Reply continues; check_delegation task]`);
   settleMail(store, bot.threadId, "turn", true);
   expect(unreadMail(store, bot.threadId)[0].comm?.read?.upto).toBe(16000);
   expect(mailForTurn(store, bot.threadId)[0].text).toContain(text.slice(16000));

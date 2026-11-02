@@ -100,12 +100,10 @@ export function toolMailResult(store: MailStore, threadId: string, taskId: strin
   const read = row.comm?.read;
   if (read?.state === "handed" || read?.state === "read" && (read.upto ?? row.text?.length ?? 0) >= (row.text?.length ?? 0)) return "already in your context";
   const offset = read?.upto ?? 0;
-  const text = result?.slice(offset);
-  const remainder = row.text!.slice(offset);
-  let sent = 0;
-  while (sent < (text?.length ?? 0) && text![sent] === remainder[sent]) sent++;
-  if (turn) handMail(store, threadId, taskId, turn.turnId, turn.requestId, offset + sent);
-  return text;
+  const full = row.text ?? result ?? "";
+  const text = full.slice(offset, offset + 16_000);
+  if (turn) handMail(store, threadId, taskId, turn.turnId, turn.requestId, offset + text.length);
+  return offset + text.length < full.length ? `${text}\n\n[Reply continues; check_delegation ${taskId}]` : text;
 }
 
 export function settleMail(store: MailStore, threadId: string, turnId: string, ok: boolean, stopReason?: string): boolean {
@@ -126,11 +124,11 @@ export function settleMail(store: MailStore, threadId: string, turnId: string, o
   return reverted;
 }
 
-export function mailReplayText(row: Message): string | null | undefined {
+export function mailReplayText(row: Message, offset = 0, upto?: number): string | null | undefined {
   if (row.role === "user" && row.from && row.comm?.withBotId) return peerMessagePrompt(row.from, row.text ?? "", "ask");
   if (!row.comm?.mailKey || row.comm.peer !== "reply") return undefined;
-  if (row.comm.read?.state !== "read") return null;
-  const text = row.text?.slice(0, row.comm.read.upto) ?? "";
+  if (row.comm.read?.state !== "read" && upto === undefined) return null;
+  const text = row.text?.slice(offset, upto ?? row.comm.read?.upto) ?? "";
   return text ? peerMessagePrompt({ name: row.comm.withName }, text, "reply") : null;
 }
 
