@@ -70,6 +70,7 @@ describe("Phone setup steps", () => {
     await render({ url, setup: { state: "ready" }, pcs: [{ name: "Laptop", host: "laptop.tail1234.ts.net" }] });
     await act(async () => button("PC").click());
     expect(button("Open Laptop")).toBeUndefined();
+    expect(host.textContent).not.toContain("Open Laptop");
     expect(button("Copy Link")).toBeDefined();
   });
 
@@ -88,6 +89,7 @@ describe("Phone setup steps", () => {
   });
 
   it.each(["Phone", "PC"])("keeps %s steps numbered 1-2 when This PC folds", async (tab) => {
+    vi.stubGlobal("ogb", { deviceWindow: { open: vi.fn() } });
     await render({ url: null, setup: { state: "missing" } });
     await act(async () => button(tab).click());
     const numbers = () => [...host.querySelectorAll('[data-devices-settings] > ol:last-child [data-device-step]')].map((row) => row.getAttribute("data-device-step"));

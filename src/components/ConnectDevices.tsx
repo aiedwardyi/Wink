@@ -197,8 +197,8 @@ export function ConnectDevices() {
             <div className="mt-1"><GetTailscaleLink /></div>
             {ready && copyButton}
           </Step>
-          <Step n={2} done={false} active={ready && setup.pcOnline} title={pcs[0] ? t("settings.devices.openPc", { name: pcs[0].name }) : t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
-            {deviceWindow && pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
+          {deviceWindow && <Step n={2} done={false} active={ready && setup.pcOnline} title={pcs[0] ? t("settings.devices.openPc", { name: pcs[0].name }) : t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
+            {pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
               setPcFailed(false);
               void deviceWindow.open(pc.host, pc.name).then((opened) => {
                 if (!live.current || opened) return;
@@ -208,7 +208,7 @@ export function ConnectDevices() {
               }, () => { if (live.current) setPcFailed(true); });
             }} className={`${button} mr-2 mt-2`}>{t("settings.devices.openPc", { name: pc.name })}</button>)}
             {pcFailed && <p role="alert" className={help}>{t("settings.phoneLink.notRunning")}</p>}
-          </Step>
+          </Step>}
         </>}
       </ol>
     </div>
