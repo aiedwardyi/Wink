@@ -37,7 +37,7 @@ export async function handleServerErrorReport(req, res, token, reports) {
         chunks.push(chunk);
       }
       const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (Object.keys(input).length === 2 && input.code === "SERVER_RUNTIME_FAILURE" && input.site === ERROR_SITES.serverRuntime) {
+      if (Object.keys(input).length === 2 && input.code === "SERVER_RUNTIME_FAILURE" && [ERROR_SITES.serverRuntime, ERROR_SITES.chatRace, ERROR_SITES.usageRefresh, ERROR_SITES.chatQueue].includes(input.site)) {
         reports.capture({ process: "server", code: input.code, site: input.site });
         status = 204;
       }

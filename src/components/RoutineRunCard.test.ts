@@ -73,7 +73,7 @@ describe("RoutineRunCard", () => {
     expect(completed).toContain("border-hairline/30 opacity-70");
     expect(completed).not.toContain("border-accent/40");
     const failed = renderToStaticMarkup(createElement(RoutineRunCard, { message: message("failed", { error: "No engine" }) }));
-    expect(failed.replace(/aria-label="[^"]*"/g, "")).toContain("Failed: No engine");
+    expect(failed.replace(/aria-label="[^"]*"/g, "")).toContain("Failed: The bot couldn&#x27;t finish that.");
   });
 
   it("makes a waiting question or approval an explicit Review action", () => {
@@ -87,16 +87,17 @@ describe("RoutineRunCard", () => {
     expect(markup).toContain('aria-label="Review for Morning brief"');
   });
 
-  it("shows a concise error without dumping a verbose run log into chat", () => {
+  it("keeps a verbose run error behind closed details", () => {
     const verbose = `Provider failed ${"trace-line ".repeat(100)}`;
     const markup = renderToStaticMarkup(createElement(RoutineRunCard, {
       message: message("failed", { error: verbose }),
       onOpen: vi.fn(),
     }));
 
-    expect(markup).toContain("Failed: Provider failed");
-    expect(markup).toContain("…");
-    expect(markup).not.toContain(verbose);
+    expect(markup).toContain("Failed: The bot couldn&#x27;t finish that.");
+    expect(markup).toContain("<details");
+    expect(markup).not.toContain("<details open");
+    expect(markup).toContain(verbose);
   });
 
   it("keeps a concise text fallback visible for an incomplete or newer payload", () => {

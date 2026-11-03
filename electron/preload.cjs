@@ -2,6 +2,11 @@
 // this narrow surface (window.ogb), never Node or ipcRenderer itself.
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args).catch((error) => {
+  const message = String(error?.message ?? error);
+  throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, ""));
+});
+
 let pendingPackageInstallUrl = null;
 const packageInstallListeners = new Set();
 ipcRenderer.on("package:install", (_event, url) => {
@@ -14,18 +19,18 @@ contextBridge.exposeInMainWorld("ogb", {
   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
   platform: process.platform,
   terminal: {
-    appearance: () => ipcRenderer.invoke("terminal:appearance"),
-    open: (input) => ipcRenderer.invoke("terminal:open", input),
-    prestart: (input) => ipcRenderer.invoke("terminal:prestart", input),
-    cancelOpen: (botId) => ipcRenderer.invoke("terminal:cancel-open", botId),
-    write: (id, data) => ipcRenderer.invoke("terminal:write", id, data),
-    acknowledge: (id) => ipcRenderer.invoke("terminal:acknowledge", id),
-    resize: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", id, cols, rows),
-    readBot: (botId, options) => ipcRenderer.invoke("terminal:read-bot", botId, options),
-    paneLabels: () => ipcRenderer.invoke("terminal:pane-labels"),
-    sendBot: (botId, input) => ipcRenderer.invoke("terminal:send-bot", botId, input),
-    openBot: (botId, input) => ipcRenderer.invoke("terminal:open-bot", botId, input),
-    close: (id) => ipcRenderer.invoke("terminal:close", id),
+    appearance: () => invoke("terminal:appearance"),
+    open: (input) => invoke("terminal:open", input),
+    prestart: (input) => invoke("terminal:prestart", input),
+    cancelOpen: (botId) => invoke("terminal:cancel-open", botId),
+    write: (id, data) => invoke("terminal:write", id, data),
+    acknowledge: (id) => invoke("terminal:acknowledge", id),
+    resize: (id, cols, rows) => invoke("terminal:resize", id, cols, rows),
+    readBot: (botId, options) => invoke("terminal:read-bot", botId, options),
+    paneLabels: () => invoke("terminal:pane-labels"),
+    sendBot: (botId, input) => invoke("terminal:send-bot", botId, input),
+    openBot: (botId, input) => invoke("terminal:open-bot", botId, input),
+    close: (id) => invoke("terminal:close", id),
     onData: (cb) => {
       const handler = (_event, value) => cb(value);
       ipcRenderer.on("terminal:data", handler);
@@ -57,7 +62,7 @@ contextBridge.exposeInMainWorld("ogb", {
       return () => ipcRenderer.removeListener("terminal:closed", handler);
     },
   },
-  getCapabilities: () => ipcRenderer.invoke("desktop:capabilities"),
+  getCapabilities: () => invoke("desktop:capabilities"),
   onCapabilitiesChanged: (cb) => {
     const handler = (_event, capabilities) => cb(capabilities);
     ipcRenderer.on("desktop:capabilities-changed", handler);
@@ -128,28 +133,28 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** PNG bytes of the clipboard image, or null. A screenshot paste can reach
    * the page as 0 bytes on Windows, so the composer reads it again here. */
-  readClipboardImage: () => ipcRenderer.invoke("desktop:clipboard-image"),
+  readClipboardImage: () => invoke("desktop:clipboard-image"),
   /** Opens System Settings on the given privacy pane: mic|screen|speech. */
-  permOpenSettings: (pane) => ipcRenderer.invoke("perm:open-settings", pane),
+  permOpenSettings: (pane) => invoke("perm:open-settings", pane),
 
   /** Copies an engine install command and opens a blank terminal. Resolves
    * false if no terminal could be launched; the clipboard still has it. */
   openInstallTerminal: (command) => ipcRenderer.invoke("engine:open-terminal", command),
   openEngineSignIn: (instanceId) => ipcRenderer.invoke("engine:sign-in", instanceId),
-  openEngineInstall: (instanceId, installOnly) => ipcRenderer.invoke("engine:install", instanceId, installOnly),
+  openEngineInstall: (instanceId, installOnly) => invoke("engine:install", instanceId, installOnly),
   /** Open a web link in the default browser. Unlike renderer window.open,
    * this remains reliable after an asynchronous API request. */
-  openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
+  openExternal: (url) => invoke("desktop:open-external", url),
   /** Tell the window which skin the page wears, so the native chrome the
    * renderer cannot paint (the Windows caption-button overlay) matches. */
-  applySkin: (skin) => ipcRenderer.invoke("desktop:skin", skin),
-  setModelPickerBackground: (view) => ipcRenderer.invoke("desktop:model-picker-background", view),
+  applySkin: (skin) => invoke("desktop:skin", skin),
+  setModelPickerBackground: (view) => invoke("desktop:model-picker-background", view),
   /** Installed app version, from the main process. */
-  getAppVersion: () => ipcRenderer.invoke("desktop:app-version"),
-  startFresh: () => ipcRenderer.invoke("desktop:start-fresh"),
+  getAppVersion: () => invoke("desktop:app-version"),
+  startFresh: () => invoke("desktop:start-fresh"),
   getLocale: () => ipcRenderer.sendSync("desktop:os-locale"),
   getLocalePreference: () => ipcRenderer.sendSync("desktop:locale-preference-get"),
-  setLocalePreference: (preference) => ipcRenderer.invoke("desktop:locale-preference", preference),
+  setLocalePreference: (preference) => invoke("desktop:locale-preference", preference),
   /** A reviewed BotMRR package opened through orbit://install. */
   onPackageInstall: (cb) => {
     packageInstallListeners.add(cb);
@@ -180,34 +185,28 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
   deviceWindow: {
-    open: (host, name) => ipcRenderer.invoke("device-window:open", host, name),
+    open: (host, name) => invoke("device-window:open", host, name),
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */
-  pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
+  pickFolder: (current) => invoke("desktop:pick-folder", current),
   /** Writes the redacted diagnostics report to a user-chosen file; resolves
    * the path, or null when the save dialog was cancelled. */
-  exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
-  errorReportConsent: () => ipcRenderer.invoke("error-reports:get"),
-  setErrorReportConsent: (enabled) => ipcRenderer.invoke("error-reports:set", enabled),
+  exportDiagnostics: () => invoke("desktop:export-diagnostics"),
+  errorReportConsent: () => invoke("error-reports:get"),
+  setErrorReportConsent: (enabled) => invoke("error-reports:set", enabled),
   captureErrorReport: (site) => ipcRenderer.send("error-reports:capture", site),
   /** Open a local file or folder from a chat link in its default app, or reveal it
    * when its type could run. The chat bubble shows the rejection text
    * verbatim, so strip the "Error invoking remote method" wrapper
    * ipcRenderer adds around a main-process throw. */
   openFile: (filePath, base) =>
-    ipcRenderer.invoke("desktop:open-file", filePath, base).catch((error) => {
-      const message = String(error?.message ?? error);
-      throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, ""));
-    }),
+    invoke("desktop:open-file", filePath, base),
   /** Pops the native right-click menu for a local file link. Rejects with
    *  the same readable reason as openFile. */
   fileMenu: (filePath, base) =>
-    ipcRenderer.invoke("desktop:file-menu", filePath, base).catch((error) => {
-      const message = String(error?.message ?? error);
-      throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, ""));
-    }),
+    invoke("desktop:file-menu", filePath, base),
   /** Store a provider credential with OS-backed encryption. */
-  setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
+  setCredential: (name, value) => invoke("credential:set", name, value),
 
   /** In-app auto-update. State object:
    *  { status: "idle"|"checking"|"available"|"downloading"|"downloaded"|"error",

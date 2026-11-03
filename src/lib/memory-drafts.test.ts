@@ -14,6 +14,21 @@ afterEach(() => {
   localStorage.clear();
 });
 
+it.each(["network", "gateway", "limit"])("uses plain words when autosave hits %s", async (failure) => {
+  vi.useFakeTimers();
+  const drafts = await tab();
+  const failed = vi.fn();
+  drafts.watchMemory("error", { saved: vi.fn(), conflict: vi.fn(), failed });
+  drafts.openMemory("error", { text: "old", revision: "r0" });
+  drafts.editMemory("error", "new");
+  vi.stubGlobal("fetch", failure === "network"
+    ? vi.fn().mockRejectedValue(new TypeError("Load failed"))
+    : vi.fn().mockResolvedValue(new Response(failure === "gateway" ? "Bad Gateway" : JSON.stringify({ error: "memory is capped at 256KB - move longer notes into memory/<topic>.md files" }), { status: failure === "gateway" ? 502 : 400 })));
+  await drafts.flushMemory("error");
+  expect(failed).toHaveBeenCalledWith(failure === "limit" ? "Memory is full. Move some notes into separate memory files." : "Can't reach Wink. Check your connection.", false);
+  expect(drafts.memoryDraft("error")).toBe("new");
+});
+
 it("never sends a save without a base revision", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);

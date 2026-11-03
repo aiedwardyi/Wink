@@ -3,6 +3,20 @@
 // filenames, and stored transcripts are not keys and must never pass through
 // translate().
 export const en = {
+  "errors.sendTaskChanged": "Not sent. The chat moved to another task. Send your message again.",
+  "errors.stopTaskChanged": "Couldn't stop. The chat moved to another task. Try again.",
+  "errors.memoryLimit": "Memory is full. Move some notes into separate memory files.",
+  "errors.shell": "The terminal is unavailable right now. Trying again...",
+  "errors.connection": "Can't reach Wink. Check your connection.",
+  "errors.request": "Wink couldn't finish that. Try again.",
+  "errors.notFound": "That page is no longer available. Refresh Wink and try again.",
+  "errors.unfinished": "{bot} couldn't finish that.",
+  "errors.bot": "The bot",
+  "errors.details": "Details",
+  "errors.stopped": "No reply for {minutes} minutes. The turn was stopped.",
+  "errors.model": "This model isn't available. Choose another in Settings.",
+  "errors.apps": "Connected apps aren't available right now. Try again in a moment.",
+  "errors.engine": "The reply stopped before it finished. Try again.",
   "viewer.preview": "Preview {name}",
   "viewer.download": "Download {name}",
   "viewer.downloadTitle": "Download",
@@ -459,8 +473,8 @@ export const en = {
 
   "onboarding.welcomeTitle": "Welcome to Wink",
   "onboarding.welcomeBody": "A calm home for bots that run on engines like Claude or Codex. Give a bot a job, then message it like anyone else.",
-  "onboarding.enginesError": "Wink couldn't check the engines on this computer.",
-  "onboarding.enginesErrorHint": "Try again when the local server is ready.",
+  "onboarding.enginesError": "Wink is still getting ready.",
+  "onboarding.enginesErrorHint": "Wait a moment, then try again.",
   "onboarding.tryAgain": "Try again",
   "onboarding.phoneTryAgain": "Try Again",
   "onboarding.signInTitle": "Scan the code on your PC",
@@ -1406,6 +1420,20 @@ export const en = {
 export type MessageKey = keyof typeof en;
 
 export const ko = {
+  "errors.sendTaskChanged": "전송되지 않았어요. 채팅이 다른 작업으로 바뀌었어요. 메시지를 다시 보내 주세요.",
+  "errors.stopTaskChanged": "멈추지 못했어요. 채팅이 다른 작업으로 바뀌었어요. 다시 시도해 주세요.",
+  "errors.memoryLimit": "메모리가 가득 찼어요. 일부 내용을 별도의 메모리 파일로 옮겨 주세요.",
+  "errors.shell": "지금은 터미널에 연결할 수 없어요. 다시 연결하고 있어요...",
+  "errors.connection": "Wink에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.",
+  "errors.request": "Wink가 작업을 마치지 못했어요. 다시 시도해 주세요.",
+  "errors.notFound": "이 페이지를 찾을 수 없어요. Wink를 새로 고침한 후 다시 시도해 주세요.",
+  "errors.unfinished": "{bot}: 작업을 마치지 못했어요.",
+  "errors.bot": "봇",
+  "errors.details": "자세히",
+  "errors.stopped": "{minutes}분 동안 응답이 없어 작업을 멈췄어요.",
+  "errors.model": "이 모델을 사용할 수 없어요. 설정에서 다른 모델을 선택해 주세요.",
+  "errors.apps": "지금은 연결된 앱을 사용할 수 없어요. 잠시 후 다시 시도해 주세요.",
+  "errors.engine": "답변을 마치기 전에 멈췄어요. 다시 시도해 주세요.",
   "viewer.preview": "{name} 미리보기",
   "viewer.download": "{name} 다운로드",
   "viewer.downloadTitle": "다운로드",
@@ -1862,8 +1890,8 @@ export const ko = {
 
   "onboarding.welcomeTitle": "Wink에 오신 것을 환영합니다",
   "onboarding.welcomeBody": "Claude, Codex 같은 엔진으로 작동하는 봇을 한곳에서 편하게 사용하세요. 봇에게 일을 맡기고, 동료와 대화하듯 메시지를 주고받으세요.",
-  "onboarding.enginesError": "이 컴퓨터의 엔진을 확인하지 못했습니다.",
-  "onboarding.enginesErrorHint": "로컬 서버가 준비되면 다시 시도하세요.",
+  "onboarding.enginesError": "Wink를 준비하고 있어요.",
+  "onboarding.enginesErrorHint": "잠시 기다린 후 다시 시도해 주세요.",
   "onboarding.tryAgain": "다시 시도",
   "onboarding.phoneTryAgain": "다시 시도",
   "onboarding.signInTitle": "PC에서 코드를 스캔하세요",

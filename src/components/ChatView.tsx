@@ -1,3 +1,5 @@
+import { chatErrorText } from "@/lib/error-text";
+import { ErrorDetails } from "./ErrorDetails";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
@@ -193,8 +195,10 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
  *
  * Only durable wait projections may promise an automatic continuation. */
 export function ErrorRow({
+  botName,
   message,
   onRetry,
+  retryDisabled,
   setupInstance,
   usageLimit,
   usageWait,
@@ -203,7 +207,9 @@ export function ErrorRow({
   botId,
 }: {
   message: string;
+  botName?: string;
   onRetry?: () => void;
+  retryDisabled?: boolean;
   setupInstance?: InstanceInfo;
   usageLimit?: { resetsAt: number | null };
   usageWait?: NonNullable<Message["tool"]>["usageWait"];
@@ -224,15 +230,19 @@ export function ErrorRow({
       </div>
     );
   }
+  const shown = chatErrorText(message, botName ?? t("errors.bot"), t);
+  if (!usageLimit && !setupInstance && !shown) return null;
   const reset = usageLimit && !usageWait ? usageLimitReset(usageLimit.resetsAt, now) : null;
   const waiting = usageWait?.state === "waiting";
   const time = usageWait?.resumesAt == null ? "" : new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", ...(usageWait.weekly ? { weekday: "short" } : {}) }).format(usageWait.resumesAt);
   const retryButton = onRetry && (
     <button
       onClick={onRetry}
+      disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
         usageLimit ? "border-warning/30 hover:bg-warning/15" : "border-danger/30 hover:bg-danger/15",
+        "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
       <RefreshCw size={12} /> {t("composer.retry")}
@@ -259,10 +269,11 @@ export function ErrorRow({
                 <span className="mt-1 block text-[12px] opacity-70">{message}</span>
               </>
             ) : (
-              localizeServerLine(message, t)
+              setupInstance ? localizeServerLine(message, t) : shown?.text ?? message
             )}
           </span>
         </div>
+        {!usageLimit && !setupInstance && <ErrorDetails raw={shown?.raw} />}
         {action === "cli" && setupInstance ? (
           <>
             <EngineSetup instance={setupInstance} signIn={signIn} className="mt-2 text-ink-secondary" />
@@ -772,6 +783,7 @@ const MessagesList = memo(function MessagesList({
                 return (
                   <ErrorRow
                     botId={bot.id}
+                    botName={bot.name}
                     folder={m.tool.folder}
                     message={m.tool.name.slice(6).trim()}
                     onRetry={m.id === canonicalLastMessageId && canRetryLast && !m.tool.name.startsWith(SYNC_NOTICE) ? onRegenerate : undefined}

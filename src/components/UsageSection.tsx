@@ -1,3 +1,4 @@
+import { quietUsageError } from "../../shared/chat-error";
 // App settings → Usage: what every bot has spent, so "which of my bots is
 // costing me money" is answerable without a provider dashboard. Figures are
 // banked per settled turn on each task (server/store.ts addTaskUsage) and
@@ -145,7 +146,7 @@ function EnginePlanRow({
       {!instance.rateLimits && !muse && (
         <div className="mt-1 text-[12px] text-ink-secondary">{honestCaption}</div>
       )}
-      {error && (
+      {error && !quietUsageError(error) && (
         <div className="mt-1 text-[12px] text-danger">
           {instance.rateLimits
             ? t("usage.limits.refreshFailed", { message: refreshErrorText(error, t) })

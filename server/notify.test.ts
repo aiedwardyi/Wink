@@ -7,6 +7,11 @@ import { pingForMailbox } from "./phone-ping.ts";
 
 const bot = { id: "bot-1", name: "Scout", threadId: "thread-1" };
 
+it("keeps routine exception details out of notifications", () => {
+  expect(buildNotification("routine-failed", bot, "thread-1", "spawn failed: ENOENT C:\\private\\engine")?.body)
+    .toBe("Scout couldn't finish that.");
+});
+
 describe("buildNotification", () => {
   it("names the bot and carries the detail, per kind", () => {
     expect(buildNotification("approval", bot, "thread-1", "rm -rf ./build")).toMatchObject({

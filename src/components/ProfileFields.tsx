@@ -1,3 +1,4 @@
+import { fallbackError } from "@/lib/error-text";
 import { useEffect, useRef, useState } from "react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
@@ -27,7 +28,7 @@ export function ProfileFields() {
     try {
       dispatch({ type: "configStatus", config: await request() });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t(fallback));
+      setError(fallbackError(cause, t(fallback)));
     } finally {
       setSaving(false);
     }

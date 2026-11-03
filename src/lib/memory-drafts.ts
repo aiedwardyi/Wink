@@ -6,6 +6,8 @@
 // keeps it.
 import { z } from "zod";
 
+import { fetchResponse, responseBody } from "./api-request";
+import { t } from "./i18n";
 import { holdReload } from "./reload-hold";
 
 export interface MemoryLatest {
@@ -133,7 +135,7 @@ export async function flushMemory(botId: string): Promise<void> {
   const body = JSON.stringify({ text: sent.text, baseRevision: sent.base });
   try {
     const res = await holdReload(
-      fetch(`/api/bots/${botId}/memory`, {
+      fetchResponse(`/api/bots/${botId}/memory`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body,
@@ -141,14 +143,15 @@ export async function flushMemory(botId: string): Promise<void> {
         keepalive: new TextEncoder().encode(body).length <= 64 * 1024,
       }),
     );
-    const result = await res.json().catch(() => ({}));
+    const result = await responseBody(res);
     const latest = latestSchema.safeParse(result);
     if (res.status === 409 && latest.success) {
       s.held = true;
       s.revision = latest.data.revision;
       s.view?.conflict(latest.data);
     } else if (!res.ok) {
-      throw new Error(result.error ?? `${res.status} ${res.statusText}`);
+      if (result.code === "INTERNAL_ERROR") throw new Error(t("errors.request"));
+      throw new Error(/^memory is capped at 256KB/.test(result.error ?? "") ? t("errors.memoryLimit") : result.error ?? `${res.status} ${res.statusText}`);
     } else {
       s.revision = result.revision;
       if (s.draft?.text === sent.text) {

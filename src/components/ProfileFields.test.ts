@@ -152,7 +152,7 @@ describe("ProfileFields Save", () => {
     await flush();
 
     expect(mock.dispatch).not.toHaveBeenCalled();
-    expect(host.querySelector("[role=alert]")?.textContent).toBe("save failed");
+    expect(host.querySelector("[role=alert]")?.textContent).toBe("Could not save name.");
 
     await act(async () => {
       root.unmount();
@@ -219,7 +219,7 @@ describe("ProfileFields photo", () => {
     await flush();
 
     expect(request).not.toHaveBeenCalled();
-    expect(host.querySelector("[role=alert]")?.textContent).toBe("Choose a PNG, JPEG, GIF, or WebP image");
+    expect(host.querySelector("[role=alert]")?.textContent).toBe("Could not save photo.");
     expect(host.textContent).toContain("PNG, JPEG, GIF, or WebP · up to 10 MB");
     await act(async () => root.unmount());
   });

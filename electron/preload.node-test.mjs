@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+import vm from "node:vm";
+
+function bridge(invoke) {
+  let api;
+  vm.runInNewContext(readFileSync(new URL("./preload.cjs", import.meta.url), "utf8"), {
+    require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } }, ipcRenderer: { on() {}, invoke }, webUtils: {} }),
+    process: { platform: "win32" }, Error,
+  });
+  return api;
+}
+
+for (const name of ["open", "prestart", "cancelOpen", "write", "acknowledge", "resize", "readBot", "paneLabels", "sendBot", "openBot", "close", "appearance"]) {
+  test(`terminal ${name} strips the IPC wrapper`, async () => {
+    const api = bridge(async (channel) => { throw new Error(`Error invoking remote method '${channel}': Error: No terminal shell is available`); });
+    await assert.rejects(api.terminal[name]("id"), { message: "No terminal shell is available" });
+  });
+}
+
+test("desktop diagnostics strips the IPC wrapper", async () => {
+  const api = bridge(async () => { throw new Error("Error invoking remote method 'desktop:export-diagnostics': Error: Access denied"); });
+  await assert.rejects(api.exportDiagnostics(), { message: "Access denied" });
+});
+
+test("successful terminal calls keep their arguments and result", async () => {
+  const api = bridge(async (...args) => args);
+  assert.deepEqual(Array.from(await api.terminal.resize("pane", 80, 24)), ["terminal:resize", "pane", 80, 24]);
+});
+
+for (const [name, channel, args] of [
+  ["permOpenSettings", "perm:open-settings", ["mic"]],
+  ["openEngineInstall", "engine:install", ["engine", true]],
+  ["deviceWindow.open", "device-window:open", ["host", "device"]],
+  ["errorReportConsent", "error-reports:get", []],
+  ["setErrorReportConsent", "error-reports:set", [true]],
+  ["setCredential", "credential:set", ["provider", "value"]],
+]) {
+  const call = (api) => name.split(".").reduce((value, key) => value[key], api)(...args);
+  test(`${name} strips the IPC wrapper`, async () => {
+    const api = bridge(async () => { throw new Error(`Error invoking remote method '${channel}': Error: Access denied`); });
+    await assert.rejects(call(api), { message: "Access denied" });
+  });
+  test(`${name} keeps its arguments and result`, async () => {
+    const api = bridge(async (...input) => input);
+    assert.deepEqual(Array.from(await call(api)), [channel, ...args]);
+  });
+}

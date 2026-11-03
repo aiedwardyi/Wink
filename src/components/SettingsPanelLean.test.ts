@@ -569,7 +569,7 @@ describe("SettingsPanel memory autosave", () => {
     await wait(800);
     await land(puts[0], new Response(JSON.stringify({ error: "memory is capped at 256KB" }), { status: 400 }));
     expect(box().value).toBe("x".repeat(40));
-    expect(host.querySelector(".text-danger")?.textContent).toBe("memory is capped at 256KB");
+    expect(host.querySelector(".text-danger")?.textContent).toBe("Memory is full. Move some notes into separate memory files.");
     expect(status()).toBe("");
     await type("x".repeat(20));
     await wait(800);
