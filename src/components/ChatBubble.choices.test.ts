@@ -25,7 +25,9 @@ const bot = (messages: Message[]): Bot => ({
   notifications: false, color: "blue", unread: false, busy: false, activity: "idle",
   modelSelection: { instanceId: "inst", model: "m" }, messages,
 });
-const question = (id: string, text: string): Message => ({ id, at: 2, role: "bot", kind: "text", text });
+const question = (id: string, text: string): Message => ({
+  id, at: 2, role: "bot", kind: "text", text, reactions: [{ emoji: "👍", by: "user" }],
+});
 
 let unmount: (() => Promise<void>) | null = null;
 
@@ -66,7 +68,9 @@ describe("a question that is only choices", () => {
     const current = bot([question("q1", "Which one?\n- Red\n- Blue")]);
     const host = await mount([current], [], createElement(ChatView, { bot: current }));
     expect(host.querySelector('[data-mid="q1"] [data-orbit-message-content]')).toBeNull();
-    expect(host.querySelectorAll('[data-mid="q1"] button').length).toBeGreaterThan(0);
+    expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Copy message"]')).not.toBeNull();
+    expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Reply to message"]')).not.toBeNull();
+    expect(host.querySelector('[data-mid="q1"] [data-message-reactions]')?.textContent).toContain("👍");
     expect(host.textContent).toContain("Red");
     expect(host.textContent).toContain("Blue");
   });
@@ -87,6 +91,8 @@ describe("a question that is only choices", () => {
     const host = await mount([member], [group], createElement(GroupView, { group }));
     expect(host.querySelector('[data-mid="q1"]')).not.toBeNull();
     expect(host.querySelector('[data-mid="q1"] [data-orbit-message-content]')).toBeNull();
+    expect(host.querySelector('[data-mid="q1"] [data-message-hover-actions] button[aria-label="Reply to message"]')).not.toBeNull();
+    expect(host.querySelector('[data-mid="q1"] [data-message-reactions]')?.textContent).toContain("👍");
     expect(host.textContent).toContain("Red");
     expect(host.textContent).toContain("Blue");
   });

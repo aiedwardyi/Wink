@@ -4,13 +4,13 @@ import { Check, Loader2, PlugZap, RefreshCw, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api, type Message } from "@/state/store";
 
-async function openConnectionPage(url: string) {
+async function openConnectionPage(url: string, blocked: string) {
   if (window.ogb?.openExternal) {
     await window.ogb.openExternal(url);
     return;
   }
   const opened = window.open("", "_blank");
-  if (!opened) throw new Error("Your browser blocked the connection page. Allow pop-ups, then try again.");
+  if (!opened) throw new Error(blocked);
   opened.opener = null;
   opened.location.replace(url);
 }
@@ -63,7 +63,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
         method: "POST",
         body: JSON.stringify({ threadId }),
       });
-      await openConnectionPage(String(result.url));
+      await openConnectionPage(String(result.url), t("connector.popupBlocked"));
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : String(error));
     } finally {

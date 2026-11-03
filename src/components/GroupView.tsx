@@ -537,7 +537,6 @@ export const Transcript = memo(function Transcript({
                 });
               } : undefined}
             >
-              {!choicesOnly && (
               <div
                 data-orbit-message-body
                 data-strip={m.reactions?.length ? "" : undefined}
@@ -560,6 +559,7 @@ export const Transcript = memo(function Transcript({
 
                   </div>
                 )}
+                {!choicesOnly && (
                 <div
                   data-orbit-message-content
                   className={cn(
@@ -583,6 +583,7 @@ export const Transcript = memo(function Transcript({
                     </MessageBoundary>
                   ) : null}
                 </div>
+                )}
                 {!user && !streaming && !docked?.live && (
                   <div
                     data-message-hover-actions
@@ -609,7 +610,6 @@ export const Transcript = memo(function Transcript({
                   className="bottom-3.5"
                 />
               </div>
-              )}
               {optionChoices && (
                 <ChatOptionChips
                   options={optionChoices.options}

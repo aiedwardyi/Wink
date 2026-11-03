@@ -382,7 +382,6 @@ const Bubble = memo(function Bubble({
       {...menuProps}
     >
       {/* Keep the action row below the reaction overhang. */}
-      {!choicesOnly && (
       <div
         data-orbit-message-body
         data-strip={hasReactions || dockShown ? "" : undefined}
@@ -420,6 +419,7 @@ const Bubble = memo(function Bubble({
 
           </div>
         )}
+        {!choicesOnly && (
         <div
           data-orbit-message-content
           className={cn(
@@ -490,6 +490,7 @@ const Bubble = memo(function Bubble({
             </MessageBoundary>
           ) : null}
         </div>
+        )}
         {dock && dockShown && <DockedPresence {...dock} className="absolute bottom-0 left-0 min-h-[26px]" />}
         {!user && !streaming && !dock?.live && (
           <div
@@ -531,7 +532,6 @@ const Bubble = memo(function Bubble({
           />
         )}
       </div>
-      )}
       {optionChoices && (
         <ChatOptionChips
           options={optionChoices.options}
