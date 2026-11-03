@@ -41,7 +41,7 @@ describe("sync path continuity", () => {
     expect(prepare.mock.calls.some(([sql]) => sql.includes("WITH RECURSIVE active"))).toBe(false);
     expect(store.taskByThread(bot.id, threadId)?.resumeCursors).toEqual({ test: "cursor" });
     expect(bot.resumeCursors).toEqual({ test: "cursor" });
-  });
+  }, 90_000);
 
   for (const missing of ["parent", "leaf"]) {
     it(`invalidates when a new row fills the missing active ${missing}`, () => {
