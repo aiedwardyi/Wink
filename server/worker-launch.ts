@@ -75,7 +75,7 @@ export function workerCommand(command: string, unmanaged = false) {
   const first = /^\s*([^\s]+)/.exec(rest)?.[1] ?? "";
   const engine = ENGINES.get(first.toLowerCase());
   if (!engine) {
-    if (WRAPPER.test(first) || /(?:^|[;&|(){}\r\n])\s*&?\s*["']?(?:[^\s"']*[\\/])?(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=[\s"';&|(){}<>]|$)/i.test(rest)
+    if ((WRAPPER.test(first) && [/["'`^]/g, /["'`^\\]/g].some((escapes) => rest.replace(escapes, "").split(/[\s;&|(){}<>=]+/).some((token) => [token, token.replace(/^-+\w/, "")].some((name) => ENGINES.has(engineToken(name)))))) || /(?:^|[;&|(){}\r\n])\s*&?\s*["']?(?:[^\s"']*[\\/])?(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=[\s"';&|(){}<>]|$)/i.test(rest)
       || /^(?:pnpm|npm|npx|bunx)\s+(?:exec\s+)?(?:claude|codex|grok|muse|agy)\b/i.test(rest)) throw new Error("Ambiguous worker launch; use a direct engine command");
     return { kind: "shell" as const };
   }
