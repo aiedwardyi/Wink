@@ -92,6 +92,9 @@ import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountRoutes } from "./account-routes.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
+import { createWorkerTurns } from "./worker-turn.ts";
+import { createWorkerLaunch } from "./worker-launch.ts";
+import { enableWorkerAccounts, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
@@ -577,6 +580,7 @@ let terminalBridgeAccess =
   process.env.OMB_TERMINAL_URL?.trim() && process.env.OMB_TERMINAL_TOKEN?.trim()
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
+if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess);
 
 function agentsIntegration(botId: string, threadId: string, depth: number) {
   return {
@@ -2873,6 +2877,13 @@ const spawnUsage = createSpawnUsage({
   },
   environment: (instanceId) => instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment,
 });
+const workerTurns = createWorkerTurns();
+const workerLaunch = createWorkerLaunch({
+  enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
+  bases: () => instanceConfigs(cfg), usage: spawnUsage,
+  available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
+    && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
+});
 const accountRuntime = createAccountRuntime({
   accounts, registry, providers: providerReload, store, reload: reloadProviders,
   rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
@@ -2945,6 +2956,7 @@ const watchdog = new TurnWatchdog({
     // clears it first when the adapter responds.
     const release = setTimeout(() => {
       providerReload.settled(turn.threadId);
+      workerTurns.settled(turn.threadId);
       if (stalledTurnId && turnRegistry.get(stalledTurnId)) {
         if (settleMail(store, turn.threadId, stalledTurnId, false, "interrupted")) paneWake.noteArrived(turn.botId, turn.threadId);
         turnRegistry.settle(stalledTurnId);
@@ -4057,6 +4069,7 @@ bus.subscribe((event: RuntimeEvent) => {
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   providerReload.settled(event.threadId);
+  workerTurns.settled(event.threadId);
   drainQueuedSends();
   paneWake.settled();
   // after both, so held sends and pane wakes claim the bot before a queued routine;
@@ -5296,6 +5309,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         const live = providerReload.started(threadId, instanceId);
         if (!live) return Promise.reject(new Error(`provider instance "${instanceId}" is unavailable`));
+        if (accounts.snapshot.length) workerTurns.capture(bot.id, threadId, live);
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
@@ -5480,6 +5494,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
       turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
+      workerTurns.settled(threadId);
       releaseLocalVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
       watchdog.settle(threadId);
@@ -6322,6 +6337,7 @@ async function runClaimedGroupMemberTurn(
       }
       const live = providerReload.started(threadId, selection.instanceId);
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
+      if (accounts.snapshot.length) workerTurns.capture(bot.id, threadId, live);
       pendingInterruptThreads.started(threadId, bot.id, epoch);
       return live.adapter.sendTurn({
         threadId,
@@ -6343,6 +6359,7 @@ async function runClaimedGroupMemberTurn(
       .catch((err) => {
         pendingInterruptThreads.bind(threadId, bot.id, epoch);
         providerReload.settled(threadId);
+        workerTurns.settled(threadId);
         if (err?.cancelled) {
           watchdog.settle(threadId);
           finish("dispatch_failed");
@@ -7109,6 +7126,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "terminal bridge must be a loopback HTTP endpoint" });
         }
         terminalBridgeAccess = { url, token };
+        if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess);
         return json(res, 200, { ok: true });
       }
       if ((method === "PUT" || method === "DELETE") && path === "/api/internal/google-account") {
@@ -7169,7 +7187,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
+        if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
+      }
+      if (method === "POST" && path === "/api/internal/worker-launch") {
+        const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], await readBody(req), workerLaunch);
+        return json(res, result.status, result.body);
       }
       // The show_image tool: a copy of a local image lands as a settled
       // screen message that references the attachment, never inline pixels.
@@ -7891,6 +7914,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── the fleet-wide authorization decision log ──
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
+    if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
     if (await accountRoutes(req, res, method, path)) return;
     m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
