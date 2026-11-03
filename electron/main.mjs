@@ -14,6 +14,7 @@ import { openEngineSignIn } from "./engine-signin.mjs";
 import { registerEngineInstall } from "./engine-install.mjs";
 import { createGoogleAccountController, createGoogleSessionPush, googleClient, googleServerEnv, watchDevServer } from "./google-signin.mjs";
 import { createTerminalHost, trustedTerminalSender } from "./terminal-host.mjs";
+import { createPaneCleanup } from "./pane-cleanup.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
 import { createPaneRuns, notifyRestartedPanes } from "./pane-runs.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
@@ -310,6 +311,7 @@ const terminalHost = createTerminalHost({
   owner: () => mainWindow?.webContents ?? null,
   mailbox: paneMailbox,
   paneRuns,
+  paneCleanup: createPaneCleanup({ home: app.getPath("home"), worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
     require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,

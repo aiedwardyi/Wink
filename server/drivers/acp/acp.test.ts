@@ -10,7 +10,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
 import type { ProviderDriver, ProviderInstance } from "../../contracts.ts";
@@ -20,9 +20,12 @@ import { toWslPath } from "../../env-path.ts";
 import { GrokAgentDriver, grokSupport } from "./grok.ts";
 import { MuseAgentDriver } from "./muse.ts";
 import { readGrokBillingRpc } from "../../usage-refresh.ts";
-import { removeTempDir } from "../../testing/cleanup.ts";
+import { createTempDirs, removeTempDir } from "../../testing/cleanup.ts";
 import { ProviderRegistry } from "../../harness/registry.ts";
 import * as procs from "../../procs.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
 
@@ -1024,7 +1027,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("writes Unsloth's studio token into grok config and keeps it off the child", async () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-acp-unsloth-"));
+    const home = temps.make(join(tmpdir(), "omb-acp-unsloth-"));
     mkdirSync(join(home, ".grok"), { recursive: true });
     const dump = join(scratch, "dump-unsloth.json");
     instance = await GrokAgentDriver.create({

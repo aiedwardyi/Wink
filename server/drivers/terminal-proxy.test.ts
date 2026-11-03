@@ -249,6 +249,19 @@ describe("terminal proxy", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("passes keep through terminal_close for scratch hand-offs", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ closed: true }), { status: 200 }));
+    await callTool("terminal_close", fetchImpl, CONFIG, { sessionId: "p1", keep: true });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]?.body))).toEqual({ sessionId: "p1", keep: true });
+  });
+
+  it("rejects a non-boolean keep before closing", async () => {
+    const fetchImpl = vi.fn();
+    const result = await callTool("terminal_close", fetchImpl, CONFIG, { sessionId: "p1", keep: "true" });
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("reports success, not an error, when the pane was already closed", async () => {
     const fetchImpl = async () => new Response(JSON.stringify({ closed: true, alreadyClosed: true }), { status: 200 });
     const result = await callTool("terminal_close", fetchImpl, { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" }, { sessionId: "p1" });

@@ -1,17 +1,21 @@
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { Accounts } from "../relay/src/accounts.ts";
 import { PHONE_RELAY_OFF, signTicket } from "../shared/relay-protocol.ts";
 import { reportOwnerHash, reportPayload, type TeamReport } from "../shared/team-report.ts";
 import { loadOrCreateIdentity, writeTicket } from "./phone-relay/store.ts";
 import type { Message, Store } from "./store.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const root = process.env.TEAM_REPORT_FIX_ROOT ?? process.cwd();
 const source = (file: string) => import(pathToFileURL(join(root, file)).href);
@@ -26,7 +30,7 @@ const current = { engine: "fixture", model: "fixture", version: "fixture" };
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGNcAAAAASUVORK5CYII=", "base64");
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "report-fix-"));
+  const dir = temps.make(join(tmpdir(), "report-fix-"));
   const path: Message[] = [];
   const bot = { id: "helper", name: "Helper", threadId: "thread" };
   const append = (role: "user" | "bot", text: string, extra: Partial<Message> = {}) => {

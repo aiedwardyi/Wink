@@ -403,6 +403,19 @@ test("closes a pane for the granted bot only", async () => {
   await bridge.close();
 });
 
+test("close passes keep through to scratch cleanup", async (t) => {
+  const calls = [];
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, closeForBot: async (...args) => { calls.push(args); } } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  const response = await fetch(`${access.url}/v1/bots/bot/terminal/close`, {
+    method: "POST", headers: { authorization: `Bearer ${terminalReadGrant(access.token, "bot")}` },
+    body: JSON.stringify({ sessionId: "pane", keep: true }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [["bot", "pane", true]]);
+});
+
 test("deleted bot cleanup retires its spawned panes through the bridge", async () => {
   const events = [];
   const children = [];

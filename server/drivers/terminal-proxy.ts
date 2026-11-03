@@ -161,10 +161,13 @@ export const TOOLS = [
   {
     name: "terminal_close",
     description:
-      "Close one of this bot's own spawned Wink terminal panes and kill the shell in it. Never closes the main terminal. Pass the pane's sessionId from terminal_read or terminal_spawn.",
+      "Close one of this bot's own spawned Wink terminal panes and kill the shell in it. Never closes the main terminal. Pass the pane's sessionId from terminal_read or terminal_spawn. Wink removes reported scratch on close; pass keep to hand it to the next card for up to three days.",
     inputSchema: {
       type: "object",
-      properties: { sessionId: { type: "string", description: "Pane session id, or a unique prefix of at least 8 characters, from terminal_read or terminal_spawn." } },
+      properties: {
+        sessionId: { type: "string", description: "Pane session id, or a unique prefix of at least 8 characters, from terminal_read or terminal_spawn." },
+        keep: { type: "boolean", description: "Keep scratch for a hand-off to the next card (up to three days)." },
+      },
       required: ["sessionId"],
       additionalProperties: false,
     },
@@ -234,7 +237,7 @@ function readDeadlineMs(route: { waitFor?: string; timeoutMs?: number }): number
   return bounded + READ_WAIT_HTTP_MARGIN_MS;
 }
 
-async function terminalRequest<T = Snapshot>(fetchImpl: typeof fetch, config: TerminalConfig, route: { send?: SendInput; spawn?: SpawnInput; close?: { sessionId: string }; sessionId?: string; waitFor?: string; timeoutMs?: number; observe?: boolean } = {}): Promise<T> {
+async function terminalRequest<T = Snapshot>(fetchImpl: typeof fetch, config: TerminalConfig, route: { send?: SendInput; spawn?: SpawnInput; close?: { sessionId: string; keep?: boolean }; sessionId?: string; waitFor?: string; timeoutMs?: number; observe?: boolean } = {}): Promise<T> {
   const host = config.host ?? HOST;
   const token = config.token ?? TOKEN;
   const botId = config.botId ?? BOT_ID;
@@ -288,7 +291,8 @@ export function closeTerminalPane(args: Record<string, unknown>, fetchImpl: type
   const { sessionId } = args;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
   if (typeof sessionId !== "string" || !sessionId) return Promise.reject(new Error("terminal_close needs a sessionId from terminal_read or terminal_spawn"));
-  return terminalRequest<{ closed: boolean; alreadyClosed?: boolean }>(fetchImpl, config, { close: { sessionId } });
+  if (args.keep !== undefined && typeof args.keep !== "boolean") return Promise.reject(new Error("terminal_close keep must be a boolean"));
+  return terminalRequest<{ closed: boolean; alreadyClosed?: boolean }>(fetchImpl, config, { close: { sessionId, ...(args.keep === undefined ? {} : { keep: args.keep }) } });
 }
 
 // Requests are dispatched concurrently, so two sends to one pane would interleave their text and Enter.

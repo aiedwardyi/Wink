@@ -1,9 +1,9 @@
 import { createHash, createPublicKey } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { request } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { googleSubHash } from "../../shared/google-id-token.ts";
 import { signAccountTicket, verifyAccountTicket } from "../../shared/relay-protocol.ts";
 import { signAccountRequest } from "../src/accounts.ts";
@@ -12,6 +12,10 @@ import { mintInvite } from "../../shared/relay-protocol.ts";
 import { signEnrollment } from "../src/enroll.ts";
 import { event, makeOperator, makePc, openControl, startRelay, ticketFor, type Harness, type Pc } from "./fixtures.ts";
 import { makeIssuer, type TestIssuer } from "./google-issuer.ts";
+import { createTempDirs } from "../../server/testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const DESKTOP = "desktop-client.apps.googleusercontent.com";
 const WEB = "web-client.apps.googleusercontent.com";
@@ -173,7 +177,7 @@ describe("account directory", () => {
   it("refuses a revoked label", async () => {
     const issuer = makeIssuer();
     const pc = makePc();
-    const file = join(await mkdtemp(join(tmpdir(), "wink-revoked-")), "revoked");
+    const file = join(temps.make(join(tmpdir(), "wink-revoked-")), "revoked");
     await writeFile(file, `${pc.label}\n`);
     h = await startRelay({ google: google(issuer), revokedLabelsFile: file, limits: { accountPerIpPerHour: 100 } });
     const res = await register(h, issuer, pc, issuer.sign(idClaims(DESKTOP, "revoked-sub")));
@@ -342,7 +346,7 @@ describe("account directory", () => {
   });
 
   it("loads a google block and rejects a bad origin", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "wink-cfg-"));
+    const dir = temps.make(join(tmpdir(), "wink-cfg-"));
     const path = join(dir, "config.json");
     const acme = { directoryUrl: "https://ca.invalid/directory", termsOfServiceAgreed: true };
     await writeFile(

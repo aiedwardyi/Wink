@@ -1,13 +1,17 @@
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { request } from "node:https";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { mintInvite, verifyTicket } from "../../shared/relay-protocol.ts";
 import { Enroller, signEnrollment } from "../src/enroll.ts";
 import { InviteStore, nonceHash } from "../src/invites.ts";
 import { event, makePc, openControl, startRelay, type Harness, type Pc } from "./fixtures.ts";
+import { createTempDirs } from "../../server/testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -130,7 +134,7 @@ describe("enrollment", () => {
   it("refuses revoked labels", async () => {
     const pc = makePc();
     h = await startRelay();
-    const file = join(await mkdtemp(join(tmpdir(), "wink-revoked-")), "revoked");
+    const file = join(temps.make(join(tmpdir(), "wink-revoked-")), "revoked");
     await writeFile(file, `${pc.label}\n`);
     await h.close();
     h = await startRelay({ revokedLabelsFile: file });
@@ -147,7 +151,7 @@ describe("enrollment", () => {
   });
 
   it("keeps an invite consumed when the store cannot persist", async () => {
-    const store = await InviteStore.open(await mkdtemp(join(tmpdir(), "wink-store-")));
+    const store = await InviteStore.open(temps.make(join(tmpdir(), "wink-store-")));
     const operator = generateKeyPairSync("ed25519").privateKey;
     const enroller = new Enroller({
       operatorPrivateKey: operator,

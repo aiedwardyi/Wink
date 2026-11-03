@@ -1,11 +1,15 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { RateLimiter } from "../src/limits.ts";
 import { peerAddress, peerPrefix, rateKey } from "../src/net-util.ts";
 import { RevocationList } from "../src/revocation.ts";
 import { makePc } from "./fixtures.ts";
+import { createTempDirs } from "../../server/testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 describe("rate limiter", () => {
   it("allows a burst then refills at the rate, per key", () => {
@@ -43,7 +47,7 @@ describe("peer helpers", () => {
 
 describe("revocation list", () => {
   it("reads labels, ignores junk and reports newly revoked labels", async () => {
-    const file = join(await mkdtemp(join(tmpdir(), "wink-rev-")), "revoked");
+    const file = join(temps.make(join(tmpdir(), "wink-rev-")), "revoked");
     const a = makePc().label;
     const b = makePc().label;
     const list = new RevocationList(file);

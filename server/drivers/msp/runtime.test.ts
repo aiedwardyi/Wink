@@ -5,16 +5,19 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs } from "../../config.ts";
 import type { ProviderInstance } from "../../contracts.ts";
 import { toWslPath } from "../../env-path.ts";
 import * as procs from "../../procs.ts";
-import { removeTempDir } from "../../testing/cleanup.ts";
+import { createTempDirs, removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { MspMuseAgentDriver } from "./muse.ts";
 import { createMspDriver, mspMcpServers, translateMspServerForWsl } from "./runtime.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-msp-cli.ts");
 
@@ -112,7 +115,7 @@ describe("MSP turns (fake host)", () => {
     delete process.env.META_API_KEY;
     recorder?.stop();
     await instance?.dispose();
-    removeTempDir(scratch);
+    await removeTempDir(scratch);
   });
 
   it("starts a session with the requested model and folds text", async () => {
@@ -850,7 +853,7 @@ describe("MSP prewarm (fake host)", () => {
   beforeEach(() => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-msp-prewarm-"));
+    scratch = temps.make(join(tmpdir(), "omb-msp-prewarm-"));
     rpcDump = join(scratch, "rpc.json");
     process.env.FAKE_MSP_RPC_DUMP = rpcDump;
   });
@@ -860,7 +863,7 @@ describe("MSP prewarm (fake host)", () => {
     delete process.env.FAKE_MSP_INIT_DELAY_MS;
     await instance?.dispose();
     vi.restoreAllMocks();
-    removeTempDir(scratch);
+    await removeTempDir(scratch);
   });
 
   it("hands the prewarmed host to the next turn without a second initialize", async () => {

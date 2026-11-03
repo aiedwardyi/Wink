@@ -1,12 +1,16 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { acceptFacts, createMemoryPass, secretLike, type MemoryPass, type NoteGenerator } from "./memory-pass.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { memoryFileRaw, writeMemoryFile } from "./workspace.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const MINUTE = 60_000;
 const FACT = "Wants every report also emailed to helpdesk@example.net";
@@ -53,7 +57,7 @@ describe("memory pass automation rows", () => {
     writeMemoryFile("bot-t1", "");
     pass = createMemoryPass({
       store,
-      dataDir: mkdtempSync(join(tmpdir(), "memory-pass-guard-")),
+      dataDir: temps.make(join(tmpdir(), "memory-pass-guard-")),
       generate: () => generate,
       enabled: () => true,
       busy: () => false,

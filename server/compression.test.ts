@@ -1,12 +1,16 @@
-import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { utimesSync, writeFileSync } from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { acceptedEncoding, IMMUTABLE_CACHE, JSON_COMPRESS_MIN_BYTES, sendJson, sendStaticFile, sendText } from "./compression.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 type Raw = { status: number; headers: IncomingHttpHeaders; body: Buffer };
 
@@ -104,7 +108,7 @@ describe("sendText", () => {
 
 describe("sendStaticFile", () => {
   it("compresses a static file once and serves later requests from memory", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-compress-"));
+    const dir = temps.make(join(tmpdir(), "orbit-compress-"));
     const file = join(dir, "index-AAAA1111.js");
     const stamp = new Date("2026-01-01T00:00:00Z");
     const first = `export const answer = "${"a".repeat(20_000)}";`;
@@ -128,7 +132,7 @@ describe("sendStaticFile", () => {
   });
 
   it("leaves images and HEAD uncompressed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-compress-"));
+    const dir = temps.make(join(tmpdir(), "orbit-compress-"));
     const png = join(dir, "app-icon.png");
     writeFileSync(png, Buffer.alloc(20_000, 7));
     const css = join(dir, "index.css");
@@ -146,7 +150,7 @@ describe("sendStaticFile", () => {
   });
 
   it("caches mascot avatars like hashed assets", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-compress-"));
+    const dir = temps.make(join(tmpdir(), "orbit-compress-"));
     const png = join(dir, "icon-31-wink.png");
     writeFileSync(png, Buffer.alloc(2_000, 7));
     const port = await serve((res) => sendStaticFile(res, png, res.req.url ?? "/", "image/png"));

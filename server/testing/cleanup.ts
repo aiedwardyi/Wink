@@ -3,10 +3,24 @@
 //
 // Both halves of that pattern have a race in them, and both races surface
 // as a red suite whose assertions all passed — the most expensive kind of
-// failure to read. These two helpers exist so the fix lives in one place
+// failure to read. These helpers exist so the fix lives in one place
 // instead of being re-derived (or forgotten) per suite.
 import type { ChildProcess } from "node:child_process";
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+
+export function createTempDirs() {
+  const dirs: string[] = [];
+  return {
+    make(prefix: string): string {
+      const dir = mkdtempSync(prefix);
+      dirs.push(dir);
+      return dir;
+    },
+    async remove(): Promise<void> {
+      for (const dir of dirs.splice(0)) await removeTempDir(dir);
+    },
+  };
+}
 
 /** How `waitForExit` should end the child, and how long to allow. */
 export interface WaitForExitOptions {
