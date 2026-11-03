@@ -21,5 +21,7 @@ export function fallbackError(cause: unknown, fallback: string): string {
 
 export function chatBannerError(cause: unknown): string | null {
   const line = cause instanceof Error ? cause.message : String(cause);
-  return classifyChatError(line).kind === "quiet" ? null : line;
+  const error = classifyChatError(line);
+  if (error.kind === "quiet") return null;
+  return error.kind === "known" ? t(error.key, error.vars) : line;
 }

@@ -1,15 +1,17 @@
 export type ChatError =
   | { kind: "quiet"; site: "chatRace" | "chatQueue" }
   | { kind: "keep"; raw: string }
-  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "chat.busyGaveUp"; vars?: Record<string, string | number> }
+  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp"; vars?: Record<string, string | number> }
   | { kind: "unknown"; raw: string };
 
 export function classifyChatError(line: string): ChatError {
   const raw = line.replace(/^error:\s*/, "");
   const queued = /^queued (?:message|room turn) could not start\s*[-\u2014]\s*/.test(raw);
   const reason = raw.replace(/^queued (?:message|room turn) could not start\s*[-\u2014]\s*/, "");
+  if (/^the (?:bot|channel) switched tasks before it could receive the message$/i.test(reason)) return { kind: "known", key: "errors.sendTaskChanged" };
+  if (/^the (?:bot|channel) switched tasks before it could be interrupted$/i.test(reason)) return { kind: "known", key: "errors.stopTaskChanged" };
   if (/^(?:Claude is not signed in\.|Grok CLI is not signed in|Grok runs in WSL\.|`[^`]+` isn't installed|Project folder not found:)/.test(reason)) return { kind: "keep", raw };
-  if (/^(?:a turn is already running on this thread|turn cancel(?:led|ed) before dispatch|the bot is (?:already working|still stopping its last turn)|the bot switched tasks before it could receive the message|sendId already belongs to another message)/i.test(reason)
+  if (/^(?:a turn is already running on this thread|turn cancel(?:led|ed) before dispatch|the bot is (?:already working|still stopping its last turn)|sendId already belongs to another message)/i.test(reason)
     || (queued && reason === "no such task")) {
     return { kind: "quiet", site: queued ? "chatQueue" : "chatRace" };
   }

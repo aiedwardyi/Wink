@@ -2,7 +2,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { translate, type Translate } from "./i18n";
+import { applyLocale, translate, type Translate } from "./i18n";
 import { ErrorRow } from "../components/ChatView";
 import { RoomToolChip } from "../components/GroupView";
 import { localizeServerLine } from "./activity-runs";
@@ -16,6 +16,29 @@ vi.mock("@/state/store", async (original) => ({
 }));
 
 describe("chat errors", () => {
+  it.each(["bot", "channel"])("shows a %s send task switch as a known failure in 1:1 and rooms", async (target) => {
+    const { classifyChatError } = await import("../../shared/chat-error");
+    const line = `the ${target} switched tasks before it could receive the message`;
+    expect(classifyChatError(line)).toEqual({ kind: "known", key: "errors.sendTaskChanged" });
+    for (const [locale, expected] of [
+      ["en", "Not sent. The chat moved to another task. Send your message again."],
+      ["ko", "전송되지 않았어요. 채팅이 다른 작업으로 바뀌었어요. 메시지를 다시 보내 주세요."],
+    ] as const) {
+      applyLocale(locale);
+      try {
+        const direct = renderToStaticMarkup(createElement(ErrorRow, { message: line, botId: "atlas", botName: "Atlas" }));
+        const room = renderToStaticMarkup(createElement(RoomToolChip, {
+          message: { id: "task-switch", at: 1, role: "bot", kind: "activity", from: { botId: "atlas", name: "Atlas", color: "blue" }, tool: { name: `error: ${line}`, ok: false } },
+        }));
+        expect(direct).toContain(expected);
+        expect(room).toBe(direct);
+        expect(direct).not.toContain("<details");
+      } finally {
+        applyLocale("en");
+      }
+    }
+  });
+
   it.each([
     "a turn is already running on this thread",
     "turn cancelled before dispatch",
