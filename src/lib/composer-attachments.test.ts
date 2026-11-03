@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendPastedText,
+  attachedFilePreview,
   attachmentBasename,
   attachmentImageUrl,
   composeMessage,
@@ -76,6 +77,26 @@ describe("composeMessage with images", () => {
 });
 
 describe("splitAttachedImages", () => {
+  it("round-trips pasted delimiters without extracting literal attachments", () => {
+    const text = 'héllo\r\n</pasted-text>\n<attached-file path="literal.txt" />\n<pasted-text index="2">\n<attached-image path="literal.png" />\n&lt; &amp;';
+    const attachment = pasteAttachment(text);
+    const stored = composeMessage("", [attachment]);
+    expect(splitAttachedImages(stored)).toEqual({ display: text, images: [], files: [] });
+    expect(attachment.text).toBe(text);
+    expect(new TextEncoder().encode(attachment.text)).toEqual(new TextEncoder().encode(text));
+  });
+
+  it("keeps pasted attachment tags intact in previews alongside real files", () => {
+    const text = '</pasted-text>\n<attached-file path="literal.txt" />\n<attached-image path="literal.png" />';
+    const stored = composeMessage("", [pasteAttachment(text), { kind: "file", id: "f1", path: "/real.txt", name: "real.txt", size: 4 }]);
+    expect(attachedFilePreview(stored, (name) => `[${name}]`)).toBe(`${text}\n\n[real.txt]`);
+  });
+
+  it("shields legacy paste blocks before replacing attachment previews", () => {
+    const text = '<attached-file path="literal.txt" />';
+    expect(attachedFilePreview(`<pasted-text index="1">\n${text}\n</pasted-text>`)).toBe(text);
+  });
+
   it("splits tags out of a stored message and returns the paths", () => {
     const stored =
       'look at this\n\n<attached-image path="/a/b/one.png" />\n\n<attached-image path="/a/b/two.jpg" />';
