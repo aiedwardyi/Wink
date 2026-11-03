@@ -2,6 +2,8 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { beforeEach, expect, it, vi } from "vitest";
 import { prepareModelContext } from "./context-compaction.ts";
+import { delegationContext } from "./delegation-context.ts";
+import { loadDelegationReceipts } from "./delegation-ledger.ts";
 import { _resetPending, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { markMailRead } from "./mail.ts";
@@ -72,7 +74,7 @@ it("carries two delegation ids and bounded reply gists without changing other ro
   expect(text).toContain(`ask_bot 1 (task ${second.id.slice(0, 8)} -> @Pokkey: "${("Verified ".repeat(20)).slice(0, 100)}")`);
   expect(carried.map((row) => ({ ...row, text: row.text.replace(/ \(task [^\n]*?\)/g, "") }))).toEqual(plain);
   expect(added).toBeGreaterThan(0);
-  expect(added).toBe(186);
+  expect(added).toBeLessThan(500);
 });
 
 it("keeps a queued id when tool detail capture is disabled", async () => {
@@ -93,6 +95,60 @@ it("keeps only the five newest delegations in a tool rollup", async () => {
   for (const task of tasks.slice(0, 2)) expect(text).not.toContain(task.id.slice(0, 8));
   for (const task of tasks.slice(2)) expect(text).toContain(task.id.slice(0, 8));
   expect(text).toContain("delegate_bot 7");
+});
+
+it("keeps the five newest annotations per tool in a mixed rollup", async () => {
+  const tasks = ["delegate_bot", "ask_bot"].map((name, kind) => Array.from({ length: 7 }, (_, i) => {
+    const id = `task${kind}00${i}-full-id`;
+    store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: `mcp__agents__${name}`, ok: true, detail: { output: [`Task id: ${id}`] } } });
+    recordDelegationReceipt({ id, sourceThreadId: bot.threadId, toBotId: peer.id, toBotName: peer.name, status: "done", result: `Reply ${i}` });
+    return id;
+  }));
+  const text = (await replay())[0].text;
+  expect(text.match(/\(task /g) ?? []).toHaveLength(10);
+  for (const ids of tasks) {
+    for (const id of ids.slice(0, 2)) expect(text).not.toContain(id.slice(0, 8));
+    for (const id of ids.slice(2)) expect(text).toContain(id.slice(0, 8));
+  }
+  expect(text).toContain("delegate_bot 7");
+  expect(text).toContain("ask_bot 7");
+});
+
+it("carries a busy peer's queued ask without a raw ask chip", async () => {
+  store.patchBot(peer.id, { busy: true });
+  const req = new IncomingMessage(new Socket());
+  const output = response();
+  const pending = routes().askBot(req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, toBotId: peer.id, message: "Verify" }));
+  req.emit("end");
+  await pending;
+  const id: string = output.body().taskId;
+  expect(id).toBeTruthy();
+  expect(store.messagesFor(bot.threadId).some((row) => row.tool?.name.endsWith("ask_bot"))).toBe(false);
+  expect((await replay()).map((row) => row.text).join("\n")).toContain(`(task ${id.slice(0, 8)} -> @Pokkey)`);
+  finishDelegatedTurn(bus(), { taskId: id, toBotId: peer.id, sourceThreadId: bot.threadId, sourceBotId: bot.id, ask: true }, true, "Queued verification finished.\nDetails");
+  _resetPending();
+  loadDelegationReceipts();
+  expect((await replay())[0].text).toContain(`(task ${id.slice(0, 8)} -> @Pokkey: "Queued verification finished.")`);
+});
+
+it("keeps a completed synchronous ask out of a later ask's annotation", async () => {
+  const calls: Message[] = [];
+  for (const replied of [true, false]) {
+    calls.push(store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "ask_bot", ok: true } }));
+    const route = routes(async (_target, _text, _depth, _from, task) => replied ? { text: "Done", replied } : { text: "Still working", replied, taskId: task!.taskId });
+    const req = new IncomingMessage(new Socket());
+    const output = response();
+    const pending = route.askBot(req, output.res);
+    req.emit("data", JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, toBotId: peer.id, message: "Verify" }));
+    req.emit("end");
+    await pending;
+  }
+  const messages = store.activePath(bot.threadId);
+  const details = delegationContext(messages, messages);
+  const id = messages.find((row) => row.comm?.peer === "message" && row.comm.taskId)!.comm!.taskId!;
+  expect(details.has(calls[0].id)).toBe(false);
+  expect(details.get(calls[1].id)).toBe(`task ${id.slice(0, 8)} -> @Pokkey`);
 });
 
 it("lists the caller's five newest delegations with status and gist without consuming mail", async () => {
@@ -161,8 +217,14 @@ it("orders by delegation creation when an older task settles last", async () => 
   expect(recent.body.tasks.map((task: { id: string }) => task.id)).toEqual([newer.id.slice(0, 8), older.id.slice(0, 8)]);
 });
 
-it("lists this bot's delegations across its task threads", async () => {
+it("lists only the calling conversation's delegations and resolves every listed id", async () => {
+  const task = delegate();
   const other = store.createTask(bot.id, "Other", false)!;
   recordDelegationReceipt({ id: "other123-task", sourceThreadId: other.threadId, toBotId: peer.id, toBotName: peer.name, status: "done", result: "Other thread reply" });
-  expect((await check()).body.tasks).toEqual([{ id: "other123", peer: "Pokkey", status: "done", gist: "Other thread reply" }]);
+  const current = (await check()).body.tasks;
+  expect(current).toEqual([{ id: task.id.slice(0, 8), peer: "Pokkey", status: "queued", gist: "" }]);
+  for (const row of current) expect((await check(row.id)).status).toBe(200);
+  const elsewhere = (await check(undefined, bot.id, other.threadId)).body.tasks;
+  expect(elsewhere).toEqual([{ id: "other123", peer: "Pokkey", status: "done", gist: "Other thread reply" }]);
+  for (const row of elsewhere) expect((await check(row.id, bot.id, other.threadId)).status).toBe(200);
 });

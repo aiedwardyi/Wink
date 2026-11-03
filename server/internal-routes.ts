@@ -514,7 +514,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromThreadId = source.threadId;
       const from = store.bot(fromBotId);
       if (!from || !connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "unknown sender" });
-      if (delegationMatch[1] === "recent" && url.searchParams.get("list") === "1") return json(res, 200, { tasks: recentDelegations(store, from.id) });
+      if (delegationMatch[1] === "recent" && url.searchParams.get("list") === "1") return json(res, 200, { tasks: recentDelegations(store, from.id, fromThreadId) });
       const runningIds = [...delegationWatch.values()].filter((watch) => watch.sourceThreadId === fromThreadId && watch.taskId).map((watch) => watch.taskId!);
       const resolved = resolveDelegationId(delegationMatch[1], fromThreadId, runningIds);
       if ("error" in resolved) {

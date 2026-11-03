@@ -6,9 +6,9 @@ import { paneNoteWaiting } from "./pane-wake.ts";
 import { receiptSnapshot } from "./delegation-ledger.ts";
 import { delegationGist } from "./delegation-context.ts";
 
-export function recentDelegations(store: Pick<Store, "botByThread" | "messagesFor">, botId: string) {
+export function recentDelegations(store: Pick<Store, "botByThread" | "messagesFor">, botId: string, threadId: string) {
   const rows = new Map<string, Message[]>();
-  const tasks = receiptSnapshot().filter((row) => (row.source?.botId ?? store.botByThread(row.sourceThreadId)?.id) === botId);
+  const tasks = receiptSnapshot().filter((row) => row.sourceThreadId === threadId && (row.source?.botId ?? store.botByThread(row.sourceThreadId)?.id) === botId);
   const created = (task: typeof tasks[number]) => {
     if (!rows.has(task.sourceThreadId)) rows.set(task.sourceThreadId, store.messagesFor(task.sourceThreadId));
     const messages = rows.get(task.sourceThreadId)!;

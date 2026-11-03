@@ -36,13 +36,18 @@ export function delegationContext(messages: Message[], referenceMessages: Messag
       calls.set(speaker, pending);
     }
     const id = row.comm?.taskId;
+    if (!id && row.comm?.peer === "message") {
+      const pending = calls.get(speaker) ?? [];
+      const index = pending.findIndex((call) => call.tool!.name.replace(/^mcp__.+?__/, "") === "ask_bot");
+      if (index >= 0) pending.splice(index, 1);
+    }
     if (!id || row.comm?.peer === "reply" || row.comm?.peer === "from" || seen.has(id)) continue;
     seen.add(id);
     const receipt = findDelegationReceipt(id);
     const pending = calls.get(speaker) ?? [];
     const kind = receipt?.kind === "ask" ? "ask_bot" : receipt?.kind === "delegation" ? "delegate_bot" : undefined;
     const index = pending.findIndex((call) => !kind || call.tool!.name.replace(/^mcp__.+?__/, "") === kind);
-    if (index < 0 && row.comm?.peer !== "message") continue;
+    if (index < 0 && row.comm?.peer !== "message" && receipt?.kind !== "ask") continue;
     const call = index < 0 ? row : pending.splice(index, 1)[0]!;
     details.set(call.id, taskContext(id, row.comm!.withName, replies.get(id), row.comm?.state));
   }
@@ -50,7 +55,7 @@ export function delegationContext(messages: Message[], referenceMessages: Messag
 }
 
 export function delegationRollup(run: ReadonlyArray<{ chip?: { name: string; delegation?: string } }>, name: string): string {
-  return run.filter((unit) => unit.chip?.delegation).slice(-5)
-    .filter((unit) => unit.chip!.name.replace(/^mcp__.+?__/, "") === name)
+  return run.filter((unit) => unit.chip?.delegation)
+    .filter((unit) => unit.chip!.name.replace(/^mcp__.+?__/, "") === name).slice(-5)
     .map((unit) => ` (${unit.chip!.delegation})`).join("");
 }
