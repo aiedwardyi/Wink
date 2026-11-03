@@ -334,7 +334,9 @@ export function composeMessage(text: string, attachments: Attachment[]): string 
   const parts = [text.trim()];
   attachments.forEach((a, i) => {
     if (a.kind === "paste") {
-      parts.push(`<pasted-text index="${i + 1}">\n${a.text}\n</pasted-text>`);
+      const encoded = /<(?:\/?pasted-text|attached-image|attached-file)/i.test(a.text);
+      const pasted = encoded ? a.text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;") : a.text;
+      parts.push(`<pasted-text index="${i + 1}"${encoded ? ' encoding="xml"' : ""}>\n${pasted}\n</pasted-text>`);
     } else if (a.kind === "image") {
       parts.push(`<attached-image path="${escapeAttribute(a.path)}" />`);
     } else if (a.kind === "file") {
@@ -372,7 +374,7 @@ function unescapeAttribute(value: string): string {
 export type AttachedFile = { path: string; name: string; size?: number };
 
 const ATTACHED_FILE = /<attached-file\s+path="([^"]*)"((?:\s+[a-z]+="[^"]*")*)\s*\/?>/g;
-const PASTED_TEXT = /<pasted-text(?:\s+index="\d+")?>\n?([\s\S]*?)\n?<\/pasted-text>/g;
+const PASTED_TEXT = /<pasted-text(?:\s+index="\d+")?(\s+encoding="xml")?>\n?([\s\S]*?)\n?<\/pasted-text>/g;
 
 function attachedFile(rawPath: string, rawAttributes: string): AttachedFile {
   const path = unescapeAttribute(rawPath);
@@ -387,18 +389,21 @@ function attachedFile(rawPath: string, rawAttributes: string): AttachedFile {
 
 /** One-line previews: each attached file reads as its name, in place. */
 export function attachedFilePreview(text: string, label = (name: string) => name): string {
-  return splitAttachedImages(text.replace(ATTACHED_FILE, (_match, path: string, rest: string) => label(attachedFile(path, rest).name)))
-    .display;
+  return splitAttachments(text, label).display;
 }
 
 /** Split a stored user message into its display text and the images and
  * files it attached, for transcript rendering. Tags never show in the bubble. */
 export function splitAttachedImages(text: string): { display: string; images: string[]; files: AttachedFile[]; tags: string[] } {
+  return splitAttachments(text);
+}
+
+function splitAttachments(text: string, label?: (name: string) => string): { display: string; images: string[]; files: AttachedFile[]; tags: string[] } {
   const pasted: string[] = [];
   let display = text.replace(
     PASTED_TEXT,
-    (_match, inner: string) => {
-      pasted.push(inner);
+    (_match, encoded: string | undefined, inner: string) => {
+      pasted.push(encoded ? unescapeAttribute(inner) : inner);
       return `\0PASTE${pasted.length - 1}\0`;
     },
   );
@@ -411,24 +416,37 @@ export function splitAttachedImages(text: string): { display: string; images: st
     return "";
   });
   const files: AttachedFile[] = [];
-  display = display.replace(new RegExp(`${ATTACHED_FILE.source}(?:\\s*\\n)?`, "g"), (match, path: string, rest: string) => {
+  const filePattern = label ? ATTACHED_FILE : new RegExp(`${ATTACHED_FILE.source}(?:\\s*\\n)?`, "g");
+  display = display.replace(filePattern, (match, path: string, rest: string) => {
     tags.push(match.trim());
-    files.push(attachedFile(path, rest));
+    const file = attachedFile(path, rest);
+    files.push(file);
+    if (label) return label(file.name);
     return "";
   });
   display = display.replace(/\0PASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)] ?? "");
   return { display: display.trim(), images, files, tags };
 }
 
+const onOwnLines = (text: string, at: number, length: number) =>
+  (at === 0 || text[at - 1] === "\n") && (at + length === text.length || text[at + length] === "\n");
+
 export function editedMessageText(initial: string, draft: string): string {
   const attached = splitAttachedImages(initial);
   if (draft.trim() === attached.display) return initial.trim();
   const pasted = [...initial.matchAll(PASTED_TEXT)];
   let text = draft;
-  pasted.forEach(([, inner], index) => {
-    if (inner) text = text.replace(inner, () => `\0EDITPASTE${index}\0`);
-  });
-  text = text.replace(/\0EDITPASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)]?.[0] ?? "");
+  let end = text.length;
+  for (let index = pasted.length - 1; index >= 0; index--) {
+    const [block, encoded, raw] = pasted[index];
+    const inner = encoded ? unescapeAttribute(raw) : raw;
+    if (!inner || inner.length > end) continue;
+    let at = text.lastIndexOf(inner, end - inner.length);
+    while (at >= 0 && !onOwnLines(text, at, inner.length)) at = at > 0 ? text.lastIndexOf(inner, at - 1) : -1;
+    if (at < 0) continue;
+    text = text.slice(0, at) + block + text.slice(at + inner.length);
+    end = at;
+  }
   return [text.trim(), ...attached.tags].filter(Boolean).join("\n\n");
 }
 

@@ -10,6 +10,8 @@ import {
   X,
 } from "lucide-react";
 
+import { chatErrorText } from "@/lib/error-text";
+import { ErrorDetails } from "./ErrorDetails";
 import { cn } from "@/lib/cn";
 import { useI18n, type Translate } from "@/lib/i18n";
 import type { RoutineRunCardData } from "../../shared/routine-run";
@@ -51,7 +53,7 @@ function footer(run: RoutineRunCardData, at: number, ringing: boolean, t: Transl
     case "failed":
       return {
         icon: <CircleAlert size={14} className={cn(className, "text-danger")} />,
-        text: t("routine.card.failed", { error: compactDetail(run.error ?? run.summary) }),
+        text: t("routine.card.failed", { error: chatErrorText(run.error ?? run.summary ?? "", t("errors.bot"), t)?.text ?? t("errors.request") }),
       };
     case "missed":
       return { icon: <CircleAlert size={14} className={cn(className, "text-danger")} />, text: t("routine.card.missed", { time: scheduled }) };
@@ -124,6 +126,7 @@ export function RoutineRunCard({
         <span className="min-w-0 truncate">{run.routineName}</span>
         {time && <span className="ml-auto shrink-0 text-[12.5px] font-medium text-ink-secondary">{time}</span>}
       </div>
+      {run.status === "failed" && <ErrorDetails raw={chatErrorText(run.error ?? run.summary ?? "", t("errors.bot"), t)?.raw} />}
       {instruction && <div className="mt-1 truncate text-[14px] leading-relaxed text-ink">{instruction}</div>}
       {result && <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-ink-secondary">{result}</p>}
       <div className="mt-3 flex min-w-0 items-center gap-1.5 text-[13px] text-ink-secondary">

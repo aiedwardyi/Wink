@@ -1,6 +1,7 @@
 // Desktop notifications, driven by the harness's {kind:"notify"} frames.
 // The server decides *whether* something is worth an interruption (it owns
 // the per-bot toggle); this only decides how to show it here.
+import { t } from "./i18n";
 import type { Notification } from "../../server/notify.ts";
 import { botNotifyIconPath, type BotAvatarProfileInput } from "../../shared/bot-avatar.ts";
 
@@ -120,7 +121,7 @@ export function showNotification(
   if (typeof native === "function") {
     const payload: Parameters<typeof native>[0] = {
       title: frame.title,
-      body: frame.body,
+      body: frame.kind === "routine-failed" ? t("errors.unfinished", { bot: frame.botName }) : frame.body,
       botId: frame.botId,
       threadId: frame.threadId,
       visibleThreadId: visibleThreadId ?? null,
@@ -151,7 +152,7 @@ export function showNotification(
 
   if (Notification.permission === "granted") {
     const options: NotificationOptions = {
-      body: frame.body,
+      body: frame.kind === "routine-failed" ? t("errors.unfinished", { bot: frame.botName }) : frame.body,
       ...buildNotificationOptions({ id: frame.botId, icon: frame.icon }),
     };
     try {

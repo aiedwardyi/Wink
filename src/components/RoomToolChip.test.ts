@@ -109,20 +109,21 @@ describe("RoomToolChip", () => {
     await renderRows(rows);
     expect(labels()).toEqual([
       "Delegation to @Atlas denied by user",
-      "error: delegation failed \u2014 Atlas is offline",
       "Delegation to @Atlas waiting \u2014 they're busy (retry 1/3 when they finish)",
-      "error: the CLI exited",
     ]);
+    expect(Array.from(host.querySelectorAll(".bg-inset.text-ink span.break-words")).map((span) => span.textContent)).toEqual(["The bot couldn't finish that.", "The bot couldn't finish that."]);
+    expect(Array.from(host.querySelectorAll("details div")).map((div) => div.textContent)).toEqual(["delegation failed \u2014 Atlas is offline", "the CLI exited"]);
     await act(async () => { root.unmount(); });
     host.remove();
     localStorage.setItem("omb-locale", "ko");
     await renderRows(rows);
     expect(labels()).toEqual([
       "@Atlas에게 한 위임을 사용자가 거부했습니다",
-      "오류: 위임 실패 - Atlas is offline",
       "@Atlas에게 한 위임 대기 중 - 상대가 작업 중입니다 (끝나면 1/3번째 재시도)",
-      "error: the CLI exited",
     ]);
+    expect(Array.from(host.querySelectorAll(".bg-inset.text-ink span.break-words")).map((span) => span.textContent)).toEqual(["봇: 작업을 마치지 못했어요.", "봇: 작업을 마치지 못했어요."]);
+    expect(Array.from(host.querySelectorAll("summary")).map((summary) => summary.textContent)).toEqual(["자세히", "자세히"]);
+    expect(Array.from(host.querySelectorAll("details div")).map((div) => div.textContent)).toEqual(["delegation failed \u2014 Atlas is offline", "the CLI exited"]);
   });
 
   it("shows handoff status lines whole in the UI font and keeps commands mono and truncated", async () => {
@@ -137,12 +138,12 @@ describe("RoomToolChip", () => {
     expect(spans.map((span) => span.className)).toEqual([
       "min-w-0 max-w-[480px] break-words",
       "min-w-0 max-w-[480px] break-words",
-      "min-w-0 max-w-[480px] break-words",
       "min-w-0 max-w-[480px] truncate font-mono",
     ]);
+    expect(host.querySelector(".bg-inset.text-ink .break-words")?.className).not.toMatch(/font-mono|truncate/);
   });
 
-  it("translates Message from and the failed-turn fold labels into Korean in a room", async () => {
+  it("translates Message from and the failed-turn details label into Korean in a room", async () => {
     localStorage.setItem("omb-locale", "ko");
     const received: Message = { id: "received", at: 1, role: "bot", kind: "activity", tool: { name: "Message from @Atlas" }, comm: { ...comm, peer: "from" } };
     const chips = await renderRows([received, { ...received, id: "old", comm }]);
@@ -157,10 +158,12 @@ describe("RoomToolChip", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(RoomToolChip, { message: failed, onRetry: () => {} })));
     });
-    const toggle = () => [...host.querySelectorAll("button")].at(-1);
-    expect(toggle()?.textContent).toBe("전체 메시지 보기");
-    await act(async () => { toggle()?.click(); });
-    expect(toggle()?.textContent).toBe("접기");
+    const details = host.querySelector("details")!;
+    expect(details.querySelector("summary")?.textContent).toBe("자세히");
+    expect(details.open).toBe(false);
+    expect(details.querySelector("div")?.textContent).toBe("a long failure");
+    await act(async () => { details.querySelector("summary")?.click(); });
+    expect(details.open).toBe(true);
   });
 
   it("A rejected resend re-enables the Retry button", async () => {
@@ -202,7 +205,7 @@ describe("RoomToolChip", () => {
     expect(button?.hasAttribute("disabled")).toBe(false);
   });
 
-  it("A failed turn offers Show full message and expands the truncated pill", async () => {
+  it("A failed turn keeps the raw error in closed Details", async () => {
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
@@ -220,25 +223,23 @@ describe("RoomToolChip", () => {
       root.render(createElement(RoomToolChip, { message, onRetry: () => {} }));
     });
 
-    const pill = () => host.querySelector("span.max-w-\\[480px\\], span.break-words");
-    expect(pill()?.className).toMatch(/truncate/);
-    expect(host.textContent).toContain("Show full message");
-
-    const toggle = [...host.querySelectorAll("button")].find((b) => b.textContent === "Show full message");
-    expect(toggle).not.toBeUndefined();
+    const shown = host.querySelector("span.break-words");
+    expect(shown?.textContent).toBe("The bot couldn't finish that.");
+    expect(shown?.className).not.toMatch(/truncate|font-mono/);
+    const details = host.querySelector("details")!;
+    const toggle = details.querySelector("summary")!;
+    expect(toggle.textContent).toBe("Details");
+    expect(details.open).toBe(false);
+    expect(details.querySelector("div")?.textContent).toBe(longError.slice(6).trim());
     await act(async () => {
       toggle?.click();
     });
 
-    expect(pill()?.className).not.toMatch(/truncate/);
-    expect(host.textContent).toContain(longError);
-    expect(host.textContent).toContain("Show less");
-
-    const collapse = [...host.querySelectorAll("button")].find((b) => b.textContent === "Show less");
+    expect(details.open).toBe(true);
     await act(async () => {
-      collapse?.click();
+      toggle.click();
     });
-    expect(pill()?.className).toMatch(/truncate/);
+    expect(details.open).toBe(false);
   });
 
   it("A setup error on the last activity from the sole responder: exposes the same action setupErrorAction gives 1:1", async () => {

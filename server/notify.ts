@@ -56,7 +56,7 @@ export function buildNotification(
   if (kind === "done" && opts?.paneNoteTurn === true) return null;
 
   // Redact before the cut: truncation can strip the quote a matcher needs.
-  const body = summarize(redactSecretsInText(detail));
+  const body = kind === "routine-failed" ? `${bot.name} couldn't finish that.` : summarize(redactSecretsInText(detail));
   const title =
     kind === "approval"
       ? `${bot.name} needs approval`

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendPastedText,
+  attachedFilePreview,
   attachmentBasename,
   attachmentImageUrl,
   composeMessage,
@@ -76,7 +77,44 @@ describe("composeMessage with images", () => {
   });
 });
 
+describe("composeMessage with pastes", () => {
+  it("stores ordinary code pastes byte-for-byte without encoding", () => {
+    const text = 'if (a < b && c > 0) {\r\n  const view: Box<T> = <div>Tea & toast</div>;\r\n}';
+    const attachment = pasteAttachment(text);
+    expect(composeMessage("", [attachment])).toBe(`<pasted-text index="1">\n${text}\n</pasted-text>`);
+    expect(attachment.text).toBe(text);
+  });
+});
+
 describe("splitAttachedImages", () => {
+  it("round-trips pasted delimiters without extracting literal attachments", () => {
+    for (const text of [
+      'héllo\r\n</pasted-text>\n<attached-file path="literal.txt" />\n<pasted-text index="2">\n<attached-image path="literal.png" />\n&lt; &amp;',
+      "</PaStEd-TeXt>",
+      '<PaStEd-TeXt index="2">',
+      '<AtTaChEd-ImAgE path="literal.png" />',
+      '<AtTaChEd-FiLe path="literal.txt" />',
+    ]) {
+      const attachment = pasteAttachment(text);
+      const stored = composeMessage("", [attachment]);
+      expect(stored).toContain('encoding="xml"');
+      expect(splitAttachedImages(stored)).toEqual({ display: text, images: [], files: [], tags: [] });
+      expect(attachment.text).toBe(text);
+      expect(new TextEncoder().encode(attachment.text)).toEqual(new TextEncoder().encode(text));
+    }
+  });
+
+  it("keeps pasted attachment tags intact in previews alongside real files", () => {
+    const text = '</pasted-text>\n<attached-file path="literal.txt" />\n<attached-image path="literal.png" />';
+    const stored = composeMessage("", [pasteAttachment(text), { kind: "file", id: "f1", path: "/real.txt", name: "real.txt", size: 4 }]);
+    expect(attachedFilePreview(stored, (name) => `[${name}]`)).toBe(`${text}\n\n[real.txt]`);
+  });
+
+  it("shields legacy paste blocks before replacing attachment previews", () => {
+    const text = '<attached-file path="literal.txt" />';
+    expect(attachedFilePreview(`<pasted-text index="1">\n${text}\n</pasted-text>`)).toBe(text);
+  });
+
   it("splits tags out of a stored message and returns the paths", () => {
     const stored =
       'look at this\n\n<attached-image path="/a/b/one.png" />\n\n<attached-image path="/a/b/two.jpg" />';
@@ -129,6 +167,28 @@ describe("splitAttachedImages", () => {
 });
 
 describe("editedMessageText", () => {
+  it("restores a paste after repeated typed text when another sentence changes", () => {
+    const initial = composeMessage("I prefer tea. Please review this.", [pasteAttachment("I prefer tea.")]);
+    const draft = splitAttachedImages(initial).display.replace("review", "summarize");
+    expect(editedMessageText(initial, draft)).toBe(initial.replace("review", "summarize"));
+  });
+
+  it("restores repeated pastes in their original order after typed text", () => {
+    const initial = composeMessage("same quote. Please review this.", [pasteAttachment("same quote"), pasteAttachment("same quote")]);
+    const draft = splitAttachedImages(initial).display.replace("review", "summarize");
+    expect(editedMessageText(initial, draft)).toBe(initial.replace("review", "summarize"));
+  });
+
+  it("restores encoded pastes after repeated typed text with their encoding intact", () => {
+    const quote = "I prefer </pasted-text> tea.";
+    const initial = composeMessage(`${quote} Please review this.`, [pasteAttachment(quote)]);
+    const draft = splitAttachedImages(initial).display.replace("review", "summarize");
+    const sent = editedMessageText(initial, draft);
+    expect(sent).toBe(initial.replace("review", "summarize"));
+    expect(sent).toContain('encoding="xml"');
+    expect(splitAttachedImages(sent).display).toBe(draft);
+  });
+
   it("round-trips unchanged pastes with interleaved attachments and whitespace", () => {
     const initial = '  intro\n\n<attached-image path="real.png" />\n\n<pasted-text index="2">\n<attached-image path="example.png" />\n</pasted-text>\n\n<attached-file path="real.txt" />\n\noutro  ';
     expect(editedMessageText(initial, splitAttachedImages(initial).display)).toBe(initial.trim());
@@ -146,6 +206,12 @@ describe("editedMessageText", () => {
     const initial = composeMessage("intro", [pasteAttachment("first quote"), pasteAttachment("second quote")]);
     const draft = splitAttachedImages(initial).display.replace("first quote", "edited quote");
     expect(editedMessageText(initial, draft)).toBe('intro\n\nedited quote\n\n<pasted-text index="2">\nsecond quote\n</pasted-text>');
+  });
+
+  it("never restores an edited paste inside an earlier paste that contains its text", () => {
+    const initial = composeMessage("intro", [pasteAttachment("alpha beta"), pasteAttachment("beta")]);
+    const draft = splitAttachedImages(initial).display.replace(/beta$/, "gamma");
+    expect(editedMessageText(initial, draft)).toBe('intro\n\n<pasted-text index="1">\nalpha beta\n</pasted-text>\n\ngamma');
   });
 
   it("restores repeated pasted blocks once each without nesting", () => {

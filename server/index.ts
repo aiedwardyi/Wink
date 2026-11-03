@@ -387,6 +387,8 @@ import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { reportServerFailure } from "./error-reports.ts";
+import { writeChatError, usageError, startQueuedTurn } from "./chat-error.ts";
+import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
@@ -3742,11 +3744,12 @@ bus.subscribe((event: RuntimeEvent) => {
       });
       break;
     case "runtime.error": {
+      if (!event.usageLimit && !event.setup && !event.signIn && !event.folder && !writeChatError(event.message, terminalBridgeAccess)) break;
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
       const previousId = event.usageLimit ? limitWaits.messageId(event.threadId) : undefined;
       const tool = {
-        name: `error: ${event.message.slice(0, event.signIn ? 600 : 160)}`,
+        name: `error: ${event.message}`,
         ok: false,
         setup: event.setup,
         usageLimit: event.usageLimit,
@@ -4191,17 +4194,17 @@ function drainQueuedSends() {
         { queueId: userMessage.queueId },
       );
     }
-    startTurn(botId, prompt, {
+    return startQueuedTurn(() => startTurn(botId, prompt, {
       threadId,
       userMessage: userMessage ?? undefined,
       excludeMessageIds: excludeIds,
       onDispatchError: rerunIfIdle,
-    }).then(rerunIfIdle).catch((err) => {
-      store.appendMessage(threadId, {
+    }), () => isSendCancelled(userMessage?.sendId ?? userMessage?.queueId), terminalBridgeAccess).then(rerunIfIdle).catch((err) => {
+      if (writeChatError(`queued message could not start - ${err instanceof Error ? err.message : String(err)}`, terminalBridgeAccess)) store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
         tool: {
-          name: `error: queued message could not start — ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`,
+          name: `error: queued message could not start - ${err instanceof Error ? err.message : String(err)}`,
           ok: false,
         },
       });
@@ -5537,10 +5540,10 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         return;
       }
       const message = e instanceof Error ? e.message : String(e);
-      store.appendMessage(threadId, {
+      if (writeChatError(message, terminalBridgeAccess)) store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
-        tool: { name: `error: ${message.slice(0, 160)}`, ok: false },
+        tool: { name: `error: ${message}`, ok: false },
       });
       const packet = routineTurnThreads.has(threadId) ? null : taskPacketForWrite(threadId);
       if (packet) {
@@ -5955,11 +5958,11 @@ function enqueueDrainedRoomTurn(
     tracked.catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       fail(message);
-      store.appendMessage(threadId, {
+      if (writeChatError(`queued room turn could not start - ${message}`, terminalBridgeAccess)) store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",
         tool: {
-          name: `error: queued room turn could not start — ${message.slice(0, 120)}`,
+          name: `error: queued room turn could not start - ${message}`,
           ok: false,
         },
       });
@@ -6393,11 +6396,11 @@ async function runClaimedGroupMemberTurn(
           return;
         }
         const message = err instanceof Error ? err.message : "turn failed";
-        store.appendMessage(threadId, {
+        if (writeChatError(message, terminalBridgeAccess)) store.appendMessage(threadId, {
           role: "bot",
           kind: "activity",
           from: { botId: bot.id, name: bot.name, color: bot.color },
-          tool: { name: `error: ${message.slice(0, 140)}`, ok: false },
+          tool: { name: `error: ${message}`, ok: false },
         });
         onDispatchError?.(message);
         watchdog.settle(threadId);
@@ -7978,7 +7981,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const newest = rateLimitsByInstance.get(instanceId);
       return json(res, 200, usageRefreshResponse(instanceId, {
         report: newest,
-        error: result.error,
+        error: usageError(result.error, terminalBridgeAccess),
         retryAt: result.retryAt,
         status: result.status,
         resetsAt: result.resetsAt,
@@ -8350,10 +8353,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
 
-    return json(res, 404, { error: `no route: ${method} ${path}` });
+    return json(res, 404, unknownRoute);
   } catch (e) {
-    const status = (e as any)?.status ?? 500;
-    return json(res, status, { error: e instanceof Error ? e.message : String(e) });
+    const failure = requestError(e);
+    return json(res, failure.status, failure.body);
   }
 };
 

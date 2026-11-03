@@ -1,3 +1,4 @@
+import { fallbackError } from "@/lib/error-text";
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -32,7 +33,7 @@ export function PhoneNotificationSettings() {
     try {
       await action();
     } catch (cause) {
-      setNote({ kind: "error", message: cause instanceof Error ? cause.message : fallback });
+      setNote({ kind: "error", message: fallbackError(cause, fallback) });
     } finally {
       setBusy(false);
     }

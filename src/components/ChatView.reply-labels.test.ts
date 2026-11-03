@@ -398,10 +398,13 @@ describe("ChatView handoff status lines", () => {
   const midTitle = (host: HTMLElement, label: string) =>
     Array.from(host.querySelectorAll('[data-mid="steered"] [title]')).find((el) => el.textContent === label)?.getAttribute("title");
 
-  it("shows the server lines and the mid-turn note as written in English", async () => {
+  it("shows plain error copy and the server status lines in English", async () => {
     const { host } = await mount(bot([delivered, failed, steered]));
     expect(rowLabel(host, "delivered")).toBe("Delivered to @Atlas");
-    expect(host.querySelector('[data-mid="failed"]')?.textContent).toBe("delegation failed \u2014 Atlas is offline");
+    const error = host.querySelector('[data-mid="failed"]')!;
+    expect(error.querySelector(".break-words")?.textContent).toBe("Helper couldn't finish that.");
+    expect(error.querySelector("details")?.open).toBe(false);
+    expect(error.querySelector("details div")?.textContent).toBe("delegation failed \u2014 Atlas is offline");
     expect(host.querySelector('[data-mid="steered"]')?.textContent).toContain("sent mid-turn");
     expect(midTitle(host, "sent mid-turn")).toBe("Sent while the bot was working \u2014 it saw this before its next step, inside the same turn.");
   });
@@ -410,7 +413,11 @@ describe("ChatView handoff status lines", () => {
     localStorage.setItem("omb-locale", "ko");
     const { host } = await mount(bot([delivered, failed, steered]));
     expect(rowLabel(host, "delivered")).toBe("@Atlas에게 전달됨");
-    expect(host.querySelector('[data-mid="failed"]')?.textContent).toBe("위임 실패 - Atlas is offline");
+    const error = host.querySelector('[data-mid="failed"]')!;
+    expect(error.querySelector(".break-words")?.textContent).toBe("Helper: 작업을 마치지 못했어요.");
+    expect(error.querySelector("summary")?.textContent).toBe("자세히");
+    expect(error.querySelector("details")?.open).toBe(false);
+    expect(error.querySelector("details div")?.textContent).toBe("delegation failed \u2014 Atlas is offline");
     expect(host.querySelector('[data-mid="steered"]')?.textContent).toContain("작업 중에 전송됨");
     expect(midTitle(host, "작업 중에 전송됨")).toBe("봇이 작업하는 동안 보냄 - 같은 턴 안에서 다음 단계 전에 이 메시지를 확인했습니다.");
   });

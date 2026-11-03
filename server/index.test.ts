@@ -341,7 +341,7 @@ describe("harness HTTP API", () => {
 
     const unknownApi = await api("GET", "/api/not-a-real-route");
     expect(unknownApi.status).toBe(404);
-    expect(unknownApi.body.error).toContain("/api/not-a-real-route");
+    expect(unknownApi.body).toEqual({ code: "NOT_FOUND", error: "That page is no longer available. Refresh Wink and try again." });
   });
 
   it("rejects malformed and oversized JSON bodies without hanging", async () => {
@@ -4155,10 +4155,10 @@ describe("harness HTTP API", () => {
     expect(ok.body.total).toEqual({ runtime: expect.any(Number), native: expect.any(Number) });
   });
 
-  it("404s unknown routes with the route in the error", async () => {
+  it("404s unknown routes without echoing the route", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);
-    expect(res.body.error).toContain("/api/definitely-not-a-route");
+    expect(res.body).toEqual({ code: "NOT_FOUND", error: "That page is no longer available. Refresh Wink and try again." });
   });
 });
 

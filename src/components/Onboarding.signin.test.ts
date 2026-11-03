@@ -184,7 +184,7 @@ describe("Onboarding engine check", () => {
 
   it("still reports a real engine check failure", async () => {
     const host = await renderWith(500);
-    expect(host.textContent).toContain("Wink couldn't check the engines on this computer.");
+    expect(host.textContent).toContain("Wink is still getting ready.");
     expect(host.textContent).not.toContain("Sign in to this PC");
   });
 

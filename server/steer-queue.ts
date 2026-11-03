@@ -56,6 +56,7 @@ interface QueueEntry {
 const queues = new Map<string, QueueEntry>(); // botId + threadId → waiting work
 const cancelledSendIds = new Set<string>();
 const runningSendIds = new Map<string, string>(); // botId → sendId
+const pendingDrainedSends = new Map<string, { botId: string; sendId?: string }>();
 const promoting = new Map<string, string>();
 let queueSeq = 0;
 
@@ -351,7 +352,14 @@ export function drainSteeredMessages(
       }
       // Remove the receipt only after the transcript append is durable.
       saveQueueAfterAppend();
-      void run(entry.botId, entry.threadId, item.prompt, appended, [appended.id]);
+      pendingDrainedSends.set(item.messageId, { botId: entry.botId, sendId: item.sendId });
+      void (async () => {
+        try {
+          await run(entry.botId, entry.threadId, item.prompt, appended, [appended.id]);
+        } finally {
+          pendingDrainedSends.delete(item.messageId);
+        }
+      })();
       continue;
     }
 
@@ -537,6 +545,13 @@ export interface ReturnedSend {
 /** Drop every waiting 1:1 send of a bot the user stopped, oldest first. */
 export function cancelQueuedSends(botId: string): ReturnedSend[] {
   const returned: Array<SteerItem & { threadId: string }> = [];
+  let cancelledDrained = false;
+  for (const [queueId, pending] of pendingDrainedSends) {
+    if (pending.botId !== botId) continue;
+    if (pending.sendId) rememberCancelledSend(pending.sendId);
+    rememberCancelledSend(queueId);
+    cancelledDrained = true;
+  }
   for (const [key, entry] of queues) {
     if (entry.botId !== botId) continue;
     const items = entry.items.filter((item) => {
@@ -550,7 +565,7 @@ export function cancelQueuedSends(botId: string): ReturnedSend[] {
     if (items.length === 0) queues.delete(key);
     else queues.set(key, { botId: entry.botId, threadId: entry.threadId, items });
   }
-  if (returned.length) saveQueueAfterAppend();
+  if (returned.length || cancelledDrained) saveQueueAfterAppend();
   return returned
     .sort((a, b) => a.seq - b.seq)
     .map((item) => ({ threadId: item.threadId, queueId: item.messageId, sendId: item.sendId, text: item.text }));
@@ -579,6 +594,7 @@ export function _resetSteerQueue(): void {
   promoting.clear();
   cancelledSendIds.clear();
   runningSendIds.clear();
+  pendingDrainedSends.clear();
 }
 
 /** After a drained start fails, try the next queued send only if this

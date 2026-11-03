@@ -1,5 +1,5 @@
 export const ERROR_CODES = Object.freeze(["UNKNOWN_ERROR", "RENDERER_GONE", "SERVER_GONE", "STARTUP_TIMEOUT", "UPDATE_FAILED", "UPDATE_UNAVAILABLE", "UNCLEAN_EXIT", "SERVER_RUNTIME_FAILURE"]);
-export const ERROR_SITES = Object.freeze({ rendererError: 1, rendererRejection: 2, rendererGone: 3, serverGone: 4, startupTimeout: 5, updaterFailure: 6, updaterUnavailable: 7, uncleanExit: 8, serverRuntime: 9, updaterChannel: 10 });
+export const ERROR_SITES = Object.freeze({ rendererError: 1, rendererRejection: 2, rendererGone: 3, serverGone: 4, startupTimeout: 5, updaterFailure: 6, updaterUnavailable: 7, uncleanExit: 8, serverRuntime: 9, updaterChannel: 10, chatRace: 11, usageRefresh: 12, chatQueue: 13 });
 const PLATFORMS = ["win32", "darwin", "linux"];
 const ARCHES = ["x64", "arm64", "ia32", "arm"];
 const PROCESSES = ["main", "renderer", "server"];

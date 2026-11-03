@@ -457,8 +457,8 @@ describe("localizeServerLine", () => {
     ["Reply from @Atlas", "@Atlas의 답장"],
     ["Queued for @Atlas, sends when this reply ends", "@Atlas에게 대기 중, 이 응답이 끝나면 전송됩니다"],
     ["Queued for @Atlas, sends when this reply ends: check the build", "@Atlas에게 대기 중, 이 응답이 끝나면 전송됩니다: check the build"],
-    ["error: delegation failed \u2014 Atlas is offline", "오류: 위임 실패 - Atlas is offline"],
-    ["error: delegation to @Atlas could not start \u2014 spawn failed", "오류: @Atlas에게 한 위임을 시작하지 못했습니다 - spawn failed"],
+    ["error: delegation failed \u2014 Atlas is offline", "봇: 작업을 마치지 못했어요."],
+    ["error: delegation to @Atlas could not start \u2014 spawn failed", "봇: 작업을 마치지 못했어요."],
     ["Delegation to @Atlas dropped - the turn did not finish", "@Atlas에게 한 위임 취소됨 - 턴이 끝나지 않았습니다"],
     ["1 queued delegation dropped \u2014 the turn did not finish", "대기 중이던 위임 1건 취소됨 - 턴이 끝나지 않았습니다"],
     ["3 queued delegations dropped \u2014 the turn did not finish", "대기 중이던 위임 3건 취소됨 - 턴이 끝나지 않았습니다"],
@@ -478,14 +478,14 @@ describe("localizeServerLine", () => {
     ["Delegated turn could not start \u2014 spawn failed", "위임한 턴을 시작하지 못했습니다 - spawn failed"],
     ["Gemini is busy. Retrying in 30 sec.", "Gemini가 바쁩니다. 30초 후 다시 시도합니다."],
     ["Gemini is busy. Retrying in 2 min.", "Gemini가 바쁩니다. 2분 후 다시 시도합니다."],
-    ["error: Gemini is still busy after 3 tries. Try another model.", "오류: Gemini가 3번 시도한 뒤에도 바쁩니다. 다른 모델을 써 보세요."],
+    ["error: Gemini is still busy after 3 tries. Try another model.", "Gemini가 3번 시도한 뒤에도 바쁩니다. 다른 모델을 써 보세요."],
   ];
 
   it.each(samples)("maps %s into Korean", (line, korean) => {
     expect(localizeServerLine(line, ko)).toBe(korean);
   });
 
-  it.each(samples)("leaves %s as written in English", (line) => {
+  it.each(samples.filter(([line]) => !line.startsWith("error:")))("leaves %s as written in English", (line) => {
     expect(localizeServerLine(line, en)).toBe(line);
   });
 
@@ -499,23 +499,23 @@ describe("localizeServerLine", () => {
 
   it("passes free text through untouched, even when it looks like a placeholder or a replacement pattern", () => {
     const why = "bad $& $$ {name} {why} \u2014 “quoted”\n2nd line";
-    expect(localizeServerLine(`error: delegation failed \u2014 ${why}`, en)).toBe(`error: delegation failed \u2014 ${why}`);
-    expect(localizeServerLine(`error: delegation failed \u2014 ${why}`, ko)).toBe(`오류: 위임 실패 - ${why}`);
+    expect(localizeServerLine(`error: delegation failed \u2014 ${why}`, en)).toBe("The bot couldn't finish that.");
+    expect(localizeServerLine(`error: delegation failed \u2014 ${why}`, ko)).toBe("봇: 작업을 마치지 못했어요.");
     expect(localizeServerLine(`Queued for @Atlas, sends when this reply ends: ${why}`, ko)).toBe(`@Atlas에게 대기 중, 이 응답이 끝나면 전송됩니다: ${why}`);
   });
 
-  it("swaps the error prefix for the app language on a mapped line only", () => {
+  it("shows plain sentences without an error prefix", () => {
     const line = "error: delegation failed \u2014 Atlas is offline";
-    expect(localizeServerLine(line, en).startsWith("error: ")).toBe(true);
-    expect(localizeServerLine(line, ko).startsWith("오류: ")).toBe(true);
-    expect(localizeServerLine("error: the CLI exited", ko)).toBe("error: the CLI exited");
-    expect(localizeServerLine("error: the CLI exited", en)).toBe("error: the CLI exited");
+    expect(localizeServerLine(line, en).startsWith("error: ")).toBe(false);
+    expect(localizeServerLine(line, ko).startsWith("오류: ")).toBe(false);
+    expect(localizeServerLine("error: the CLI exited", ko)).toBe("봇: 작업을 마치지 못했어요.");
+    expect(localizeServerLine("error: the CLI exited", en)).toBe("The bot couldn't finish that.");
   });
 
   it("never shows the id of a deleted bot", () => {
     const stored = "error: delegation to b7 failed \u2014 no such bot";
-    expect(localizeServerLine(stored, en)).toBe("error: delegation failed - that bot was deleted");
-    expect(localizeServerLine(stored, ko)).toBe("오류: 위임 실패 - 삭제된 봇입니다");
+    expect(localizeServerLine(stored, en)).toBe("The bot couldn't finish that.");
+    expect(localizeServerLine(stored, ko)).toBe("봇: 작업을 마치지 못했어요.");
     expect(localizeServerLine(stored.slice(7), en)).toBe("delegation failed - that bot was deleted");
     expect(localizeServerLine(stored.slice(7), ko)).toBe("위임 실패 - 삭제된 봇입니다");
   });
@@ -525,7 +525,7 @@ describe("localizeServerLine", () => {
   });
 
   it("passes unknown lines through", () => {
-    for (const line of ["Bash", "memory.save", "error: the CLI exited", "Message to Atlas", "Delivered to Atlas", "auto-approved Bash: npm test"]) {
+    for (const line of ["Bash", "memory.save", "Message to Atlas", "Delivered to Atlas", "auto-approved Bash: npm test"]) {
       expect(localizeServerLine(line, ko)).toBe(line);
     }
   });

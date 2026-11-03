@@ -33,7 +33,7 @@ function exportRoute(result, platform = "win32") {
 
 it("keeps the preload diagnostics bridge connected to its IPC route", () => {
   const preload = readFileSync(new URL("./preload.cjs", import.meta.url), "utf8");
-  expect(preload).toContain('exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics")');
+  expect(preload).toContain('exportDiagnostics: () => invoke("desktop:export-diagnostics")');
 });
 
 it("exports the redacted report to the chosen file", async () => {

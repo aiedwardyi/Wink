@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { spawnSync } from "node:child_process";
+import { writeChatError } from "../server/chat-error.ts";
 
 const scratch = path.join(os.tmpdir(), "wink-REPORTS-FIX");
 fs.mkdirSync(scratch, { recursive: true });
@@ -57,12 +58,12 @@ test("only the bus's canonical log failure is reported from runtime.error", () =
   const message = bus.match(/INCOMPLETE_LOG_MESSAGE\s*=\s*\n?\s*"([^"]+)"/)[1];
   const branch = source("../server/index.ts").split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0].replace(/break;(\s*\})?\s*$/, "$1");
   const calls = [];
-  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", branch);
+  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
   for (const event of [
     { message: "usage limit", usageLimit: { resetsAt: null } }, { message: "sign in", signIn: true },
     { message: "setup", setup: true }, { message: "CLI not found" }, { message: "Permission request timed out" },
     { message: "provider offline" }, { message },
-  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map());
+  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError);
   assert.deepEqual(calls, [{ message }]);
 });
 
@@ -445,6 +446,26 @@ test("typed server failures use a separate authenticated loopback grant and reje
   assert.equal(f.queue().records[0].report.code, "SERVER_RUNTIME_FAILURE");
   const bytes = JSON.stringify(f.received);
   for (const text of privateText) assert.equal(bytes.includes(text), false);
+});
+
+test("server report capture accepts exactly the server failure sites", async () => {
+  const { createHmac } = await import("node:crypto");
+  const { Readable } = await import("node:stream");
+  const { ERROR_SITES } = await import("../shared/error-report.mjs");
+  const { handleServerErrorReport } = await import("./error-report-capture.mjs");
+  const token = "test-report-token";
+  const grant = createHmac("sha256", token).update("orbit-error-report-v1").digest("base64url");
+  const allowed = [ERROR_SITES.serverRuntime, ERROR_SITES.chatRace, ERROR_SITES.usageRefresh, ERROR_SITES.chatQueue];
+  for (const site of [...Object.values(ERROR_SITES), 0, 99, "11"]) {
+    const req = Readable.from([Buffer.from(JSON.stringify({ code: "SERVER_RUNTIME_FAILURE", site }))]);
+    req.method = "POST";
+    req.headers = { authorization: `Bearer ${grant}` };
+    const captures = [];
+    let status;
+    await handleServerErrorReport(req, { writeHead: (value) => { status = value; }, end() {} }, token, { capture: (value) => captures.push(value) });
+    assert.equal(status, allowed.includes(site) ? 204 : 400, String(site));
+    assert.deepEqual(captures, allowed.includes(site) ? [{ process: "server", code: "SERVER_RUNTIME_FAILURE", site }] : []);
+  }
 });
 
 test("updater reports both silent rejection and event failures without forwarding errors", async () => {

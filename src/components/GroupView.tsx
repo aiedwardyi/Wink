@@ -2,8 +2,9 @@
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
+import { ErrorRow } from "./ChatView";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -207,6 +208,10 @@ export function RoomToolChip({
   const instance = member?.modelSelection?.instanceId
     ? state.instances.find((i) => i.instanceId === member.modelSelection.instanceId)
     : undefined;
+  if (tool.name.startsWith("error:")) return (
+    <ErrorRow message={tool.name.slice(6).trim()} botId={member?.id ?? ""} botName={member?.name ?? message.from?.name}
+      setupInstance={(tool.setup || tool.signIn) && onRetry ? instance : undefined} signIn={tool.signIn} onRetry={handleRetry} retryDisabled={retried} />
+  );
   const status = isServerLine(tool.name);
   const setupAction =
     (tool.setup || tool.signIn) && onRetry
@@ -1080,7 +1085,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
           />
         </label>
 
-        {error && <div role="alert" className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+        {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-hairline/50 bg-inset px-3 py-2 text-[12.5px] text-ink"><AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" /><span className="min-w-0 break-words">{error}</span></div>}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"

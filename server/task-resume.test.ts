@@ -5,6 +5,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as recovery from "./task-recovery-flush.ts";
+import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import {
   _resetSteerQueue,
   cancelQueuedSends,
@@ -189,6 +190,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   });
   drainQueuedSends = load("drainQueuedSends", {
     taskResumes, store, drainSteeredMessages, continueQueuedDrainIfIdle, startTurn, botHasActiveTurn,
+    startQueuedTurn, writeChatError, terminalBridgeAccess: null, isSendCancelled: () => false,
     markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
   });
   const startGroupCardContinuation = load("startGroupCardContinuation", {
