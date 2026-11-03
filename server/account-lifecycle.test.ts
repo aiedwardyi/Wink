@@ -76,6 +76,60 @@ async function fixture() {
 }
 
 describe("account lifecycle", () => {
+  it("backs off unknown probes from one second to a sixty-second cap", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.invalidate.mockClear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    f.statuses.set(account.id, { state: "unavailable" });
+    const retry = vi.spyOn(f.registry, "retryAccount");
+    await f.controller.observe(account.id, { state: "unavailable" });
+    const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000];
+    for (const [index, delay] of delays.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(retry).toHaveBeenCalledTimes(index);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(retry).toHaveBeenCalledTimes(index + 1);
+      expect(f.accounts.get(account.id)).toEqual(account);
+      expect(f.registry.accountBlocked(account.id)).toBe(true);
+    }
+    expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("clears a known answer's retry and restarts the next unknown at one second", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    f.statuses.set(account.id, { state: "unavailable" });
+    const retry = vi.spyOn(f.registry, "retryAccount");
+    await f.controller.observe(account.id, { state: "unavailable" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(retry).toHaveBeenCalledTimes(1);
+    await f.controller.observe(account.id, { state: "available", authenticated: true, accountIdentity: account.identity });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.registry.accountBlocked(account.id)).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(retry).toHaveBeenCalledTimes(1);
+    await f.controller.observe(account.id, { state: "unavailable" });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(retry).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(retry).toHaveBeenCalledTimes(2);
+    expect(f.accounts.get(account.id)).toEqual(account);
+  });
+
+  it("clears an outstanding retry when re-login confirms the identity", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await f.controller.observe(account.id, { state: "unavailable" });
+    await f.controller.signIn(account.id);
+    await f.controller.settled(account.id);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+  });
+
   it.each(["restore", "observe", "probe", "crash", "empty status", "missing identity"])("retries an unknown %s without stopping or invalidating the account", async (path) => {
     const f = await fixture();
     const account = await f.add();

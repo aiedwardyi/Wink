@@ -17,7 +17,7 @@ export class AccountLifecycle {
   private pending = new Map<string, Promise<void>>();
   private mutations = 0;
   private drainTimer?: ReturnType<typeof setTimeout>;
-  private retries = new Map<string, ReturnType<typeof setTimeout>>();
+  private retries = new Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>();
   private disposed = false;
   private results = new Map<string, { state: "failed" | "cancelled"; error?: "device_cap" }>();
   readonly accounts: AccountService;
@@ -58,7 +58,7 @@ export class AccountLifecycle {
   dispose() {
     this.disposed = true;
     clearTimeout(this.drainTimer);
-    for (const timer of this.retries.values()) clearTimeout(timer);
+    for (const retry of this.retries.values()) clearTimeout(retry.timer);
     this.retries.clear();
   }
 
@@ -198,8 +198,7 @@ export class AccountLifecycle {
       this.retry(account);
       return Promise.resolve();
     }
-    clearTimeout(this.retries.get(id));
-    this.retries.delete(id);
+    this.clearRetry(id);
     if (snapshot.authenticated === true && snapshot.accountIdentity === account.identity) {
       this.registry.blockAccount(id, false);
       return Promise.resolve();
@@ -239,6 +238,7 @@ export class AccountLifecycle {
     }
     const added = Boolean(this.accounts.get(id));
     await this.accounts.finishDrain(id, destination, () => { this.bots!.destination(id, drain.destinationId); });
+    this.clearRetry(id);
     this.hooks.invalidate(id);
     await this.hooks.reload();
     this.registry.blockAccount(id, !added);
@@ -254,16 +254,26 @@ export class AccountLifecycle {
     this.drainTimer.unref?.();
   }
 
+  private clearRetry(id: string) {
+    clearTimeout(this.retries.get(id)?.timer);
+    this.retries.delete(id);
+  }
+
   private retry(account: AccountRecord) {
-    if (this.disposed || this.retries.has(account.id)) return;
-    const timer = setTimeout(() => {
-      this.retries.delete(account.id);
+    const retry = this.retries.get(account.id) ?? { delay: 1_000, timer: undefined };
+    if (this.disposed || retry.timer) return;
+    retry.timer = setTimeout(() => {
+      retry.timer = undefined;
       const current = this.accounts.get(account.id);
-      if (!current || current.state !== "ready" || current.generation !== account.generation || this.accounts.drains[account.id] || this.jobs.has(account.id)) return;
+      if (!current || current.state !== "ready" || current.generation !== account.generation || this.accounts.drains[account.id] || this.jobs.has(account.id)) {
+        this.retries.delete(account.id);
+        return;
+      }
+      retry.delay = Math.min(retry.delay * 2, 60_000);
       void this.registry.retryAccount(account.id).catch(() => this.retry(account));
-    }, 1_000);
-    timer.unref?.();
-    this.retries.set(account.id, timer);
+    }, retry.delay);
+    retry.timer.unref?.();
+    this.retries.set(account.id, retry);
   }
 
   private async begin(account: AccountRecord, device: boolean) {
@@ -314,6 +324,7 @@ export class AccountLifecycle {
       if (account.state === "ready") this.retry(account);
       return;
     }
+    this.clearRetry(account.id);
     if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
     const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
     if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
@@ -322,6 +333,7 @@ export class AccountLifecycle {
   }
 
   private async discard(id: string) {
+    this.clearRetry(id);
     this.hooks.invalidate(id);
     await this.accounts.retire(id);
     await this.hooks.reload();
