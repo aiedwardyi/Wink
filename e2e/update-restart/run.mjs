@@ -4,7 +4,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const MODE = process.argv[2];
 const OUT_ROOT = process.env.OUT_DIR;
@@ -135,7 +135,7 @@ function pickShots(shots, out, result, t0) {
 }
 
 function uninstall(inst, userData, cacheDir) {
-  for (const p of processesUnder(inst)) spawnSync("taskkill.exe", ["/PID", String(p.ProcessId), "/T", "/F"], { windowsHide: true });
+  for (const p of inst ? processesUnder(inst) : []) spawnSync("taskkill.exe", ["/PID", String(p.ProcessId), "/T", "/F"], { windowsHide: true });
   const e = entry();
   const m = /^"([^"]+)"\s*(.*)$/.exec(e?.QuietUninstallString ?? "");
   if (m) spawnSync(m[1], m[2].split(/\s+/).filter(Boolean), { windowsHide: true, timeout: 120_000 });
@@ -167,7 +167,8 @@ async function side(name) {
     result.installOldS = (Date.now() - t) / 1000;
     const e = entry();
     if (installed.status !== 0 || e?.DisplayVersion !== OLD) throw new Error(`install ${OLD}: exit ${installed.status}, entry ${JSON.stringify(e)}`);
-    inst = e.InstallLocation.replace(/\\$/, "");
+    // electron-builder keeps InstallLocation under its own key; the uninstaller sits in the install dir.
+    inst = dirname(/^"([^"]+)"/.exec(e.QuietUninstallString)[1]);
 
     // Same updater, same installer path, local feed.
     const yml = join(inst, "resources", "app-update.yml");
@@ -277,7 +278,7 @@ async function side(name) {
       await sleep(2000);
     }
     server.close();
-    if (inst) uninstall(inst, userData, cacheDir);
+    if (inst || entry()) uninstall(inst, userData, cacheDir);
     result.leftover = { entry: entry(), inst: inst ? existsSync(inst) : null };
     writeFileSync(join(out, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   }
