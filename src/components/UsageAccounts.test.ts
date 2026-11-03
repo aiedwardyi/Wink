@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
 import type { InstanceInfo } from "@/state/store";
+import type { UsageAccount } from "@/lib/accounts";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
   state: { bots: [{ id: "bot", modelSelection: { instanceId: "claude" }, tasks: [] }], instances: [] as InstanceInfo[] },
@@ -20,11 +21,12 @@ import { UsageSection } from "./UsageSection";
 let root: Root;
 let host: HTMLDivElement;
 let accounts: { id: string; of: string; state: string; default?: boolean }[];
-const engine = (id: string, used = 20, signedIn = true): InstanceInfo => ({
+const engine = (id: string, used = 20, signedIn = true): UsageAccount => ({
   instanceId: id, driverKind: "claudeAgent", displayName: "Claude",
   snapshot: { state: "available", authenticated: signedIn, account: `${id}@example.com` },
   models: { default: "opus", options: [] },
   capabilities: { rateLimits: true },
+  canRefreshUsage: id === "claude",
   rateLimits: { observedAt: new Date().toISOString(), windows: [{ id: "five_hour", usedPercent: used, resetsAt: Date.now() + 3_600_000 }] },
 });
 const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
@@ -161,7 +163,7 @@ it("does not switch a default whose limit is hit", async () => {
 
 it("keeps the default in place and shows failure if the API rejects a pick", async () => {
   await render();
-  request.mockRejectedValueOnce(new Error("offline"));
+  request.mockRejectedValueOnce(new Error(""));
   await act(async () => button("Set as Main").click());
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Didn't finish");
@@ -172,4 +174,23 @@ it("translates account controls into Korean", async () => {
   await render(3);
   expect(button("기본으로 설정")).toBeDefined();
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
+});
+
+it.each(["en", "ko"] as const)("shows default refusal messages in %s", async (locale) => {
+  persistPreference(locale);
+  await render();
+  request.mockRejectedValueOnce(new Error("This account is still used by a pane"));
+  await act(async () => button(locale === "en" ? "Set as Main" : "기본으로 설정").click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("This account is still used by a pane");
+});
+
+it.each([false, true])("uses server refresh eligibility instead of account ids (%s)", async (allowed) => {
+  const id = allowed ? "acct_legacy" : "claude";
+  state.instances = [{ ...engine(id), canRefreshUsage: allowed } as UsageAccount];
+  accounts = [];
+  await act(async () => root.render(createElement(UsageSection)));
+  request.mockClear();
+  const refresh = host.querySelector<HTMLButtonElement>('[aria-keyshortcuts="Alt+R"]');
+  if (refresh) await act(async () => refresh.click());
+  expect(request.mock.calls.some(([path]) => path === `/api/usage/refresh/${id}`)).toBe(allowed);
 });

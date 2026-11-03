@@ -1,13 +1,33 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 
 import type { AccountContext } from "../account-policy.ts";
 import { spawnCli } from "../procs.ts";
 import { awaitDyingAppServers, codexHome, retireAppServer } from "./codex-catalog.ts";
+import { accountLabel, storedAccount } from "./auth-status.ts";
 
 export interface CodexAccount { type?: string; authenticated?: boolean; label?: string; identity?: string }
 const responseSchema = z.object({ account: z.object({ type: z.string(), email: z.string().nullish() }).nullable() });
+const authSchema = z.object({ auth_mode: z.string().nullish(), tokens: z.object({ id_token: z.string() }) });
+
+export function codexApiKeyAccount(env: Record<string, string | undefined>): boolean {
+  try {
+    return authSchema.pick({ auth_mode: true }).safeParse(JSON.parse(readFileSync(join(codexHome(env), "auth.json"), "utf8"))).data?.auth_mode === "apikey";
+  } catch { return false; }
+}
+
+export function codexAccount(env: Record<string, string | undefined>): string | undefined {
+  return storedAccount(join(codexHome(env), "auth.json"), (auth) => {
+    const parsed = authSchema.safeParse(auth);
+    if (!parsed.success || parsed.data.auth_mode === "apikey") return undefined;
+    const claims: unknown = JSON.parse(Buffer.from(parsed.data.tokens.id_token.split(".")[1] ?? "", "base64url").toString("utf8"));
+    const named = z.object({ email: z.unknown().optional(), name: z.unknown().optional() }).safeParse(claims);
+    return named.success ? accountLabel(named.data.email, named.data.name) : undefined;
+  });
+}
 
 export function parseCodexAccount(value: unknown): CodexAccount {
   const parsed = responseSchema.safeParse(value);

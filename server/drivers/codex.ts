@@ -44,7 +44,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, codexRateLimitWindows } from "./rate-limits.ts";
 import { cachedSignIn } from "./auth-status.ts";
 import { accountLaunch } from "../account-policy.ts";
-import { readCodexAccount, type CodexAccount } from "./codex-account.ts";
+import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount } from "./codex-account.ts";
 import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
@@ -230,7 +230,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     let models = STATIC_CODEX_MODELS;
     const refreshModels = async () => {
       try {
-        const resolved = await readCodexModelCatalog(catalogEnv, fetch, config.cli, { account: input.account, onAccount: (account) => { engineAccount = account; if (input.account) admitted = account.type === "chatgpt"; } });
+        const resolved = await readCodexModelCatalog(catalogEnv, fetch, config.cli, input.account ? { account: input.account, onAccount: (account) => { engineAccount = account; admitted = account.type === "chatgpt"; } } : undefined);
         if (resolved.options.length) models = resolved;
       } catch {
         // Keep the last usable catalog when a local provider is down.
@@ -354,7 +354,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let contextWindow: number | undefined;
       let usageWindows: ReturnType<typeof codexRateLimitWindows> = [];
       let usageLimitReported = false;
-      const apiKeyAccount = engineAccount.type === "apiKey";
+      const apiKeyAccount = input.account ? engineAccount.type === "apiKey" : codexApiKeyAccount(env);
       const usageFailure = (failure: unknown) => chatUsageLimit("codex", failure, usageWindows,
         [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && !apiKeyAccount);
 
@@ -913,7 +913,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const force = opts?.rescan || opts?.refresh;
     const authenticated = input.account ? (await accountStatus(force)).type === "chatgpt" : await signedIn(force);
     if (input.account) admitted = authenticated === true;
-    const metadata = input.account ? engineAccount : authenticated ? await accountStatus(force) : {};
+    const metadata = input.account ? engineAccount : { label: authenticated ? codexAccount(env) : undefined };
     // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login
     return { state: "available", version, authenticated, account: authenticated ? metadata.label : undefined, ...(input.account ? { accountIdentity: metadata.identity, accountAuthenticated: metadata.authenticated } : {}), billing: "subscription" };
   };

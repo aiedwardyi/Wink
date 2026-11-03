@@ -48,8 +48,7 @@ const PLAN_USAGE_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent", "museAg
 // through a check (one small message) instead.
 const REFRESH_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent"]);
 const canRefresh = (instance: UsageAccount) => REFRESH_DRIVERS.has(instance.driverKind)
-  && !(instance.driverKind === "claudeAgent" && (instance.instanceId.startsWith("acct_")
-    || (instance.accountInfo && instance.accountInfo.id !== instance.accountInfo.of)));
+  && instance.canRefreshUsage !== false;
 type RefreshResult = { error?: string; status?: string };
 // The server words these failures in English, without a period.
 function refreshErrorText(error: string, t: Translate): string {

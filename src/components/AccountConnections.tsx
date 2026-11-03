@@ -11,7 +11,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const { t } = useI18n();
   const { refreshInstances } = useStore();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
   const base = accounts[0]!.accountInfo?.of ?? accounts[0]!.instanceId;
   const draining = accounts.some((account) => account.accountInfo?.drain && account.accountInfo.drain.phase !== "failed");
   const update = useCallback(async () => {
@@ -20,17 +20,17 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   }, [refreshInstances, reload]);
   useEffect(() => {
     if (!draining) return;
-    const timer = window.setInterval(() => { void update().catch(() => setError(true)); }, 1500);
+    const timer = window.setInterval(() => { void update().catch((error) => setError(error instanceof Error && error.message || t("engines.didntFinish"))); }, 1500);
     return () => window.clearInterval(timer);
-  }, [draining, update]);
+  }, [draining, update, t]);
   const mutate = async (path: string, body: object) => {
     if (busy) return;
     setBusy(true);
-    setError(false);
+    setError("");
     try {
       await api(path, { method: "POST", body: JSON.stringify(body) });
       await update();
-    } catch { setError(true); }
+    } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
     finally { setBusy(false); }
   };
   return (
@@ -58,7 +58,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       })}
       {accounts.length < 8 && <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb })}
         className="min-h-11 text-[12px] text-ink hover:underline disabled:opacity-50">{t("accounts.add")}</button>}
-      {error && <div role="alert" className="text-[12px] text-danger">{t("engines.didntFinish")}</div>}
+      {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}
     </div>
   );
 }
