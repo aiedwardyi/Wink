@@ -177,15 +177,16 @@ async function side(name) {
     if (cacheDir) cacheDir = join(process.env.LOCALAPPDATA, cacheDir);
 
     log("launch", inst);
-    const { _electron: electron } = await import("playwright");
+    const { chromium } = await import("playwright");
     const env = { ...process.env, USERPROFILE: join(work, "home"), HOME: join(work, "home") };
     for (const key of Object.keys(env)) if (/^(ELECTRON_|OMB_|OGB_|ORBIT_|GH_TOKEN|GITHUB_TOKEN)/.test(key)) delete env[key];
     mkdirSync(env.USERPROFILE, { recursive: true });
-    const app = await electron.launch({ executablePath: join(inst, "Orbit.exe"), env, timeout: 120_000 });
-    const oldPid = app.process().pid;
-    userData = await app.evaluate(({ app: a }) => a.getPath("userData"));
-    const page = await app.firstWindow();
-    await waitFor("the app page", 120_000, () => page.url().startsWith("http://127.0.0.1"));
+    // Playwright's electron.launch never sees the packaged app ready, so attach to its renderer over CDP instead.
+    const app = spawn(join(inst, "Orbit.exe"), [`--remote-debugging-port=${PORT + 1}`], { env, stdio: "ignore" });
+    const oldPid = app.pid;
+    userData = join(process.env.APPDATA, "Wink");
+    const browser = await waitFor("the debug port", 120_000, () => chromium.connectOverCDP(`http://127.0.0.1:${PORT + 1}`).catch(() => null), 1000);
+    const page = await waitFor("the app page", 120_000, () => browser.contexts().flatMap((c) => c.pages()).find((p) => p.url().startsWith("http://127.0.0.1")));
     await page.waitForFunction(() => Boolean(window.ogb?.updater), null, { timeout: 60_000 });
     await page.evaluate(() => window.ogb.updater.onState((s) => { window.__update = s; }));
     const status = () => page.evaluate(() => window.__update?.status ?? null);
