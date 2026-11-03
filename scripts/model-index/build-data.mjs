@@ -96,7 +96,8 @@ export function buildData(from = dir) {
   const snapshots = readdirSync(from)
     .filter((name) => name.endsWith(".json") && name !== "models.json")
     .sort()
-    .map((name) => JSON.parse(readFileSync(join(from, name), "utf8")));
+    .map((name) => JSON.parse(readFileSync(join(from, name), "utf8")))
+    .filter((snapshot) => snapshot.active !== false);
   const entries = [];
   const sources = {};
   const rowKeys = new Set();

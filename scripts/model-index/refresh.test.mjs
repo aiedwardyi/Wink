@@ -155,6 +155,17 @@ describe("vals cyberbench page", () => {
   });
 });
 
+describe("vals legal research page", () => {
+  it("refreshes research scores and costs without mixing in LegalBench", () => {
+    const page = vals.parsePage(fixture("vals-legal-research.html"), "legal_research");
+    expect([page.version, page.updated]).toEqual(["1", "2026-10-29"]);
+    expect(() => vals.parsePage(fixture("vals-legal-bench.html"), "legal_research")).toThrow(Unverifiable);
+    const { snapshot } = vals.buildSnapshot({ page, models, retrievedAt: "2026-11-03T00:00:00Z", previous: { ...previous, benchmark: "vals-legal-research", version: "1", index: "legal" }, benchmark: "vals-legal-research" });
+    expect(snapshot.rows.find((row) => row.model === "gpt-6-astra")).toMatchObject({ value: 39.423, cost_per_task: 10.577143, cost_benchmark: "vals-legal-research", source_url: "https://www.vals.ai/benchmarks/legal_research" });
+    expect(snapshot.rows.filter((row) => row.model === "muse-spark-1.3").map((row) => [row.effort, row.value, row.cost_per_task])).toEqual([["xhigh", 40.865, 0.650063], ["max", 55.288, 0.588812]]);
+  });
+});
+
 describe("list price parsers", () => {
   it("reads Anthropic rates, the Haiku prompt tier, and leaves out a model the page does not list", () => {
     const prices = listPrices.parseAnthropic(fixture("anthropic-pricing.html"), ["Claude Fable 5", "Claude Fable 5.1", "Claude Haiku 5.5", "Claude Nova 9"]);
@@ -346,6 +357,12 @@ describe("repeated rows", () => {
     expect(built.stdout).toContain('updated: null, retrievedAt: "2026-10-10T00:00:00.000Z"');
   });
 
+  it("leaves inactive benchmark snapshots out of generated data", () => {
+    const built = runBuild({ "models.json": wink, "current.json": snap([score("high")]), "history.json": { ...snap([score("high")]), active: false } });
+    expect(built.status, built.stderr).toBe(0);
+    expect(built.stdout.match(/model: "gpt-6-astra"/g)).toHaveLength(1);
+  });
+
   it("rejects a filled date with an unknown kind or invalid calendar day", () => {
     for (const score_date of [{ date: "2026-02-30", kind: "checked" }, { date: "2026-08-01", kind: "release" }]) {
       const built = runBuild({ "models.json": wink, "aa-frontiercode.json": snap([{ ...score("high"), score_date }]) });
@@ -444,6 +461,8 @@ describe("refresh run state", () => {
       expect(second.out.join("\n")).not.toMatch(/already fetched/);
       expect(second.out.join("\n")).toMatch(/offline/);
       expect(calls).toHaveLength(8);
+      expect(calls).toContain("https://www.vals.ai/benchmarks/legal_research");
+      expect(calls).not.toContain("https://www.vals.ai/benchmarks/legal_bench");
     } finally {
       globalThis.fetch = original;
       const { beginRun } = await import("./lib.mjs");

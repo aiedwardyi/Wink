@@ -176,7 +176,7 @@ describe("AA refresh integration", () => {
           if (parsed.hostname === "ai.google.dev" && parsed.searchParams.get("hl") !== "en") throw new Error("missing English locale");
           const file = pages[parsed.hostname] ? pages[parsed.hostname] + "-pricing.html"
             : parsed.hostname === "datasets-server.huggingface.co" ? "lmarena-webdev.json"
-            : parsed.pathname.endsWith("legal_bench") ? "vals-legal-bench.html" : "vals-cyber.html";
+            : parsed.pathname.endsWith("legal_research") ? "vals-legal-research.html" : "vals-cyber.html";
           return { status: 200, text: async () => fixture(file) };
         };
       `);
@@ -184,11 +184,13 @@ describe("AA refresh integration", () => {
       const script = join(dir, "scripts/model-index/refresh.mjs");
       const run = spawnSync(process.execPath, ["--import", stub.href, script, "--aa-raw", fixture], { encoding: "utf8", env });
       assert.equal(run.status, 2, run.stderr + run.stdout);
-      for (const name of ["lmarena-webdev", "vals-legalbench", "vals-cyberbench", "list-prices", "aa-intelligence-index", "aa-terminal-bench"]) assert.match(run.stdout, new RegExp(`${name}: (CHANGED|no change)`));
-      for (const name of ["aa-gdpval", "aa-frontiercode"]) {
-        assert.match(run.stdout, new RegExp(`${name}: MANUAL`));
+      for (const name of ["lmarena-webdev", "vals-legal-research", "vals-cyberbench", "list-prices", "aa-intelligence-index", "aa-terminal-bench"]) assert.match(run.stdout, new RegExp(`${name}: (CHANGED|no change)`));
+      for (const name of ["aa-gdpval", "aa-frontiercode", "vals-legalbench"]) {
+        if (name !== "vals-legalbench") assert.match(run.stdout, new RegExp(`${name}: MANUAL`));
         assert.equal(readFileSync(join(dir, "shared/model-index-sources", name + ".json"), "utf8"), readFileSync(join(root, "shared/model-index-sources", name + ".json"), "utf8"));
       }
+      const webdev = JSON.parse(readFileSync(join(dir, "shared/model-index-sources/lmarena-webdev.json")));
+      assert(webdev.rows.some((row) => row.model === "gpt-6.1-terra" && row.score_date && row.value === 1672.6547058209349));
       const intelligence = JSON.parse(readFileSync(join(dir, "shared/model-index-sources/aa-intelligence-index.json")));
       assert.equal(intelligence.rows.length, 3);
       assert.match(run.stdout, /needs hand check: cost:/);

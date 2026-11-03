@@ -1,5 +1,6 @@
 {
   "benchmark": "vals-legalbench",
+  "active": false,
   "version": "1",
   "index": "legal",
   "label": "Vals.ai LegalBench (overall accuracy)",

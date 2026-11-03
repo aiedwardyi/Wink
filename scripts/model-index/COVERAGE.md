@@ -1,5 +1,7 @@
 # Model Index fill, 2026-11-03
 
+Legal now uses [Vals Legal Research Bench v1](https://www.vals.ai/benchmarks/legal_research), published 2026-10-29 and checked 2026-11-03: 14/15 picker models, with only Contributor untested. Weekly refresh fetches `vals-legal-research.json`. The builder skips snapshots marked `active: false`; `vals-legalbench.json` keeps the LegalBench rows below as history. FrontierCode and WebDev fills remain active.
+
 15 published values added across 3 charts. No estimated scores. Counts below use the 15 picker models; retired GPT-5.6 Terra was not added.
 
 | Chart | Missing before | Missing after | Values added |
