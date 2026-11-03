@@ -141,6 +141,26 @@ describe("Settings Polish", () => {
     host.remove();
   });
 
+  it.each(["en", "ko"])("caps Name and Language on desktop without capping phone rows in %s", async (locale) => {
+    const previousLocale = localStorage.getItem("omb-locale");
+    localStorage.setItem("omb-locale", locale);
+    try {
+      mockState.appSettingsSection = "account";
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal))));
+      const name = host.querySelector<HTMLInputElement>("#settings-profile-name")!;
+      expect.soft(name.className).toContain("w-full md:max-w-xs");
+
+      mockState.appSettingsSection = "general";
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal))));
+      const language = host.querySelector('[role="radiogroup"]')!;
+      expect(language.closest('[class="w-full md:max-w-md"]')).toBeTruthy();
+      expect(language.className).toContain("w-fit");
+    } finally {
+      if (previousLocale === null) localStorage.removeItem("omb-locale");
+      else localStorage.setItem("omb-locale", previousLocale);
+    }
+  });
+
   it.each(["Bot List Side", "Reply Style"])("sizes %s to its labels in a wrapping shared row", async (label) => {
     mockState.appSettingsSection = "general";
     await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal, { defaultAdvancedOpen: true }))));

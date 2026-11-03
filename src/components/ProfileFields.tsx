@@ -74,7 +74,7 @@ export function ProfileFields() {
     );
 
   const inputClass =
-    "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-1.5 text-[14px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none disabled:cursor-wait disabled:opacity-50";
+    "w-full md:max-w-xs rounded-lg border border-hairline/40 bg-inset px-3 py-1.5 text-[14px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none disabled:cursor-wait disabled:opacity-50";
   const buttonClass =
     "whitespace-nowrap rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:cursor-wait disabled:opacity-50";
   const quietButtonClass =
