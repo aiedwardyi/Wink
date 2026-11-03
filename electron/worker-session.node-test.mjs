@@ -11,6 +11,7 @@ import { createTerminalHost } from "./terminal-host.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { managedWorkerCommand } from "./terminal-worker.mjs";
+import { claudeSessionArgs } from "./worker-session.mjs";
 
 async function fixture(t, engine = "codex", overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-"));
@@ -135,6 +136,48 @@ test("Claude inline permissions survive startup hook injection", () => {
     assert.match(command, /"matcher":"startup\|resume"/);
     assert.equal(command.split("--settings").length, 2);
   }
+});
+
+for (const inline of [false, true]) {
+  const settingsArgs = (value) => inline ? [`--settings=${value}`] : ["--settings", value];
+
+  test(`Claude file settings pass through without a session record (${inline ? "equals" : "separate"})`, async (t) => {
+    const args = ["--model", "fixture", ...settingsArgs("C:/custom/settings.json")];
+    const original = [...args];
+    assert.deepEqual(claudeSessionArgs(args, "C:/bin"), original);
+    const f = await fixture(t, "claude", { workerLaunch: async () => ({ kind: "managed", executable: "claude", args,
+      account: { id: "account-3", generation: 3 }, environment: {},
+      session: { engine: "claude", launchGeneration: randomUUID(), nativeId: randomUUID(), model: "fixture", effort: "high" } }) });
+    await f.open();
+    assert.equal(f.read()[0].session, undefined);
+    assert.equal(f.children[0].options.env.ORBIT_SESSION_AUTH, undefined);
+    assert.equal(f.children[0].writes[0], `${managedWorkerCommand({ executable: "claude", args: original }, {}, "win32")}\r`);
+    assert.equal((await f.post(0, f.payload(0))).status, 409);
+  });
+
+  test(`Claude inline settings preserve every existing hook (${inline ? "equals" : "separate"})`, () => {
+    const startup = { matcher: "startup", hooks: [{ type: "command", command: "custom-start" }] };
+    const stop = [{ hooks: [{ type: "command", command: "custom-stop" }] }];
+    const value = { permissions: { allow: ["Read"] }, model: "custom", hooks: { SessionStart: [startup], Stop: stop } };
+    const args = claudeSessionArgs(settingsArgs(JSON.stringify(value)), "C:/bin");
+    const merged = JSON.parse(inline ? args[0].slice(11) : args[1]);
+    assert.deepEqual(merged, { ...value, hooks: { ...value.hooks, SessionStart: [startup, merged.hooks.SessionStart.at(-1)] } });
+    assert.equal(merged.hooks.SessionStart.length, 2);
+    assert.equal(merged.hooks.SessionStart[1].matcher, "startup|resume");
+    assert.match(merged.hooks.SessionStart[1].hooks[0].command, /orbit-session\.ps1/);
+  });
+}
+
+test("Claude without settings gets only the session hook", () => {
+  const args = ["--model", "fixture", "task"];
+  const updated = claudeSessionArgs(args, "C:/bin");
+  assert.deepEqual(updated.slice(0, -2), args);
+  assert.equal(updated.at(-2), "--settings");
+  const settings = JSON.parse(updated.at(-1));
+  assert.deepEqual(Object.keys(settings), ["hooks"]);
+  assert.deepEqual(Object.keys(settings.hooks), ["SessionStart"]);
+  assert.equal(settings.hooks.SessionStart.length, 1);
+  assert.equal(settings.hooks.SessionStart[0].matcher, "startup|resume");
 });
 
 test("a new launch generation on the same pane rejects its previous callback", async (t) => {

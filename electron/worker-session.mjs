@@ -22,17 +22,25 @@ export function workerSessionHook(dir) {
   return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(dir, "orbit-session.ps1").replace(/\\/g, "/")}"`;
 }
 
+function claudeSettings(args) {
+  const index = args.findLastIndex((arg) => arg === "--settings" || arg.startsWith("--settings="));
+  if (index < 0) return { index, inline: false, value: {} };
+  const inline = args[index].startsWith("--settings=");
+  try {
+    const value = JSON.parse(inline ? args[index].slice(11) : args[index + 1]);
+    return value && typeof value === "object" && !Array.isArray(value) ? { index, inline, value } : null;
+  } catch { return null; }
+}
+
 export function claudeSessionArgs(args, dir) {
+  const existing = claudeSettings(args);
+  if (!existing) return args;
   const hook = { matcher: "startup|resume", hooks: [{ type: "command", command: workerSessionHook(dir), timeout: 15 }] };
-  for (let i = args.length - 1; i >= 0; i--) {
-    const inline = args[i].startsWith("--settings=");
-    if (args[i] !== "--settings" && !inline) continue;
-    const value = JSON.parse(inline ? args[i].slice(11) : args[i + 1]);
-    const settings = JSON.stringify({ ...value, hooks: { SessionStart: [hook] } });
-    args[inline ? i : i + 1] = inline ? `--settings=${settings}` : settings;
-    return args;
-  }
-  return [...args, "--settings", path.join(dir, "claude-worker.json")];
+  const { index, inline, value } = existing;
+  const settings = JSON.stringify({ ...value, hooks: { ...value.hooks, SessionStart: [...(value.hooks?.SessionStart ?? []), hook] } });
+  if (index < 0) return [...args, "--settings", settings];
+  args[inline ? index : index + 1] = inline ? `--settings=${settings}` : settings;
+  return args;
 }
 
 export function codexSessionArgs(dir, platform) {
@@ -50,6 +58,7 @@ export function codexSessionArgs(dir, platform) {
 export function createWorkerSession(worker, pane, cwd, bridgeUrl) {
   const launch = worker?.session;
   if (!launch || !["claude", "codex"].includes(launch.engine)) return null;
+  if (launch.engine === "claude" && !worker.workerSettings && !claudeSettings(worker.args)) return null;
   const auth = randomBytes(24).toString("hex");
   return {
     auth,
