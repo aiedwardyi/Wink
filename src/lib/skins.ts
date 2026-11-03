@@ -158,6 +158,8 @@ const TERMINAL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["terminal", "ter
 
 export const isTerminalSkin = (id: SkinId): boolean => TERMINAL_SKIN_IDS.has(id);
 
+export const isTerminalToolSkin = (id: SkinId): boolean => isTerminalSkin(id) || id.startsWith("tui");
+
 const TOOL_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["logfile", "multiplexer", "modal"]);
 export const HUD_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["mono-hud", "servo-gray"]);
 

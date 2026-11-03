@@ -45,7 +45,7 @@ afterEach(async () => {
   setUsageMode("remaining");
 });
 
-async function render(current = bot, instance = engine, cwd?: string | null, instances = [instance], locale: "en" | "ko" = "en", turns?: number) {
+async function render(current = bot, instance = engine, cwd?: string | null, instances = [instance], locale: "en" | "ko" = "en") {
   applyLocale(locale);
   vi.spyOn(Date, "now").mockReturnValue(now);
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
@@ -55,7 +55,7 @@ async function render(current = bot, instance = engine, cwd?: string | null, ins
   let store: ReturnType<typeof useStore>;
   function Harness() {
     store = useStore();
-    return createElement(TermStatusLine, { bot: current, engine: instance, cwd, turns });
+    return createElement(TermStatusLine, { bot: current, engine: instance, cwd });
   }
   const host = document.createElement("div");
   document.body.append(host);
@@ -90,7 +90,7 @@ describe("TermStatusLine", () => {
           { id: "seven_day", usedPercent: 71, resetsAt: now + (5 * 24 + 6) * 3600_000 },
         ] },
       };
-      const host = await render(current, instance, undefined, [instance], locale, 9999);
+      const host = await render(current, instance, undefined, [instance], locale);
       const status = host.querySelector("[data-term-status]")!;
       expect(status.getAttribute("data-term-phone")).toBe(skin);
       expect(status.querySelector("[data-term-model]")?.textContent).toBe(skin === "multiplexer" ? "Sonnet 4.6" : "◆ Sonnet 4.6");
@@ -179,7 +179,7 @@ describe("TermStatusLine", () => {
     expect(host.querySelector("[data-term-phone]")).toBeNull();
     expect(host.textContent).toContain("Old model");
     expect(host.textContent).toContain("/default");
-    expect(host.textContent).toContain("no summary yet");
+    expect(host.textContent).not.toMatch(/summary|turns kept|요약|보관된 턴/);
     expect(host.querySelector("[data-term-status]")?.textContent).toMatch(/[▰▱]{5}/);
   });
 
@@ -270,29 +270,19 @@ describe("TermStatusLine", () => {
     if (cwd) expect(host.textContent).toContain(cwd);
   });
 
-  it("reports only the active branch's latest valid summary", async () => {
-    const messages: Message[] = [
-      { id: "prompt", at: now - 4 * 3600_000, role: "user", kind: "text", text: "Fixture prompt." },
-      summary("active", now - 2 * 3600_000, "prompt"),
-      summary("inactive", now - 60_000, "prompt"),
-      { ...summary("invalid", now - 30_000, "active"), compaction: { v: 1 } },
-      { ...summary("unsupported", now - 20_000, "invalid"), compaction: { v: 2 } },
-    ];
-    const host = await render({ ...bot, messages, activeLeafId: "unsupported" });
-    expect(host.textContent).toContain("summary 2h ago");
-    expect(host.textContent).not.toContain("summary 0m ago");
-  });
-
-  it.each([{ v: 1 }, { v: 2 }])("does not count %j as a usable summary", async (compaction) => {
-    const host = await render({ ...bot, messages: [{ ...summary("bad", now - 60_000), compaction }] });
-    expect(host.textContent).toContain("no summary yet");
-  });
-
-  it("does not clone a flat transcript to find its last summary", async () => {
-    const messages = [summary("saved", now - 2 * 3600_000)];
-    const copies = vi.spyOn(messages, Symbol.iterator);
-    const host = await render({ ...bot, messages });
-    expect(host.textContent).toContain("summary 2h ago");
-    expect(copies).not.toHaveBeenCalled();
+  it.each(["terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal"])("omits summary and turn status in %s for both locales", async (skin) => {
+    document.documentElement.dataset.skin = skin;
+    for (const locale of ["en", "ko"] as const) {
+      for (const messages of [[], [summary("saved", now - 2 * 3600_000)]]) {
+        const host = await render({ ...bot, messages }, engine, undefined, [engine], locale);
+        const status = host.querySelector("[data-term-status]")!;
+        expect(status.textContent).not.toMatch(/summary|turns kept|요약|보관된 턴/);
+        expect(status.textContent).toContain("Old model");
+        expect(status.textContent).toContain("29%");
+        expect(status.textContent?.trim()).not.toMatch(/[│·]$/);
+        await unmount?.();
+        unmount = null;
+      }
+    }
   });
 });

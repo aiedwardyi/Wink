@@ -8,8 +8,9 @@ import { Bot, ChevronRight, Check, FileText, Globe, Loader2, Pencil, Search, Squ
 import type { Message } from "@/state/store";
 import { classifyServerNotice, describeRun, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
 import { useI18n, type Translate } from "@/lib/i18n";
-import { isTerminalSkin, useSkin } from "@/lib/skins";
+import { isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { APPROVAL_WORD, TERM_STEP_WORD, termBlock, termHeaderArgs, termResultLine, termStepAria, termStepState, termUpdatedLine, termVerb } from "@/lib/terminal-skin";
+import "./ActivityRun.css";
 
 function StepStatus({ ok }: { ok: boolean | undefined }) {
   if (ok === undefined) return <Loader2 data-idle-hide size={13} className="shrink-0 animate-spin" />;
@@ -43,7 +44,7 @@ function TermNotice({ text, failed }: { text: string; failed: boolean }) {
  * settles in the same row: same key, same element, only the status swaps. */
 export const ActivityStep = memo(function ActivityStep({ message, notices }: { message: Message; notices?: LinkedApproval[] }) {
   const { t } = useI18n();
-  const terminal = isTerminalSkin(useSkin());
+  const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   const running = tool?.ok === undefined;
   const [now, setNow] = useState(() => Date.now());
@@ -55,6 +56,7 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
   if (!tool) return null;
   const notice = classifyServerNotice(tool.name);
   if (terminal && notice) {
+    if (notice.kind === "approval" && notice.label !== "review" && tool.ok !== false) return null;
     const text = notice.kind === "approval" ? t(APPROVAL_WORD[notice.label]) : tool.name;
     return <TermNotice text={text} failed={tool.ok === false} />;
   }
@@ -75,33 +77,39 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
 
 type ToolDetail = NonNullable<Message["tool"]>["detail"];
 
-/** Claude Code's call: `● Verb(args)` over its output, or one `⎿ Done (1.2s)` line. */
+/** Expands only the captured preview; discarded output cannot be recovered. */
 function TermStep({ name, rawVerb, summary, ok, elapsed, detail, notices }: { name: string; rawVerb?: string; summary?: string; ok: boolean | undefined; elapsed: number | undefined; detail?: ToolDetail; notices?: LinkedApproval[] }) {
   const { t } = useI18n();
-  const verb = termVerb(rawVerb ?? name);
+  const verb = termVerb(rawVerb ?? name).replace(/ \(MCP\)$/, "");
   const state = termStepState(ok);
   const aria = termStepAria(state, elapsed);
   const args = termHeaderArgs(verb, summary, detail, rawVerb ? name : undefined);
   const block = termBlock(detail, state === "failed");
   return (
     <div data-term-step={state} className="term-step min-w-0 max-w-full">
-      <span className="sr-only">{t(aria.key, { tool: summary ? `${verb} ${summary}` : verb, seconds: aria.seconds ?? 0 })}</span>
-      <div aria-hidden="true" className="term-step-head">
-        <span className="font-semibold text-ink">{verb}</span>
-        {args && `(${args})`}
-      </div>
+      <details>
+        <summary className="term-step-head" aria-label={t(aria.key, { tool: args ? `${verb}(${args})` : verb, seconds: aria.seconds ?? 0 })} title={t("term.step.expand")}>
+          <span className="font-semibold text-ink">{verb}</span>
+          {args && `(${args})`}
+        </summary>
+        <div data-term-call>
+          {rawVerb && name !== rawVerb && name !== args && name !== summary && <div>{name}</div>}
+          {summary && summary !== args && <div>{summary}</div>}
+          {detail?.input && detail.input !== args && <div>{detail.input}</div>}
+        </div>
+      </details>
       {block?.kind === "hidden" ? (
         <div className="term-step-out">{t("term.step.hidden")}</div>
       ) : block ? (
         <div className="term-step-out">
-          {block.changes && detail?.input && <div>{termUpdatedLine(t, detail.input, block.changes)}</div>}
+          {block.changes && detail?.input && <div data-term-changes>{termUpdatedLine(t, detail.input, block.changes)}</div>}
           {block.rows.map((row, index) => <div key={index} data-term-row={row.tone}>{row.text}</div>)}
           {block.more && <div>{t(block.more === 1 ? "term.step.moreOne" : "term.step.moreMany", { count: block.more })}</div>}
         </div>
       ) : (
-        <div aria-hidden="true" className="term-step-result truncate">{termResultLine(t(TERM_STEP_WORD[state]), elapsed)}</div>
+        <div className="term-step-result truncate">{termResultLine(t(TERM_STEP_WORD[state]), undefined)}</div>
       )}
-      {notices?.map((notice) => <TermNotice key={notice.message.id} text={t(APPROVAL_WORD[notice.label])} failed={false} />)}
+      {notices?.filter((notice) => notice.label === "review" || notice.message.tool?.ok === false).map((notice) => <TermNotice key={notice.message.id} text={t(APPROVAL_WORD[notice.label])} failed={notice.message.tool?.ok === false} />)}
     </div>
   );
 }
@@ -119,7 +127,7 @@ export function ActivityRun({
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
-  const terminal = isTerminalSkin(useSkin());
+  const terminal = isTerminalToolSkin(useSkin());
   const failed = messages.some((message) => message.tool?.ok === false);
   const running = messages.some((message) => message.tool?.ok === undefined);
   const [open, setOpen] = useState(forceOpen);

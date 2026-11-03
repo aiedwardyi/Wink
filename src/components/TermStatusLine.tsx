@@ -1,22 +1,21 @@
 // The Terminal skin's two-line status under the composer. It takes the place
 // of the 5h/7d strip, so the meters still open Usage.
 import { useEffect, useId, useState } from "react";
-import { shownModelSelection, useStore, visibleMessages, type Bot, type InstanceInfo } from "@/state/store";
+import { shownModelSelection, useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { shortPath } from "@/lib/short-path";
-import { museReading, planMeterWindows, readingAge, resetCompact } from "@/lib/usage";
+import { museReading, planMeterWindows, resetCompact } from "@/lib/usage";
 import { useUsageMode } from "@/lib/usage-preferences";
 import { termMeter, termModelLabel } from "@/lib/terminal-skin";
 import { PHONE_QUERY } from "@/lib/phone-swipe";
 import { useSkin } from "@/lib/skins";
-import { readContextCompaction } from "../../shared/context-compaction";
 import { PLAN_WINDOW_SHORT_LABEL_KEY, useNow } from "./PlanUsageBar";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import "./TermStatusLine.css";
 
 const PHONE_STATUS_QUERY = `${PHONE_QUERY} and (pointer: coarse)`;
 
-export function TermStatusLine({ bot, engine, cwd = bot.cwd, turns }: { bot: Bot; engine: InstanceInfo | undefined; cwd?: string | null; turns?: number }) {
+export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engine: InstanceInfo | undefined; cwd?: string | null }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
@@ -46,8 +45,6 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd, turns }: { bot: Bot
   }, undefined);
   const phoneMeters = skin === "multiplexer" ? meter ? [meter] : [] : meters;
   const phoneModel = termModelLabel(model);
-  const summary = visibleMessages(bot).findLast((message) => message.kind === "compaction" && readContextCompaction({ value: message.compaction }).status === "valid");
-  const age = summary && readingAge(new Date(summary.at).toISOString(), now);
   if (phone) return (
     <div data-term-status data-term-window={bot.name} data-term-phone={skin} role="group" aria-label={t("term.status.aria")} className="term-status">
       {skin === "multiplexer" && (
@@ -95,8 +92,8 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd, turns }: { bot: Bot
         )}
         {selection.effort && <span className="text-ink-secondary"> · {selection.effort}</span>}
       </div>
-      <div>
-        {meters.length > 0 && (
+      {meters.length > 0 && (
+        <div>
           <button
             type="button"
             onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
@@ -120,13 +117,8 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd, turns }: { bot: Bot
               </span>
             ))}
           </button>
-        )}
-        {meters.length > 0 && <span aria-hidden="true" className="text-ink-secondary"> │ </span>}
-        <span className="text-ink-secondary">
-          {age ? t("term.status.summary", { age: t(age.key, age.vars) }) : t("term.status.noSummary")}
-          {turns ? ` · ${t("term.status.turns", { turns })}` : ""}
-        </span>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
