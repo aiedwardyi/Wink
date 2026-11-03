@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
-const { calls, children, wait, retire, kill } = vi.hoisted(() => ({
+const { calls, children, wait, retire, kill, probe } = vi.hoisted(() => ({
   calls: [] as { method: string }[], children: [] as EventEmitter[],
+  probe: { failure: "", account: { type: "chatgpt", email: "stub@example.com" } as { type: string; email?: string } | null },
   wait: vi.fn(async () => {}), retire: vi.fn(), kill: vi.fn(),
 }));
 vi.mock("../procs.ts", async (original) => ({
@@ -20,8 +21,16 @@ vi.mock("../procs.ts", async (original) => ({
       stdin: new Writable({ write(chunk, _encoding, done) {
         const request = JSON.parse(String(chunk));
         calls.push(request);
+        if (request.method === "account/read" && probe.failure) {
+          queueMicrotask(() => {
+            if (probe.failure === "close") child.emit("close", 1);
+            else if (probe.failure === "rpc") stdout.write(`${JSON.stringify({ id: request.id, error: { code: -1, message: "probe failed" } })}\n`);
+          });
+          done();
+          return;
+        }
         const result = request.method === "model/list" ? { data: [{ id: "gpt-6.1-sol", isDefault: true }], nextCursor: null }
-          : request.method === "account/read" ? { account: { type: "chatgpt", email: "stub@example.com" } }
+          : request.method === "account/read" ? { account: probe.account }
             : request.method === "account/rateLimits/read" ? { rateLimits: {} }
               : request.method === "thread/start" ? { thread: { id: "native" } }
                 : request.method === "turn/start" ? { turn: { id: "turn" } } : {};
@@ -47,6 +56,8 @@ afterEach(() => {
   for (const child of children.splice(0)) child.emit("close", 0);
   calls.splice(0);
   vi.clearAllMocks();
+  probe.failure = "";
+  probe.account = { type: "chatgpt", email: "stub@example.com" };
 });
 
 it("keeps base catalog, snapshots and turns free of account RPCs and extra spawns", async () => {
@@ -92,6 +103,24 @@ it("does not spawn an account reader for a refreshed base snapshot", async () =>
     const count = children.length;
     expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: true });
     expect(children).toHaveLength(count);
+  } finally { await instance.dispose(); }
+});
+
+it.each(["rpc", "close", "timeout"])("preserves unknown authentication after a managed %s failure", async (failure) => {
+  const account = { id: "acct_test", of: "codex", home: join(homedir(), "managed"), generation: 1 };
+  const instance = await CodexDriver.create({ instanceId: account.id, displayName: "Codex", enabled: true, config: { cli: "stub-codex", fullAuto: false }, environment: {}, account });
+  try {
+    probe.failure = failure;
+    expect(await instance.snapshot({ refresh: true })).toMatchObject({ state: "available", authenticated: undefined });
+  } finally { await instance.dispose(); }
+});
+
+it.each([null, { type: "apikey" }])("still rejects a known non-ChatGPT account (%j)", async (value) => {
+  const account = { id: "acct_test", of: "codex", home: join(homedir(), "managed"), generation: 1 };
+  const instance = await CodexDriver.create({ instanceId: account.id, displayName: "Codex", enabled: true, config: { cli: "stub-codex", fullAuto: false }, environment: {}, account });
+  try {
+    probe.account = value;
+    expect(await instance.snapshot({ refresh: true })).toMatchObject({ authenticated: false });
   } finally { await instance.dispose(); }
 });
 

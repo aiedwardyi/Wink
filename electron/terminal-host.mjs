@@ -1087,7 +1087,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
   };
-  const botWrite = (session, raw) => {
+  const botWrite = (session, raw, worker) => {
     const text = normalizeTerminalText(raw);
     clearActivityTimer(session);
     const echo = inputEchoText(text);
@@ -1111,7 +1111,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const launched = session.botPane ? WORKER_CLI_RE.exec(text) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
-        const args = text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+        const args = worker?.kind === "managed" ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
         session.claudeTrust = session.engine === "claude" && args.includes("--dangerously-skip-permissions");
         session.claudeTrustMoved = false;
         session.claudeTrustAnswered = false;
@@ -1572,7 +1572,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (input.command) {
         const command = normalizeTerminalText(worker?.kind === "managed" ? managedWorkerCommand(worker, session.workerEnvironment, platform, session.mail?.binDir) : input.command);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
-        await botWrite(session, session.command);
+        await botWrite(session, session.command, worker);
       }
       return { sessionId: session.id, generation: session.generation, ...(worker?.line ? { line: worker.line } : {}) };
     },

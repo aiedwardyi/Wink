@@ -1352,6 +1352,7 @@ export const en = {
 
   "usage.limits.title": "Plan Usage",
   "accounts.setAsMain": "Set as Main",
+  "accounts.signOutMain": "Set another account as Main on the Usage page before signing out.",
   "accounts.previous": "Previous Account",
   "accounts.next": "Next Account",
   "accounts.signedOut": "Signed out.",
@@ -2761,6 +2762,7 @@ export const ko = {
 
   "usage.limits.title": "요금제 사용량",
   "accounts.setAsMain": "기본으로 설정",
+  "accounts.signOutMain": "로그아웃하려면 사용량 페이지에서 다른 계정을 기본으로 설정하세요.",
   "accounts.previous": "이전 계정",
   "accounts.next": "다음 계정",
   "accounts.signedOut": "로그아웃됨.",

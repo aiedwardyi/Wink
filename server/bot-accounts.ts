@@ -55,7 +55,7 @@ export class BotAccounts {
   automaticCandidate(candidate: AutomaticCandidate, lookup: (id: string) => AutomaticCandidate | undefined): AutomaticCandidate {
     const accountId = this.routedAccount(candidate.instanceId);
     if (!accountId) return this.accounts.drains[candidate.instanceId] ? { ...candidate, available: false } : candidate;
-    const selected = lookup(accountId);
+    const selected = accountId === candidate.instanceId ? candidate : lookup(accountId);
     return { ...(selected ?? candidate), instanceId: candidate.instanceId, accountOf: candidate.accountOf,
       available: Boolean(selected?.available && this.available(accountId)),
     };

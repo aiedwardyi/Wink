@@ -14,7 +14,7 @@ import { createAccountRoutes } from "./account-routes.ts";
 import { DATA_DIR, instanceConfigs } from "./config.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createBotRoutes } from "./bot-routes.ts";
-import { resolveAutomaticSelection } from "./automatic-selection.ts";
+import { resolveAutomaticSelection, type AutomaticCandidate } from "./automatic-selection.ts";
 import type { InstanceConfigMap, ModelSelection } from "./contracts.ts";
 import type { JsonValue } from "./schema.ts";
 import { EventBus } from "./harness/bus.ts";
@@ -312,7 +312,8 @@ describe("account removal drain", () => {
     expect(f.controller.bots?.checkSelection(f.bot.modelSelection)).toBe(f.bot.modelSelection);
     expect(f.controller.bots?.noteAccount()).toEqual({ instanceId: destinationId, available: true });
     const candidate = { instanceId: "claude", driverKind: "claudeAgent", available: true, defaultModel: "claudeAgent-1", capabilities: {} };
-    expect(f.controller.bots?.automaticCandidate(candidate, (instanceId) => ({ ...candidate, instanceId }))).toMatchObject({ available: true, instanceId: "claude" });
+    const lookup = (instanceId: string): AutomaticCandidate | undefined => f.controller.bots?.automaticCandidate({ ...candidate, instanceId }, lookup);
+    expect(f.controller.bots?.automaticCandidate(candidate, lookup)).toMatchObject({ available: true, instanceId: "claude" });
     expect(f.providers.current("in-flight")?.instanceId).toBe(id);
     expect(f.logout).not.toHaveBeenCalled();
     const next = f.store.createBot({ name: "Destination turn" });

@@ -5329,7 +5329,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         const live = providerReload.started(threadId, instanceId);
         if (!live) return Promise.reject(new Error(`provider instance "${instanceId}" is unavailable`));
-        if (accounts.snapshot.length) workerTurns.capture(bot.id, threadId, live);
+        workerTurns.capture(bot.id, threadId, live);
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
@@ -6364,7 +6364,7 @@ async function runClaimedGroupMemberTurn(
       }
       const live = providerReload.started(threadId, selection.instanceId);
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
-      if (accounts.snapshot.length) workerTurns.capture(bot.id, threadId, live);
+      workerTurns.capture(bot.id, threadId, live);
       pendingInterruptThreads.started(threadId, bot.id, epoch);
       return live.adapter.sendTurn({
         threadId,

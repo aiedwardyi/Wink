@@ -911,7 +911,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     });
     if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
     const force = opts?.rescan || opts?.refresh;
-    const authenticated = input.account ? (await accountStatus(force)).type === "chatgpt" : await signedIn(force);
+    const authenticated = input.account ? (await accountStatus(force)).authenticated && engineAccount.type === "chatgpt" : await signedIn(force);
     if (input.account) admitted = authenticated === true;
     const metadata = input.account ? engineAccount : { label: authenticated ? codexAccount(env) : undefined };
     // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login

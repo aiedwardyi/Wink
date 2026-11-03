@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -51,6 +52,44 @@ test("model home overrides on managed launches are refused before a PTY starts",
   t.after(() => f.host.dispose());
   await assert.rejects(f.host.openForBot("bot-1", { label: "worker", command: "$env:CODEX_HOME='wrong'; codex 'task'" }), /Conflicting worker home/);
   assert.equal(f.children.length, 0);
+});
+
+for (const platform of ["linux", "win32"]) {
+  test(`managed Claude trust survives command serialization on ${platform}`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: Date.UTC(2026, 9, 24) });
+    const worker = { ...launch(THIRD, "claude"), args: ["--dangerously-skip-permissions", "task"] };
+    const f = fixture(async () => worker, { platform, now: () => Date.now() });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: "claude --dangerously-skip-permissions 'task'" });
+    const child = f.children[0];
+    const recorded = JSON.parse(readFileSync(new URL("./terminal-host.trust.fixture.json", import.meta.url), "utf8"));
+    let elapsed = 0;
+    for (const entry of recorded.redraw) {
+      t.mock.timers.tick(entry.t - elapsed);
+      elapsed = entry.t;
+      child.data(entry.data);
+      await Promise.resolve();
+    }
+    t.mock.timers.tick(500);
+    await Promise.resolve();
+    assert.equal(child.writes.at(-1), "\x1b[B");
+    child.data(recorded.redraw.find((entry) => entry.data.includes("1B>")).data);
+    t.mock.timers.tick(500);
+    await Promise.resolve();
+    assert.equal(child.writes.at(-1), "\r");
+  });
+}
+
+test("split engine input on a plain shell is still refused before submission", async (t) => {
+  const f = fixture(async (input) => {
+    if (input.mode === "send" && /^codex\b/.test(input.command)) throw new Error("Managed worker launches require terminal_spawn");
+    return { kind: "shell" };
+  });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", {});
+  await f.host.sendBot("bot-1", { ...pane, text: "co" });
+  await assert.rejects(f.host.sendBot("bot-1", { ...pane, text: "dex 'task'\n" }), /terminal_spawn/);
+  assert.deepEqual(f.children[0].writes, ["co"]);
 });
 
 for (const engine of ["codex", "claude"]) {

@@ -38,6 +38,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       <div className="py-1.5 text-[13px] text-ink">{accounts[0]!.displayName}</div>
       {accounts.map((account) => {
         const drain = account.accountInfo?.drain;
+        const main = accounts.length > 1 && (account.accountInfo?.default ?? account.instanceId === base);
         return (
           <div key={account.instanceId} className="py-1">
             <div className="flex min-h-11 min-w-0 items-center gap-3 text-[12px] text-ink-secondary">
@@ -48,11 +49,12 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
               <div className="ml-auto shrink-0">
                 {drain && drain.phase !== "failed" ? <span role="status">{t("accounts.removing")}</span>
                   : !accountReady(account) && !drain ? <EngineSignIn instance={account} onUpdated={() => void update()} />
-                    : <button type="button" disabled={busy}
+                    : <button type="button" disabled={busy || main}
                       onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, {})}
                       className="min-h-11 text-ink hover:underline disabled:opacity-50">{t("engines.signOut")}</button>}
               </div>
             </div>
+            {main && accountReady(account) && <div className="text-[12px] text-ink-secondary">{t("accounts.signOutMain")}</div>}
           </div>
         );
       })}

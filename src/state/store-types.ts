@@ -378,6 +378,7 @@ export interface InstanceInfo {
   loginCapture?: { url?: string; code?: string };
   instanceId: string;
   driverKind: string;
+  accountOf?: string;
   displayName: string;
   snapshot: {
     state: "available" | "unavailable";

@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
 import { AccountService } from "./accounts.ts";
@@ -40,6 +42,47 @@ async function fixture() {
 }
 
 describe("trusted worker accounts", () => {
+  it.each(["codex", "claude"])("preserves the inherited %s home for an existing account", async (engine) => {
+    const f = await fixture();
+    const selector = engine === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+    const driverKind = engine === "codex" ? "codex" : "claudeAgent";
+    const inherited = join(DATA_DIR, "inherited-login");
+    vi.stubEnv(selector, inherited);
+    try {
+      delete f.bases[engine].environment;
+      f.turns.capture("bot", "thread", { instanceId: engine, driverKind });
+      const launch = await f.prepare({ ...f.input, command: `${engine} 'task'` });
+      expect(launch).toMatchObject({ account: { id: engine, generation: 0 }, environment: { [selector]: inherited } });
+      f.bases[engine].environment = { [selector]: join(DATA_DIR, "configured-login") };
+      expect(await f.prepare({ ...f.input, command: `${engine} 'task'` })).toMatchObject({ environment: f.bases[engine].environment });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each([0, 1])("captures dispatch %i before the first account is added", async (index) => {
+    const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+    const dispatches: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "workerTurns.capture") {
+        dispatches.push((ts.isIfStatement(node.parent) ? node.parent : node).getText(source));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(dispatches).toHaveLength(2);
+    const accounts = new AccountService(join(DATA_DIR, `mid-turn-${++serial}`), () => ({ codex: { driver: "codex" } }));
+    const turns = captures!.createWorkerTurns();
+    runInNewContext(ts.transpile(dispatches[index], { target: ts.ScriptTarget.ES2022 }), {
+      accounts, workerTurns: turns, bot: { id: "bot" }, threadId: "thread", live: { instanceId: "codex", driverKind: "codex" },
+    });
+    const usage = Object.assign(vi.fn(async () => ({})), { invalidate() {} });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: turns.resolveWorkerTurn,
+      bases: () => ({ codex: { driver: "codex" } }), available: () => true, usage });
+    const input = { botId: "bot", command: "codex 'task'", environment: {} };
+    expect(await prepare(input)).toBeNull();
+    await accounts.add("codex");
+    expect(await prepare(input)).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0 } });
+  });
+
   it("resolves account 3 from the active dispatch and reuses core policy", async () => {
     const f = await fixture();
     const launch = await f.prepare(f.input);

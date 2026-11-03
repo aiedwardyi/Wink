@@ -31,11 +31,11 @@ export const PICKER_MODEL_IDS: readonly string[] = [
 ];
 
 export function pickerRows(instances: InstanceInfo[], current: ModelSelection, preview = current): PickerRow[] {
+  instances = instances.filter((instance) => !instance.accountOf);
   const ordered: Array<{ instance: InstanceInfo; label: string }> = ENGINES.flatMap(([kind, label]) => instances
     .filter((instance) => instance.driverKind === kind)
     .map((instance) => ({ instance, label })));
-  // Roster dedup by id: a duplicated entry must not fan out into repeated
-  // rows. First wins; distinct ids (two real accounts) still list twice.
+  // Distinct engine profiles stay separate; duplicate ids use the first row.
   const seen = new Set<string>();
   const rows = ordered.filter((row) => {
     if (seen.has(row.instance.instanceId)) return false;

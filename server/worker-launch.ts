@@ -78,9 +78,9 @@ export function workerCommand(command: string, unmanaged = false) {
   return { kind: "managed" as const, executable, args, environment, ...engine };
 }
 
-function baseAccount(id: string, driver: string, environment: Record<string, string> | undefined): AccountContext {
+function baseAccount(id: string, driver: string, environment: NodeJS.ProcessEnv): AccountContext {
   const selector = driver === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
-  const home = Object.entries(environment ?? {}).find(([key]) => key.toUpperCase() === selector)?.[1]
+  const home = Object.entries(environment).find(([key]) => key.toUpperCase() === selector)?.[1]
     ?? join(homedir(), driver === "codex" ? ".codex" : ".claude");
   return Object.freeze({ id, of: id, generation: 0, home });
 }
@@ -101,7 +101,7 @@ export function createWorkerLaunch(deps: {
     const baseId = sameEngine ? turn.account?.of ?? turn.instanceId : command.base;
     const base = Object.hasOwn(bases, baseId) ? bases[baseId] : undefined;
     if (!base || base.enabled === false || base.driver !== command.driver) throw new Error("Worker base account is unavailable");
-    const account = sameEngine && turn.account ? turn.account : baseAccount(baseId, command.driver, base.environment);
+    const account = sameEngine && turn.account ? turn.account : baseAccount(baseId, command.driver, { ...process.env, ...base.environment });
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");

@@ -50,24 +50,26 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it.each(["en", "ko"] as const)("signs out in one tap with no move choices or bot count in %s", async (locale) => {
+it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", async (locale) => {
   persistPreference(locale);
   await render(3);
   const name = locale === "en" ? "Sign Out" : "로그아웃";
   expect(buttons(name)).toHaveLength(3);
-  await act(async () => buttons(name)[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  await act(async () => buttons(name)[1]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", { method: "POST", body: "{}" });
   expect(request.mock.calls.filter(([path]) => String(path).endsWith("/sign-out"))).toHaveLength(1);
   expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Move|bots? use|옮|봇/);
 });
 
-it("signs out the main account even when no other account is ready", async () => {
+it("guides main-account sign-out even when no other account is ready", async () => {
   await render();
   state.instances[1] = engine("account-1", false);
   await update();
   await act(async () => buttons("Sign Out")[0]!.click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
+  expect(buttons("Sign Out")[0]!.disabled).toBe(true);
+  expect(host.textContent).toContain("Set another account as Main on the Usage page before signing out.");
   expect(host.textContent).toContain("Signed out.");
   expect(buttons("Sign In")).toHaveLength(1);
 });
@@ -134,13 +136,13 @@ it("disables actions while signing out and shows a retryable failure", async () 
   await render();
   let reject!: (error: Error) => void;
   request.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
-  await act(async () => buttons("Sign Out")[0]!.click());
+  await act(async () => buttons("Sign Out")[1]!.click());
   expect(buttons("Sign Out").every((button) => button.disabled)).toBe(true);
   expect(buttons("Add Account")[0]!.disabled).toBe(true);
   await act(async () => reject(new Error("")));
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Didn't finish");
-  expect(buttons("Sign Out").every((button) => !button.disabled)).toBe(true);
-  await act(async () => buttons("Sign Out")[0]!.click());
+  expect(buttons("Sign Out")[1]!.disabled).toBe(false);
+  await act(async () => buttons("Sign Out")[1]!.click());
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -152,13 +154,38 @@ it.each(["en", "ko"] as const)("shows account refusal messages in %s", async (lo
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in is already in progress");
 });
 
-it("signs out with zero bots without selecting a destination", async () => {
+it("guides main-account sign-out with zero bots", async () => {
   const bots = state.bots.splice(0);
   try {
     await render();
     await act(async () => buttons("Sign Out")[0]!.click());
-    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+    expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
+    expect(buttons("Sign Out")[0]!.disabled).toBe(true);
     expect(host.textContent).not.toContain("Move");
     expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   } finally { state.bots.push(...bots); }
+});
+
+it.each(["en", "ko"] as const)("guides the main account and unlocks sign-out after switching Main in %s", async (locale) => {
+  persistPreference(locale);
+  await render();
+  const name = locale === "en" ? "Sign Out" : "로그아웃";
+  expect(buttons(name)[0]!.disabled).toBe(true);
+  expect(host.textContent).toContain(locale === "en" ? "Set another account as Main on the Usage page before signing out." : "로그아웃하려면 사용량 페이지에서 다른 계정을 기본으로 설정하세요.");
+  accounts[0]!.default = false;
+  accounts[1]!.default = true;
+  state.instances = [...state.instances];
+  await update();
+  expect(buttons(name)[0]!.disabled).toBe(false);
+  expect(buttons(name)[1]!.disabled).toBe(true);
+  await act(async () => buttons(name)[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+});
+
+it("keeps single-account sign-out unchanged", async () => {
+  await render(1);
+  expect(buttons("Sign Out")[0]!.disabled).toBe(false);
+  await act(async () => buttons("Sign Out")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+  expect(host.textContent).not.toContain("Set another account");
 });
