@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { setUsageMode } from "@/lib/usage-preferences";
 import type { InstanceInfo } from "@/state/store";
+import { codexRateLimitWindows } from "../../server/drivers/rate-limits";
 
 const { mockState, mockApi } = vi.hoisted(() => {
   const engine = (
@@ -752,7 +753,7 @@ describe("UsageSection friends plan card", () => {
     }
   });
 
-  it("renders every reported Claude window per account, including zero usage", () => {
+  it.each([false, true])("aligns Claude weekly-only accounts, both weekly-only: %s", (weeklyOnly) => {
     const original = mockState.instances;
     const claude = original.find((instance) => instance.instanceId === "claude")!;
     const report = (windows: NonNullable<InstanceInfo["rateLimits"]>["windows"]) => ({ observedAt: new Date().toISOString(), windows });
@@ -760,16 +761,74 @@ describe("UsageSection friends plan card", () => {
       { ...claude, accountOf: "claude", accountMain: true, snapshot: { ...claude.snapshot, account: "weekly@example.com" },
         rateLimits: report([{ id: "seven_day", usedPercent: 98, resetsAt: null }]) },
       { ...claude, instanceId: "acct_fixture", accountOf: "claude", accountMain: false, snapshot: { ...claude.snapshot, account: "both@example.com" },
-        rateLimits: report([{ id: "five_hour", usedPercent: 0, resetsAt: null }, { id: "seven_day", usedPercent: 18, resetsAt: null }]) },
+        rateLimits: report([...(weeklyOnly ? [] : [{ id: "five_hour", usedPercent: 0, resetsAt: null }]), { id: "seven_day", usedPercent: 18, resetsAt: null }]) },
     ];
     try {
       persistPreference("en");
       setUsageMode("remaining");
       const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
       expect(html).toContain('aria-label="7d: 2% remaining"');
-      expect(html).toContain('aria-label="5h: 100% remaining"');
       expect(html).toContain('aria-label="7d: 82% remaining"');
-      expect(html.match(/aria-label="5h:/g)).toHaveLength(1);
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const columns = [...doc.querySelectorAll("div.mt-2.flex.flex-col.items-start")];
+      expect(columns).toHaveLength(2);
+      expect([...columns[0].children].map((row) => row.textContent)).toEqual(["5h–", expect.stringContaining("2%")]);
+      expect(columns[1].children).toHaveLength(2);
+      if (weeklyOnly) expect(columns[1].children[0].textContent).toBe("5h–");
+      else expect(columns[1].children[0].querySelector('[aria-label="5h: 100% remaining"]')).not.toBeNull();
+      expect(columns[1].children[1].querySelector('[aria-label="7d: 82% remaining"]')).not.toBeNull();
+    } finally { mockState.instances = original; }
+  });
+
+  it.each([
+    [false, false], [false, true], [true, false], [true, true],
+  ])("aligns equivalent Codex windows, fallback first: %s, weekly-only: %s", (fallbackFirst, weeklyOnly) => {
+    const original = mockState.instances;
+    const codex = original.find((instance) => instance.instanceId === "codex")!;
+    const windows = (duration: boolean, usedPercent: number) => codexRateLimitWindows({
+      primary: weeklyOnly ? undefined : { usedPercent, windowDurationMins: duration ? 300 : undefined },
+      secondary: { usedPercent, windowDurationMins: duration ? 10080 : undefined },
+    });
+    mockState.instances = [false, true].map((other) => ({
+      ...codex, instanceId: other ? "codex-other" : "codex", accountOf: "codex", accountMain: !other,
+      rateLimits: { observedAt: new Date().toISOString(), windows: windows(other === fallbackFirst, other ? 42 : 18) },
+    }));
+    const reports = structuredClone(mockState.instances);
+    try {
+      persistPreference("en");
+      setUsageMode("used");
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      const columns = [...new DOMParser().parseFromString(html, "text/html").querySelectorAll("div.mt-2.flex.flex-col.items-start")];
+      expect(columns).toHaveLength(2);
+      columns.forEach((column, index) => {
+        expect(column.children).toHaveLength(2);
+        if (weeklyOnly) expect(column.children[0].textContent).toBe("5h–");
+        else expect(column.children[0].querySelector(`[aria-label="5h: ${index ? 42 : 18}% used"]`)).not.toBeNull();
+        expect(column.children[1].querySelector(`[aria-label="7d: ${index ? 42 : 18}% used"]`)).not.toBeNull();
+      });
+      expect(mockState.instances).toEqual(reports);
+    } finally { mockState.instances = original; }
+  });
+
+  it("keeps distinct Codex durations and provider buckets in separate slots", () => {
+    const original = mockState.instances;
+    const codex = original.find((instance) => instance.instanceId === "codex")!;
+    mockState.instances = [false, true].map((other) => ({
+      ...codex, instanceId: other ? "codex-other" : "codex", accountOf: "codex", accountMain: !other,
+      rateLimits: { observedAt: new Date().toISOString(), windows: other
+        ? codexRateLimitWindows({ primary: { usedPercent: 31, windowDurationMins: 1440 }, secondary: { usedPercent: 43, windowDurationMins: 20160 } })
+        : [{ id: "five_hour", usedPercent: 11, resetsAt: null }, { id: "seven_day", usedPercent: 22, resetsAt: null },
+          { id: "seven_day_opus", usedPercent: 33, resetsAt: null }] },
+    }));
+    try {
+      persistPreference("en");
+      setUsageMode("used");
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      const columns = [...new DOMParser().parseFromString(html, "text/html").querySelectorAll("div.mt-2.flex.flex-col.items-start")];
+      expect(columns.map((column) => column.children.length)).toEqual([5, 5]);
+      expect(columns[0].querySelector('[aria-label="Opus 7d"]')).not.toBeNull();
+      expect(columns[1].querySelector('[aria-label="Usage window: 31% used"]')).not.toBeNull();
+      expect(columns[1].querySelector('[aria-label="7d: 43% used"]')).not.toBeNull();
     } finally { mockState.instances = original; }
   });
 
@@ -932,18 +991,25 @@ describe("UsageSection friends plan card", () => {
     }
   });
 
-  it("keeps an unreported reset on its row's hover in English and Korean", () => {
+  it.each([
+    ["en", "Reset time not reported"], ["ko", "초기화 시각이 보고되지 않았습니다"],
+  ] as const)("exposes unreported resets without hover in %s", (locale, status) => {
     const report = mockState.instances[0].rateLimits;
     if (!report) throw new Error("claude fixture missing rateLimits");
     const original = report.windows;
     try {
-      report.windows = [...original, { id: "secondary", usedPercent: 46, windowMinutes: 10080, resetsAt: null }];
-      persistPreference("en");
-      const en = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
-      expect(en).toMatch(/title="Reset time not reported"[^>]*><div role="group" aria-label="7d: /);
-      expect(en).not.toContain(">Reset time not reported<");
-      persistPreference("ko");
-      expect(renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)))).toContain('title="초기화 시각이 보고되지 않았습니다"');
+      report.windows = original.map((window) => window.id === "seven_day" || window.id === "seven_day_opus"
+        ? { ...window, resetsAt: null } : window);
+      persistPreference(locale);
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const rows = [...doc.querySelectorAll(`[title="${status}"]`)];
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.querySelector(".sr-only")?.textContent).toBe(status);
+        expect(row.querySelector(".sr-only")?.closest('[aria-hidden="true"]')).toBeNull();
+      }
+      expect(doc.querySelectorAll(".sr-only")).toHaveLength(2);
     } finally {
       report.windows = original;
       persistPreference("en");
