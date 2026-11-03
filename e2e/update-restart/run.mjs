@@ -20,7 +20,7 @@ function ps(command) {
 const list = (json) => (json ? [JSON.parse(json)].flat() : []);
 
 function entry() {
-  const json = ps("Get-ItemProperty 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/*' | Where-Object { \"$($_.DisplayName)\" -like 'Wink *' } | Select-Object DisplayName, DisplayVersion, InstallLocation, QuietUninstallString | ConvertTo-Json -Compress");
+  const json = ps("Get-ItemProperty 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall/*' -ErrorAction SilentlyContinue | Where-Object { \"$($_.DisplayName)\" -like 'Wink *' } | Select-Object DisplayName, DisplayVersion, InstallLocation, QuietUninstallString | ConvertTo-Json -Compress");
   return list(json)[0] ?? null;
 }
 
