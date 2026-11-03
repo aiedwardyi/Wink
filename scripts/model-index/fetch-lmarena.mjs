@@ -1,6 +1,6 @@
 // Refreshes shared/model-index-sources/lmarena-webdev.json from LMArena's CC BY 4.0 leaderboard dataset on Hugging Face. Usage: node scripts/model-index/fetch-lmarena.mjs
 import { pathToFileURL } from "node:url";
-import { get, readModels, readSnapshot, saveRaw, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
+import { get, keepFilledRows, readModels, readSnapshot, saveRaw, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
 
 const API_URL = "https://datasets-server.huggingface.co/rows?dataset=lmarena-ai/leaderboard-dataset&config=webdev&split=latest";
 export const PAGE_URL = "https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset/viewer/webdev/latest";
@@ -58,7 +58,7 @@ export function buildSnapshot({ rows, models, retrievedAt, previous }) {
   if (out.length === 0) throw new Unverifiable("no LMArena model maps to a Wink model");
   // LMArena versions the board by its publish date.
   const [date] = dates;
-  return { snapshot: { ...previous, version: date, updated: date, rows: sortRows(out, models) }, unmapped: unmapped.sort() };
+  return { snapshot: keepFilledRows(previous, { ...previous, version: date, updated: date, rows: sortRows(out, models) }, models), unmapped: unmapped.sort() };
 }
 
 export async function fetchSnapshot() {

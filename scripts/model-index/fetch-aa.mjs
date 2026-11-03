@@ -3,7 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { percent, readModels, readSnapshot, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
+import { keepFilledRows, percent, readModels, readSnapshot, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
 
 export const API_URL = "https://artificialanalysis.ai/api/v2/data/llms/models";
 export const BENCHMARKS = {
@@ -83,7 +83,7 @@ export function buildSnapshot({ rows, models, retrievedAt, previous }) {
     out.push({ model, effort, value: score, ...carried, source_url: `https://artificialanalysis.ai/models/${row.slug}`, retrieved_at: retrievedAt, kind: "independent" });
   }
   if (out.length === 0) throw new Unverifiable(`no AA ${benchmark.field} score maps to a Wink model`);
-  return { snapshot: { ...previous, updated: null, rows: sortRows(out, models) }, unmapped: unmapped.sort(), needsCost };
+  return { snapshot: keepFilledRows(previous, { ...previous, updated: null, rows: sortRows(out, models) }, models), unmapped: unmapped.sort(), needsCost };
 }
 
 export async function loadResponse({ rawFile, apiKey = process.env.AA_API_KEY, keyFile = join(homedir(), ".aa", "key") } = {}) {

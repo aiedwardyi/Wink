@@ -61,6 +61,19 @@
       "kind": "independent"
     },
     {
+      "model": "gpt-6-astra",
+      "effort": "all",
+      "value": 87.1,
+      "source_url": "https://z.ai/blog/glm-legal",
+      "source_label": "Z.ai LegalBench comparison (Vals evaluation)",
+      "retrieved_at": "2026-11-03T10:24:49.478Z",
+      "kind": "vendor",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
       "model": "grok-4.6",
       "effort": "all",
       "value": 86.307,

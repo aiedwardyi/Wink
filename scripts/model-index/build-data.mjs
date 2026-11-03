@@ -1,4 +1,4 @@
-// Snapshot shared/model-index-sources/<benchmark>.json: { benchmark, version, index, label, updated, rows: [{ model, effort, value, source_url, retrieved_at, kind, interval?, cost_per_task?, cost_benchmark?, cost_source?, harness?, price? }] }.
+// Snapshot shared/model-index-sources/<benchmark>.json: { benchmark, version, index, label, updated, rows: [{ model, effort, value, source_url, retrieved_at, kind, interval?, cost_per_task?, cost_benchmark?, cost_source?, harness?, price?, score_date?, source_label? }] }.
 // Writes shared/model-index-data.ts from the snapshots; --print writes it to stdout instead.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -58,6 +58,7 @@ export interface ModelIndexEntry {
   version: string | null;
   kind: "independent" | "vendor";
   harness?: string;
+  scoreDate?: { date: string; kind: "published" | "checked" };
   retrievedAt: string;
 }
 
@@ -108,6 +109,13 @@ export function buildData(from = dir) {
       rowKeys.add(key);
       const meta = models[row.model];
       if (!meta) throw new Error(`${snap.benchmark}: no provider or label for ${row.model}`);
+      if (row.score_date) {
+        const { date, kind } = row.score_date;
+        const parsed = Date.parse(date);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== date || !["published", "checked"].includes(kind)) {
+          throw new Error(`${key}: invalid score date`);
+        }
+      }
       const { price } = row;
       entries.push({
         provider: meta.provider,
@@ -122,15 +130,17 @@ export function buildData(from = dir) {
         costSource: row.cost_source,
         interval: row.interval,
         source: row.source_url,
-        sourceLabel: price ? priceLabel(row, snap.benchmark) : snap.label,
+        sourceLabel: price ? priceLabel(row, snap.benchmark) : row.source_label ?? snap.label,
         benchmark: snap.benchmark,
         version: snap.version,
         kind: row.kind,
         harness: row.harness,
+        scoreDate: row.score_date,
         retrievedAt: row.retrieved_at,
       });
     }
-    const oldest = snap.rows.map((row) => row.retrieved_at).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+    const current = snap.rows.filter((row) => !row.score_date);
+    const oldest = (current.length ? current : snap.rows).map((row) => row.retrieved_at).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
     sources[snap.benchmark] = { index: snap.index, version: snap.version, label: snap.label, updated: snap.updated, retrievedAt: oldest };
   }
   const newest = Math.max(...entries.map((entry) => Date.parse(entry.retrievedAt)));

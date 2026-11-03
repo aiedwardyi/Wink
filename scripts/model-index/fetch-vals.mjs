@@ -1,6 +1,6 @@
 // Refreshes shared/model-index-sources/vals-legalbench.json and vals-cyberbench.json from their Vals.ai benchmark pages. Usage: node scripts/model-index/fetch-vals.mjs
 import { pathToFileURL } from "node:url";
-import { get, readModels, readSnapshot, saveRaw, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
+import { get, keepFilledRows, readModels, readSnapshot, saveRaw, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
 
 export const BENCHMARKS = {
   "vals-legalbench": { id: "legal_bench", name: "LegalBench", url: "https://www.vals.ai/benchmarks/legal_bench" },
@@ -68,7 +68,7 @@ export function buildSnapshot({ page, models, retrievedAt, previous, benchmark =
     });
   }
   if (rows.length === 0) throw new Unverifiable("no Vals model maps to a Wink model");
-  return { snapshot: { ...previous, updated: page.updated, rows: sortRows(rows, models) }, unmapped: unmapped.sort() };
+  return { snapshot: keepFilledRows(previous, { ...previous, updated: page.updated, rows: sortRows(rows, models) }, models), unmapped: unmapped.sort() };
 }
 
 const fetcher = (benchmark) => ({

@@ -6,6 +6,76 @@
   "updated": null,
   "rows": [
     {
+      "model": "claude-fable-5",
+      "effort": "low",
+      "value": 48.01,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "claude-code",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "claude-fable-5",
+      "effort": "medium",
+      "value": 49.82,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "claude-code",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "claude-fable-5",
+      "effort": "high",
+      "value": 52.73,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "claude-code",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "claude-fable-5",
+      "effort": "xhigh",
+      "value": 53.48,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "claude-code",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "claude-fable-5",
+      "effort": "max",
+      "value": 51.57,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "claude-code",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
       "model": "claude-fable-5-1",
       "effort": "max",
       "value": 48.9732333333333,
@@ -182,6 +252,48 @@
       "kind": "independent"
     },
     {
+      "model": "grok-4.6",
+      "effort": "low",
+      "value": 40.11,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "grok-build",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "grok-4.6",
+      "effort": "medium",
+      "value": 46.06,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "grok-build",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "grok-4.6",
+      "effort": "high",
+      "value": 48.01,
+      "source_url": "https://cognition.com/data/frontiercode-leaderboard/data.json",
+      "source_label": "Cognition FrontierCode 1.1 Main (mean score %)",
+      "retrieved_at": "2026-11-03T10:20:28.180Z",
+      "kind": "independent",
+      "harness": "grok-build",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
       "model": "grok-4.7",
       "effort": "low",
       "value": 39.5933666666667,
@@ -204,6 +316,71 @@
       "source_url": "https://artificialanalysis.ai/models/grok-4-7",
       "retrieved_at": "2026-10-19T23:38:10+09:00",
       "kind": "independent"
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "low",
+      "value": 36.3365333333333,
+      "source_url": "https://artificialanalysis.ai/evaluations/frontiercode",
+      "retrieved_at": "2026-11-03T10:20:27.871Z",
+      "kind": "independent",
+      "harness": "Stirrup",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "medium",
+      "value": 43.7161666666667,
+      "source_url": "https://artificialanalysis.ai/evaluations/frontiercode",
+      "retrieved_at": "2026-11-03T10:20:27.871Z",
+      "kind": "independent",
+      "harness": "Stirrup",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "value": 37.1596,
+      "source_url": "https://artificialanalysis.ai/evaluations/frontiercode",
+      "retrieved_at": "2026-11-03T10:20:27.871Z",
+      "kind": "independent",
+      "harness": "Stirrup",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "xhigh",
+      "value": 41.3522333333333,
+      "source_url": "https://artificialanalysis.ai/evaluations/frontiercode",
+      "retrieved_at": "2026-11-03T10:20:27.871Z",
+      "kind": "independent",
+      "harness": "Stirrup",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "max",
+      "value": 36.025,
+      "source_url": "https://artificialanalysis.ai/evaluations/frontiercode",
+      "retrieved_at": "2026-11-03T10:20:27.871Z",
+      "kind": "independent",
+      "harness": "Stirrup",
+      "score_date": {
+        "date": "2026-11-03",
+        "kind": "checked"
+      }
     }
   ]
 }
