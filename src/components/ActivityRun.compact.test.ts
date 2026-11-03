@@ -21,6 +21,29 @@ afterEach(() => {
 });
 
 describe("compact terminal steps", () => {
+  it.each([
+    { name: "Bash", summary: "git status", ok: true },
+    { name: "git status", verb: "Bash", ok: true, detail: { input: "git status" } },
+    { name: "Bash", summary: "printenv", ok: true, detail: { input: "printenv", outputHidden: true } },
+    { name: "browser_click", ok: false },
+  ])("omits the call section without extra call text: %#", (tool) => {
+    document.documentElement.dataset.skin = "terminal";
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(ActivityStep, { message: { ...message, tool } }));
+    expect(host.querySelector("[data-term-call]")).toBeNull();
+    expect(host.querySelector(".term-step-head")?.getAttribute("aria-label")).toContain(tool.ok ? "done" : "failed");
+  });
+
+  it("keeps output expansion without an empty call section", () => {
+    document.documentElement.dataset.skin = "terminal";
+    const host = document.createElement("div");
+    const tool = { ...message.tool!, summary: "git status --short" };
+    host.innerHTML = renderToStaticMarkup(createElement(ActivityStep, { message: { ...message, tool } }));
+    expect(host.querySelector("details > summary")).not.toBeNull();
+    expect(host.querySelector("[data-term-call]")).toBeNull();
+    expect(host.querySelectorAll(".term-step-out > div")).toHaveLength(4);
+  });
+
   it.each(["terminal", "terminal-dracula", "terminal-ice", "paper-tape", "logfile", "multiplexer", "modal", "tui", "tui-black", "tui-amber", "tui-ice", "tui-slate", "tui-smoke"])("uses one accessible expandable header in %s", (skin) => {
     document.documentElement.dataset.skin = skin;
     const host = document.createElement("div");

@@ -31,6 +31,7 @@
     cursor: pointer;
   }
 
+  .term-step-head::marker,
   .term-step-head::-webkit-details-marker {
     display: none;
   }

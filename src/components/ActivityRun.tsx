@@ -85,6 +85,11 @@ function TermStep({ name, rawVerb, summary, ok, elapsed, detail, notices }: { na
   const aria = termStepAria(state, elapsed);
   const args = termHeaderArgs(verb, summary, detail, rawVerb ? name : undefined);
   const block = termBlock(detail, state === "failed");
+  const call = [
+    rawVerb && name !== rawVerb && name !== args && name !== summary ? name : undefined,
+    summary && summary !== args ? summary : undefined,
+    detail?.input && detail.input !== args ? detail.input : undefined,
+  ].filter(Boolean);
   return (
     <div data-term-step={state} className="term-step min-w-0 max-w-full">
       <details>
@@ -92,11 +97,7 @@ function TermStep({ name, rawVerb, summary, ok, elapsed, detail, notices }: { na
           <span className="font-semibold text-ink">{verb}</span>
           {args && `(${args})`}
         </summary>
-        <div data-term-call>
-          {rawVerb && name !== rawVerb && name !== args && name !== summary && <div>{name}</div>}
-          {summary && summary !== args && <div>{summary}</div>}
-          {detail?.input && detail.input !== args && <div>{detail.input}</div>}
-        </div>
+        {call.length > 0 && <div data-term-call>{call.map((line, index) => <div key={index}>{line}</div>)}</div>}
       </details>
       {block?.kind === "hidden" ? (
         <div className="term-step-out">{t("term.step.hidden")}</div>
