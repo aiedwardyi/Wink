@@ -9,8 +9,8 @@ export function ErrorReportsRow() {
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const read = async () => {
-    const [reports, usage] = await Promise.all([window.ogb?.errorReportConsent?.(), api("/api/analytics")]);
-    return reports === true || usage.enabled === true;
+    const [reports, usage] = await Promise.allSettled([window.ogb?.errorReportConsent?.(), api("/api/analytics")]);
+    return (reports.status === "fulfilled" && reports.value === true) || (usage.status === "fulfilled" && usage.value.enabled === true);
   };
   useEffect(() => {
     let gone = false;

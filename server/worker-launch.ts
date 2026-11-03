@@ -88,7 +88,9 @@ export function workerCommand(command: string, unmanaged = false) {
 function baseAccount(id: string, driver: string, environment: NodeJS.ProcessEnv): AccountContext {
   const selector = driver === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
   const home = Object.entries(environment).find(([key]) => key.toUpperCase() === selector)?.[1]
-    || join(driver === "codex" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(), driver === "codex" ? ".codex" : ".claude");
+    || join(
+        driver === "codex" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(),
+        driver === "codex" ? ".codex" : ".claude");
   return Object.freeze({ id, of: id, generation: 0, home });
 }
 

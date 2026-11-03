@@ -895,6 +895,22 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
 });
 
 describe("Antigravity snapshot", () => {
+  it("marks an unsupported Linux authentication probe as complete", async () => {
+    vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(() => auth.probeAntigravitySignIn("linux")));
+    const instance = await AntigravityDriver.create({
+      instanceId: "agy-linux",
+      displayName: undefined,
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      const snapshot = await instance.snapshot();
+      expect(snapshot).toMatchObject({ state: "available", authChecked: true });
+      expect(snapshot.authenticated).toBeUndefined();
+    } finally { await instance.dispose(); }
+  });
+
   it("reports available with the CLI version against the fake", async () => {
     chmodSync(FAKE_CLI, 0o755);
     const instance = await AntigravityDriver.create({

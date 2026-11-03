@@ -1079,7 +1079,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      return { state: "available", version, authenticated: await signIn.check(opts?.rescan || opts?.refresh) };
+      return { state: "available", version, authenticated: await signIn.check(opts?.rescan || opts?.refresh), authChecked: true };
     };
 
     return {

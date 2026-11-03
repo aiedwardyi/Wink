@@ -117,3 +117,21 @@ it("keeps the switch on after a partial save so opt-out can be retried", async (
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   } finally { await act(async () => root.unmount()); }
 });
+
+it.each([true, false])("uses native consent %s after an initial analytics read failure", async (reports) => {
+  request.mockRejectedValueOnce(new Error("offline"));
+  const setErrorReportConsent = vi.fn(async (value: boolean) => value);
+  Object.defineProperty(window, "ogb", { value: { errorReportConsent: async () => reports, setErrorReportConsent }, configurable: true });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(ErrorReportsRow))));
+    const toggle = host.querySelector("button")!;
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(reports));
+    await act(async () => toggle.click());
+    expect(setErrorReportConsent).toHaveBeenCalledExactlyOnceWith(!reports);
+    expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: !reports }) });
+    expect(toggle.getAttribute("aria-checked")).toBe(String(!reports));
+  } finally { await act(async () => root.unmount()); }
+});

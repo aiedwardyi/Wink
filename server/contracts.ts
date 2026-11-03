@@ -366,6 +366,7 @@ export interface ProviderSnapshot {
   state: "available" | "unavailable";
   reason?: string;
   authenticated?: boolean;
+  authChecked?: boolean;
   /** Email or account name of the sign-in, read from the CLI's own status or auth file. */
   account?: string;
   accountIdentity?: string;

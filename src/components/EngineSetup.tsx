@@ -317,7 +317,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   };
 
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
-  if (!forceSignIn && !waiting && current.snapshot.authenticated === undefined && !current.loginState) return null;
+  if (!forceSignIn && !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState) return null;
   if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   return (
     <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
