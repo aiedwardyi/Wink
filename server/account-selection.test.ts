@@ -32,7 +32,7 @@ function fixture(useDefault = true) {
   const patch = vi.fn();
   const accounts = { defaultFor: (of: string) => useDefault && of === "claude" ? "added" : undefined,
     get: (id: string) => ["added", "other"].includes(id) ? { of: "claude", state: "ready" } : undefined,
-    binding: () => undefined, drains: {},
+    drains: {},
   } as unknown as AccountService;
   const registry = { get: (id: string) => instances.find((instance) => instance.instanceId === id),
     accountAvailable: (id: string) => instances.some((instance) => instance.instanceId === id) && availability.get(id) !== false,

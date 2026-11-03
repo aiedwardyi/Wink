@@ -260,6 +260,10 @@ export class ProviderRegistry {
     this.get(id)?.setAccountBlocked?.(blocked);
   }
   accountBlocked(id: string) { return this.blockedAccounts.has(id); }
+  async retryAccount(id: string) {
+    const entry = this.byId.get(id);
+    if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
+  }
   accountAvailable(id: string) {
     const snapshot = this.probed.get(id)?.snapshot;
     return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
@@ -477,9 +481,10 @@ export class ProviderRegistry {
     entry: RegistryEntry,
     candidatesFor: (driver: AnyProviderDriver | undefined) => string[],
     opts?: { rescan?: boolean; refresh?: boolean },
+    retryAccount = false,
   ): Promise<Probe> {
     const id = entry.instanceId;
-    if (this.accountBlocked(id)) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
+    if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
     const pending = this.probe(entry, candidatesFor, opts);
     this.probing.set(id, pending);
     void pending.then((probe) => {
@@ -543,9 +548,12 @@ export class ProviderRegistry {
         }
       }
       snapshot = await inst.snapshot(opts);
-      if (inst.account && this.get(inst.instanceId) === inst) await this.accountIdentity?.(inst.instanceId, snapshot);
     } catch (e) {
       snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) };
+    }
+    if (inst.account && this.get(inst.instanceId) === inst) {
+      try { await this.accountIdentity?.(inst.instanceId, snapshot); }
+      catch (e) { snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) }; }
     }
     return {
       snapshot,

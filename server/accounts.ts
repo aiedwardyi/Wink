@@ -45,6 +45,7 @@ function plainDirectory(path: string, create: boolean) {
 }
 
 export class AccountService {
+  readonly error?: string;
   private state: State = { version: 1, accounts: [], retired: [] };
   private records: readonly AccountRecord[] = Object.freeze([]);
   private queue: Promise<unknown> = Promise.resolve();
@@ -63,7 +64,8 @@ export class AccountService {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular file");
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
-      throw new AccountError("Cannot load accounts.json; account state is unavailable", 503);
+      this.error = "Cannot load accounts.json; accounts are off because account state is unavailable";
+      return;
     }
     try {
       this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
@@ -77,7 +79,8 @@ export class AccountService {
       }
       this.publish();
     } catch {
-      throw new AccountError("Cannot load accounts.json; account state is corrupt or unsafe", 503);
+      this.state = { version: 1, accounts: [], retired: [] };
+      this.error = "Cannot load accounts.json; accounts are off because account state is corrupt or unsafe, or its base engine is unavailable";
     }
   }
 
@@ -98,7 +101,7 @@ export class AccountService {
       this.base(of);
       const account = this.get(accountId);
       if (this.drains[accountId] || (accountId !== of && (account?.of !== of || account.state !== "ready"))) {
-        throw new AccountError("This account is unavailable or draining; choose an account");
+        throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections");
       }
       if (accountId === of && !this.defaultFor(of)) return;
       const defaults = { ...this.state.defaults };
@@ -144,7 +147,8 @@ export class AccountService {
     });
   }
 
-  list() {
+  list(): Array<{ id: string; of: string; driverKind: string; generation: number; existing: boolean; state: SavedAccount["state"]; error?: string }> {
+    if (this.error) return [{ id: "accounts", of: "accounts", driverKind: "accounts", generation: 0, existing: false, state: "stopped", error: this.error }];
     return Object.entries(this.bases()).filter(([, entry]) => entry.enabled !== false && ["claudeAgent", "codex"].includes(entry.driver))
       .flatMap(([of, entry]) => [
         { id: of, of, driverKind: entry.driver, generation: 0, existing: true, state: "ready" as const },
@@ -198,15 +202,14 @@ export class AccountService {
     });
   }
 
-  validateBases() { this.validate(this.state); }
+  validateBases(bases = this.bases()) { if (!this.error) this.validate(this.state, bases); }
 
   private require(id: string): AccountRecord {
     const row = this.get(id);
     if (!row) throw new AccountError("Unknown account", 404);
     return row;
   }
-  private base(id: string) {
-    const bases = this.bases();
+  private base(id: string, bases = this.bases()) {
     if (!isInstanceId(id) || !Object.hasOwn(bases, id) || bases[id].enabled === false || !["claudeAgent", "codex"].includes(bases[id].driver)) {
       throw new AccountError("Account base must be an enabled Claude or Codex instance", 400);
     }
@@ -217,22 +220,21 @@ export class AccountService {
     if (!ACCOUNT_ID.test(id) || relative(resolve(this.root), home) !== id) throw new AccountError("Unsafe account home");
     return home;
   }
-  private validate(state: State) {
+  private validate(state: State, bases = this.bases()) {
     const seen = new Set<string>();
     const counts = new Map<string, number>();
-    const bases = this.bases();
     for (const entry of Object.values(bases)) if (entry.enabled !== false && ["claudeAgent", "codex"].includes(entry.driver)) counts.set(entry.driver, (counts.get(entry.driver) ?? 0) + 1);
     for (const id of [...state.retired, ...state.accounts.map((row) => row.id)]) {
       if (seen.has(id) || Object.hasOwn(bases, id)) throw new AccountError("Duplicate account id");
       seen.add(id);
     }
     for (const row of state.accounts) {
-      const driver = this.base(row.of).driver;
+      const driver = this.base(row.of, bases).driver;
       counts.set(driver, (counts.get(driver) ?? 0) + 1);
       this.home(row.id);
     }
     for (const [of, accountId] of Object.entries(state.defaults ?? {})) {
-      this.base(of);
+      this.base(of, bases);
       if (accountId !== of && !state.accounts.some((row) => row.id === accountId && row.of === of)) throw new AccountError("Invalid default account");
     }
     if ([...counts.values()].some((count) => count > MAX_ENGINE_ACCOUNTS)) throw new AccountError(`At most ${MAX_ENGINE_ACCOUNTS} accounts per engine`);
@@ -247,7 +249,10 @@ export class AccountService {
     this.records = Object.freeze(this.state.accounts.map((row) => Object.freeze({ ...row, home: this.home(row.id) })));
   }
   private change<T>(run: () => T): Promise<T> {
-    const pending = this.queue.then(run);
+    const pending = this.queue.then(() => {
+      if (this.error) throw new AccountError(this.error, 503);
+      return run();
+    });
     this.queue = pending.catch(() => {});
     return pending;
   }

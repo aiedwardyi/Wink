@@ -28,7 +28,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         const instances = await registry.describeCached();
         json(res, 200, { accounts: lifecycle.accounts.list().map((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
-          return { ...account, ...(lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
+          return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
             state: account.existing && registry.accountBlocked(account.id) ? "stopped" : account.state,
             models: instance?.models, effortLevels: instance?.capabilities.effortLevels,
             ...(lifecycle.accounts.drains[account.id] ? { drain: lifecycle.accounts.drains[account.id] } : {}),

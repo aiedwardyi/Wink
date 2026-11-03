@@ -123,7 +123,7 @@ test("later managed engine input on a plain shell is refused before submission",
   assert.deepEqual(f.children[0].writes, []);
 });
 
-test("pending launches and plain shells are reported as unknown account use", async (t) => {
+test("pending launches block removal until a plain shell is confirmed unrelated", async (t) => {
   let release;
   const f = fixture(() => new Promise((resolve) => { release = resolve; }));
   t.after(() => f.host.dispose());
@@ -134,7 +134,7 @@ test("pending launches and plain shells are reported as unknown account use", as
     release?.({ kind: "shell" });
     await opening;
   }
-  assert.equal(f.host.livePanesForAccount(THIRD.id).unknown, 1);
+  assert.deepEqual(f.host.livePanesForAccount(THIRD.id), { count: 0, unknown: 0, generations: {} });
 });
 
 test("managed command serialization preserves prompt text and expands only pane grants", () => {

@@ -22,15 +22,15 @@ export class BotAccounts {
 
   resolve(bot: Pick<BotRecord, "modelSelection">, required: readonly AutomaticCapability[] = []): ModelSelection {
     const selection = bot.modelSelection;
-    const accountId = this.accounts.defaultFor(selection.instanceId);
+    const accountId = this.routedAccount(selection.instanceId);
     if (!accountId) {
-      if (this.accounts.drains[selection.instanceId]) throw new AccountError("This account is draining; choose an account");
-      if (this.accounts.get(selection.instanceId)) throw new AccountError("Choose this engine's default account before starting it");
+      if (this.accounts.drains[selection.instanceId]) throw new AccountError("This account is draining. Use Set as Main on the Usage page");
+      if (this.accounts.get(selection.instanceId)) throw new AccountError("Use Set as Main on the Usage page before starting this engine");
       return selection;
     }
     const instance = this.validate(accountId, selection);
     if (required.some((capability) => capability === "approvalReview" ? !instance.reviewPermission : instance.adapter.capabilities[capability] !== true)) {
-      throw new AccountError("This account cannot run this bot's tools; choose an account");
+      throw new AccountError("This account cannot run this bot's tools. Use Set as Main on the Usage page to choose another account");
     }
     return { ...selection, instanceId: accountId };
   }
@@ -42,18 +42,18 @@ export class BotAccounts {
   }
 
   catalogInstanceId(selection: ModelSelection) {
-    return this.accounts.defaultFor(selection.instanceId) ?? selection.instanceId;
+    return this.routedAccount(selection.instanceId) ?? selection.instanceId;
   }
 
   checkSelection(selection: ModelSelection): ModelSelection {
-    if (/^acct_[0-9a-f-]{36}$/.test(selection.instanceId)) throw new AccountError("Choose an engine's default account on the Usage page", 400);
-    const accountId = this.accounts.defaultFor(selection.instanceId);
+    if (/^acct_[0-9a-f-]{36}$/.test(selection.instanceId)) throw new AccountError("Use Set as Main on the Usage page to choose this engine's account", 400);
+    const accountId = this.routedAccount(selection.instanceId);
     if (accountId) this.validate(accountId, selection);
     return selection;
   }
 
   automaticCandidate(candidate: AutomaticCandidate, lookup: (id: string) => AutomaticCandidate | undefined): AutomaticCandidate {
-    const accountId = this.accounts.defaultFor(candidate.instanceId);
+    const accountId = this.routedAccount(candidate.instanceId);
     if (!accountId) return this.accounts.drains[candidate.instanceId] ? { ...candidate, available: false } : candidate;
     const selected = lookup(accountId);
     return { ...(selected ?? candidate), instanceId: candidate.instanceId, accountOf: candidate.accountOf,
@@ -64,7 +64,7 @@ export class BotAccounts {
   useForBots(id: string) {
     const account = this.accounts.list().find((row) => row.id === id);
     if (!account) throw new AccountError("Unknown account", 404);
-    if (!this.available(id)) throw new AccountError("This account is unavailable or draining; choose an account");
+    if (!this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections");
     for (const bot of this.store.bots) {
       for (const selection of this.selections(bot)) if (selection.instanceId === account.of) this.validate(id, selection);
     }
@@ -73,7 +73,7 @@ export class BotAccounts {
 
   noteAccount() {
     const claude = this.registry.instances().find((instance) => instance.driverKind === "claudeAgent" && !instance.account && instance.enabled && instance.generateText);
-    const id = claude && this.accounts.defaultFor(claude.instanceId);
+    const id = claude && this.routedAccount(claude.instanceId);
     return id ? { instanceId: id, available: this.available(id) } : undefined;
   }
 
@@ -102,6 +102,12 @@ export class BotAccounts {
     return bot.pendingModelSelection ? [bot.modelSelection, bot.pendingModelSelection] : [bot.modelSelection];
   }
 
+  private routedAccount(of: string) {
+    const id = this.accounts.defaultFor(of) ?? of;
+    const drain = this.accounts.drains[id];
+    return drain && drain.phase !== "failed" ? drain.destinationId : id !== of ? id : undefined;
+  }
+
   private available(id: string) {
     const account = this.accounts.get(id);
     return !this.accounts.drains[id] && (!account || account.state === "ready") && this.registry.accountAvailable(id);
@@ -109,7 +115,7 @@ export class BotAccounts {
 
   private validate(id: string, selection: ModelSelection) {
     const instance = this.registry.get(id);
-    if (!instance || !this.available(id)) throw new AccountError("This account is unavailable or draining; choose an account");
+    if (!instance || !this.available(id)) throw new AccountError("This account is unavailable or draining. Sign in again in Settings > Connections");
     if (selection.model !== instance.models.default && !instance.models.options.some((option) => option.id === selection.model)) {
       throw new AccountError("This account does not offer the selected model; choose a model first", 400);
     }

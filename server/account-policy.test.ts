@@ -17,6 +17,21 @@ const policy = await import("./account-policy.ts").catch(() => null);
 afterEach(() => vi.restoreAllMocks());
 
 describe("account launch boundary", () => {
+  it.each(["status", "login", "logout"])("keeps Claude auth %s free of turn settings", (command) => {
+    const args = ["auth", command];
+    const result = policy!.accountLaunch(account, "claudeAgent", args, {});
+    expect(result.args).toEqual(args);
+    expect(result.env.CLAUDE_CONFIG_DIR).toBe(account.home);
+  });
+
+  it.each([["-p", "fixture"], ["--print", "fixture"], ["fixture"]])("loads project and local settings for Claude launch %j", (...args) => {
+    expect(policy!.accountLaunch(account, "claudeAgent", args, {}).args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+  });
+
+  it("keeps Claude version probes free of turn settings", () => {
+    expect(policy!.accountLaunch(account, "claudeAgent", ["--version"], {}).args).toEqual(["--version"]);
+  });
+
   it.each(["openai_api_key", "Anthropic_Api_Key", "Meta_Api_Key", "xai_API_key", "aws_access_key_id", "Google_Application_Credentials"])("scrubs inherited %s case-insensitively", (key) => {
     const env = { [key]: "fake-secret", PATH: "keep" };
     applyCredentialAllowlist(env);

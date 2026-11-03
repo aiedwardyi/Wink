@@ -64,7 +64,7 @@ describe("trusted worker accounts", () => {
     expect(launch).toMatchObject({ account: { id: "claude", generation: 0 }, environment: { CLAUDE_CONFIG_DIR: f.bases.claude.environment!.CLAUDE_CONFIG_DIR } });
     if (launch?.kind !== "managed") throw new Error("expected managed launch");
     expect(launch.environment).not.toHaveProperty("CODEX_HOME");
-    expect(launch.args.slice(-2)).toEqual(["--setting-sources", ""]);
+    expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
     expect(f.available).toHaveBeenCalledWith("claude", 0);
   });
 
@@ -89,7 +89,7 @@ describe("trusted worker accounts", () => {
     expect(launch).toMatchObject({ workerSettings: true, account: { id: third.id }, environment: { CLAUDE_CONFIG_DIR: third.home, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
     if (launch?.kind !== "managed") throw new Error("expected managed launch");
     expect(launch.args.join(" ")).not.toContain("claude-worker.json");
-    expect(launch.args.slice(-2)).toEqual(["--setting-sources", ""]);
+    expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
   });
 
   it.each(["& codex 'task'", "codex 'task'; echo done", "pwsh -Command codex", "pnpm exec codex 'task'", "C:/bin/codex.cmd 'task'", "'codex' 'task'", "codex $(whoami)", "codex 'task\x1b[D'"])("refuses ambiguous workers: %s", async (command) => {

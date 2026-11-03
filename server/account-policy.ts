@@ -50,7 +50,7 @@ export function accountLaunch(
     }
     env.CLAUDE_CONFIG_DIR = account.home;
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
-    return { env, args: [...args, "--setting-sources", ""] };
+    return { env, args: args[0] === "auth" || args[0] === "--version" ? args : [...args, "--setting-sources", "project,local"] };
   }
   env.CODEX_HOME = account.home;
   env.CODEX_SQLITE_HOME = join(account.home, "state");

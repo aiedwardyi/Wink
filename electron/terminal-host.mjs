@@ -1009,7 +1009,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     const session = {
       id, key, botId: input.botId, botPane, owner: event.sender, cwd, shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
-      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerFinished: false, workerEnvironment: paneEnv,
+      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker), workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
@@ -1423,7 +1423,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const generations = {};
       for (const session of sessions.values()) {
         if (!session.botPane || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
-        if (!session.workerAccount) { unknown++; continue; }
+        if (!session.workerAccount) { if (!session.workerAccountKnown) unknown++; continue; }
         if (session.workerFinished || session.workerAccount.id !== accountId) continue;
         count++;
         const generation = session.workerAccount.generation;

@@ -91,6 +91,7 @@ import { AccountService, isInstanceId } from "./accounts.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
@@ -8132,6 +8133,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!check.ok) return json(res, 400, { error: check.message });
       }
       const previousPerson = (cfg.profile?.name ?? "").trim();
+      validateAccountSettings(accounts, cfg, patch);
       if (externalSecretStorage) {
         // The packaged Electron caller commits supplied credentials to the
         // OS-encrypted store before entering this route. Persist every

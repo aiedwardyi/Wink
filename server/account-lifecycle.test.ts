@@ -15,11 +15,14 @@ const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
 const routes = await import("./account-routes.ts").catch(() => null);
 const registries: ProviderRegistry[] = [];
+const controllers: InstanceType<NonNullable<typeof lifecycle>["AccountLifecycle"]>[] = [];
 let next = 0;
 
 afterEach(async () => {
+  controllers.splice(0).forEach((controller) => controller.dispose());
   await Promise.all(registries.splice(0).map((registry) => registry.disposeAll()));
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 async function fixture() {
@@ -64,6 +67,7 @@ async function fixture() {
     reload: () => providers.reload(configs()),
     referenced: async (id) => references.has(id), invalidate, configBusy: () => configBusy,
   });
+  controllers.push(controller);
   return { dir, accounts, registry, controller, references, invalidate, start, statuses, providers,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
@@ -72,6 +76,63 @@ async function fixture() {
 }
 
 describe("account lifecycle", () => {
+  it.each(["restore", "observe", "probe", "crash", "empty status", "missing identity"])("retries an unknown %s without stopping or invalidating the account", async (path) => {
+    const f = await fixture();
+    const account = await f.add();
+    f.invalidate.mockClear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const unknown: ProviderSnapshot = path === "missing identity" ? { state: "available", authenticated: true } : { state: path === "empty status" ? "available" : "unavailable" };
+    f.statuses.set(account.id, unknown);
+    if (path === "restore") await f.controller.restore();
+    else if (path === "probe" || path === "crash") {
+      if (path === "crash") vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture app-server crashed"));
+      await f.registry.describe({ refresh: true });
+    } else await f.controller.observe(account.id, unknown);
+    expect(f.accounts.get(account.id)).toEqual(account);
+    expect(f.invalidate).not.toHaveBeenCalled();
+    f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(f.accounts.get(account.id)).toEqual(account);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+    expect(f.providers.started("retried", account.id)).not.toBeNull();
+    f.providers.settled("retried");
+    expect(f.invalidate).not.toHaveBeenCalled();
+    f.references.add(account.id);
+    f.statuses.set(account.id, { state: "available", authenticated: false });
+    if (path === "restore") await f.controller.restore();
+    else await f.controller.observe(account.id, f.statuses.get(account.id)!);
+    expect(f.accounts.get(account.id)?.state).toBe("stopped");
+    expect(f.registry.accountAvailable(account.id)).toBe(false);
+  });
+
+  it("retries a thrown restore probe without changing the account", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.invalidate.mockClear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(f.registry.get(account.id)!, "snapshot").mockRejectedValueOnce(new Error("fixture timeout"));
+    await f.controller.restore();
+    expect(f.accounts.get(account.id)).toEqual(account);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+    expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prior identity when a re-login probe is unknown", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.invalidate.mockClear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    f.statuses.set(account.id, { state: "available" });
+    await f.controller.signIn(account.id);
+    await f.controller.settled(account.id);
+    expect(f.accounts.get(account.id)).toEqual(account);
+    expect(f.invalidate).not.toHaveBeenCalled();
+    f.statuses.set(account.id, { state: "available", authenticated: true, accountIdentity: account.identity });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+  });
+
   it("adds and probes in that home after the engine's own login", async () => {
     const f = await fixture();
     const account = await f.add();

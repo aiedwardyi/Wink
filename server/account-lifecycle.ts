@@ -8,7 +8,7 @@ type Hooks = {
   referenced(id: string, activeOnly: boolean): Promise<boolean>;
   invalidate(id: string): void;
   configBusy?(): boolean;
-  panesBusy?(): Promise<boolean>;
+  panesBusy?(id: string): Promise<boolean>;
 };
 
 export class AccountLifecycle {
@@ -17,6 +17,7 @@ export class AccountLifecycle {
   private pending = new Map<string, Promise<void>>();
   private mutations = 0;
   private drainTimer?: ReturnType<typeof setTimeout>;
+  private retries = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
   private results = new Map<string, { state: "failed" | "cancelled"; error?: "device_cap" }>();
   readonly accounts: AccountService;
@@ -47,15 +48,19 @@ export class AccountLifecycle {
       if (account.state === "pending") await this.discard(account.id);
       else if (account.state === "ready") {
         this.registry.blockAccount(account.id, true);
-        const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true });
-        if (snapshot?.authenticated === true && snapshot.accountIdentity && snapshot.accountIdentity === account.identity) this.registry.blockAccount(account.id, false);
-        else await this.observe(account.id, snapshot ?? { state: "unavailable" });
+        const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true }).catch(() => undefined);
+        await this.observe(account.id, snapshot ?? { state: "unavailable" });
       }
     }
     await this.resumeDrains();
   }
 
-  dispose() { this.disposed = true; clearTimeout(this.drainTimer); }
+  dispose() {
+    this.disposed = true;
+    clearTimeout(this.drainTimer);
+    for (const timer of this.retries.values()) clearTimeout(timer);
+    this.retries.clear();
+  }
 
   resumeDrains() {
     return this.exclusive(async () => {
@@ -136,7 +141,7 @@ export class AccountLifecycle {
       if (destinationId) {
         if (!this.bots) throw new AccountError("Bot account routing is unavailable", 503);
         this.bots.destination(id, destinationId);
-        if (await this.hooks.panesBusy?.()) throw new AccountError("This account is still used by a pane or pane state is unknown");
+        if (await this.hooks.panesBusy?.(id)) throw new AccountError("This account is still used by a pane");
         const current = this.accounts.drains[id];
         if (current && (current.destinationId !== destinationId || current.phase !== "failed")) {
           throw new AccountError("This account already has a recorded removal destination");
@@ -156,9 +161,11 @@ export class AccountLifecycle {
         if (guarded) {
           const blocked = this.registry.accountBlocked(id);
           this.registry.blockAccount(id, true);
-          if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.()) {
+          try {
+            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("This account is still used by a turn, helper or pane");
+          } catch (error) {
             this.registry.blockAccount(id, blocked);
-            throw new AccountError("This account is still used by a turn, helper or pane");
+            throw error;
           }
         }
         const success = await this.registry.signOut(id);
@@ -166,10 +173,13 @@ export class AccountLifecycle {
         if (guarded) this.hooks.invalidate(id);
         return {};
       }
+      const blocked = this.registry.accountBlocked(id);
       this.registry.blockAccount(id, true);
-      if (await this.hooks.referenced(id, false)) {
-        this.registry.blockAccount(id, account.state !== "ready" || this.jobs.has(id));
-        throw new AccountError("This account is still used by a bot, pending choice, turn or pane");
+      try {
+        if (await this.hooks.referenced(id, false)) throw new AccountError("This account is still used by a bot, pending choice, turn or pane");
+      } catch (error) {
+        this.registry.blockAccount(id, blocked);
+        throw error;
       }
       this.jobs.delete(id);
       await this.accounts.stop(id);
@@ -183,7 +193,17 @@ export class AccountLifecycle {
   observe(id: string, snapshot: ProviderSnapshot, generation?: number): Promise<void> {
     const account = this.accounts.get(id);
     if (!account || this.accounts.drains[id] || (generation !== undefined && generation !== account.generation) || account.state !== "ready" || this.jobs.has(id)) return Promise.resolve();
-    if (snapshot.authenticated === true && snapshot.accountIdentity && snapshot.accountIdentity === account.identity) return Promise.resolve();
+    if (snapshot.authenticated !== false && !(snapshot.authenticated === true && snapshot.accountIdentity)) {
+      this.registry.blockAccount(id, true);
+      this.retry(account);
+      return Promise.resolve();
+    }
+    clearTimeout(this.retries.get(id));
+    this.retries.delete(id);
+    if (snapshot.authenticated === true && snapshot.accountIdentity === account.identity) {
+      this.registry.blockAccount(id, false);
+      return Promise.resolve();
+    }
     this.registry.blockAccount(id, true);
     return this.exclusive(async () => {
       const current = this.accounts.get(id);
@@ -206,7 +226,7 @@ export class AccountLifecycle {
       throw error;
     }
     if (drain.phase === "draining") {
-      if (await this.hooks.referenced(id, true) || this.jobs.has(id) || await this.hooks.panesBusy?.()) return { state: "draining", destinationId: drain.destinationId };
+      if (await this.hooks.referenced(id, true) || this.jobs.has(id) || await this.hooks.panesBusy?.(id)) return { state: "draining", destinationId: drain.destinationId };
       await this.registry.cancelSignIn(id);
       await this.accounts.drain(id, drain.destinationId, "logout");
       try {
@@ -234,6 +254,18 @@ export class AccountLifecycle {
     this.drainTimer.unref?.();
   }
 
+  private retry(account: AccountRecord) {
+    if (this.disposed || this.retries.has(account.id)) return;
+    const timer = setTimeout(() => {
+      this.retries.delete(account.id);
+      const current = this.accounts.get(account.id);
+      if (!current || current.state !== "ready" || current.generation !== account.generation || this.accounts.drains[account.id] || this.jobs.has(account.id)) return;
+      void this.registry.retryAccount(account.id).catch(() => this.retry(account));
+    }, 1_000);
+    timer.unref?.();
+    this.retries.set(account.id, timer);
+  }
+
   private async begin(account: AccountRecord, device: boolean) {
     const token = {};
     this.jobs.set(account.id, token);
@@ -256,21 +288,21 @@ export class AccountLifecycle {
         this.registry.blockAccount(account.id, true);
         return;
       }
-      if (state === "complete" && snapshot?.authenticated === true) {
+      if (state === "complete" && snapshot?.authenticated === true && snapshot.accountIdentity) {
         await this.accept(this.accounts.get(account.id)!, snapshot, true);
         this.registry.logins.acknowledge(account.id, true);
       } else {
         this.results.set(account.id, { state: state === "cancelled" ? "cancelled" : "failed", ...(error ? { error } : {}) });
         if (this.results.size > 50) this.results.delete(this.results.keys().next().value!);
         if (account.state === "pending") await this.discard(account.id);
-        else await this.accept(this.accounts.get(account.id)!, { state: "available", authenticated: false });
+        else await this.accept(this.accounts.get(account.id)!, snapshot ?? { state: "unavailable" });
       }
     }, false)).catch(() => this.exclusive(async () => {
       this.jobs.delete(account.id);
       const current = this.accounts.get(account.id);
       try {
         if (current?.state === "pending") await this.discard(account.id);
-        else if (current) await this.accounts.stop(account.id);
+        else if (current) await this.observe(account.id, { state: "unavailable" });
       } catch { console.error("Account sign-in state could not be saved"); }
     }, false)).finally(() => { if (this.pending.get(account.id) === finished) this.pending.delete(account.id); });
     this.pending.set(account.id, finished);
@@ -278,6 +310,10 @@ export class AccountLifecycle {
   }
 
   private async accept(account: AccountRecord, snapshot: ProviderSnapshot, force = false) {
+    if (snapshot.authenticated !== false && !(snapshot.authenticated === true && snapshot.accountIdentity)) {
+      if (account.state === "ready") this.retry(account);
+      return;
+    }
     if (force || snapshot.authenticated !== true || !snapshot.accountIdentity || snapshot.accountIdentity !== account.identity) this.hooks.invalidate(account.id);
     const next = await this.accounts.identify(account.id, snapshot.authenticated === true ? snapshot.accountIdentity : undefined, force);
     if (snapshot.authenticated !== true) await this.accounts.stop(account.id);

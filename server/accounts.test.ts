@@ -78,11 +78,26 @@ describe("PC-local accounts", () => {
     expect((await service.identify(first.id, undefined)).generation).toBeGreaterThan(signedIn.generation);
   });
 
-  it.each(["{", '{"version":9,"accounts":[]}', '{"version":1,"accounts":[{"id":"../escape","of":"claude","generation":1,"state":"pending"}],"retired":[]}'])("fails closed on corrupt state %s", (content) => {
+  it.each(["{", '{"version":9,"accounts":[]}', '{"version":1,"accounts":[{"id":"../escape","of":"claude","generation":1,"state":"pending"}],"retired":[]}'])("fails closed on corrupt state %s", async (content) => {
     const { dir } = fixture();
     writeFileSync(join(dir, "accounts.json"), content);
-    expect(() => new core!.AccountService(dir, () => bases)).toThrow(/accounts.json/);
+    const restored = new core!.AccountService(dir, () => bases);
+    expect(restored.snapshot).toEqual([]);
+    expect(restored.list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
+    await expect(restored.add("claude")).rejects.toThrow(/accounts.json/);
     expect(readFileSync(join(dir, "accounts.json"), "utf8")).toBe(content);
+  });
+
+  it.each(["missing", "disabled"])("starts with accounts off when their base is %s", async (reason) => {
+    const { dir, service } = fixture();
+    await service.add("claude");
+    const before = readFileSync(join(dir, "accounts.json"), "utf8");
+    const restoredBases: InstanceConfigMap = reason === "missing" ? { codex: bases.codex } : { ...bases, claude: { ...bases.claude, enabled: false } };
+    const restored = new core!.AccountService(dir, () => restoredBases);
+    expect(restored.snapshot).toEqual([]);
+    expect(restored.list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
+    await expect(restored.add("codex")).rejects.toThrow(/accounts.json/);
+    expect(readFileSync(join(dir, "accounts.json"), "utf8")).toBe(before);
   });
 
   it("refuses an account-root alias", async () => {
@@ -101,7 +116,7 @@ describe("PC-local accounts", () => {
     const disk = JSON.parse(readFileSync(file, "utf8"));
     disk.accounts.push(disk.accounts[0]);
     writeFileSync(file, JSON.stringify(disk));
-    expect(() => new core!.AccountService(dir, () => bases)).toThrow(/accounts.json/);
+    expect(new core!.AccountService(dir, () => bases).list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
   });
 
   it("keeps the old snapshot and file after an atomic write fails", async () => {
@@ -118,7 +133,7 @@ describe("PC-local accounts", () => {
   it("refuses disabled bases and configured-id collisions", async () => {
     const { dir, service } = fixture();
     const added = await service.add("claude");
-    expect(() => new core!.AccountService(dir, () => ({ ...bases, [added.id]: { driver: "codex" } }))).toThrow(/accounts.json/);
+    expect(new core!.AccountService(dir, () => ({ ...bases, [added.id]: { driver: "codex" } })).list()).toEqual([expect.objectContaining({ state: "stopped", error: expect.stringContaining("accounts.json") })]);
     const other = join(dir, "disabled");
     const disabled = new core!.AccountService(other, () => ({ claude: { driver: "claudeAgent", enabled: false } }));
     await expect(disabled.add("claude")).rejects.toThrow("enabled Claude or Codex");

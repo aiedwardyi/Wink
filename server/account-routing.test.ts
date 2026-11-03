@@ -75,7 +75,7 @@ async function fixture(empty = false, of = "claude") {
   store.groups.length = 0;
   const bot = store.createBot({ name: "Routing fixture" });
   const logout = vi.spyOn(registry, "signOut").mockResolvedValue(true);
-  const panes = vi.fn<typeof fetch>(async () => Response.json({ counts: {} }));
+  const panes = vi.fn<typeof fetch>(async () => Response.json({ count: 0, unknown: 0, generations: {} }));
   vi.stubGlobal("fetch", panes);
   const deps = { accounts, registry, providers, store, reload: () => providers.reload(configs()),
     rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(),
@@ -299,6 +299,42 @@ describe("engine default account routing", () => {
 });
 
 describe("account removal drain", () => {
+  it.each(["claude", "added", "base destination"])("routes new work to the confirmed destination during a %s drain", async (source) => {
+    const f = await fixture();
+    const id = source === "claude" ? "claude" : f.added[0].id;
+    const destinationId = source === "base destination" ? "claude" : f.added[2].id;
+    if (id !== "claude") await f.useDefault(id);
+    f.providers.started("in-flight", id);
+    await f.controller.remove(id, destinationId);
+    expect(f.accounts.drains[id]?.phase).toBe("draining");
+    expect(f.resolve().instanceId).toBe(destinationId);
+    expect(f.controller.bots?.catalogInstanceId(f.bot.modelSelection)).toBe(destinationId);
+    expect(f.controller.bots?.checkSelection(f.bot.modelSelection)).toBe(f.bot.modelSelection);
+    expect(f.controller.bots?.noteAccount()).toEqual({ instanceId: destinationId, available: true });
+    const candidate = { instanceId: "claude", driverKind: "claudeAgent", available: true, defaultModel: "claudeAgent-1", capabilities: {} };
+    expect(f.controller.bots?.automaticCandidate(candidate, (instanceId) => ({ ...candidate, instanceId }))).toMatchObject({ available: true, instanceId: "claude" });
+    expect(f.providers.current("in-flight")?.instanceId).toBe(id);
+    expect(f.logout).not.toHaveBeenCalled();
+    const next = f.store.createBot({ name: "Destination turn" });
+    f.providers.started(next.threadId, destinationId);
+    f.store.setActivity(next.id, "working", next.threadId);
+    f.providers.settled("in-flight");
+    await f.controller.resumeDrains();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(id);
+    expect(f.providers.current(next.threadId)?.instanceId).toBe(destinationId);
+    expect(f.resolve().instanceId).toBe(destinationId);
+    f.providers.settled(next.threadId);
+  });
+
+  it("directs unavailable accounts to the current sign-in and main-account actions", async () => {
+    const f = await fixture();
+    await f.useDefault(f.added[0].id);
+    await f.accounts.stop(f.added[0].id);
+    expect(f.resolve).toThrow("Sign in again in Settings > Connections");
+    expect(() => f.controller.bots?.checkSelection({ instanceId: f.added[0].id, model: "claudeAgent-1" })).toThrow("Use Set as Main on the Usage page");
+    expect((await f.request("POST", `/api/accounts/${f.added[0].id}/default`)).body.error).toContain("Sign in again in Settings > Connections");
+  });
+
   it("keeps last-account sign-out available without changing portable selections", async () => {
     const f = await fixture(true);
     const before = JSON.stringify(f.bot.modelSelection);
@@ -323,7 +359,7 @@ describe("account removal drain", () => {
     const f = await fixture();
     f.active.add(f.bot.id);
     await f.controller.remove("claude", f.added[2].id);
-    expect(f.resolve).toThrow(/draining|account/i);
+    expect(f.resolve().instanceId).toBe(f.added[2].id);
     expect(f.logout).not.toHaveBeenCalled();
   });
 
@@ -554,7 +590,7 @@ describe("account removal drain", () => {
   it("retains the conservative refusal for live or unknown panes", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[0].id)).status).toBe(200);
-    f.panes.mockResolvedValue(Response.json({ counts: { [f.bot.id]: 1 } }));
+    f.panes.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { [f.added[0].generation]: 1 } }));
     await expect(f.controller.remove(f.added[0].id, f.added[2].id)).rejects.toThrow(/pane|still used/i);
     expect(f.logout).not.toHaveBeenCalled();
   });
@@ -584,7 +620,8 @@ describe("account-aware Claude notes", () => {
     expect((await f.useDefault(f.added[2].id)).status).toBe(200);
     if (state === "signed out") await f.accounts.stop(f.added[2].id);
     else { f.active.add(f.bot.id); await f.controller.remove(f.added[2].id, f.added[0].id); }
-    expect(f.notes()).toBeNull();
+    if (state === "signed out") expect(f.notes()).toBeNull();
+    else await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe(f.added[0].id);
     expect(first).not.toHaveBeenCalled();
   });
 

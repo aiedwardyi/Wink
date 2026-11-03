@@ -14,8 +14,10 @@ import type { RateLimitsMap } from "./rate-limits-store.ts";
 const core = await import("./accounts.ts").catch(() => null);
 const runtime = await import("./account-runtime.ts").catch(() => null);
 const registries: ProviderRegistry[] = [];
+const controllers: Array<{ dispose(): void }> = [];
 let serial = 0;
 afterEach(async () => {
+  controllers.splice(0).forEach((controller) => controller.dispose());
   await Promise.all(registries.splice(0).map((registry) => registry.disposeAll()));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -47,13 +49,14 @@ async function fixture() {
   const invalidate = vi.spyOn(usage, "invalidate");
   const holds = vi.fn();
   const waits = vi.fn();
-  const request = vi.fn<typeof fetch>(async () => Response.json({ counts: {} }));
+  const request = vi.fn<typeof fetch>(async () => Response.json({ count: 0, unknown: 0, generations: {} }));
   vi.stubGlobal("fetch", request);
   const controller = runtime!.createAccountRuntime({
     accounts, registry, providers, store, reload: () => providers.reload(configs()), rateLimits, saveRateLimits: () => {}, usage, availability,
     invalidateHolds: holds, invalidateWaits: waits, botActive: () => false,
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: () => false,
   });
+  controllers.push(controller);
   return { account, accounts, registry, providers, store, bot, logout, rateLimits, availability, invalidate, holds, waits, request, controller };
 }
 
@@ -64,18 +67,29 @@ describe("account removal references", () => {
     if (reference === "pending") f.bot.pendingModelSelection = { instanceId: f.account.id, model: "codex-1" };
     if (reference === "turn") f.providers.started("detached-thread", f.account.id);
     if (reference === "helper") f.registry.get(f.account.id)!.accountBusy = () => true;
-    if (reference === "pane") f.request.mockResolvedValue(Response.json({ counts: { [f.bot.id]: 1 } }));
+    if (reference === "pane") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { [f.account.generation]: 1 } }));
     await expect(f.controller.remove(f.account.id)).rejects.toThrow("still used");
     expect(f.logout).not.toHaveBeenCalled();
     expect(f.accounts.get(f.account.id)).toBeDefined();
     if (reference === "turn") f.providers.settled("detached-thread");
   });
 
+  it.each(["shell", "other account"])("allows sign-out with an unrelated %s pane", async () => {
+    const f = await fixture();
+    f.request.mockImplementation(async (url) => String(url).includes("/account-panes?")
+      ? Response.json({ count: 0, unknown: 0, generations: {} })
+      : Response.json({ counts: { [f.bot.id]: 1 } }));
+    await f.controller.remove(f.account.id);
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.account.id);
+    expect(String(f.request.mock.calls[0][0])).toContain(`accountId=${f.account.id}`);
+  });
+
   it("refuses logout when the pane bridge cannot prove there are no panes", async () => {
     const f = await fixture();
     f.request.mockRejectedValue(new Error("unreachable fixture"));
-    await expect(f.controller.remove(f.account.id)).rejects.toThrow("still used");
+    await expect(f.controller.remove(f.account.id)).rejects.toThrow("Terminal host is unreachable or account pane state is unknown");
     expect(f.logout).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked(f.account.id)).toBe(false);
   });
 
   it("retires an unused account and invalidates only its caches", async () => {

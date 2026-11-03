@@ -165,7 +165,8 @@ function checkLaunches(f: ReturnType<typeof fixture>, kind: string) {
     if (kind === "codex") {
       expect(launch.env.CODEX_SQLITE_HOME).toBe(join(f.account.home, "state"));
       expect(launch.args).toContain('forced_login_method="chatgpt"');
-    } else expect(launch.args.slice(-2)).toEqual(["--setting-sources", ""]);
+    } else if (launch.args[0] === "auth" || launch.args[0] === "--version") expect(launch.args).not.toContain("--setting-sources");
+    else expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
   }
 }
 
