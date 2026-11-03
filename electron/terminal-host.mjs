@@ -918,10 +918,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           // Past the trust menu, so stop scanning every chunk for it.
           session.claudeTrustAnswered = true;
           session.autoNote = null;
-          if (!session.agentBusy) {
+          const resumed = session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt;
+          if (!session.agentBusy || resumed) {
             session.autoDelivered = false;
             session.autoReported = false;
           }
+          if (resumed) session.stallArmedAt = now();
         }
         session.agentBusy = busy;
       }
