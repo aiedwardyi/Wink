@@ -40,7 +40,7 @@ beforeEach(() => {
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   refreshInstances.mockClear();
-  request.mockReset().mockImplementation(async (path: string) => path === "/api/accounts" ? { accounts: state.instances.map((account) => ({
+  request.mockReset().mockImplementation(async (path: string) => path.endsWith("/destination") ? { destinationId: state.instances.find((account) => !account.accountMain && account.accountState === "ready" && account.snapshot.authenticated)?.instanceId } : path === "/api/accounts" ? { accounts: state.instances.map((account) => ({
     id: account.instanceId, of: account.accountOf, state: account.accountState, default: account.accountMain,
   })) } : {});
 });
@@ -101,6 +101,35 @@ it("skips stopped and loading accounts when choosing Main's destination", async 
   await update();
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-3" }) });
+});
+
+it("uses the server's compatible destination for Main sign-out", async () => {
+  await render(3);
+  request.mockImplementation(async (path: string) => path.endsWith("/destination") ? { destinationId: "account-2" } : {});
+  await act(async () => buttons("Sign Out")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/destination");
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-2" }) });
+});
+
+it("keeps Main signed in when compatible destination selection fails", async () => {
+  await render(3);
+  request.mockImplementation(async (path: string) => {
+    if (path.endsWith("/destination")) throw new Error("This account does not offer the selected model; choose a model first");
+    return {};
+  });
+  await act(async () => buttons("Sign Out")[0]!.click());
+  expect(request.mock.calls.some(([path]) => path.endsWith("/sign-out"))).toBe(false);
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("selected model");
+});
+
+it.each(["en", "ko"] as const)("localizes a missing ready destination in %s", async (locale) => {
+  persistPreference(locale);
+  await render(3);
+  request.mockRejectedValueOnce(new Error("No ready account can take over this profile"));
+  await act(async () => buttons(locale === "en" ? "Sign Out" : "로그아웃")[0]!.click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en"
+    ? "No ready account can take over this profile" : "이 프로필을 이어받을 준비된 계정이 없어요");
+  expect(request.mock.calls.some(([path]) => path.endsWith("/sign-out"))).toBe(false);
 });
 
 it.each(["Personal account", undefined])("uses the engine account label without an email (%s)", async (label) => {

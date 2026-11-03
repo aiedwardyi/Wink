@@ -481,6 +481,62 @@ describe("account removal drain", () => {
     expect(readFileSync(join(f.root, "accounts.json"), "utf8")).toBe(before);
   });
 
+  it.each(["model", "effort"])("selects the first compatible sign-out destination for %s", async (kind) => {
+    const f = await fixture();
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    const candidates = ["claude", f.added[1].id];
+    for (const id of candidates) {
+      if (kind === "model") Object.assign(f.registry.get(id)!.models, { default: "other", options: [] });
+      else f.registry.get(id)!.adapter.capabilities.effortLevels = ["low"];
+    }
+    if (kind === "effort") f.bot.pendingModelSelection = { ...f.bot.modelSelection, effort: "high" };
+    const path = `/api/accounts/${f.added[0].id}/destination`;
+    const before = readFileSync(join(f.root, "accounts.json"), "utf8");
+    const selected = await f.request("GET", path);
+    expect(selected.status).toBe(200);
+    expect(selected.body).toEqual({ destinationId: f.added[2].id });
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(readFileSync(join(f.root, "accounts.json"), "utf8")).toBe(before);
+    expect((await f.request("POST", `/api/accounts/${f.added[0].id}/sign-out`, selected.body)).status).toBe(200);
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.added[0].id);
+  });
+
+  it.each(["claude", "codex"])("skips unconfirmed %s authentication when selecting a sign-out destination", async (of) => {
+    const f = await fixture(false, of);
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    vi.spyOn(f.registry.get(of)!, "snapshot").mockResolvedValue({ state: "available" });
+    await f.registry.describe({ refresh: true });
+    const result = await f.request("GET", `/api/accounts/${f.added[0].id}/destination`);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ destinationId: f.added[1].id });
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.accounts.isDefault(f.added[0].id)).toBe(true);
+  });
+
+  it("refuses automatic destination selection when authentication is unconfirmed everywhere else", async () => {
+    const f = await fixture();
+    await f.useDefault(f.added[0].id);
+    for (const id of ["claude", f.added[1].id, f.added[2].id]) {
+      vi.spyOn(f.registry.get(id)!, "snapshot").mockResolvedValue({ state: "available" });
+    }
+    await f.registry.describe({ refresh: true });
+    const result = await f.request("GET", `/api/accounts/${f.added[0].id}/destination`);
+    expect(result.status).toBe(400);
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.accounts.isDefault(f.added[0].id)).toBe(true);
+  });
+
+  it("refuses automatic destination selection when no compatible account remains", async () => {
+    const f = await fixture();
+    await f.useDefault(f.added[0].id);
+    for (const id of ["claude", f.added[1].id, f.added[2].id]) f.registry.blockAccount(id, true);
+    const result = await f.request("GET", `/api/accounts/${f.added[0].id}/destination`);
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: "No ready account can take over this profile" });
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.accounts.isDefault(f.added[0].id)).toBe(true);
+  });
+
   it("keeps the default and pending model picks unchanged after failed logout and does not retry on restart", async () => {
     const f = await fixture();
     expect((await f.useDefault(f.added[0].id)).status).toBe(200);
