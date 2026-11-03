@@ -206,7 +206,7 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
   );
 }
 
-export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string }) {
+export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean }) {
   const { t } = useI18n();
   const [current, setCurrent] = useState(instance);
   const [waiting, setWaiting] = useState(instance.loginState === "pending");
@@ -317,7 +317,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   };
 
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
-  if (!waiting && current.snapshot.authenticated === undefined && !current.loginState) return null;
+  if (!forceSignIn && !waiting && current.snapshot.authenticated === undefined && !current.loginState) return null;
   if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   return (
     <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
@@ -398,7 +398,7 @@ export function EngineSetup({
       </div>
 
       {oneClick ? (
-        <div className="mt-3 flex justify-end"><EngineSignIn instance={instance} /></div>
+        <div className="mt-3 flex justify-end"><EngineSignIn instance={instance} forceSignIn={signIn} /></div>
       ) : command ? (
         <CommandRow command={command} signInInstanceId={signInOnly ? instance.instanceId : undefined} installInstanceId={signInOnly ? undefined : instance.instanceId} installOnly={intent === "inject"} signsIn={intent !== "inject" && installSignsIn(install)} docsUrl={install.docsUrl} actionLabel={signInOnly ? t("engine.openSignIn") : t("engine.openInstall")} />
       ) : (
