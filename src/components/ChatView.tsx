@@ -36,7 +36,7 @@ import { SignedInCard, SignInCard } from "./SignInCard";
 import { BotAvatar } from "./Avatar";
 import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
-import { isTerminalSkin, useSkin } from "@/lib/skins";
+import { isTerminalSkin, isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { logLine } from "@/lib/terminal-skin";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { usePhoneHeaderNameFloor } from "@/lib/use-phone-header-name";
@@ -289,7 +289,7 @@ export function ErrorRow({
 /** A tool run: spinner while live, check/cross once settled. */
 const ActivityChip = memo(function ActivityChip({ message, notices }: { message: Message; notices?: LinkedApproval[] }) {
   const { t } = useI18n();
-  const terminal = isTerminalSkin(useSkin());
+  const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
   if (tool.name === "memory.save") return <MemorySaveChip summary={tool.spoken ?? ""} at={message.at} />;
@@ -632,7 +632,7 @@ const MessagesList = memo(function MessagesList({
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const skin = useSkin();
-  const terminal = isTerminalSkin(skin);
+  const terminal = isTerminalToolSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
   const showActivities = showToolCalls || terminal;
   const { workerAt, open, toggle } = useWorkerRows(workers, messages);
@@ -988,9 +988,10 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   const livePanes = useLivePanes(bot.id, runs.length > 0 || (state.terminalPanes[bot.id]?.length ?? 0) > 0, paneLabelsKey(state.terminalPanes[bot.id]), sessionKey, dispatch, runs);
   const workers = useMemo(() => runs.map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })), [runs, livePanes, bot.id]);
   const rowWorkers = useMemo(() => jump.messages ? workerRuns(messages, jump.messages).map((run) => ({ run, state: shownState(run, livePanes, lastChanged.get(bot.id)) })) : workers, [messages, jump.messages, livePanes, workers, bot.id]);
-  const terminal = isTerminalSkin(useSkin());
+  const skin = useSkin();
+  const terminal = isTerminalSkin(skin);
   const showToolCalls = showToolCallsEnabled(state.config);
-  const showActivities = showToolCalls || terminal;
+  const showActivities = showToolCalls || isTerminalToolSkin(skin);
   const renders = useCallback(
     (index: number) => messageVisible(messages[index], { showToolCalls, showActivities, transcript: messages }),
     [messages, showToolCalls, showActivities],
@@ -1858,7 +1859,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
         />
-        {terminal && <TermStatusLine bot={bot} engine={engine} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} turns={activeTask?.usage?.turns} />}
+        {terminal && <TermStatusLine bot={bot} engine={engine} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>
       </div>
 

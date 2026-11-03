@@ -51,7 +51,7 @@ const versions = (rows: { instanceId: string; snapshot: { version?: string | nul
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
 describe("ProviderRegistry", () => {
-  it.each(["antigravityAgent", "museAgent"])("marks only completed available Gemini probes for %s", async (kind) => {
+  it.each(["antigravityAgent", "claudeAgent", "codex", "museAgent"])("marks completed available auth probes for %s", async (kind) => {
     const fake = makeFakeDriver({ kind });
     const registry = new ProviderRegistry([fake.driver]);
     try {
@@ -63,12 +63,30 @@ describe("ProviderRegistry", () => {
       answer({ state: "available" });
       const rows = await pending;
       expect(rows[0].snapshot.authenticated).toBeUndefined();
-      expect(rows[0].snapshot.authChecked).toBe(kind === "antigravityAgent" ? true : undefined);
+      expect(rows[0].snapshot.authChecked).toBe(true);
       expect((await registry.describeCached())[0].snapshot).toEqual(rows[0].snapshot);
       expect(registry.describeSaved()[0].snapshot).toEqual(rows[0].snapshot);
       registry.get("a")!.snapshot = async () => ({ state: "unavailable" });
       expect((await registry.describe())[0].snapshot.authChecked).toBeUndefined();
     } finally { await registry.disposeAll(); }
+  });
+
+  it("preserves auth completion in saved probes across restart", async () => {
+    const cacheDir = mkdtempSync(join(homedir(), "probe-cache-"));
+    const configs = { a: { driver: "fake" } };
+    const first = new ProviderRegistry([makeFakeDriver().driver], { cacheDir });
+    const next = new ProviderRegistry([makeFakeDriver().driver], { cacheDir });
+    try {
+      await first.load(configs);
+      first.get("a")!.snapshot = async () => ({ state: "available", authChecked: true });
+      await first.describe();
+      await next.load(configs);
+      expect(next.describeSaved()[0].snapshot.authChecked).toBe(true);
+      expect(next.describeSaved()[0].snapshot.authenticated).toBeUndefined();
+    } finally {
+      await Promise.all([first.disposeAll(), next.disposeAll()]);
+      await removeTempDir(cacheDir);
+    }
   });
 
   it("resolves Claude sign-in directly to auth login", () => {

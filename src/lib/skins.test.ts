@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
-import { SKINS, SKIN_IDS, DEFAULT_SKIN, LIGHT_SKIN_IDS, applySkin, isTerminalSkin, readSkin } from "./skins";
+import { SKINS, SKIN_IDS, DEFAULT_SKIN, LIGHT_SKIN_IDS, applySkin, isTerminalSkin, isTerminalToolSkin, readSkin, type SkinId } from "./skins";
 import { terminalTheme } from "./terminal-appearance";
 
 const css = readFileSync(
@@ -281,6 +281,17 @@ describe("Terminal composer", () => {
 describe("Terminal tool rows", () => {
   const terminal = css.split(TERMINAL_SCOPE)[1]?.split("@keyframes term-blink")[0] ?? "";
   const rule = (selector: string) => terminal.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+
+  it("limits terminal tool rendering to the explicit terminal and TUI skins", () => {
+    const tui = ["tui", "tui-black", "tui-amber", "tui-ice", "tui-slate", "tui-smoke"];
+    for (const id of SKIN_IDS) expect(isTerminalToolSkin(id)).toBe(isTerminalSkin(id) || tui.includes(id));
+    expect(isTerminalToolSkin("tuition-dark" as SkinId)).toBe(false);
+  });
+
+  it("hides both standard and WebKit disclosure markers", () => {
+    const compact = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../components/ActivityRun.css"), "utf8");
+    expect(compact).toMatch(/\.term-step-head::marker,\s*\.term-step-head::-webkit-details-marker\s*\{\s*display: none;/);
+  });
 
   it("wraps output rows inside the column instead of clipping them", () => {
     const out = rule(String.raw`\.term-step-out > div`);

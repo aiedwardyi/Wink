@@ -23,27 +23,40 @@ describe("room defaults", () => {
     expect(new Store(selection).group(room.id)?.defaultResponder).toEqual({ kind: "everyone" });
   });
 
-  it("preserves saved policies and gives an old room without a value its first member", () => {
+  it.each([
+    { kind: "member", botId: "lead" },
+    { kind: "mentions" },
+    undefined,
+  ] as const)("loads a saved %j room with everyone answering and mentions selecting one", (policy) => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
-    const lead = store.createGroup("Lead", [first.id, second.id], false, undefined, {
-      defaultResponder: { kind: "member", botId: second.id },
+    store.patchBot(first.id, { name: "Ada" });
+    store.patchBot(second.id, { name: "Kit" });
+    const room = store.createGroup("Saved room", [first.id, second.id], false, undefined, {
+      defaultResponder: policy?.kind === "member" ? { kind: "member", botId: second.id } : policy,
     });
-    const mentions = store.createGroup("Mentions", [first.id], false, undefined, {
-      defaultResponder: { kind: "mentions" },
-    });
-    const legacy = store.createGroup("Legacy", [first.id, second.id]);
     const file = join(DATA_DIR, "groups.json");
     const saved = JSON.parse(readFileSync(file, "utf8"));
-    delete saved.find((room: { id: string }) => room.id === legacy.id).defaultResponder;
+    if (!policy) delete saved.find((candidate: { id: string }) => candidate.id === room.id).defaultResponder;
     writeFileSync(file, JSON.stringify(saved));
 
     const reloaded = new Store(selection);
-    expect(reloaded.group(lead.id)?.defaultResponder).toEqual({ kind: "member", botId: second.id });
-    expect(reloaded.group(mentions.id)?.defaultResponder).toEqual({ kind: "mentions" });
-    expect(reloaded.group(legacy.id)?.defaultResponder).toEqual({ kind: "member", botId: first.id });
+    const loaded = reloaded.group(room.id)!;
+    const members = loaded.memberIds.map((id) => reloaded.bot(id)!);
+    expect(roomResponders("hi", members, loaded.defaultResponder)).toEqual(members);
+    expect(roomResponders("@Kit hi", members, loaded.defaultResponder)).toEqual([members[1]]);
+    expect(loaded.defaultResponder).toEqual({ kind: "everyone" });
+    expect(new Store(selection).group(room.id)?.defaultResponder).toEqual({ kind: "everyone" });
+  });
+
+  it("keeps bot-to-bot channels mention-only across reloads", () => {
+    const store = new Store(selection);
+    const first = store.createBot();
+    const second = store.createBot();
+    const dm = store.createGroup("DM", [first.id, second.id], true);
+
     expect(normalizeGroupDefaultResponder(undefined, [])).toEqual({ kind: "mentions" });
-    expect(store.createGroup("DM", [first.id, second.id], true).defaultResponder).toEqual({ kind: "mentions" });
+    expect(new Store(selection).group(dm.id)?.defaultResponder).toEqual({ kind: "mentions" });
   });
 });

@@ -54,7 +54,7 @@ const savedProbeSchema = z.object({
   key: z.string(),
   snapshot: z.object({
     state: z.enum(["available", "unavailable"]), reason: z.string().optional(),
-    authenticated: z.boolean().optional(), account: z.string().optional(), version: z.string().nullable().optional(),
+    authenticated: z.boolean().optional(), authChecked: z.boolean().optional(), account: z.string().optional(), version: z.string().nullable().optional(),
     billing: z.enum(["metered", "subscription"]).optional(),
   }),
   cliCandidates: z.array(z.string()),
@@ -574,6 +574,7 @@ export class ProviderRegistry {
     } catch (e) {
       snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) };
     }
+    if (snapshot.state === "available") snapshot = { ...snapshot, authChecked: true };
     return {
       snapshot,
       // every copy of the driver's default binary on the augmented PATH -
@@ -587,7 +588,6 @@ export class ProviderRegistry {
   private row(entry: RegistryEntry, probe: Probe) {
     const driver = this.driversByKind.get(entry.shadow?.driverKind ?? entry.live!.driverKind);
     const snapshot = { ...probe.snapshot };
-    if (entry.live?.driverKind === "antigravityAgent" && snapshot.state === "available") snapshot.authChecked = true;
     delete snapshot.accountIdentity;
     delete snapshot.accountAuthenticated;
     if (entry.shadow) {

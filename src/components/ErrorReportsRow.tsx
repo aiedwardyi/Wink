@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/state/store";
 import { Card } from "./SettingsPrimitives";
@@ -8,17 +8,28 @@ export function ErrorReportsRow() {
   const [enabled, setEnabled] = useState(false);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  const consent = useRef<{ reports?: boolean; usage?: boolean }>({});
   const read = async () => {
     const [reports, usage] = await Promise.allSettled([window.ogb?.errorReportConsent?.(), api("/api/analytics")]);
-    return (reports.status === "fulfilled" && reports.value === true) || (usage.status === "fulfilled" && usage.value.enabled === true);
+    if (reports.status === "fulfilled") consent.current.reports = reports.value === true;
+    if (usage.status === "fulfilled") consent.current.usage = usage.value.enabled === true;
+    const value = consent.current;
+    return value.reports || value.usage ? true : value.reports === false && value.usage === false ? false : undefined;
   };
   useEffect(() => {
+    if (ready) return;
     let gone = false;
-    void read().then((value) => {
-      if (!gone) { setEnabled(value); setReady(true); }
-    }).catch(() => {});
-    return () => { gone = true; };
-  }, []);
+    let retry: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      const value = await read();
+      if (gone) return;
+      if (value !== undefined) setEnabled(value);
+      setReady(value !== undefined);
+      if (value === undefined) retry = setTimeout(() => void refresh(), 2000);
+    };
+    void refresh();
+    return () => { gone = true; clearTimeout(retry); };
+  }, [ready]);
   if (!window.ogb?.setErrorReportConsent) return null;
   const toggle = async () => {
     if (saving || !ready) return;
@@ -28,10 +39,14 @@ export function ErrorReportsRow() {
         window.ogb?.setErrorReportConsent?.(!enabled),
         api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: !enabled }) }),
       ]);
+      if (results[0].status === "fulfilled") consent.current.reports = !enabled;
+      if (results[1].status === "fulfilled") consent.current.usage = !enabled;
       if (results.some((result) => result.status === "rejected")) throw new Error("Consent update failed");
       setEnabled(!enabled);
     } catch {
-      try { setEnabled(await read()); } catch {}
+      const value = await read();
+      if (value !== undefined) setEnabled(value);
+      setReady(value !== undefined);
     } finally { setSaving(false); }
   };
   return (

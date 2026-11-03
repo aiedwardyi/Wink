@@ -828,6 +828,7 @@ export function ModelIndexSection() {
           <div className="flex min-w-0 items-center gap-3">
             <Segmented
               label={t("modelIndex.indexLabel")}
+              peek
               value={tab}
               options={TABS.map((id) => ({ id, label: t(INDEX_KEY[id]) }))}
               onChange={(id) => {

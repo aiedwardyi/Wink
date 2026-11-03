@@ -2,6 +2,23 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.228] - 2026-11-04
+
+### Added
+- Wink clears worker scratch folders after panes close, removes old unused worktrees, and limits diagnostic log growth.
+
+### Changed
+- One privacy switch turns off both crash reports and usage stats.
+- Sign Out on your Main account picks another ready account without a trip to Usage.
+
+### Fixed
+- The usage bar above the chat follows your Main account.
+- Workers keep your default Claude and Codex settings, and Claude no longer stops on setup screens.
+- Script panes can start through shell wrappers again.
+- Add Account waits for a signed-in account, and engine rows no longer flash Sign In while Wink checks the login.
+- Sign-in controls recover after failed or canceled attempts.
+- Bots keep their delegation task ids after a fresh session.
+
 ## [1.0.227] - 2026-11-03
 
 ### Added
@@ -519,6 +536,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.228]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.228
 [1.0.227]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.227
 [1.0.226]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.226
 [1.0.225]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.225

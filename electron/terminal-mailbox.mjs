@@ -455,6 +455,7 @@ function claudeWorkerSettings(dir) {
   const status = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(dir, "orbit-status.ps1").replace(/\\/g, "/")}" ${CLAUDE_COMPACT_WINDOW}`;
   return `${JSON.stringify({
     autoCompactWindow: CLAUDE_COMPACT_WINDOW,
+    skipDangerousModePermissionPrompt: true,
     permissions: { allow: ["Bash(orbit-clean:*)", "PowerShell(orbit-clean *)"] },
     statusLine: { type: "command", command: status },
     hooks: {

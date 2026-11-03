@@ -7,6 +7,8 @@ import { applyLocale, I18nProvider, persistPreference } from "@/lib/i18n";
 import { StoreProvider, type InstanceInfo } from "@/state/store";
 import { EngineSignIn } from "./EngineSetup";
 import { EngineRow as EngineRowView } from "./EnginesSettings";
+import { ProviderRegistry } from "../../server/harness/registry.ts";
+import { makeFakeDriver } from "../../server/testing/fake-driver.ts";
 
 function EngineRow(props: ComponentProps<typeof EngineRowView>) {
   return createElement(StoreProvider, null, createElement(EngineRowView, props));
@@ -59,6 +61,20 @@ afterEach(async () => {
 });
 
 describe("engine sign-in row", () => {
+  it.each(["claudeAgent", "codex"])("offers Sign In after an inconclusive %s registry probe", async (kind) => {
+    const registry = new ProviderRegistry([makeFakeDriver({ kind }).driver]);
+    try {
+      await registry.load({ [kind]: { driver: kind } });
+      registry.get(kind)!.snapshot = async () => ({ state: "available" });
+      const [row] = await registry.describe();
+      vi.stubGlobal("fetch", vi.fn(async () => json(capture)));
+      await render(createElement(EngineSignIn, { instance: instance(kind, { snapshot: row.snapshot }) }));
+      expect(host.textContent).toBe("Sign In");
+      await click("Sign In");
+      expect(fetch).toHaveBeenCalledWith(`/api/instances/${kind}/sign-in`, expect.objectContaining({ method: "POST" }));
+    } finally { await registry.disposeAll(); }
+  });
+
   it("keeps Linux Gemini sign-in available after an unsupported authentication probe", async () => {
     Object.assign(window, { ogb: { platform: "linux", openEngineSignIn: vi.fn(async () => "opened") } });
     const fetchMock = vi.fn(async () => json({}));

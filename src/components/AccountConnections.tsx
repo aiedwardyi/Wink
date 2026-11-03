@@ -68,14 +68,18 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
-  const mutate = async (path: string, body: object) => {
+  const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
+      if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
       await api(path, { method: "POST", body: JSON.stringify(body) });
       await reload();
-    } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
+    } catch (error) {
+      setError(error instanceof Error && error.message === "No ready account can take over this profile"
+        ? t("accounts.noDestination") : error instanceof Error && error.message || t("engines.didntFinish"));
+    }
     finally { setBusy(false); }
   };
   return (
@@ -83,7 +87,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       {accounts.map((account, index) => {
         const drain = account.drain;
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
-        const destination = main ? accounts.find((other) => other !== account && accountReady(other)) : undefined;
+        const hasDestination = accounts.some((other) => other !== account && accountReady(other));
         const loading = account.snapshot.authenticated === undefined && !account.loginState;
         const tag = main && <span className="ml-2 inline-block text-ink-secondary">{t("accounts.main")}</span>;
         const mark = <EngineMark instance={account} size={16} tapToShow />;
@@ -96,8 +100,8 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
             label={<>{accountReady(account) ? <span className="min-w-0 break-words text-ink">{accountLabel(account)}{tag}</span>
               : !loading && <span>{t("accounts.signedOut")}{tag}</span>}</>}
             actions={<>{add}{drain && drain.phase !== "failed" ? <span role="status">{t("accounts.removing")}</span>
-              : <button type="button" disabled={busy || (main && !destination && !drain)}
-                onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : destination ? { destinationId: destination.instanceId } : {})}
+              : <button type="button" disabled={busy || (main && !hasDestination && !drain)}
+                onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)}
                 className={CONNECTION_ACTION}>{t(drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}</>} />
         );
       })}

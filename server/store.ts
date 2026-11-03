@@ -752,8 +752,7 @@ export class Store {
     } catch {
       this.groups = [];
     }
-    // busy never survives a restart — no turn does either. Rooms saved
-    // before default responders existed adopt their first member as lead.
+    // busy never survives a restart - no turn does either.
     let botsMigrated = false;
     const crashedTaskThreads = new Map<string, string | null>();
     const chiefSectionsSeen = new Set<string>();
@@ -838,7 +837,7 @@ export class Store {
     }
     for (const g of this.groups) {
       g.busyBotId = null;
-      const normalized = normalizeGroupDefaultResponder(g.defaultResponder, g.memberIds, Boolean(g.dm));
+      const normalized = normalizeGroupDefaultResponder({ kind: "everyone" }, g.memberIds, Boolean(g.dm));
       if (JSON.stringify(normalized) !== JSON.stringify(g.defaultResponder)) groupsMigrated = true;
       g.defaultResponder = normalized;
       // Bot-to-bot channels intentionally remain one canonical thread.
