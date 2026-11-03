@@ -1,7 +1,7 @@
 // One side of the update restart check on a fresh Windows runner:
 //   node run.mjs before|after   install 1.0.900, update to 1.0.901 through the app's Restart path, time the gap
 //   node run.mjs compare        before vs after table, fails when the after side misses its checks
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { basename, join } from "node:path";
@@ -14,8 +14,11 @@ const PORT = 47123;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
+// A missing registry key or empty query still exits 1, so only the output counts.
 function ps(command) {
-  return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", windowsHide: true }).trim();
+  const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", windowsHide: true });
+  if (r.error) throw r.error;
+  return r.stdout.trim();
 }
 const list = (json) => (json ? [JSON.parse(json)].flat() : []);
 
