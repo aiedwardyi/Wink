@@ -172,7 +172,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return refreshInstancesRef.current();
   };
 
-  const finish = () => setStep(2);
+  const finish = () => hasReadyEngine ? setStep(2) : onDone();
 
   const live = (instances ?? []).filter((instance) => !isRetiredEngineKind(instance.driverKind));
   const engines = live

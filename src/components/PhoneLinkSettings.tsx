@@ -11,8 +11,8 @@ export function PhoneLinkSettings() {
   const [relayManaged, setRelayManaged] = useState(false);
   const relayBox = useRef<HTMLDivElement>(null);
 
-  // Relay setup is PC-only: a device window viewing this PC is refused, so it gets no link.
   useEffect(() => {
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return;
     let live = true;
     api("/api/phone-relay/status").then(() => live && setRelayManaged(true), () => {});
     return () => {

@@ -31,11 +31,11 @@ export function StepMark({ done, step, label, muted }: { done: boolean; step: nu
   );
 }
 
-export function GetTailscaleLink({ primary }: { primary?: boolean }) {
+export function GetTailscaleLink({ primary, onOpen }: { primary?: boolean; onOpen?: () => void }) {
   const { t } = useI18n();
   const url = tailscaleDownload();
   return (
-    <a href={url} target="_blank" rel="noreferrer" onClick={(event) => openOutside(event, url)} className={primary ? `${button} mt-2` : quietLink}>
+    <a href={url} target="_blank" rel="noreferrer" onClick={(event) => { openOutside(event, url); onOpen?.(); }} className={primary ? `${button} mt-2` : quietLink}>
       {t("settings.phone.getTailscale")}
     </a>
   );

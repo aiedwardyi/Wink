@@ -6,7 +6,6 @@ import { useI18n, type Translate } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { devicesSetup } from "@/lib/devices-setup";
 import type { RemotePhoneLink } from "@/lib/phone-setup";
-import { isPhone } from "@/lib/phone-swipe";
 import { api } from "@/state/store";
 import { button, GetTailscaleLink, openOutside, StepMark, StoreCodes, StoreLinks } from "./DeviceSetupParts";
 
@@ -35,8 +34,8 @@ const help = "mt-1 break-keep text-[12px] leading-relaxed text-ink-secondary";
 
 export function ConnectDevices() {
   const { t } = useI18n();
-  const phone = isPhone();
   const onThisPc = Boolean(window.ogb) || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  const phone = !onThisPc;
   const deviceWindow = window.ogb?.deviceWindow;
   const [status, setStatus] = useState<RemotePhoneLink | null>(null);
   const [tab, setTab] = useState<"phone" | "pc">("phone");
@@ -50,35 +49,55 @@ export function ConnectDevices() {
   const copiedTimer = useRef<number | undefined>(undefined);
   const live = useRef(true);
   const signedInHere = useRef(false);
+  const waiting = useRef<{ state: string; until: number } | null>(null);
+  const waitForChange = () => {
+    if (status?.setup?.state === "ready") return;
+    waiting.current = { state: JSON.stringify([status?.setup?.state, status?.setup?.backendState]), until: Date.now() + 60_000 };
+    setRefresh((value) => value + 1);
+  };
 
   useEffect(() => {
     live.current = true;
     let active = true;
     let pending = false;
-    const load = async () => {
+    let ready = false;
+    let probedAt = 0;
+    let timer: number | undefined;
+    const load = async (probe = false) => {
       if (pending || document.visibilityState === "hidden") return;
+      window.clearTimeout(timer);
       pending = true;
       try {
-        const body: RemotePhoneLink = await api("/api/remote-link?setup=1");
+        // A periodic real probe finds PCs and phones that join while the page stays open.
+        const cached = ready && !probe && !waiting.current && Date.now() - probedAt < 30_000;
+        if (!cached) probedAt = Date.now();
+        const body: RemotePhoneLink = await api(`/api/remote-link?setup=1${cached ? "&cached=1" : ""}`);
         if (active) {
+          ready = body.setup?.state === "ready" && Boolean(body.url);
+          if (waiting.current && (Date.now() >= waiting.current.until || waiting.current.state !== JSON.stringify([body.setup?.state, body.setup?.backendState]))) waiting.current = null;
           setStatus(body);
           if (body.setup?.backendState !== "NeedsLogin") setLoginOpened(false);
         }
       } catch {
+        ready = false;
         if (active) setStatus({ url: null, setup: { state: "error" } });
-      } finally { pending = false; }
+      } finally {
+        pending = false;
+        if (waiting.current && Date.now() >= waiting.current.until) waiting.current = null;
+        if (active) timer = window.setTimeout(() => void load(), waiting.current ? 2_000 : 6_000);
+      }
     };
-    const timer = window.setInterval(() => void load(), 2_000);
-    window.addEventListener("focus", load);
-    document.addEventListener("visibilitychange", load);
+    const onFocus = () => void load(true);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     void load();
     return () => {
       active = false;
       live.current = false;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       window.clearTimeout(copiedTimer.current);
-      window.removeEventListener("focus", load);
-      document.removeEventListener("visibilitychange", load);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
   }, [refresh]);
 
@@ -87,7 +106,10 @@ export function ConnectDevices() {
     if (!signedInHere.current || status?.setup?.state !== "serve-disabled" || !enableUrl || !window.ogb?.openExternal) return;
     signedInHere.current = false;
     void window.ogb.openExternal(enableUrl).then(() => {
-      if (live.current) setAllowOpened(true);
+      if (live.current) {
+        setAllowOpened(true);
+        waitForChange();
+      }
     }, () => {});
   }, [status?.setup?.state, status?.setup?.enableUrl, loginOpened]);
 
@@ -107,6 +129,7 @@ export function ConnectDevices() {
       if (live.current) {
         signedInHere.current = true;
         setLoginOpened(true);
+        waitForChange();
       }
     } catch {
       if (live.current) setLoginFailed(true);
@@ -138,10 +161,10 @@ export function ConnectDevices() {
         <StepMark done step={1} label={t("settings.phone.pcReady")} />
         <span className="text-ink">{t("settings.devices.thisPc")}</span>
         {account && <span>· {t("settings.devices.signedInAs", { account })}</span>}
-        <span>· <GetTailscaleLink /></span>
+        <span>· <GetTailscaleLink onOpen={waitForChange} /></span>
       </div> : <ol className="mt-3 flex flex-col gap-2">
         <Step n={1} done={installed} active={!installed} title={t("settings.phone.getTailscale")} label={t("settings.phone.pcReady")}>
-          {setup.state === "missing" ? <GetTailscaleLink primary /> : <div className="mt-1"><GetTailscaleLink /></div>}
+          {setup.state === "missing" ? <GetTailscaleLink primary onOpen={waitForChange} /> : <div className="mt-1"><GetTailscaleLink onOpen={waitForChange} /></div>}
           {setup.state === "checking" && <p className={help}>{t(setup.help)}</p>}
         </Step>
         <Step n={2} done={signedIn} active={installed && !signedIn} title={t("settings.devices.signIn")} label={t("settings.phone.pcReady")}>
@@ -163,6 +186,7 @@ export function ConnectDevices() {
             <a href={status.setup.enableUrl} target="_blank" rel="noreferrer" onClick={(event) => {
               openOutside(event, status.setup!.enableUrl!);
               setAllowOpened(true);
+              waitForChange();
             }} className={`${button} mt-1`}>{t("settings.devices.allowButton")}</a>
             {allowOpened && <p className={help}>{t("settings.devices.allowHelp")}</p>}
           </> : <p className={help}>{t(setup.help)}</p>)}
@@ -196,7 +220,7 @@ export function ConnectDevices() {
         </> : <>
           <Step n={1} done={setup.pcOnline} active={ready && !setup.pcOnline} title={t("settings.devices.pcStep")} label={t("settings.devices.pcStep")}>
             <p className={help}>{account ? t("settings.devices.pcHelp", { account }) : t("settings.devices.pcHelpSame")}</p>
-            <div className="mt-1"><GetTailscaleLink /></div>
+            <div className="mt-1"><GetTailscaleLink onOpen={waitForChange} /></div>
             {ready && copyButton}
           </Step>
           {deviceWindow && <Step n={2} done={false} active={ready && setup.pcOnline} title={pcs[0] ? t("settings.devices.openPc", { name: pcs[0].name }) : t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>

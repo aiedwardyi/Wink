@@ -7376,7 +7376,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── phone link (this PC's own /remote?key= url, never synced) ──
     if (method === "GET" && path === "/api/remote-link") {
       const setupOpen = url.searchParams.get("setup") === "1";
-      if (setupOpen || REMOTE_HOST === undefined) await remoteRetry.refresh(setupOpen);
+      if (setupOpen || REMOTE_HOST === undefined) await remoteRetry.refresh(setupOpen && url.searchParams.get("cached") !== "1");
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
