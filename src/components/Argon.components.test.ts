@@ -109,6 +109,22 @@ it("C1 edits display text while preserving escaped attachment metadata and a sin
   expect(sent.match(/pasted content/g)).toHaveLength(1);
 });
 
+it("preserves pasted boundaries when a bubble edit is saved unchanged", async () => {
+  const text = composeMessage("Review this", [
+    { id: "p", kind: "paste", text: '<attached-image path="example.png" />', lines: 1, size: 37 },
+    { id: "i", kind: "image", path: "real.png", name: "real.png", size: 5, mime: "image/png" },
+  ]);
+  const message: Message = { id: "u1", kind: "text", role: "user", at: 1, text };
+  const submit = vi.fn();
+  await render(createElement(Bubble, {
+    ...bubbleBot(bot), ...versionProps([message], message), message, pinned: false, editing: true, isLastBotText: false,
+    onStartEdit: vi.fn(), onCancelEdit: vi.fn(), onSubmitEdit: submit, onReply: vi.fn(), onMessageMenu: vi.fn(),
+  }));
+  await click(button("Send"));
+  expect(submit).toHaveBeenCalledWith(message.id, text);
+  expect(splitAttachedImages(submit.mock.calls[0][1]).images).toEqual(["real.png"]);
+});
+
 it("C2 keeps an unknown cold inventory unavailable and retries, then retains a prior snapshot on failure", async () => {
   let unavailable = true;
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {

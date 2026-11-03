@@ -15,7 +15,7 @@ import { detectChatOptions } from "@/lib/chat-options";
 import { ChatOptionChips } from "./ChatOptionChips";
 import { PeerMessageBody } from "./PeerMessage";
 import { webhookMessageView } from "@/lib/webhook-message";
-import { splitAttachedImages } from "@/lib/composer-attachments";
+import { editedMessageText, splitAttachedImages } from "@/lib/composer-attachments";
 import { placeTooltip } from "@/lib/tooltip-position";
 import { PLAIN_TOOLTIP_CLASS } from "@/lib/tooltips";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -70,7 +70,7 @@ function BubbleEditor({
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
   const submit = () => {
-    const text = [draft.trim(), ...attached.tags].filter(Boolean).join("\n\n");
+    const text = editedMessageText(initial, draft);
     if (text) onSubmit(text);
   };
   return (

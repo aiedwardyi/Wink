@@ -372,6 +372,7 @@ function unescapeAttribute(value: string): string {
 export type AttachedFile = { path: string; name: string; size?: number };
 
 const ATTACHED_FILE = /<attached-file\s+path="([^"]*)"((?:\s+[a-z]+="[^"]*")*)\s*\/?>/g;
+const PASTED_TEXT = /<pasted-text(?:\s+index="\d+")?>\n?([\s\S]*?)\n?<\/pasted-text>/g;
 
 function attachedFile(rawPath: string, rawAttributes: string): AttachedFile {
   const path = unescapeAttribute(rawPath);
@@ -395,7 +396,7 @@ export function attachedFilePreview(text: string, label = (name: string) => name
 export function splitAttachedImages(text: string): { display: string; images: string[]; files: AttachedFile[]; tags: string[] } {
   const pasted: string[] = [];
   let display = text.replace(
-    /<pasted-text(?:\s+index="\d+")?>\n?([\s\S]*?)\n?<\/pasted-text>/g,
+    PASTED_TEXT,
     (_match, inner: string) => {
       pasted.push(inner);
       return `\0PASTE${pasted.length - 1}\0`;
@@ -417,6 +418,18 @@ export function splitAttachedImages(text: string): { display: string; images: st
   });
   display = display.replace(/\0PASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)] ?? "");
   return { display: display.trim(), images, files, tags };
+}
+
+export function editedMessageText(initial: string, draft: string): string {
+  const attached = splitAttachedImages(initial);
+  if (draft.trim() === attached.display) return initial.trim();
+  const pasted = [...initial.matchAll(PASTED_TEXT)];
+  let text = draft;
+  pasted.forEach(([, inner], index) => {
+    if (inner) text = text.replace(inner, () => `\0EDITPASTE${index}\0`);
+  });
+  text = text.replace(/\0EDITPASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)]?.[0] ?? "");
+  return [text.trim(), ...attached.tags].filter(Boolean).join("\n\n");
 }
 
 /** The bare filename a saved attachment path ends in — what the serving

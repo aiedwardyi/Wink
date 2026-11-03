@@ -209,7 +209,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
   );
   /** true when what is on screen is remembered rather than confirmed */
   const [stale, setStale] = useState(
-    cachedConnectorStatus !== null && !cachedConnectorStatusAuthoritative,
+    cachedConnectorStatus === null ? readCachedInventory() !== null : !cachedConnectorStatusAuthoritative,
   );
   const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
   const [aliasSlug, setAliasSlug] = useState<string | null>(null);
@@ -317,7 +317,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (inventoryPhase !== "ready") return;
+    if (inventoryPhase !== "ready" || cachedConnectorStatus === null) return;
     cachedConnectorStatus = status;
     cachedConnectorStatusAt = Date.now();
     cachedConnectorStatusAuthoritative = !stale;
@@ -325,7 +325,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
 
   useEffect(() => {
     let alive = true;
-    void loadConnectionInventory();
+    void loadConnectionInventory(true);
     api("/api/connectors/catalog")
       .then((r) => {
         if (!alive) return;
