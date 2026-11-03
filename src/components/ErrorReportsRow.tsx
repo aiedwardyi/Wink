@@ -1,25 +1,37 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { api } from "@/state/store";
 import { Card } from "./SettingsPrimitives";
 
 export function ErrorReportsRow() {
   const { t } = useI18n();
-  const [enabled, setEnabled] = useState<boolean | null>(false);
+  const [enabled, setEnabled] = useState(false);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  const read = async () => {
+    const [reports, usage] = await Promise.all([window.ogb?.errorReportConsent?.(), api("/api/analytics")]);
+    return reports === true || usage.enabled === true;
+  };
   useEffect(() => {
     let gone = false;
-    void window.ogb?.errorReportConsent?.().then((value) => {
+    void read().then((value) => {
       if (!gone) { setEnabled(value); setReady(true); }
     }).catch(() => {});
     return () => { gone = true; };
   }, []);
-  if (!window.ogb?.setErrorReportConsent || enabled === null) return null;
   const toggle = async () => {
     if (saving || !ready) return;
     setSaving(true);
-    try { setEnabled(await window.ogb!.setErrorReportConsent!(!enabled)); }
-    catch {} finally { setSaving(false); }
+    try {
+      const results = await Promise.allSettled([
+        window.ogb?.setErrorReportConsent?.(!enabled),
+        api("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: !enabled }) }),
+      ]);
+      if (results.some((result) => result.status === "rejected")) throw new Error("Consent update failed");
+      setEnabled(!enabled);
+    } catch {
+      try { setEnabled(await read()); } catch {}
+    } finally { setSaving(false); }
   };
   return (
     <Card>

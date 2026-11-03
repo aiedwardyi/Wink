@@ -215,6 +215,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const [copyFallback, setCopyFallback] = useState(false);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const cancelled = useRef(false);
   const [loginCode, setLoginCode] = useState("");
   const phone = !window.ogb && isPhone();
   const external = instance.driverKind === "antigravityAgent";
@@ -233,11 +234,12 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
     setCapture(instance.loginCapture ?? {});
     setCopyFallback(false);
     setBusy(false);
+    cancelled.current = false;
     return () => { generation.current += 1; };
   }, [instance.instanceId]);
   useEffect(() => {
     setCurrent(instance);
-    if (instance.loginState === "pending") {
+    if (instance.loginState === "pending" && !cancelled.current) {
       setWaiting(true);
       setCapture(instance.loginCapture ?? {});
     }
@@ -245,6 +247,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   }, [instance]);
 
   useEngineLoginRefresh(waiting, (instances) => {
+    if (cancelled.current) return;
     const next = instances.find((row) => row.instanceId === instance.instanceId);
     if (!next) return;
     setCurrent(next);
@@ -257,6 +260,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const start = async () => {
     if (waiting || busy) return;
     const request = ++generation.current;
+    cancelled.current = false;
     setWaiting(true);
     setFailed(false);
     setCapture({});
@@ -285,6 +289,10 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const cancel = async () => {
     if (busy) return;
     const request = ++generation.current;
+    cancelled.current = true;
+    setWaiting(false);
+    setFailed(false);
+    setCapture({});
     setBusy(true);
     try {
       await api(path, { method: "DELETE" });
@@ -309,6 +317,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   };
 
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
+  if (!waiting && current.snapshot.authenticated === undefined && !current.loginState) return null;
   if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   return (
     <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
@@ -326,7 +335,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className="text-ink underline">{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className="text-ink underline disabled:opacity-50">{t("engines.cancel")}</button>
         </div>
-      </> : <button type="button" onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
+      </> : <button type="button" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
       {failed && <span>{t("engines.didntFinish")}</span>}
     </div>
   );

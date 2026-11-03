@@ -31,29 +31,32 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       {accounts.map((account) => {
         const drain = account.drain;
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
+        const destination = main ? accounts.find((other) => other !== account && accountReady(other)) : undefined;
+        const loading = account.snapshot.authenticated === undefined && !account.loginState;
         return (
           <div key={account.instanceId} className="py-1">
             <div className="flex min-h-11 min-w-0 items-center gap-3 text-[12px] text-ink-secondary">
               <EngineMark instance={account} size={16} tapToShow />
               <span className="min-w-0 flex-1 truncate" title={accountReady(account) ? accountLabel(account) : undefined}>
-                {accountReady(account) ? accountLabel(account) : t("accounts.signedOut")}
+                {accountReady(account) ? accountLabel(account) : loading ? null : t("accounts.signedOut")}
               </span>
               {main && <span className="shrink-0 rounded border border-hairline px-1.5 py-0.5 text-[11px]">{t("accounts.main")}</span>}
               <div className="ml-auto shrink-0">
                 {drain && drain.phase !== "failed" ? <span role="status">{t("accounts.removing")}</span>
                   : !accountReady(account) && !drain ? <EngineSignIn instance={account} onUpdated={() => void reload()} />
-                    : <button type="button" disabled={busy || (main && !drain)}
-                      onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {})}
+                    : <button type="button" disabled={busy || (main && !destination && !drain)}
+                      onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : destination ? { destinationId: destination.instanceId } : {})}
                       className="min-h-11 text-ink hover:underline disabled:opacity-50">{t(drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
               </div>
             </div>
-            {main && accountReady(account) && <div className="text-[12px] text-ink-secondary">{t("accounts.signOutMain")}</div>}
           </div>
         );
       })}
-      {accounts.length < 8 && (computerOnly ? <span className="text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>
+      {accounts.length < 8 && <div className="min-h-11">
+        {accounts.some(accountReady) && (computerOnly ? <span className="text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>
         : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
           className="min-h-11 text-[12px] text-ink hover:underline disabled:opacity-50">{t("accounts.add")}</button>)}
+      </div>}
       {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}
     </div>
   );

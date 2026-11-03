@@ -44,6 +44,12 @@ it("initializes then reads usage in the account home without sending a prompt", 
   expect(procs.killCliTree).toHaveBeenCalledWith(f.child);
 });
 
+it("keeps a weekly-only get_usage response when five_hour is null", async () => {
+  const f = childFixture();
+  f.respond("usage", { ...payload, rate_limits: { five_hour: null, seven_day: { utilization: 98, resets_at: null } } });
+  expect(await f.pending).toEqual([{ id: "seven_day", usedPercent: 98, resetsAt: null, windowMinutes: 10080 }]);
+});
+
 it.each([
   { ...payload, rate_limits_available: false },
   { ...payload, rate_limits: { ...payload.rate_limits, five_hour: { utilization: "35", resets_at: null } } },

@@ -752,6 +752,27 @@ describe("UsageSection friends plan card", () => {
     }
   });
 
+  it("renders every reported Claude window per account, including zero usage", () => {
+    const original = mockState.instances;
+    const claude = original.find((instance) => instance.instanceId === "claude")!;
+    const report = (windows: NonNullable<InstanceInfo["rateLimits"]>["windows"]) => ({ observedAt: new Date().toISOString(), windows });
+    mockState.instances = [
+      { ...claude, accountOf: "claude", accountMain: true, snapshot: { ...claude.snapshot, account: "weekly@example.com" },
+        rateLimits: report([{ id: "seven_day", usedPercent: 98, resetsAt: null }]) },
+      { ...claude, instanceId: "acct_fixture", accountOf: "claude", accountMain: false, snapshot: { ...claude.snapshot, account: "both@example.com" },
+        rateLimits: report([{ id: "five_hour", usedPercent: 0, resetsAt: null }, { id: "seven_day", usedPercent: 18, resetsAt: null }]) },
+    ];
+    try {
+      persistPreference("en");
+      setUsageMode("remaining");
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      expect(html).toContain('aria-label="7d: 2% remaining"');
+      expect(html).toContain('aria-label="5h: 100% remaining"');
+      expect(html).toContain('aria-label="7d: 82% remaining"');
+      expect(html.match(/aria-label="5h:/g)).toHaveLength(1);
+    } finally { mockState.instances = original; }
+  });
+
   it("shares one left-aligned column across engine rows instead of centering each grid", async () => {
     const host = document.createElement("div");
     document.body.append(host);

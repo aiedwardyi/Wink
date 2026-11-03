@@ -59,6 +59,40 @@ afterEach(async () => {
 });
 
 describe("engine sign-in row", () => {
+  it.each(["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent"])("leaves the %s action empty until authentication is known", async (kind) => {
+    const row = instance(kind, { snapshot: { state: "available" } });
+    await render(createElement(EngineSignIn, { instance: row }));
+    expect(host.textContent).toBe("");
+    expect(host.querySelector("button")).toBeNull();
+    await act(async () => root!.render(createElement(I18nProvider, null,
+      createElement(EngineSignIn, { instance: { ...row, snapshot: { state: "available", authenticated: true } } }))));
+    expect(host.textContent).toBe("Connected");
+  });
+
+  it("cancels immediately and ignores pending pushes until a new sign-in", async () => {
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn((_: string, init?: RequestInit) => init?.method === "DELETE"
+      ? new Promise<Response>((resolve) => { finish = resolve; }) : Promise.resolve(json(capture)));
+    vi.stubGlobal("fetch", fetchMock);
+    const row = instance("claudeAgent");
+    await render(createElement(EngineSignIn, { instance: row }));
+    await click("Sign In");
+    await click("Cancel");
+    expect(host.textContent).toBe("Sign In");
+    const push = async (loginState: InstanceInfo["loginState"]) => act(async () => root!.render(createElement(I18nProvider, null,
+      createElement(EngineSignIn, { instance: { ...row, loginState, loginCapture: capture } }))));
+    await push("pending");
+    expect(host.textContent).toBe("Sign In");
+    await act(async () => finish(json({})));
+    await push("pending");
+    expect(host.textContent).toBe("Sign In");
+    await push("cancelled");
+    await act(async () => vi.advanceTimersByTimeAsync(7000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await click("Sign In");
+    expect(host.textContent).toContain("Cancel");
+  });
+
   it("keeps stopped credentials actionable until the account is ready", async () => {
     const row = instance("claudeAgent", { accountState: "stopped", snapshot: { state: "available", authenticated: true } });
     const fetchMock = vi.fn(async (url: string) => json(url === "/api/instances" ? { instances: [{ ...row, loginState: "pending", loginCapture: capture }] } : capture));
