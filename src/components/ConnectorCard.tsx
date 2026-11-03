@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2, PlugZap, RefreshCw, X } from "lucide-react";
 
+import { useI18n } from "@/lib/i18n";
 import { api, type Message } from "@/state/store";
 
 async function openConnectionPage(url: string) {
@@ -15,6 +16,7 @@ async function openConnectionPage(url: string) {
 }
 
 export function ConnectorCard({ botId, threadId, message }: { botId: string; threadId: string; message: Message }) {
+  const { t } = useI18n();
   const connector = message.connector!;
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -101,26 +103,26 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
               <span className="truncate text-[14px] font-semibold text-ink">{connector.label}</span>
               {connected && (
                 <span className="flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-medium text-success">
-                  <Check size={11} /> Connected
+                  <Check size={11} /> {t("connector.connected")}
                 </span>
               )}
             </div>
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">
               {connected
                 ? connector.resumed
-                  ? "Connected securely. Your bot is continuing the task."
-                  : "Connected securely. Continue the paused task when you're ready."
+                  ? t("connector.connectedResumed")
+                  : t("connector.connectedPaused")
                 : connector.description}
             </p>
             {!connected && (
               <p className="mt-1 text-[11.5px] text-ink-secondary/80">
-                Sign in or enter the app key on the secure connection page — never in chat.
+                {t("connector.secureHint")}
               </p>
             )}
             {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
           </div>
           {!connected && (
-            <button onClick={dismiss} aria-label="Not now" title="Not now" className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink">
+            <button onClick={dismiss} aria-label={t("connector.notNow")} title={t("connector.notNow")} className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink">
               <X size={15} />
             </button>
           )}
@@ -128,7 +130,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
         <div className="flex items-center justify-between border-t border-hairline/40 bg-panel/40 px-4 py-2.5">
           <div className="flex items-center gap-1.5 text-[11.5px] text-ink-secondary">
             {authorizing ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />}
-            {authorizing ? "Waiting for sign-in…" : connected ? "Ready to use" : "Requested by your bot"}
+            {authorizing ? t("connector.waiting") : connected ? t("connector.ready") : t("connector.requested")}
           </div>
           {!connected ? (
             <button
@@ -137,7 +139,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
               className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
             >
               {busy || authorizing ? <Loader2 size={13} className="animate-spin" /> : <PlugZap size={13} />}
-              {authorizing ? "Open again" : connector.status === "failed" ? "Try again" : "Connect securely"}
+              {authorizing ? t("connector.openAgain") : connector.status === "failed" ? t("connector.tryAgain") : t("connector.connect")}
             </button>
           ) : !connector.resumed ? (
             <button
@@ -145,10 +147,10 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
               disabled={busy}
               className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
             >
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Continue task
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} {t("connector.continueTask")}
             </button>
           ) : (
-            <span className="flex items-center gap-1 text-[12px] font-medium text-success"><Check size={13} /> Continuing</span>
+            <span className="flex items-center gap-1 text-[12px] font-medium text-success"><Check size={13} /> {t("connector.continuing")}</span>
           )}
         </div>
       </div>

@@ -293,6 +293,7 @@ const Bubble = memo(function Bubble({
     detectedOptions && (answeredChoice != null || isLastBotText) ? detectedOptions : null;
   const markdownText =
     optionChoices?.messagePrefix != null ? optionChoices.messagePrefix : text;
+  const choicesOnly = Boolean(optionChoices) && !markdownText.trim() && !quoted && !dock;
   const webhookView = user ? webhookMessageView(text) : null;
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
@@ -381,6 +382,7 @@ const Bubble = memo(function Bubble({
       {...menuProps}
     >
       {/* Keep the action row below the reaction overhang. */}
+      {!choicesOnly && (
       <div
         data-orbit-message-body
         data-strip={hasReactions || dockShown ? "" : undefined}
@@ -529,6 +531,7 @@ const Bubble = memo(function Bubble({
           />
         )}
       </div>
+      )}
       {optionChoices && (
         <ChatOptionChips
           options={optionChoices.options}

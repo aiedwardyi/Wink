@@ -163,7 +163,7 @@ export function ActivityRun({
         type="button"
         onClick={() => setOpen(true)}
         aria-expanded={false}
-        title="Show every step"
+        title={t("activity.showEveryStep")}
         className="flex items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control focus-visible:bg-control"
       >
         <span className="max-w-[480px] truncate">{describeRun(messages, t)}<span data-idle-hide={running ? "" : undefined}> ·</span></span>
