@@ -935,8 +935,13 @@ export function ModelIndexSection() {
                 </div>
                 <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
                   <span className="break-keep text-[17px] font-semibold leading-tight text-ink">{formatValue(index, hovered, priceText)}</span>
-                  <span className="truncate text-ink-secondary">
+                  <span className="break-keep text-ink-secondary">
                     {t(index === "cost" ? "modelIndex.tooltip.cost" : index === "agentic" || index === "coding" ? BENCH_KEY[index] : INDEX_KEY[index])}
+                    {hovered.scoreDate && (
+                      <>, <span className="whitespace-nowrap">{hovered.scoreDate.kind === "checked"
+                        ? t("modelIndex.tooltip.asOf", { date: new Date(hovered.scoreDate.date).toLocaleDateString(localeTag(locale), { year: "numeric", month: "short", timeZone: "UTC" }) })
+                        : new Date(hovered.scoreDate.date).toLocaleDateString(localeTag(locale), { year: "numeric", month: "short", timeZone: "UTC" })}</span></>
+                    )}
                   </span>
                 </div>
                 {hovered.interval && (

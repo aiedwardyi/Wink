@@ -7,6 +7,7 @@ import { expect } from "vitest";
 import * as lmarena from "./fetch-lmarena.mjs";
 import * as listPrices from "./fetch-list-prices.mjs";
 import * as vals from "./fetch-vals.mjs";
+import * as lib from "./lib.mjs";
 import { percent, sourceIds, sourcesDir, Unverifiable, writeSnapshot } from "./lib.mjs";
 import { diffSnapshots, refresh } from "./refresh.mjs";
 
@@ -336,6 +337,23 @@ describe("repeated rows", () => {
     }
   };
 
+  it("builds a filled score's date and source without aging the current check", () => {
+    const filled = { ...score("high"), retrieved_at: "2026-08-01T00:00:00Z", score_date: { date: "2026-08-01", kind: "checked" }, source_label: "Cognition FrontierCode 1.1 Main" };
+    const built = runBuild({ "models.json": wink, "aa-frontiercode.json": snap([filled, score("xhigh")]) });
+    expect(built.status, built.stderr).toBe(0);
+    expect(built.stdout).toContain('scoreDate: { date: "2026-08-01", kind: "checked" }');
+    expect(built.stdout).toContain('sourceLabel: "Cognition FrontierCode 1.1 Main"');
+    expect(built.stdout).toContain('updated: null, retrievedAt: "2026-10-10T00:00:00.000Z"');
+  });
+
+  it("rejects a filled date with an unknown kind or invalid calendar day", () => {
+    for (const score_date of [{ date: "2026-02-30", kind: "checked" }, { date: "2026-08-01", kind: "release" }]) {
+      const built = runBuild({ "models.json": wink, "aa-frontiercode.json": snap([{ ...score("high"), score_date }]) });
+      expect(built.status).not.toBe(0);
+      expect(built.stderr).toMatch(/invalid score date/);
+    }
+  });
+
   it("fails when a model and effort is repeated", () => {
     const built = runBuild({ "models.json": wink, "aa-frontiercode.json": snap([score("xhigh"), score("xhigh")]) });
     expect(built.status).not.toBe(0);
@@ -376,6 +394,37 @@ describe("repeated rows", () => {
     });
     expect(built.status).not.toBe(0);
     expect(built.stderr).toMatch(/list-prices grok-4.6: no vendor name for https:\/\/example.com\/pricing/);
+  });
+});
+
+describe("filled rows", () => {
+  const filled = { model: "grok-4.6", effort: "high", value: 48.01, score_date: { date: "2026-11-03", kind: "checked" }, source_url: "https://cognition.com/frontiercode", retrieved_at: "2026-11-03T10:00:00Z", kind: "independent" };
+  const prior = { ...previous, benchmark: "aa-frontiercode", rows: [filled] };
+  const fresh = (date, rows) => ({ ...prior, updated: date, rows });
+
+  it("keeps a missing filled model and effort through refresh", () => {
+    const low = { ...filled, effort: "low", value: 40, score_date: undefined };
+    const next = fresh("2026-11-04", [low]);
+    expect(lib.keepFilledRows(prior, next, models).rows).toEqual([low, filled]);
+    expect(next.rows).toEqual([low]);
+  });
+
+  it("replaces a filled score only with a newer real row at the same effort", () => {
+    const row = { ...filled, value: 49, score_date: undefined, retrieved_at: "2026-11-04T00:00:00Z" };
+    expect(lib.keepFilledRows(prior, fresh("2026-10-01", [row]), models).rows).toEqual([filled]);
+    expect(lib.keepFilledRows(prior, fresh("2026-11-04", [row]), models).rows).toEqual([row]);
+    expect(lib.keepFilledRows(prior, fresh(null, [row]), models).rows).toEqual([row]);
+  });
+
+  it("does not move a filled score into another benchmark version", () => {
+    expect(() => lib.keepFilledRows(prior, { ...fresh(null, []), version: "2.0" }, models)).toThrow(/version/);
+  });
+
+  it("keeps filled Vals and WebDev rows in their standalone fetchers", () => {
+    const legal = vals.buildSnapshot({ page: vals.parsePage(fixture("vals-legal-bench.html")), models, retrievedAt: "2026-11-04T00:00:00Z", previous: { ...previous, benchmark: "vals-legalbench", version: "1", rows: [{ ...filled, model: "gpt-6-astra", effort: "all" }] } });
+    expect(legal.snapshot.rows.some((row) => row.model === "gpt-6-astra" && row.score_date)).toBe(true);
+    const arena = lmarena.buildSnapshot({ rows: arenaRows(), models, retrievedAt: "2026-11-04T00:00:00Z", previous: { ...previous, benchmark: "lmarena-webdev", version: "2026-10-01", rows: [filled] } });
+    expect(arena.snapshot.rows).toContainEqual(filled);
   });
 });
 

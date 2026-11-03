@@ -40,6 +40,17 @@ describe("AA response", () => {
     assert.deepEqual(MANUAL.map(({ name }) => name), ["aa-gdpval", "aa-frontiercode"]);
   });
 
+  it("keeps a filled effort absent from the AA response until a new real score arrives", () => {
+    const filled = { model: "gpt-6.1-sol", effort: "max", value: 88, score_date: { date: "2026-10-20", kind: "checked" }, source_url: "https://artificialanalysis.ai/models/gpt-6-1-sol", retrieved_at: "2026-10-20T00:00:00Z", kind: "independent" };
+    const prior = { ...previous, rows: [filled] };
+    assert.deepEqual(build({ previous: prior }).snapshot.rows.find((row) => row.model === filled.model && row.effort === "max"), filled);
+    const current = rows().find((row) => row.slug === "gpt-6-1-sol-high");
+    const newer = { ...current, slug: "gpt-6-1-sol", name: "GPT-6.1 Sol (Max)" };
+    const updated = build({ previous: prior, rows: [newer] }).snapshot.rows[0];
+    assert.equal(updated.score_date, undefined);
+    assert.equal(updated.value, 87.2);
+  });
+
   it("carries auxiliary fields only when the same model and effort keep their score", () => {
     const fields = { cost_per_task: 1.25, cost_benchmark: "aa-intelligence-index", cost_source: "https://artificialanalysis.ai/models/claude-opus-5-5", interval: { low: 60, high: 65 }, harness: "Default" };
     const prior = { ...previous, rows: [

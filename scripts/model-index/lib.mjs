@@ -66,6 +66,21 @@ export function sortRows(rows, models) {
   return rows.sort((a, b) => order.indexOf(a.model) - order.indexOf(b.model) || EFFORTS.indexOf(a.effort) - EFFORTS.indexOf(b.effort));
 }
 
+export function keepFilledRows(before, after, models) {
+  const filled = before.rows.filter((row) => row.score_date);
+  if (filled.length && (before.benchmark !== after.benchmark || (before.version !== after.version && before.benchmark !== "lmarena-webdev"))) {
+    throw new Unverifiable("filled scores need the same benchmark version");
+  }
+  const rows = new Map(after.rows.map((row) => [`${row.model} ${row.effort}`, row]));
+  for (const row of filled) {
+    const key = `${row.model} ${row.effort}`;
+    const next = rows.get(key);
+    const date = next?.score_date?.date ?? after.updated ?? next?.retrieved_at?.slice(0, 10);
+    if (!next || !date || date < row.score_date.date) rows.set(key, row);
+  }
+  return { ...after, rows: sortRows([...rows.values()], models) };
+}
+
 /** Source model id to Wink id for one source, from the `sources` table in models.json. */
 export function sourceIds(models, source) {
   const ids = {};

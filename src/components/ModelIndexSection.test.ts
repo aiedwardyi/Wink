@@ -365,6 +365,40 @@ describe("score hover card", () => {
     return tip;
   };
 
+  it.each(["en", "ko"] as const)("shows a filled checked date on hover and focus in %s", async (locale) => {
+    const row = MODEL_INDEX_ENTRIES.find((entry) => entry.index === "legal" && entry.model === "claude-fable-5")! as typeof MODEL_INDEX_ENTRIES[number] & { scoreDate?: { date: string; kind: "checked" | "published" } };
+    row.scoreDate = { date: "2026-08-03", kind: "checked" };
+    try {
+      vi.stubGlobal("localStorage", { getItem: () => locale });
+      applyLocale(locale);
+      await mount();
+      for (let i = 0; i < 5; i++) press(window);
+      const text = locale === "en" ? "as of Aug 2026" : "2026년 8월 기준";
+      expect(hoverTip("Claude Fable 5 all")).toContain(text);
+      const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"]')].at(-1)!;
+      act(() => radios.querySelectorAll<HTMLButtonElement>("button")[1]!.click());
+      const bar = [...host.querySelectorAll<HTMLElement>('[tabindex="0"]')].find((el) => el.textContent?.startsWith("Claude Fable 5"))!;
+      act(() => bar.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+      expect(host.querySelector('[role="tooltip"]')?.textContent).toContain(text);
+    } finally {
+      delete row.scoreDate;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows a published score month without calling it a checked date", () => {
+    const row = MODEL_INDEX_ENTRIES.find((entry) => entry.index === "legal" && entry.model === "claude-fable-5")!;
+    row.scoreDate = { date: "2026-08-03", kind: "published" };
+    try {
+      pick("Benchmark", "Legal");
+      const tip = hoverTip("Claude Fable 5 all");
+      expect(tip).toContain("Legal, Aug 2026");
+      expect(tip).not.toContain("as of");
+    } finally {
+      delete row.scoreDate;
+    }
+  });
+
   it("shows each effort's own cost per task over one shared price", () => {
     const low = hoverTip("Claude Opus 5.5 low");
     const max = hoverTip("Claude Opus 5.5 max");

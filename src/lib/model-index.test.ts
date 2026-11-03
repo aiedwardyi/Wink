@@ -71,7 +71,7 @@ describe("model index data", () => {
 
   it("keeps one benchmark per tab", () => {
     for (const index of MODEL_INDEXES.filter((index) => index !== "cost")) {
-      const labels = new Set(MODEL_INDEX_ENTRIES.filter((e) => e.index === index).map((e) => e.sourceLabel));
+      const labels = new Set(MODEL_INDEX_ENTRIES.filter((e) => e.index === index).map((e) => `${e.benchmark}:${e.version}`));
       expect([...labels], index).toHaveLength(1);
     }
   });
@@ -130,7 +130,8 @@ describe("sourced data", () => {
       expect(Date.parse(e.retrievedAt), id).toBeLessThanOrEqual(Date.now());
       if (e.index === "cost") expect(e.kind, id).toBe("vendor");
       else {
-        expect(e.kind, id).toBe("independent");
+        expect(["independent", "vendor"], id).toContain(e.kind);
+        if (e.kind === "vendor") expect(e.scoreDate, id).toBeDefined();
         expect(e.version, id).toMatch(/\S/);
       }
     }
@@ -174,12 +175,29 @@ describe("sourced data", () => {
     expect(MODEL_INDEX_AS_OF).toBe(new Date(newest).toISOString().slice(0, 10));
   });
 
-  it("charts Legal at each model's own Vals cost per test, one score per model", () => {
+  it("charts Legal once per model and keeps undated costs empty", () => {
     const legal = MODEL_INDEX_ENTRIES.filter((e) => e.index === "legal");
     expect(legal.length).toBeGreaterThan(0);
     for (const e of legal) {
+      expect(e.effort, e.model).toBe("all");
+      if (e.cost === undefined) {
+        expect(e.scoreDate, e.model).toBeDefined();
+        expect(e.costBenchmark, e.model).toBeUndefined();
+        expect(e.costSource, e.model).toBeUndefined();
+        continue;
+      }
       expect([e.effort, e.costBenchmark, e.costSource], e.model).toEqual(["all", "vals-legalbench", "https://www.vals.ai/benchmarks/legal_bench"]);
       expect(e.cost, e.model).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps filled score dates separate from retrieval and model release dates", () => {
+    const filled = MODEL_INDEX_ENTRIES.filter((e) => e.scoreDate);
+    for (const e of filled) {
+      expect(e.scoreDate!.date, e.model).toMatch(DATE);
+      expect(["published", "checked"]).toContain(e.scoreDate!.kind);
+      expect(Date.parse(e.scoreDate!.date), e.model).toBeLessThanOrEqual(Date.parse(e.retrievedAt));
+      expect(PICKER_MODEL_IDS, e.model).toContain(e.model);
     }
   });
 
