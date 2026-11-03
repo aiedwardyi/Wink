@@ -83,6 +83,34 @@ describe("trusted worker accounts", () => {
     await expect(f.prepare({ ...f.input, command: "$env:CI='1'; codex task" })).rejects.toThrow(/Conflicting worker environment override/);
   });
 
+  describe.each([undefined, "send"] as const)("shell wrappers in %s mode", (mode) => {
+    it.each([
+      String.raw`pwsh -NoProfile -File .\ci-954.ps1`, "powershell -File x.ps1", "cmd /c dir", "bash ./run.sh",
+      "pwsh.exe -File x.ps1", "powershell.exe -File x.ps1", "cmd.exe /c dir", "sh ./run.sh", "env CI=1 ./run.sh",
+      String.raw`& .\ci-954.ps1`, String.raw`. .\ci-954.ps1`, "iex 'Get-Date'", "invoke-expression 'Get-Date'", "start-process pwsh",
+      String.raw`pwsh -File .\codex-watch.ps1`, String.raw`pwsh -File .\mycodex.ps1`, String.raw`pwsh -File .\codex.json`,
+    ])("allows an ordinary shell command: %s", async (command) => {
+      const f = await fixture();
+      expect(await f.prepare({ ...f.input, command, mode })).toEqual({ kind: "shell" });
+      expect(f.refresh).not.toHaveBeenCalled();
+      expect(f.available).not.toHaveBeenCalled();
+    });
+
+    it.each(["claude", "codex", "grok", "muse", "agy"])("refuses wrappers naming %s", async (engine) => {
+      const f = await fixture();
+      for (const command of [
+        `pwsh -Command "${engine} task"`, `powershell -Command "${engine} task"`, `cmd /c ${engine} task`, `bash -lc '${engine} task'`,
+        `pwsh.exe -Command "${engine} task"`, `powershell.exe -Command "${engine} task"`, `cmd.exe /c ${engine} task`,
+        `sh -c '${engine} task'`, `env CI=1 ${engine} task`, `& ${engine} task`, `. ${engine} task`,
+        `iex '${engine} task'`, `invoke-expression '${engine} task'`, `start-process ${engine}`,
+        `pwsh -Command "C:/bin/${engine}.exe task"`, `cmd /c C:/bin/${engine}.cmd task`, `pwsh -File C:/bin/${engine}.ps1`,
+        `pwsh -Command "echo ${engine}"`,
+      ]) await expect(f.prepare({ ...f.input, command, mode })).rejects.toThrow("Ambiguous worker launch; use a direct engine command");
+      expect(f.refresh).not.toHaveBeenCalled();
+      expect(f.available).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["codex; id", "codex|more", "(codex 'task')", "$(codex 'task')", "{ codex }"])("refuses a nested or adjacent engine: %s", (command) => {
     expect(() => workers!.workerCommand(command)).toThrow(/Ambiguous worker/);
   });
