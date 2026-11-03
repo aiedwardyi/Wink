@@ -210,7 +210,7 @@ export function RoomToolChip({
     : undefined;
   if (tool.name.startsWith("error:")) return (
     <ErrorRow message={tool.name.slice(6).trim()} botId={member?.id ?? ""} botName={member?.name ?? message.from?.name}
-      setupInstance={tool.setup || tool.signIn ? instance : undefined} signIn={tool.signIn} onRetry={handleRetry} />
+      setupInstance={(tool.setup || tool.signIn) && onRetry ? instance : undefined} signIn={tool.signIn} onRetry={handleRetry} retryDisabled={retried} />
   );
   const status = isServerLine(tool.name);
   const setupAction =

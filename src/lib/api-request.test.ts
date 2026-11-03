@@ -6,7 +6,9 @@ afterEach(() => { vi.unstubAllGlobals(); applyLocale("en"); });
 
 it.each(["Failed to fetch", "Load failed"])("maps a fetch TypeError: %s", async (message) => {
   vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError(message)));
-  await expect(api("/api/bots")).rejects.toThrow("Can't reach Wink. Check your connection.");
+  const result = api("/api/bots");
+  await expect(result).rejects.toBeInstanceOf(TypeError);
+  await expect(result).rejects.toThrow("Can't reach Wink. Check your connection.");
 });
 
 it("maps a non-JSON gateway error in Korean", async () => {

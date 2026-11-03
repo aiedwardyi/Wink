@@ -198,6 +198,7 @@ export function ErrorRow({
   botName,
   message,
   onRetry,
+  retryDisabled,
   setupInstance,
   usageLimit,
   usageWait,
@@ -208,6 +209,7 @@ export function ErrorRow({
   message: string;
   botName?: string;
   onRetry?: () => void;
+  retryDisabled?: boolean;
   setupInstance?: InstanceInfo;
   usageLimit?: { resetsAt: number | null };
   usageWait?: NonNullable<Message["tool"]>["usageWait"];
@@ -236,9 +238,11 @@ export function ErrorRow({
   const retryButton = onRetry && (
     <button
       onClick={onRetry}
+      disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
         usageLimit ? "border-warning/30 hover:bg-warning/15" : "border-danger/30 hover:bg-danger/15",
+        "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
       <RefreshCw size={12} /> {t("composer.retry")}

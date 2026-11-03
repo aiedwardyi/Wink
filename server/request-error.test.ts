@@ -22,3 +22,11 @@ it("returns 404 without echoing an unknown route", async () => {
   expect(source).toContain("return json(res, 404, unknownRoute);");
   expect(source).not.toContain('no route: ${method} ${path}');
 });
+
+it.each([400, 409, 413])("preserves explicit %s route errors", async (status) => {
+  const { requestError } = await import("./request-error.ts");
+  const log = vi.fn();
+  const error = Object.assign(new Error("raw route validation"), { status });
+  expect(requestError(error, log)).toEqual({ status, body: { error: error.message } });
+  expect(log).toHaveBeenCalledWith(error.message);
+});

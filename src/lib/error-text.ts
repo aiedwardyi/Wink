@@ -9,7 +9,7 @@ export function chatErrorText(line: string, bot: string, translate: Translate) {
   return { text: translate("errors.unfinished", { bot }), raw: error.raw };
 }
 
-export class ConnectionError extends Error {
+export class ConnectionError extends TypeError {
   constructor() {
     super(t("errors.connection"));
   }

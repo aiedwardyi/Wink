@@ -139,7 +139,7 @@ describe("send reject after the server accepted", () => {
     await act(async () => store.dispatch(action(onError) as never));
     await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
     expect(store.state.acceptedSends[threadId]).toBeUndefined();
-    expect(store.state.error).toBe("Load failed");
+    expect(store.state.error).toBe("Can't reach Wink. Check your connection.");
     expect(messagesOf(threadId)).toEqual([]);
   });
 

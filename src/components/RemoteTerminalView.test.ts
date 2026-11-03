@@ -155,7 +155,7 @@ describe("RemoteTerminalView", () => {
     try {
       const open = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal"))!;
       await act(async () => click(open));
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain("Terminal folder is unavailable");
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("The terminal is unavailable right now. Trying again...");
       expect(open.disabled).toBe(false);
     } finally {
       await act(async () => root.unmount());
