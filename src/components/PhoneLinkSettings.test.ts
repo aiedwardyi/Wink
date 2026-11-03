@@ -57,11 +57,11 @@ describe("Phone setup steps", () => {
     expect(store.api.mock.calls.some(([path]) => path === "/api/phone-relay/status")).toBe(false);
   });
 
-  it("uses cached reads while ready and slow probes while offline", async () => {
+  it("probes twice a minute while ready and slowly while offline", async () => {
     await render({ url, setup: { state: "ready" } });
     store.api.mockClear();
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(0);
+    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(2);
     store.api.mockResolvedValue({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
     await act(async () => window.dispatchEvent(new Event("focus")));
     store.api.mockClear();
@@ -83,13 +83,13 @@ describe("Phone setup steps", () => {
     expect(store.api).toHaveBeenCalledTimes(10);
   });
 
-  it("keeps ready reads cached after opening the Tailscale download", async () => {
+  it("keeps ready probes slow after opening the Tailscale download", async () => {
     vi.stubGlobal("ogb", { openExternal: vi.fn().mockResolvedValue(true) });
     await render({ url, setup: { state: "ready" } });
     await act(async () => button("Get Tailscale").click());
     store.api.mockClear();
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(0);
+    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(2);
   });
 
   it("stops fast polling when the setup state changes", async () => {

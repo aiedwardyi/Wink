@@ -61,13 +61,16 @@ export function ConnectDevices() {
     let active = true;
     let pending = false;
     let ready = false;
+    let probedAt = 0;
     let timer: number | undefined;
     const load = async (probe = false) => {
       if (pending || document.visibilityState === "hidden") return;
       window.clearTimeout(timer);
       pending = true;
       try {
-        const cached = ready && !probe && !waiting.current;
+        // A periodic real probe finds PCs and phones that join while the page stays open.
+        const cached = ready && !probe && !waiting.current && Date.now() - probedAt < 30_000;
+        if (!cached) probedAt = Date.now();
         const body: RemotePhoneLink = await api(`/api/remote-link?setup=1${cached ? "&cached=1" : ""}`);
         if (active) {
           ready = body.setup?.state === "ready" && Boolean(body.url);
