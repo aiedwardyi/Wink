@@ -334,7 +334,7 @@ export function composeMessage(text: string, attachments: Attachment[]): string 
   const parts = [text.trim()];
   attachments.forEach((a, i) => {
     if (a.kind === "paste") {
-      const encoded = /[<&]/.test(a.text);
+      const encoded = /<(?:\/?pasted-text|attached-image|attached-file)/i.test(a.text);
       const pasted = encoded ? a.text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;") : a.text;
       parts.push(`<pasted-text index="${i + 1}"${encoded ? ' encoding="xml"' : ""}>\n${pasted}\n</pasted-text>`);
     } else if (a.kind === "image") {
@@ -433,11 +433,16 @@ export function editedMessageText(initial: string, draft: string): string {
   if (draft.trim() === attached.display) return initial.trim();
   const pasted = [...initial.matchAll(PASTED_TEXT)];
   let text = draft;
-  pasted.forEach(([, encoded, raw], index) => {
+  let end = text.length;
+  for (let index = pasted.length - 1; index >= 0; index--) {
+    const [block, encoded, raw] = pasted[index];
     const inner = encoded ? unescapeAttribute(raw) : raw;
-    if (inner) text = text.replace(inner, () => `\0EDITPASTE${index}\0`);
-  });
-  text = text.replace(/\0EDITPASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)]?.[0] ?? "");
+    if (!inner || inner.length > end) continue;
+    const at = text.lastIndexOf(inner, end - inner.length);
+    if (at < 0) continue;
+    text = text.slice(0, at) + block + text.slice(at + inner.length);
+    end = at;
+  }
   return [text.trim(), ...attached.tags].filter(Boolean).join("\n\n");
 }
 
