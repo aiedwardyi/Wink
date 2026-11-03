@@ -43,6 +43,11 @@
     text-indent: 0;
   }
 
+  .term-step .term-step-result,
+  .term-notice[data-term-notice] {
+    text-indent: 0;
+  }
+
   .term-step-out::before,
   .term-step-result::before,
   .term-notice::before {
