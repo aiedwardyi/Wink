@@ -241,24 +241,29 @@ describe("WorkerChip", () => {
     }
   });
 
-  it("stacks three marks on desktop and one mark plus a count on a phone", async () => {
+  it.each([1, 11])("labels %s workers with the same glyph at both widths", async (count) => {
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const runs = [1, 2, 3, 4].map((at) => shown(`W${at}`, "working", `session-${at}`, at));
+    const runs = Array.from({ length: count }, (_, at) => shown(`W${at}`, "working", `session-${at}`, at));
     const { host, unmount } = await mount(runs);
     try {
       const desktop = host.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.querySelectorAll("[data-worker-state]")).toHaveLength(3);
-      expect(desktop.textContent).toBe("+1");
+      expect(desktop.querySelectorAll(".lucide-bot.text-ink-secondary")).toHaveLength(1);
+      expect(desktop.querySelectorAll("svg")).toHaveLength(1);
+      expect(desktop.textContent).toBe(`${count} ${count === 1 ? "worker" : "workers"}`);
+      expect(desktop.querySelector(".bg-accent")).not.toBeNull();
       const phone = host.querySelector("[data-worker-chip-phone]")!;
-      expect(phone.querySelectorAll("[data-worker-state]")).toHaveLength(1);
-      expect(phone.textContent).toBe("4");
-      expect(host.querySelector("[data-worker-strip]")?.getAttribute("aria-label")).toBe("4 working, 0 waiting, 0 failed, 0 done. Show workers");
+      expect(phone.querySelectorAll(".lucide-bot.text-ink-secondary")).toHaveLength(1);
+      expect(phone.querySelectorAll("svg")).toHaveLength(1);
+      expect(phone.querySelector(".bg-accent")).not.toBeNull();
+      expect(phone.textContent).toBe(count === 1 ? "" : String(count));
+      expect(host.querySelector("[data-worker-strip]")?.getAttribute("aria-label")).toBe(`${count} working, 0 waiting, 0 failed, 0 done. Show workers`);
+      expect(host.querySelector("[data-worker-strip]")?.getAttribute("title")).toBe("Workers (Alt+W)");
     } finally {
       await unmount();
     }
   });
 
-  it("lays wide marks in a row with a gap and no z-index", async () => {
+  it("uses the compact chip below the chat header breakpoint", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const runs = [1, 2, 3, 4].map((at) => shown(`W${at}`, at === 1 ? "waiting" : "working", `session-${at}`, at));
     const { host, unmount } = await mount(runs);
@@ -267,7 +272,7 @@ describe("WorkerChip", () => {
       const phone = host.querySelector("[data-worker-chip-phone]")!;
       const klass = desktop.getAttribute("class") ?? "";
       expect({
-        gap: /(?:^|\s)gap-1(?:\s|$)/.test(klass),
+        gap: /(?:^|\s)gap-1\.5(?:\s|$)/.test(klass),
         overlap: klass.includes("-space-x-"),
         stacked: [...desktop.querySelectorAll("[class*='z-']")].map((el) => el.getAttribute("class")),
         phone: phone.getAttribute("class"),
@@ -275,8 +280,9 @@ describe("WorkerChip", () => {
         gap: true,
         overlap: false,
         stacked: [],
-        phone: "relative flex items-center gap-0.5 md:hidden @max-4xl/chathead:!flex",
+        phone: "relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex",
       });
+      expect(klass).toContain("md:flex @max-4xl/chathead:!hidden");
     } finally {
       await unmount();
     }
@@ -295,7 +301,8 @@ describe("WorkerChip", () => {
     });
     try {
       expect(host.querySelector("[data-worker-strip]")).not.toBeNull();
-      expect([...host.querySelectorAll("[data-worker-chip-desktop] [data-worker-state]")].map((el) => el.getAttribute("data-worker-state"))).toEqual(["waiting", "failed", "done"]);
+      expect(host.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("3 workers");
+      expect(host.querySelector("[data-worker-chip-desktop] .bg-warning")).not.toBeNull();
       const opener = chip()!;
       opener.focus();
       await act(async () => opener.click());
@@ -326,7 +333,8 @@ describe("WorkerChip", () => {
       shown("SHIP", "failed", "fail-1", 4),
     ], { livePanes: null });
     try {
-      expect([...host.querySelectorAll("[data-worker-chip-desktop] [data-worker-state]")].map((el) => el.getAttribute("data-worker-state"))).toEqual(["waiting", "working"]);
+      expect(host.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("2 workers");
+      expect(host.querySelector("[data-worker-chip-desktop] .bg-warning")).not.toBeNull();
       await act(async () => chip()!.click());
       expect([...host.querySelectorAll("[data-worker-list] li")].map((li) => li.textContent)).toEqual([
         "WAITOpus 5.5 · High‖Waiting", "WORKOpus 5.5 · High●Working",
@@ -418,7 +426,8 @@ describe("WorkerChip", () => {
         shown("COPY", "done", "done-1", 3),
       ], { livePanes: null });
       try {
-        expect([...host.querySelectorAll("[data-worker-chip-desktop] [data-worker-state]")].map((el) => el.getAttribute("data-worker-state"))).toEqual(["waiting", "working"]);
+        expect(host.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("2 workers");
+        expect(host.querySelector("[data-worker-chip-desktop] .bg-warning")).not.toBeNull();
       } finally {
         await unmount();
       }
@@ -427,7 +436,7 @@ describe("WorkerChip", () => {
     }
   });
 
-  it("faces a waiting script first with a scroll glyph while AI workers keep brand marks", async () => {
+  it("uses the bot glyph for a waiting script and keeps provider marks in the list", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const { host, chip, unmount } = await mount([
       { run: run("A | Grok 4.7 | high"), state: "working" },
@@ -435,11 +444,11 @@ describe("WorkerChip", () => {
     ], { livePanes: null });
     try {
       const desktop = [...host.querySelectorAll("[data-worker-chip-desktop] svg")];
-      expect(desktop).toHaveLength(2);
-      expect(desktop[0]!.classList.contains("lucide-scroll-text")).toBe(true);
-      expect(desktop.some((svg) => svg.classList.contains("lucide-square-terminal"))).toBe(false);
+      expect(desktop).toHaveLength(1);
+      expect(desktop[0]!.classList.contains("lucide-bot")).toBe(true);
+      expect(host.querySelector("[data-worker-chip-desktop] .bg-warning")).not.toBeNull();
       const phone = host.querySelector("[data-worker-chip-phone] svg")!;
-      expect(phone.classList.contains("lucide-scroll-text")).toBe(true);
+      expect(phone.classList.contains("lucide-bot")).toBe(true);
       await act(async () => chip()!.click());
       const list = host.querySelector("[data-worker-list]")!;
       expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
@@ -463,7 +472,7 @@ describe("WorkerChip", () => {
     const { host, root, chip, unmount } = await mount(runs, { livePanes: new Set(["aaaaaaaa-1"]), onOpenTerminalPane: onOpen });
     try {
       expect(chip()!.getAttribute("aria-label")).toBe("0 working, 1 waiting, 0 failed, 0 done. Show workers");
-      expect(host.querySelectorAll("[data-worker-chip-desktop] [data-worker-state]")).toHaveLength(1);
+      expect(host.querySelector("[data-worker-chip-desktop]")!.textContent).toBe("1 worker");
       expect(host.querySelector("[data-worker-chip-phone]")!.textContent).toBe("");
       await act(async () => chip()!.click());
       const list = document.body.querySelector("[data-worker-list]")!;
