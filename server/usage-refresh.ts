@@ -70,7 +70,7 @@ export function usageRefreshResponse(instanceId: string, result: Result) {
 
 export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?: AccountContext): Promise<JsonValue> {
   const home = account?.home ?? codexHome(env);
-  await awaitDyingAppServers(2_000, home);
+  if (account) await awaitDyingAppServers(2_000, home);
   return new Promise((resolve, reject) => {
     const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env, stdio: ["pipe", "pipe", "pipe"], ...(account ? { account, accountDriver: "codex" } : {}) });
     const lines = createInterface({ input: child.stdout });
@@ -82,7 +82,8 @@ export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?
       settled = true;
       clearTimeout(timer);
       lines.close();
-      retireAppServer(child, home);
+      if (account) retireAppServer(child, home);
+      else killCliTree(child);
       if (value !== undefined) resolve(value);
       else reject(new Error(code === 401 || code === 403 ? "signin" : "refresh"));
     };

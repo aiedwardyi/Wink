@@ -137,9 +137,28 @@ it("disables actions while signing out and shows a retryable failure", async () 
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(buttons("Sign Out").every((button) => button.disabled)).toBe(true);
   expect(buttons("Add Account")[0]!.disabled).toBe(true);
-  await act(async () => reject(new Error("offline")));
+  await act(async () => reject(new Error("")));
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Didn't finish");
   expect(buttons("Sign Out").every((button) => !button.disabled)).toBe(true);
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it.each(["en", "ko"] as const)("shows account refusal messages in %s", async (locale) => {
+  persistPreference(locale);
+  await render(1);
+  request.mockRejectedValueOnce(new Error("Sign-in is already in progress"));
+  await act(async () => buttons(locale === "en" ? "Add Account" : "계정 추가")[0]!.click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in is already in progress");
+});
+
+it("signs out with zero bots without selecting a destination", async () => {
+  const bots = state.bots.splice(0);
+  try {
+    await render();
+    await act(async () => buttons("Sign Out")[0]!.click());
+    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
+    expect(host.textContent).not.toContain("Move");
+    expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
+  } finally { state.bots.push(...bots); }
 });

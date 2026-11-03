@@ -11,6 +11,7 @@ export interface AccountInfo {
 }
 
 export interface UsageAccount extends InstanceInfo {
+  canRefreshUsage?: boolean;
   accountInfo?: AccountInfo;
 }
 

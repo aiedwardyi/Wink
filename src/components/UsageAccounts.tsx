@@ -13,7 +13,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const { t } = useI18n();
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
   if (accounts.length === 1) return renderRow(accounts[0]!);
   const main = accounts.find((account) => account.accountInfo?.default)
     ?? accounts.find((account) => account.instanceId === account.accountInfo?.of) ?? accounts[0]!;
@@ -22,12 +22,12 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const setAsMain = async (account: UsageAccount) => {
     if (busy) return;
     setBusy(true);
-    setError(false);
+    setError("");
     try {
       await api(`/api/accounts/${encodeURIComponent(account.instanceId)}/default`, { method: "POST", body: "{}" });
       await reload();
       setPage(0);
-    } catch { setError(true); }
+    } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
     finally { setBusy(false); }
   };
   const arrows = others.length > 1 && (
@@ -67,7 +67,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
           {column(account, true)}
         </div>)}
       </div>
-      {error && <div role="alert" className="text-[12px] text-danger sm:col-span-2">{t("engines.didntFinish")}</div>}
+      {error && <div role="alert" className="text-[12px] text-danger sm:col-span-2">{error}</div>}
     </div>
   );
 }
