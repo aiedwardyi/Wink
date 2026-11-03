@@ -343,7 +343,7 @@ describe("Store", () => {
     expect(colors.every((color) => color === "white")).toBe(true);
   });
 
-  it("repairs a saved lead when membership changes", () => {
+  it("repairs a live lead on membership change, then reload resets to everyone", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
