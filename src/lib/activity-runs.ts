@@ -189,14 +189,12 @@ export const SERVER_LINES: ServerLine[] = [
 export function localizeServerLine(name: string, t: Translate): string {
   const timelineKey = (["chat.timeline.taskStarted", "chat.timeline.userInput", "chat.timeline.screenObserved", "chat.timeline.responseRecorded"] as const).find((key) => en[key] === name);
   if (timelineKey) return t(timelineKey);
-  const isError = name.startsWith("error: ");
-  if (isError) return chatErrorText(name, t("errors.bot"), t)?.text ?? "";
-  const body = isError ? name.slice(7) : name;
+  if (name.startsWith("error: ")) return chatErrorText(name, t("errors.bot"), t)?.text ?? "";
   for (const line of SERVER_LINES) {
-    const m = line.re.exec(body);
+    const m = line.re.exec(name);
     if (m) {
       const [key, vars] = line.pick(m);
-      return (isError ? t("chat.errorPrefix") : "") + t(key, vars);
+      return t(key, vars);
     }
   }
   return name;

@@ -135,13 +135,13 @@ contextBridge.exposeInMainWorld("ogb", {
    * the page as 0 bytes on Windows, so the composer reads it again here. */
   readClipboardImage: () => invoke("desktop:clipboard-image"),
   /** Opens System Settings on the given privacy pane: mic|screen|speech. */
-  permOpenSettings: (pane) => ipcRenderer.invoke("perm:open-settings", pane),
+  permOpenSettings: (pane) => invoke("perm:open-settings", pane),
 
   /** Copies an engine install command and opens a blank terminal. Resolves
    * false if no terminal could be launched; the clipboard still has it. */
   openInstallTerminal: (command) => ipcRenderer.invoke("engine:open-terminal", command),
   openEngineSignIn: (instanceId) => ipcRenderer.invoke("engine:sign-in", instanceId),
-  openEngineInstall: (instanceId, installOnly) => ipcRenderer.invoke("engine:install", instanceId, installOnly),
+  openEngineInstall: (instanceId, installOnly) => invoke("engine:install", instanceId, installOnly),
   /** Open a web link in the default browser. Unlike renderer window.open,
    * this remains reliable after an asynchronous API request. */
   openExternal: (url) => invoke("desktop:open-external", url),
@@ -185,15 +185,15 @@ contextBridge.exposeInMainWorld("ogb", {
   },
   /** Another PC's Orbit in its own sandboxed window; focuses it when already open. */
   deviceWindow: {
-    open: (host, name) => ipcRenderer.invoke("device-window:open", host, name),
+    open: (host, name) => invoke("device-window:open", host, name),
   },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => invoke("desktop:pick-folder", current),
   /** Writes the redacted diagnostics report to a user-chosen file; resolves
    * the path, or null when the save dialog was cancelled. */
   exportDiagnostics: () => invoke("desktop:export-diagnostics"),
-  errorReportConsent: () => ipcRenderer.invoke("error-reports:get"),
-  setErrorReportConsent: (enabled) => ipcRenderer.invoke("error-reports:set", enabled),
+  errorReportConsent: () => invoke("error-reports:get"),
+  setErrorReportConsent: (enabled) => invoke("error-reports:set", enabled),
   captureErrorReport: (site) => ipcRenderer.send("error-reports:capture", site),
   /** Open a local file or folder from a chat link in its default app, or reveal it
    * when its type could run. The chat bubble shows the rejection text
@@ -206,7 +206,7 @@ contextBridge.exposeInMainWorld("ogb", {
   fileMenu: (filePath, base) =>
     invoke("desktop:file-menu", filePath, base),
   /** Store a provider credential with OS-backed encryption. */
-  setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
+  setCredential: (name, value) => invoke("credential:set", name, value),
 
   /** In-app auto-update. State object:
    *  { status: "idle"|"checking"|"available"|"downloading"|"downloaded"|"error",

@@ -4150,12 +4150,12 @@ function drainQueuedSends() {
         { queueId: userMessage.queueId },
       );
     }
-    startQueuedTurn(() => startTurn(botId, prompt, {
+    return startQueuedTurn(() => startTurn(botId, prompt, {
       threadId,
       userMessage: userMessage ?? undefined,
       excludeMessageIds: excludeIds,
       onDispatchError: rerunIfIdle,
-    }), () => isSendCancelled(userMessage?.sendId), terminalBridgeAccess).then(rerunIfIdle).catch((err) => {
+    }), () => isSendCancelled(userMessage?.sendId ?? userMessage?.queueId), terminalBridgeAccess).then(rerunIfIdle).catch((err) => {
       if (writeChatError(`queued message could not start - ${err instanceof Error ? err.message : String(err)}`, terminalBridgeAccess)) store.appendMessage(threadId, {
         role: "bot",
         kind: "activity",

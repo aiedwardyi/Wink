@@ -59,6 +59,7 @@ function focusInput(input: HTMLTextAreaElement | null) {
 
 // A dropped fetch, a timeout or a bridge 5xx can fail a send the pty already ran.
 function sendMayHaveRun(cause: unknown): boolean {
+  if (cause instanceof TypeError) return true;
   if (!(cause instanceof Error) || cause.name !== "Error") return true;
   return /unreachable|terminal bridge: HTTP|^50[24] /i.test(cause.message);
 }

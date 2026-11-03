@@ -18,6 +18,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import {
   cancelQueuedRoomParticipations,
+  cancelQueuedSends,
   cancelSteeredMessage,
   clearSendRunning,
   continueQueuedDrainIfIdle,
@@ -36,6 +37,7 @@ import {
   type SteerStore,
 } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
+import { startQueuedTurn } from "./chat-error.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +87,34 @@ function fakeStore(bots: BotRecord[]): SteerStore & { messages: Message[] } {
 describe("steer-queue module", () => {
   afterEach(() => {
     _resetSteerQueue();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each([undefined, "send_1234567890123456"])("Stop cancels a drained busy retry with sendId %s", async (sendId) => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bot = fakeBot("bot-stop-retry", "thread-stop-retry", false);
+    const store = fakeStore([bot]);
+    queueSteeredMessage(bot.id, bot.threadId, "old message", { sendId });
+    const start = vi.fn<(prompt: string) => Promise<void>>().mockRejectedValueOnce(new Error("the bot is already working")).mockResolvedValue(undefined);
+    const run = (_botId: string, _threadId: string, prompt: string, message: Message | null) =>
+      startQueuedTurn(() => start(prompt), () => isSendCancelled(message?.sendId ?? message?.queueId), null);
+    drainSteeredMessages(store, run);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(_queuedCount(bot.threadId)).toBe(0);
+    expect(start).toHaveBeenCalledExactlyOnceWith("old message");
+    cancelQueuedSends(bot.id);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(start).toHaveBeenCalledTimes(1);
+
+    queueSteeredMessage(bot.id, bot.threadId, "new message", { sendId: "send_abcdefghijklmnop" });
+    drainSteeredMessages(store, run);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenLastCalledWith("new message");
+    cancelQueuedSends(bot.id);
+    expect(isSendCancelled("send_abcdefghijklmnop")).toBe(false);
   });
 
   it("does not append a queued user message until drain", () => {

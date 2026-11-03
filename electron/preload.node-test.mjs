@@ -28,3 +28,22 @@ test("successful terminal calls keep their arguments and result", async () => {
   const api = bridge(async (...args) => args);
   assert.deepEqual(Array.from(await api.terminal.resize("pane", 80, 24)), ["terminal:resize", "pane", 80, 24]);
 });
+
+for (const [name, channel, args] of [
+  ["permOpenSettings", "perm:open-settings", ["mic"]],
+  ["openEngineInstall", "engine:install", ["engine", true]],
+  ["deviceWindow.open", "device-window:open", ["host", "device"]],
+  ["errorReportConsent", "error-reports:get", []],
+  ["setErrorReportConsent", "error-reports:set", [true]],
+  ["setCredential", "credential:set", ["provider", "value"]],
+]) {
+  const call = (api) => name.split(".").reduce((value, key) => value[key], api)(...args);
+  test(`${name} strips the IPC wrapper`, async () => {
+    const api = bridge(async () => { throw new Error(`Error invoking remote method '${channel}': Error: Access denied`); });
+    await assert.rejects(call(api), { message: "Access denied" });
+  });
+  test(`${name} keeps its arguments and result`, async () => {
+    const api = bridge(async (...input) => input);
+    assert.deepEqual(Array.from(await call(api)), [channel, ...args]);
+  });
+}

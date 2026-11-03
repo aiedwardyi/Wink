@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withAcceptedMessages } from "@/lib/send-accept";
 import { reloadHeld } from "@/lib/reload-hold";
+import { ConnectionError } from "@/lib/error-text";
 import { api, StoreProvider, useStore, type Bot, type Group, type Message, type OptionCardData } from "./store";
 
 class FakeEventSource {
@@ -379,13 +380,13 @@ describe("send while the server holds the thread", () => {
     expect(painted.map((message) => message.text)).toEqual([text]);
   });
 
-  it("keeps a queued send when the phone drops the POST response", async () => {
+  it.each([new TypeError("Load failed"), new ConnectionError()])("keeps a queued send when the phone drops the POST response with %s", async (failure) => {
     const bodies: unknown[] = [];
     await mount(
       () => Response.json({ messages: [], hasMore: false }),
       async (init) => {
         bodies.push(JSON.parse(String(init?.body)));
-        if (bodies.length === 1) throw new TypeError("Load failed");
+        if (bodies.length === 1) throw failure;
         return queued();
       },
     );

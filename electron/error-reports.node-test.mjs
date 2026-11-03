@@ -448,6 +448,26 @@ test("typed server failures use a separate authenticated loopback grant and reje
   for (const text of privateText) assert.equal(bytes.includes(text), false);
 });
 
+test("server report capture accepts exactly the server failure sites", async () => {
+  const { createHmac } = await import("node:crypto");
+  const { Readable } = await import("node:stream");
+  const { ERROR_SITES } = await import("../shared/error-report.mjs");
+  const { handleServerErrorReport } = await import("./error-report-capture.mjs");
+  const token = "test-report-token";
+  const grant = createHmac("sha256", token).update("orbit-error-report-v1").digest("base64url");
+  const allowed = [ERROR_SITES.serverRuntime, ERROR_SITES.chatRace, ERROR_SITES.usageRefresh, ERROR_SITES.chatQueue];
+  for (const site of [...Object.values(ERROR_SITES), 0, 99, "11"]) {
+    const req = Readable.from([Buffer.from(JSON.stringify({ code: "SERVER_RUNTIME_FAILURE", site }))]);
+    req.method = "POST";
+    req.headers = { authorization: `Bearer ${grant}` };
+    const captures = [];
+    let status;
+    await handleServerErrorReport(req, { writeHead: (value) => { status = value; }, end() {} }, token, { capture: (value) => captures.push(value) });
+    assert.equal(status, allowed.includes(site) ? 204 : 400, String(site));
+    assert.deepEqual(captures, allowed.includes(site) ? [{ process: "server", code: "SERVER_RUNTIME_FAILURE", site }] : []);
+  }
+});
+
 test("updater reports both silent rejection and event failures without forwarding errors", async () => {
   const { createUpdaterCoordinator } = await import("./updater-coordinator.mjs");
   const updater = new EventEmitter();

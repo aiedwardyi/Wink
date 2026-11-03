@@ -16,6 +16,7 @@ vi.mock("@/state/store", async () => {
 });
 
 import { I18nProvider } from "@/lib/i18n";
+import { ConnectionError } from "@/lib/error-text";
 import { RemoteTerminalView, remotePaneHotkey, snapshotText } from "./RemoteTerminalView";
 import { ProviderMark } from "./ProviderIcons";
 
@@ -906,7 +907,7 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it.each([new TypeError("Load failed"), new Error("terminal bridge unreachable")])("warns the line may have run after %s", async (failure) => {
+  it.each([new TypeError("Load failed"), new ConnectionError(), Object.assign(new ConnectionError(), { name: "Error" }), new Error("terminal bridge unreachable")])("warns the line may have run after %s", async (failure) => {
     let ran = false;
     store.api.mockImplementation(async (path: string) => {
       if (!path.endsWith("/send")) return { screenText: ran ? "$ make deploy" : "$", sessionId: "s1", generation: 2 };
