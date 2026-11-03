@@ -36,7 +36,7 @@ it("releases a reply handed to a turn the watchdog stopped", async () => {
   const noteArrived = vi.fn();
   const deps = {
     repeats: { settle() {} }, settlePendingToolMessages() {}, store, routineTurnThreads: new Set(), taskPacketForWrite: () => null,
-    persistTaskPacket() {}, recordTaskCompletion() {}, registry: { get: () => null }, TURN_STALL_MS: 600_000, stallErrorActivity,
+    persistTaskPacket() {}, recordTaskCompletion() {}, registry: { get: () => null }, botAccounts: { instance: () => null }, TURN_STALL_MS: 600_000, stallErrorActivity,
     finalizeDelegationWatch() {}, turnRegistry, turnUsage: new Map(), roomStallCompletions: { stall() {} }, providerReload: { settled() {} },
     settleMail, paneWake: { noteArrived, settled() {} }, groupSpeakers: new Map(), stopScreenPoller() {}, activeVpsThreads: new Map(),
     drainQueuedSends() {}, drainConnectorResumes() {}, drainSecretResumes() {},
