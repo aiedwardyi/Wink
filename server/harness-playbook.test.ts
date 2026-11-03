@@ -148,6 +148,11 @@ describe("harness playbook", () => {
     expect(harnessPlaybookPrompt(true)).toContain("- Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.");
   });
 
+  it("keeps long waits and deletes unattended-safe", () => {
+    expect(harnessPlaybookPrompt(true)).toContain("start the job hidden, then poll it in the foreground");
+    expect(harnessPlaybookPrompt(true)).toContain("never `cd` then relative `rm`");
+  });
+
   it("carries the four house rules", () => {
     const prompt = harnessPlaybookPrompt(true);
     expect(prompt).toContain("- Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.");
@@ -176,7 +181,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13243);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13411);
   });
 
   it("fills the worktree path from the configured root", () => {
