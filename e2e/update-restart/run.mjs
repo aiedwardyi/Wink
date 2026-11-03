@@ -178,9 +178,9 @@ async function side(name) {
 
     log("launch", inst);
     const { chromium } = await import("playwright");
-    const env = { ...process.env, USERPROFILE: join(work, "home"), HOME: join(work, "home") };
+    // A moved USERPROFILE makes Electron fail to resolve userData; the runner is fresh anyway.
+    const env = { ...process.env };
     for (const key of Object.keys(env)) if (/^(ELECTRON_|OMB_|OGB_|ORBIT_|GH_TOKEN|GITHUB_TOKEN)/.test(key)) delete env[key];
-    mkdirSync(env.USERPROFILE, { recursive: true });
     // Playwright's electron.launch never sees the packaged app ready, so attach to its renderer over CDP instead.
     const app = spawn(join(inst, "Orbit.exe"), [`--remote-debugging-port=${PORT + 1}`, "--enable-logging=stderr"], { env, stdio: ["ignore", "pipe", "pipe"] });
     const oldPid = app.pid;
