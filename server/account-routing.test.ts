@@ -507,6 +507,45 @@ describe("account removal drain", () => {
     expect(accounts.get(f.added[0].id)).toBeUndefined();
   });
 
+  it.each(["expired", "unknown"])("keeps booting with a signed-out drain and an %s destination", async (state) => {
+    const f = await fixture();
+    await f.useDefault(f.added[0].id);
+    await f.accounts.drain(f.added[0].id, f.added[2].id, "signed-out");
+    f.controller.dispose();
+    vi.spyOn(f.registry.get(f.added[2].id)!, "snapshot").mockResolvedValue(state === "expired"
+      ? { state: "available", authenticated: false } : { state: "unavailable" });
+    const accounts = new AccountService(f.root, () => f.bases);
+    const controller = createAccountRuntime({ ...f.deps, accounts });
+    controllers.push(controller);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(controller.restore()).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith("Account drain recovery failed");
+    expect(accounts.drains[f.added[0].id]).toEqual({ destinationId: f.added[2].id, phase: "signed-out" });
+    expect(f.registry.accountBlocked(f.added[0].id)).toBe(true);
+    expect(f.logout).not.toHaveBeenCalled();
+    await accounts.identify(f.added[2].id, "identity-2");
+    f.registry.blockAccount(f.added[2].id, false);
+    await controller.resumeDrains();
+    expect(accounts.get(f.added[0].id)).toBeUndefined();
+    expect(f.logout).not.toHaveBeenCalled();
+  });
+
+  it("projects Main readiness without changing account snapshots or single-account rows", async () => {
+    const f = await fixture();
+    const instances = await f.registry.describeCached();
+    const base = instances.find((row) => row.instanceId === "claude")!;
+    base.snapshot = { state: "available", authenticated: false };
+    const describe = () => f.controller.bots!.pickerInstances(instances);
+    expect(describe()).toEqual(instances);
+    await f.useDefault(f.added[2].id);
+    const main = instances.find((row) => row.instanceId === f.added[2].id)!;
+    expect(describe().find((row) => row.instanceId === "claude")).toMatchObject({ snapshot: base.snapshot, pickerSnapshot: main.snapshot });
+    expect(base).not.toHaveProperty("pickerSnapshot");
+    expect(describe().find((row) => row.instanceId === main.instanceId)).toBe(main);
+    f.registry.blockAccount(main.instanceId, true);
+    expect(describe().find((row) => row.instanceId === "claude")?.pickerSnapshot?.state).toBe("unavailable");
+  });
+
   it("waits for a captured usage refresh and refuses another during drain", async () => {
     const f = await fixture(false, "codex");
     expect((await f.useDefault(f.added[0].id)).status).toBe(200);
@@ -634,6 +673,7 @@ describe("account-aware Claude notes", () => {
   it("does no account file or subprocess work when no accounts.json exists", async () => {
     const f = await fixture(true);
     const before = existsSync(join(f.root, "accounts.json"));
+    const instances = await f.registry.describeCached();
     const calls = [
       ...["readFileSync", "writeFileSync", "lstatSync", "statSync", "openSync", "readdirSync", "realpathSync"].map((name) => vi.spyOn(fs, name as "readFileSync")),
       ...["readFile", "writeFile", "lstat", "stat", "open", "readdir", "realpath"].map((name) => vi.spyOn(fsAsync, name as "readFile")),
@@ -641,6 +681,7 @@ describe("account-aware Claude notes", () => {
     ];
     syncBuiltinESMExports();
     for (let i = 0; i < 20; i++) {
+      expect(f.controller.bots!.pickerInstances(instances)).toEqual(instances);
       expect(f.resolve()).toBe(f.bot.modelSelection);
       expect(resolveAutomaticSelection({ candidates: [{ instanceId: "claude", driverKind: "claudeAgent", available: true, defaultModel: "claudeAgent-1", capabilities: {} }], current: f.bot.modelSelection })?.instanceId).toBe("claude");
       await f.providers.started(f.bot.threadId, f.resolve().instanceId)?.adapter.sendTurn({ threadId: f.bot.threadId, text: "test" });

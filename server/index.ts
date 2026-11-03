@@ -8033,7 +8033,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (probe !== "cached") resetPathCache();
       const instances = withRateLimits(await describeInstances(probe));
       rememberAutomaticAvailability(instances);
-      return json(res, 200, { instances });
+      return json(res, 200, { instances: botAccounts.pickerInstances(instances) });
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──

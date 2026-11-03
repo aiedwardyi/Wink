@@ -379,6 +379,7 @@ export interface InstanceInfo {
   instanceId: string;
   driverKind: string;
   accountOf?: string;
+  pickerSnapshot?: InstanceInfo["snapshot"];
   displayName: string;
   snapshot: {
     state: "available" | "unavailable";

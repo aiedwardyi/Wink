@@ -61,6 +61,19 @@ async function fixture() {
 }
 
 describe("account removal references", () => {
+  it.each(["pane", "unknown", "unreachable"])("refuses sign-in with %s account pane state", async (state) => {
+    const f = await fixture();
+    const start = vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});
+    if (state === "pane") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { [f.account.generation]: 1 } }));
+    if (state === "unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
+    if (state === "unreachable") f.request.mockRejectedValue(new Error("unreachable fixture"));
+    await expect(f.controller.signIn(f.account.id)).rejects.toThrow(state === "pane" ? "active work" : "Terminal host is unreachable");
+    expect(start).not.toHaveBeenCalled();
+    expect(f.accounts.get(f.account.id)).toEqual(f.account);
+    expect(f.registry.accountBlocked(f.account.id)).toBe(false);
+    expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
   it.each(["bot", "pending", "turn", "helper", "pane"] as const)("refuses logout for a live %s reference", async (reference) => {
     const f = await fixture();
     if (reference === "bot") f.bot.modelSelection = { instanceId: f.account.id, model: "codex-1" };

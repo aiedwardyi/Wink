@@ -52,7 +52,10 @@ export class AccountLifecycle {
         await this.observe(account.id, snapshot ?? { state: "unavailable" });
       }
     }
-    await this.resumeDrains();
+    await this.resumeDrains().catch(() => {
+      console.error("Account drain recovery failed");
+      this.scheduleDrains();
+    });
   }
 
   dispose() {
@@ -116,7 +119,7 @@ export class AccountLifecycle {
       if (this.jobs.has(id)) return this.registry.logins.capture(id);
       this.registry.blockAccount(id, true);
       try {
-        if (await this.hooks.referenced(id, true)) throw new AccountError("Finish this account's active work before signing in");
+        if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in");
         return await this.begin(account, device);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);

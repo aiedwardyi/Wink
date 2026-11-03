@@ -6,6 +6,18 @@ import type { InstanceInfo } from "@/state/store";
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
 describe("picker catalogs", () => {
+  it("uses Main readiness while preserving the engine id and catalog", () => {
+    const base: InstanceInfo = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
+      snapshot: { state: "available", authenticated: false }, pickerSnapshot: { state: "available", authenticated: true },
+      models: { default: "claude-opus-5-5", options: [{ id: "claude-opus-5-5", label: "Opus" }] } };
+    const row = pickerRows([base], { instanceId: "claude", model: base.models.default })[0]!;
+    expect(row.instance).toEqual({ ...base, snapshot: base.pickerSnapshot });
+    expect(row.instance.models).toBe(base.models);
+    expect(base.snapshot.authenticated).toBe(false);
+    const { pickerSnapshot: _, ...single } = base;
+    expect(pickerRows([single], { instanceId: "claude", model: base.models.default })[0]!.instance).toBe(single);
+  });
+
   it("excludes managed accounts even when the saved selection names one", () => {
     const base: InstanceInfo = { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" },
       models: { default: "claude-opus-5-5", options: [{ id: "claude-opus-5-5", label: "Opus" }] } };
