@@ -293,6 +293,7 @@ const Bubble = memo(function Bubble({
     detectedOptions && (answeredChoice != null || isLastBotText) ? detectedOptions : null;
   const markdownText =
     optionChoices?.messagePrefix != null ? optionChoices.messagePrefix : text;
+  const choicesOnly = Boolean(optionChoices) && !markdownText.trim() && !quoted && !dock;
   const webhookView = user ? webhookMessageView(text) : null;
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
   const visibleText = webhookView?.task ?? attachedImages?.display ?? text;
@@ -418,6 +419,7 @@ const Bubble = memo(function Bubble({
 
           </div>
         )}
+        {!choicesOnly && (
         <div
           data-orbit-message-content
           className={cn(
@@ -488,6 +490,7 @@ const Bubble = memo(function Bubble({
             </MessageBoundary>
           ) : null}
         </div>
+        )}
         {dock && dockShown && <DockedPresence {...dock} className="absolute bottom-0 left-0 min-h-[26px]" />}
         {!user && !streaming && !dock?.live && (
           <div

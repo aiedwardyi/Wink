@@ -444,6 +444,7 @@ export const Transcript = memo(function Transcript({
             : null;
         const markdownText =
           optionChoices?.messagePrefix != null ? optionChoices.messagePrefix : (m.text ?? "");
+        const choicesOnly = Boolean(optionChoices) && !markdownText.trim() && !m.replyToId;
         // the room's pinned folder, else its shared desk, else the writer's own
         const botFolder = (group.pinnedCwd === undefined ? group.cwd : group.pinnedCwd) ?? memberOf(m.from?.botId)?.cwd;
         const routineOwner = m.kind === "routine.run" ? memberOf(m.from?.botId) : undefined;
@@ -558,6 +559,7 @@ export const Transcript = memo(function Transcript({
 
                   </div>
                 )}
+                {!choicesOnly && (
                 <div
                   data-orbit-message-content
                   className={cn(
@@ -581,6 +583,7 @@ export const Transcript = memo(function Transcript({
                     </MessageBoundary>
                   ) : null}
                 </div>
+                )}
                 {!user && !streaming && !docked?.live && (
                   <div
                     data-message-hover-actions
