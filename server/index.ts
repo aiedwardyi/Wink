@@ -8300,7 +8300,7 @@ startTeamSnagOwner({
 });
 startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => phoneAccess.base(), baked: googleEnv.teamRelay,
   owner: googleEnv.teamOwner, email: () => googleAccount.owner()?.email ?? null, tokens: googleAccount,
-  ...reportOwnerPost(store, profileSyncSettings.deviceId), warn: (line) => console.warn(line) });
+  ...reportOwnerPost(store, profileSyncSettings.deviceId, (botId, threadId) => paneWake.noteArrived(botId, threadId)), warn: (line) => console.warn(line) });
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
 for (const bot of store.bots) {
