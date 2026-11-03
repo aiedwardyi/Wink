@@ -273,6 +273,10 @@ async function side(name) {
     result.error = String(error?.stack ?? error);
     log("error", result.error);
     if (inst) result.atError = processesUnder(inst).map((p) => `${p.ProcessId} ${p.ExecutablePath}`);
+    const glance = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(import.meta.dirname, "watch.ps1"), "-Out", join(out, "at-error.jsonl"), "-Shots", join(out, "at-error"), "-Stop", join(work, "stop-glance"), "-Ready", join(work, "ready-glance")], { stdio: "inherit" });
+    await sleep(8000);
+    writeFileSync(join(work, "stop-glance"), "");
+    await new Promise((resolve) => (glance.exitCode === null ? glance.once("exit", resolve) : resolve()));
   } finally {
     for (const file of ["updater.log", "server.log", "main.log"]) {
       const from = userData && join(userData, "logs", file);
