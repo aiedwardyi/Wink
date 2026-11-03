@@ -190,6 +190,40 @@ it("keeps single-account sign-out unchanged", async () => {
   expect(host.textContent).not.toContain("Set another account");
 });
 
+it.each([false, true])("retries a failed drain with its recorded destination when Main is %s", async (main) => {
+  await render();
+  state.instances[1]!.accountMain = main;
+  state.instances[1]!.drain = { destinationId: "claude", phase: "failed" };
+  await update();
+  expect(buttons("Retry Sign Out")).toHaveLength(1);
+  expect(buttons("Retry Sign Out")[0]!.disabled).toBe(false);
+  await act(async () => buttons("Retry Sign Out")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-out", {
+    method: "POST", body: JSON.stringify({ destinationId: "claude" }),
+  });
+});
+
+it.each(["en", "ko"] as const)("submits a managed Claude browser code without exposing it in %s", async (locale) => {
+  persistPreference(locale);
+  await render();
+  state.instances[1] = { ...engine("account-1", false), loginState: "pending",
+    loginCapture: { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 } };
+  await update();
+  const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
+  expect(input).not.toBeNull();
+  await act(async () => {
+    input.value = "returned-code#state";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  request.mockResolvedValue({});
+  await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(request).toHaveBeenCalledWith("/api/accounts/account-1/sign-in/code", {
+    method: "POST", body: JSON.stringify({ code: "returned-code#state", generation: 7 }),
+  });
+  expect(host.textContent).not.toContain("returned-code#state");
+  expect(input.value).toBe("");
+});
+
 it("uses browser login when Claude does not advertise device login", async () => {
   await render(1);
   state.instances[0]!.install = { login: { args: ["auth", "login"] } };

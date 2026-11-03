@@ -8,6 +8,7 @@ import { accountLaunch, type AccountContext } from "./account-policy.ts";
 export interface LoginCapture {
   url?: string;
   code?: string;
+  inputGeneration?: number;
   error?: "device_cap";
 }
 
@@ -27,6 +28,7 @@ interface LoginJob {
   finish: (state: LoginState) => void;
   changed: Set<() => void>;
   acknowledged: boolean;
+  pasteBack: boolean;
 }
 
 export class EngineLogin {
@@ -58,6 +60,15 @@ export class EngineLogin {
     return { ...this.jobs.get(engine)?.capture };
   }
 
+  submit(engine: string, generation: number, code: string): boolean {
+    const job = this.jobs.get(engine);
+    if (job?.state !== "pending" || job.capture.inputGeneration !== generation || !job.child?.stdin?.writable
+      || !code.length || code.length > 4096 || /[^!-~]/.test(code)) return false;
+    try { job.child.stdin.write(`${code}\n`); } catch { return false; }
+    delete job.capture.inputGeneration;
+    return true;
+  }
+
   needsRefresh(engine: string): boolean {
     const job = this.jobs.get(engine);
     return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
@@ -81,6 +92,7 @@ export class EngineLogin {
     }
     if (job?.state !== "pending") {
       job = this.create(engine, scope);
+      job.pasteBack = Boolean(options.account && scope === "claudeAgent" && args[0] === "auth" && args[1] === "login");
       try {
         const resolved = resolveCliSpawn(cli, args);
         const launch = accountLaunch(options.account, scope, resolved.args, { PATH: augmentedPath(), ...env });
@@ -145,7 +157,7 @@ export class EngineLogin {
     const job: LoginJob = {
       scope,
       generation: ++this.nextGeneration,
-      capture: {}, state: "pending", changed: new Set(), acknowledged: false,
+      capture: {}, state: "pending", changed: new Set(), acknowledged: false, pasteBack: false,
       done: new Promise<void>((resolve) => { closed = resolve; }),
       finish: (state) => {
         if (job.state !== "pending") return;
@@ -188,6 +200,7 @@ export class EngineLogin {
     const parse = () => {
       if (job.state !== "pending") { line = ""; return; }
       const clean = stripVTControlCharacters(line).trim();
+      if (job.pasteBack && /^Paste code here if prompted\s*>\s*$/.test(clean)) job.capture.inputGeneration = job.generation;
       if (job.scope === "codex" && /\bdevice[ _-]+limit(?:[ _-]+reached)?\b|\btoo many (?:paid )?accounts (?:on|for) (?:this|the same) device\b/i.test(clean)) {
         job.capture.error = "device_cap";
         job.finish("failed");
@@ -198,8 +211,10 @@ export class EngineLogin {
         try {
           const parsed = new URL(url[1]);
           const names = [...parsed.searchParams.keys(), ...new URLSearchParams(parsed.hash.slice(1)).keys()].map((name) => name.toLowerCase());
+          const authorization = job.pasteBack && parsed.hostname === "claude.com" && parsed.pathname === "/cai/oauth/authorize"
+            && parsed.searchParams.getAll("code").length === 1 && parsed.searchParams.get("code") === "true" && !parsed.hash;
           const secret = names.some((name) => ["access_token", "refresh_token", "id_token", "token"].includes(name))
-            || (!authHosts.includes(parsed.hostname) && names.includes("code"));
+            || (!authHosts.includes(parsed.hostname) && !authorization && names.includes("code"));
           if (!parsed.username && !parsed.password && !secret) job.capture.url = parsed.href;
         } catch {}
       }
@@ -215,6 +230,7 @@ export class EngineLogin {
           dropping = false;
         } else if (!dropping) {
           line += char;
+          if (job.pasteBack && char === ">" && /^Paste code here if prompted\s*>$/.test(stripVTControlCharacters(line).trim())) parse();
           if (line.length > 8192) { line = ""; dropping = true; }
         }
       }
@@ -230,7 +246,7 @@ export class EngineLogin {
         resolve();
       };
       const check = () => {
-        if (job.state !== "pending" || (job.capture.url && job.capture.code)) finish();
+        if (job.state !== "pending" || (job.capture.url && (job.capture.code || job.capture.inputGeneration))) finish();
       };
       const timer = setTimeout(finish, this.captureMs);
       job.changed.add(check);

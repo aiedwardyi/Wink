@@ -9,10 +9,11 @@ import { json, readBody } from "./http-helpers.ts";
 const signInSchema = z.object({ device: z.boolean().optional() }).strict();
 const addSchema = signInSchema.extend({ of: z.string().refine(isInstanceId) });
 const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional() }).strict();
+const codeSchema = z.object({ generation: z.number().int().positive(), code: z.string().min(1).max(4096).refine((code) => !/[^!-~]/.test(code)) }).strict();
 
 export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry) {
   return async (req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<boolean> => {
-    const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in|sign-out|default))?)?$/.exec(path);
+    const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default))?)?$/.exec(path);
     const legacy = /^\/api\/instances\/([^/]+)\/(sign-in|sign-out)$/.exec(path);
     const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1]));
     if (!route && !managed) return false;
@@ -24,6 +25,12 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         const result = legacy ? registry.signIn(id) : lifecycle.signInResult(id) ?? (lifecycle.accounts.list().some((row) => row.id === id) ? { state: registry.logins.state(id), ...registry.logins.capture(id) } : null);
         if (!result) throw new AccountError("Unknown account", 404);
         json(res, 200, result);
+      } else if (id && action === "sign-in/code" && method === "POST") {
+        if (!lifecycle.accounts.get(id) || registry.get(id)?.driverKind !== "claudeAgent") throw new AccountError("Unknown managed Claude account", 404);
+        const parsed = codeSchema.safeParse(await body(req));
+        if (!parsed.success) throw new AccountError("A login generation and one code are required", 400);
+        if (!registry.logins.submit(id, parsed.data.generation, parsed.data.code)) throw new AccountError("This sign-in is no longer waiting for a code", 409);
+        json(res, 200, {});
       } else if (!id && method === "GET") {
         const instances = await registry.describeCached();
         json(res, 200, { accounts: lifecycle.accounts.list().map((account) => {

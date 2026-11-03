@@ -42,9 +42,9 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
               <div className="ml-auto shrink-0">
                 {drain && drain.phase !== "failed" ? <span role="status">{t("accounts.removing")}</span>
                   : !accountReady(account) && !drain ? <EngineSignIn instance={account} onUpdated={() => void reload()} />
-                    : <button type="button" disabled={busy || main}
-                      onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, {})}
-                      className="min-h-11 text-ink hover:underline disabled:opacity-50">{t("engines.signOut")}</button>}
+                    : <button type="button" disabled={busy || (main && !drain)}
+                      onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {})}
+                      className="min-h-11 text-ink hover:underline disabled:opacity-50">{t(drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
               </div>
             </div>
             {main && accountReady(account) && <div className="text-[12px] text-ink-secondary">{t("accounts.signOutMain")}</div>}

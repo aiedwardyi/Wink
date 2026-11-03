@@ -75,6 +75,44 @@ async function replay(engine: string, output: string, authHosts?: string[]) {
 }
 
 describe("EngineLogin", () => {
+  it("completes a managed Claude paste-back login through its pending stdin", async () => {
+    const { manager, dir } = fixture();
+    const script = join(dir, "paste-back.cjs");
+    const received = join(dir, "received.txt");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT.claude)});
+      process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(0); });`);
+    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+    });
+    expect(capture.url).toContain("https://claude.com/cai/oauth/authorize?code=true");
+    expect(capture.inputGeneration).toBe(manager.generation("added"));
+    expect(manager.submit("added", capture.inputGeneration! + 1, "wrong-job")).toBe(false);
+    expect(manager.submit("added", capture.inputGeneration!, "code\nextra")).toBe(false);
+    expect(manager.submit("added", capture.inputGeneration!, "code\n")).toBe(false);
+    expect(manager.submit("added", capture.inputGeneration!, "returned-code#state")).toBe(true);
+    expect(manager.submit("added", capture.inputGeneration!, "duplicate")).toBe(false);
+    await manager.wait("added");
+    expect(manager.state("added")).toBe("complete");
+    expect(readFileSync(received, "utf8")).toBe("returned-code#state\n");
+    expect(JSON.stringify(manager.capture("added"))).not.toContain("returned-code");
+    expect(manager.submit("added", capture.inputGeneration!, "late")).toBe(false);
+  });
+
+  it.each([
+    "https://claude.com/cai/oauth/authorize?code=secret",
+    "https://claude.com/other?code=true",
+    "https://other.example/cai/oauth/authorize?code=true",
+    "https://claude.com/cai/oauth/authorize?code=true&access_token=secret",
+  ])("does not capture a managed Claude secret or unrelated URL: %s", async (url) => {
+    const { manager, dir } = fixture(15000, 100);
+    const script = join(dir, "unsafe-claude.cjs");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(url + "\nPaste code here if prompted > ")}); setInterval(() => {}, 1000);`);
+    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+    });
+    expect(capture.url).toBeUndefined();
+  });
+
   it("releases a finished login scope when neither kill nor close completes", async () => {
     const { EventEmitter } = await import("node:events");
     const manager = new EngineLogin();

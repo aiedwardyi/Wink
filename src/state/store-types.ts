@@ -375,7 +375,7 @@ export interface RateLimitReport {
 /** One row of GET /api/instances - the model picker's data. */
 export interface InstanceInfo {
   loginState?: "pending" | "complete" | "failed" | "cancelled";
-  loginCapture?: { url?: string; code?: string };
+  loginCapture?: { url?: string; code?: string; inputGeneration?: number };
   instanceId: string;
   driverKind: string;
   accountOf?: string;
@@ -384,6 +384,7 @@ export interface InstanceInfo {
   drain?: { destinationId: string; phase: "draining" | "logout" | "signed-out" | "failed" };
   canRefreshUsage?: boolean;
   pickerSnapshot?: InstanceInfo["snapshot"];
+  pickerModels?: InstanceInfo["models"];
   displayName: string;
   snapshot: {
     state: "available" | "unavailable";

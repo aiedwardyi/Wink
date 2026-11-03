@@ -312,7 +312,9 @@ export class ProviderRegistry {
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
     const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account });
-    return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}) };
+    return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
+      ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
+    };
   }
 
   async cancelSignIn(instanceId: InstanceId) {
@@ -614,7 +616,10 @@ export class ProviderRegistry {
       loginState: this.signingOut.has(inst.instanceId) ? "cancelled" : this.logins.state(inst.instanceId),
       loginCapture: this.signingOut.has(inst.instanceId) ? {}
         : driver?.install?.login?.deviceArgs ? this.logins.capture(inst.instanceId)
-        : { url: this.logins.capture(inst.instanceId).url },
+        : { url: this.logins.capture(inst.instanceId).url,
+          ...(inst.account && inst.driverKind === "claudeAgent" && this.logins.capture(inst.instanceId).inputGeneration
+            ? { inputGeneration: this.logins.capture(inst.instanceId).inputGeneration } : {}),
+        },
       driverKind: inst.driverKind,
       displayName: inst.displayName ?? inst.driverKind,
       snapshot,

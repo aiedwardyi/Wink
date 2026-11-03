@@ -215,6 +215,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const [copyFallback, setCopyFallback] = useState(false);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const [loginCode, setLoginCode] = useState("");
   const phone = !window.ogb && isPhone();
   const external = instance.driverKind === "antigravityAgent";
   const login = instance.install?.login;
@@ -223,6 +224,8 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const deviceFlow = phone || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
   const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
+
+  useEffect(() => { setLoginCode(""); }, [capture.inputGeneration]);
 
   useEffect(() => {
     setWaiting(instance.loginState === "pending");
@@ -291,6 +294,19 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
     } catch { if (request === generation.current) setFailed(true); }
     finally { if (request === generation.current) setBusy(false); }
   };
+  const submitCode = async () => {
+    if (busy || !capture.inputGeneration || !loginCode) return;
+    const request = generation.current;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await api(`/api/accounts/${encodeURIComponent(instance.instanceId)}/sign-in/code`, {
+        method: "POST", body: JSON.stringify({ code: loginCode, generation: capture.inputGeneration }),
+      });
+      if (request === generation.current) setLoginCode("");
+    } catch { if (request === generation.current) setFailed(true); }
+    finally { if (request === generation.current) setBusy(false); }
+  };
 
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
   if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
@@ -300,6 +316,12 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
         <span>{copyFallback ? t("engine.pasteAndEnter") : capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>
         {copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
         {capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
+        {capture.inputGeneration && <form className="flex max-w-full flex-wrap justify-end gap-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
+          <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
+            aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
+            className="min-h-11 min-w-0 rounded border border-hairline bg-control px-2 text-ink" />
+          <button type="submit" disabled={busy || !loginCode} className="min-h-11 text-ink underline disabled:opacity-50">{t("accounts.submitCode")}</button>
+        </form>}
         <div className="flex flex-wrap justify-end gap-3">
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className="text-ink underline">{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className="text-ink underline disabled:opacity-50">{t("engines.cancel")}</button>

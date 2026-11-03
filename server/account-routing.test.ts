@@ -111,6 +111,34 @@ async function fixture(empty = false, of = "claude") {
 }
 
 describe("engine default account routing", () => {
+  it("pushes Claude paste-back capture only for the managed account", async () => {
+    const f = await fixture();
+    const added = f.added[0].id;
+    const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
+    vi.spyOn(f.registry.logins, "capture").mockReturnValue(capture);
+    vi.spyOn(f.registry.logins, "state").mockReturnValue("pending");
+    const instances = await f.registry.describeCached();
+    expect(instances.find((row) => row.instanceId === added)?.loginCapture).toEqual(capture);
+    expect(instances.find((row) => row.instanceId === "claude")?.loginCapture).toEqual({ url: capture.url });
+  });
+
+  it("submits a code only to a managed Claude pending login", async () => {
+    const f = await fixture();
+    const submit = vi.fn(() => true);
+    Object.assign(f.registry.logins, { submit });
+    const path = `/api/accounts/${f.added[0].id}/sign-in/code`;
+    expect((await f.request("POST", path, { generation: 7, code: "returned-code#state" })).status).toBe(200);
+    expect(submit).toHaveBeenCalledExactlyOnceWith(f.added[0].id, 7, "returned-code#state");
+    submit.mockClear();
+    for (const value of [{ generation: 7, code: "a\nb" }, { generation: 7, code: "code\n" }, { generation: 7, code: "" }, { generation: 0, code: "code" }, { code: "code" }]) {
+      expect((await f.request("POST", path, value)).status).toBe(400);
+    }
+    expect((await f.request("POST", "/api/accounts/claude/sign-in/code", { generation: 7, code: "code" })).status).toBe(404);
+    expect(submit).not.toHaveBeenCalled();
+    submit.mockReturnValue(false);
+    expect((await f.request("POST", path, { generation: 7, code: "stale" })).status).toBe(409);
+  });
+
   it("uses the default for every existing and new bot without publishing account ids", async () => {
     const f = await fixture();
     const sibling = f.store.createBot({ name: "Sibling" });

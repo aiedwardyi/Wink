@@ -347,6 +347,22 @@ describe("ProviderRegistry", () => {
     await registry.disposeAll();
   });
 
+  it("retains managed Claude paste-back input for start and pushed rows", async () => {
+    const fake = makeFakeDriver({ kind: "claudeAgent" });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }),
+      install: { login: { args: ["auth", "login"] } },
+      create: async (input) => ({ ...await fake.driver.create(input), account: input.account }),
+    }]);
+    try {
+      await registry.load({ added: { driver: "claudeAgent", account: { id: "added", of: "claude", home: homedir(), generation: 1 } } });
+      const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
+      vi.spyOn(registry.logins, "start").mockResolvedValue({ ...capture, code: "ABCD-EFGH" });
+      vi.spyOn(registry.logins, "capture").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
+      expect(await registry.startSignIn("added")).toEqual(capture);
+      expect((await registry.describeCached())[0].loginCapture).toEqual(capture);
+    } finally { await registry.disposeAll(); vi.restoreAllMocks(); }
+  });
+
   it("discards an old auth probe after a login is replaced", async () => {
     const fake = countingDriver();
     const registry = new ProviderRegistry([fake.driver]);

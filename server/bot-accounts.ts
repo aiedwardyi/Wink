@@ -1,7 +1,7 @@
 import { isEffortOffered } from "../shared/model-effort.ts";
 import { AccountError, type AccountService } from "./accounts.ts";
 import type { AutomaticCandidate, AutomaticCapability } from "./automatic-selection.ts";
-import type { ModelSelection, ProviderInstance, ProviderSnapshot } from "./contracts.ts";
+import type { ModelCatalog, ModelSelection, ProviderInstance, ProviderSnapshot } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import type { BotRecord, Store } from "./store.ts";
 
@@ -45,13 +45,15 @@ export class BotAccounts {
     return this.routedAccount(selection.instanceId) ?? selection.instanceId;
   }
 
-  pickerInstances<T extends { instanceId: string; snapshot: ProviderSnapshot }>(instances: T[]): Array<T & { pickerSnapshot?: ProviderSnapshot }> {
+  pickerInstances<T extends { instanceId: string; snapshot: ProviderSnapshot; models?: ModelCatalog }>(instances: T[]): Array<T & { pickerSnapshot?: ProviderSnapshot; pickerModels?: ModelCatalog }> {
     return instances.map((instance) => {
       if (this.accounts.get(instance.instanceId)) return instance;
       const id = this.routedAccount(instance.instanceId);
       if (!id && !this.accounts.drains[instance.instanceId]) return instance;
-      const snapshot = instances.find((row) => row.instanceId === id)?.snapshot;
-      return { ...instance, pickerSnapshot: id && this.available(id) && snapshot ? snapshot : { state: "unavailable" } };
+      const main = instances.find((row) => row.instanceId === id);
+      return { ...instance, pickerSnapshot: id && this.available(id) && main ? main.snapshot : { state: "unavailable" },
+        ...(main?.models ? { pickerModels: main.models } : {}),
+      };
     });
   }
 
