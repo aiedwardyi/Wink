@@ -12,8 +12,8 @@ import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
 import { TOOLS, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeState, readTerminalSnapshot, terminalReadGrant, terminalSnapshotText, workerModelsText, workerReportText } from "./terminal-proxy.ts";
 
 const CONFIG = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
-const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────\n  ⏵⏵ bypass permissions on";
-const IDLE = "● pong\n✻ Sautéed for 5s · done 11:34 PM\n──⏸─manual─mode─on──────────\n❯\n────────────────────\n  ⏵⏵ bypass permissions on";
+const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────";
+const IDLE = "● pong\n✻ Sautéed for 5s · done 11:34 PM\n──⏸─manual─mode─on──────────\n❯\n────────────────────";
 const CODEX_MENU = "Select Model and Effort\n› 1. GPT-6.1-Sol (current)\n  2. GPT-6-Astra\n\n  enter select · esc back";
 
 type FetchMock = Mock<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>;
@@ -633,16 +633,47 @@ describe("terminal proxy", () => {
     expect(posted(fetchImpl)).toEqual(["\x1b"]);
   });
 
+  it.each(["busy", "idle"])("rules out the recorded Muse %s screen after its banner scrolls off", (state) => {
+    const screenText = muse.reply[state].slice(7).join("\n");
+    expect(claudeState(screenText)).toBeUndefined();
+    expect(terminalSnapshotText({ screenText })).not.toContain("Claude:");
+  });
+
+  it.each([
+    ["manual", "busy"],
+    ["manual", "idle"],
+    ["plan", "busy"],
+    ["plan", "idle"],
+  ])("keeps a footerless %s-mode Claude pane %s", async (mode, state) => {
+    const screenText = [
+      state === "busy" ? "✽ Undulating… (3s · ↓ 75 tokens)" : "✻ Sautéed for 5s",
+      `──⏸─${mode}─mode─on──────────`,
+      "❯",
+      "────────────────────",
+    ].join("\n");
+    expect(claudeState(screenText)).toBe(state);
+    expect(terminalSnapshotText({ screenText })).toContain(`Claude: ${state}`);
+    const fetchImpl = scripted({ screenText });
+    const result = await send(fetchImpl, { key: "esc", sessionId: "s1", generation: 2 });
+    if (state === "busy") {
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("esc would interrupt the running Claude turn");
+      expect(posted(fetchImpl)).toEqual([]);
+    } else {
+      expect(result.isError).toBeUndefined();
+      expect(posted(fetchImpl)).toEqual(["\x1b"]);
+    }
+  });
+
   it.each([
     ["a running turn", BUSY, "busy"],
-    ["the first spinner frame", "Claude Code\n❯ go\n* Fermenting…\n────────────\n❯", "busy"],
+    ["the first spinner frame", "❯ go\n* Fermenting…\n────────────\n❯", "busy"],
     ["a finished turn at its prompt", IDLE, "idle"],
     ["a shell", "PS C:\\work> echo done…", undefined],
     ["an idle 2.1.293 pane at its > prompt", IDLE_GT, "idle"],
     ["a busy 2.1.293 pane above its > prompt", `* Considering… (10m 9s · ↓ 32.8k tokens · thinking with max effort)\n${IDLE_GT}`, "busy"],
     ["PowerShell with a continuation prompt", "PS C:\\> Get-ChildItem |\n>> Select-Object Name\n>> \nPS C:\\>", undefined],
     ["Codex at its prompt", "────────────\n› Ask Codex to do anything\n\n  ? for shortcuts", undefined],
-    ["an unidentified screen with a Claude-like spinner and prompt", "* Fermenting…\n────────────\n❯", undefined],
   ])("reads the Claude state from %s", (_label, screenText, state) => {
     expect(claudeState(screenText)).toBe(state);
     const text = terminalSnapshotText({ sessionId: "s1", generation: 1, screenText });
