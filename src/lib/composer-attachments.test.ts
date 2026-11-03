@@ -208,6 +208,12 @@ describe("editedMessageText", () => {
     expect(editedMessageText(initial, draft)).toBe('intro\n\nedited quote\n\n<pasted-text index="2">\nsecond quote\n</pasted-text>');
   });
 
+  it("never restores an edited paste inside an earlier paste that contains its text", () => {
+    const initial = composeMessage("intro", [pasteAttachment("alpha beta"), pasteAttachment("beta")]);
+    const draft = splitAttachedImages(initial).display.replace(/beta$/, "gamma");
+    expect(editedMessageText(initial, draft)).toBe('intro\n\n<pasted-text index="1">\nalpha beta\n</pasted-text>\n\ngamma');
+  });
+
   it("restores repeated pasted blocks once each without nesting", () => {
     const initial = composeMessage("intro", [pasteAttachment("same quote"), pasteAttachment("same quote")]);
     const draft = splitAttachedImages(initial).display.replace("intro", "updated");

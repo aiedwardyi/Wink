@@ -428,6 +428,9 @@ function splitAttachments(text: string, label?: (name: string) => string): { dis
   return { display: display.trim(), images, files, tags };
 }
 
+const onOwnLines = (text: string, at: number, length: number) =>
+  (at === 0 || text[at - 1] === "\n") && (at + length === text.length || text[at + length] === "\n");
+
 export function editedMessageText(initial: string, draft: string): string {
   const attached = splitAttachedImages(initial);
   if (draft.trim() === attached.display) return initial.trim();
@@ -438,7 +441,8 @@ export function editedMessageText(initial: string, draft: string): string {
     const [block, encoded, raw] = pasted[index];
     const inner = encoded ? unescapeAttribute(raw) : raw;
     if (!inner || inner.length > end) continue;
-    const at = text.lastIndexOf(inner, end - inner.length);
+    let at = text.lastIndexOf(inner, end - inner.length);
+    while (at >= 0 && !onOwnLines(text, at, inner.length)) at = at > 0 ? text.lastIndexOf(inner, at - 1) : -1;
     if (at < 0) continue;
     text = text.slice(0, at) + block + text.slice(at + inner.length);
     end = at;
