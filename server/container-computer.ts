@@ -276,6 +276,7 @@ export interface ContainerComputerStatus {
   image: boolean;
   imageMatches: boolean;
   managed: boolean;
+  owned: boolean;
   container: "running" | "stopped" | "missing";
   network: "loopback" | "unsafe" | "unknown";
   security: "hardened" | "unsafe" | "unknown";
@@ -306,6 +307,7 @@ function emptyStatus(platform: NodeJS.Platform, target: LocalVmTarget): Containe
     image: false,
     imageMatches: false,
     managed: false,
+    owned: false,
     container: "missing",
     network: "unknown",
     security: "unknown",
@@ -362,8 +364,15 @@ function containerLabelsMatch(
   labels: Record<string, string> | undefined,
   target: LocalVmTarget,
 ): boolean {
+  return imageLabelsMatch(labels) && containerOwned(labels, target);
+}
+
+function containerOwned(
+  labels: Record<string, string> | undefined,
+  target: LocalVmTarget,
+): boolean {
   return (
-    imageLabelsMatch(labels) &&
+    labels?.[MANAGED_LABEL] === "1" &&
     labels?.[WORKSPACE_LABEL] === "1" &&
     (target.key === SHARED_LOCAL_VM_TARGET.key
       ? labels?.[TARGET_LABEL] === undefined || labels?.[TARGET_LABEL] === target.label
@@ -490,6 +499,7 @@ export async function containerComputerStatus(
       status.imageMatches =
         appleImage === IMAGE && status.image_id !== null && appleImageId === status.image_id;
       status.managed = containerLabelsMatch(detail?.configuration?.labels, target);
+      status.owned = containerOwned(detail?.configuration?.labels, target);
       status.persistence = appleWorkspaceMountIsSafe(detail?.configuration?.mounts, platform, target.workspaceDir)
         ? "durable"
         : "unsafe";
@@ -527,6 +537,7 @@ export async function containerComputerStatus(
         status.image_id !== null &&
         normalizeImageId(detail?.Image) === status.image_id;
       status.managed = containerLabelsMatch(detail?.Config?.Labels, target);
+      status.owned = containerOwned(detail?.Config?.Labels, target);
       status.persistence = dockerWorkspaceMountIsSafe(
         detail?.Mounts,
         platform,
@@ -922,7 +933,7 @@ export async function containerComputerAction(
   const runtime = before.runtime;
   if (!runtime) throw Object.assign(new Error(before.problem ?? "No container runtime is installed"), { status: 409 });
   if (!before.daemonUp) throw Object.assign(new Error(before.problem ?? `${runtime} is not running`), { status: 409 });
-  if ((action === "stop" || action === "remove") && before.container !== "missing" && !before.managed) {
+  if ((action === "stop" || action === "remove") && before.container !== "missing" && !before.owned) {
     throw Object.assign(new Error("This container was not created by Wink; manage it with your container runtime"), { status: 409 });
   }
 

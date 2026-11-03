@@ -6,12 +6,17 @@ import { SHARED_LOCAL_VM_TARGET } from "./container-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-const idleFor = source.slice(source.indexOf("function localVmIdleFor("), source.indexOf("function releaseLocalVmThread("));
-const startup = source.slice(source.indexOf("void (async () => {", source.indexOf("// A running VM may have survived")));
-const boot = startup.slice(0, startup.indexOf("})();") + 5).replace("void (", "return (");
+const parsed = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, true);
+const idleFor = parsed.statements.find((statement) =>
+  ts.isFunctionDeclaration(statement) && statement.name?.text === "localVmIdleFor",
+)!.getText(parsed);
+const boot = parsed.statements.find((statement) =>
+  ts.isExpressionStatement(statement) && ts.isVoidExpression(statement.expression) &&
+  statement.getText(parsed).includes("localVmIdleFor(target).touch()"),
+)!.getText(parsed).replace(/^void /, "return ");
 
-function harness(managed: boolean) {
-  const status = { container: "running", managed };
+function harness(owned: boolean, managed = owned) {
+  const status = { container: "running", owned, managed };
   const remove = vi.fn(async () => {});
   const timers = new Map<string, LocalVmIdleTimer>();
   const scope = {
@@ -33,7 +38,7 @@ function harness(managed: boolean) {
 afterEach(() => vi.useRealTimers());
 
 describe("Local VM idle ownership", () => {
-  it("arms the startup backstop only for a managed running container", async () => {
+  it("arms the startup backstop only for an owned running container", async () => {
     vi.useFakeTimers();
     const unmanaged = harness(false);
     await unmanaged.boot();
@@ -52,12 +57,32 @@ describe("Local VM idle ownership", () => {
     vi.useFakeTimers();
     const vm = harness(true);
     await vm.boot();
+    vm.status.owned = false;
     vm.status.managed = false;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(vm.remove).not.toHaveBeenCalled();
 
+    vm.status.owned = true;
     vm.status.managed = true;
     vm.localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(vm.remove).toHaveBeenCalledOnce();
+  });
+
+  it("arms cleanup for an owned container with incompatible image labels", async () => {
+    vi.useFakeTimers();
+    const vm = harness(true, false);
+    await vm.boot();
+    expect(vm.timers.size).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(vm.remove).toHaveBeenCalledWith("remove", undefined, undefined, SHARED_LOCAL_VM_TARGET);
+  });
+
+  it("removes an owned container after its image labels become incompatible", async () => {
+    vi.useFakeTimers();
+    const vm = harness(true);
+    await vm.boot();
+    vm.status.managed = false;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(vm.remove).toHaveBeenCalledOnce();
   });
