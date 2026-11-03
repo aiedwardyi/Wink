@@ -153,7 +153,7 @@ describe("Settings Polish", () => {
       mockState.appSettingsSection = "general";
       await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal))));
       const language = host.querySelector('[role="radiogroup"]')!;
-      expect(language.closest('[class="w-full md:max-w-md"]')).toBeTruthy();
+      expect(language.closest(".md\\:max-w-md")).toBeTruthy();
       expect(language.className).toContain("w-fit");
     } finally {
       if (previousLocale === null) localStorage.removeItem("omb-locale");
