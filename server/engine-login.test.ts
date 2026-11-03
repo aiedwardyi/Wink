@@ -155,6 +155,16 @@ describe("EngineLogin", () => {
     expect(readFileSync(file, "utf8")).toBe(".");
   });
 
+  it("starts another account's sign-in once a cancelled one on the engine closes", async () => {
+    const { manager, cli, dir } = fixture();
+    await manager.start("a", cli, ["normal"], {}, [], { scope: "claude" });
+    void manager.cancel("a");
+    manager.clear("a");
+    const file = join(dir, "next");
+    await manager.start("b", cli, ["count", file], {}, [], { scope: "claude" });
+    expect(readFileSync(file, "utf8")).toBe(".");
+  });
+
   it("does not launch a queued replacement during shutdown", async () => {
     const { manager, cli, dir } = fixture();
     await manager.start("fake", cli, ["normal"]);
