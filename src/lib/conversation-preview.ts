@@ -49,6 +49,20 @@ export function transcriptIdleAfterOnboarding(messages: PreviewBot["messages"]):
   return messages.every((message) => isIgnoredOnboardingCard(message, messages));
 }
 
+function messagePreview(last: PreviewBot["messages"][number], messages: PreviewBot["messages"], translate: Translate, showToolCalls: boolean): string {
+  if (!isShownMessage(last)) return "";
+  if (last.kind === "options" && last.card) {
+    if (shouldHideOnboardingCard(last, messages)) return last.card.answered || "";
+    if (last.card.requestId && last.card.tool && last.card.answered) return settledApproval(last.card, translate);
+    return isOnboardingCard(last) ? translate("onboarding.card.title") : last.card.title;
+  }
+  if (last.kind === "activity" && last.tool) return activityVisibleInChat(last, showToolCalls) ? last.tool.name : "";
+  if (last.kind === "screen") return showToolCalls ? translate("chrome.screenFrame") : "";
+  if (last.kind === "note" && last.text) return notePreview(parsePaneNote(last.text), translate);
+  if (last.kind === "launch" && last.text) return last.text.split("\n", 1)[0] ?? "";
+  return attachedFilePreview(last.text ?? "");
+}
+
 export function conversationPreview(
   bot: PreviewBot,
   translate: Translate = t,
@@ -58,27 +72,8 @@ export function conversationPreview(
   if (bot.busy) return translate("chrome.working");
   const visible = previewMessages(bot);
   for (let i = visible.length - 1; i >= 0; i--) {
-    const last = visible[i];
-    if (!isShownMessage(last)) continue;
-    if (last.kind === "options" && last.card) {
-      if (shouldHideOnboardingCard(last, visible)) {
-        if (last.card.answered) return last.card.answered;
-        continue;
-      }
-      if (last.card.requestId && last.card.tool && last.card.answered) return settledApproval(last.card, translate);
-      return isOnboardingCard(last) ? translate("onboarding.card.title") : last.card.title;
-    }
-    if (last.kind === "activity" && last.tool) {
-      if (!activityVisibleInChat(last, showToolCalls)) continue;
-      return last.tool.name;
-    }
-    if (last.kind === "screen") {
-      if (!showToolCalls) continue;
-      return translate("chrome.screenFrame");
-    }
-    if (last.kind === "note" && last.text) return notePreview(parsePaneNote(last.text), translate);
-    if (last.kind === "launch" && last.text) return last.text.split("\n", 1)[0] ?? "";
-    if (last.text) return attachedFilePreview(last.text);
+    const text = messagePreview(visible[i], visible, translate, showToolCalls);
+    if (text) return text;
   }
   return "";
 }
@@ -101,10 +96,8 @@ export function roomConversationPreview(
   }
   for (let i = group.messages.length - 1; i >= 0; i--) {
     const last = group.messages[i];
-    if (!isShownMessage(last)) continue;
-    if (last.kind === "activity" && last.tool && !activityVisibleInChat(last, showToolCalls)) continue;
-    if (last.kind === "screen" && !showToolCalls) continue;
-    const text = last.kind === "activity" && last.tool ? last.tool.name : attachedFilePreview(last.text ?? "");
+    const text = messagePreview(last, group.messages, translate, showToolCalls);
+    if (!text) continue;
     if (last.role === "user") return translate("chrome.youPrefix", { text });
     return last.from ? translate("chrome.speakerPrefix", { name: last.from.name, text }) : text;
   }

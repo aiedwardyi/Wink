@@ -350,6 +350,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
 
   useEffect(() => {
     return window.ogb?.onNotificationClick?.((target) => {
+      window.focus();
       const current = latestState.current;
       openNotificationTarget(dispatch, target, current);
       if (target.openTerminal) {
