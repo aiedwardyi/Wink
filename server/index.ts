@@ -274,6 +274,7 @@ import {
   deviceNameSchema,
   listDevices,
   loadDeviceName,
+  namedDevicePeers,
   pickerDevices,
   saveDeviceName,
   writeDeviceRecord,
@@ -7390,7 +7391,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: await remoteRetry.devices() } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
         phones: phoneVisits.list(),
       });
     }

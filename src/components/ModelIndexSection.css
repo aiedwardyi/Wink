@@ -26,7 +26,7 @@
 .model-index [data-mi-size] {
   transition: height var(--mi-ease);
 }
-.model-index [data-mi-thumb] {
+.model-index [data-segmented-thumb] {
   transition: transform var(--mi-ease), width var(--mi-ease);
 }
 .model-index [data-mi-pop] {
@@ -64,7 +64,7 @@
   .model-index [data-mi-line],
   .model-index [data-mi-bar],
   .model-index [data-mi-size],
-  .model-index [data-mi-thumb],
+  .model-index [data-segmented-thumb],
   .model-index [data-mi-pop],
   .model-index [data-mi-focus],
   .model-index [data-mi-leave] {

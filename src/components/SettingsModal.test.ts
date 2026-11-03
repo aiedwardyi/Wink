@@ -262,7 +262,7 @@ describe("SettingsModal friends chrome", () => {
     saveRainbowBox("off");
     expect(checked()).toContain("Off");
     const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
-    expect(source).toContain("onClick={() => saveRainbowBox(option)}");
+    expect(source).toContain("onChange={saveRainbowBox}");
   });
 
   it("does not reveal Local VM, channel turns, experimental, or diagnostics when Advanced would have been open", () => {
@@ -302,7 +302,7 @@ describe("SettingsModal friends chrome", () => {
     const primitives = readFileSync(join(here, "SettingsPrimitives.tsx"), "utf8");
     expect(picker).not.toContain("compact");
     expect(picker).not.toContain("flex-col gap-2");
-    expect(picker).toMatch(/role="radiogroup"/);
+    expect(picker).toContain("<SegmentedRow");
     expect(picker).toContain("language.matchSystem");
     expect(picker).toContain("language.name.en");
     expect(picker).toContain("language.name.ko");

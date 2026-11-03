@@ -69,7 +69,14 @@ it("Today counts roll over at midnight KST while Settings remains open", async (
   await act(async () => { await vi.advanceTimersByTimeAsync(120000); });
   expect(cells()).toContain("0Bot Snags");
   expect(cells()).toContain("0Bug Reports");
-  expect(todayCalls()).toBe(callsBefore + 1);
+  expect(todayCalls()).toBeGreaterThan(callsBefore);
+});
+it("refreshes team totals from the relay while Settings stays open", async () => {
+  await draw();
+  await settle();
+  const before = todayCalls();
+  await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+  expect(todayCalls()).toBe(before + 1);
 });
 it("unrelated Settings rerenders do not fetch Today on every render", async () => {
   await draw();
