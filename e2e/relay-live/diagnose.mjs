@@ -104,7 +104,7 @@ async function screenshot(server, name) {
     const connections = page.getByRole("dialog").getByRole("button", { name: "Connections", exact: true });
     await connections.waitFor();
     // Phone access moved to Account in 1.0.171, then behind Phone's relay link in 1.0.216
-    const phone = page.getByRole("dialog").getByRole("button", { name: "Phone", exact: true });
+    const phone = page.getByRole("dialog").getByRole("button", { name: /^(Devices|Phone)$/ });
     const account = page.getByRole("dialog").getByRole("button", { name: "Account", exact: true });
     await ((await phone.count()) ? phone : (await account.count()) ? account : connections).click();
     const relay = page.locator('button[aria-controls="phone-relay-settings"]');
