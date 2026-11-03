@@ -150,6 +150,7 @@ export async function flushMemory(botId: string): Promise<void> {
       s.revision = latest.data.revision;
       s.view?.conflict(latest.data);
     } else if (!res.ok) {
+      if (result.code === "INTERNAL_ERROR") throw new Error(t("errors.request"));
       throw new Error(/^memory is capped at 256KB/.test(result.error ?? "") ? t("errors.memoryLimit") : result.error ?? `${res.status} ${res.statusText}`);
     } else {
       s.revision = result.revision;

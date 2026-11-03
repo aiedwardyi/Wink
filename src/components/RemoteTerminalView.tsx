@@ -120,6 +120,7 @@ export function RemoteTerminalView({
   const sidebarOnRight = useSidebarSide() === "right";
   const [snapshot, setSnapshot] = useState<RemoteTerminalSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [selectedPane, setSelectedPane] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -163,6 +164,7 @@ export function RemoteTerminalView({
       appliedRequestRef.current = request;
       setSnapshot(next);
       setError(null);
+      setActionError(null);
     } catch (cause) {
       if (request < appliedRequestRef.current) return;
       appliedRequestRef.current = request;
@@ -320,6 +322,7 @@ export function RemoteTerminalView({
   const start = async () => {
     setStarting(true);
     setError(null);
+    setActionError(null);
     try {
       const next: RemoteTerminalSnapshot = await api(`/api/bots/${encodeURIComponent(bot.id)}/terminal/start`, { method: "POST" });
       appliedRequestRef.current = ++requestRef.current;
@@ -327,7 +330,7 @@ export function RemoteTerminalView({
       setSelectedPane(null);
       setSnapshot(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setActionError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setStarting(false);
     }
@@ -341,7 +344,7 @@ export function RemoteTerminalView({
       await navigator.clipboard.writeText(text);
       setCopied(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setActionError(cause instanceof Error ? cause.message : String(cause));
     }
   };
   const buttonClass =
@@ -391,7 +394,7 @@ export function RemoteTerminalView({
           ))}
         </div>
       )}
-      {error && <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-ink-secondary">{t("errors.shell")}</p>}
+      {(actionError || error) && <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-ink-secondary">{actionError ? `${t("terminal.unavailable")}: ${actionError}` : t("errors.shell")}</p>}
       {noTerminal ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-ink-secondary">
           <p>{t("terminal.workersEmpty", { name: bot.name })}</p>
