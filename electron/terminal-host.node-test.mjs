@@ -1921,6 +1921,8 @@ test("a worker busy again after its report delivers its next turn-end note", asy
   f.children[0].data("\x1b[2J\x1b[H✻ Working… (1s · esc to interrupt)\r\n");
   await f.settle();
   f.host.attendBot("bot-1", pane.sessionId, "report");
+  f.children[0].data("\x1b[2J\x1b[HWaiting for an answer file\r\n");
+  await f.settle();
   await f.advance(1_000);
   f.children[0].data("\x1b[2J\x1b[H✻ Working… (2s · esc to interrupt)\r\n");
   await f.settle();
@@ -1938,8 +1940,8 @@ test("a worker busy again after its report stalls after two idle minutes", async
   f.children[0].data("\x1b[2J\x1b[H• Working (1s • esc to interrupt)\r\n");
   await f.settle();
   f.host.attendBot("bot-1", pane.sessionId, "report");
-  await f.advance(1_000);
-  f.children[0].data("\x1b[2J\x1b[H• Working (2s • esc to interrupt)\r\n");
+  await f.advance(60_000);
+  f.children[0].data("\x1b[2J\x1b[H• Working (61s • esc to interrupt)\r\n");
   await f.settle();
   f.children[0].data("\x1b[2J\x1b[HWhich branch should I use?\r\n");
   await f.settle();
@@ -1960,6 +1962,27 @@ test("a worker idle after its final report stays quiet", async (t) => {
   await f.settle();
   f.host.attendBot("bot-1", pane.sessionId, "report");
   await f.advance(1_000);
+  f.children[0].data("\x1b[2J\x1b[HDone\r\n");
+  f.host.attendBot("bot-1", pane.sessionId, "auto", "Done");
+  await f.advance(90_000);
+  assert.equal(f.notes.length, 0);
+  await f.advance(24 * 60 * 60_000);
+  assert.equal(f.notes.length, 0);
+  assert.deepEqual(f.children[0].writes, ["claude go\r"]);
+});
+
+test("a worker wrapping up its final report stays quiet", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "AGENT", command: "claude go" });
+  f.children[0].data("\x1b[2J\x1b[H✻ Working… (1s · esc to interrupt)\r\n");
+  await f.settle();
+  f.host.attendBot("bot-1", pane.sessionId, "report");
+  for (let seconds = 1; seconds <= 5; seconds++) {
+    await f.advance(1_000);
+    f.children[0].data(`\x1b[2J\x1b[H✻ Working… (${seconds + 1}s · esc to interrupt)\r\n`);
+    await f.settle();
+  }
   f.children[0].data("\x1b[2J\x1b[HDone\r\n");
   f.host.attendBot("bot-1", pane.sessionId, "auto", "Done");
   await f.advance(90_000);
