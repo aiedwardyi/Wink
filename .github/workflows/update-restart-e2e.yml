@@ -1,0 +1,112 @@
+# Windows update restart on a fresh runner. Each side builds 1.0.900 and
+# 1.0.901 from its commit, installs 1.0.900, updates through the app's own
+# Restart path against a local feed, and logs every visible window.
+# before = the base; after = this branch (the fix plus this harness, which
+# the app never packages).
+name: Update restart E2E
+
+on:
+  push:
+    branches: [e2e/update-restart]
+  workflow_dispatch:
+    inputs:
+      before:
+        description: "Commit for the before side"
+        required: false
+        type: string
+        default: cb7f7ed579604f2b81c139b99ae0595696b9bc67
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-restart-e2e
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.side }}
+    strategy:
+      matrix:
+        side: [before, after]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.side == 'before' && (inputs.before || 'cb7f7ed579604f2b81c139b99ae0595696b9bc67') || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build 1.0.900 and 1.0.901
+        shell: bash
+        run: |
+          rm -rf dist dist-server release
+          git log --oneline -1
+          pnpm package:prepare
+          for v in 1.0.900 1.0.901; do
+            pnpm exec electron-builder --win --publish never -c.extraMetadata.version=$v -c.directories.output=release/$v
+          done
+          ls -l release/1.0.900 release/1.0.901
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-${{ matrix.side }}
+          path: |
+            release/1.0.900/*-setup.exe
+            release/1.0.901/*-setup.exe
+            release/1.0.901/*-setup.exe.blockmap
+            release/1.0.901/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  run:
+    name: Update restart, before and after
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: update-*
+          path: ${{ runner.temp }}/bits
+      - name: Install the harness
+        working-directory: e2e/update-restart
+        run: npm install --no-audit --no-fund
+      - name: Before
+        working-directory: e2e/update-restart
+        env:
+          BITS_DIR: ${{ runner.temp }}/bits/update-before
+          OUT_DIR: ${{ runner.temp }}/out
+          WORK_DIR: ${{ runner.temp }}/work
+        run: node run.mjs before
+      - name: After
+        if: ${{ !cancelled() }}
+        working-directory: e2e/update-restart
+        env:
+          BITS_DIR: ${{ runner.temp }}/bits/update-after
+          OUT_DIR: ${{ runner.temp }}/out
+          WORK_DIR: ${{ runner.temp }}/work
+        run: node run.mjs after
+      - name: Compare
+        if: ${{ !cancelled() }}
+        working-directory: e2e/update-restart
+        env:
+          OUT_DIR: ${{ runner.temp }}/out
+        run: node run.mjs compare
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: update-restart-e2e
+          path: ${{ runner.temp }}/out
+          if-no-files-found: warn
+          retention-days: 7
