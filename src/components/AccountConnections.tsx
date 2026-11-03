@@ -23,7 +23,10 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
       await api(path, { method: "POST", body: JSON.stringify(body) });
       await reload();
-    } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
+    } catch (error) {
+      setError(error instanceof Error && error.message === "No ready account can take over this profile"
+        ? t("accounts.noDestination") : error instanceof Error && error.message || t("engines.didntFinish"));
+    }
     finally { setBusy(false); }
   };
   return (

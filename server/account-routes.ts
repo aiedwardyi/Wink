@@ -33,11 +33,14 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         json(res, 200, {});
       } else if (id && action === "destination" && method === "GET") {
         if (!lifecycle.bots) throw new AccountError("Bot account routing is unavailable", 503);
+        const instances = await registry.describeCached();
         const destination = lifecycle.accounts.list().find((account) => {
+          const instance = instances.find((row) => row.instanceId === account.id);
+          if (instance?.snapshot.state !== "available" || instance.snapshot.authenticated !== true) return false;
           try { lifecycle.bots!.destination(id, account.id); return true; }
           catch (error) { if (!(error instanceof AccountError)) throw error; return false; }
         });
-        if (!destination) throw new AccountError("Choose a different account of this profile by id", 400);
+        if (!destination) throw new AccountError("No ready account can take over this profile", 400);
         json(res, 200, { destinationId: destination.id });
       } else if (!id && method === "GET") {
         const instances = await registry.describeCached();

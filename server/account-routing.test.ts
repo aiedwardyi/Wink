@@ -501,12 +501,38 @@ describe("account removal drain", () => {
     expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.added[0].id);
   });
 
+  it.each(["claude", "codex"])("skips unconfirmed %s authentication when selecting a sign-out destination", async (of) => {
+    const f = await fixture(false, of);
+    expect((await f.useDefault(f.added[0].id)).status).toBe(200);
+    vi.spyOn(f.registry.get(of)!, "snapshot").mockResolvedValue({ state: "available" });
+    await f.registry.describe({ refresh: true });
+    const result = await f.request("GET", `/api/accounts/${f.added[0].id}/destination`);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ destinationId: f.added[1].id });
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.accounts.isDefault(f.added[0].id)).toBe(true);
+  });
+
+  it("refuses automatic destination selection when authentication is unconfirmed everywhere else", async () => {
+    const f = await fixture();
+    await f.useDefault(f.added[0].id);
+    for (const id of ["claude", f.added[1].id, f.added[2].id]) {
+      vi.spyOn(f.registry.get(id)!, "snapshot").mockResolvedValue({ state: "available" });
+    }
+    await f.registry.describe({ refresh: true });
+    const result = await f.request("GET", `/api/accounts/${f.added[0].id}/destination`);
+    expect(result.status).toBe(400);
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.accounts.isDefault(f.added[0].id)).toBe(true);
+  });
+
   it("refuses automatic destination selection when no compatible account remains", async () => {
     const f = await fixture();
     await f.useDefault(f.added[0].id);
     for (const id of ["claude", f.added[1].id, f.added[2].id]) f.registry.blockAccount(id, true);
     const result = await f.request("GET", `/api/accounts/${f.added[0].id}/destination`);
     expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: "No ready account can take over this profile" });
     expect(f.logout).not.toHaveBeenCalled();
     expect(f.accounts.isDefault(f.added[0].id)).toBe(true);
   });

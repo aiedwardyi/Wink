@@ -122,6 +122,16 @@ it("keeps Main signed in when compatible destination selection fails", async () 
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("selected model");
 });
 
+it.each(["en", "ko"] as const)("localizes a missing ready destination in %s", async (locale) => {
+  persistPreference(locale);
+  await render(3);
+  request.mockRejectedValueOnce(new Error("No ready account can take over this profile"));
+  await act(async () => buttons(locale === "en" ? "Sign Out" : "로그아웃")[0]!.click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en"
+    ? "No ready account can take over this profile" : "이 프로필을 이어받을 준비된 계정이 없어요");
+  expect(request.mock.calls.some(([path]) => path.endsWith("/sign-out"))).toBe(false);
+});
+
 it.each(["Personal account", undefined])("uses the engine account label without an email (%s)", async (label) => {
   await render(1);
   state.instances[0]!.snapshot.account = label;

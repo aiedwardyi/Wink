@@ -17,18 +17,19 @@ export function ErrorReportsRow() {
     return value.reports || value.usage ? true : value.reports === false && value.usage === false ? false : undefined;
   };
   useEffect(() => {
+    if (ready) return;
     let gone = false;
     let retry: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       const value = await read();
       if (gone) return;
-      setEnabled(value === true);
+      if (value !== undefined) setEnabled(value);
       setReady(value !== undefined);
       if (value === undefined) retry = setTimeout(() => void refresh(), 2000);
     };
     void refresh();
     return () => { gone = true; clearTimeout(retry); };
-  }, []);
+  }, [ready]);
   if (!window.ogb?.setErrorReportConsent) return null;
   const toggle = async () => {
     if (saving || !ready) return;

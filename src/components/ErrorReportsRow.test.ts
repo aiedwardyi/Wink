@@ -160,6 +160,57 @@ it.each(["reports", "usage"])("retries unknown %s consent without enabling repor
   } finally { await act(async () => root.unmount()); }
 });
 
+it.each(["reports", "usage"].flatMap((unknown) => [false, true].map((enabled) => ({ unknown, enabled }))))("recovers unknown $unknown consent after partial opt-out to $enabled", async ({ unknown, enabled }) => {
+  vi.useFakeTimers();
+  let offline = true;
+  let reports = unknown === "usage";
+  let usage = unknown === "reports";
+  request.mockImplementation(async (_path: string, init?: RequestInit) => {
+    if (offline && unknown === "usage") throw new Error("offline");
+    if (init?.body) usage = JSON.parse(String(init.body)).enabled;
+    return { enabled: usage };
+  });
+  const setErrorReportConsent = vi.fn(async (value: boolean) => {
+    if (offline && unknown === "reports") throw new Error("offline");
+    reports = value;
+    return value;
+  });
+  Object.defineProperty(window, "ogb", { value: {
+    errorReportConsent: async () => {
+      if (offline && unknown === "reports") throw new Error("offline");
+      return reports;
+    }, setErrorReportConsent,
+  }, configurable: true });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(ErrorReportsRow))));
+    const toggle = host.querySelector("button")!;
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await act(async () => toggle.click());
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    if (unknown === "reports") reports = enabled;
+    else usage = enabled;
+    offline = false;
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    expect(setErrorReportConsent).toHaveBeenCalledExactlyOnceWith(false);
+    expect(request.mock.calls.filter(([, init]) => init?.body)).toHaveLength(1);
+    if (enabled) {
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      expect(reports).toBe(false);
+      expect(usage).toBe(false);
+    }
+  } finally { await act(async () => root.unmount()); }
+});
+
 it.each(["reports", "usage"])("preserves enabled %s consent while its opt-out and recovery read fail", async (failed) => {
   let reports = true;
   let usage = true;
