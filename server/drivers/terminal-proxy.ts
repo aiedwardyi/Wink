@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ModelCatalog } from "../contracts.ts";
 import { TERMINAL_KEYS, type TerminalKey } from "../terminal-keys.ts";
-import { STATIC_GROK_MODELS } from "./acp/grok.ts";
+import { grokSupport, STATIC_GROK_MODELS } from "./acp/grok.ts";
 import { STATIC_CLAUDE_MODELS } from "./claude.ts";
 import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
@@ -37,6 +37,7 @@ const PANE_MENU_FOOTER_RE = /(?:^|\n)\s*enter select · esc back\s*$/u;
 const CLAUDE_BUSY_RE = /^[·✢✳✶✻✽*][\s─]+\S[^\n]*…(?:\s+\(|\s*$)/mu;
 // Its input box opens with a rule over a "❯" prompt, or ">" in 2.1.29x on Windows; ">>" is a shell continuation.
 const CLAUDE_PROMPT_RE = /^──[^\n]*\n(?:❯|>(?!>))/mu;
+const MUSE_SCREEN_RE = /^\s*Muse Code\b|^── Voice input \(Alt\+V to start\) ─/mu;
 // Where electron/main.mjs installs orbit-msg; forward slashes survive the JSON inside notify.
 const ORBIT_MSG_PS1 = join(homedir(), ".orbit", "bin", "orbit-msg.ps1").replace(/\\/g, "/");
 // Installed beside orbit-msg; Claude Code refuses to start when --settings names a missing file.
@@ -83,7 +84,7 @@ export function workerModelsText(): string {
     line("Claude", STATIC_CLAUDE_MODELS),
     line("Codex", STATIC_CODEX_MODELS),
     line("Muse", MSP_MUSE_MODELS, ` (effort ${MSP_MUSE_EFFORT_LEVELS.join("/")})`),
-    line("Grok", STATIC_GROK_MODELS),
+    line("Grok", STATIC_GROK_MODELS, ` (effort ${grokSupport.effortLevels?.join("/")})`),
     `Gemini: ${WORKER_GEMINI_FAMILIES.map((family) => `${family.name} = ${family.id}-<effort>`).join(", ")} (effort ${WORKER_GEMINI_EFFORTS.join("/")}, part of the id).`,
   ].join(" ");
 }
@@ -96,6 +97,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const compact = (text: string) => text.replace(/\s+/g, "");
 
 export function claudeState(screenText = ""): "busy" | "idle" | undefined {
+  if (MUSE_SCREEN_RE.test(screenText)) return undefined;
   if (CLAUDE_BUSY_RE.test(screenText)) return "busy";
   return CLAUDE_PROMPT_RE.test(screenText) ? "idle" : undefined;
 }
