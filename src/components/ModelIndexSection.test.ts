@@ -301,6 +301,32 @@ describe("promo price on the cost tab", () => {
 });
 
 describe("score vs cost", () => {
+  it("draws Design against published page cost with the Rams scale in both locales", async () => {
+    for (const locale of ["en", "ko"] as const) {
+      try {
+        vi.stubGlobal("localStorage", { getItem: () => locale });
+        applyLocale(locale);
+        await mount();
+        pick(locale === "en" ? "Benchmark" : "벤치마크", locale === "en" ? "Design" : "디자인");
+        const chart = locale === "en" ? "Chart" : "차트";
+        expect(chosen(chart)).toBe(locale === "en" ? "Score vs Cost" : "점수 대비 비용");
+        expect(host.textContent).toContain("Rams Index");
+        expect(host.textContent).toContain(locale === "en" ? "Cost per page" : "페이지당 비용");
+        const sol = host.querySelector<SVGElement>('[aria-label="GPT-6.1 Sol default"]')!;
+        act(() => sol.focus());
+        const tip = host.querySelector('[role="tooltip"]')?.textContent;
+        expect(tip).toContain("92.0");
+        expect(tip).toContain("90.3-93.8");
+        expect(tip).toContain("$0.15");
+        expect(tip).not.toContain("92.0%");
+        pick(chart, locale === "en" ? "Ranked" : "순위");
+        expect(host.querySelectorAll('[tabindex="0"]')).toHaveLength(12);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
   it("plots Intelligence with committed run costs without layout fixtures", async () => {
     MODEL_INDEX_ENTRIES.forEach((entry, i) => { entry.cost = savedCosts[i]; });
     await mount();
@@ -444,7 +470,7 @@ describe("score hover card", () => {
     try {
       pick("Benchmark", "Design");
       pick("Chart", "Ranked");
-      expect(rowTip("GPT-6 Astramax")).toContain("HarnessCodex");
+      expect(rowTip("GPT-6 Astradefault")).toContain("HarnessCodex");
     } finally {
       row.harness = harness;
     }

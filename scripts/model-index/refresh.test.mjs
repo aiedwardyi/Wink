@@ -461,6 +461,8 @@ describe("refresh run state", () => {
       expect(second.out.join("\n")).not.toMatch(/already fetched/);
       expect(second.out.join("\n")).toMatch(/offline/);
       expect(calls).toHaveLength(8);
+      expect(calls).toContain("https://www.rams.ai/index");
+      expect(calls).not.toContain(expect.stringContaining("datasets-server.huggingface.co"));
       expect(calls).toContain("https://www.vals.ai/benchmarks/legal_research");
       expect(calls).not.toContain("https://www.vals.ai/benchmarks/legal_bench");
     } finally {
