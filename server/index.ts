@@ -3148,7 +3148,7 @@ function localVmIdleFor(target: LocalVmTarget): LocalVmIdleTimer {
         // The desktop leaves a stale X lock after stop, so idle cleanup
         // removes only the disposable container. Its target-specific durable
         // workspace and the shared prepared image remain.
-        if (status.container === "running") {
+        if (status.managed && status.container === "running") {
           await containerComputerAction("remove", undefined, undefined, target);
         }
       } finally {
@@ -3176,7 +3176,7 @@ void (async () => {
     : [SHARED_LOCAL_VM_TARGET];
   for (const target of targets) {
     const status = await containerComputerStatus(undefined, undefined, target).catch(() => null);
-    if (status?.container === "running") localVmIdleFor(target).touch();
+    if (status?.managed && status.container === "running") localVmIdleFor(target).touch();
   }
 })();
 

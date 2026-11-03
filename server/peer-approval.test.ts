@@ -162,4 +162,32 @@ describe("peer approval card lifecycle", () => {
     expect(pendingCard(store, from)).toBeTruthy();
     cancelPeerApprovalsFor(from.id); // don't leave a timer pending
   });
+
+  it("dismisses stale peer cards in current and previous room tasks on boot", () => {
+    const room = store.createGroup("Room", [from.id, target.id]);
+    const previousThreadId = room.threadId;
+    const current = store.createGroupTask(room.id, "Current")!;
+    const cards = [previousThreadId, current.threadId].map((threadId) => ({
+      threadId,
+      message: store.appendMessage(threadId, {
+        role: "bot",
+        kind: "options",
+        card: {
+          title: "Contact Helper",
+          subtitle: "ping",
+          options: ["Allow", "Deny"],
+          requestId: `dead-process-${threadId}`,
+          tool: "ask_bot",
+        },
+      }),
+    }));
+
+    expect(dismissStalePeerCards(bus)).toBe(2);
+    for (const { threadId, message } of cards) {
+      expect(store.messagesFor(threadId).find((item) => item.id === message.id)?.card).toMatchObject({
+        answered: "deny", dismissed: true,
+      });
+    }
+    expect(dismissStalePeerCards(bus)).toBe(0);
+  });
 });

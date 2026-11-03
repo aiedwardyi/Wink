@@ -646,6 +646,38 @@ describe("Cua integration", () => {
 });
 
 describe("containerComputerAction", () => {
+  it.each(["stop", "remove"] as const)("refuses %s for an unmanaged same-name container but permits an owned one", async (action) => {
+    const target = perBotLocalVmTarget("bot-a");
+    const command = `docker ${action === "remove" ? "rm -f" : "stop"} ${target.containerName}`;
+    for (const labels of [undefined, { [MANAGED_LABEL]: "1", [TARGET_LABEL]: perBotLocalVmTarget("bot-b").label }]) {
+      const fake = runner({
+        "/usr/bin/which docker": "docker\n",
+        "/usr/bin/which podman": new Error("missing"),
+        "docker info --format {{.ServerVersion}}": "29\n",
+        [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+        [`docker inspect ${target.containerName}`]: readyInspect({ Config: { Image: IMAGE, Labels: labels } }),
+        [command]: "",
+      });
+
+      await expect(containerComputerAction(action, fake.run, "linux", target)).rejects.toMatchObject({
+        status: 409,
+        message: "This container was not created by Wink; manage it with your container runtime",
+      });
+      expect(fake.calls).not.toContain(command);
+    }
+
+    const owned = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${target.containerName}`]: perBotReadyInspect("bot-a", 49152),
+      [command]: "",
+    });
+    await containerComputerAction(action, owned.run, "linux", target);
+    expect(owned.calls).toContain(command);
+  });
+
   it("fails closed instead of giving Apple container an invalid dynamic-port spec", async () => {
     const target = perBotLocalVmTarget("bot-a");
     const fake = runner({

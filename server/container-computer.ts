@@ -922,6 +922,9 @@ export async function containerComputerAction(
   const runtime = before.runtime;
   if (!runtime) throw Object.assign(new Error(before.problem ?? "No container runtime is installed"), { status: 409 });
   if (!before.daemonUp) throw Object.assign(new Error(before.problem ?? `${runtime} is not running`), { status: 409 });
+  if ((action === "stop" || action === "remove") && before.container !== "missing" && !before.managed) {
+    throw Object.assign(new Error("This container was not created by Wink; manage it with your container runtime"), { status: 409 });
+  }
 
   if (action === "run" && before.container !== "missing") {
     throw Object.assign(new Error("A Local VM already exists; remove it before creating a replacement"), { status: 409 });
