@@ -60,7 +60,8 @@ function BubbleEditor({
   onSubmit: (text: string) => void;
 }) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState(initial);
+  const attached = useMemo(() => splitAttachedImages(initial), [initial]);
+  const [draft, setDraft] = useState(attached.display);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -69,7 +70,8 @@ function BubbleEditor({
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
   const submit = () => {
-    if (draft.trim()) onSubmit(draft.trim());
+    const text = [draft.trim(), ...attached.tags].filter(Boolean).join("\n\n");
+    if (text) onSubmit(text);
   };
   return (
     <div className="w-full max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40 bg-bubble-user px-4 py-3">
@@ -101,7 +103,7 @@ function BubbleEditor({
         </button>
         <button
           onClick={submit}
-          disabled={!draft.trim()}
+          disabled={!draft.trim() && !attached.tags.length}
           className="rounded-full bg-accent px-3 py-1 text-[13px] font-medium text-accent-ink disabled:opacity-40"
         >
           {t("composer.send")}

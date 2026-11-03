@@ -392,7 +392,7 @@ export function attachedFilePreview(text: string, label = (name: string) => name
 
 /** Split a stored user message into its display text and the images and
  * files it attached, for transcript rendering. Tags never show in the bubble. */
-export function splitAttachedImages(text: string): { display: string; images: string[]; files: AttachedFile[] } {
+export function splitAttachedImages(text: string): { display: string; images: string[]; files: AttachedFile[]; tags: string[] } {
   const pasted: string[] = [];
   let display = text.replace(
     /<pasted-text(?:\s+index="\d+")?>\n?([\s\S]*?)\n?<\/pasted-text>/g,
@@ -402,18 +402,21 @@ export function splitAttachedImages(text: string): { display: string; images: st
     },
   );
   const images: string[] = [];
-  display = display.replace(/<attached-image\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (_match, raw: string) => {
+  const tags: string[] = [];
+  display = display.replace(/<attached-image\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (match, raw: string) => {
+    tags.push(match.trim());
     const path = unescapeAttribute(raw);
     if (path) images.push(path);
     return "";
   });
   const files: AttachedFile[] = [];
-  display = display.replace(new RegExp(`${ATTACHED_FILE.source}(?:\\s*\\n)?`, "g"), (_match, path: string, rest: string) => {
+  display = display.replace(new RegExp(`${ATTACHED_FILE.source}(?:\\s*\\n)?`, "g"), (match, path: string, rest: string) => {
+    tags.push(match.trim());
     files.push(attachedFile(path, rest));
     return "";
   });
   display = display.replace(/\0PASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)] ?? "");
-  return { display: display.trim(), images, files };
+  return { display: display.trim(), images, files, tags };
 }
 
 /** The bare filename a saved attachment path ends in — what the serving

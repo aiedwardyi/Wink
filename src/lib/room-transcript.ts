@@ -36,6 +36,7 @@ export function messageVisible(message: Message, showToolCalls: boolean, showAct
     case "options":
       return Boolean((message.card?.requestId && message.card.tool) || message.card?.askUser);
     case "routine.run":
+    case "compaction":
       return true;
     case "screen":
       return Boolean(message.png || message.image || message.hasImage) && (message.shown || showToolCalls);

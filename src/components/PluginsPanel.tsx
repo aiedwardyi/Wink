@@ -217,8 +217,9 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<{ slug: string; label: string; account: { id: string; alias?: string } } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const hasInventory = useRef(cachedConnectorStatus !== null || readCachedInventory() !== null);
   const [inventoryPhase, setInventoryPhase] = useState<ConnectorInventoryPhase>(
-    cachedConnectorStatus === null ? "loading" : "ready",
+    hasInventory.current ? "ready" : "loading",
   );
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -266,7 +267,7 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
       .catch(() => ({}));
   }, []);
 
-  const refreshConnectedStatus = useCallback((force = false): Promise<Record<string, ConnectorStatus>> => {
+  const refreshConnectedStatus = useCallback((force = false): Promise<ConnectorInventory> => {
     const requestGenerations = new Map(statusGenerations.current);
     setRefreshing(true);
     return preloadConnectedApps(force)
@@ -288,18 +289,19 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
             return next;
           });
         }
-        return services;
+        return { services, authoritative };
       })
       .finally(() => setRefreshing(false));
   }, []);
 
   const loadConnectionInventory = useCallback((force = false) => {
-    const hadCachedInventory = cachedConnectorStatus !== null;
+    const hadCachedInventory = hasInventory.current;
     if (!hadCachedInventory) setInventoryPhase("loading");
     setError(null);
     return refreshConnectedStatus(force)
-      .then((services) => {
-        setInventoryPhase("ready");
+      .then(({ services, authoritative }) => {
+        if (authoritative) hasInventory.current = true;
+        setInventoryPhase(hasInventory.current ? "ready" : "error");
         return services;
       })
       .catch((cause) => {
@@ -514,13 +516,10 @@ export function PluginsPanel({ closing = false }: { closing?: boolean }) {
         </header>
 
         {stale && (
-          // Say which of the two things is true. Silence here is what makes a
-          // remembered list indistinguishable from a confirmed one.
           <div className="mx-6 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning sm:mx-8">
             <TriangleAlert size={14} className="mt-px shrink-0" />
             <span>
-              Showing what was connected last time — this Mac's credential store could not be opened just now, so these
-              could not be re-checked. Your apps are still connected; restarting Wink usually clears this.
+              {t(hasInventory.current ? "connectedApps.statusStale" : "connectedApps.statusUnknown")}
             </span>
           </div>
         )}
