@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { InstanceInfo } from "@/state/store";
 import {
-  botNameFromJob,
   groupCreatePayload,
   isEngineConnected,
   newBotPayload,
@@ -76,17 +75,17 @@ describe("wizard engine suggestion", () => {
 });
 
 describe("wizard naming and payloads", () => {
-  it("names a bot from the first words of the job", () => {
-    expect(botNameFromJob("help me plan a trip to japan soon")).toBe("Help me plan a trip");
-    expect(botNameFromJob("  ")).toBe("");
-  });
-
-  it("posts the inline bot with its engine default model", () => {
-    expect(newBotPayload("  review my code ", { instanceId: "gem-1", model: "gemini-3" })).toEqual({
-      job: "review my code",
-      name: "Review my code",
+  it("keeps the typed name without deriving a job or changing its case", () => {
+    expect(newBotPayload("  research Desk v2 / Seoul HQ  ", { instanceId: "gem-1", model: "gemini-3" })).toEqual({
+      name: "research Desk v2 / Seoul HQ",
       modelSelection: { instanceId: "gem-1", model: "gemini-3" },
     });
+  });
+
+  it("trims and caps the name at 40 characters without an ellipsis", () => {
+    const selection = { instanceId: "codex-1", model: "m" };
+    expect(newBotPayload(`  ${"a".repeat(45)}  `, selection).name).toBe("a".repeat(40));
+    expect(newBotPayload("  ", selection).name).toBe("");
   });
 
   it("creates everyone-replies groups with completed setup and no extras", () => {
