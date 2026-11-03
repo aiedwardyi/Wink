@@ -113,7 +113,7 @@ describe("ProviderRegistry", () => {
     } finally { await registry.disposeAll(); }
   });
 
-  it("isolates login jobs and cancellation for two Claude config directories", async () => {
+  it("gates Claude login listeners while keeping cancellation scoped", async () => {
     const dir = mkdtempSync(join(homedir(), "login-instances-"));
     const script = join(dir, "cli.cjs");
     writeFileSync(script, `
@@ -133,9 +133,11 @@ describe("ProviderRegistry", () => {
         a: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: first } },
         b: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: second } },
       });
-      await Promise.all([registry.startSignIn("a"), registry.startSignIn("b")]);
-      expect([existsSync(first), existsSync(second)]).toEqual([true, true]);
+      await registry.startSignIn("a");
+      await expect(registry.startSignIn("b")).rejects.toThrow("Another sign-in");
+      expect([existsSync(first), existsSync(second)]).toEqual([true, false]);
       await registry.cancelSignIn("a");
+      await registry.startSignIn("b");
       const rows = await registry.describe();
       expect(rows.find((row) => row.instanceId === "a")?.loginState).toBe("cancelled");
       expect(rows.find((row) => row.instanceId === "b")?.loginState).toBe("pending");
@@ -312,7 +314,7 @@ describe("ProviderRegistry", () => {
     await registry.load({ a: { driver: "fake", config: { cli: "custom-cli", login: { args: ["untrusted"] } }, environment: { TEST_ENV: "yes" } } });
     const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login" });
     await registry.startSignIn("a", true);
-    expect(start).toHaveBeenCalledExactlyOnceWith("a", "custom-cli", ["device"], expect.objectContaining({ TEST_ENV: "yes", MUSE_LOGIN: "0" }), ["auth.example"]);
+    expect(start).toHaveBeenCalledExactlyOnceWith("a", "custom-cli", ["device"], expect.objectContaining({ TEST_ENV: "yes", MUSE_LOGIN: "0" }), ["auth.example"], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("missing")).toBeNull();
     await registry.disposeAll();
   });
@@ -375,7 +377,7 @@ describe("ProviderRegistry", () => {
     const logout = registry.signOut("a");
     await Promise.resolve();
     expect(cancel).toHaveBeenCalledWith("a");
-    expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object));
+    expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("a")).toBeNull();
     expect(await registry.signOut("a")).toBe(false);
     finish();

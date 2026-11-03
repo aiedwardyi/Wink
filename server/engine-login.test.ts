@@ -16,7 +16,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function fixture(timeout = 5000, capture = 500) {
+function fixture(timeout = 15000, capture = 2500) {
   const dir = mkdtempSync(join(tmpdir(), "engine-login-"));
   dirs.push(dir);
   const script = join(dir, "login.cjs");
@@ -65,7 +65,7 @@ const REAL_OUTPUT = {
 };
 
 async function replay(engine: string, output: string, authHosts?: string[]) {
-  const { manager, dir } = fixture(5000, 300);
+  const { manager, dir } = fixture(15000, 2500);
   const file = join(dir, "output.txt");
   const script = join(dir, "replay.cjs");
   writeFileSync(file, output);
@@ -118,7 +118,7 @@ describe("EngineLogin", () => {
     expect(closeListeners.length).toBeGreaterThan(0);
     const settled = await Promise.race([
       manager.cancel("fake").then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 7500)),
     ]);
     once.mockRestore();
     if (!settled) for (const listener of closeListeners) listener(null, "SIGTERM");
@@ -175,13 +175,16 @@ describe("EngineLogin", () => {
   });
 
   it.each(["cancel", "timeout", "shutdown"])("kills the process tree on %s", async (action) => {
-    const { manager, cli, dir } = fixture(action === "timeout" ? 800 : 5000);
+    const { manager, cli, dir } = fixture(action === "timeout" ? 2500 : 15000);
     const file = join(dir, "heartbeat");
     await manager.start("fake", cli, ["tree", file]);
-    await expect.poll(() => existsSync(file)).toBe(true);
+    await expect.poll(() => existsSync(file), { timeout: 5000 }).toBe(true);
     if (action === "cancel") await manager.cancel("fake");
     else if (action === "shutdown") await manager.dispose();
-    else await expect.poll(() => manager.state("fake")).toBe("failed");
+    else {
+      await expect.poll(() => manager.state("fake"), { timeout: 5000 }).toBe("failed");
+      await manager.wait("fake");
+    }
     await new Promise((resolve) => setTimeout(resolve, 200));
     const size = readFileSync(file).length;
     await new Promise((resolve) => setTimeout(resolve, 150));

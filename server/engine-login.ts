@@ -3,14 +3,22 @@ import { stripVTControlCharacters } from "node:util";
 
 import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
 import { killCliTree } from "./procs.ts";
+import { accountLaunch, type AccountContext } from "./account-policy.ts";
 
 export interface LoginCapture {
   url?: string;
   code?: string;
+  error?: "device_cap";
+}
+
+export class LoginBusyError extends Error {
+  readonly status = 409;
+  constructor() { super("Another sign-in for this engine is still running"); }
 }
 
 type LoginState = "pending" | "complete" | "failed" | "cancelled";
 interface LoginJob {
+  scope: string;
   generation: number;
   child?: ChildProcess;
   capture: LoginCapture;
@@ -23,6 +31,7 @@ interface LoginJob {
 
 export class EngineLogin {
   private jobs = new Map<string, LoginJob>();
+  private scopes = new Map<string, LoginJob>();
   private nextGeneration = 0;
   private disposed = false;
   private timeoutMs: number;
@@ -54,22 +63,26 @@ export class EngineLogin {
     return job?.state === "pending" || (job?.state === "complete" && !job.acknowledged);
   }
 
-  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = []): Promise<LoginCapture> {
+  async start(engine: string, cli: string, args: string[], env: NodeJS.ProcessEnv = {}, authHosts: string[] = [], options: { scope?: string; account?: AccountContext } = {}): Promise<LoginCapture> {
     if (this.disposed) return {};
     let job = this.jobs.get(engine);
+    const scope = options.scope ?? engine;
+    const owner = this.scopes.get(scope);
+    if (owner && owner !== job) throw new LoginBusyError();
     if (job && job.state !== "pending") {
       await job.done;
       if (this.jobs.get(engine) === job) this.jobs.delete(engine);
-      return this.start(engine, cli, args, env, authHosts);
+      return this.start(engine, cli, args, env, authHosts, options);
     }
     if (job?.state !== "pending") {
-      job = this.create(engine);
+      job = this.create(engine, scope);
       try {
         const resolved = resolveCliSpawn(cli, args);
-        const child = spawn(resolved.command, resolved.args, {
+        const launch = accountLaunch(options.account, scope, resolved.args, { PATH: augmentedPath(), ...env });
+        const child = spawn(resolved.command, launch.args, {
           stdio: "pipe", windowsHide: true,
           ...(process.platform === "win32" ? {} : { detached: true }),
-          env: { PATH: augmentedPath(), ...env },
+          env: launch.env,
         });
         job.child = child;
         child.stdin.on("error", () => {});
@@ -119,11 +132,13 @@ export class EngineLogin {
     this.disposed = true;
     await Promise.all([...this.jobs.keys()].map((engine) => this.cancel(engine)));
     this.jobs.clear();
+    this.scopes.clear();
   }
 
-  private create(engine: string): LoginJob {
+  private create(engine: string, scope = engine): LoginJob {
     let closed!: () => void;
     const job: LoginJob = {
+      scope,
       generation: ++this.nextGeneration,
       capture: {}, state: "pending", changed: new Set(), acknowledged: false,
       done: new Promise<void>((resolve) => { closed = resolve; }),
@@ -132,17 +147,29 @@ export class EngineLogin {
         job.state = state;
         clearTimeout(timer);
         if (job.child && job.child.exitCode === null && job.child.signalCode === null) {
-          const fallback = setTimeout(closed, 1000);
+          let childClosed = false;
+          let treeStopped = false;
+          const finish = () => {
+            if (!childClosed || !treeStopped) return;
+            clearTimeout(fallback);
+            if (this.scopes.get(scope) === job) this.scopes.delete(scope);
+            closed();
+          };
+          const fallback = setTimeout(closed, 5000);
           fallback.unref();
-          job.child.once("close", () => { clearTimeout(fallback); closed(); });
-          killCliTree(job.child);
-        } else closed();
+          job.child.once("close", () => { childClosed = true; finish(); });
+          killCliTree(job.child, () => { treeStopped = true; finish(); });
+        } else {
+          if (this.scopes.get(scope) === job) this.scopes.delete(scope);
+          closed();
+        }
         for (const notify of job.changed) notify();
       },
     };
     const timer = setTimeout(() => job.finish("failed"), this.timeoutMs);
     timer.unref();
     this.jobs.set(engine, job);
+    this.scopes.set(scope, job);
     return job;
   }
 
@@ -153,6 +180,10 @@ export class EngineLogin {
     const parse = () => {
       if (job.state !== "pending") { line = ""; return; }
       const clean = stripVTControlCharacters(line).trim();
+      if (job.scope === "codex" && /\bdevice[ _-]+limit(?:[ _-]+reached)?\b|\btoo many (?:paid )?accounts (?:on|for) (?:this|the same) device\b/i.test(clean)) {
+        job.capture.error = "device_cap";
+        job.finish("failed");
+      }
       const url = /^(?:(?:If your browser (?:did not|didn't) open, (?:navigate to this URL|visit)|If the browser didn't open, visit|Visit|Open(?: this URL)?|Sign in(?: at)?|URL|Verification (?:URL|URI))\s*:?\s*)?(https:\/\/[^\s<>"\x00-\x1f]+)$/i.exec(clean);
       const code = /^(?:(?:Enter (?:this |the )?(?:one-time |device |user )?code(?: \(expires in \d+ minutes\))?|(?:Your )?(?:one-time |device |user )?code)\s*:?\s*)?([A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,2})$/i.exec(clean);
       if (url && !job.capture.url) {

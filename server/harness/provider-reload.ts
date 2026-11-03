@@ -20,10 +20,13 @@ export class ProviderReload {
 
   /** Current instance for a dispatch; one captured before an await may already be disposed. */
   started(threadId: string, instanceId: string): ProviderInstance | null {
+    if (this.registry.accountBlocked(instanceId)) return null;
     const live = this.registry.get(instanceId);
     if (live) this.active.set(threadId, instanceId);
     return live;
   }
+
+  inUse(instanceId: string): boolean { return [...this.active.values()].includes(instanceId); }
 
   settled(threadId: string) {
     const instanceId = this.active.get(threadId);

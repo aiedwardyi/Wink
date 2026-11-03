@@ -86,7 +86,10 @@ import {
   EVENTS_DIR,
   NATIVE_DIR,
 } from "./config.ts";
-import { loadRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
+import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
+import { AccountService, isInstanceId } from "./accounts.ts";
+import { createAccountRuntime } from "./account-runtime.ts";
+import { createAccountRoutes } from "./account-routes.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { ComputerControl } from "./computer-control.ts";
@@ -404,6 +407,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
   console.warn(`config: could not remove the legacy OpenCode section from ${join(DATA_DIR, "config.json")}; delete the opencodeGo key manually`);
 }
 const cfg = loadConfig();
+const accounts = new AccountService(DATA_DIR, () => instanceConfigs(cfg));
 // Before registry.load: a prewarmed engine child would inherit the token.
 const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
@@ -414,7 +418,7 @@ if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { cacheDir: DATA_DIR });
-await registry.load(instanceConfigs(cfg));
+await registry.load(instanceConfigs(cfg, accounts.snapshot));
 const bundledSkills = loadBundledSkills();
 const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DATA_DIR, "skills")));
 
@@ -452,7 +456,7 @@ utilityParentPort?.on("message", (event) => {
 
 const bus = new EventBus();
 bus.attach(registry.instances());
-const providerReload = new ProviderReload(registry, bus, instanceConfigs(cfg));
+const providerReload = new ProviderReload(registry, bus, instanceConfigs(cfg, accounts.snapshot));
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
@@ -1139,13 +1143,14 @@ const keepGoing = new KeepGoing({
     const instanceId = store.bot(botId)?.modelSelection.instanceId ?? "";
     const previous = rateLimitsByInstance.get(instanceId);
     if (previous?.windows.length && Number.isFinite(Date.parse(previous.observedAt)) && Date.now() - Date.parse(previous.observedAt) <= KEEP_GOING_USAGE_FRESH_MS) return previous;
-    const config = instanceConfigs(cfg)[instanceId];
+    const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
     const instance = registry.get(instanceId);
     if (!config || !instance) return null;
     const result = await refreshUsage(instance.driverKind, {
       instanceId,
       cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
       environment: config.environment,
+      account: config.account,
     }, previous);
     if (result.report) {
       const current = rateLimitsByInstance.get(instanceId);
@@ -1174,27 +1179,28 @@ const limitWaits = new LimitWaits({
   deviceId: () => profileSyncSettings.deviceId,
   canRead: (selection) => {
     const instance = registry.get(selection.instanceId);
-    const config = instanceConfigs(cfg)[selection.instanceId];
-    return Boolean(instance && config && canRefreshUsage(instance.driverKind, config.environment));
+    const config = instanceConfigs(cfg, accounts.snapshot)[selection.instanceId];
+    return Boolean(instance && config && canRefreshUsage(instance.driverKind, config.environment, undefined, config.account));
   },
   released: (row) => paneWake.noteArrived(row.botId, row.threadId),
   current: (botId, instanceId) => {
     const bot = store.bot(botId);
     if (!bot || !store.taskByThread(bot.id, bot.threadId) || bot.paneWakePaused) return null;
     const controlKey = createHash("sha256").update(JSON.stringify([
-      bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg)[instanceId ?? bot.modelSelection.instanceId],
+      bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg, accounts.snapshot)[instanceId ?? bot.modelSelection.instanceId],
       lastUserInstruction(store.activePath(bot.threadId))?.messageId,
     ])).digest("hex");
     return { threadId: bot.threadId, controlKey, busy: botHasActiveTurn(botId) || hasQueuedSends(botId) };
   },
   usage: async (row) => {
     const instance = registry.get(row.selection.instanceId);
-    const config = instanceConfigs(cfg)[row.selection.instanceId];
+    const config = instanceConfigs(cfg, accounts.snapshot)[row.selection.instanceId];
     if (!instance || !config) return { error: "Usage unavailable", retryAt: Date.now() + 30_000 };
     const result = await refreshUsage(instance.driverKind, {
       instanceId: row.selection.instanceId,
       cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
       environment: config.environment,
+      account: config.account,
     });
     if (result.report && !result.error) {
       rateLimitsByInstance.set(row.selection.instanceId, result.report);
@@ -2854,19 +2860,27 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 // not per turn, so it lives here and rides /api/instances rather than being
 // banked on a task. Persisted so a restart keeps the last report until a turn or refresh replaces it.
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
-const refreshUsage = createUsageRefresh();
+const refreshUsage = createUsageRefresh({ accountIdentity: (account, identity) => accountRuntime.observe(account.id, { state: "available", authenticated: true, accountIdentity: identity }, account.generation) });
 const checkMuseUsage = createMuseCheck();
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
   save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR),
   refresh: async (instanceId, previous) => {
-    const config = instanceConfigs(cfg)[instanceId];
+    const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
     const instance = registry.get(instanceId);
     if (!config || !instance) return {};
-    return refreshUsage(instance.driverKind, { instanceId, cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli, environment: config.environment }, previous);
+    return refreshUsage(instance.driverKind, { instanceId, cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli, environment: config.environment, account: config.account }, previous);
   },
-  environment: (instanceId) => instanceConfigs(cfg)[instanceId]?.environment,
+  environment: (instanceId) => instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment,
 });
+const accountRuntime = createAccountRuntime({
+  accounts, registry, providers: providerReload, store, reload: reloadProviders,
+  rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
+  invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
+  botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
+});
+if (accounts.snapshot.length) await accountRuntime.restore();
+const accountRoutes = createAccountRoutes(accountRuntime, registry);
 
 function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
   return instances.map((instance) => {
@@ -6861,7 +6875,8 @@ function configStatus() {
 }
 
 function reloadProviders() {
-  return providerReload.reload(instanceConfigs(cfg));
+  accounts.validateBases();
+  return providerReload.reload(instanceConfigs(cfg, accounts.snapshot));
 }
 
 // Config writes rebuild the whole provider registry. Keep the read-modify-write
@@ -7876,10 +7891,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── the fleet-wide authorization decision log ──
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
-    m = path.match(/^\/api\/usage\/(refresh|check)\/([\w-]+)$/);
+    if (await accountRoutes(req, res, method, path)) return;
+    m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
-      const config = instanceConfigs(cfg)[instanceId];
+      if (!isInstanceId(instanceId)) return json(res, 400, { error: "Invalid instance id" });
+      const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
       const instance = registry.get(instanceId);
       if (!config || !instance || (m[1] === "check" && instance.driverKind !== "museAgent")) return json(res, 404, { error: "unknown provider instance" });
       const previous = rateLimitsByInstance.get(instanceId);
@@ -7887,6 +7904,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         instanceId,
         cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
         environment: config.environment,
+        account: config.account,
       };
       const result = m[1] === "check"
         ? await checkMuseUsage({
@@ -7911,12 +7929,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }));
     }
 
-    const engineInstall = /^\/api\/instances\/([\w.-]+)\/install$/.exec(path);
+    const engineInstall = /^\/api\/instances\/([^/]+)\/install$/.exec(path);
     if (method === "GET" && engineInstall) {
+      if (!isInstanceId(engineInstall[1])) return json(res, 400, { error: "Invalid instance id" });
       const install = registry.install(engineInstall[1]);
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
-    const engineSignIn = /^\/api\/instances\/([\w.-]+)\/sign-in$/.exec(path);
+    const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
+    if (engineSignIn && !isInstanceId(engineSignIn[1])) return json(res, 400, { error: "Invalid instance id" });
     if (method === "POST" && engineSignIn) {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
@@ -7930,7 +7950,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await registry.cancelSignIn(engineSignIn[1])
         ? json(res, 200, {}) : json(res, 404, { error: "Unknown engine sign-in" });
     }
-    const engineSignOut = /^\/api\/instances\/([\w.-]+)\/sign-out$/.exec(path);
+    const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
+    if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
     if (method === "POST" && engineSignOut) {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
@@ -8005,7 +8026,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (externalSecretStorage && !credentials.bearerOk) return json(res, 403, { error: "forbidden" });
       const customKeyError = customKeyStorageError(patch, req.headers, REMOTE_HOST, externalSecretStorage, relay, !credentials.bearerOk);
       if (customKeyError) return json(res, 400, { error: customKeyError });
-      if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
+      if (providerConfigBusy || accountRuntime.busy) return json(res, 409, { error: "provider settings are already being updated" });
       if (patch.vps !== undefined) {
         const currentAlias = vpsSshAlias(cfg);
         const nextAlias = vpsSshAlias({ ...cfg, vps: patch.vps });

@@ -19,6 +19,9 @@ import { createMspChannel, MspRpcError, uuidv7 } from "./drivers/msp/protocol.ts
 import { augmentedPath, toWslPath } from "./env-path.ts";
 import { execCli, killCliTree, spawnCli } from "./procs.ts";
 import { parseJson, type JsonValue } from "./schema.ts";
+import { accountLaunch, type AccountContext } from "./account-policy.ts";
+import { awaitDyingAppServers, codexHome, retireAppServer } from "./drivers/codex-catalog.ts";
+import { parseCodexAccount } from "./drivers/codex-account.ts";
 
 type Report = { windows: RateLimitWindow[]; observedAt: string };
 export type UsageRefreshStatus =
@@ -29,7 +32,7 @@ export type UsageRefreshStatus =
   | "auth_error"
   | "limit_reached";
 type Result = { report?: Report; error?: string; retryAt: number; status?: UsageRefreshStatus; resetsAt?: number | null };
-type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string };
+type Options = { instanceId: string; cli?: string; environment?: NodeJS.ProcessEnv; museModel?: string; account?: AccountContext };
 const usableReport = (report: Report | undefined): report is Report =>
   Boolean(report && report.windows.length > 0 && Number.isFinite(Date.parse(report.observedAt)));
 const text = z.string().min(1);
@@ -65,22 +68,26 @@ export function usageRefreshResponse(instanceId: string, result: Result) {
   return { instanceId, report: result.report, error: result.error, retryAt: result.retryAt, status: result.status, resetsAt: result.resetsAt };
 }
 
-export function readUsageRpc(cli: string, env: NodeJS.ProcessEnv): Promise<JsonValue> {
+export async function readUsageRpc(cli: string, env: NodeJS.ProcessEnv, account?: AccountContext): Promise<JsonValue> {
+  const home = account?.home ?? codexHome(env);
+  await awaitDyingAppServers(2_000, home);
   return new Promise((resolve, reject) => {
-    const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawnCli(cli, ["app-server"], { cwd: homedir(), env, stdio: ["pipe", "pipe", "pipe"], ...(account ? { account, accountDriver: "codex" } : {}) });
     const lines = createInterface({ input: child.stdout });
     let settled = false;
+    let usage: JsonValue | undefined;
+    let identity: JsonValue | undefined;
     const finish = (value?: JsonValue, code?: number) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       lines.close();
-      killCliTree(child);
+      retireAppServer(child, home);
       if (value !== undefined) resolve(value);
       else reject(new Error(code === 401 || code === 403 ? "signin" : "refresh"));
     };
     const send = (method: string, id?: number) => {
-      try { child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: method === "initialize" ? { clientInfo: { name: "orbit", version: "1" } } : {} })}\n`); }
+      try { child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: method === "initialize" ? { clientInfo: { name: "orbit", version: "1" } } : method === "account/read" ? { refreshToken: false } : {} })}\n`); }
       catch { finish(); }
     };
     const timer = setTimeout(() => finish(), 15_000);
@@ -90,10 +97,18 @@ export function readUsageRpc(cli: string, env: NodeJS.ProcessEnv): Promise<JsonV
     lines.on("line", (line) => {
       try {
         const message = rpcMessage.parse(parseJson(line));
-        if (message.id !== 1 && message.id !== 2) return;
+        if (message.id !== 1 && message.id !== 2 && message.id !== 3) return;
         if (message.error) return finish(undefined, message.error.code);
-        if (message.id === 1) { send("initialized"); send("account/rateLimits/read", 2); }
-        else finish(message.result);
+        if (message.id === 1) { send("initialized"); send("account/rateLimits/read", 2); if (account) send("account/read", 3); }
+        else if (!account) finish(message.result);
+        else {
+          if (message.id === 2) usage = message.result;
+          if (message.id === 3) identity = message.result;
+          if (usage !== undefined && identity !== undefined) {
+            if (parseCodexAccount(identity).type !== "chatgpt") return finish(undefined, 401);
+            finish({ ...z.record(z.string(), z.json()).parse(usage), account: z.object({ account: z.json() }).parse(identity).account });
+          }
+        }
       } catch { finish(); }
     });
     send("initialize", 1);
@@ -786,7 +801,8 @@ async function readClaudeFileUsage(deps: ClaudeFileDeps): Promise<Response> {
   return response;
 }
 
-export function canRefreshUsage(driver: string, environment: NodeJS.ProcessEnv = {}, platform = process.platform): boolean {
+export function canRefreshUsage(driver: string, environment: NodeJS.ProcessEnv = {}, platform = process.platform, account?: AccountContext): boolean {
+  if (account && driver === "claudeAgent") return false;
   return ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(driver)
     && (driver !== "claudeAgent" || platform !== "darwin" || Boolean(({ ...process.env, ...environment }).CLAUDE_CODE_OAUTH_TOKEN));
 }
@@ -802,6 +818,7 @@ export function createUsageRefresh(deps: {
   now?: () => number;
   platform?: NodeJS.Platform;
   throttleMs?: number;
+  accountIdentity?: (account: AccountContext, identity: string | undefined) => Promise<void>;
 } = {}) {
   const request = deps.request ?? fetch;
   const read = deps.read ?? ((path: string) => readFile(path, "utf8"));
@@ -815,26 +832,38 @@ export function createUsageRefresh(deps: {
   const cache = new Map<string, { retryAt: number; pending: Promise<Result> }>();
   const claudeReads = new Map<string, { retryAt: number; limited: number; pending: Promise<Report> }>();
   const skipped = new Set<string>();
+  const epochs = new Map<string, number>();
   const skipWindow = (name: string, id: string) => {
     if (skipped.has(`${name}:${id}`)) return;
     skipped.add(`${name}:${id}`);
     console.warn(`usage-refresh: skipped unreadable ${name} window ${id}`);
   };
-  return async (driver: string, options: Options, previous?: Report): Promise<Result> => {
+  const refresh = async (driver: string, options: Options, previous?: Report): Promise<Result> => {
+    if (options.account && driver === "claudeAgent") return { report: previous, retryAt: 0, status: "no_observation" };
     const name = driver === "claudeAgent" ? "Claude" : driver === "codex" ? "Codex" : driver === "grokAgent" ? "Grok" : driver === "antigravityAgent" ? "Antigravity" : driver === "museAgent" ? "Muse" : undefined;
     if (!name) return { report: previous, error: "Usage refresh is not supported", retryAt: 0 };
     // Claude reads are cached per credential below, so its backoff is not masked here.
-    const cached = driver === "claudeAgent" ? undefined : cache.get(options.instanceId);
+    const key = options.account ? `${options.instanceId}:${options.account.generation}` : options.instanceId;
+    const epoch = epochs.get(options.instanceId);
+    const cached = driver === "claudeAgent" ? undefined : cache.get(key);
     if (cached && clock() < cached.retryAt) return cached.pending;
     const retryAt = clock() + (deps.throttleMs ?? 30_000);
     const pending = (async (): Promise<Result> => {
       try {
-        const env: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath(), ...options.environment };
+        const merged: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath(), ...options.environment };
+        const env = options.account ? accountLaunch(options.account, driver, [], merged).env : merged;
         const home = env.HOME || env.USERPROFILE || homedir();
         let windows: RateLimitWindow[];
         let observedAt: string | undefined;
         if (driver === "codex") {
-          const result = z.object({ rateLimits: z.json(), rateLimitsByLimitId: z.record(z.string(), z.json()).optional() }).parse(await (deps.rpc ?? readUsageRpc)(options.cli || "codex", env));
+          const payload = await (deps.rpc ?? readUsageRpc)(options.cli || "codex", env, options.account);
+          if (options.account) {
+            if (epochs.get(options.instanceId) !== epoch) return { retryAt: 0 };
+            const identity = parseCodexAccount(payload);
+            if (identity.type !== "chatgpt") throw new Error("signin");
+            await deps.accountIdentity?.(options.account, identity.identity);
+          }
+          const result = z.object({ rateLimits: z.json(), rateLimitsByLimitId: z.record(z.string(), z.json()).optional() }).parse(payload);
           const rateLimits = codexUsage.parse(result.rateLimits);
           windows = codexRateLimitWindows(rateLimits);
           for (const [id, snapshot] of Object.entries(result.rateLimitsByLimitId ?? {})) {
@@ -924,9 +953,14 @@ export function createUsageRefresh(deps: {
         };
       }
     })();
-    if (driver !== "claudeAgent") cache.set(options.instanceId, { retryAt, pending });
-    return pending;
+    const guarded = pending.then((result) => options.account && epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result);
+    if (driver !== "claudeAgent") cache.set(key, { retryAt, pending: guarded });
+    return guarded;
   };
+  return Object.assign(refresh, { invalidate: (instanceId: string) => {
+    epochs.set(instanceId, (epochs.get(instanceId) ?? 0) + 1);
+    for (const key of cache.keys()) if (key === instanceId || key.startsWith(`${instanceId}:`)) cache.delete(key);
+  } });
 }
 
 /** Check now: one paid Muse turn, at most once a minute per instance. */

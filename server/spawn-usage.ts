@@ -56,7 +56,7 @@ type Deps = {
 
 export function createSpawnUsage(deps: Deps) {
   const now = deps.now ?? Date.now;
-  const held = new Map<string, number>();
+  const held = new Map<string, { at: number; instanceId: string }>();
   const refreshed = async (instanceId: string) => {
     const result = await deps.refresh(instanceId, deps.rateLimits.get(instanceId));
     const current = deps.rateLimits.get(instanceId);
@@ -65,7 +65,7 @@ export function createSpawnUsage(deps: Deps) {
       deps.save();
     }
   };
-  return async (botId: string, label: string, command: string): Promise<SpawnUsage> => {
+  const usage = async (botId: string, label: string, command: string): Promise<SpawnUsage> => {
     const engine = spawnEngine(command);
     // Panes start without the instance's environment, so an account set there is not the pane's.
     if (!engine || Object.keys(deps.environment(engine.instanceId) ?? {}).some((name) => OTHER_HOME.has(name.toUpperCase()))) return {};
@@ -82,13 +82,16 @@ export function createSpawnUsage(deps: Deps) {
       weekly && `weekly ${left(weekly)}%${suffix}`,
     ].filter(Boolean).join(", ");
     const low = (window: RateLimitWindow | undefined, min: number) => window !== undefined && window.resetsAt !== null && left(window) < min;
-    for (const [key, heldAt] of held) if (at - heldAt > REPEAT_MS) held.delete(key);
+    for (const [key, heldAt] of held) if (at - heldAt.at > REPEAT_MS) held.delete(key);
     const key = JSON.stringify([botId, label, command]);
     if ((low(session, SESSION_MIN_LEFT) || low(weekly, WEEKLY_MIN_LEFT)) && !held.has(key)) {
-      held.set(key, at);
+      held.set(key, { at, instanceId: engine.instanceId });
       return { hold: `Held: ${engine.name} ${text(" left")}. Pick another engine, or send the same spawn again within 2 min to launch anyway.` };
     }
     held.delete(key);
     return { line: `${engine.name} usage left: ${text("")}.` };
   };
+  return Object.assign(usage, { invalidate: (instanceId: string) => {
+    for (const [key, hold] of held) if (hold.instanceId === instanceId) held.delete(key);
+  } });
 }

@@ -48,6 +48,7 @@ export interface ModelSelection {
 // drivers round-trip and surface as unavailable shadow snapshots so a
 // config from a newer build downgrades safely.
 export interface InstanceConfig {
+  account?: import("./account-policy.ts").AccountContext;
   driver: DriverKind;
   displayName?: string;
   accentColor?: string;
@@ -367,6 +368,8 @@ export interface ProviderSnapshot {
   authenticated?: boolean;
   /** Email or account name of the sign-in, read from the CLI's own status or auth file. */
   account?: string;
+  accountIdentity?: string;
+  accountAuthenticated?: boolean;
   version?: string | null;
   /** How this instance is paid for, when the driver can tell: a reported
    * cost on a subscription is notional and the UI labels it as such. */
@@ -417,6 +420,7 @@ export interface ModelCatalog {
 }
 
 export interface DriverCreateInput<Config> {
+  account?: import("./account-policy.ts").AccountContext;
   instanceId: InstanceId;
   displayName: string | undefined;
   environment: Record<string, string>;
@@ -425,6 +429,10 @@ export interface DriverCreateInput<Config> {
 }
 
 export interface ProviderInstance {
+  readonly account?: import("./account-policy.ts").AccountContext;
+  accountBusy?(): boolean;
+  setAccountBlocked?(blocked: boolean): void;
+  invalidateAccount?(): void;
   readonly instanceId: InstanceId;
   readonly driverKind: DriverKind;
   readonly displayName: string | undefined;

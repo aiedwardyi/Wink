@@ -11,8 +11,6 @@
 // and falls back to a fresh thread/start. After Orbit compaction the
 // harness omits resumeCursor and injects the bounded transcript instead.
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 
 import { applyCredentialAllowlist } from "../config.ts";
@@ -44,26 +42,15 @@ import { augmentedPath } from "../env-path.ts";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, codexRateLimitWindows } from "./rate-limits.ts";
-import { accountLabel, cachedSignIn, storedAccount } from "./auth-status.ts";
+import { cachedSignIn } from "./auth-status.ts";
+import { accountLaunch } from "../account-policy.ts";
+import { readCodexAccount, type CodexAccount } from "./codex-account.ts";
 import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
 const DRIVER_KIND = "codex";
 const STEER_NOTE = "[Wink note: Any earlier final answer in this running turn is already shown to the user and stays visible. Continue from it; do not repeat it when answering this follow-up.]";
-
-const codexAuthSchema = z.object({ auth_mode: z.string().nullish(), tokens: z.object({ id_token: z.string() }) });
-
-/** The ChatGPT login's email from the id token claims; an API-key login names no account. */
-export function codexAccount(env: Record<string, string | undefined>): string | undefined {
-  return storedAccount(join(codexHome(env), "auth.json"), (auth) => {
-    const parsed = codexAuthSchema.safeParse(auth);
-    if (!parsed.success || parsed.data.auth_mode === "apikey") return undefined;
-    const claims: unknown = JSON.parse(Buffer.from(parsed.data.tokens.id_token.split(".")[1] ?? "", "base64url").toString("utf8"));
-    const named = z.object({ email: z.unknown().optional(), name: z.unknown().optional() }).safeParse(claims);
-    return named.success ? accountLabel(named.data.email, named.data.name) : undefined;
-  });
-}
 
 const toolItemSchema = z.object({
   type: z.enum(["commandExecution", "fileChange", "mcpToolCall", "webSearch"]),
@@ -214,6 +201,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
   async create(input: DriverCreateInput<CodexConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
+    const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
+    let engineAccount: CodexAccount = {};
+    let admitted = !input.account;
+    let accountBlocked = false;
     const childEnv = (): Record<string, string | undefined> => {
       const env: Record<string, string | undefined> = {
         ...process.env,
@@ -232,20 +223,21 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // calls, which is accepted because they already share the CLI's trust
       // boundary. GITHUB_TOKEN stays stripped.
       applyCredentialAllowlist(env, ["UNSLOTH_STUDIO_AUTH_TOKEN", "GH_TOKEN"]);
-      return env;
+      return input.account ? accountLaunch(input.account, DRIVER_KIND, [], env).env : env;
     };
     const catalogEnv = childEnv();
+    const retirementHome = input.account?.home ?? codexHome(catalogEnv);
     let models = STATIC_CODEX_MODELS;
     const refreshModels = async () => {
       try {
-        const resolved = await readCodexModelCatalog(catalogEnv, fetch, config.cli);
+        const resolved = await readCodexModelCatalog(catalogEnv, fetch, config.cli, { account: input.account, onAccount: (account) => { engineAccount = account; if (input.account) admitted = account.type === "chatgpt"; } });
         if (resolved.options.length) models = resolved;
       } catch {
         // Keep the last usable catalog when a local provider is down.
       }
     };
     await refreshModels();
-    const text = createCodexText(config.cli, childEnv, () => models.default);
+    const text = createCodexText(config.cli, childEnv, () => models.default, input.account);
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => void;
@@ -268,6 +260,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     });
 
     const sendTurn = async (turn: SendTurnInput) => {
+      if (!admitted || accountBlocked) throw new Error("Sign in to this Codex account before starting a turn");
+      if (input.account && turn.model && decodeCodexSelection(turn.model).modelProvider !== "openai") throw new Error("Unsupported subscription model");
       // One driver instance serves many threads. Interrupt state belongs to
       // this turn so activity elsewhere cannot cancel or revive its retry.
       let stopRequested = false;
@@ -277,7 +271,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const turnId = newId();
       // Reserve the thread across the retirement wait so Stop lands here.
       active.set(threadId, { stop: () => { stopRequested = true; }, steer: async () => false, turnId, asks: new Map() });
-      await awaitDyingAppServers();
+      await awaitDyingAppServers(2_000, retirementHome);
       if (stopRequested) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
         active.delete(threadId);
@@ -333,6 +327,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
 
         const child = spawnCli(config.cli, appServerArgs, {
+          ...launchPolicy,
           cwd: turn.cwd ?? homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -359,10 +354,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let contextWindow: number | undefined;
       let usageWindows: ReturnType<typeof codexRateLimitWindows> = [];
       let usageLimitReported = false;
-      let apiKeyAccount = false;
-      try {
-        apiKeyAccount = codexAuthSchema.pick({ auth_mode: true }).safeParse(JSON.parse(readFileSync(join(codexHome(env), "auth.json"), "utf8"))).data?.auth_mode === "apikey";
-      } catch {}
+      const apiKeyAccount = engineAccount.type === "apiKey";
       const usageFailure = (failure: unknown) => chatUsageLimit("codex", failure, usageWindows,
         [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && !apiKeyAccount);
 
@@ -402,7 +394,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const stop = () => {
         stopRequested = true;
-        retireAppServer(child);
+        retireAppServer(child, retirementHome);
       };
 
       const steer = async (text: string): Promise<boolean> => {
@@ -755,7 +747,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             reason: "state runtime busy",
           });
           setTimeout(async () => {
-            await awaitDyingAppServers();
+            await awaitDyingAppServers(2_000, retirementHome);
             if (!stopRequested) void launchAttempt(attempt + 1).catch(() => {});
             else settle(false, "interrupted");
           }, STATE_RUNTIME_RETRY_MS);
@@ -869,12 +861,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           // This app-server never exits by itself. Retire the failed attempt
           // and silence its late handlers before the replacement launches.
           abandoned = true;
-          retireAppServer(child);
+          retireAppServer(child, retirementHome);
           await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, Math.max(1, Math.round(delayMs * retryScale)));
             timer.unref?.();
           });
-          await awaitDyingAppServers();
+          await awaitDyingAppServers(2_000, retirementHome);
           if (!stopRequested) {
             void launchAttempt(attempt).catch(() => {});
           } else {
@@ -898,6 +890,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     return { turnId };
   };
 
+  const accountStatus = cachedSignIn(async () => {
+    engineAccount = await readCodexAccount(config.cli, childEnv(), input.account);
+    return engineAccount;
+  }, (value) => value.authenticated === true);
   const signedIn = cachedSignIn(() => new Promise<boolean | undefined>((resolve) => {
     execCli(config.cli, ["login", "status"], { timeout: 3000, env: childEnv() }, (err, stdout, stderr) => {
       const status = `${stdout}\n${stderr ?? ""}`;
@@ -909,18 +905,24 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
   const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
     const env = childEnv();
     const version = await new Promise<string | null>((resolve) => {
-      execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
+      execCli(config.cli, ["--version"], { timeout: 8000, env, ...launchPolicy }, (err, stdout) =>
         resolve(err ? null : stdout.trim()),
       );
     });
     if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-    const authenticated = await signedIn(opts?.rescan || opts?.refresh);
+    const force = opts?.rescan || opts?.refresh;
+    const authenticated = input.account ? (await accountStatus(force)).type === "chatgpt" : await signedIn(force);
+    if (input.account) admitted = authenticated === true;
+    const metadata = input.account ? engineAccount : authenticated ? await accountStatus(force) : {};
     // childEnv drops OPENAI_API_KEY on purpose — turns run on the ChatGPT login
-    return { state: "available", version, authenticated, account: authenticated ? codexAccount(env) : undefined, billing: "subscription" };
+    return { state: "available", version, authenticated, account: authenticated ? metadata.label : undefined, ...(input.account ? { accountIdentity: metadata.identity, accountAuthenticated: metadata.authenticated } : {}), billing: "subscription" };
   };
 
   return {
     instanceId,
+    ...(input.account ? { account: input.account } : {}),
+    ...(input.account ? { invalidateAccount: () => { admitted = false; listeners.clear(); } } : {}),
+    ...(input.account ? { accountBusy: () => active.size > 0 || text.busy(), setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; } } : {}),
     driverKind: DRIVER_KIND,
     displayName: input.displayName,
     enabled: input.enabled,
@@ -930,7 +932,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     refreshModels,
     snapshot,
     loginConfig: () => ({ cli: config.cli, env: childEnv() }),
-    generateText: text.generateText,
+    generateText: (prompt, options) => {
+      if (!admitted || accountBlocked) return Promise.reject(new Error("Sign in to this Codex account before using helpers"));
+      return text.generateText(prompt, options);
+    },
     get textModel() { return models.default; },
     textTimeoutMs: CODEX_TEXT_TIMEOUT_MS,
     adapter: {
