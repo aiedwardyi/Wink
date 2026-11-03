@@ -92,6 +92,9 @@ Every step re-reads the worker's whole context, so long runs cost more.
 
 - Ask the auditor to walk the user's first real session end to end. That walk
   finds the bugs normal use hits first.
+- A walk logs every snag it sees to one shared findings list. Before the next
+  walk, read that list and walk only the screens changed since, unless the
+  user asks for more.
 - Probe scripts read PORT, HOME and ROOT from env, so a fix branch can be
   re-checked with one command.
 - Triage findings by "can this hit normal use soon?" Fix those. Park the rest in
