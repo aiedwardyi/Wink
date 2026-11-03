@@ -77,6 +77,22 @@ describe("account removal references", () => {
     expect(f.registry.accountAvailable(f.account.id)).toBe(true);
   });
 
+  it.each(["pane", "unknown", "unreachable"])("guards identity changes with %s account pane state", async (state) => {
+    const f = await fixture();
+    if (state === "pane") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { [f.account.generation]: 1 } }));
+    if (state === "unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
+    if (state === "unreachable") f.request.mockRejectedValue(new Error("unreachable fixture"));
+    const observed = f.controller.observe(f.account.id, { state: "available", authenticated: true, accountIdentity: "changed" }, f.account.generation);
+    if (state === "pane") await observed;
+    else await expect(observed).rejects.toThrow("Terminal host is unreachable");
+    expect(f.accounts.get(f.account.id)).toEqual({ ...f.account, state: state === "pane" ? "stopped" : "ready" });
+    expect(f.registry.accountBlocked(f.account.id)).toBe(true);
+    expect(f.providers.started("worker", f.account.id)).toBeNull();
+    expect(f.invalidate).not.toHaveBeenCalled();
+    expect(f.holds).not.toHaveBeenCalled();
+    expect(f.waits).not.toHaveBeenCalled();
+  });
+
   it.each(["pane", "unknown", "unreachable"])("refuses base sign-in with %s account pane state", async (state) => {
     const f = await fixture();
     const start = vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});

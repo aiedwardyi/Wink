@@ -226,7 +226,7 @@ export class AccountLifecycle {
     return this.exclusive(async () => {
       const current = this.accounts.get(id);
       if (!current || current.generation !== account.generation) return;
-      if (await this.hooks.referenced(id, true)) {
+      if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) {
         await this.accounts.stop(id);
         return;
       }
