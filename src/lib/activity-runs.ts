@@ -5,6 +5,7 @@
 // SAID. Consecutive finished steps fold into a single row that names them;
 // text between two stretches breaks the run, so the bot's words always
 // separate one run from the next.
+import { chatErrorText } from "./error-text";
 import { t as translate, type MessageKey, type Translate } from "@/lib/i18n";
 import { en } from "./i18n-catalog";
 import type { Message } from "@/state/store";
@@ -184,11 +185,12 @@ export const SERVER_LINES: ServerLine[] = [
   },
 ];
 
-/** A server handoff line in the app's language; anything unrecognised comes back as written. Display only. */
+/** Translate stored notices; raw failures belong in Details. */
 export function localizeServerLine(name: string, t: Translate): string {
   const timelineKey = (["chat.timeline.taskStarted", "chat.timeline.userInput", "chat.timeline.screenObserved", "chat.timeline.responseRecorded"] as const).find((key) => en[key] === name);
   if (timelineKey) return t(timelineKey);
   const isError = name.startsWith("error: ");
+  if (isError) return chatErrorText(name, t("errors.bot"), t)?.text ?? "";
   const body = isError ? name.slice(7) : name;
   for (const line of SERVER_LINES) {
     const m = line.re.exec(body);

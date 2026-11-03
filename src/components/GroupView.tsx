@@ -2,6 +2,7 @@
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
+import { ErrorRow } from "./ChatView";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, AtSign, Check, ChevronDown, ChevronRight, Crown, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, Users, X } from "lucide-react";
 import {
@@ -207,6 +208,10 @@ export function RoomToolChip({
   const instance = member?.modelSelection?.instanceId
     ? state.instances.find((i) => i.instanceId === member.modelSelection.instanceId)
     : undefined;
+  if (tool.name.startsWith("error:")) return (
+    <ErrorRow message={tool.name.slice(6).trim()} botId={member?.id ?? ""} botName={member?.name ?? message.from?.name}
+      setupInstance={tool.setup || tool.signIn ? instance : undefined} signIn={tool.signIn} onRetry={handleRetry} />
+  );
   const status = isServerLine(tool.name);
   const setupAction =
     (tool.setup || tool.signIn) && onRetry

@@ -2,6 +2,8 @@
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
 // pure; everything async lives in the wrapped dispatch + SSE fold.
+import { request } from "@/lib/api-request";
+import { createErrorBanner } from "@/lib/error-banner";
 import {
   createContext,
   useCallback,
@@ -1014,16 +1016,6 @@ export function api(path: string, init?: RequestInit): Promise<any> {
   return method === "GET" || method === "HEAD" ? call : holdReload(call);
 }
 
-async function request(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
-  return body;
-}
-
 /** Phone browsers fail in-flight fetches when the tab backgrounds, even ones the server already accepted. */
 async function acceptedSend(state: AppState, threadId: string, sendId: string, text: string): Promise<Message | null> {
   const isSend = (message: Message) =>
@@ -1230,6 +1222,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const errorBanner = useMemo(() => createErrorBanner((message) => rawDispatch({ type: "error", message })), []);
+  useEffect(() => () => errorBanner.dispose(), [errorBanner]);
+
   const botPatchQueue = useMemo(
     () =>
       createBotPatchQueue({
@@ -1248,12 +1243,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         onAuthoritative: (bot, optimisticOverlay) => {
           rawDispatch({ type: "botPatched", bot: { ...bot, ...optimisticOverlay } });
         },
-        onError: (error) => {
-          rawDispatch({ type: "error", message: error.message });
-          setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
-        },
+        onError: errorBanner.show,
       }),
-    [],
+    [errorBanner],
   );
 
   useEffect(() => {
@@ -1264,10 +1256,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [botPatchQueue]);
 
   const dispatch = useMemo(() => {
-    const showError = (e: unknown) => {
-      rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
-    };
+    const showError = errorBanner.show;
     // fire-and-forget card persistence; the route is optional server-side
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>) => {
       const saving = fetch(`/api/bots/${botId}/cards/${messageId}`, {
@@ -1887,7 +1876,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     return wrapped;
-  }, [botPatchQueue]);
+  }, [botPatchQueue, errorBanner]);
 
   useEffect(() => {
     const target = pendingNotificationSwitch.current;

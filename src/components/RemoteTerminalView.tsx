@@ -390,7 +390,7 @@ export function RemoteTerminalView({
           ))}
         </div>
       )}
-      {error && <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-ink-secondary">{t("terminal.unavailable")}: {error}</p>}
+      {error && <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-ink-secondary">{t("errors.shell")}</p>}
       {noTerminal ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-ink-secondary">
           <p>{t("terminal.workersEmpty", { name: bot.name })}</p>
