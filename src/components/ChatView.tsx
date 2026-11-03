@@ -247,13 +247,10 @@ export function ErrorRow({
   return (
     <div className="flex justify-start">
       <div
-        className={cn(
-          "w-fit max-w-[min(42rem,78%)] rounded-xl border px-3.5 py-2.5 text-[13.5px]",
-          usageLimit ? "border-warning/30 bg-warning/10 text-warning" : "border-danger/30 bg-danger/10 text-danger",
-        )}
+        className="w-fit max-w-[min(42rem,78%)] rounded-xl border border-hairline/50 bg-inset px-3.5 py-2.5 text-[13.5px] text-ink"
       >
         <div className="flex items-start gap-2">
-          {usageLimit ? <Gauge size={15} className="mt-0.5 shrink-0" /> : <AlertTriangle size={15} className="mt-0.5 shrink-0" />}
+          {usageLimit ? <Gauge size={15} className="mt-0.5 shrink-0 text-warning" /> : <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />}
           <span className="min-w-0 break-words">
             {usageLimit ? (
               <>
@@ -284,8 +281,7 @@ export function ErrorRow({
   );
 }
 
-/** A tool run: spinner while live, check/cross once settled. A failed step
- * stays neutral; only turn-level `error:` rows go red. */
+/** A tool run: spinner while live, check/cross once settled. */
 const ActivityChip = memo(function ActivityChip({ message, notices }: { message: Message; notices?: LinkedApproval[] }) {
   const { t } = useI18n();
   const terminal = isTerminalSkin(useSkin());
@@ -1549,8 +1545,9 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
       {/* Error banner */}
       {state.error && (
         <div className="w-full px-5">
-          <div className="mb-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
-            {state.error}
+          <div className="mb-2 flex items-start gap-2 rounded-lg border border-hairline/50 bg-inset px-3 py-2 text-[13px] text-ink">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
+            <span className="min-w-0 break-words">{state.error}</span>
           </div>
         </div>
       )}
