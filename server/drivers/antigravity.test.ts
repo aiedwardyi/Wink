@@ -16,6 +16,7 @@ import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from ".
 import type { ProviderInstance } from "../contracts.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { ProviderRegistry } from "../harness/registry.ts";
 import {
   ANTIGRAVITY_COMPUTER_MCP_KEY,
   AntigravityDriver,
@@ -897,18 +898,13 @@ describe("Antigravity system text once per conversation (fake CLI)", () => {
 describe("Antigravity snapshot", () => {
   it("marks an unsupported Linux authentication probe as complete", async () => {
     vi.mocked(auth.antigravitySignIn).mockImplementation(() => createSignIn(() => auth.probeAntigravitySignIn("linux")));
-    const instance = await AntigravityDriver.create({
-      instanceId: "agy-linux",
-      displayName: undefined,
-      environment: {},
-      enabled: true,
-      config: { cli: FAKE_CLI, fullAuto: false },
-    });
+    const registry = new ProviderRegistry([AntigravityDriver]);
     try {
-      const snapshot = await instance.snapshot();
+      await registry.load({ "agy-linux": { driver: "antigravityAgent", config: { cli: FAKE_CLI, fullAuto: false } } });
+      const [{ snapshot }] = await registry.describe();
       expect(snapshot).toMatchObject({ state: "available", authChecked: true });
       expect(snapshot.authenticated).toBeUndefined();
-    } finally { await instance.dispose(); }
+    } finally { await registry.disposeAll(); }
   });
 
   it("reports available with the CLI version against the fake", async () => {

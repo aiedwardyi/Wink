@@ -51,6 +51,26 @@ const versions = (rows: { instanceId: string; snapshot: { version?: string | nul
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
 describe("ProviderRegistry", () => {
+  it.each(["antigravityAgent", "museAgent"])("marks only completed available Gemini probes for %s", async (kind) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      await registry.load({ a: { driver: kind } });
+      let answer!: (snapshot: { state: "available" }) => void;
+      registry.get("a")!.snapshot = () => new Promise((resolve) => { answer = resolve; });
+      const pending = registry.describe();
+      expect(registry.describeSaved()).toEqual([]);
+      answer({ state: "available" });
+      const rows = await pending;
+      expect(rows[0].snapshot.authenticated).toBeUndefined();
+      expect(rows[0].snapshot.authChecked).toBe(kind === "antigravityAgent" ? true : undefined);
+      expect((await registry.describeCached())[0].snapshot).toEqual(rows[0].snapshot);
+      expect(registry.describeSaved()[0].snapshot).toEqual(rows[0].snapshot);
+      registry.get("a")!.snapshot = async () => ({ state: "unavailable" });
+      expect((await registry.describe())[0].snapshot.authChecked).toBeUndefined();
+    } finally { await registry.disposeAll(); }
+  });
+
   it("resolves Claude sign-in directly to auth login", () => {
     expect(BUILT_IN_DRIVERS.find((driver) => driver.driverKind === "claudeAgent")?.install?.signInCommand).toBe("claude auth login");
   });

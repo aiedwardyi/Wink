@@ -587,6 +587,7 @@ export class ProviderRegistry {
   private row(entry: RegistryEntry, probe: Probe) {
     const driver = this.driversByKind.get(entry.shadow?.driverKind ?? entry.live!.driverKind);
     const snapshot = { ...probe.snapshot };
+    if (entry.live?.driverKind === "antigravityAgent" && snapshot.state === "available") snapshot.authChecked = true;
     delete snapshot.accountIdentity;
     delete snapshot.accountAuthenticated;
     if (entry.shadow) {
