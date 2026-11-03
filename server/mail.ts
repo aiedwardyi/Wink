@@ -3,6 +3,24 @@ import { claimDelegationWake } from "./comms-budget.ts";
 import type { Message, Store } from "./store.ts";
 import type { MailRead } from "./mail-types.ts";
 import { paneNoteWaiting } from "./pane-wake.ts";
+import { receiptSnapshot } from "./delegation-ledger.ts";
+import { delegationGist } from "./delegation-context.ts";
+
+export function recentDelegations(store: Pick<Store, "botByThread" | "messagesFor">, botId: string, threadId: string) {
+  const rows = new Map<string, Message[]>();
+  const tasks = receiptSnapshot().filter((row) => row.sourceThreadId === threadId && (row.source?.botId ?? store.botByThread(row.sourceThreadId)?.id) === botId);
+  const created = (task: typeof tasks[number]) => {
+    if (!rows.has(task.sourceThreadId)) rows.set(task.sourceThreadId, store.messagesFor(task.sourceThreadId));
+    const messages = rows.get(task.sourceThreadId)!;
+    const index = messages.findIndex((row) => row.comm?.taskId === task.id);
+    return { at: messages[index]?.at ?? task.finishedAt, index };
+  };
+  return tasks.sort((a, b) => created(b).at - created(a).at || (a.sourceThreadId === b.sourceThreadId ? created(b).index - created(a).index : 0)).slice(0, 5).map((row) => ({
+    id: row.id.slice(0, 8), peer: row.toBotName,
+    status: row.state === "dispatching" ? "running" : row.status === "done" || row.status === "queued" || row.status === "running" ? row.status : "failed",
+    gist: delegationGist(row.result),
+  }));
+}
 
 type MailStore = Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "activePath" | "messagesFor" | "patchMessage">;
 export interface MailPart { id: string; text: string; upto: number; part?: number }

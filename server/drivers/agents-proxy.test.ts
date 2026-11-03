@@ -4,10 +4,13 @@
 // endpoints, and drive the MCP stdio surface end to end. No shebang, no
 // shell — plain node child, so this runs on every OS like index.test.ts.
 import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "agents-proxy.ts");
 const TOKEN = "test-comms-token";
@@ -23,6 +26,7 @@ let lastDelegateBody: any = null;
 let lastDelegationUrl: string | null = null;
 interface DelegationStatusResponse { status: string; toBotName?: string; result?: string; sameTurn?: boolean }
 let delegationStatusResponse: DelegationStatusResponse = { status: "done", toBotName: "Helper", result: "All done." };
+let recentDelegationsResponse = { tasks: [{ id: "38930fab", peer: "Helper", status: "done", gist: "All done." }] };
 let delegateResponse: unknown = { queued: true, message: "Delegation queued." };
 let lastCreateBody: any = null;
 let lastCreateChannelBody: any = null;
@@ -117,7 +121,7 @@ beforeAll(async () => {
     if (req.method === "GET" && req.url?.startsWith("/api/internal/delegations/")) {
       lastDelegationUrl = req.url;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(delegationStatusResponse));
+      res.end(JSON.stringify(req.url.startsWith("/api/internal/delegations/recent?") ? recentDelegationsResponse : delegationStatusResponse));
       return;
     }
     if (req.method === "POST" && req.url === "/api/internal/create-bot") {
@@ -843,6 +847,29 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("wait_delegation");
     expect(res.result.content[0].text).toContain("in a later turn");
     delegateResponse = { queued: true, message: "Delegation queued." };
+  });
+
+  it("replays a recorded Claude check_delegation call over MCP stdio", async () => {
+    const result = await callTool(reply.call.name.replace("mcp__agents__", ""), reply.call.input);
+    expect(result.result.isError).toBe(false);
+    expect(result.result.content[0].text).toBe(`@Helper finished task ${reply.call.input.task_id}:\nAll done.`);
+    expect(lastDelegationUrl).toBe(`/api/internal/delegations/${reply.call.input.task_id}?fromBotId=bot-asker&fromThreadId=thread-asker-routine&wait_ms=0`);
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("check_delegation lists recent tasks when task_id is omitted", async () => {
+    const result = await callTool("check_delegation", {});
+    expect(result.result.isError).not.toBe(true);
+    expect(result.result.content[0].text).toContain('38930fab -> @Helper: done "All done."');
+    expect(lastDelegationUrl).toContain("/api/internal/delegations/recent?");
+    expect(lastDelegationUrl).toContain("fromBotId=bot-asker");
+    const list = await rpc("tools/list");
+    const check = list.result.tools.find((tool: { name: string }) => tool.name === "check_delegation");
+    const wait = list.result.tools.find((tool: { name: string }) => tool.name === "wait_delegation");
+    expect(check.inputSchema.required ?? []).not.toContain("task_id");
+    expect(wait.inputSchema.required).toContain("task_id");
+    recentDelegationsResponse = { tasks: [] };
+    expect((await callTool("check_delegation", {})).result.content[0].text).toBe("No recent delegations.");
   });
 
   it("check/wait_delegation: flat schemas, guided errors, and the read-back wire", async () => {

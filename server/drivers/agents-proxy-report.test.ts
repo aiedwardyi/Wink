@@ -21,6 +21,7 @@ vi.mock("node:readline", () => ({
 import "./agents-proxy.ts";
 
 const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/team-report-mcp.json", import.meta.url), "utf8"));
+const { reply: delegation } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));
 
 function rpc(frame: Record<string, unknown>): Promise<any> {
   return new Promise((resolve) => {
@@ -35,6 +36,19 @@ function rpc(frame: Record<string, unknown>): Promise<any> {
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 afterAll(() => { vi.unstubAllEnvs(); });
+
+it("replays recorded check_delegation arguments with the authenticated turn identity", async () => {
+  const fetch = vi.fn(async () => new Response(JSON.stringify({ status: "done", toBotName: "Helper", result: "All done." })));
+  vi.stubGlobal("fetch", fetch);
+  const result = await rpc({ jsonrpc: "2.0", id: delegation.call.id, method: "tools/call", params: {
+    name: delegation.call.name.replace("mcp__agents__", ""), arguments: delegation.call.input,
+  } });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:8799/api/internal/delegations/${delegation.call.input.task_id}?fromBotId=fixture-bot&fromThreadId=fixture-thread&wait_ms=0`, expect.objectContaining({
+    headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
+  }));
+  expect(result).toMatchObject({ id: delegation.call.id, result: { isError: false, content: [{ type: "text", text: `@Helper finished task ${delegation.call.input.task_id}:\nAll done.` }] } });
+});
 
 describe("recorded team report MCP requests", () => {
   it("accepts the engine handshake and advertises a flat report tool", async () => {

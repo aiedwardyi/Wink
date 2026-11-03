@@ -297,13 +297,13 @@ const TOOLS = [
   {
     name: "check_delegation",
     description:
-      "Check what happened to a delegation you queued with delegate_bot, or an ask_bot that returned a task id, without waiting: still queued, running, or finished - and the peer's reply once it is done. task_id may be a unique prefix of 8+ characters.",
+      "Check what happened to a delegation you queued with delegate_bot, or an ask_bot that returned a task id, without waiting: still queued, running, or finished - and the peer's reply once it is done. task_id may be a unique prefix of 8+ characters; omit it to list your 5 newest delegations.",
     inputSchema: {
       type: "object",
       properties: {
         task_id: { type: "string", description: "The task id delegate_bot or ask_bot returned, or a unique prefix of 8+ characters." },
       },
-      required: ["task_id"],
+      required: [],
     },
   },
   {
@@ -702,6 +702,13 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
   }
   if (name === "check_delegation" || name === "wait_delegation") {
     const taskId = String(args.task_id ?? "").trim();
+    if (name === "check_delegation" && args.task_id === undefined) {
+      const query = new URLSearchParams({ fromBotId: BOT_ID, fromThreadId: THREAD_ID, list: "1" });
+      const r = await api(`/api/internal/delegations/recent?${query.toString()}`);
+      // SAFETY: the authenticated list route returns this bounded task shape.
+      const tasks = r.tasks as Array<{ id: string; peer: string; status: string; gist: string }>;
+      return { text: tasks.length ? tasks.map((task) => `${task.id} -> @${task.peer}: ${task.status}${task.gist ? ` ${JSON.stringify(task.gist)}` : ""}`).join("\n") : "No recent delegations." };
+    }
     if (!/^[\w-]{4,64}$/.test(taskId)) {
       return { text: `${name} needs the "task_id" that delegate_bot returned, e.g. {"task_id":"1f0c2f4e-..."}.`, isError: true };
     }

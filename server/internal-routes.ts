@@ -17,7 +17,7 @@ import type { ComputerControl } from "./computer-control.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import { appendDecision } from "./decision-log.ts";
 import { acceptPeerTask, drainWaitingOn, finishDelegatedTurn, pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult, type drainDelegations } from "./delegations.ts";
-import { handMail, toolMailResult } from "./mail.ts";
+import { handMail, recentDelegations, toolMailResult } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { generateImageFile, generateImageRequestSchema } from "./generate-image.ts";
 import { googleAccountRoute, type GoogleAccount } from "./google-account.ts";
@@ -347,7 +347,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         if (freshTarget.busy) return queueAsk(true);
       }
       const channel = getOrCreateChannel(store, currentFrom, currentTarget);
-      mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
+      const sourceChipId = mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
       const prefixed = peerMessagePrompt(currentFrom, message, "ask");
       const taskId = acceptPeerTask(currentFrom, currentTarget, fromThreadId, "ask", "dispatching");
       const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId, {
@@ -358,7 +358,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         taskId,
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
-      if (reply.taskId) return json(res, 200, { botName: currentTarget.name, text: reply.text, taskId: reply.taskId, shown: false });
+      if (reply.taskId) {
+        const chip = store.messagesFor(fromThreadId).find((row) => row.id === sourceChipId);
+        if (chip?.comm) store.patchMessage(fromThreadId, chip.id, { comm: { ...chip.comm, taskId: reply.taskId } });
+        return json(res, 200, { botName: currentTarget.name, text: reply.text, taskId: reply.taskId, shown: false });
+      }
       const shown = finishDelegatedTurn(commsBus, { toBotId, taskId, sourceThreadId: fromThreadId, sourceBotId: currentFrom.id, channelId: channel.id, ask: true, inline: true }, reply.replied, reply.text, reply.text);
       if (reply.replied) handReply(currentFrom.id, fromThreadId, taskId, requestingTurn);
       return json(res, 200, { botName: currentTarget.name, text: reply.text, shown });
@@ -510,6 +514,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromThreadId = source.threadId;
       const from = store.bot(fromBotId);
       if (!from || !connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "unknown sender" });
+      if (delegationMatch[1] === "recent" && url.searchParams.get("list") === "1") return json(res, 200, { tasks: recentDelegations(store, from.id, fromThreadId) });
       const runningIds = [...delegationWatch.values()].filter((watch) => watch.sourceThreadId === fromThreadId && watch.taskId).map((watch) => watch.taskId!);
       const resolved = resolveDelegationId(delegationMatch[1], fromThreadId, runningIds);
       if ("error" in resolved) {
