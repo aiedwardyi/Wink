@@ -2,6 +2,7 @@ import type { ModelCatalog } from "./contracts.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { isWakeNote } from "./pane-wake.ts";
 import { mailReplayText } from "./mail.ts";
+import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { ENGINE_SUMMARY_PREFIX, replyExcerpt, transcriptText } from "./replies.ts";
 import type { Message, OptionCardData } from "./store.ts";
@@ -54,7 +55,7 @@ interface ReplayUnit {
   /** a question card; fallback keeps it beside the answer that follows */
   card?: true;
   /** a tool chip, until its run is folded into one line */
-  chip?: { name: string; ok: boolean; speaker: string; speakerId: string };
+  chip?: { name: string; ok: boolean; speaker: string; speakerId: string; delegation?: string };
   mailUpto?: number;
 }
 
@@ -494,6 +495,7 @@ function replayUnits(
   const pending = new Map(deferredMail.map((row) => [row.id, row.upto]));
   const through = new Map(throughMail.map((row) => [row.id, row.upto]));
   const from = pending.size ? 0 : offset;
+  const delegations = delegationContext(messages.slice(from).filter((row) => !excludeIds.has(row.id)), referenceMessages);
   return messages.slice(from).flatMap((message, index): ReplayUnit[] => {
     const pathIndex = from + index;
     if (pathIndex < offset && !pending.has(message.id)) return [];
@@ -516,7 +518,8 @@ function replayUnits(
     if (isContextNote(message) && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "user", text: wakeNoteText(message), label: "Pane note: " }];
     }
-    if (message.kind === "activity" && message.tool && message.tool.ok !== undefined) {
+    const delegation = delegations.get(message.id);
+    if (message.kind === "activity" && message.tool && (message.tool.ok !== undefined || delegation)) {
       // An approval chip repeats the call it answered, command text included.
       if (message.tool.approval || message.tool.name.startsWith("auto-approved ")) return [];
       const speaker = message.from?.name ?? "Bot";
@@ -527,7 +530,7 @@ function replayUnits(
         text: "",
         label: includeSpeakers ? "" : "Assistant: ",
         atomic: true,
-        chip: { name: message.tool.name, ok: message.tool.ok, speaker, speakerId: message.from?.botId ?? speaker },
+        chip: { name: delegation && message.comm?.peer === "message" ? "ask_bot" : message.tool.name, ok: message.tool.ok ?? true, speaker, speakerId: message.from?.botId ?? speaker, delegation },
       }];
     }
     const routine = message.kind === "routine.run" && message.routineRun ? routineRunText(message.routineRun) : null;
@@ -562,7 +565,7 @@ function foldToolRuns(units: ReplayUnit[], includeSpeakers: boolean): ReplayUnit
       if (!unit.chip!.ok) failed.set(name, (failed.get(name) ?? 0) + 1);
     }
     const list = (tally: Map<string, number>) =>
-      [...tally].sort((a, b) => b[1] - a[1]).map(([name, count]) => `${name} ${count}`).join(", ");
+      [...tally].sort((a, b) => b[1] - a[1]).map(([name, count]) => `${name} ${count}${tally === counts ? delegationRollup(run, name) : ""}`).join(", ");
     const tool = `[${run.length} tool call${run.length === 1 ? "" : "s"}: ${list(counts)}${failed.size ? `; failed: ${list(failed)}` : ""}]`;
     const { chip, ...last } = run.at(-1)!;
     folded.push({ ...last, text: redactSecretsInText(includeSpeakers ? `${chip!.speaker}: ${tool}` : tool) });
