@@ -158,6 +158,10 @@ describe("harness playbook", () => {
     expect(harnessPlaybookPrompt(true)).toContain("- Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.");
   });
 
+  it("keeps worker sound off the speakers", () => {
+    expect(harnessPlaybookPrompt(true)).toContain("test browsers keep `--mute-audio`");
+  });
+
   it("keeps long waits and deletes unattended-safe", () => {
     expect(harnessPlaybookPrompt(true)).toContain("start the job hidden, then poll it in the foreground");
     expect(harnessPlaybookPrompt(true)).toContain("never `cd` then relative `rm`");
@@ -191,7 +195,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13764);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13909);
   });
 
   it("fills the worktree path from the configured root", () => {

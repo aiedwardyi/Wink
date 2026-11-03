@@ -36,6 +36,7 @@ What to build or fix, and why. Two to five lines.
   focused file, not a large one.
 - If a choice this card does not cover would change the result, stop and report BLOCKED with the question.
 - Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.
+- Keep sound off the speakers: test browsers keep `--mute-audio`; a clip that needs sound captures it without playing it, or adds it afterwards.
 - Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
