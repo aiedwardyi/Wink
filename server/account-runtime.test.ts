@@ -22,6 +22,7 @@ afterEach(async () => {
   await Promise.all(registries.splice(0).map((registry) => registry.disposeAll()));
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function fixture(kind = "codex", usage = createUsageRefresh()) {
@@ -91,6 +92,35 @@ describe("account removal references", () => {
     expect(f.invalidate).not.toHaveBeenCalled();
     expect(f.holds).not.toHaveBeenCalled();
     expect(f.waits).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unknown", false], ["unreachable", false], ["unknown", true], ["unreachable", true],
+  ] as const)("restores with %s panes and authenticated %s, then retries until recovery", async (state, authenticated) => {
+    const f = await fixture();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    f.statuses.set(f.account.id, { state: "available", authenticated, ...(authenticated ? { accountIdentity: "changed" } : {}) });
+    if (state === "unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
+    else f.request.mockRejectedValue(new Error("unreachable fixture"));
+    const retry = vi.spyOn(f.registry, "retryAccount");
+    await expect(f.controller.restore()).resolves.toBeUndefined();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(f.accounts.get(f.account.id)).toEqual(f.account);
+      expect(f.registry.accountBlocked(f.account.id)).toBe(true);
+      expect(f.providers.started("worker", f.account.id)).toBeNull();
+      expect(f.invalidate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(retry).toHaveBeenCalledTimes(attempt + 1);
+    }
+    f.request.mockResolvedValue(Response.json({ count: 0, unknown: 0, generations: {} }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(f.accounts.get(f.account.id)).toMatchObject({
+      state: authenticated ? "ready" : "stopped", generation: f.account.generation + 1,
+    });
+    expect(f.registry.accountBlocked(f.account.id)).toBe(!authenticated);
+    expect(f.invalidate).toHaveBeenCalledExactlyOnceWith(f.account.id);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["pane", "unknown", "unreachable"])("refuses base sign-in with %s account pane state", async (state) => {

@@ -50,7 +50,9 @@ export class AccountLifecycle {
       else if (account.state === "ready") {
         this.registry.blockAccount(account.id, true);
         const snapshot = await this.registry.get(account.id)?.snapshot({ refresh: true }).catch(() => undefined);
-        await this.observe(account.id, snapshot ?? { state: "unavailable" });
+        await this.observe(account.id, snapshot ?? { state: "unavailable" }).catch(() => {
+          console.error("Account restoration is waiting for recovery");
+        });
       }
     }
     await this.resumeDrains().catch(() => {
@@ -231,7 +233,10 @@ export class AccountLifecycle {
         return;
       }
       await this.accept(current, snapshot);
-    }, false);
+    }, false).catch((error) => {
+      this.retry(account);
+      throw error;
+    });
   }
 
   private async advanceDrain(id: string) {
