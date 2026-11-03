@@ -35,7 +35,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
     observer.observe(group);
     for (const button of group.querySelectorAll("button")) observer.observe(button);
     return () => observer.disconnect();
-  }, [value, options]);
+  }, [value, options.length]);
   return (
     <div
       ref={ref}
