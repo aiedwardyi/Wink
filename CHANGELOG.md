@@ -30,7 +30,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Send to terminal works when Share Terminal with Chat is off; approval requests block sends and attachments.
 - File links with line numbers or query text open the right file.
 - Phone bot menus and section pickers stay on screen with the bot list on the right.
-- Room chats show saved-summary dividers, and Space in call controls no longer interrupts speech.
+- Room chats show saved-summary dividers in terminal skins, and Space in call controls no longer interrupts speech.
 - Team Today shows unavailable totals as unknown and refreshes at midnight in Korea.
 
 ## [1.0.226] - 2026-11-03
