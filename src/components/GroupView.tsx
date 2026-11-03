@@ -3,7 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, AtSign, Check, ChevronDown, ChevronRight, Crown, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, Users, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -25,7 +25,7 @@ import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { DEFAULT_MAUS_COLOR, normalizeState } from "@/lib/mascot";
-import { effectiveDefaultResponder, groupResponseHint, responderControlLabel } from "@/lib/group-routing";
+import { groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChatOptionChips } from "./ChatOptionChips";
 import { AskUserRecord } from "./AskUserRecord";
@@ -302,7 +302,6 @@ export const Transcript = memo(function Transcript({
   streamingMessage,
   dock,
   onReply,
-  onFocusComposer,
   onMessageMenu,
   workers,
 }: {
@@ -315,7 +314,6 @@ export const Transcript = memo(function Transcript({
   streamingMessage: Message | null;
   dock: ReplyDock | null;
   onReply: (message: Message) => void;
-  onFocusComposer: () => void;
   onMessageMenu: (menu: MessageMenuRequest) => void;
   workers: ShownRun[];
 }) {
@@ -616,7 +614,6 @@ export const Transcript = memo(function Transcript({
                   answeredText={answeredChoice}
                   disabled={!answeredChoice && Boolean(group.busyBotId)}
                   onPick={(option) => dispatch({ type: "sendGroup", groupId: group.id, text: option })}
-                  onWriteOwn={onFocusComposer}
                 />
               )}
               <div className="relative mt-0.5 flex">
@@ -645,62 +642,6 @@ export const Transcript = memo(function Transcript({
     </>
   );
 });
-
-function DefaultResponderSelect({ group, members }: { group: Group; members: Bot[] }) {
-  const { t } = useI18n();
-  const { dispatch } = useStore();
-  const responder = effectiveDefaultResponder(group, members);
-  const value = responder.kind === "member" ? `member:${responder.botId}` : responder.kind;
-  const lead = responder.kind === "member" ? members.find((member) => member.id === responder.botId) : undefined;
-  const closedLabel = responderControlLabel(responder.kind, lead?.name, t);
-  const ModeIcon = responder.kind === "everyone" ? Users : responder.kind === "member" ? Crown : AtSign;
-  const title =
-    responder.kind === "everyone"
-      ? t("room.titleEveryone")
-      : responder.kind === "mentions"
-        ? t("room.titleMentions")
-        : t("room.titleLead", { name: lead?.name ?? t("room.leadBot") });
-
-  const change = (nextValue: string) => {
-    let next: GroupDefaultResponder;
-    if (nextValue === "everyone") next = { kind: "everyone" };
-    else if (nextValue === "mentions") next = { kind: "mentions" };
-    else next = { kind: "member", botId: nextValue.slice("member:".length) };
-    dispatch({ type: "patchGroup", groupId: group.id, patch: { defaultResponder: next } });
-  };
-
-  return (
-    <div className="relative min-w-16 shrink-[4] max-md:w-12 max-md:min-w-0 max-md:shrink-0" title={title}>
-      <select
-        aria-label={closedLabel}
-        value={value}
-        onChange={(event) => change(event.target.value)}
-        className="h-8 w-full min-w-0 max-w-[240px] appearance-none truncate rounded-full border border-hairline/40 bg-raised/60 py-1 pl-3 pr-7 text-[12.5px] font-medium text-transparent outline-none hover:bg-raised focus:border-accent"
-      >
-        <optgroup label={t("room.channelLead")}>
-          {members.map((member) => (
-            <option key={member.id} value={`member:${member.id}`} className="text-ink">
-              {t("room.leadLabel", { name: member.name })}
-            </option>
-          ))}
-        </optgroup>
-        <optgroup label={t("room.channelBehavior")}>
-          <option value="everyone" className="text-ink">{t("room.everyoneResponds")}</option>
-          <option value="mentions" className="text-ink">{t("room.onlyWhenMentioned")}</option>
-        </optgroup>
-      </select>
-      <span data-who-answers="" className="pointer-events-none absolute inset-0 flex items-center pl-3 pr-7 max-md:pl-2.5 text-[12.5px] font-medium text-ink">
-        <ModeIcon size={12} aria-hidden="true" className="shrink-0 md:hidden" />
-        <span className="min-w-0 truncate max-md:hidden">{closedLabel}</span>
-      </span>
-      <ChevronDown
-        size={13}
-        aria-hidden="true"
-        className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-secondary"
-      />
-    </div>
-  );
-}
 
 /** The room's shared project folder: where every member's shell and file
  * tools run, overriding each bot's own folder for room turns. The room
@@ -1569,7 +1510,6 @@ export function GroupView({ group }: { group: Group }) {
       >
         <div className="flex min-w-[4.5rem] flex-1 items-center gap-2">
           <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
-
         </div>
         <div className="flex min-w-0 items-center gap-1.5 max-md:gap-1">
           <WorkerChip name={group.name} runs={workers} livePanes={null} />
@@ -1588,7 +1528,6 @@ export function GroupView({ group }: { group: Group }) {
           </button>
           {showChannelCallControl() && <GroupCallButton group={group} members={members} />}
           {!setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
-          {!setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}
           {group.dm ? (
             memberMauses
           ) : (
@@ -1821,7 +1760,6 @@ export function GroupView({ group }: { group: Group }) {
             streamingMessage={listedStreaming}
             dock={dock}
             onReply={selectReply}
-            onFocusComposer={focusComposer}
             onMessageMenu={setMenu}
             workers={rowWorkers}
           />

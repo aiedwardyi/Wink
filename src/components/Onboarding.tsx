@@ -1,88 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
-import { EngineSetup } from "./EngineSetup";
-import { EngineRow } from "./EnginesSettings";
 import { OrbitMark } from "./OrbitMark";
-import { isEmptyEngineLaunch, isFriendsCliEngine } from "@/lib/engine-rail";
+import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { EngineConnect } from "./EngineConnect";
 import { OnboardingFinish } from "./OnboardingFinish";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
-import { ProviderMark } from "./ProviderIcons";
-
-const CORE_DRIVERS = new Set(["grokAgent", "claudeAgent", "codex"]);
-// Leads with the DEFAULT_FLEET order like the rail does.
-const ENGINE_ORDER = ["claudeAgent", "codex", "grokAgent", "antigravityAgent"];
-
-function StatusRow({
-  ok,
-  title,
-  mark,
-  children,
-}: {
-  ok: boolean;
-  title: string;
-  mark: ReactNode;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-hairline/30 bg-card p-3.5">
-      <span
-        className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full ${
-          ok ? "bg-success/15 text-success" : "bg-warning/15 text-warning"
-        }`}
-      >
-        {ok ? <Check size={14} /> : <AlertTriangle size={13} />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-[14px] font-medium text-ink">
-          {mark}
-          <span className="min-w-0 truncate">{title}</span>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
 
 function engineReady(instance: InstanceInfo): boolean {
   return (
     instance.snapshot.state === "available" &&
     (instance.access === "custom" || instance.snapshot.authenticated !== false)
-  );
-}
-
-function ReadyTile({ instance }: { instance: InstanceInfo }) {
-  const { t } = useI18n();
-  return (
-    <div className="flex min-w-0 items-start gap-2.5 rounded-xl border border-hairline/30 bg-card p-3">
-      <ProviderMark driverKind={instance.driverKind} size={17} />
-      <div className="min-w-0">
-        <div className="truncate text-[13.5px] font-medium text-ink">
-          {instance.displayName}
-        </div>
-        <div className="mt-0.5 text-[12px] leading-snug text-ink-secondary">{t("onboarding.engineReady")}</div>
-      </div>
-    </div>
-  );
-}
-
-function SetupRow({ instance, onConnected }: { instance: InstanceInfo; onConnected: () => void }) {
-  if (instance.snapshot.state === "available" && isFriendsCliEngine(instance)) return <EngineRow instance={instance} onConnected={onConnected} />;
-  return (
-    <StatusRow
-      ok={false}
-      title={instance.displayName}
-      mark={<ProviderMark driverKind={instance.driverKind} size={16} />}
-    >
-      <EngineSetup
-        instance={instance}
-        className="mt-2.5"
-        intent={instance.access === "custom" ? "inject" : "cloud"}
-      />
-    </StatusRow>
   );
 }
 
@@ -175,18 +105,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const finish = () => hasReadyEngine ? setStep(2) : onDone();
 
   const live = (instances ?? []).filter((instance) => !isRetiredEngineKind(instance.driverKind));
-  const engines = live
-    .filter((instance) => {
-      if (!instance.install) return false;
-      return engineReady(instance) || CORE_DRIVERS.has(instance.driverKind) || (isFriendsCliEngine(instance) && instance.snapshot.state === "available");
-    })
-    .sort((a, b) => {
-      const aOrder = ENGINE_ORDER.indexOf(a.driverKind);
-      const bOrder = ENGINE_ORDER.indexOf(b.driverKind);
-      return (aOrder < 0 ? 99 : aOrder) - (bOrder < 0 ? 99 : bOrder);
-    });
-  const readyEngines = engines.filter(engineReady);
-  const setupEngines = engines.filter((instance) => !engineReady(instance));
   const hasReadyEngine = live.some(engineReady);
 
   return (
@@ -271,34 +189,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 </div>
               ) : (
                 <>
-                  {readyEngines.length > 0 && (
-                    <section>
-                      <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">{t("onboarding.ready")}</div>
-                      <div className="grid grid-cols-2 gap-2.5">
-                        {readyEngines.map((instance) => isFriendsCliEngine(instance)
-                          ? <EngineRow key={instance.instanceId} instance={instance} onUpdated={(next) => {
-                            setInstances((rows) => rows?.map((row) => row.instanceId === next.instanceId ? next : row) ?? null);
-                          }} />
-                          : <ReadyTile key={instance.instanceId} instance={instance} />)}
-                      </div>
-                    </section>
-                  )}
-                  {setupEngines.length > 0 && (
-                    <section className={readyEngines.length ? "mt-2" : ""}>
-                      <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">{t("onboarding.optionalSetup")}</div>
-                      <div className="flex flex-col gap-2.5">
-                        {setupEngines.map((instance) => <SetupRow key={instance.instanceId} instance={instance} onConnected={retryInstances} />)}
-                      </div>
-                    </section>
-                  )}
+                  <EngineConnect instances={instances} onRefresh={retryInstances} recheckOnFocus={false}
+                    footer={{ back: () => setStep(0), open: finish, label: "onboarding.continue", disabled: !hasReadyEngine }} />
                   <p className="px-1 pt-1 text-[11px] text-ink-secondary/70">{t("onboarding.moreInSettings")}</p>
                 </>
               )}
             </div>
-            <div className="mt-5 flex shrink-0 items-center gap-2.5">
+            {(instancesError || !instances) && <div className="mt-5 flex shrink-0 items-center gap-2.5">
               <button type="button" onClick={() => setStep(0)} className="rounded-xl px-4 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>
-              <button type="button" onClick={instancesError ? retryInstances : finish} disabled={!instancesError && !hasReadyEngine} className="flex-1 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{instancesError ? t("onboarding.tryAgain") : t("onboarding.openOrbit")}</button>
-            </div>
+              <button type="button" onClick={instancesError ? retryInstances : finish} disabled={!instancesError && !hasReadyEngine} className="rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{instancesError ? t("onboarding.tryAgain") : t("onboarding.continue")}</button>
+            </div>}
             </>}
           </div>
         )}

@@ -1,24 +1,16 @@
 import { useEffect, useState } from "react";
-import { focusComposerOnActivation } from "@/lib/focus-composer";
 import { QuestionChoiceCard } from "./QuestionChoiceCard";
-
-/** Focus the docked composer without touching its draft. */
-export function focusOrbitComposer(): void {
-  focusComposerOnActivation();
-}
 
 export function ChatOptionChips({
   options,
   question,
   onPick,
-  onWriteOwn,
   answeredText,
   disabled,
 }: {
   options: string[];
   question?: string | null;
   onPick: (text: string) => void;
-  onWriteOwn?: () => void;
   /** Later user message that answered this card, when known. */
   answeredText?: string | null;
   disabled?: boolean;
@@ -51,7 +43,6 @@ export function ChatOptionChips({
         setPending(true);
         onPick(option);
       }}
-      onWriteOwn={onWriteOwn ?? focusOrbitComposer}
     />
   );
 }

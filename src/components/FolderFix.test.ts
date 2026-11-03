@@ -81,7 +81,7 @@ async function mount(room?: Group, current = bot) {
   root = createRoot(host);
   const view = room ? createElement(Transcript, {
     group: room, members: [current], messages: room.messages, transcript: room.messages,
-    streamingMessage: null, dock: null, onReply() {}, onFocusComposer() {}, onMessageMenu() {}, workers: [],
+    streamingMessage: null, dock: null, onReply() {}, onMessageMenu() {}, workers: [],
   }) : createElement(ChatView, { bot: current });
   await act(async () => root!.render(createElement(I18nProvider, null, createElement(StoreProvider, null, view))));
   vi.useFakeTimers();

@@ -158,7 +158,7 @@ describe("first engine connection", () => {
     expect(row.textContent).toContain("Finish in the window that opened.");
     instances = instances.map((instance) => instance.instanceId === id ? { ...instance, snapshot: { state: "available", authenticated: false } } : instance);
     await advance(5000);
-    expect(row.textContent).toContain(`Sign in to ${id === "antigravity" ? "Gemini (Antigravity)" : instances.find((item) => item.instanceId === id)!.displayName}`);
+    expect(host.querySelector(`[data-engine-connect="${id}"]`)!.textContent).toContain(`Sign in to ${id === "antigravity" ? "Gemini (Antigravity)" : instances.find((item) => item.instanceId === id)!.displayName}`);
   });
 
   it("keeps independent deadlines and stops probing when the last install completes", async () => {
@@ -222,12 +222,38 @@ describe("first engine connection", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the existing onboarding path when an engine was installed before opening", async () => {
+  it("shares EngineConnect when an engine was installed before opening", async () => {
     instances[0]!.snapshot = { state: "available", authenticated: false };
     await render();
     await click("Continue");
     expect(host.textContent).toContain("Wink found the engines on this computer.");
-    expect(host.textContent).not.toContain("Most people start with Claude");
+    expect(host.querySelector("[data-engine-connect-panel]")).not.toBeNull();
+    expect(host.textContent).toContain("Sign in to Claude");
+    expect(host.querySelector("code")).toBeNull();
+    const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(next.disabled).toBe(true);
+    expect(next.className).not.toMatch(/flex-1|w-full/);
+    expect(host.textContent).not.toContain("Optional setup");
+    instances[0]!.snapshot = { state: "available", authenticated: true };
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(host.textContent).toContain("Claude is ready");
+    expect(next.disabled).toBe(false);
+    await click("Continue");
+    expect(host.textContent).toContain("You're all set");
+    expect(host.textContent).toContain("Open Wink");
+  });
+
+  it("shows a ready Codex above Other Engines using the existing row", async () => {
+    instances[1]!.snapshot = { state: "available", authenticated: true };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="codex"]')!;
+    expect(row.textContent).toContain("Codex is ready");
+    expect(row.hasAttribute("data-onboarding-ready")).toBe(true);
+    expect(row.querySelector("button")!.disabled).toBe(true);
+    const html = host.innerHTML;
+    expect(html.indexOf('data-engine-connect="codex"')).toBeLessThan(html.indexOf("Other Engines"));
+    expect(html.indexOf('data-engine-connect="claude"')).toBeGreaterThan(html.indexOf("Other Engines"));
+    expect(host.querySelector("code")).toBeNull();
   });
 
   it("shares the Claude-first desktop NoEngines screen and focus recheck", async () => {
