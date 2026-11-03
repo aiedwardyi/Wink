@@ -15,8 +15,8 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (accounts.length === 1) return renderRow(accounts[0]!);
-  const main = accounts.find((account) => account.accountInfo?.default)
-    ?? accounts.find((account) => account.instanceId === account.accountInfo?.of) ?? accounts[0]!;
+  const main = accounts.find((account) => account.accountMain)
+    ?? accounts.find((account) => account.instanceId === account.accountOf) ?? accounts[0]!;
   const others = accounts.filter((account) => account !== main);
   const index = Math.min(page, others.length - 1);
   const setAsMain = async (account: UsageAccount) => {
@@ -45,7 +45,9 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const heading = (account: UsageAccount, other = false) => (
     <div className="flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink">
       <EngineMark instance={account} size={16} tapToShow />
-      {other ? arrows : <span>{account.displayName}</span>}
+      <span className="min-w-0 truncate" title={account.snapshot.account}>{account.snapshot.account || account.displayName}</span>
+      {!other && <span className="shrink-0 rounded border border-hairline px-1.5 py-0.5 text-[11px]">{t("accounts.main")}</span>}
+      {other && arrows}
     </div>
   );
   const column = (account: UsageAccount, other = false) => (

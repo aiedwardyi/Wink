@@ -53,6 +53,7 @@ async function fixture() {
   const providers = new ProviderReload(registry, bus, configs());
   const references = new Set<string>();
   const invalidate = vi.fn();
+  const changed = vi.fn();
   let configBusy = false;
   let state: ReturnType<typeof registry.logins.state> = "complete";
   let waiting: Promise<void> = Promise.resolve();
@@ -65,10 +66,10 @@ async function fixture() {
   vi.spyOn(registry.logins, "wait").mockImplementation(() => waiting);
   const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
     reload: () => providers.reload(configs()),
-    referenced: async (id) => references.has(id), invalidate, configBusy: () => configBusy,
+    referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, controller, references, invalidate, start, statuses, providers,
+  return { dir, accounts, registry, controller, references, invalidate, changed, start, statuses, providers,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
     add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
@@ -76,6 +77,30 @@ async function fixture() {
 }
 
 describe("account lifecycle", () => {
+  it("publishes accepted and removed accounts after their rows are ready", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    expect(f.changed).toHaveBeenCalledWith(added.id);
+    expect(f.registry.accountAvailable(added.id)).toBe(true);
+    f.changed.mockClear();
+    await f.controller.remove(added.id);
+    expect(f.changed).toHaveBeenCalled();
+    expect(f.registry.get(added.id)).toBeNull();
+  });
+
+  it("replaces a stale rescan row after login changes its generation", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    const instance = f.registry.get(added.id)!;
+    const snapshot = vi.spyOn(instance, "snapshot").mockResolvedValueOnce({ state: "available", authenticated: true, accountIdentity: "changed", account: "current@example.test" });
+    f.statuses.set(added.id, { state: "available", authenticated: true, accountIdentity: "changed", account: "current@example.test" });
+    const rows = await f.registry.describe({ rescan: true });
+    expect(snapshot).toHaveBeenCalled();
+    expect(rows.find((row) => row.instanceId === added.id)).toMatchObject({
+      accountGeneration: added.generation + 1, snapshot: { authenticated: true, account: "current@example.test" },
+    });
+  });
+
   it("backs off unknown probes from one second to a sixty-second cap", async () => {
     const f = await fixture();
     const account = await f.add();

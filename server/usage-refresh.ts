@@ -22,6 +22,7 @@ import { parseJson, type JsonValue } from "./schema.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
 import { awaitDyingAppServers, codexHome, retireAppServer } from "./drivers/codex-catalog.ts";
 import { parseCodexAccount } from "./drivers/codex-account.ts";
+import { createClaudeUsageProbe, readClaudeUsage } from "./claude-usage-probe.ts";
 
 type Report = { windows: RateLimitWindow[]; observedAt: string };
 export type UsageRefreshStatus =
@@ -803,7 +804,7 @@ async function readClaudeFileUsage(deps: ClaudeFileDeps): Promise<Response> {
 }
 
 export function canRefreshUsage(driver: string, environment: NodeJS.ProcessEnv = {}, platform = process.platform, account?: AccountContext): boolean {
-  if (account && driver === "claudeAgent") return false;
+  if (account && driver === "claudeAgent") return true;
   return ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(driver)
     && (driver !== "claudeAgent" || platform !== "darwin" || Boolean(({ ...process.env, ...environment }).CLAUDE_CODE_OAUTH_TOKEN));
 }
@@ -821,6 +822,8 @@ export function createUsageRefresh(deps: {
   throttleMs?: number;
   accountIdentity?: (account: AccountContext, identity: string | undefined) => Promise<void>;
   accountBlocked?: (instanceId: string) => boolean;
+  claude?: typeof readClaudeUsage;
+  random?: () => number;
 } = {}) {
   const request = deps.request ?? fetch;
   const read = deps.read ?? ((path: string) => readFile(path, "utf8"));
@@ -831,6 +834,7 @@ export function createUsageRefresh(deps: {
   const credentialLocks = new Map<string, Promise<unknown>>();
   const mintedByPath = new Map<string, { accessToken: string; refreshToken: string }>();
   const clock = deps.now ?? Date.now;
+  const claudeProbe = createClaudeUsageProbe({ read: deps.claude, now: clock, random: deps.random });
   const cache = new Map<string, { retryAt: number; pending: Promise<Result> }>();
   const claudeReads = new Map<string, { retryAt: number; limited: number; pending: Promise<Report> }>();
   const skipped = new Set<string>();
@@ -843,7 +847,6 @@ export function createUsageRefresh(deps: {
   };
   const refresh = async (driver: string, options: Options, previous?: Report): Promise<Result> => {
     if (deps.accountBlocked?.(options.instanceId)) return { report: previous, error: "This account is stopped", retryAt: 0, status: "no_observation" };
-    if (options.account && driver === "claudeAgent") return { report: previous, retryAt: 0, status: "no_observation" };
     const name = driver === "claudeAgent" ? "Claude" : driver === "codex" ? "Codex" : driver === "grokAgent" ? "Grok" : driver === "antigravityAgent" ? "Antigravity" : driver === "museAgent" ? "Muse" : undefined;
     if (!name) return { report: previous, error: "Usage refresh is not supported", retryAt: 0 };
     // Claude reads are cached per credential below, so its backoff is not masked here.
@@ -892,6 +895,11 @@ export function createUsageRefresh(deps: {
             if (isMuseNoObservation(payload)) return { report: previous, status: "no_observation", retryAt };
             throw new MuseUsageFailure("transport");
           }
+          windows = report.windows;
+          observedAt = report.observedAt;
+        } else if (options.account && driver === "claudeAgent") {
+          const report = await claudeProbe(options.cli || "claude", env, options.account);
+          if (!report) return { report: previous, retryAt, status: "no_observation" };
           windows = report.windows;
           observedAt = report.observedAt;
         } else {

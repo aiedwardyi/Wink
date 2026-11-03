@@ -7,6 +7,7 @@ type Hooks = {
   reload(): Promise<void>;
   referenced(id: string, activeOnly: boolean): Promise<boolean>;
   invalidate(id: string): void;
+  changed?(usageId?: string): void;
   configBusy?(): boolean;
   panesBusy?(id: string): Promise<boolean>;
 };
@@ -335,6 +336,7 @@ export class AccountLifecycle {
     if (snapshot.authenticated !== true) await this.accounts.stop(account.id);
     if (next.generation !== account.generation || snapshot.authenticated !== true) await this.hooks.reload();
     this.registry.blockAccount(account.id, snapshot.authenticated !== true);
+    this.hooks.changed?.(snapshot.authenticated === true ? account.id : undefined);
   }
 
   private async discard(id: string) {
@@ -350,7 +352,10 @@ export class AccountLifecycle {
     const pending = this.queue.then(() => {
       if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated");
       return run();
-    }).finally(() => { this.mutations -= 1; });
+    }).finally(() => {
+      this.mutations -= 1;
+      this.hooks.changed?.();
+    });
     this.queue = pending.catch(() => {});
     return pending;
   }

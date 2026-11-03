@@ -430,8 +430,17 @@ export class ProviderRegistry {
     });
   }
 
-  private currentAccountRows<T extends { instanceId: string; accountGeneration?: number }>(rows: T[]): T[] {
-    return rows.filter((row) => row.accountGeneration === undefined || this.accounts.get(row.instanceId)?.generation === row.accountGeneration);
+  private async currentAccountRows(rows: ReturnType<ProviderRegistry["row"]>[]) {
+    const current = await Promise.all(rows.map(async (row) => {
+      while ("accountGeneration" in row && row.accountGeneration !== undefined && this.accounts.get(row.instanceId)?.generation !== row.accountGeneration) {
+        const entry = this.byId.get(row.instanceId);
+        if (!entry) return [];
+        const probe = this.probed.get(row.instanceId) ?? await (this.probing.get(row.instanceId) ?? this.startProbe(entry, this.candidateScan()));
+        row = this.row(entry, probe);
+      }
+      return [row];
+    }));
+    return current.flat();
   }
 
   private async prepareProbes<T>(probe: () => Promise<T>): Promise<T> {
@@ -592,7 +601,7 @@ export class ProviderRegistry {
     const inst = entry.live;
     return {
       instanceId: inst.instanceId,
-      ...(inst.account ? { accountOf: inst.account.of, accountGeneration: inst.account.generation, canRefreshUsage: inst.driverKind !== "claudeAgent" } : {}),
+      ...(inst.account ? { accountOf: inst.account.of, accountGeneration: inst.account.generation, canRefreshUsage: true } : {}),
       ...(this.logins.capture(inst.instanceId).error ? { loginError: this.logins.capture(inst.instanceId).error } : {}),
       loginState: this.signingOut.has(inst.instanceId) ? "cancelled" : this.logins.state(inst.instanceId),
       loginCapture: this.signingOut.has(inst.instanceId) ? {}

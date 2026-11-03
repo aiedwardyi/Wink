@@ -55,6 +55,20 @@ export class BotAccounts {
     });
   }
 
+  accountInstances<T extends { instanceId: string }>(instances: T[]): Array<T & {
+    accountOf?: string; accountMain?: boolean; accountState?: "pending" | "ready" | "stopped"; drain?: AccountService["drains"][string];
+  }> {
+    const accounts = this.accounts.list();
+    return instances.map((instance) => {
+      const account = accounts.find((row) => row.id === instance.instanceId);
+      if (!account) return instance;
+      return { ...instance, accountOf: account.of, accountMain: !account.error && this.accounts.isDefault(account.id),
+        accountState: account.existing && this.registry.accountBlocked(account.id) ? "stopped" as const : account.state,
+        ...(this.accounts.drains[account.id] ? { drain: this.accounts.drains[account.id] } : {}),
+      };
+    });
+  }
+
   checkSelection(selection: ModelSelection): ModelSelection {
     if (/^acct_[0-9a-f-]{36}$/.test(selection.instanceId)) throw new AccountError("Use Set as Main on the Usage page to choose this engine's account", 400);
     const accountId = this.routedAccount(selection.instanceId);

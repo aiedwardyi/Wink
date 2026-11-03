@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/state/store";
 import { EngineMark } from "./EngineMark";
 import { AccountConnections } from "./AccountConnections";
-import { useAccounts } from "@/lib/accounts";
+import { groupAccounts } from "@/lib/accounts";
 import { EngineSignIn, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
@@ -90,7 +90,8 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
 export function EnginesSettings() {
   const { t } = useI18n();
   const { state, refreshInstances } = useStore();
-  const { groups, reload } = useAccounts(state.instances);
+  const groups = groupAccounts(state.instances);
+  const reload = refreshInstances;
   const [showAll, setShowAll] = useState(false);
   // Same guard as the store's focus probe: a rescan can flash a window that
   // steals focus, so only a real trip away (a terminal sign-in) rescans.

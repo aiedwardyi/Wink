@@ -16,12 +16,14 @@ export function createAccountRuntime(deps: {
   invalidateHolds(id: string): void; invalidateWaits(id: string): void;
   botActive(id: string): boolean; terminal(): TerminalBridgeAccess | null; configBusy(): boolean;
   bots?: BotAccounts;
+  changed?(usageId?: string): void;
 }) {
   const bots = deps.bots ?? new BotAccounts(deps.accounts, deps.registry, deps.store, {
     captured: (threadId) => deps.providers.current(threadId),
   });
   return new AccountLifecycle(deps.accounts, deps.registry, {
     reload: deps.reload,
+    changed: deps.changed,
     configBusy: deps.configBusy,
     panesBusy: (id) => accountPanesBusy(deps.terminal(), id),
     referenced: async (id, activeOnly) => {

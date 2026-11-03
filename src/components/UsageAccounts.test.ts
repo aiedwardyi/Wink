@@ -20,13 +20,13 @@ import { UsageSection } from "./UsageSection";
 
 let root: Root;
 let host: HTMLDivElement;
-let accounts: { id: string; of: string; state: string; default?: boolean }[];
 const engine = (id: string, used = 20, signedIn = true): UsageAccount => ({
   instanceId: id, driverKind: "claudeAgent", displayName: "Claude",
+  accountOf: "claude", accountState: "ready", accountMain: id === "claude",
   snapshot: { state: "available", authenticated: signedIn, account: `${id}@example.com` },
   models: { default: "opus", options: [] },
   capabilities: { rateLimits: true },
-  canRefreshUsage: id === "claude",
+  canRefreshUsage: true,
   rateLimits: { observedAt: new Date().toISOString(), windows: [{ id: "five_hour", usedPercent: used, resetsAt: Date.now() + 3_600_000 }] },
 });
 const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
@@ -34,7 +34,6 @@ const main = () => host.querySelector('[data-account-column="main"]')!;
 const other = () => host.querySelector('[data-account-column="other"] > div:not([inert])')!;
 async function render(count = 2) {
   state.instances = [engine("claude"), engine("second", 70), engine("third", 95)].slice(0, count);
-  accounts = state.instances.map((instance) => ({ id: instance.instanceId, of: "claude", state: "ready", default: instance.instanceId === "claude" }));
   await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
 }
 beforeEach(() => {
@@ -43,10 +42,13 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
+  refreshInstances.mockImplementation(async () => { root.render(createElement(I18nProvider, null, createElement(UsageSection))); });
   request.mockReset().mockImplementation(async (path: string) => {
-    if (path === "/api/accounts") return { accounts };
+    if (path === "/api/accounts") return { accounts: state.instances.map((account) => ({
+      id: account.instanceId, of: account.accountOf, state: account.accountState, default: account.accountMain,
+    })) };
     if (path.endsWith("/default")) {
-      accounts = accounts.map((account) => ({ ...account, default: path.includes(`/${account.id}/`) }));
+      state.instances = state.instances.map((account) => ({ ...account, accountMain: path.includes(`/${account.instanceId}/`) }));
     }
     return {};
   });
@@ -66,20 +68,34 @@ it("keeps the single-account row unchanged without account controls", async () =
   expect(host.textContent).not.toContain("@example.com");
 });
 
-it("puts the default left and the other account right with no email text", async () => {
+it("groups pushed accounts immediately and after returning without a side fetch", async () => {
+  request.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(host.querySelectorAll('[data-account-column="main"]')).toHaveLength(1);
+  expect(other().textContent).toContain("second@example.com");
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
+  expect(host.querySelectorAll('[data-account-column="main"]')).toHaveLength(1);
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("puts email headings and Main above the matching account's bars", async () => {
   await render();
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   expect(main().textContent).not.toContain("Set as Main");
   expect(other().textContent).toContain("Set as Main");
-  expect(host.textContent).not.toContain("@example.com");
+  expect(main().textContent).toContain("claude@example.comMain");
+  expect(other().textContent).toContain("second@example.com");
+  expect(other().textContent).not.toContain("MainSet");
+  expect(request).not.toHaveBeenCalledWith("/api/accounts");
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
 });
 
-it("uses the API default flag even when the base account arrives first", async () => {
+it("uses the pushed Main flag even when the base account arrives first", async () => {
   await render();
-  accounts = accounts.map((account) => ({ ...account, default: account.id === "second" }));
-  state.instances = [...state.instances];
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
   await act(async () => root.render(createElement(UsageSection)));
   expect(main().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
 });
@@ -105,7 +121,7 @@ it("pages three accounts and keeps hidden pages in the same grid cell", async ()
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
 });
 
-it("reveals an email only through its icon and closes on another tap", async () => {
+it("keeps the icon's account details available beside its email heading", async () => {
   await render();
   expect(document.querySelector('[data-engine-card]')).toBeNull();
   const mark = other().querySelector<HTMLElement>('[data-engine-hover]')!;
@@ -114,7 +130,7 @@ it("reveals an email only through its icon and closes on another tap", async () 
     mark.click();
   });
   expect(document.querySelector('[data-engine-card]')?.textContent).toContain("second@example.com");
-  expect(host.textContent).not.toContain("second@example.com");
+  expect(other().textContent).toContain("second@example.com");
   await act(async () => {
     mark.dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true }));
     mark.click();
@@ -153,12 +169,11 @@ it("keeps a signed-out default left without falling back", async () => {
 
 it("does not switch a default whose limit is hit", async () => {
   await render();
-  request.mockImplementation(async (path: string) => path === "/api/accounts" ? { accounts }
-    : { status: "limit_reached", resetsAt: Date.now() + 3_600_000 });
+  request.mockImplementation(async () => ({ status: "limit_reached", resetsAt: Date.now() + 3_600_000 }));
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-keyshortcuts="Alt+R"]')!.click());
   expect(main().textContent).toContain("Limit reached.");
   expect(request.mock.calls.some(([path]) => String(path).endsWith("/default"))).toBe(false);
-  expect(request.mock.calls.some(([path]) => path === "/api/usage/refresh/second")).toBe(false);
+  expect(request.mock.calls.some(([path]) => path === "/api/usage/refresh/second")).toBe(true);
 });
 
 it("keeps the default in place and shows failure if the API rejects a pick", async () => {
@@ -173,6 +188,7 @@ it("translates account controls into Korean", async () => {
   persistPreference("ko");
   await render(3);
   expect(button("기본으로 설정")).toBeDefined();
+  expect(main().textContent).toContain("claude@example.com기본");
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
 });
 
@@ -187,7 +203,6 @@ it.each(["en", "ko"] as const)("shows default refusal messages in %s", async (lo
 it.each([false, true])("uses server refresh eligibility instead of account ids (%s)", async (allowed) => {
   const id = allowed ? "acct_legacy" : "claude";
   state.instances = [{ ...engine(id), canRefreshUsage: allowed } as UsageAccount];
-  accounts = [];
   await act(async () => root.render(createElement(UsageSection)));
   request.mockClear();
   const refresh = host.querySelector<HTMLButtonElement>('[aria-keyshortcuts="Alt+R"]');

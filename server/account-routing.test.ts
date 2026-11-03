@@ -77,7 +77,7 @@ async function fixture(empty = false, of = "claude") {
   const logout = vi.spyOn(registry, "signOut").mockResolvedValue(true);
   const panes = vi.fn<typeof fetch>(async () => Response.json({ count: 0, unknown: 0, generations: {} }));
   vi.stubGlobal("fetch", panes);
-  const deps = { accounts, registry, providers, store, reload: () => providers.reload(configs()),
+  const deps = { accounts, registry, providers, store, reload: () => providers.reload(configs()), changed: vi.fn(),
     rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(),
     invalidateHolds: vi.fn(), invalidateWaits: vi.fn(), botActive: (id: string) => active.has(id) || store.bot(id)?.busy === true,
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: vi.fn(() => false) };
@@ -299,6 +299,26 @@ describe("engine default account routing", () => {
 });
 
 describe("account removal drain", () => {
+  it("pushes Main changes and drain completion with current account metadata", async () => {
+    const f = await fixture();
+    const source = f.added[0].id;
+    const destination = f.added[2].id;
+    await f.useDefault(source);
+    expect(f.deps.changed).toHaveBeenCalled();
+    const rows = () => f.controller.bots!.accountInstances(f.registry.describeSaved());
+    await f.registry.describeCached();
+    expect(rows().find((row) => row.instanceId === source)).toMatchObject({ accountMain: true, accountState: "ready", accountOf: "claude" });
+    f.providers.started("draining", source);
+    await f.controller.remove(source, destination);
+    expect(rows().find((row) => row.instanceId === source)?.drain).toMatchObject({ destinationId: destination, phase: "draining" });
+    f.providers.settled("draining");
+    f.deps.changed.mockClear();
+    await f.controller.resumeDrains();
+    expect(f.deps.changed).toHaveBeenCalled();
+    expect(rows().find((row) => row.instanceId === source)).toBeUndefined();
+    expect(rows().find((row) => row.instanceId === destination)?.accountMain).toBe(true);
+  });
+
   it.each(["claude", "added", "base destination"])("routes new work to the confirmed destination during a %s drain", async (source) => {
     const f = await fixture();
     const id = source === "claude" ? "claude" : f.added[0].id;

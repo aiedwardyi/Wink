@@ -90,6 +90,7 @@ import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-l
 import { AccountService, isInstanceId } from "./accounts.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
+import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
@@ -2906,11 +2907,18 @@ const workerLaunch = createWorkerLaunch({
 });
 const accountRuntime = createAccountRuntime({
   accounts, registry, providers: providerReload, store, reload: reloadProviders, bots: botAccounts,
+  changed: (id) => { void accountUpdates(id); },
   rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
   invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
 });
 const accountRoutes = createAccountRoutes(accountRuntime, registry);
+const accountUpdates = createAccountUpdates({
+  describe: async () => botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(await registry.describeCached()))),
+  publish: (instances) => { rememberAutomaticAvailability(instances); broadcast({ kind: "instances", instances }); },
+  usage: createAccountUsage({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
+    rateLimits: rateLimitsByInstance, save: () => saveRateLimits(rateLimitsByInstance, DATA_DIR) }),
+});
 
 function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
   return instances.map((instance) => {
@@ -8036,7 +8044,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (probe !== "cached") resetPathCache();
       const instances = withRateLimits(await describeInstances(probe));
       rememberAutomaticAvailability(instances);
-      return json(res, 200, { instances: botAccounts.pickerInstances(instances) });
+      return json(res, 200, { instances: botAccounts.pickerInstances(botAccounts.accountInstances(instances)) });
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──
@@ -8413,7 +8421,7 @@ void serverServing.then(() => setTimeout(() => {
     .then(() => registry.describeCached())
     .then((instances) => {
       rememberAutomaticAvailability(instances);
-      broadcast({ kind: "instances", instances: withRateLimits(instances) });
+      broadcast({ kind: "instances", instances: botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(instances))) });
       return defaultSelection();
     })
     .then((sel) => {

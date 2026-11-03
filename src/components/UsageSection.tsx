@@ -12,7 +12,7 @@ import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
 import { EngineMark } from "./EngineMark";
 import { UsageAccounts } from "./UsageAccounts";
-import { accountReady, useAccounts, type UsageAccount } from "@/lib/accounts";
+import { accountReady, groupAccounts, type UsageAccount } from "@/lib/accounts";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { showUsagePerBotTable } from "@/lib/friends-chrome";
 import { splitFriendsEngines } from "@/lib/engine-rail";
@@ -164,9 +164,9 @@ function EnginePlanRow({
 
 function PlanUsage() {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch, refreshInstances: reload } = useStore();
   const now = useNow();
-  const { groups, reload } = useAccounts(state.instances);
+  const groups = useMemo(() => groupAccounts(state.instances), [state.instances]);
   const mode = useUsageMode();
   const [refreshing, setRefreshing] = useState(false);
   const refreshingRef = useRef(false);
@@ -183,7 +183,7 @@ function PlanUsage() {
     [engines],
   );
   const refreshable = useMemo(
-    () => shown.flat().filter((instance) => (instance.snapshot.authenticated !== false && (!instance.accountInfo || accountReady(instance)))
+    () => shown.flat().filter((instance) => (instance.snapshot.authenticated !== false && (!instance.accountState || accountReady(instance)))
       && (canRefresh(instance) || instance.driverKind === "museAgent")),
     [shown],
   );
@@ -277,7 +277,7 @@ function PlanUsage() {
         <div className="flex flex-col gap-5">
           {shown.map((accounts) => (
             <UsageAccounts
-              key={accounts[0]!.accountInfo?.of ?? accounts[0]!.instanceId}
+              key={accounts[0]!.accountOf ?? accounts[0]!.instanceId}
               accounts={accounts}
               reload={reload}
               renderRow={(instance, heading) => <EnginePlanRow instance={instance} now={now} heading={heading}

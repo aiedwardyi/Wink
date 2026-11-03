@@ -19,8 +19,8 @@ import { EnginesSettings } from "./EnginesSettings";
 
 let root: Root;
 let host: HTMLDivElement;
-let accounts: { id: string; of: string; state: string; default?: boolean }[];
 const engine = (id: string, signedIn = true): InstanceInfo => ({
+  accountOf: id === "codex" ? "codex" : "claude", accountState: "ready", accountMain: id === "claude" || id === "codex",
   instanceId: id, driverKind: "claudeAgent", displayName: "Claude",
   snapshot: { state: "available", authenticated: signedIn, account: `${id}@example.com` },
   models: { default: "opus", options: [] },
@@ -29,7 +29,6 @@ const engine = (id: string, signedIn = true): InstanceInfo => ({
 const buttons = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].filter((node) => node.textContent === name);
 async function render(count = 2) {
   state.instances = Array.from({ length: count }, (_, i) => engine(i ? `account-${i}` : "claude"));
-  accounts = state.instances.map((instance) => ({ id: instance.instanceId, of: "claude", state: "ready", default: instance.instanceId === "claude" }));
   await update();
 }
 async function update() {
@@ -41,7 +40,9 @@ beforeEach(() => {
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   refreshInstances.mockClear();
-  request.mockReset().mockImplementation(async (path: string) => path === "/api/accounts" ? { accounts } : {});
+  request.mockReset().mockImplementation(async (path: string) => path === "/api/accounts" ? { accounts: state.instances.map((account) => ({
+    id: account.instanceId, of: account.accountOf, state: account.accountState, default: account.accountMain,
+  })) } : {});
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -97,7 +98,6 @@ it.each(["en", "ko"] as const)("offers one Add Account per engine, including a s
   persistPreference(locale);
   await render(1);
   state.instances = [...state.instances, { ...engine("codex"), driverKind: "codex", displayName: "Codex" }];
-  accounts.push({ id: "codex", of: "codex", state: "ready", default: true });
   await update();
   const add = buttons(locale === "en" ? "Add Account" : "계정 추가");
   expect(add).toHaveLength(2);
@@ -113,10 +113,9 @@ it.each([false, true])("opens the existing add/sign-in flow with desktop bridge 
   request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/accounts" && init?.method === "POST") {
       state.instances = [...state.instances, { ...engine("new", false), loginState: "pending", loginCapture: { code: "ABCD", url: "https://example.com/login" } }];
-      accounts.push({ id: "new", of: "claude", state: "pending" });
       return { id: "new", state: "pending" };
     }
-    return path === "/api/accounts" ? { accounts } : {};
+    return {};
   });
   await act(async () => buttons("Add Account")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: !desktop }) });
@@ -172,8 +171,8 @@ it.each(["en", "ko"] as const)("guides the main account and unlocks sign-out aft
   const name = locale === "en" ? "Sign Out" : "로그아웃";
   expect(buttons(name)[0]!.disabled).toBe(true);
   expect(host.textContent).toContain(locale === "en" ? "Set another account as Main on the Usage page before signing out." : "로그아웃하려면 사용량 페이지에서 다른 계정을 기본으로 설정하세요.");
-  accounts[0]!.default = false;
-  accounts[1]!.default = true;
+  state.instances[0]!.accountMain = false;
+  state.instances[1]!.accountMain = true;
   state.instances = [...state.instances];
   await update();
   expect(buttons(name)[0]!.disabled).toBe(false);
@@ -188,4 +187,28 @@ it("keeps single-account sign-out unchanged", async () => {
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
   expect(host.textContent).not.toContain("Set another account");
+});
+
+
+it.each(["en", "ko"] as const)("shows the Main tag next to its email from pushed rows in %s", async (locale) => {
+  persistPreference(locale);
+  await render();
+  const tag = locale === "en" ? "Main" : "기본";
+  const mainTag = () => [...host.querySelectorAll("span")].find((span) => span.textContent === tag)!;
+  expect(mainTag().parentElement?.textContent).toContain(`claude@example.com${tag}`);
+  expect(request).not.toHaveBeenCalledWith("/api/accounts");
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "account-1" }));
+  await update();
+  expect(mainTag().parentElement?.textContent).toContain(`account-1@example.com${tag}`);
+});
+
+it("shows an accepted account as soon as the server pushes its signed-in row", async () => {
+  await render(1);
+  state.instances = [...state.instances, { ...engine("new", false), accountState: "pending" }];
+  await update();
+  expect(host.textContent).not.toContain("new@example.com");
+  state.instances = [state.instances[0]!, engine("new")];
+  await update();
+  expect(host.textContent).toContain("new@example.com");
+  expect(request).not.toHaveBeenCalledWith("/api/accounts");
 });

@@ -67,18 +67,20 @@ describe("account launch boundary", () => {
     const read = vi.fn(async () => { throw new Error("credential read"); });
     const write = vi.fn(async () => {});
     const request = vi.fn<typeof fetch>(async () => { throw new Error("token HTTP"); });
-    const refresh = createUsageRefresh({ read, write, request });
+    const claude = vi.fn(async () => { throw new Error("old CLI"); });
+    const refresh = createUsageRefresh({ read, write, request, claude });
     const options = { instanceId: account.id, account, environment: { CLAUDE_CODE_OAUTH_TOKEN: "fake-env-token", CLAUDE_CONFIG_DIR: account.home } };
     const result = await refresh("claudeAgent", options);
     expect(read).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
+    expect(claude).toHaveBeenCalledOnce();
     expect(result.status).toBe("no_observation");
   });
 
-  it("advertises Claude account usage as stream-only on every platform", () => {
-    expect(canRefreshUsage("claudeAgent", {}, "win32", account)).toBe(false);
-    expect(canRefreshUsage("claudeAgent", { CLAUDE_CODE_OAUTH_TOKEN: "fake" }, "darwin", account)).toBe(false);
+  it("advertises the CLI usage read for Claude accounts on every platform", () => {
+    expect(canRefreshUsage("claudeAgent", {}, "win32", account)).toBe(true);
+    expect(canRefreshUsage("claudeAgent", { CLAUDE_CODE_OAUTH_TOKEN: "fake" }, "darwin", account)).toBe(true);
   });
 
   it.each([
