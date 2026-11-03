@@ -71,6 +71,7 @@ export class EngineLogin {
     if (owner && owner !== job) {
       if (owner.state === "pending") throw new LoginBusyError();
       await owner.done;
+      if (this.scopes.get(scope) === owner) throw new LoginBusyError();
       return this.start(engine, cli, args, env, authHosts, options);
     }
     if (job && job.state !== "pending") {
@@ -159,7 +160,7 @@ export class EngineLogin {
             if (this.scopes.get(scope) === job) this.scopes.delete(scope);
             closed();
           };
-          const fallback = setTimeout(() => { childClosed = treeStopped = true; finish(); }, 5000);
+          const fallback = setTimeout(closed, 5000);
           fallback.unref();
           job.child.once("close", () => { childClosed = true; finish(); });
           killCliTree(job.child, () => { treeStopped = true; finish(); });
