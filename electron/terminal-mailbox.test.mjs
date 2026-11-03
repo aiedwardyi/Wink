@@ -337,7 +337,7 @@ describe("installOrbitMsg", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "orbit-install-"));
     try {
       const bin = await installOrbitMsg(path.join(dir, "orbit-bin"), "win32");
-      expect(readdirSync(bin).sort()).toEqual(["claude-worker.json", "orbit-clean", "orbit-clean.cmd", "orbit-clean.ps1", "orbit-compact.ps1", "orbit-msg", "orbit-msg.cmd", "orbit-msg.ps1", "orbit-status.ps1"]);
+      expect(readdirSync(bin).sort()).toEqual(["claude-worker.json", "orbit-clean", "orbit-clean.cmd", "orbit-clean.ps1", "orbit-compact.ps1", "orbit-msg", "orbit-msg.cmd", "orbit-msg.ps1", "orbit-session.ps1", "orbit-status.ps1"]);
       const compact = readFileSync(path.join(bin, "orbit-compact.ps1"), "utf8");
       expect(compact).toMatch(/\r\n/);
       expect(compact).not.toMatch(/[^\r]\n/);
@@ -397,7 +397,7 @@ describe("installOrbitMsg", () => {
           SessionStart: [{ matcher: "compact", hooks: [
             { type: "command", command: `${script} card`, timeout: 30 },
             { type: "command", command: `${script} progress`, timeout: 30 },
-          ] }],
+          ] }, { matcher: "startup|resume", hooks: [{ type: "command", command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(bin, "orbit-session.ps1").replace(/\\/g, "/")}"`, timeout: 15 }] }],
         },
       });
     } finally {

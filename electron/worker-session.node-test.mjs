@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createPaneRuns } from "./pane-runs.mjs";
+import { createPaneRuns as createLegacyPaneRuns } from "./pane-runs.legacy.fixture.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
@@ -212,11 +213,10 @@ test("old-format runs remain readable and old builds tolerate new fields", async
   fs.writeFileSync(f.file, JSON.stringify([legacy]));
   assert.deepEqual(createPaneRuns(f.file).restarted().get("bot"), [legacy]);
   await f.open();
-  const source = execFileSync("git", ["show", "44bf8af3:electron/pane-runs.mjs"], { encoding: "utf8", windowsHide: true });
-  const oldFile = path.join(f.dir, "old-pane-runs.mjs");
-  fs.writeFileSync(oldFile, source);
-  const { createPaneRuns: oldRuns } = await import(`file:///${oldFile.replaceAll("\\", "/")}`);
-  assert.deepEqual(oldRuns(f.file).restarted().get("bot")[0], f.read()[0]);
+  const current = f.read()[0];
+  assert.ok(current.session);
+  assert.deepEqual(createLegacyPaneRuns(f.file).restarted().get("bot")[0], current);
+  assert.deepEqual(f.read()[0], current);
 });
 
 test("other engines and unmanaged commands do not record native sessions", async (t) => {
