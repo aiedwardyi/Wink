@@ -40,15 +40,23 @@ function completionFixture() {
   return { complete, windows, deviceLoads };
 }
 
-test("a subresource 401 never replaces the device page with pairing", () => {
+test("a 401 from another origin never replaces the device page with pairing", () => {
   const { complete, windows } = completionFixture();
   for (const resourceType of ["image", "xhr", "fetch", "subFrame"]) {
-    complete({ statusCode: 401, webContentsId: 0, resourceType, url: `${ORIGIN}/private` });
     complete({ statusCode: 401, webContentsId: 0, resourceType, url: "https://images.example/private.png" });
   }
   assert.deepEqual(windows.flatMap((win) => win.loads), []);
   complete({ statusCode: 401, webContentsId: 0, resourceType: "mainFrame", url: DEVICE_URL });
   assert.deepEqual(windows[0].loads, ["data:pairing-0"]);
+});
+
+test("a device-origin API 401 redirects a stale session to pairing", () => {
+  for (const resourceType of ["fetch", "xhr"]) {
+    const { complete, windows } = completionFixture();
+    complete({ statusCode: 401, webContentsId: 0, resourceType, url: `${ORIGIN}/api/threads` });
+    assert.deepEqual(windows[0].loads, ["data:pairing-0"]);
+    assert.deepEqual(windows[1].loads, []);
+  }
 });
 
 test("pairing uses the requesting window's stored device origin", () => {

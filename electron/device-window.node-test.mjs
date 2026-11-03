@@ -352,7 +352,7 @@ test("main process sandboxes PC windows without the app preload", () => {
 test("main process sends a main-frame 403 to its window's watcher", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
   const open = openDeviceWindowSource(main);
-  assert.ok(open.includes('resourceType !== "mainFrame" || (statusCode !== 401 && statusCode !== 403)'));
+  assert.ok(open.includes('statusCode === 403 && resourceType === "mainFrame"'));
   assert.ok(open.includes("deviceLoads.get(target)?.refused(href)"));
 });
 

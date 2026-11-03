@@ -1185,9 +1185,9 @@ async function openDeviceWindow(rawHost, rawName) {
     const devices = win.webContents.session;
     devices.setPermissionCheckHandler((_webContents, permission) => permission === "clipboard-sanitized-write");
     devices.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === "clipboard-sanitized-write"));
-    // One listener per session: route main-frame refusals to the device window that made them.
+    // One listener per session: route device-origin 401s and main-frame 403s to their window.
     devices.webRequest.onCompleted({ urls: ["https://*/*"] }, ({ statusCode, webContentsId, resourceType, url: href }) => {
-      if (resourceType !== "mainFrame" || (statusCode !== 401 && statusCode !== 403)) return;
+      if (statusCode !== 401 && !(statusCode === 403 && resourceType === "mainFrame")) return;
       const [origin, target] = [...deviceWindows].find(([, open]) => !open.isDestroyed() && open.webContents.id === webContentsId) ?? [];
       if (!target || !sameDesktopViewerOrigin(href, origin)) return;
       if (statusCode === 403) return deviceLoads.get(target)?.refused(href);
