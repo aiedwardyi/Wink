@@ -19,7 +19,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     ?? accounts.find((account) => account.instanceId === account.accountInfo?.of) ?? accounts[0]!;
   const others = accounts.filter((account) => account !== main);
   const index = Math.min(page, others.length - 1);
-  const useForBots = async (account: UsageAccount) => {
+  const setAsMain = async (account: UsageAccount) => {
     if (busy) return;
     setBusy(true);
     setError(false);
@@ -54,8 +54,8 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
         {heading(account, other)}
         <div className="mt-2 text-[12px] text-ink-secondary">{t("accounts.signedOut")}</div>
       </>}
-      {other && accountReady(account) && <button type="button" disabled={busy} onClick={() => void useForBots(account)}
-        className="mt-2 text-[12px] text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.useForBots")}</button>}
+      {other && accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
+        className="mt-2 text-[12px] text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.setAsMain")}</button>}
     </div>
   );
   return (

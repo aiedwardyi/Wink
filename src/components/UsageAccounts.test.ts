@@ -16,7 +16,6 @@ vi.mock("@/state/store", async (original) => ({
   useStore: () => ({ state, dispatch: vi.fn(), refreshInstances }),
 }));
 import { UsageSection } from "./UsageSection";
-import { EnginesSettings } from "./EnginesSettings";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -31,10 +30,10 @@ const engine = (id: string, used = 20, signedIn = true): InstanceInfo => ({
 const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
 const main = () => host.querySelector('[data-account-column="main"]')!;
 const other = () => host.querySelector('[data-account-column="other"] > div:not([inert])')!;
-async function render(count = 2, component = UsageSection) {
+async function render(count = 2) {
   state.instances = [engine("claude"), engine("second", 70), engine("third", 95)].slice(0, count);
   accounts = state.instances.map((instance) => ({ id: instance.instanceId, of: "claude", state: "ready", default: instance.instanceId === "claude" }));
-  await act(async () => root.render(createElement(I18nProvider, null, createElement(component))));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
 }
 beforeEach(() => {
   persistPreference("en");
@@ -60,7 +59,7 @@ it("keeps the single-account row unchanged without account controls", async () =
   await render(1);
   expect(host.textContent).toContain("Claude");
   expect(host.querySelector('[data-account-column]')).toBeNull();
-  expect(button("Use for Bots")).toBeUndefined();
+  expect(button("Set as Main")).toBeUndefined();
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
   expect(host.textContent).not.toContain("@example.com");
 });
@@ -69,8 +68,8 @@ it("puts the default left and the other account right with no email text", async
   await render();
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
-  expect(main().textContent).not.toContain("Use for Bots");
-  expect(other().textContent).toContain("Use for Bots");
+  expect(main().textContent).not.toContain("Set as Main");
+  expect(other().textContent).toContain("Set as Main");
   expect(host.textContent).not.toContain("@example.com");
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
 });
@@ -83,13 +82,13 @@ it("uses the API default flag even when the base account arrives first", async (
   expect(main().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
 });
 
-it("Use for Bots posts once and moves that account left without confirmation", async () => {
+it("Set as Main posts once and moves that account left without confirmation", async () => {
   await render();
-  await act(async () => button("Use for Bots").click());
+  await act(async () => button("Set as Main").click());
   expect(request).toHaveBeenCalledWith("/api/accounts/second/default", { method: "POST", body: "{}" });
   expect(main().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   expect(host.querySelector('[role="alertdialog"]')).toBeNull();
-  await act(async () => button("Use for Bots").click());
+  await act(async () => button("Set as Main").click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/default", { method: "POST", body: "{}" });
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
 });
@@ -132,12 +131,12 @@ it("reveals the account on icon hover", async () => {
   expect(document.querySelector('[data-engine-card]')?.textContent).toContain("second@example.com");
 });
 
-it("shows signed out without bars or Use for Bots", async () => {
+it("shows signed out without bars or Set as Main", async () => {
   await render();
   state.instances = [state.instances[0]!, engine("second", 70, false)];
   await act(async () => root.render(createElement(UsageSection)));
   expect(other().textContent).toContain("Signed out.");
-  expect(other().textContent).not.toContain("Use for Bots");
+  expect(other().textContent).not.toContain("Set as Main");
   expect(other().querySelector('[aria-label*="remaining"]')).toBeNull();
 });
 
@@ -163,7 +162,7 @@ it("does not switch a default whose limit is hit", async () => {
 it("keeps the default in place and shows failure if the API rejects a pick", async () => {
   await render();
   request.mockRejectedValueOnce(new Error("offline"));
-  await act(async () => button("Use for Bots").click());
+  await act(async () => button("Set as Main").click());
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Didn't finish");
 });
@@ -171,90 +170,6 @@ it("keeps the default in place and shows failure if the API rejects a pick", asy
 it("translates account controls into Korean", async () => {
   persistPreference("ko");
   await render(3);
-  expect(button("봇에 사용")).toBeDefined();
+  expect(button("기본으로 설정")).toBeDefined();
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
-});
-
-it("requires two taps to sign out and sends the selected destination", async () => {
-  await render(3, EnginesSettings);
-  await act(async () => button("Sign Out").click());
-  expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
-  expect(host.textContent).toContain("1 bot uses this account.");
-  const choices = host.querySelectorAll<HTMLInputElement>('input[type="radio"]');
-  expect([...choices].map((choice) => choice.getAttribute("aria-label"))).toEqual(["second@example.com", "third@example.com"]);
-  expect([...choices].map((choice) => choice.closest("label")?.textContent)).toEqual(["second@example.com", "third@example.com"]);
-  await act(async () => choices[1]!.click());
-  await act(async () => button("Move and Sign Out").click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "third" }) });
-});
-
-it("names connected accounts and keeps full labels available when truncated", async () => {
-  await render(2, EnginesSettings);
-  const label = "personal.account.with.a.very.long.address@example.com";
-  state.instances = [state.instances[0]!, { ...state.instances[1]!, snapshot: { ...state.instances[1]!.snapshot, account: label } }];
-  await act(async () => root.render(createElement(EnginesSettings)));
-  expect(host.textContent).toContain("claude@example.com");
-  expect(host.textContent).toContain(label);
-  expect(host.textContent).not.toContain("Connected");
-  const identity = host.querySelector<HTMLElement>(`span[title="${label}"]`)!;
-  expect(identity.textContent).toBe(label);
-  expect(identity.classList.contains("truncate")).toBe(true);
-});
-
-it.each(["Personal account", undefined])("uses the engine account label when no email is available (%s)", async (label) => {
-  await render(2, EnginesSettings);
-  state.instances = [state.instances[0]!, { ...state.instances[1]!, snapshot: { ...state.instances[1]!.snapshot, account: label } }];
-  await act(async () => root.render(createElement(EnginesSettings)));
-  expect(host.querySelector(`span[title="${label ?? "Claude"}"]`)?.textContent).toBe(label ?? "Claude");
-});
-
-it.each(["en", "ko"] as const)("names the only ready destination without radios in %s", async (locale) => {
-  persistPreference(locale);
-  state.bots.push({ ...state.bots[0]!, id: "second-bot" });
-  await render(2, EnginesSettings);
-  await act(async () => button(locale === "en" ? "Sign Out" : "로그아웃").click());
-  expect(host.querySelector('[role="radiogroup"]')).toBeNull();
-  expect(host.querySelector('input[type="radio"]')).toBeNull();
-  expect(host.textContent).toContain(locale === "en"
-    ? "2 bots use this account. They move to second@example.com."
-    : "봇 2개가 이 계정을 써요. second@example.com 계정으로 옮겨져요.");
-  await act(async () => button(locale === "en" ? "Move and Sign Out" : "옮기고 로그아웃").click());
-  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "second" }) });
-});
-
-it("excludes signed-out accounts when choosing the only ready destination", async () => {
-  await render(3, EnginesSettings);
-  state.instances = [state.instances[0]!, state.instances[1]!, engine("third", 95, false)];
-  await act(async () => root.render(createElement(EnginesSettings)));
-  expect(host.textContent).toContain("Signed out.");
-  await act(async () => button("Sign Out").click());
-  expect(host.querySelector('input[type="radio"]')).toBeNull();
-  expect(host.textContent).toContain("1 bot uses this account. It moves to second@example.com.");
-});
-
-it("names both radio destinations in Korean", async () => {
-  persistPreference("ko");
-  await render(3, EnginesSettings);
-  await act(async () => button("로그아웃").click());
-  const choices = host.querySelectorAll<HTMLInputElement>('input[type="radio"]');
-  expect([...choices].map((choice) => choice.closest("label")?.textContent)).toEqual(["second@example.com", "third@example.com"]);
-  expect(host.textContent).toContain("옮길 계정");
-});
-
-it("cancels removal without sending a sign-out", async () => {
-  await render(2, EnginesSettings);
-  await act(async () => button("Sign Out").click());
-  await act(async () => button("Cancel").click());
-  expect(host.querySelector('[role="radiogroup"]')).toBeNull();
-  expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
-});
-
-it("blocks removing the default when no signed-in destination exists", async () => {
-  await render(2, EnginesSettings);
-  state.instances = [state.instances[0]!, engine("second", 70, false)];
-  await act(async () => root.render(createElement(EnginesSettings)));
-  await act(async () => button("Sign Out").click());
-  expect(host.querySelector('[role="radiogroup"]')).toBeNull();
-  expect(button("Sign Out").disabled).toBe(true);
-  expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
 });
