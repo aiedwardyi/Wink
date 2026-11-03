@@ -10,6 +10,16 @@ vi.mock("@/state/store", () => ({ api: request }));
 beforeEach(() => request.mockReset().mockResolvedValue({ enabled: false }));
 afterEach(() => { delete window.ogb; localStorage.setItem("omb-locale", "en"); });
 
+it.each([undefined, {}])("renders nothing without the native consent API (%j)", async (bridge) => {
+  Object.defineProperty(window, "ogb", { value: bridge, configurable: true });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(ErrorReportsRow))));
+    expect(host.innerHTML).toBe("");
+  } finally { await act(async () => root.unmount()); }
+});
+
 it("keeps usage consent available when crash reporting is unavailable", async () => {
   Object.defineProperty(window, "ogb", { value: { errorReportConsent: async () => null, setErrorReportConsent: vi.fn() }, configurable: true });
   const host = document.createElement("div");

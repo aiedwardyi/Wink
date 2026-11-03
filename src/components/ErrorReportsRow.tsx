@@ -19,6 +19,7 @@ export function ErrorReportsRow() {
     }).catch(() => {});
     return () => { gone = true; };
   }, []);
+  if (!window.ogb?.setErrorReportConsent) return null;
   const toggle = async () => {
     if (saving || !ready) return;
     setSaving(true);
