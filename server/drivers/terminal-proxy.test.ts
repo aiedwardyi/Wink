@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,7 @@ import { TOOLS, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeS
 const CONFIG = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
 const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────";
 const IDLE = "● pong\n✻ Sautéed for 5s · done 11:34 PM\n──⏸─manual─mode─on──────────\n❯\n────────────────────";
+const IDLE_BACKGROUND = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/idle-background-shell.json", import.meta.url), "utf8")).reply.screen.join("\n");
 const CODEX_MENU = "Select Model and Effort\n› 1. GPT-6.1-Sol (current)\n  2. GPT-6-Astra\n\n  enter select · esc back";
 
 type FetchMock = Mock<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>;
@@ -615,6 +617,7 @@ describe("terminal proxy", () => {
     ["a running turn", BUSY, "busy"],
     ["the first spinner frame", "❯ go\n* Fermenting…\n────────────\n❯", "busy"],
     ["a finished turn at its prompt", IDLE, "idle"],
+    ["a recorded idle pane with a background shell", IDLE_BACKGROUND, "idle"],
     ["a shell", "PS C:\\work> echo done…", undefined],
     ["an idle 2.1.293 pane at its > prompt", IDLE_GT, "idle"],
     ["a busy 2.1.293 pane above its > prompt", `* Considering… (10m 9s · ↓ 32.8k tokens · thinking with max effort)\n${IDLE_GT}`, "busy"],

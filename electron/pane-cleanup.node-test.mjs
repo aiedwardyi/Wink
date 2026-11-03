@@ -12,7 +12,7 @@ const DAY_MS = 86_400_000;
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true }).trim();
 
 function fixture(t) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pane-cleanup-"));
+  const home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pane-cleanup-")));
   const tempRoot = path.join(home, "temp");
   const worktreeRoot = path.join(home, "worktrees");
   fs.mkdirSync(tempRoot);
