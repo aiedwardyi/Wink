@@ -1,6 +1,8 @@
 # Model Index fill, 2026-11-03
 
-Legal now uses [Vals Legal Research Bench v1](https://www.vals.ai/benchmarks/legal_research), published 2026-10-29 and checked 2026-11-03: 14/15 picker models, with only Contributor untested. Weekly refresh fetches `vals-legal-research.json`. The builder skips snapshots marked `active: false`; `vals-legalbench.json` keeps the LegalBench rows below as history. FrontierCode and WebDev fills remain active.
+Design now uses [Rams Index 0.6.1](https://www.rams.ai/index), published 2026-10-29 and checked 2026-11-03: 12/15 picker models with published generation cost per page and 95% intervals. WebDev's 14/15 snapshot and filled Terra row remain inactive history, byte-for-byte apart from `active: false`. Security stays CyberBench 1.1 at 12/15: no verified 14/15 alternative or compatible missing-model fill was found. See `SEC-DESIGN.coverage.md` beside the card for the wider source audit.
+
+Legal now uses [Vals Legal Research Bench v1](https://www.vals.ai/benchmarks/legal_research), published 2026-10-29 and checked 2026-11-03: 14/15 picker models, with only Contributor untested. Weekly refresh fetches `vals-legal-research.json`. The builder skips snapshots marked `active: false`; `vals-legalbench.json` keeps the LegalBench rows below as history. FrontierCode fills remain active; WebDev fills are retained in inactive history.
 
 15 published values added across 3 charts. No estimated scores. Counts below use the 15 picker models; retired GPT-5.6 Terra was not added.
 

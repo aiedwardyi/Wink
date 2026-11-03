@@ -1,5 +1,6 @@
 {
   "benchmark": "lmarena-webdev",
+  "active": false,
   "version": "2026-10-23",
   "index": "design",
   "label": "LMArena WebDev leaderboard (rating), CC BY 4.0",

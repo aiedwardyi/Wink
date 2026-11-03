@@ -1,0 +1,218 @@
+{
+  "name": "Rams Index",
+  "edition": "models-v0.6.1",
+  "season": "0.6.1",
+  "url": "https://www.rams.ai/index",
+  "updated": "2026-10-29",
+  "license": "https://creativecommons.org/licenses/by/4.0/",
+  "models": [
+    {
+      "name": "GPT-6.1 Sol",
+      "effort": "default",
+      "index": 92,
+      "lo": 90.3,
+      "hi": 93.8,
+      "usdPerPage": 0.15
+    },
+    {
+      "name": "GPT-6 Astra",
+      "effort": "default",
+      "index": 91,
+      "lo": 88.7,
+      "hi": 94.1,
+      "usdPerPage": 0.428
+    },
+    {
+      "name": "Grok 4.7",
+      "effort": "default",
+      "index": 88.4,
+      "lo": 85.9,
+      "hi": 90.1,
+      "usdPerPage": 0.132
+    },
+    {
+      "name": "Claude Fable 5.1",
+      "effort": "default (always thinks)",
+      "index": 88.3,
+      "lo": 86.2,
+      "hi": 89.9,
+      "usdPerPage": 0.866
+    },
+    {
+      "name": "GPT-6.1 Terra",
+      "effort": "default",
+      "index": 86.1,
+      "lo": 83.5,
+      "hi": 90.1,
+      "usdPerPage": 0.039
+    },
+    {
+      "name": "GLM 5.3",
+      "effort": "default",
+      "index": 76,
+      "lo": 67.5,
+      "hi": 78.5,
+      "usdPerPage": 0.219
+    },
+    {
+      "name": "Claude Opus 5.5",
+      "effort": "default (medium)",
+      "index": 74.1,
+      "lo": 70.9,
+      "hi": 76.8,
+      "usdPerPage": 0.276
+    },
+    {
+      "name": "Claude Sonnet 5.5",
+      "effort": "default",
+      "index": 72.7,
+      "lo": 66.6,
+      "hi": 73.3,
+      "usdPerPage": 0.145
+    },
+    {
+      "name": "Mistral Large 4",
+      "effort": "default",
+      "index": 72,
+      "lo": 65.2,
+      "hi": 74.8,
+      "usdPerPage": 0.288
+    },
+    {
+      "name": "GPT-6 Luna",
+      "effort": "default",
+      "index": 71.2,
+      "lo": 67.4,
+      "hi": 80.1,
+      "usdPerPage": 0.005
+    },
+    {
+      "name": "Claude Haiku 5.5",
+      "effort": "default",
+      "index": 70,
+      "lo": 64.4,
+      "hi": 73.7,
+      "usdPerPage": 0.006
+    },
+    {
+      "name": "GPT-5.6 Sol",
+      "effort": "default",
+      "index": 68.9,
+      "lo": 62.8,
+      "hi": 71.2,
+      "usdPerPage": 0.175
+    },
+    {
+      "name": "Claude Fable 5",
+      "effort": "default (always thinks)",
+      "index": 62.8,
+      "lo": 57.6,
+      "hi": 64.7,
+      "usdPerPage": 0.532
+    },
+    {
+      "name": "Kimi K3",
+      "effort": "default",
+      "index": 62,
+      "lo": 56.9,
+      "hi": 67.3,
+      "usdPerPage": 0.429
+    },
+    {
+      "name": "Kimi K3.1 Pro",
+      "effort": "default",
+      "index": 58.3,
+      "lo": 55.2,
+      "hi": 61,
+      "usdPerPage": 0.317
+    },
+    {
+      "name": "GLM 5.3 Prime",
+      "effort": "default",
+      "index": 55.1,
+      "lo": 48.8,
+      "hi": 59.5,
+      "usdPerPage": 0.496
+    },
+    {
+      "name": "DeepSeek V4 Pro",
+      "effort": "default",
+      "index": 35.9,
+      "lo": 31.3,
+      "hi": 38.8,
+      "usdPerPage": 0.032
+    },
+    {
+      "name": "Claude Opus 4.8",
+      "effort": "default",
+      "index": 32,
+      "lo": 28.2,
+      "hi": 34.7,
+      "usdPerPage": 0.155
+    },
+    {
+      "name": "MiMo V2.6 Pro",
+      "effort": "default",
+      "index": 31.7,
+      "lo": 26.6,
+      "hi": 35.1,
+      "usdPerPage": 0.021
+    },
+    {
+      "name": "Gemini 4 Argon",
+      "effort": "default",
+      "index": 22.9,
+      "lo": 19.7,
+      "hi": 26.5,
+      "usdPerPage": 0.149
+    },
+    {
+      "name": "Gemini 3.8 Flash",
+      "effort": "default",
+      "index": 11.5,
+      "lo": 9.8,
+      "hi": 13.9,
+      "usdPerPage": 0.056
+    },
+    {
+      "name": "MiniMax M3",
+      "effort": "default",
+      "index": 10.8,
+      "lo": 8.6,
+      "hi": 16.7,
+      "usdPerPage": 0.033
+    },
+    {
+      "name": "Qwen 3.8 Max",
+      "effort": "default",
+      "index": 9,
+      "lo": 7.6,
+      "hi": 12.3,
+      "usdPerPage": 0.149
+    },
+    {
+      "name": "Qwen 3.8 Max Prime",
+      "effort": "default",
+      "index": 7.5,
+      "lo": 7.1,
+      "hi": 11,
+      "usdPerPage": 0.342
+    },
+    {
+      "name": "Muse Spark Open",
+      "effort": "default",
+      "index": 3.8,
+      "lo": 2.9,
+      "hi": 5.2,
+      "usdPerPage": 0.062
+    },
+    {
+      "name": "Muse Wonder",
+      "effort": "default",
+      "index": 2.6,
+      "lo": 2.1,
+      "hi": 4,
+      "usdPerPage": 0.252
+    }
+  ]
+}

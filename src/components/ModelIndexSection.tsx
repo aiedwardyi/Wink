@@ -77,6 +77,7 @@ const COST_KEY = new Map<ModelIndexKey, MessageKey>([
   ["intelligence", "modelIndex.axis.cost"],
   ["coding", "modelIndex.axis.costCoding"],
   ["agentic", "modelIndex.axis.costAgentic"],
+  ["design", "modelIndex.axis.costDesign"],
   ["security", "modelIndex.axis.costSecurity"],
   ["general", "modelIndex.axis.costGeneral"],
   ["legal", "modelIndex.tooltip.runCost"],
@@ -88,7 +89,7 @@ const BENCH_KEY = {
 } satisfies Record<Coding, MessageKey>;
 
 const PERCENT = new Set<ModelIndexKey>(["coding", "agentic", "security", "legal"]);
-const RATING = new Set<ModelIndexKey>(["design", "general"]);
+const RATING = new Set<ModelIndexKey>(["general"]);
 
 const PROVIDER_NAME: Record<Exclude<ChartProvider, "other">, string> = {
   anthropic: "Anthropic",

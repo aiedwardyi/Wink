@@ -168,6 +168,8 @@ describe("AA refresh integration", () => {
       const stub = pathToFileURL(join(dir, "offline.mjs"));
       writeFileSync(stub, `
         import { readFileSync } from "node:fs";
+        let clock = Date.now();
+        Date.now = () => clock += 1000;
         const fixture = (name) => readFileSync(new URL("./scripts/model-index/fixtures/" + name, import.meta.url), "utf8");
         const pages = { "platform.claude.com": "anthropic", "ai.google.dev": "google", "dev.meta.ai": "meta", "developers.openai.com": "openai", "docs.x.ai": "xai" };
         globalThis.fetch = async (url) => {
@@ -175,7 +177,7 @@ describe("AA refresh integration", () => {
           if (parsed.hostname === "artificialanalysis.ai") throw new Error("unexpected live API call");
           if (parsed.hostname === "ai.google.dev" && parsed.searchParams.get("hl") !== "en") throw new Error("missing English locale");
           const file = pages[parsed.hostname] ? pages[parsed.hostname] + "-pricing.html"
-            : parsed.hostname === "datasets-server.huggingface.co" ? "lmarena-webdev.json"
+            : parsed.hostname === "www.rams.ai" ? (parsed.pathname === "/index" ? "rams-board.html" : "rams-index.json")
             : parsed.pathname.endsWith("legal_research") ? "vals-legal-research.html" : "vals-cyber.html";
           return { status: 200, text: async () => fixture(file) };
         };
@@ -184,13 +186,20 @@ describe("AA refresh integration", () => {
       const script = join(dir, "scripts/model-index/refresh.mjs");
       const run = spawnSync(process.execPath, ["--import", stub.href, script, "--aa-raw", fixture], { encoding: "utf8", env });
       assert.equal(run.status, 2, run.stderr + run.stdout);
-      for (const name of ["lmarena-webdev", "vals-legal-research", "vals-cyberbench", "list-prices", "aa-intelligence-index", "aa-terminal-bench"]) assert.match(run.stdout, new RegExp(`${name}: (CHANGED|no change)`));
-      for (const name of ["aa-gdpval", "aa-frontiercode", "vals-legalbench"]) {
-        if (name !== "vals-legalbench") assert.match(run.stdout, new RegExp(`${name}: MANUAL`));
+      for (const name of ["rams-index", "vals-legal-research", "vals-cyberbench", "list-prices", "aa-intelligence-index", "aa-terminal-bench"]) assert.match(run.stdout, new RegExp(`${name}: (CHANGED|no change)`));
+      for (const name of ["aa-gdpval", "aa-frontiercode", "vals-legalbench", "lmarena-webdev"]) {
+        if (name.startsWith("aa-")) assert.match(run.stdout, new RegExp(`${name}: MANUAL`));
         assert.equal(readFileSync(join(dir, "shared/model-index-sources", name + ".json"), "utf8"), readFileSync(join(root, "shared/model-index-sources", name + ".json"), "utf8"));
       }
       const webdev = JSON.parse(readFileSync(join(dir, "shared/model-index-sources/lmarena-webdev.json")));
       assert(webdev.rows.some((row) => row.model === "gpt-6.1-terra" && row.score_date && row.value === 1672.6547058209349));
+      assert(!run.stdout.includes("lmarena-webdev:"));
+      const design = JSON.parse(readFileSync(join(dir, "shared/model-index-sources/rams-index.json")));
+      assert.equal(design.rows.length, 12);
+      assert(design.rows.every((row) => row.cost_per_task > 0 && row.interval));
+      const legal = JSON.parse(readFileSync(join(dir, "shared/model-index-sources/vals-legal-research.json")));
+      const legalBefore = JSON.parse(readFileSync(join(root, "shared/model-index-sources/vals-legal-research.json")));
+      for (const row of legalBefore.rows) assert(legal.rows.some((next) => next.model === row.model && next.effort === row.effort && next.value === row.value && next.cost_per_task === row.cost_per_task));
       const intelligence = JSON.parse(readFileSync(join(dir, "shared/model-index-sources/aa-intelligence-index.json")));
       assert.equal(intelligence.rows.length, 3);
       assert.match(run.stdout, /needs hand check: cost:/);
