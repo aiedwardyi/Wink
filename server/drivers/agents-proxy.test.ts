@@ -4,10 +4,13 @@
 // endpoints, and drive the MCP stdio surface end to end. No shebang, no
 // shell — plain node child, so this runs on every OS like index.test.ts.
 import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "agents-proxy.ts");
 const TOKEN = "test-comms-token";
@@ -844,6 +847,14 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("wait_delegation");
     expect(res.result.content[0].text).toContain("in a later turn");
     delegateResponse = { queued: true, message: "Delegation queued." };
+  });
+
+  it("replays a recorded Claude check_delegation call over MCP stdio", async () => {
+    const result = await callTool(reply.call.name.replace("mcp__agents__", ""), reply.call.input);
+    expect(result.result.isError).toBe(false);
+    expect(result.result.content[0].text).toBe(`@Helper finished task ${reply.call.input.task_id}:\nAll done.`);
+    expect(lastDelegationUrl).toBe(`/api/internal/delegations/${reply.call.input.task_id}?fromBotId=bot-asker&fromThreadId=thread-asker-routine&wait_ms=0`);
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
   it("check_delegation lists recent tasks when task_id is omitted", async () => {
