@@ -2,6 +2,37 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.227] - 2026-11-03
+
+### Added
+- More than one Claude or Codex account: add accounts in Settings > Connections, compare usage, and pick the Main account on the Usage page.
+- Model Index fills gaps with older dated scores (hover shows the date); Legal covers more models, and Design now has Score vs Cost.
+- Updates show a progress window while Wink restarts.
+
+### Changed
+- Simpler first run and rooms: installed engines come first, new rooms default to every bot answering, and @ picks one bot.
+- Settings is lighter for new users: one visible privacy switch, smaller rows, and Terminal Colors and Terminal Alerts hidden.
+- Chat errors use plain words in calm gray rows with a small warning mark; details fold below.
+- The worker chip labels its count on wide headers and shows a bot icon and status dot.
+
+### Fixed
+- Sending during a running turn joins it where supported; queued messages wait instead of showing a busy error.
+- Pasted blocks and attachments survive message edits; choice-only messages no longer show an empty bubble.
+- Korean text for replies, search, connectors and Auto warnings.
+- Saved keys survive credential migration, and other-PC windows recover from expired sign-ins and stalled loads.
+- Local VM cleanup only stops or removes containers created by Wink.
+- Chat sync keeps catching up until ready, and stale approval cards clear in rooms after a restart.
+- Claude worker panes keep their busy or idle state without confusing Muse panes, and Grok worker instructions list effort choices.
+- Room previews show questions and worker notes correctly, and notification clicks open their target once.
+- Access tokens split across streamed output stay masked.
+- Engine discovery refreshes after the login shell loads, and project imports create their room.
+- Connected Apps keeps its last known connections when refresh fails and offers Retry when none can be checked.
+- Send to terminal works when Share Terminal with Chat is off; approval requests block sends and attachments.
+- File links with line numbers or query text open the right file.
+- Phone bot menus and section pickers stay on screen with the bot list on the right.
+- Room chats show saved-summary dividers, and Space in call controls no longer interrupts speech.
+- Team Today shows unavailable totals as unknown and refreshes at midnight in Korea.
+
 ## [1.0.226] - 2026-11-03
 
 ### Added
@@ -488,6 +519,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.227]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.227
 [1.0.226]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.226
 [1.0.225]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.225
 [1.0.224]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.224
