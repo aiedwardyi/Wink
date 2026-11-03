@@ -8,7 +8,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { catalogs } from "@/lib/i18n-catalog";
 import { saveRainbowBox } from "@/lib/rainbow-box";
 import { SKINS } from "@/lib/skins";
-import { saveTerminalPopups } from "@/lib/terminal-popups";
+import { saveTerminalPopups, terminalPopupsEnabled } from "@/lib/terminal-popups";
 import type { AppSettingsSection } from "@/state/store";
 
 const mock = vi.hoisted(() => ({
@@ -164,7 +164,7 @@ describe("SettingsModal friends chrome", () => {
 
   it("shows featured palettes with the remaining themes folded", () => {
     const html = markup("themes");
-    expect(html).toContain("Skin");
+    expect(html).not.toContain(">Skin<");
     expect(html).not.toContain("Applies instantly and is remembered");
     for (const name of ["Wink", "Precision", "GitHub Dimmed", "Tokyo Night", "Kanagawa", "Terminal", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
@@ -216,18 +216,37 @@ describe("SettingsModal friends chrome", () => {
     expect(general).not.toContain("Applies instantly and is remembered");
     expect(general).not.toContain('data-skin="kanagawa"');
     const themes = markup("themes");
-    expect(themes).toContain("Skin");
+    expect(themes).not.toContain(">Skin<");
     expect(themes).toContain('data-skin="kanagawa"');
   });
 
-  it("flips Terminal alerts inside Advanced, off by default", () => {
-    const popupsSwitch = /<button role="switch" aria-checked="(true|false)" aria-label="Terminal Alerts"/;
-    expect(markup("general", true)).toContain("Notifications");
-    expect(markup("general", true).match(popupsSwitch)?.[1]).toBe("false");
+  it("hides terminal controls without changing saved alerts", () => {
     saveTerminalPopups(true);
-    expect(markup("general", true).match(popupsSwitch)?.[1]).toBe("true");
+    const html = markup("general", true);
+    expect(html).not.toContain("Terminal Alerts");
+    expect(html).not.toContain("Terminal Colors");
+    expect(terminalPopupsEnabled()).toBe(true);
     saveTerminalPopups(false);
-    expect(markup("general", true).match(popupsSwitch)?.[1]).toBe("false");
+  });
+
+  it("keeps Error Reports on General and hides usage stats", () => {
+    Object.defineProperty(window, "ogb", { value: { errorReportConsent: vi.fn(), setErrorReportConsent: vi.fn() }, configurable: true, writable: true });
+    const html = markup("general");
+    expect(html).toContain("Send Error Reports");
+    expect(html).not.toContain("Send Anonymous Usage Stats");
+    expect((html.match(/role="switch"/g) ?? [])).toHaveLength(1);
+    Object.defineProperty(window, "ogb", { value: undefined, configurable: true, writable: true });
+  });
+
+  it("groups Advanced preferences in one card without repeated titles", () => {
+    const html = markup("general", true);
+    const advanced = html.slice(html.indexOf("data-settings-preferences"));
+    expect((advanced.match(/bg-card/g) ?? [])).toHaveLength(1);
+    expect(advanced).not.toContain(">Tool Calls<");
+    expect(advanced).not.toContain(">Replies<");
+    for (const label of ["Bot List Side", "Reply Style", "Work Steps", "Longer Replies"]) {
+      expect(advanced).toContain(`aria-label="${label}"`);
+    }
   });
 
   it("picks the chat box ring from Off, Rainbow and Theme colors on Themes, off by default", () => {
@@ -302,13 +321,13 @@ describe("SettingsModal friends chrome", () => {
     expect(general).not.toContain("<SkinPicker");
     const themes = source.slice(source.indexOf('section === "themes"'), source.indexOf('section === "engines"') === -1 ? undefined : source.indexOf('section === "engines"'));
     expect(themes).toContain("<SkinPicker");
-    expect(themes).toContain("settings.skin.title");
+    expect(themes).not.toContain("settings.skin.title");
   });
 
   it("orders General with Bot List Side and Reply Style first under Advanced", () => {
     const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
     const general = source.slice(source.indexOf('section === "general"'), source.indexOf('section === "connections"'));
-    const order = ["<LanguagePicker", "<PhoneNotificationSettings", "<VibrationRow", "<UpdatesRow", "data-settings-preferences", "<SidebarSideRow", "<ReplyStyleRow", "<TerminalAppearanceRow", "<ToolCallsRow", "<DetailedRepliesRow", "<NotificationsRow", "<StartFreshRow"].map((marker) => general.indexOf(marker));
+    const order = ["<LanguagePicker", "<PhoneNotificationSettings", "<VibrationRow", "<UpdatesRow", "data-settings-preferences", "<SidebarSideRow", "<ReplyStyleRow", "<ToolCallsRow", "<DetailedRepliesRow", "<StartFreshRow"].map((marker) => general.indexOf(marker));
     expect(order.every((at) => at > -1)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });

@@ -71,7 +71,15 @@ describe("ManageMembersPanel Korean title", () => {
     expect(html).not.toContain("Manage members of Channel");
   });
 
-  it("uses the group add flow with an explicit model selection", async () => {
+  it.each([
+    ["en", "Name your bot", "For example, Researcher", "Save"],
+    ["ko", "봇 이름 짓기", "예: 리서처", "저장"],
+  ] as const)("adds a named bot with an explicit model selection in %s", async (locale, label, placeholder, saveLabel) => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => (key === "omb-locale" ? locale : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
     const existing: Bot = {
       id: "existing",
       threadId: "existing-thread",
@@ -84,7 +92,7 @@ describe("ManageMembersPanel Korean title", () => {
       modelSelection: { instanceId: "codex-1", model: "codex-default" },
       messages: [],
     };
-    const created: Bot = { ...existing, id: "created", threadId: "created-thread", name: "Review weekly brief" };
+    const created: Bot = { ...existing, id: "created", threadId: "created-thread", name: "research Desk v2 / Seoul HQ" };
     const codex: InstanceInfo = {
       instanceId: "codex-1",
       driverKind: "codex",
@@ -120,26 +128,30 @@ describe("ManageMembersPanel Korean title", () => {
       section: "Work",
     };
     const { ManageMembersPanel } = await import("./ManageMembersPanel");
+    const { I18nProvider } = await import("@/lib/i18n");
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
     try {
-      await act(async () => root.render(createElement(ManageMembersPanel, {
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(ManageMembersPanel, {
         group,
         onClose: () => undefined,
         triggerRef: { current: null },
-      })));
+      }))));
       await act(async () => host.querySelector<HTMLButtonElement>("[data-manage-create-bot]")!.click());
-      const job = host.querySelector<HTMLInputElement>('input[id^="group-wizard-job-"]');
+      const name = host.querySelector<HTMLInputElement>('input[id^="group-wizard-name-"]');
       const selects = [...host.querySelectorAll("select")];
-      if (!(job instanceof HTMLInputElement)) throw new Error("group add purpose field did not render");
+      if (!(name instanceof HTMLInputElement)) throw new Error("group add name field did not render");
+      expect(host.querySelector(`label[for="${name.id}"]`)?.textContent).toBe(label);
+      expect(name.placeholder).toBe(placeholder);
+      expect(name.maxLength).toBe(40);
       expect(selects).toHaveLength(2);
       expect([...selects[1]!.options].map((option) => option.value)).toEqual(["codex-default", "codex-pro"]);
 
       await act(async () => {
         const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        inputSetter.call(job, "review weekly brief");
-        job!.dispatchEvent(new Event("input", { bubbles: true }));
+        inputSetter.call(name, "  research Desk v2 / Seoul HQ  ");
+        name!.dispatchEvent(new Event("input", { bubbles: true }));
         const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value")!.set!;
         selectSetter.call(selects[1], "codex-pro");
         selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -156,14 +168,13 @@ describe("ManageMembersPanel Korean title", () => {
       });
 
       expect(calls[0]?.body).toEqual({
-        job: "review weekly brief",
-        name: "Review weekly brief",
+        name: "research Desk v2 / Seoul HQ",
         modelSelection: { instanceId: "codex-1", model: "codex-pro" },
         section: "Work",
       });
       expect(dispatched).toContainEqual(expect.objectContaining({ type: "botAdded", bot: created }));
       expect(dispatched).not.toContainEqual(expect.objectContaining({ type: "patchGroup" }));
-      const save = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Save"));
+      const save = [...host.querySelectorAll("button")].find((button) => button.textContent === saveLabel);
       if (!(save instanceof HTMLButtonElement)) throw new Error("group save action did not render");
       await act(async () => save.click());
       expect(dispatched).toContainEqual({

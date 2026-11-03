@@ -883,7 +883,7 @@ describe("plan usage", () => {
   });
 
   it("wires those phrases into the Usage settings surface instead of hardcoded English", () => {
-    expect(usageSection).toContain('t("usage.limits.title")');
+    expect(usageSection).not.toContain('t("usage.limits.title")');
     expect(usageSection).toContain('t("usage.limits.empty")');
     expect(planUsageBar).toContain('"usage.limits.session"');
     expect(planUsageBar).toContain('"usage.limits.weekly"');

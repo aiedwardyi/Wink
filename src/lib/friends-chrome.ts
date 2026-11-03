@@ -50,3 +50,15 @@ export function showChatHeaderFind(): boolean {
 export function showTouchPickerLegend(): boolean {
   return false;
 }
+
+export function showTerminalAlerts(): boolean {
+  return false;
+}
+
+export function showTerminalColors(): boolean {
+  return false;
+}
+
+export function showUsageStats(): boolean {
+  return false;
+}

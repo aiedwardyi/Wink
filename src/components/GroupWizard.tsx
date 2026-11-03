@@ -1,13 +1,11 @@
-// One-card New group: name, members, the reply rule. Existing bots check
-// off in one list; + New bot rows expand inline for described bots. Drafts
-// live in component state so a failed create keeps everything.
+// Draft rows survive failed creates.
 import { useEffect, useRef, useState } from "react";
 
-import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { api, useStore, type Bot } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { BotPickerList } from "./BotPickerList";
 import {
+  WIZARD_BOT_NAME_LIMIT,
   groupCreatePayload,
   newBotPayload,
   resolveWizardModel,
@@ -19,7 +17,7 @@ import {
 
 export interface NewRow {
   key: number;
-  job: string;
+  name: string;
   /** Engine override; null follows the live suggestion. */
   instanceId: string | null;
   model: string | null;
@@ -57,11 +55,10 @@ export function GroupWizard({
 
   const bots = state.bots.filter((b) => !b.hidden);
 
-  // Zero bots: lead with the create form instead of an empty list and a
-  // hidden + row — nothing to discover, just describe the first bot.
+  // With no existing bots, start with the first name field.
   useEffect(() => {
     if (bots.length === 0) {
-      setRows((prev) => (prev.length === 0 ? [{ key: nextRowKey++, job: "", instanceId: null, model: null, saving: false, error: null }] : prev));
+      setRows((prev) => (prev.length === 0 ? [{ key: nextRowKey++, name: "", instanceId: null, model: null, saving: false, error: null }] : prev));
     }
   }, [bots.length]);
   const toggle = (id: string) =>
@@ -76,8 +73,8 @@ export function GroupWizard({
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
   const addBot = async (row: NewRow, pick: EnginePick) => {
-    const job = row.job.trim();
-    if (!job || row.saving) return;
+    const name = row.name.trim();
+    if (!name || row.saving) return;
     patchRow(row.key, { saving: true, error: null });
     try {
       const selection = {
@@ -86,7 +83,7 @@ export function GroupWizard({
       };
       const result: { bot: Bot } = await api("/api/bots", {
         method: "POST",
-        body: JSON.stringify(newBotPayload(job, selection)),
+        body: JSON.stringify(newBotPayload(name, selection)),
       });
       dispatch({ type: "botAdded", bot: result.bot, activate: false, focusComposer: false });
       setPicked((prev) => new Set(prev).add(result.bot.id));
@@ -162,7 +159,7 @@ export function GroupWizard({
         ))}
 
         <button
-          onClick={() => setRows((prev) => [...prev, { key: nextRowKey++, job: "", instanceId: null, model: null, saving: false, error: null }])}
+          onClick={() => setRows((prev) => [...prev, { key: nextRowKey++, name: "", instanceId: null, model: null, saving: false, error: null }])}
           className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
         >
           {rows.length === 0 && addedNew === 0 ? t("groupWizard.newBot") : t("groupWizard.addAnother")}
@@ -204,8 +201,8 @@ export function NewBotRow({
 }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
-  const jobRef = useRef<HTMLInputElement>(null);
-  const [jobInvalid, setJobInvalid] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const [nameInvalid, setNameInvalid] = useState(false);
   const preferKinds = PREFERS[Math.min(preferIndex, PREFERS.length - 1)]!;
   const pick: EnginePick | null = row.instanceId
     ? (() => {
@@ -217,11 +214,11 @@ export function NewBotRow({
   const showSubstituted = !!pick?.substituted && instances.some((i) => i.driverKind === preferKind);
   const engineOptions = wizardEngineOptions(instances, pick?.instance ?? null);
   const model = pick ? resolveWizardModel(pick.instance, row.model) : null;
-  const jobErrorId = `group-wizard-job-error-${row.key}`;
+  const nameErrorId = `group-wizard-name-error-${row.key}`;
   const submit = () => {
-    if (!row.job.trim()) {
-      setJobInvalid(true);
-      jobRef.current?.focus();
+    if (!row.name.trim()) {
+      setNameInvalid(true);
+      nameRef.current?.focus();
       return;
     }
     if (pick && !row.saving) onAdd(pick);
@@ -229,30 +226,30 @@ export function NewBotRow({
 
   return (
     <div className="mt-2 rounded-lg bg-raised/50 p-2.5">
-      <label htmlFor={`group-wizard-job-${row.key}`} className="mb-1 block text-[12.5px] text-ink-secondary">
-        {t("groupWizard.jobLabel")}
+      <label htmlFor={`group-wizard-name-${row.key}`} className="mb-1 block text-[12.5px] text-ink-secondary">
+        {t("createBot.title")}
       </label>
       <input
-        ref={jobRef}
-        id={`group-wizard-job-${row.key}`}
+        ref={nameRef}
+        id={`group-wizard-name-${row.key}`}
         autoFocus
-        value={row.job}
-        maxLength={BOT_PROFILE_LIMITS.description}
+        value={row.name}
+        maxLength={WIZARD_BOT_NAME_LIMIT}
         onChange={(e) => {
-          setJobInvalid(false);
-          onPatch({ job: e.target.value });
+          setNameInvalid(false);
+          onPatch({ name: e.target.value });
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") submit();
         }}
-        placeholder={t("groupWizard.jobPlaceholder")}
+        placeholder={t("groupWizard.botNamePlaceholder")}
         required
-        aria-invalid={jobInvalid || undefined}
-        aria-describedby={jobInvalid ? jobErrorId : undefined}
+        aria-invalid={nameInvalid || undefined}
+        aria-describedby={nameInvalid ? nameErrorId : undefined}
         className="w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
       />
-      {jobInvalid && (
-        <p id={jobErrorId} role="alert" className="mt-1 text-[12px] text-danger">{t("groupWizard.jobRequired")}</p>
+      {nameInvalid && (
+        <p id={nameErrorId} role="alert" className="mt-1 text-[12px] text-danger">{t("groupWizard.botNameRequired")}</p>
       )}
 
       {pick ? (
