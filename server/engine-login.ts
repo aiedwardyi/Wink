@@ -68,7 +68,12 @@ export class EngineLogin {
     let job = this.jobs.get(engine);
     const scope = options.scope ?? engine;
     const owner = this.scopes.get(scope);
-    if (owner && owner !== job) throw new LoginBusyError();
+    if (owner && owner !== job) {
+      if (owner.state === "pending") throw new LoginBusyError();
+      await owner.done;
+      if (this.scopes.get(scope) === owner) throw new LoginBusyError();
+      return this.start(engine, cli, args, env, authHosts, options);
+    }
     if (job && job.state !== "pending") {
       await job.done;
       if (this.jobs.get(engine) === job) this.jobs.delete(engine);

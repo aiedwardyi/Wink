@@ -817,8 +817,7 @@ describe("KeepGoing server wiring", () => {
     const config = { config: { cli: "fake-cli" }, environment: { FAKE: "1" } };
     const scope = {
       store: { bot: () => ({ modelSelection: { instanceId: "engine" } }) },
-      rateLimitsByInstance, cfg: {}, instanceConfigs: () => ({ engine: config }),
-      accounts: { snapshot: [] },
+      accounts: { snapshot: [] }, rateLimitsByInstance, cfg: {}, instanceConfigs: () => ({ engine: config }),
       registry: { get: () => ({ driverKind: "claude" }) }, refreshUsage, scheduleSaveRateLimits,
       KEEP_GOING_USAGE_FRESH_MS, DATA_DIR: dir, z,
     };
