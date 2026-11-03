@@ -42,6 +42,32 @@ async function fixture() {
 }
 
 describe("trusted worker accounts", () => {
+  it.each(["linux", "darwin"])("preserves POSIX worker quoting on %s", (platform) => {
+    vi.stubGlobal("process", { ...process, platform });
+    try {
+      const cases = [
+        [String.raw`claude "Say \"hello\""`, ['Say "hello"']],
+        [String.raw`claude "path\\file\q"`, [String.raw`path\file\q`]],
+        [String.raw`claude Say\ hello`, ["Say hello"]],
+        [String.raw`claude 'it'\''s'`, ["it's"]],
+        [String.raw`claude 'it''s'`, ["its"]],
+        [String.raw`claude "\$literal \`literal"`, ["$literal `literal"]],
+        [String.raw`claude escaped\;value`, ["escaped;value"]],
+        ['claude "" a\\\nb', ["", "ab"]],
+      ] as const;
+      for (const [command, args] of cases) expect(workers!.workerCommand(command)).toMatchObject({ kind: "managed", args });
+      expect(() => workers!.workerCommand("claude task\\")).toThrow(/quoting/);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("keeps Windows worker quoting and backslashes unchanged", () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    try {
+      expect(workers!.workerCommand(String.raw`claude 'it''s' C:\work\task "Say \"hello\""`))
+        .toMatchObject({ kind: "managed", args: ["it's", String.raw`C:\work\task`, "Say \\hello\\"] });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it.each(["codex", "claude"])("preserves the inherited %s home for an existing account", async (engine) => {
     const f = await fixture();
     const selector = engine === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";

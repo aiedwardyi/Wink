@@ -20,13 +20,20 @@ const WRAPPER = /^(?:&|\.|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|bash
 
 function tokens(command: string): string[] {
   const result: string[] = [];
+  const windows = process.platform === "win32";
   let token = "";
   let quote = "";
   let started = false;
   for (let i = 0; i < command.length; i++) {
     const char = command[i];
-    if (char === "'" && quote !== '"') {
-      if (quote && command[i + 1] === "'") { token += "'"; i++; }
+    if (!windows && char === "\\" && quote !== "'") {
+      const next = command[i + 1];
+      if (next === undefined) throw new Error("Ambiguous worker launch quoting");
+      if (quote === '"' && !/["\\$`\n]/.test(next)) { token += char; started = true; continue; }
+      i++;
+      if (next !== "\n") { token += next; started = true; }
+    } else if (char === "'" && quote !== '"') {
+      if (windows && quote && command[i + 1] === "'") { token += "'"; i++; }
       else quote = quote ? "" : "'";
       started = true;
     } else if (char === '"' && quote !== "'") {

@@ -530,6 +530,60 @@ describe("account removal drain", () => {
     expect(f.logout).not.toHaveBeenCalled();
   });
 
+  it.each(["added", "base"])("reauthenticates an expired %s destination after restoring a signed-out drain", async (kind) => {
+    const f = await fixture();
+    const source = f.added[0].id;
+    const destination = kind === "added" ? f.added[2].id : "claude";
+    await f.useDefault(source);
+    await f.accounts.drain(source, destination, "signed-out");
+    f.controller.dispose();
+    const snapshot = vi.spyOn(f.registry.get(destination)!, "snapshot").mockResolvedValue({ state: "available", authenticated: false });
+    const accounts = new AccountService(f.root, () => f.bases);
+    const controller = createAccountRuntime({ ...f.deps, accounts });
+    controllers.push(controller);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    f.registry.blockAccount(destination, true);
+    await controller.restore();
+    expect(controller.busy).toBe(true);
+    await expect(controller.signIn(source)).rejects.toThrow("draining");
+    const login = vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});
+    vi.spyOn(f.registry.logins, "wait").mockResolvedValue();
+    vi.spyOn(f.registry.logins, "state").mockReturnValue("complete");
+    snapshot.mockResolvedValue({ state: "available", authenticated: true, accountIdentity: "identity-2" });
+    await controller.signIn(destination);
+    await controller.settled(destination);
+    await controller.resumeDrains();
+    expect(login).toHaveBeenCalledExactlyOnceWith(destination, false);
+    expect(accounts.get(source)).toBeUndefined();
+    expect(accounts.drains[source]).toBeUndefined();
+    expect(controller.bots?.resolve(f.bot).instanceId).toBe(destination);
+    expect(controller.busy).toBe(false);
+    expect(f.logout).not.toHaveBeenCalled();
+  });
+
+  it.each(["added", "base"].flatMap((account) => ["turn", "pane", "unknown pane"].map((kind) => [account, kind])))("keeps the %s destination's %s guard during reauthentication", async (account, kind) => {
+    const f = await fixture();
+    const destination = account === "added" ? f.added[2].id : "claude";
+    await f.accounts.drain(f.added[0].id, destination, "signed-out");
+    if (kind === "turn") f.providers.started("destination-work", destination);
+    else f.panes.mockResolvedValue(Response.json({ count: kind === "pane" ? 1 : 0, unknown: kind === "unknown pane" ? 1 : 0, generations: {} }));
+    f.registry.blockAccount(destination, true);
+    const login = vi.spyOn(f.registry, "startSignIn");
+    await expect(f.controller.signIn(destination)).rejects.toThrow(kind === "unknown pane" ? /unknown/ : /active work/);
+    expect(login).not.toHaveBeenCalled();
+    f.providers.settled("destination-work");
+  });
+
+  it.each(["draining", "logout", "failed", "signed-out"] as const)("refuses destination reauthentication during %s without a recovery need", async (phase) => {
+    const f = await fixture();
+    const destination = f.added[2].id;
+    await f.accounts.drain(f.added[0].id, destination, phase);
+    if (phase !== "signed-out") f.registry.blockAccount(destination, true);
+    const login = vi.spyOn(f.registry, "startSignIn");
+    await expect(f.controller.signIn(destination)).rejects.toThrow("destination of a pending removal");
+    expect(login).not.toHaveBeenCalled();
+  });
+
   it("projects Main readiness without changing account snapshots or single-account rows", async () => {
     const f = await fixture();
     const instances = await f.registry.describeCached();

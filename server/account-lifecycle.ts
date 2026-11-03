@@ -99,13 +99,15 @@ export class AccountLifecycle {
 
   signIn(id: string, device = false) {
     return this.exclusive(async () => {
-      if (Object.values(this.accounts.drains).some((row) => row.destinationId === id)) throw new AccountError("This account is the destination of a pending removal");
+      const destinations = Object.values(this.accounts.drains).filter((row) => row.destinationId === id);
+      if (destinations.some((row) => row.phase !== "signed-out") || (destinations.length > 0 && this.registry.accountAvailable(id))) throw new AccountError("This account is the destination of a pending removal");
       const drain = this.accounts.drains[id];
       if (drain?.phase === "failed") await this.accounts.clearDrain(id);
       else if (drain) throw new AccountError("This account is draining");
       const account = this.accounts.get(id);
       if (!account) {
         if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
+        if (destinations.length > 0 && (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id))) throw new AccountError("Finish this account's active work before signing in");
         const capture = await this.registry.startSignIn(id, device);
         if (this.registry.accountBlocked(id)) {
           const finished = this.registry.logins.wait(id).then(async () => {
