@@ -151,6 +151,24 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       }
       const update = parsed.pathname.match(/^\/v1\/update\/(state|check|download|install)$/);
       if (update) return handleUpdate(req, res, updater, token, update[1]);
+      if (parsed.pathname === "/v1/terminal/worker-accounts") {
+        if (!grantMatches(req.headers.authorization, token)) return json(res, 401, { error: "Unauthorized" });
+        if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
+        if (!host.enableWorkerAccounts) return json(res, 503, { error: "Worker account routing is unavailable" });
+        host.enableWorkerAccounts();
+        return json(res, 200, { enabled: true });
+      }
+      if (parsed.pathname === "/v1/terminal/account-panes") {
+        if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });
+        if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });
+        const accountId = parsed.searchParams.get("accountId") ?? "";
+        if (!/^[\w.-]{1,128}$/.test(accountId)) return json(res, 400, { error: "Invalid account" });
+        try {
+          return json(res, 200, host.livePanesForAccount?.(accountId) ?? { count: 0, unknown: 1, generations: {} });
+        } catch {
+          return json(res, 503, { count: 0, unknown: 1, generations: {} });
+        }
+      }
       if (parsed.pathname === "/v1/terminal/pane-counts") {
         if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });
         if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });

@@ -40,6 +40,7 @@ it("releases a reply handed to a turn the watchdog stopped", async () => {
     finalizeDelegationWatch() {}, turnRegistry, turnUsage: new Map(), roomStallCompletions: { stall() {} }, providerReload: { settled() {} },
     settleMail, paneWake: { noteArrived, settled() {} }, groupSpeakers: new Map(), stopScreenPoller() {}, activeVpsThreads: new Map(),
     drainQueuedSends() {}, drainConnectorResumes() {}, drainSecretResumes() {},
+    workerTurns: { capture() {}, settled() {} },
   };
   new Function(...Object.keys(deps), `${javascript}\nreturn onStall;`)(...Object.values(deps))({ botId: bot.id, threadId: bot.threadId });
   await vi.advanceTimersByTimeAsync(6_000);
