@@ -108,7 +108,8 @@ export function createWorkerLaunch(deps: {
     const baseId = sameEngine ? turn.account?.of ?? turn.instanceId : command.base;
     const base = Object.hasOwn(bases, baseId) ? bases[baseId] : undefined;
     if (!base || base.enabled === false || base.driver !== command.driver) throw new Error("Worker base account is unavailable");
-    const account = sameEngine && turn.account ? turn.account : baseAccount(baseId, command.driver, { ...process.env, ...base.environment });
+    const baseEnvironment = { ...process.env, ...base.environment };
+    const account = sameEngine && turn.account ? turn.account : baseAccount(baseId, command.driver, baseEnvironment);
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
@@ -130,6 +131,11 @@ export function createWorkerLaunch(deps: {
     const source = { ...input.environment, ...base.environment, ...command.environment };
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
     const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source);
+    if (command.driver === "claudeAgent" && !(sameEngine && turn.account)
+      && !Object.entries(baseEnvironment).some(([key, value]) => key.toUpperCase() === "CLAUDE_CONFIG_DIR" && value)) {
+      // Setting the default directory moves Claude's config from ~/.claude.json to ~/.claude/.claude.json.
+      delete policy.env.CLAUDE_CONFIG_DIR;
+    }
     if (command.driver === "codex" && !policy.args.includes("--no-daemon")) policy.args.push("--no-daemon");
     if (!managedEngine) {
       applyCredentialAllowlist(policy.env, []);

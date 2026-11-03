@@ -245,3 +245,26 @@ test("the captured-turn resolver and core policy reach the final fake PTY enviro
   assert.equal(pane.line, "Captured usage.");
   assert.equal(f.host.livePanesForAccount(THIRD.id).count, 1);
 });
+
+for (const platform of ["linux", "win32"]) {
+  test(`default Claude config stays unset in the final fake PTY on ${platform}`, async (t) => {
+    const inherited = process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    t.after(() => {
+      if (inherited === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = inherited;
+    });
+    const turns = captures.createWorkerTurns();
+    turns.capture("bot-1", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    const usageCalls = [];
+    const usage = Object.assign(async (...args) => { usageCalls.push(args); return {}; }, { invalidate() {} });
+    const prepare = policy.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: turns.resolveWorkerTurn,
+      bases: () => ({ claude: { driver: "claudeAgent" } }), available: () => true, usage });
+    const f = fixture(prepare, { platform });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { label: "worker", command: "claude 'task'" });
+    assert.equal(f.children[0].options.env.CLAUDE_CONFIG_DIR, undefined);
+    assert.deepEqual(usageCalls[0][3], { id: "claude", generation: 0, name: "Claude" });
+    assert.deepEqual(f.host.livePanesForAccount("claude"), { count: 1, unknown: 0, generations: { "0": 1 } });
+  });
+}
