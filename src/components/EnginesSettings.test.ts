@@ -493,8 +493,8 @@ describe("EnginesSettings friends Connections list", () => {
     for (const name of ["Claude", "Codex", "Grok", "Gemini (Antigravity)", "Meta Muse"]) {
       expect(html).toContain(name);
     }
-    expect(html.match(/>Add Account</g)).toHaveLength(5);
-    expect(html.match(/>Sign Out</g)).toHaveLength(5);
+    expect(html.match(/>Add Account</g)).toHaveLength(2);
+    expect(html.match(/>Connected</g)).toHaveLength(3);
     expect(html).not.toContain("Details");
     expect(html).not.toContain("Advanced");
     expect(html).not.toMatch(/<(input|select|code)/);

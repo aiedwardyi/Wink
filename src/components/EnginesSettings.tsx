@@ -129,7 +129,8 @@ export function EnginesSettings() {
       {rows.length === 0 && <p className="text-[13px] text-ink-secondary">{t("engines.none")}</p>}
       {installed.map((instance) => {
         const accounts = groups.find((group) => group[0] === instance)!;
-        return <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />;
+        return ["claudeAgent", "codex"].includes(instance.driverKind) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />
+          : <EngineRow key={instance.instanceId} instance={instance} />;
       })}
       {missing.length > 0 && <>
         <button type="button" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}
