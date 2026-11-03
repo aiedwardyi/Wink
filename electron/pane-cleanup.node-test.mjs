@@ -177,7 +177,7 @@ for (const phase of ["traversal", "final directory check"]) {
   });
 }
 
-for (const claim of ["open pane", "recent close", "pin"]) {
+for (const claim of ["open pane", "recent close", "pin", "aliased open pane", "aliased recent close"]) {
   test(`a worktree claimed by a ${claim} during backup survives`, async (t) => {
     const f = fixture(t);
     const { target } = repo(f);
@@ -190,15 +190,19 @@ for (const claim of ["open pane", "recent close", "pin"]) {
     const promises = await import("node:fs/promises");
     const original = promises.default.link;
     let claimed = false;
-    const next = { ...f.session, id: "next", cwd: path.join(target, "not-created") };
+    const aliased = claim.startsWith("aliased ");
+    const kind = aliased ? claim.slice(8) : claim;
+    const alias = path.join(f.home, "project");
+    if (aliased) fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+    const next = { ...f.session, id: "next", cwd: path.join(aliased ? alias : target, "not-created") };
     t.mock.method(promises.default, "link", async (...args) => {
       const value = await original(...args);
       if (!claimed) {
         claimed = true;
-        if (claim === "pin") pins.push(target);
+        if (kind === "pin") pins.push(target);
         else {
           cleanup.opened(next);
-          if (claim === "open pane") panes = [next];
+          if (kind === "open pane") panes = [next];
           else await cleanup.closed(next, true);
         }
       }
@@ -211,13 +215,41 @@ for (const claim of ["open pane", "recent close", "pin"]) {
     assert.equal(f.ledger().filter((entry) => entry.cwd === target).every((entry) => !entry.worktreeDone), true);
     assert.deepEqual(fs.readdirSync(f.worktreeRoot), ["worker"]);
     assert.deepEqual(f.warnings, []);
-    if (claim === "open pane") await cleanup.closed(next, true);
+    if (kind === "open pane") await cleanup.closed(next, true);
     panes = [];
     pins.length = 0;
     f.advance(4 * DAY_MS);
     await cleanup.sweep();
     assert.equal(fs.existsSync(target), false);
+    if (aliased) fs.unlinkSync(alias);
   });
+}
+
+for (const gate of ["open pane", "unclosed ledger", "recent close"]) {
+  for (const missing of [false, true]) {
+    test(`a symlinked pane ${gate} protects its worktree${missing ? " with a missing child" : ""}`, async (t) => {
+      const f = fixture(t);
+      const { target } = repo(f);
+      const alias = path.join(f.home, "project");
+      fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+      await eligible(f);
+      const next = { ...f.session, id: "next", label: "OTHER", cwd: missing ? path.join(alias, "not-created", "child") : alias };
+      if (gate === "open pane") f.open([next]);
+      else {
+        f.cleanup.opened(next);
+        if (gate === "recent close") await f.cleanup.closed(next, true);
+      }
+      await f.cleanup.sweep();
+      assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+      assert.deepEqual(f.warnings, []);
+      fs.unlinkSync(alias);
+      f.open([]);
+      if (gate === "unclosed ledger") await f.cleanup.closed(next, true);
+      f.advance(4 * DAY_MS);
+      await f.cleanup.sweep();
+      assert.equal(fs.existsSync(target), false);
+    });
+  }
 }
 
 for (const origin of ["worktree", "scratch"]) {
@@ -327,20 +359,92 @@ test("short aliases cannot bypass a newer long-path scratch hand-off", { skip: p
 });
 
 for (const gate of ["TEMP root", "TEMP ancestor"]) {
-  test(`scratch refuses a junction at its ${gate}`, async (t) => {
+  test(`scratch refuses a substituted junction at its ${gate}`, async (t) => {
     const f = fixture(t);
     const target = path.join(f.home, "user-files");
     const temp = path.join(target, "temp");
     const scratch = path.join(temp, "wink-TEST");
     fs.mkdirSync(scratch, { recursive: true });
     fs.writeFileSync(path.join(scratch, "precious"), "survives");
-    const link = path.join(f.home, "linked");
-    fs.symlinkSync(gate === "TEMP root" ? temp : target, link, process.platform === "win32" ? "junction" : "dir");
+    const link = path.join(f.home, "original-temp");
     f.session.tempRoot = gate === "TEMP root" ? link : path.join(link, "temp");
+    fs.mkdirSync(f.session.tempRoot, { recursive: true });
     f.cleanup.opened(f.session);
+    fs.rmdirSync(f.session.tempRoot);
+    if (gate === "TEMP ancestor") fs.rmdirSync(link);
+    fs.symlinkSync(gate === "TEMP root" ? temp : target, link, process.platform === "win32" ? "junction" : "dir");
     await f.cleanup.closed(f.session);
     assert.equal(fs.readFileSync(path.join(scratch, "precious"), "utf8"), "survives");
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    fs.unlinkSync(link);
+  });
+}
+
+for (const source of ["default", "session"]) {
+  for (const gate of ["root", "ancestor"]) {
+    for (const delayed of [false, true]) {
+      test(`symlinked TEMP ${gate} from ${source} removes ${delayed ? "expired" : "reported"} scratch`, async (t) => {
+        const f = fixture(t);
+        const link = path.join(f.home, "linked");
+        fs.symlinkSync(gate === "root" ? f.tempRoot : f.home, link, process.platform === "win32" ? "junction" : "dir");
+        const alias = gate === "root" ? link : path.join(link, "temp");
+        const cleanup = createPaneCleanup({ ...f.options, tempRoot: source === "default" ? alias : f.tempRoot });
+        cleanup.start(() => []);
+        t.after(() => cleanup.dispose());
+        const session = { ...f.session, tempRoot: source === "session" ? alias : undefined, reportAt: delayed ? 0 : f.session.reportAt };
+        cleanup.opened(session);
+        await cleanup.closed(session);
+        if (delayed) {
+          assert.equal(fs.existsSync(f.scratch), true);
+          f.advance(DAY_MS);
+          await cleanup.sweep();
+        }
+        assert.equal(fs.existsSync(f.scratch), false);
+        assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+        assert.deepEqual(f.warnings, []);
+        fs.unlinkSync(link);
+      });
+    }
+  }
+}
+
+for (const gate of ["root", "ancestor"]) {
+  test(`a symlinked TEMP ${gate} does not block worktree cleanup`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    const link = path.join(f.home, "linked");
+    fs.symlinkSync(gate === "root" ? f.tempRoot : f.home, link, process.platform === "win32" ? "junction" : "dir");
+    const cleanup = createPaneCleanup({ ...f.options, tempRoot: gate === "root" ? link : path.join(link, "temp") });
+    cleanup.start(() => []);
+    t.after(() => cleanup.dispose());
+    const session = { ...f.session, tempRoot: undefined };
+    cleanup.opened(session);
+    await cleanup.closed(session, true);
+    f.advance(4 * DAY_MS);
+    await cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.deepEqual(f.warnings, []);
+    fs.unlinkSync(link);
+  });
+}
+
+for (const missing of [false, true]) {
+  test(`canonical TEMP ownership protects a pane using its scratch alias${missing ? " with a missing child" : ""}`, async (t) => {
+    const f = fixture(t);
+    const link = path.join(f.home, "linked");
+    fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+    f.session.tempRoot = path.join(link, "temp");
+    const cwd = path.join(link, "temp", "wink-TEST", ...(missing ? ["not-created", "child"] : []));
+    f.open([{ id: "other", label: "OTHER", cwd }]);
+    f.cleanup.opened(f.session);
+    await f.cleanup.closed(f.session);
+    assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+    f.open([]);
+    f.advance(DAY_MS);
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(f.scratch), false);
+    assert.deepEqual(f.warnings, []);
     fs.unlinkSync(link);
   });
 }
