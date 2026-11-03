@@ -390,6 +390,7 @@ export interface InstanceInfo {
     state: "available" | "unavailable";
     reason?: string;
     authenticated?: boolean;
+    authChecked?: boolean;
     /** email or account name of the sign-in, when the CLI names one */
     account?: string;
     version?: string | null;

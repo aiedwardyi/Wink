@@ -347,15 +347,15 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
-  it("keeps a signed-out engine state and Add Account", async () => {
+  it("keeps only Sign In for a signed-out engine", async () => {
     const restore = stage("codex", {
       snapshot: { state: "available", authenticated: false },
       install: { login: { args: ["login"] }, logout: ["logout"], signInCommand: "codex login", docsUrl: "https://example.com/codex" },
     });
     const { root, row } = await renderList();
     try {
-      expect([...row("codex").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Sign In", "Add Account"]);
-      expect(row("codex").textContent).toBe("CodexSigned out.Sign InAdd Account");
+      expect([...row("codex").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Sign In"]);
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign In");
       expect(row("codex").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -478,7 +478,7 @@ describe("EnginesSettings friends Connections list", () => {
       });
       vi.setSystemTime(Date.now() + 6000);
       await act(async () => window.dispatchEvent(new Event("focus")));
-      expect(row("codex").textContent).toBe("CodexSigned out.Sign InAdd Account");
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign In");
       expect(row("codex").querySelector("a")).toBeNull();
     } finally {
       await act(async () => root.unmount());

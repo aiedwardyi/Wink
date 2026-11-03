@@ -64,14 +64,13 @@ it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", 
   expect(host.textContent).not.toMatch(/Move|bots? use|옮|봇/);
 });
 
-it("guides main-account sign-out even when no other account is ready", async () => {
+it("keeps main-account sign-out disabled when no other account is ready", async () => {
   await render();
   state.instances[1] = engine("account-1", false);
   await update();
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
   expect(buttons("Sign Out")[0]!.disabled).toBe(true);
-  expect(host.textContent).toContain("Set another account as Main on the Usage page before signing out.");
   expect(host.textContent).toContain("Signed out.");
   expect(buttons("Sign In")).toHaveLength(1);
 });
@@ -86,6 +85,22 @@ it("names connected accounts and keeps the full truncated label available", asyn
   expect(identity.textContent).toBe(label);
   expect(identity.classList.contains("truncate")).toBe(true);
   expect(buttons("Sign Out")).toHaveLength(2);
+});
+
+it.each(["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent"])("offers only Sign In while %s is signed out", async (driverKind) => {
+  state.instances = [{ ...engine("claude", false), driverKind }];
+  await update();
+  expect(buttons("Sign In")).toHaveLength(1);
+  expect(buttons("Add Account")).toHaveLength(0);
+});
+
+it("skips stopped and loading accounts when choosing Main's destination", async () => {
+  await render(4);
+  state.instances[1]!.accountState = "stopped";
+  state.instances[2]!.snapshot = { state: "available" };
+  await update();
+  await act(async () => buttons("Sign Out")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-3" }) });
 });
 
 it.each(["Personal account", undefined])("uses the engine account label without an email (%s)", async (label) => {
@@ -154,30 +169,30 @@ it.each(["en", "ko"] as const)("shows account refusal messages in %s", async (lo
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in is already in progress");
 });
 
-it("guides main-account sign-out with zero bots", async () => {
+it("signs out the main account with zero bots through the destination path", async () => {
   const bots = state.bots.splice(0);
   try {
     await render();
     await act(async () => buttons("Sign Out")[0]!.click());
-    expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
-    expect(buttons("Sign Out")[0]!.disabled).toBe(true);
+    expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1" }) });
     expect(host.textContent).not.toContain("Move");
     expect(host.querySelector('input, [role="radiogroup"]')).toBeNull();
   } finally { state.bots.push(...bots); }
 });
 
-it.each(["en", "ko"] as const)("guides the main account and unlocks sign-out after switching Main in %s", async (locale) => {
+it.each(["en", "ko"] as const)("signs out Main through another ready account in %s", async (locale) => {
   persistPreference(locale);
   await render();
   const name = locale === "en" ? "Sign Out" : "로그아웃";
-  expect(buttons(name)[0]!.disabled).toBe(true);
-  expect(host.textContent).toContain(locale === "en" ? "Set another account as Main on the Usage page before signing out." : "로그아웃하려면 사용량 페이지에서 다른 계정을 기본으로 설정하세요.");
+  expect(buttons(name)[0]!.disabled).toBe(false);
+  await act(async () => buttons(name)[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "account-1" }) });
   state.instances[0]!.accountMain = false;
   state.instances[1]!.accountMain = true;
   state.instances = [...state.instances];
   await update();
   expect(buttons(name)[0]!.disabled).toBe(false);
-  expect(buttons(name)[1]!.disabled).toBe(true);
+  expect(buttons(name)[1]!.disabled).toBe(false);
   await act(async () => buttons(name)[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
 });
@@ -187,7 +202,6 @@ it("keeps single-account sign-out unchanged", async () => {
   expect(buttons("Sign Out")[0]!.disabled).toBe(false);
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
-  expect(host.textContent).not.toContain("Set another account");
 });
 
 it.each([false, true])("retries a failed drain with its recorded destination when Main is %s", async (main) => {

@@ -7,12 +7,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { I18nProvider } from "@/lib/i18n";
 import { EngineSetup } from "./EngineSetup";
 
-it("offers one-click sign-in for an installed CLI", () => {
+it.each([false, true])("offers one-click sign-in for an installed CLI (explicit error: %s)", (signIn) => {
   const previous = globalThis.window;
   Object.defineProperty(globalThis, "window", { value: { ogb: { platform: "win32" } }, configurable: true, writable: true });
   try {
-    const row = { ...instance({ state: "available", authenticated: false }), install: { login: { args: ["login"] }, signInCommand: "fake login" } };
-    const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EngineSetup, { instance: row })));
+    const row = { ...instance({ state: "available", authenticated: signIn ? undefined : false }), install: { login: { args: ["login"] }, signInCommand: "fake login" } };
+    const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EngineSetup, { instance: row, signIn })));
     expect(html).toContain(">Sign In<");
     expect(html).toContain(">Not signed in<");
     expect(html).not.toContain("fake login");

@@ -29,7 +29,7 @@ export function SignInCard({ instance, help, onRetry }: { instance: InstanceInfo
   return (
     <Row instance={instance} title={t("engine.signInTo", { name: instance.displayName })} help={help}>
       <div className="flex flex-col items-end gap-1.5">
-        <EngineSignIn instance={instance} buttonClassName={BUTTON} />
+        <EngineSignIn instance={instance} buttonClassName={BUTTON} forceSignIn />
         {/* agy never reports signed-in, so this card can't flip to Retry */}
         {onRetry && <button type="button" onClick={onRetry} className="text-[12px] text-ink-secondary underline hover:text-ink">{t("composer.retry")}</button>}
       </div>

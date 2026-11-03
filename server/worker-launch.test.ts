@@ -44,6 +44,20 @@ async function fixture() {
 }
 
 describe("trusted worker accounts", () => {
+  it.each(["HOME", "USERPROFILE"])("resolves pinned Codex workers from the base profile's %s", async (selector) => {
+    const f = await fixture();
+    vi.stubEnv("CODEX_HOME", "");
+    vi.stubEnv("HOME", "");
+    vi.stubEnv("USERPROFILE", "");
+    try {
+      const profile = join(DATA_DIR, "profile-home");
+      f.bases.codex.environment = { [selector]: profile };
+      f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+      const launch = await f.prepare({ ...f.input, command: "codex 'task'" });
+      expect(launch).toMatchObject({ kind: "managed", environment: { CODEX_HOME: join(profile, ".codex") } });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("captures the emitting account when adopting a continuation", async () => {
     const f = await fixture();
     f.turns.settled("thread");
