@@ -17,17 +17,21 @@ export function createAccountRuntime(deps: {
   bots?: BotAccounts;
 }) {
   const bots = deps.bots ?? new BotAccounts(deps.accounts, deps.registry, deps.store, {
-    active: deps.botActive, captured: (threadId) => deps.providers.current(threadId),
+    captured: (threadId) => deps.providers.current(threadId),
   });
   return new AccountLifecycle(deps.accounts, deps.registry, {
     reload: deps.reload,
     configBusy: deps.configBusy,
     panesBusy: () => accountPanesBusy(deps.terminal()),
     referenced: async (id, activeOnly) => {
+      if (!activeOnly && deps.accounts.defaultFor(deps.accounts.get(id)?.of ?? id) === id) return true;
       if (deps.providers.inUse(id) || deps.registry.accountBusy(id) || deps.usage.busy(id)) return true;
       for (const bot of deps.store.bots) {
         const selected = bots.references(bot, id);
         if (selected && (!activeOnly || deps.botActive(bot.id))) return true;
+        const of = deps.accounts.get(id)?.of ?? id;
+        // A dispatch claim may still be setting up its captured instance.
+        if (activeOnly && deps.botActive(bot.id) && [bot.modelSelection, bot.pendingModelSelection].some((selection) => selection?.instanceId === of)) return true;
         if ((bot.tasks ?? []).some((task) => deps.registry.get(id)?.adapter.hasSession(task.threadId) || deps.registry.get(id)?.adapter.hasBackgroundWork?.(task.threadId))) return true;
       }
       return activeOnly ? false : accountPanesBusy(deps.terminal());

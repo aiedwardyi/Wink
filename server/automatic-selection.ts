@@ -30,13 +30,12 @@ export function resolveAutomaticSelection(input: {
   current?: ModelSelection;
   continuity?: { instanceId?: string; model?: string };
   required?: readonly AutomaticCapability[];
-  boundAccountId?: string;
 }): ModelSelection | null {
   const required = input.required ?? [];
   const eligible = input.candidates.filter(
     (candidate) =>
       candidate.available &&
-      (input.boundAccountId ? candidate.instanceId === input.boundAccountId : !candidate.accountOf) &&
+      !candidate.accountOf &&
       candidate.defaultModel &&
       !isRetiredEngineKind(candidate.driverKind) &&
       required.every((capability) => candidate.capabilities[capability] === true),
@@ -58,11 +57,11 @@ export function resolveAutomaticSelection(input: {
   if (!candidate) return null;
 
   const continuityModel =
-    !input.boundAccountId && input.continuity?.instanceId === candidate.instanceId ? input.continuity.model : undefined;
+    input.continuity?.instanceId === candidate.instanceId ? input.continuity.model : undefined;
   const currentModel = input.current?.instanceId === candidate.instanceId ? input.current.model : undefined;
   const autoFirst = candidate.driverKind === AUTO_FIRST.driverKind && !continuityModel && !currentModel;
   const selection: ModelSelection = {
-    mode: input.boundAccountId ? "pinned" : "automatic",
+    mode: "automatic",
     instanceId: candidate.instanceId,
     model: continuityModel || currentModel || (autoFirst ? AUTO_FIRST.model : candidate.defaultModel),
   };

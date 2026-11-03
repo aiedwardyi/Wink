@@ -711,7 +711,7 @@ function askBotAndWait(
   });
 }
 
-const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>[number]): AutomaticCandidate => ({
+const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>[number]): AutomaticCandidate => botAccounts.automaticCandidate({
   instanceId: entry.instanceId,
   accountOf: "accountOf" in entry ? entry.accountOf : undefined,
   driverKind: entry.driverKind,
@@ -720,7 +720,7 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
   capabilities: entry.capabilities,
   effortLevels: entry.capabilities.effortLevels,
   rateLimits: rateLimitsByInstance.get(entry.instanceId)?.windows,
-});
+}, (id) => { const instance = registry.get(id); return instance ? liveAutomaticCandidate(instance) : undefined; });
 
 const automaticAvailability = new Map<string, boolean>();
 
@@ -731,7 +731,7 @@ function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof regist
 }
 
 function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate {
-  return {
+  return botAccounts.automaticCandidate({
     instanceId: instance.instanceId,
     accountOf: instance.account?.of,
     driverKind: instance.driverKind,
@@ -747,7 +747,7 @@ function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate 
     },
     effortLevels: instance.adapter.capabilities.effortLevels,
     rateLimits: rateLimitsByInstance.get(instance.instanceId)?.windows,
-  };
+  }, (id) => { const selected = registry.get(id); return selected ? liveAutomaticCandidate(selected) : undefined; });
 }
 
 function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
@@ -765,25 +765,16 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
 }
 
 async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
-  if (botAccounts.hasPending(bot.id)) await botAccounts.settle(bot.id, true);
-  const bound = botAccounts.resolve(bot);
-  if (bound !== bot.modelSelection) {
-    const instance = registry.get(bound.instanceId);
-    if (!instance || !resolveAutomaticSelection({
-      candidates: [liveAutomaticCandidate(instance)], current: bound,
-      boundAccountId: bound.instanceId, required: automaticRequirements(bot),
-    })) throw Object.assign(new Error("This account cannot run this bot's tools; choose an account"), { status: 409 });
-    return bound;
-  }
-  if (bot.modelSelection.mode !== "automatic") return bot.modelSelection;
-  const preferredIds = [...new Set([task?.lastInstanceId, bot.modelSelection.instanceId].filter(Boolean))];
+  if (bot.modelSelection.mode !== "automatic") return botAccounts.resolve(bot, automaticRequirements(bot));
+  const continuityId = task?.lastInstanceId && (accounts.get(task.lastInstanceId)?.of ?? task.lastInstanceId);
+  const preferredIds = [...new Set([continuityId, bot.modelSelection.instanceId].filter(Boolean))];
   const preferred = preferredIds.flatMap((instanceId) => {
     const instance = registry.get(instanceId!);
     return instance ? [liveAutomaticCandidate(instance)] : [];
   });
   const input = {
     current: bot.modelSelection,
-    continuity: task ? { instanceId: task.lastInstanceId, model: task.lastModel } : undefined,
+    continuity: task ? { instanceId: continuityId || undefined, model: task.lastModel } : undefined,
     required: automaticRequirements(bot),
   };
   let selection = resolveAutomaticSelection({ candidates: preferred, ...input });
@@ -802,7 +793,7 @@ async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<
   ) {
     store.patchBot(bot.id, { modelSelection: selection });
   }
-  return selection;
+  return botAccounts.resolve({ modelSelection: selection });
 }
 
 // New bots prefer working engines without cached exhaustion. Automatic keeps the choice
@@ -846,7 +837,6 @@ function checkedModelSelection(
   raw: unknown,
   existing = false,
   requireAvailableModel = false,
-  botId?: string,
 ): { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, status: 400, error: "modelSelection must be an object" };
@@ -873,9 +863,9 @@ function checkedModelSelection(
     }
     selection.effort = value.effort;
   }
-  try { selection = botAccounts.checkSelection(botId ? store.bot(botId) ?? undefined : undefined, selection); }
+  try { selection = botAccounts.checkSelection(selection); }
   catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
-  const target = registry.get(botAccounts.catalogInstanceId(botId ? store.bot(botId) ?? undefined : undefined, selection));
+  const target = registry.get(botAccounts.catalogInstanceId(selection));
   // Model IDs remain free-form at the app's general API boundary. Custom
   // engines can accept IDs that are not in their discovery catalog, and
   // several drivers only learn the final catalog when a turn starts. The
@@ -938,7 +928,7 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
 const botAccounts = new BotAccounts(accounts, registry, store, {
-  active: (id) => botHasActiveTurn(id), captured: (threadId) => providerReload.current(threadId),
+  captured: (threadId) => providerReload.current(threadId),
 });
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
@@ -1160,7 +1150,7 @@ const keepGoing = new KeepGoing({
   packet: (threadId) => taskPacketForWrite(threadId),
   usage: async (botId) => {
     const bot = store.bot(botId);
-    const instanceId = bot && botAccounts.hasBinding(bot.id)
+    const instanceId = bot && accounts.defaultFor(bot.modelSelection.instanceId)
       ? botAccounts.instance(bot)?.instanceId ?? "" : bot?.modelSelection.instanceId ?? "";
     const previous = rateLimitsByInstance.get(instanceId);
     if (previous?.windows.length && Number.isFinite(Date.parse(previous.observedAt)) && Date.now() - Date.parse(previous.observedAt) <= KEEP_GOING_USAGE_FRESH_MS) return previous;
@@ -1209,7 +1199,7 @@ const limitWaits = new LimitWaits({
     if (!bot || !store.taskByThread(bot.id, bot.threadId) || bot.paneWakePaused) return null;
     const controlKey = createHash("sha256").update(JSON.stringify([
       bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg, accounts.snapshot)[instanceId ?? bot.modelSelection.instanceId],
-      ...(botAccounts.hasBinding(bot.id) ? [accounts.binding(bot.id)] : []),
+      ...(accounts.snapshot.length ? [accounts.defaultFor(bot.modelSelection.instanceId), bot.pendingModelSelection && accounts.defaultFor(bot.pendingModelSelection.instanceId)] : []),
       lastUserInstruction(store.activePath(bot.threadId))?.messageId,
     ])).digest("hex");
     return { threadId: bot.threadId, controlKey, busy: botHasActiveTurn(botId) || hasQueuedSends(botId) };
@@ -2719,7 +2709,7 @@ const summaryBuild = createSummaryBuild({
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: (botId) => noteGenerator(registry.instances(), botAccounts.noteAccount(store.bot(botId) ?? undefined)),
+  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);
@@ -4082,7 +4072,6 @@ bus.subscribe((event: RuntimeEvent) => {
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   providerReload.settled(event.threadId);
-  if (accounts.pendingBindings.length) void botAccounts.settlePending().catch(console.error);
   drainQueuedSends();
   paneWake.settled();
   // after both, so held sends and pane wakes claim the bot before a queued routine;
@@ -6909,7 +6898,7 @@ function reloadProviders() {
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
-if (accounts.snapshot.length || Object.keys(accounts.drains).length || accounts.pendingBindings.length) await accountRuntime.restore();
+if (accounts.snapshot.length || Object.keys(accounts.drains).length) await accountRuntime.restore();
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });

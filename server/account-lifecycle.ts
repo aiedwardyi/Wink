@@ -52,7 +52,6 @@ export class AccountLifecycle {
         else await this.observe(account.id, snapshot ?? { state: "unavailable" });
       }
     }
-    await this.bots?.settlePending();
     await this.resumeDrains();
   }
 
@@ -67,17 +66,11 @@ export class AccountLifecycle {
     }, false);
   }
 
-  moveBots(id: string, destinationId: string) {
+  useForBots(id: string) {
     return this.exclusive(async () => {
-      if (!this.bots) throw new AccountError("Bot account routing is unavailable", 503);
-      return this.bots.move(id, destinationId);
-    });
-  }
-
-  bindBot(botId: string, accountId: string) {
-    return this.exclusive(async () => {
-      if (!this.bots) throw new AccountError("Bot account routing is unavailable", 503);
-      return this.bots.pick(botId, accountId);
+      if (!this.bots) throw new AccountError("Account routing is unavailable", 503);
+      await this.bots.useForBots(id);
+      return {};
     });
   }
 
@@ -159,7 +152,7 @@ export class AccountLifecycle {
       if (this.bots?.hasReferences(id) && !lastExisting) throw new AccountError("This account is still used by a bot or pending choice; a confirmed destination account id is required", 400);
       if (!account) {
         if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
-        const guarded = this.bots?.hasLocalReferences(id) || this.accounts.snapshot.length > 0;
+        const guarded = this.accounts.snapshot.length > 0;
         if (guarded) {
           const blocked = this.registry.accountBlocked(id);
           this.registry.blockAccount(id, true);
@@ -225,17 +218,10 @@ export class AccountLifecycle {
       await this.accounts.drain(id, drain.destinationId, "signed-out");
     }
     const added = Boolean(this.accounts.get(id));
-    let plan!: ReturnType<BotAccounts["removalPlan"]>;
-    await this.accounts.finishDrain(id, destination, () => {
-      this.bots!.destination(id, drain.destinationId);
-      plan = this.bots!.removalPlan(id, destination);
-      return plan.bindings;
-    });
-    this.bots!.applyRemoval(plan, id, destination);
+    await this.accounts.finishDrain(id, destination, () => { this.bots!.destination(id, drain.destinationId); });
     this.hooks.invalidate(id);
     await this.hooks.reload();
     this.registry.blockAccount(id, !added);
-    await this.bots!.settlePending();
     return { state: "removed", destinationId: drain.destinationId };
   }
 

@@ -32,7 +32,7 @@ type BotRouteDeps = {
   MAX_WORKSPACE_BOTS: number;
   defaultSelection: () => Promise<ModelSelection>;
   botJobSchema: z.ZodString;
-  checkedModelSelection: (raw: unknown, existing?: boolean, requireAvailableModel?: boolean, botId?: string) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
+  checkedModelSelection: (raw: unknown, existing?: boolean, requireAvailableModel?: boolean) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
   wireBot: (bot: BotRecord) => Record<string, unknown>;
@@ -280,7 +280,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       }
       let normalizedSelection: ModelSelection | undefined;
       if (rawSelection !== undefined) {
-        const checked = checkedModelSelection(rawSelection, Boolean(existingBot), body.requireAvailableModel === true, existingBot?.id);
+        const checked = checkedModelSelection(rawSelection, Boolean(existingBot), body.requireAvailableModel === true);
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
         normalizedSelection = checked.selection;
       }
@@ -440,9 +440,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       // After the awaits above, so the pick sees the bot's busy state now.
       if (normalizedSelection && existingBot) {
         if (!sameModelSelection(existingBot.pendingModelSelection ?? existingBot.modelSelection, normalizedSelection)) deps.cancelUsageWait?.(existingBot.id);
-        Object.assign(patch, deps.accountBots?.hasBinding(existingBot.id)
-          ? await deps.accountBots.pickModel(existingBot, normalizedSelection)
-          : modelPickPatch(existingBot, normalizedSelection));
+        Object.assign(patch, modelPickPatch(existingBot, normalizedSelection));
       }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
@@ -459,7 +457,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
           ? store.setChiefOfStaff(bot.id)
           : [];
       if (chiefChanges === null) return json(res, 404, { error: "no such bot" });
-      if (normalizedSelection && body.holdForSwitch !== true && !deps.accountBots?.hasPending(bot.id)) {
+      if (normalizedSelection && body.holdForSwitch !== true) {
         await applyEffortPick(store, registry, bot.id, normalizedSelection, deps.accountBots?.instance(bot)?.instanceId);
       }
       return json(res, 200, { bot: wireBot(store.bot(bot.id) ?? bot) });
