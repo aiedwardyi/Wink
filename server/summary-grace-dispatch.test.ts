@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { estimateContextTokens, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, withoutTurnNotes } from "./context-compaction.ts";
+import { joinRunningTurn } from "./continuation-turn.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
 import { KEEP_GOING_RULES, keepGoingTurnOptions } from "./keep-going.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } from "./steer-queue.ts";
@@ -177,7 +178,7 @@ describe("summary grace dispatch", () => {
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
-        leanStartup: false, isUnattended: () => false,
+        leanStartup: false, isUnattended: () => false, joinRunningTurn, runningTurnIdByThread: new Map(),
       };
       const dispatched = runDispatch(scope);
       await vi.advanceTimersByTimeAsync(0);
