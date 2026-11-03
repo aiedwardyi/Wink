@@ -107,14 +107,14 @@ async function render(bot: Bot, instances: InstanceInfo[]) {
   };
   await act(async () => root.render(createElement(StoreProvider, null, createElement(Harness))));
   await act(async () => store.dispatch({ type: "instances", instances }));
-  return host;
+  return { host, dispatch: store!.dispatch };
 }
 
 const meter = (host: HTMLElement, label: string) => host.querySelector(`[aria-label="${label}"]`);
 
 describe("ChatView plan meters follow the shown pick", () => {
   it("hides ChatPlanMeters when a busy bot's pending pick reports no windows", async () => {
-    const host = await render(
+    const { host } = await render(
       { ...busy, pendingModelSelection: { instanceId: "gemini", model: "gemini-flash", effort: "high" } },
       [claude, gemini],
     );
@@ -123,7 +123,7 @@ describe("ChatView plan meters follow the shown pick", () => {
   });
 
   it("shows the pending instance's windows in ChatPlanMeters", async () => {
-    const host = await render(
+    const { host } = await render(
       { ...busy, pendingModelSelection: { instanceId: "muse", model: "muse-model", effort: "high" } },
       [claude, muse],
     );
@@ -134,8 +134,38 @@ describe("ChatView plan meters follow the shown pick", () => {
   });
 
   it("shows the running engine's bars in ChatPlanMeters when nothing is pending", async () => {
-    const host = await render(busy, [claude, gemini]);
+    const { host } = await render(busy, [claude, gemini]);
     expect(meter(host, "5h: 29% remaining")).not.toBeNull();
     expect(host.textContent).not.toContain("Last seen");
+  });
+
+  it.each(["claudeAgent", "codex"])("switches %s windows immediately when Main changes", async (driverKind) => {
+    const base = { ...claude, driverKind, accountOf: "claude", accountMain: true };
+    const second: InstanceInfo = {
+      ...base, instanceId: "second", accountMain: false,
+      rateLimits: {
+        observedAt: new Date(now).toISOString(),
+        windows: [
+          { id: "five_hour", usedPercent: 12, resetsAt: now + 7_200_000 },
+          { id: "seven_day", usedPercent: 34, resetsAt: now + 86_400_000 },
+        ],
+      },
+    };
+    const { host, dispatch } = await render(busy, [base, second]);
+    expect(meter(host, "5h: 29% remaining")).not.toBeNull();
+    await act(async () => dispatch({ type: "instances", instances: [
+      { ...base, accountMain: false }, { ...second, accountMain: true },
+    ] }));
+    expect(meter(host, "5h: 88% remaining")).not.toBeNull();
+    expect(meter(host, "7d: 66% remaining")).not.toBeNull();
+    expect(meter(host, "5h: 29% remaining")).toBeNull();
+    await act(async () => dispatch({ type: "rateLimits", instanceId: "second", report: {
+      observedAt: new Date(now).toISOString(),
+      windows: [{ id: "five_hour", usedPercent: 20, resetsAt: now + 7_200_000 }],
+    } }));
+    expect(meter(host, "5h: 80% remaining")).not.toBeNull();
+    await act(async () => dispatch({ type: "instances", instances: [base, second] }));
+    expect(meter(host, "5h: 29% remaining")).not.toBeNull();
+    expect(meter(host, "5h: 80% remaining")).toBeNull();
   });
 });

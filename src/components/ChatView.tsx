@@ -101,6 +101,7 @@ import { useReplyDraft } from "@/lib/drafts";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { usageLimitReset } from "@/lib/usage";
+import { usageAccount } from "@/lib/accounts";
 import { useNow } from "./PlanUsageBar";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
@@ -917,7 +918,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   const provisioning = state.provisioning[bot.id];
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
   const engine = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
-  const shownEngine = state.instances.find((i) => i.instanceId === shownModelSelection(bot).instanceId);
+  const shownEngine = usageAccount(state.instances, shownModelSelection(bot).instanceId);
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const callAvailable =
     capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
