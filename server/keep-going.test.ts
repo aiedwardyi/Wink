@@ -818,6 +818,7 @@ describe("KeepGoing server wiring", () => {
     const scope = {
       store: { bot: () => ({ modelSelection: { instanceId: "engine" } }) },
       rateLimitsByInstance, cfg: {}, instanceConfigs: () => ({ engine: config }),
+      accounts: { snapshot: [] },
       registry: { get: () => ({ driverKind: "claude" }) }, refreshUsage, scheduleSaveRateLimits,
       KEEP_GOING_USAGE_FRESH_MS, DATA_DIR: dir, z,
     };
