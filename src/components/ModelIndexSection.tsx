@@ -6,7 +6,6 @@ import { Maximize2, X } from "lucide-react";
 import { useStore } from "@/state/store";
 import { localeTag, useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
-import { cn } from "@/lib/cn";
 import { isPhone } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
 import {
@@ -30,6 +29,7 @@ import {
 } from "@/lib/model-index";
 import { MODEL_INDEX_SOURCES, type ModelIndexKey, type ModelPrice } from "../../shared/model-index-data.ts";
 import "./ModelIndexSection.css";
+import { Segmented } from "./Segmented";
 
 type View = "scatter" | "bars";
 type Tab = Exclude<ModelIndexKey, "agentic">;
@@ -232,84 +232,6 @@ function Swatch({ provider }: { provider: string }) {
   return <span aria-hidden className="h-[3px] w-3 shrink-0 rounded-full" style={{ background: color(provider) }} />;
 }
 
-function edgeFade(el: HTMLElement): string | undefined {
-  const start = el.scrollLeft > 1;
-  const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 1;
-  if (!start && !end) return undefined;
-  return `linear-gradient(to right, ${start ? "transparent" : "black"}, black 24px, black calc(100% - 24px), ${end ? "transparent" : "black"})`;
-}
-
-function Segmented<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  value: T;
-  options: Array<{ id: T; label: string }>;
-  onChange: (id: T) => void;
-  disabled?: (id: T) => boolean;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [thumb, setThumb] = useState<{ x: number; w: number } | null>(null);
-  const [mask, setMask] = useState<string | undefined>();
-  useLayoutEffect(() => {
-    const group = ref.current;
-    if (!group) return;
-    const place = () => {
-      const on = group.querySelector<HTMLElement>('[aria-checked="true"]');
-      setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
-      setMask(edgeFade(group));
-    };
-    place();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(place);
-    observer.observe(group);
-    for (const button of group.querySelectorAll("button")) observer.observe(button);
-    return () => observer.disconnect();
-  }, [value, options.length]);
-  return (
-    <div
-      ref={ref}
-      role="radiogroup"
-      aria-label={label}
-      onScroll={(e) => setMask(edgeFade(e.currentTarget))}
-      className="relative flex w-fit min-w-0 max-w-full gap-0.5 overflow-x-auto rounded-lg bg-inset p-[3px] pointer-coarse:[scrollbar-width:none] pointer-coarse:[&::-webkit-scrollbar]:hidden"
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
-    >
-      {thumb && (
-        <span
-          aria-hidden
-          data-mi-thumb
-          className="pointer-events-none absolute inset-y-[3px] left-0 rounded-[max(0px,calc(var(--radius-lg)_-_3px))] bg-raised shadow-sm ring-1 ring-hairline/60"
-          style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
-        />
-      )}
-      {options.map((option) => {
-        const selected = value === option.id;
-        const off = disabled?.(option.id) ?? false;
-        return (
-          <button
-            key={option.id}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            disabled={off}
-            onClick={() => onChange(option.id)}
-            className={cn(
-              "relative shrink-0 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_3px))] px-3 py-1 text-[12.5px] font-medium transition-colors disabled:opacity-40",
-              selected ? "text-ink" : "text-ink-secondary enabled:hover:text-ink",
-            )}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /**
  * Greedy, in priority order: eight spots hugging each anchor, then rings farther out

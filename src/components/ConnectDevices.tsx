@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { devicesSetup } from "@/lib/devices-setup";
 import type { RemotePhoneLink } from "@/lib/phone-setup";
 import { api } from "@/state/store";
+import { SegmentedRow } from "./Segmented";
 import { button, GetTailscaleLink, openOutside, StepMark, StoreCodes, StoreLinks } from "./DeviceSetupParts";
 
 function activeText(lastSeen: number, now: number, t: Translate): string {
@@ -191,14 +192,13 @@ export function ConnectDevices() {
           </> : <p className={help}>{t(setup.help)}</p>)}
         </Step>
       </ol>}
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-hairline/40 pt-3">
-        <h3 className="text-[13px] font-medium text-ink">{t("settings.devices.add")}</h3>
-        <div role="radiogroup" aria-label={t("settings.devices.add")} className="flex gap-1 rounded-lg bg-inset p-0.5">
-          {(["phone", "pc"] as const).map((id) => <button key={id} type="button" role="radio" aria-checked={tab === id} onClick={() => setTab(id)}
-            className={cn("min-w-16 rounded-md px-3 py-1.5 text-center text-[13px] font-medium transition-colors", tab === id ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}>
-            {t(`settings.devices.${id}`)}
-          </button>)}
-        </div>
+      <div className="mt-3 border-t border-hairline/40 pt-3">
+        <SegmentedRow
+          label={t("settings.devices.add")}
+          value={tab}
+          options={(["phone", "pc"] as const).map((id) => ({ id, label: t(`settings.devices.${id}`) }))}
+          onChange={setTab}
+        />
       </div>
       <ol key={tab} className="animate-fade-in mt-3 flex flex-col gap-3">
         {tab === "phone" ? <>
@@ -222,7 +222,7 @@ export function ConnectDevices() {
             <div className="mt-1"><GetTailscaleLink onOpen={waitForChange} /></div>
             {ready && copyButton}
           </Step>
-          {deviceWindow && <Step n={2} done={false} active={ready && setup.pcOnline} title={pcs[0] ? t("settings.devices.openPc", { name: pcs[0].name }) : t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
+          {deviceWindow && <Step n={2} done={false} active={ready && setup.pcOnline} title={t("settings.devices.openPcEmpty")} label={t("settings.devices.openButton")}>
             {pcs.map((pc) => <button key={pc.host} type="button" onClick={() => {
               setPcFailed(false);
               void deviceWindow.open(pc.host, pc.name).then((opened) => {

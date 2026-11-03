@@ -1,7 +1,7 @@
 // App-language control. English and Korean are first-class; "Match this
 // computer" keeps following the OS until the person picks one explicitly.
 import { useI18n, type LocalePreference } from "@/lib/i18n";
-import { cn } from "@/lib/cn";
+import { SegmentedRow } from "./Segmented";
 import { Card } from "./SettingsPrimitives";
 
 const OPTIONS: LocalePreference[] = ["system", "en", "ko"];
@@ -9,29 +9,15 @@ const OPTIONS: LocalePreference[] = ["system", "en", "ko"];
 export function LanguagePicker() {
   const { t, preference, setPreference } = useI18n();
   return (
-    <Card title={t("language.title")}>
-      <div role="radiogroup" aria-label={t("language.title")} className="flex gap-1 rounded-lg bg-inset p-0.5">
-        {OPTIONS.map((id) => {
-          const selected = preference === id;
-          const label =
-            id === "system" ? t("language.matchSystem") : id === "en" ? t("language.name.en") : t("language.name.ko");
-          return (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => setPreference(id)}
-              className={cn(
-                "min-w-0 flex-1 rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
-                selected ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
-              )}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+    <Card>
+      <SegmentedRow<LocalePreference>
+        label={t("language.title")}
+        value={preference}
+        options={OPTIONS.map((id) => ({
+          id, label: id === "system" ? t("language.matchSystem") : id === "en" ? t("language.name.en") : t("language.name.ko"),
+        }))}
+        onChange={setPreference}
+      />
     </Card>
   );
 }

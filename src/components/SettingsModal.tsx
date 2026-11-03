@@ -11,6 +11,7 @@ import { updaterActions, useManualCheck, useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
 import { Card } from "./SettingsPrimitives";
+import { SegmentedRow } from "./Segmented";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
 import { TeamSection, type TeamView } from "./TeamSection";
@@ -189,25 +190,13 @@ function ReplyStyleRow() {
   const { t } = useI18n();
   const style = useReplyStyle();
   return (
-    <div className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
-      <div className="min-w-0 text-[14px] font-medium text-ink">{t("settings.replyStyle.title")}</div>
-      <div role="radiogroup" aria-label={t("settings.replyStyle.title")} className="flex shrink-0 gap-1 rounded-lg bg-inset p-0.5">
-        {(["paragraphs", "live"] as ReplyStyle[]).map((option) => (
-          <button
-            key={option}
-            type="button"
-            role="radio"
-            aria-checked={style === option}
-            onClick={() => saveReplyStyle(option)}
-            className={cn(
-              "flex-1 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
-              style === option ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
-            )}
-          >
-            {option === "paragraphs" ? t("settings.replyStyle.paragraphs") : t("settings.replyStyle.live")}
-          </button>
-        ))}
-      </div>
+    <div className="py-4 first:pt-0 last:pb-0">
+      <SegmentedRow<ReplyStyle>
+        label={t("settings.replyStyle.title")}
+        value={style}
+        options={(["paragraphs", "live"] as const).map((id) => ({ id, label: t(`settings.replyStyle.${id}`) }))}
+        onChange={saveReplyStyle}
+      />
     </div>
   );
 }
@@ -258,34 +247,17 @@ function DetailedRepliesRow() {
   );
 }
 
-const SIDEBAR_SIDE_OPTIONS: SidebarSide[] = ["left", "right"];
-
 function SidebarSideRow() {
   const { t } = useI18n();
   const [side, setSide] = useState<SidebarSide>(() => loadSidebarSide());
   return (
-    <div className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
-      <div className="min-w-0 text-[14px] font-medium text-ink">{t("settings.sidebarSide.title")}</div>
-      <div role="radiogroup" aria-label={t("settings.sidebarSide.title")} className="flex shrink-0 gap-1 rounded-lg bg-inset p-0.5">
-        {SIDEBAR_SIDE_OPTIONS.map((option) => {
-          const selected = side === option;
-          return (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => { saveSidebarSide(option); setSide(option); }}
-              className={cn(
-                "flex-1 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
-                selected ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
-              )}
-            >
-              {option === "left" ? t("settings.sidebarSide.left") : t("settings.sidebarSide.right")}
-            </button>
-          );
-        })}
-      </div>
+    <div className="py-4 first:pt-0 last:pb-0">
+      <SegmentedRow<SidebarSide>
+        label={t("settings.sidebarSide.title")}
+        value={side}
+        options={(["left", "right"] as const).map((id) => ({ id, label: t(`settings.sidebarSide.${id}`) }))}
+        onChange={(option) => { saveSidebarSide(option); setSide(option); }}
+      />
     </div>
   );
 }
@@ -342,24 +314,14 @@ function RainbowBoxRow() {
   const { t } = useI18n();
   const box = useRainbowBox();
   return (
-    <Card title={t("settings.rainbowBox.title")} subtitle={t("settings.rainbowBox.help")}>
-      <div role="radiogroup" aria-label={t("settings.rainbowBox.title")} className="flex gap-1 rounded-lg bg-inset p-0.5">
-        {(["off", "rainbow", "theme"] as RainbowBox[]).map((option) => (
-          <button
-            key={option}
-            type="button"
-            role="radio"
-            aria-checked={box === option}
-            onClick={() => saveRainbowBox(option)}
-            className={cn(
-              "flex-1 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
-              box === option ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
-            )}
-          >
-            {t(`settings.rainbowBox.${option}`)}
-          </button>
-        ))}
-      </div>
+    <Card>
+      <SegmentedRow<RainbowBox>
+        label={t("settings.rainbowBox.title")}
+        hint={t("settings.rainbowBox.help")}
+        value={box}
+        options={(["off", "rainbow", "theme"] as const).map((id) => ({ id, label: t(`settings.rainbowBox.${id}`) }))}
+        onChange={saveRainbowBox}
+      />
     </Card>
   );
 }
