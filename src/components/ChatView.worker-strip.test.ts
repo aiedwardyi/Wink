@@ -38,7 +38,7 @@ async function mount(workers: number, phone: boolean) {
   return { header, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
-const marks = (el: Element | null | undefined) => el ? [...el.querySelectorAll("[data-worker-state]")].map((mark) => mark.getAttribute("data-worker-state")) : [];
+const glyphs = (el: Element | null | undefined) => el?.querySelectorAll(".lucide-bot.text-ink-secondary").length ?? 0;
 
 afterEach(() => {
   applyLocale("en");
@@ -49,31 +49,32 @@ afterEach(() => {
 });
 
 describe("chat header worker strip", () => {
-  it.each([false, true])("shows one mark for one worker with phone=%s", async (phone) => {
+  it.each([false, true])("labels one worker and hides its compact count with phone=%s", async (phone) => {
     const { header, unmount } = await mount(1, phone);
     try {
       const strip = header.querySelector("[data-worker-strip]")!;
       expect(header.firstElementChild?.contains(strip)).toBe(false);
-      expect(marks(strip.querySelector("[data-worker-chip-desktop]"))).toEqual(["waiting"]);
-      expect(marks(strip.querySelector("[data-worker-chip-phone]"))).toEqual(["waiting"]);
-      expect(strip.textContent).toBe("");
+      expect(glyphs(strip.querySelector("[data-worker-chip-desktop]"))).toBe(1);
+      expect(glyphs(strip.querySelector("[data-worker-chip-phone]"))).toBe(1);
+      expect(strip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("1 worker");
+      expect(strip.querySelector("[data-worker-chip-phone]")?.textContent).toBe("");
+      expect(strip.querySelectorAll(".bg-warning")).toHaveLength(2);
+      expect(strip.getAttribute("title")).toBe("Workers (Alt+W)");
       expect(strip.getAttribute("aria-label")).toBe("0 working, 1 waiting, 0 failed, 0 done. Show workers");
       expect(header.querySelector("[data-worker-status]")).toBeNull();
-      expect(header.textContent).not.toMatch(/worker/i);
     } finally { await unmount(); }
   });
 
-  it.each([false, true])("shows three marks plus four and a phone count of seven with phone=%s", async (phone) => {
+  it.each([false, true])("labels seven workers and shows the compact count with phone=%s", async (phone) => {
     const { header, unmount } = await mount(7, phone);
     try {
       const strip = header.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
-      expect(marks(strip.querySelector("[data-worker-chip-desktop]"))).toHaveLength(3);
-      expect(strip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("+4");
-      expect(marks(strip.querySelector("[data-worker-chip-phone]"))).toHaveLength(1);
+      expect(glyphs(strip.querySelector("[data-worker-chip-desktop]"))).toBe(1);
+      expect(strip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("7 workers");
+      expect(glyphs(strip.querySelector("[data-worker-chip-phone]"))).toBe(1);
       expect(strip.querySelector("[data-worker-chip-phone]")?.textContent).toBe("7");
       expect(strip.getAttribute("aria-label")).toBe("6 working, 1 waiting, 0 failed, 0 done. Show workers");
       expect(header.querySelector("[data-worker-status]")).toBeNull();
-      expect(header.textContent).not.toMatch(/7 workers/);
       await act(async () => strip.click());
       expect(document.body.querySelectorAll("[data-worker-list] li")).toHaveLength(7);
     } finally { await unmount(); }
@@ -92,6 +93,8 @@ describe("chat header worker strip", () => {
     const { header, unmount } = await mount(7, false);
     try {
       expect(header.querySelector("[data-worker-strip]")?.getAttribute("aria-label")).toBe("작업 중 6개, 대기 중 1개, 실패 0개, 완료 0개. 작업자 보기");
+      expect(header.querySelector("[data-worker-strip]")?.getAttribute("title")).toBe("작업자 (Alt+W)");
+      expect(header.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("작업자 7개");
     } finally { await unmount(); }
   });
 });

@@ -392,9 +392,9 @@ describe("ChatView worker rows", () => {
       expect(host.querySelector("[data-orbit-composer]")?.closest("[class*='z-[2]']")?.querySelector("[data-worker-strip]") ?? null).toBeNull();
       expect(strip.getAttribute("aria-label")).toBe("1 working, 1 waiting, 0 failed, 0 done. Show workers");
       const desktop = strip.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.textContent).toBe("");
-      expect(Array.from(desktop.querySelectorAll("[data-worker-state]")).map((el) => el.getAttribute("data-worker-state"))).toEqual(["waiting", "working"]);
-      expect(desktop.querySelectorAll("svg")).toHaveLength(2);
+      expect(desktop.textContent).toBe("2 workers");
+      expect(desktop.querySelector(".bg-warning")).not.toBeNull();
+      expect(desktop.querySelectorAll(".lucide-bot")).toHaveLength(1);
       await act(async () => { strip.click(); });
       const list = document.body.querySelector("[data-worker-list]")!;
       expect(list.getAttribute("role")).toBe("dialog");
@@ -409,7 +409,7 @@ describe("ChatView worker rows", () => {
     }
   });
 
-  it("caps the header chip at three marks and counts the rest", async () => {
+  it("labels all workers and shows the compact count", async () => {
     stubDom();
     // SAFETY: botA is a full Bot fixture; only messages is replaced, with valid Messages.
     const current = { ...botA, messages: [userMsg("ua", "go"), ...Array.from({ length: 7 }, (_, i) => launch(`${i}0000000-1`, `W${i} | Opus 5.5 | high`, i + 1))] } as Bot;
@@ -417,10 +417,10 @@ describe("ChatView worker rows", () => {
     try {
       const strip = host.querySelector("[data-worker-strip]")!;
       const desktop = strip.querySelector("[data-worker-chip-desktop]")!;
-      expect(desktop.querySelectorAll("[data-worker-state]")).toHaveLength(3);
-      expect(desktop.textContent).toBe("+4");
+      expect(desktop.querySelectorAll(".lucide-bot")).toHaveLength(1);
+      expect(desktop.textContent).toBe("7 workers");
       const phone = strip.querySelector("[data-worker-chip-phone]")!;
-      expect(phone.querySelectorAll("[data-worker-state]")).toHaveLength(1);
+      expect(phone.querySelectorAll(".lucide-bot")).toHaveLength(1);
       expect(phone.textContent).toBe("7");
       expect(strip.getAttribute("aria-label")).toBe("7 working, 0 waiting, 0 failed, 0 done. Show workers");
     } finally {
@@ -447,11 +447,11 @@ describe("ChatView worker rows", () => {
     const onOpen = vi.fn();
     const { host, unmount } = await mountChat(current, onOpen);
     try {
-      await vi.waitFor(() => expect(host.querySelector("[data-worker-chip-desktop] [data-worker-state]")?.getAttribute("data-worker-state")).toBe("done"));
+      await vi.waitFor(() => expect(host.querySelector("[data-worker-chip-desktop] .bg-success")).not.toBeNull());
       const chip = host.querySelector<HTMLButtonElement>("[data-worker-strip]")!;
       expect(chip.closest("[class*='@container/chathead']")).not.toBeNull();
       expect(host.querySelector("[data-orbit-composer]")?.closest("[class*='z-[2]']")?.querySelector("[data-worker-strip]") ?? null).toBeNull();
-      expect([...chip.querySelectorAll("[data-worker-chip-desktop] [data-worker-state]")].map((el) => el.getAttribute("data-worker-state"))).toEqual(["done"]);
+      expect(chip.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("1 worker");
       await act(async () => chip.click());
       const entry = document.body.querySelector<HTMLButtonElement>("[data-worker-list] li button")!;
       expect(entry.textContent).toContain("COPY");
@@ -504,7 +504,7 @@ describe("ChatView worker rows", () => {
       try {
         await settle();
         expect(states(host)).toEqual(["working", "ended", "working"]);
-        expect(host.querySelector("[data-worker-chip-desktop]")?.querySelectorAll("[data-worker-state]")).toHaveLength(2);
+        expect(host.querySelector("[data-worker-chip-desktop]")?.textContent).toBe("2 workers");
         expect(calls).toEqual([`GET ${terminalPath}`]);
       } finally {
         await unmount();
