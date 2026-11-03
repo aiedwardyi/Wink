@@ -11,7 +11,7 @@ import { beginRun, readModels, readSnapshot, root, saveRaw, writeSnapshot } from
 
 const FETCHED = [
   { name: "lmarena-webdev", fetcher: lmarena },
-  { name: "vals-legalbench", fetcher: vals.legal },
+  { name: "vals-legal-research", fetcher: vals.legalResearch },
   { name: "vals-cyberbench", fetcher: vals.cyber },
   { name: "list-prices", fetcher: listPrices },
 ];

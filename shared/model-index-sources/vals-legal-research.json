@@ -1,0 +1,185 @@
+{
+  "benchmark": "vals-legal-research",
+  "version": "1",
+  "index": "legal",
+  "label": "Vals.ai Legal Research Bench (all-pass)",
+  "updated": "2026-10-29",
+  "rows": [
+    {
+      "model": "claude-fable-5",
+      "effort": "all",
+      "value": 49.519,
+      "cost_per_task": 9.791426,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "all",
+      "value": 55.288,
+      "cost_per_task": 23.055789,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "all",
+      "value": 50.481,
+      "cost_per_task": 25.163725,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "all",
+      "value": 48.077,
+      "cost_per_task": 14.826571,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "all",
+      "value": 43.75,
+      "cost_per_task": 1.647359,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-argon",
+      "effort": "all",
+      "value": 54.808,
+      "cost_per_task": 6.44908,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "effort": "all",
+      "value": 38.942,
+      "cost_per_task": 1.630498,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "muse-spark-1.3",
+      "effort": "xhigh",
+      "value": 40.865,
+      "cost_per_task": 0.650063,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "muse-spark-1.3",
+      "effort": "max",
+      "value": 55.288,
+      "cost_per_task": 0.588812,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "all",
+      "value": 41.346,
+      "cost_per_task": 7.907299,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6-astra",
+      "effort": "all",
+      "value": 39.423,
+      "cost_per_task": 10.577143,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6-luna",
+      "effort": "all",
+      "value": 30.288,
+      "cost_per_task": 0.440296,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "effort": "all",
+      "value": 38.462,
+      "cost_per_task": 3.384561,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "grok-4.6",
+      "effort": "all",
+      "value": 48.077,
+      "cost_per_task": 1.530204,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "grok-4.7",
+      "effort": "all",
+      "value": 47.115,
+      "cost_per_task": 4.920812,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "all",
+      "value": 25.962,
+      "cost_per_task": 3.220614,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-03T11:05:22.749Z",
+      "kind": "independent"
+    }
+  ]
+}

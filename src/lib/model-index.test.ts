@@ -175,20 +175,21 @@ describe("sourced data", () => {
     expect(MODEL_INDEX_AS_OF).toBe(new Date(newest).toISOString().slice(0, 10));
   });
 
-  it("charts Legal once per model and keeps undated costs empty", () => {
+  it("charts Legal Research Bench for 14 picker models at each run's own cost", () => {
     const legal = MODEL_INDEX_ENTRIES.filter((e) => e.index === "legal");
-    expect(legal.length).toBeGreaterThan(0);
+    expect([...new Set(indexView("legal", []).points.map((e) => e.model))].sort()).toEqual(PICKER_MODEL_IDS.filter((id) => !id.endsWith("-contributor")).sort());
     for (const e of legal) {
-      expect(e.effort, e.model).toBe("all");
-      if (e.cost === undefined) {
-        expect(e.scoreDate, e.model).toBeDefined();
-        expect(e.costBenchmark, e.model).toBeUndefined();
-        expect(e.costSource, e.model).toBeUndefined();
-        continue;
-      }
-      expect([e.effort, e.costBenchmark, e.costSource], e.model).toEqual(["all", "vals-legalbench", "https://www.vals.ai/benchmarks/legal_bench"]);
+      expect([e.benchmark, e.costBenchmark, e.costSource], e.model).toEqual(["vals-legal-research", "vals-legal-research", "https://www.vals.ai/benchmarks/legal_research"]);
       expect(e.cost, e.model).toBeGreaterThan(0);
     }
+    expect(legal.filter((e) => e.model === "muse-spark-1.3").map((e) => [e.effort, e.score, e.cost])).toEqual([["xhigh", 40.865, 0.650063], ["max", 55.288, 0.588812]]);
+  });
+
+  it("keeps LegalBench fills in history without building them into the current chart", () => {
+    const history = JSON.parse(readFileSync(join(ROOT, "shared/model-index-sources/vals-legalbench.json"), "utf8"));
+    expect(history.active).toBe(false);
+    expect(history.rows.find((row: { model: string }) => row.model === "gpt-6-astra")).toMatchObject({ value: 87.1, score_date: { date: "2026-11-03", kind: "checked" } });
+    expect(MODEL_INDEX_ENTRIES.map((e) => e.benchmark)).not.toContain("vals-legalbench");
   });
 
   it("keeps filled score dates separate from retrieval and model release dates", () => {
@@ -237,7 +238,7 @@ describe("sourced data", () => {
       ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
       ["design", "lmarena-webdev", "high", 1674.1842418710726, undefined],
       ["security", "vals-cyberbench", "all", 77.857, 5.113798],
-      ["legal", "vals-legalbench", "all", 88.299, 0.016117],
+      ["legal", "vals-legal-research", "all", 54.808, 6.44908],
     ]);
     for (const e of scored) expect(e.kind).toBe("independent");
   });

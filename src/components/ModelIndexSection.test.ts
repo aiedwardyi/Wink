@@ -85,6 +85,21 @@ describe("benchmark hotkey", () => {
 });
 
 describe("coding tabs", () => {
+  it("labels Legal Research Bench in English and Korean", async () => {
+    pick("Benchmark", "Legal");
+    expect(host.textContent).toContain("Legal Research Bench, % all-pass");
+    expect(host.textContent).not.toContain("LegalBench, % accuracy");
+    try {
+      vi.stubGlobal("localStorage", { getItem: () => "ko" });
+      applyLocale("ko");
+      await mount();
+      pick("벤치마크", "법률");
+      expect(host.textContent).toContain("Legal Research Bench, 전체 통과율 %");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("fits desktop tabs with compact padding and hides the scrollbar on every pointer type", () => {
     const tabs = group("Benchmark")!;
     expect(tabs.className).toContain("[scrollbar-width:none]");

@@ -1,9 +1,10 @@
-// Refreshes shared/model-index-sources/vals-legalbench.json and vals-cyberbench.json from their Vals.ai benchmark pages. Usage: node scripts/model-index/fetch-vals.mjs
+// Refreshes Legal Research Bench and CyberBench from their Vals.ai benchmark pages. Usage: node scripts/model-index/fetch-vals.mjs
 import { pathToFileURL } from "node:url";
 import { get, keepFilledRows, readModels, readSnapshot, saveRaw, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
 
 export const BENCHMARKS = {
   "vals-legalbench": { id: "legal_bench", name: "LegalBench", url: "https://www.vals.ai/benchmarks/legal_bench" },
+  "vals-legal-research": { id: "legal_research", name: "Legal Research Bench", url: "https://www.vals.ai/benchmarks/legal_research" },
   "vals-cyberbench": { id: "cyberbench", name: "CyberBench", url: "https://www.vals.ai/benchmarks/cyber" },
 };
 
@@ -80,11 +81,11 @@ const fetcher = (benchmark) => ({
   },
 });
 
-export const legal = fetcher("vals-legalbench");
+export const legalResearch = fetcher("vals-legal-research");
 export const cyber = fetcher("vals-cyberbench");
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  for (const [benchmark, run] of [["vals-legalbench", legal], ["vals-cyberbench", cyber]]) {
+  for (const [benchmark, run] of [["vals-legal-research", legalResearch], ["vals-cyberbench", cyber]]) {
     try {
       const { snapshot, unmapped } = await run.fetchSnapshot();
       writeSnapshot(benchmark, snapshot);
