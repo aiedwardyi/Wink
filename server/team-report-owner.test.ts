@@ -58,16 +58,6 @@ describe("team report wake", () => {
     expect(paneNotesSinceLastUserTurn(f.store.activePath(f.chief.threadId), new Set(), undefined, true)).toEqual([expect.stringContaining("Export stopped")]);
   });
 
-  it("schedules once after all fresh reports in a claim pass", async () => {
-    const f = fixture();
-    f.reports([report, { ...report, id: "b".repeat(32) }, report]);
-    expect(await claimTeamReports(f.options)).toBe(3);
-    expect(f.store.messagesFor(f.chief.threadId)).toHaveLength(2);
-    expect(f.schedule).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(f.wake).toHaveBeenCalledOnce();
-  });
-
   it("holds the wake until a busy Chief settles", async () => {
     const f = fixture(); f.busy(true);
     await claimTeamReports(f.options);

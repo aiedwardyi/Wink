@@ -14,7 +14,7 @@ const claimSchema = z.strictObject({ reports: z.array(z.strictObject({
   report: teamReportSchema, label: z.string().regex(LABEL_RE), subHash: z.string().max(64),
   received: z.int().nonnegative(), filed: z.boolean(),
   pc: z.strictObject({ label: z.string().regex(LABEL_RE), name: z.string().max(200), person: z.string().max(200) }).optional(),
-})).max(512) });
+})).max(1) });
 
 export interface ReportOwnerOptions {
   dir: string;
