@@ -616,6 +616,8 @@ export const en = {
   "routine.card.actionFor": "{action} for {name}",
   "chrome.connectedApps": "Connected apps",
   "connectedApps.view": "Connected apps view",
+  "connectedApps.statusStale": "Showing the last known connections. Their status could not be checked. Retry the connection check to refresh them.",
+  "connectedApps.statusUnknown": "Connection status could not be checked. Retry the connection check before adding an account.",
   "connectedApps.unavailable":
     "Connected apps are temporarily unavailable. You can retry after restarting, or configure your own connection service.",
   "chrome.appSettings": "App settings",
@@ -2017,6 +2019,8 @@ export const ko = {
   "routine.card.actionFor": "{name} {action}",
   "chrome.connectedApps": "연결 앱",
   "connectedApps.view": "연결 앱 보기",
+  "connectedApps.statusStale": "마지막으로 확인된 연결을 표시합니다. 현재 상태를 확인하지 못했습니다. 연결 확인을 다시 시도해 새로고침하세요.",
+  "connectedApps.statusUnknown": "연결 상태를 확인하지 못했습니다. 계정을 추가하기 전에 연결 확인을 다시 시도하세요.",
   "connectedApps.unavailable":
     "연결 앱을 일시적으로 사용할 수 없습니다. 다시 시작한 뒤 다시 시도하거나, 직접 연결 서비스를 구성하세요.",
   "chrome.appSettings": "앱 설정",

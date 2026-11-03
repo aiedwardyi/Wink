@@ -71,7 +71,7 @@ const localFilePath = (href?: string): string | null => {
       return null;
     }
   }
-  return absolutePath(decodeHref(href));
+  return absolutePath(decodeHref(href.replace(/[#?].*$/, "")));
 };
 
 // react-markdown's default transform blanks file: URLs and "C:\…" paths (an

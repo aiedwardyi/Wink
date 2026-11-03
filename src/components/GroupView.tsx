@@ -35,7 +35,7 @@ import { detectChatOptions, laterUserAnswer } from "@/lib/chat-options";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { Composer } from "./Composer";
 import { EngineSetup, setupErrorAction } from "./EngineSetup";
-import { TaskRecoveryCard } from "./TaskRecoveryCard";
+import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { roomRecoveryBusy, roomRecoveryPacket } from "@/lib/task-recovery";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReconnectingCue } from "./ReconnectingCue";
@@ -479,6 +479,8 @@ export const Transcript = memo(function Transcript({
                 pinned={pinnedQuestion(group.messages)?.id === m.id}
               />
             </div>
+          ) : m.kind === "compaction" ? (
+            <ContextCompactionDivider message={m} />
           ) : m.kind === "routine.run" ? (
             <div className="flex justify-start">
               <RoutineRunCard

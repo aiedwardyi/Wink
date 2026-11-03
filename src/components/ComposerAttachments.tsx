@@ -27,6 +27,7 @@ export function pathForFile(file: File): string {
 
 /** Renders pending attachments and their composer actions. */
 export function ComposerAttachments({
+  disabled = false,
   items,
   onAdd,
   onRemove,
@@ -38,6 +39,7 @@ export function ComposerAttachments({
   onRetryUpload,
   onRepickUpload,
 }: {
+  disabled?: boolean;
   items: Attachment[];
   onAdd: (attachments: Attachment[], uploads: { id: string; file: File }[], startedAt?: number) => void;
   onRemove: (id: string) => void;
@@ -62,6 +64,7 @@ export function ComposerAttachments({
     const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
     const onEnter = (e: DragEvent) => {
+      if (disabled) return;
       if (!carriesFiles(e)) return;
       depth.current += 1;
       setDragging(true);
@@ -81,6 +84,7 @@ export function ComposerAttachments({
       e.preventDefault();
       depth.current = 0;
       setDragging(false);
+      if (disabled) return;
       const files = Array.from(e.dataTransfer?.files ?? []);
       const startedAt = performance.now();
       // Same intake the attach button uses: a dropped file and a picked one
@@ -110,7 +114,7 @@ export function ComposerAttachments({
       window.removeEventListener("dragover", onOver);
       window.removeEventListener("drop", onDrop);
     };
-  }, [onAdd, allowImages, onNotice, t]);
+  }, [onAdd, allowImages, onNotice, t, disabled]);
 
   return (
     <>
