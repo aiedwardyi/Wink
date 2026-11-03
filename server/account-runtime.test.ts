@@ -10,6 +10,7 @@ import { EventBus } from "./harness/bus.ts";
 import { makeFakeDriver } from "./testing/fake-driver.ts";
 import { createUsageRefresh } from "./usage-refresh.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
+import type { ProviderSnapshot } from "./contracts.ts";
 
 const core = await import("./accounts.ts").catch(() => null);
 const runtime = await import("./account-runtime.ts").catch(() => null);
@@ -23,24 +24,29 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function fixture() {
+async function fixture(kind = "codex") {
   expect(core, "account service exists").not.toBeNull();
   expect(runtime, "account runtime exists").not.toBeNull();
   const root = join(DATA_DIR, `runtime-${++serial}`);
   mkdirSync(root, { recursive: true });
-  const bases = { codex: { driver: "codex" } };
+  const of = kind === "codex" ? "codex" : "claude";
+  const bases = { [of]: { driver: kind } };
   const accounts = new core!.AccountService(root, () => bases);
-  const added = await accounts.add("codex");
+  const added = await accounts.add(of);
   const account = await accounts.identify(added.id, "identity");
-  const fake = makeFakeDriver({ kind: "codex" }).driver;
+  const statuses = new Map<string, ProviderSnapshot>();
+  const fake = makeFakeDriver({ kind }).driver;
   const create = fake.create;
-  fake.create = async (input) => ({ ...await create(input), account: input.account });
+  fake.create = async (input) => {
+    const instance = await create(input);
+    return { ...instance, account: input.account, snapshot: async () => statuses.get(input.instanceId) ?? instance.snapshot() };
+  };
   const registry = new ProviderRegistry([fake]);
   registries.push(registry);
   const configs = () => instanceConfigs({ instances: bases }, accounts.snapshot);
   await registry.load(configs());
   const providers = new ProviderReload(registry, new EventBus(() => {}), configs());
-  const store = new Store(() => ({ instanceId: "codex", model: "codex-1" }));
+  const store = new Store(() => ({ instanceId: of, model: `${kind}-1` }));
   const bot = store.createBot({ name: "Account fixture" });
   const logout = vi.spyOn(registry, "signOut").mockResolvedValue(true);
   const rateLimits: RateLimitsMap = new Map([[account.id, { observedAt: new Date().toISOString(), windows: [] }], ["codex", { observedAt: new Date().toISOString(), windows: [] }]]);
@@ -57,10 +63,46 @@ async function fixture() {
     terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: () => false,
   });
   controllers.push(controller);
-  return { account, accounts, registry, providers, store, bot, logout, rateLimits, availability, invalidate, holds, waits, request, controller };
+  return { account, accounts, registry, providers, store, bot, logout, rateLimits, availability, invalidate, holds, waits, request, controller, statuses, usage };
 }
 
 describe("account removal references", () => {
+  it.each(["claudeAgent", "codex"])("accepts an idle %s identity change discovered by the registry's own probe", async (kind) => {
+    const f = await fixture(kind);
+    await f.accounts.setDefault(f.account.of, f.account.id);
+    f.statuses.set(f.account.id, { state: "available", authenticated: true, accountIdentity: "changed" });
+    const rows = await f.registry.describe({ refresh: true });
+    expect(f.accounts.get(f.account.id)).toMatchObject({ state: "ready", identity: "changed", generation: f.account.generation + 1 });
+    expect(f.registry.accountAvailable(f.account.id)).toBe(true);
+    expect(f.controller.bots!.resolve(f.bot).instanceId).toBe(f.account.id);
+    expect(rows.find((row) => row.instanceId === f.account.id)).toMatchObject({ accountGeneration: f.account.generation + 1 });
+    expect(f.invalidate).toHaveBeenCalledExactlyOnceWith(f.account.id);
+  });
+
+  it.each(["turn", "helper", "usage", "session", "background"])("keeps a real %s reference guarded during identity observation", async (work) => {
+    const f = await fixture();
+    if (work === "turn") f.providers.started("captured", f.account.id);
+    if (work === "helper") f.registry.get(f.account.id)!.accountBusy = () => true;
+    if (work === "usage") vi.spyOn(f.usage, "busy").mockReturnValue(true);
+    if (work === "session") f.registry.get(f.account.id)!.adapter.hasSession = () => true;
+    if (work === "background") f.registry.get(f.account.id)!.adapter.hasBackgroundWork = () => true;
+    f.statuses.set(f.account.id, { state: "available", authenticated: true, accountIdentity: "changed" });
+    await f.registry.describe({ refresh: true });
+    expect(f.accounts.get(f.account.id)).toMatchObject({ state: "stopped", identity: "identity", generation: f.account.generation });
+    expect(f.registry.accountBlocked(f.account.id)).toBe(true);
+    expect(f.invalidate).not.toHaveBeenCalled();
+    if (work === "turn") f.providers.settled("captured");
+  });
+
+  it("keeps an identity observer failure unavailable in the cached rows", async () => {
+    const f = await fixture();
+    f.registry.onAccountIdentity(async () => { throw new Error("identity observation failed"); });
+    const rows = await f.registry.describe({ refresh: true });
+    expect(rows.find((row) => row.instanceId === f.account.id)?.snapshot).toEqual({ state: "unavailable", reason: "identity observation failed" });
+    const cached = await f.registry.describeCached();
+    expect(cached.find((row) => row.instanceId === f.account.id)?.snapshot).toEqual({ state: "unavailable", reason: "identity observation failed" });
+  });
+
   it.each(["pane", "unknown", "unreachable"])("refuses sign-in with %s account pane state", async (state) => {
     const f = await fixture();
     const start = vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});

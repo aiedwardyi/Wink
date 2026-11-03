@@ -31,7 +31,7 @@ export const PICKER_MODEL_IDS: readonly string[] = [
 ];
 
 export function pickerRows(instances: InstanceInfo[], current: ModelSelection, preview = current): PickerRow[] {
-  instances = instances.filter((instance) => !instance.accountOf)
+  instances = instances.filter((instance) => !instance.accountOf || instance.accountOf === instance.instanceId)
     .map((instance) => instance.pickerSnapshot ? { ...instance, snapshot: instance.pickerSnapshot } : instance);
   const ordered: Array<{ instance: InstanceInfo; label: string }> = ENGINES.flatMap(([kind, label]) => instances
     .filter((instance) => instance.driverKind === kind)

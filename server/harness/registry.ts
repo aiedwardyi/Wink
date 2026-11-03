@@ -494,15 +494,27 @@ export class ProviderRegistry {
   ): Promise<Probe> {
     const id = entry.instanceId;
     if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
-    const pending = this.probe(entry, candidatesFor, opts);
-    this.probing.set(id, pending);
-    void pending.then((probe) => {
+    const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
         this.probed.set(id, probe);
+        // Identity observation must not count its own completed probe as live work.
         this.probing.delete(id);
         this.probeVersion += 1;
+        if (entry.live?.account) {
+          try { await this.accountIdentity?.(id, probe.snapshot); }
+          catch (error) {
+            const failed = { ...probe, snapshot: { state: "unavailable" as const, reason: error instanceof Error ? error.message : String(error) } };
+            if (this.byId.get(id) === entry && this.probed.get(id) === probe) {
+              this.probed.set(id, failed);
+              this.probeVersion += 1;
+            }
+            return failed;
+          }
+        }
       }
+      return probe;
     });
+    this.probing.set(id, pending);
     return pending;
   }
 
@@ -559,10 +571,6 @@ export class ProviderRegistry {
       snapshot = await inst.snapshot(opts);
     } catch (e) {
       snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) };
-    }
-    if (inst.account && this.get(inst.instanceId) === inst) {
-      try { await this.accountIdentity?.(inst.instanceId, snapshot); }
-      catch (e) { snapshot = { state: "unavailable", reason: e instanceof Error ? e.message : String(e) }; }
     }
     return {
       snapshot,
