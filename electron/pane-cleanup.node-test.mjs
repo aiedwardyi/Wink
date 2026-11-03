@@ -219,6 +219,14 @@ test("startup and six-hour sweeps use unreferenced timers", (t) => {
   assert.equal(f.jobs[0].ms, 6 * 60 * 60_000);
 });
 
+test("starting cleanup twice keeps one disposable sweep timer", (t) => {
+  const f = fixture(t);
+  f.cleanup.start(() => []);
+  assert.equal(f.jobs.length, 1);
+  f.cleanup.dispose();
+  assert.equal(f.jobs.length, 0);
+});
+
 test("a busy delete retries once after sixty seconds and rechecks open panes", async (t) => {
   const f = fixture(t);
   const promises = await import("node:fs/promises");
@@ -276,6 +284,168 @@ test("a saved, clean, idle ledger worktree is removed without its branch or link
   assert.match(git(main, "branch", "--list", "test-worker"), /test-worker/);
   assert.doesNotMatch(git(main, "worktree", "list"), /worktrees[\\/]worker/);
 });
+
+test("a candidate's own link does not count as an incoming link", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  fs.symlinkSync(process.platform === "win32" ? target : ".", path.join(target, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+});
+
+test("a failed removal preserves a tracked external symlink", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const precious = path.join(f.home, "precious");
+  fs.mkdirSync(precious);
+  fs.writeFileSync(path.join(precious, "file"), "safe");
+  git(target, "config", "core.symlinks", "true");
+  const link = path.join(target, "tracked-link");
+  fs.symlinkSync(precious, link, process.platform === "win32" ? "junction" : "dir");
+  if (process.platform === "win32") {
+    const hash = execFileSync("git", ["-C", target, "hash-object", "-w", "--stdin"], { input: fs.readlinkSync(link), encoding: "utf8", windowsHide: true }).trim();
+    git(target, "update-index", "--add", "--cacheinfo", "120000", hash, "tracked-link");
+    git(target, "update-index", "--assume-unchanged", "tracked-link");
+  } else git(target, "add", "tracked-link");
+  git(target, "commit", "--quiet", "-m", "link");
+  git(target, "update-ref", "refs/remotes/test/main", "HEAD");
+  assert.match(git(target, "ls-files", "--stage", "tracked-link"), /^120000 /);
+  assert.equal(git(target, "status", "--porcelain"), "");
+  const ignored = path.join(target, "node_modules");
+  fs.symlinkSync(f.home, ignored, process.platform === "win32" ? "junction" : "dir");
+  const promises = await import("node:fs/promises");
+  const unlink = promises.default.unlink;
+  t.mock.method(promises.default, "unlink", async (file) => {
+    if (file === ignored) fs.writeFileSync(path.join(target, "racing-write"), "keep");
+    return unlink(file);
+  });
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(path.join(precious, "file"), "utf8"), "safe");
+  assert.doesNotMatch(git(target, "status", "--porcelain"), /D tracked-link/);
+  t.mock.restoreAll();
+});
+
+for (const origin of ["worktree", "scratch"]) {
+  test(`deep incoming ${origin} links retain their destination`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    const root = origin === "worktree" ? path.join(f.worktreeRoot, "host") : path.join(f.tempRoot, "wink-OTHER");
+    const folder = path.join(root, "project", "node_modules", ".pnpm", "pkg", "node_modules");
+    fs.mkdirSync(folder, { recursive: true });
+    const link = path.join(folder, "pkg");
+    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(target), true);
+    assert.equal(fs.realpathSync(link), fs.realpathSync(target));
+    fs.unlinkSync(link);
+  });
+}
+
+test("a missing old TEMP root does not block another worktree", async (t) => {
+  const f = fixture(t);
+  const root = path.join(f.home, "old-temp");
+  fs.mkdirSync(root);
+  const old = { ...f.session, id: "old", tempRoot: root };
+  f.cleanup.opened(old);
+  await f.cleanup.closed(old, true);
+  fs.rmdirSync(root);
+  const { target } = repo(f);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.deepEqual(f.warnings, []);
+});
+
+for (const incoming of [false, true]) {
+  test(`a dangling scratch link ${incoming ? "into the candidate retains it" : "elsewhere does not block cleanup"}`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    const link = path.join(f.tempRoot, "wink-OLD");
+    fs.symlinkSync(path.join(incoming ? target : f.home, "missing"), link, process.platform === "win32" ? "junction" : "dir");
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(target), incoming, f.warnings.map(String).join("\n"));
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.deepEqual(f.warnings, []);
+    fs.unlinkSync(link);
+  });
+}
+
+for (const restart of [false, true]) {
+  test(`removed worktree ownership cannot delete a reused path${restart ? " after restart" : ""}`, async (t) => {
+    const f = fixture(t);
+    const { main, target } = repo(f);
+    fs.mkdirSync(path.join(target, "sub"));
+    const other = { ...f.session, id: "other", cwd: path.join(target, "sub") };
+    f.cleanup.opened(other);
+    await f.cleanup.closed(other, true);
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+    git(main, "worktree", "add", "--quiet", "-b", "unrelated", target);
+    fs.writeFileSync(path.join(target, "file"), "unrelated");
+    git(target, "commit", "--quiet", "-am", "replacement");
+    git(target, "update-ref", "refs/remotes/test/replacement", "HEAD");
+    f.advance(2 * DAY_MS);
+    const cleanup = restart ? createPaneCleanup(f.options) : f.cleanup;
+    t.after(() => cleanup.dispose());
+    if (restart) cleanup.start(() => []);
+    await cleanup.sweep();
+    assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "unrelated");
+  });
+}
+
+test("completed ledger rows are pruned without repeated git errors", async (t) => {
+  const f = fixture(t);
+  repo(f);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.deepEqual(f.ledger(), []);
+  await f.cleanup.sweep();
+  assert.deepEqual(f.warnings, []);
+});
+
+for (const pin of ["bot", "bot task", "room", "room pin", "room task", "unreadable"]) {
+  test(`production cleanup refreshes persisted ${pin} paths`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    await eligible(f);
+    const dataDir = pin === "bot" ? path.join(f.home, ".orbit") : path.join(f.home, "data");
+    fs.mkdirSync(dataDir, { recursive: true });
+    const savePins = (bots, groups) => {
+      fs.writeFileSync(path.join(dataDir, "bots.json"), JSON.stringify(bots));
+      fs.writeFileSync(path.join(dataDir, "groups.json"), JSON.stringify(groups));
+    };
+    savePins([], []);
+    const source = fs.readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+    const expression = source.match(/paneCleanup: (createPaneCleanup\(\{[^\n]+\}\)),/)[1];
+    const module = await import("./pane-cleanup.mjs");
+    const env = { ORBIT_WORKTREE_ROOT: f.worktreeRoot };
+    if (pin !== "bot") env.OMB_DATA_DIR = dataDir;
+    const options = new Function("app", "process", "path", "readCleanupPins", "slog", "createPaneCleanup", `return ${expression};`)(
+      { getPath: () => f.home }, { env }, path, module.readCleanupPins, () => {}, (value) => value,
+    );
+    const cleanup = createPaneCleanup({ ...f.options, ...options });
+    cleanup.start(() => []);
+    t.after(() => cleanup.dispose());
+    const cwd = path.join(target, "not-created");
+    if (pin === "bot") savePins([{ cwd }], []);
+    if (pin === "bot task") savePins([{ tasks: [{ cwd }] }], []);
+    if (pin === "room") savePins([], [{ cwd }]);
+    if (pin === "room pin") savePins([], [{ pinnedCwd: cwd }]);
+    if (pin === "room task") savePins([], [{ tasks: [{ pinnedCwd: cwd }] }]);
+    if (pin === "unreadable") fs.writeFileSync(path.join(dataDir, "bots.json"), "{");
+    await cleanup.sweep();
+    assert.equal(fs.existsSync(target), true);
+    savePins([], []);
+    await cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+  });
+}
 
 for (const gate of ["none", "open pane", "pinned", "recent close"]) {
   test(`short aliases keep the worktree gate for ${gate}`, { skip: process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
@@ -388,7 +558,7 @@ for (const gate of ["dirty", "unpushed", "open pane", "recent close", "recent wr
   });
 }
 
-for (const close of ["closeForBot", "close"]) {
+for (const close of ["closeForBot", "close", "closeBotPanes"]) {
   test(`${close} cleans reported scratch after retiring the shell`, async (t) => {
     const f = fixture(t);
     const owner = { id: 1, send() {}, isDestroyed: () => false };
@@ -403,11 +573,37 @@ for (const close of ["closeForBot", "close"]) {
     const pane = await host.openForBot("bot", { label: "TEST | model", command: "codex test" });
     host.attendBot("bot", pane.sessionId, "report");
     if (close === "closeForBot") await host.closeForBot("bot", pane.sessionId);
-    else await host.close({ sender: owner }, pane.sessionId);
+    else if (close === "close") await host.close({ sender: owner }, pane.sessionId);
+    else await host.closeBotPanes("bot");
     await f.cleanup.flush();
     assert.equal(killed, true);
     assert.equal(fs.existsSync(f.scratch), false);
     assert.equal(f.ledger()[0].closedAt > 0, true);
+  });
+}
+
+for (const delay of [0, 1]) {
+  test(`a follow-up without its own report preserves scratch after ${delay} ms`, async (t) => {
+    const f = fixture(t);
+    const owner = { id: 1, send() {}, isDestroyed: () => false };
+    const host = createTerminalHost({
+      authorize() {}, owner: () => owner, resolveCwd: async () => f.home, now: f.options.now,
+      platform: "linux", env: { SHELL: "/bin/sh", TEMP: f.tempRoot }, freeMemory: () => 64 * 1024 ** 3,
+      paneCleanup: f.cleanup,
+      loadPty: () => ({ spawn: () => ({ onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }) }),
+    });
+    t.after(() => host.dispose());
+    const pane = await host.openForBot("bot", { label: "TEST", command: "codex test" });
+    host.attendBot("bot", pane.sessionId, "report");
+    f.advance(delay);
+    host.sendBot("bot", { sessionId: pane.sessionId, generation: pane.generation, text: "follow up\r" });
+    await host.closeForBot("bot", pane.sessionId);
+    await f.cleanup.flush();
+    assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+    assert.equal(f.ledger()[0].reported, false);
+    f.advance(DAY_MS);
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(f.scratch), false);
   });
 }
 

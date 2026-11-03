@@ -1465,7 +1465,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       deletedBots.add(botId);
       for (const session of botSessions(botId)) if (session.botPane) paneRuns?.closed(session.id);
-      return Promise.all(botSessions(botId).filter((session) => session.botPane).map((session) => retire(session, true)));
+      return Promise.all(botSessions(botId).filter((session) => session.botPane).map((session) => retire(session, true).then(() => { void paneCleanup?.closed(session); })));
     },
     closeForBot(botId, sessionId, keep = false) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.

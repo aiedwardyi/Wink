@@ -1,4 +1,3 @@
-import { unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
@@ -9,6 +8,7 @@ import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
+import { removeRotatingLog } from "./rotating-log.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
 import type { GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
@@ -326,9 +326,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       store.deleteGroup(group.id);
       for (const threadId of threadIds) {
         for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
-          try {
-            unlinkSync(join(dir, `${threadId}.ndjson`));
-          } catch {}
+          removeRotatingLog(join(dir, `${threadId}.ndjson`));
         }
       }
       return json(res, 200, { ok: true });

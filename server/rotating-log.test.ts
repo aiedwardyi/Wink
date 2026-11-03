@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { appendRotatingLog, LOG_MAX_BYTES } from "./rotating-log.ts";
+import { appendRotatingLog, LOG_MAX_BYTES, removeRotatingLog } from "./rotating-log.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -30,5 +30,15 @@ describe("log caps", () => {
     appendRotatingLog(file, "first\n", 8);
     expect(readFileSync(file, "utf8")).toBe("first\n");
     expect(existsSync(`${file}.1`)).toBe(false);
+  });
+
+  it("removes an orphaned backup without touching another thread", () => {
+    const dir = temps.make(join(tmpdir(), "log-cap-"));
+    const file = join(dir, "deleted.ndjson");
+    writeFileSync(`${file}.1`, "backup");
+    writeFileSync(join(dir, "kept.ndjson.1"), "keep");
+    removeRotatingLog(file);
+    expect(existsSync(`${file}.1`)).toBe(false);
+    expect(readFileSync(join(dir, "kept.ndjson.1"), "utf8")).toBe("keep");
   });
 });

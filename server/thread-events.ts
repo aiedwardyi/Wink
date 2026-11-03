@@ -154,6 +154,12 @@ function readRecentLines<T>(file: string, limit: number, valid: RecordGuard<T>):
   }
 }
 
+function readRecentLog<T>(file: string, limit: number, valid: RecordGuard<T>): { lines: T[]; total: number } {
+  const current = readRecentLines(file, limit, valid);
+  const backup = readRecentLines(`${file}.1`, Math.max(1, limit - current.lines.length), valid);
+  return { lines: [...backup.lines, ...current.lines].slice(-limit), total: backup.total + current.total };
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const stringOrMissing = (value: unknown) => value === undefined || typeof value === "string";
 const stringOrNullOrMissing = (value: unknown) => value === undefined || value === null || typeof value === "string";
@@ -269,8 +275,8 @@ export function readThreadEvents(input: {
   const requested = input.limit ?? DEFAULT_LIMIT;
   const limit = Number.isFinite(requested) ? Math.max(1, Math.min(Math.trunc(requested), MAX_LIMIT)) : DEFAULT_LIMIT;
 
-  const runtime = readRecentLines(join(eventsDir, `${threadId}.ndjson`), limit, isRuntimeEvent);
-  const native = readRecentLines(join(nativeDir, `${threadId}.ndjson`), limit, isNativeRecord);
+  const runtime = readRecentLog(join(eventsDir, `${threadId}.ndjson`), limit, isRuntimeEvent);
+  const native = readRecentLog(join(nativeDir, `${threadId}.ndjson`), limit, isNativeRecord);
 
   // cap each log on its own, then merge: the native tee is several times
   // chattier than the runtime stream, and one shared cap would leave the

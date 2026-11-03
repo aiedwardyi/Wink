@@ -251,7 +251,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
     computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes, limitWaits: { cancel: noop },
     perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
-    EVENTS_DIR: "events", NATIVE_DIR: "native", join: (...parts: string[]) => parts.join("/"), unlinkSync: noop,
+    EVENTS_DIR: "events", NATIVE_DIR: "native", join: (...parts: string[]) => parts.join("/"), removeRotatingLog: noop,
   });
   const original = options.preparing ? startTurn(bot.id, "original") : Promise.resolve();
   const groupStopDeps = {
