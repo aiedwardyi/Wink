@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -60,6 +61,25 @@ function repo(f, name = "worker") {
   git(main, "worktree", "add", "--quiet", "-b", `test-${name}`, target);
   f.session.cwd = target;
   return { main, target };
+}
+
+function trackedLink(f, target) {
+  const precious = path.join(f.home, "precious");
+  fs.mkdirSync(precious);
+  fs.writeFileSync(path.join(precious, "file"), "safe");
+  git(target, "config", "core.symlinks", "true");
+  const link = path.join(target, "tracked-link");
+  fs.symlinkSync(precious, link, process.platform === "win32" ? "junction" : "dir");
+  if (process.platform === "win32") {
+    const hash = execFileSync("git", ["-C", target, "hash-object", "-w", "--stdin"], { input: fs.readlinkSync(link), encoding: "utf8", windowsHide: true }).trim();
+    git(target, "update-index", "--add", "--cacheinfo", "120000", hash, "tracked-link");
+    git(target, "update-index", "--assume-unchanged", "tracked-link");
+  } else git(target, "add", "tracked-link");
+  git(target, "commit", "--quiet", "-m", "link");
+  git(target, "update-ref", "refs/remotes/test/main", "HEAD");
+  assert.match(git(target, "ls-files", "--stage", "tracked-link"), /^120000 /);
+  assert.equal(git(target, "status", "--porcelain"), "");
+  return { precious, link };
 }
 
 async function eligible(f) {
@@ -294,38 +314,111 @@ test("a candidate's own link does not count as an incoming link", async (t) => {
   assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
 });
 
-test("a failed removal preserves a tracked external symlink", async (t) => {
+for (const short of [false, true]) {
+  test(`a failed removal preserves a tracked external symlink${short ? " through a short alias" : ""}`, { skip: short && process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
+    const f = fixture(t, short);
+    if (!f) return;
+    const { target } = repo(f);
+    const { precious, link } = trackedLink(f, target);
+    const ignored = path.join(target, "node_modules");
+    const longTarget = fs.realpathSync.native(target);
+    const gitfile = fs.readFileSync(path.join(target, ".git"), "utf8");
+    fs.symlinkSync(f.home, ignored, process.platform === "win32" ? "junction" : "dir");
+    const promises = await import("node:fs/promises");
+    const unlink = promises.default.unlink;
+    let raced = false;
+    t.mock.method(promises.default, "unlink", async (file) => {
+      if (path.join(fs.realpathSync.native(path.dirname(file)), path.basename(file)) === path.join(longTarget, "node_modules")) {
+        raced = true;
+        fs.writeFileSync(path.join(target, "racing-write"), "keep");
+      }
+      return unlink(file);
+    });
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(raced, true);
+    assert.equal(fs.readFileSync(path.join(target, ".git"), "utf8"), gitfile);
+    assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+    assert.equal(fs.readFileSync(path.join(target, "racing-write"), "utf8"), "keep");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(precious, "file"), "utf8"), "safe");
+    assert.doesNotMatch(git(target, "status", "--porcelain"), /D tracked-link/);
+    t.mock.restoreAll();
+  });
+
+  test(`a clean worktree preserves a tracked external symlink${short ? " through a short alias" : ""}`, { skip: short && process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
+    const f = fixture(t, short);
+    if (!f) return;
+    const { target } = repo(f);
+    const { precious, link } = trackedLink(f, target);
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+    assert.equal(fs.readFileSync(path.join(precious, "file"), "utf8"), "safe");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(git(target, "status", "--porcelain"), "");
+    assert.deepEqual(f.warnings, []);
+  });
+}
+
+for (const removed of ["tracked file", "whole worktree", "Git metadata"]) {
+  test(`a partial removal restores ${removed}`, async (t) => {
+    const f = fixture(t);
+    const { main, target } = repo(f);
+    const gitdir = git(target, "rev-parse", "--absolute-git-dir");
+    const gitfile = fs.readFileSync(path.join(target, ".git"), "utf8");
+    const execFile = childProcess.execFile;
+    const failure = new Error("partial worktree removal");
+    let attempted = false;
+    t.mock.method(childProcess, "execFile", (file, args, options, callback) => {
+      if (file !== "git" || args[2] !== "worktree" || args[3] !== "remove") return execFile(file, args, options, callback);
+      attempted = true;
+      return execFile(file, ["--version"], options, () => {
+        if (removed === "whole worktree") fs.rmSync(target, { recursive: true });
+        else {
+          fs.unlinkSync(path.join(target, ".git"));
+          fs.unlinkSync(path.join(target, "file"));
+          if (removed === "Git metadata") fs.rmSync(gitdir, { recursive: true });
+        }
+        callback(failure, "");
+      });
+    });
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(attempted, true);
+    assert.equal(fs.readFileSync(path.join(target, ".git"), "utf8"), gitfile);
+    assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+    assert.equal(git(target, "status", "--porcelain"), "");
+    assert.match(git(main, "worktree", "list"), /worktrees[\\/]worker/);
+    assert.equal(f.ledger().some((entry) => !entry.worktreeDone), true);
+    assert.deepEqual(f.warnings, [failure]);
+    assert.deepEqual(fs.readdirSync(f.worktreeRoot), ["worker"]);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+    assert.deepEqual(f.ledger(), []);
+    assert.deepEqual(fs.readdirSync(f.worktreeRoot), []);
+  });
+}
+
+test("a backup failure preserves the worktree before removal", async (t) => {
   const f = fixture(t);
   const { target } = repo(f);
-  const precious = path.join(f.home, "precious");
-  fs.mkdirSync(precious);
-  fs.writeFileSync(path.join(precious, "file"), "safe");
-  git(target, "config", "core.symlinks", "true");
-  const link = path.join(target, "tracked-link");
-  fs.symlinkSync(precious, link, process.platform === "win32" ? "junction" : "dir");
-  if (process.platform === "win32") {
-    const hash = execFileSync("git", ["-C", target, "hash-object", "-w", "--stdin"], { input: fs.readlinkSync(link), encoding: "utf8", windowsHide: true }).trim();
-    git(target, "update-index", "--add", "--cacheinfo", "120000", hash, "tracked-link");
-    git(target, "update-index", "--assume-unchanged", "tracked-link");
-  } else git(target, "add", "tracked-link");
-  git(target, "commit", "--quiet", "-m", "link");
-  git(target, "update-ref", "refs/remotes/test/main", "HEAD");
-  assert.match(git(target, "ls-files", "--stage", "tracked-link"), /^120000 /);
-  assert.equal(git(target, "status", "--porcelain"), "");
-  const ignored = path.join(target, "node_modules");
-  fs.symlinkSync(f.home, ignored, process.platform === "win32" ? "junction" : "dir");
+  const gitfile = fs.readFileSync(path.join(target, ".git"), "utf8");
   const promises = await import("node:fs/promises");
-  const unlink = promises.default.unlink;
-  t.mock.method(promises.default, "unlink", async (file) => {
-    if (file === ignored) fs.writeFileSync(path.join(target, "racing-write"), "keep");
-    return unlink(file);
-  });
+  const failure = Object.assign(new Error("backup denied"), { code: "EACCES" });
+  t.mock.method(promises.default, "link", async () => { throw failure; });
   await eligible(f);
   await f.cleanup.sweep();
-  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
-  assert.equal(fs.readFileSync(path.join(precious, "file"), "utf8"), "safe");
-  assert.doesNotMatch(git(target, "status", "--porcelain"), /D tracked-link/);
-  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(path.join(target, ".git"), "utf8"), gitfile);
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.equal(git(target, "status", "--porcelain"), "");
+  assert.equal(f.ledger().some((entry) => !entry.worktreeDone), true);
+  assert.deepEqual(f.warnings, [failure]);
+  assert.deepEqual(fs.readdirSync(f.worktreeRoot), ["worker"]);
 });
 
 for (const origin of ["worktree", "scratch"]) {

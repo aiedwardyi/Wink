@@ -62,6 +62,45 @@ async function unlinkLinks(root, tracked = new Set()) {
   });
 }
 
+async function linkTree(root, copy) {
+  await fsp.mkdir(copy, { recursive: true });
+  if (!await directory(copy)) throw new Error("linked cleanup backup destination");
+  await walk(root, async (file, stat) => {
+    const destination = path.join(copy, path.relative(root, file));
+    if (stat.isDirectory()) {
+      await fsp.mkdir(destination, { recursive: true });
+      if (!await directory(destination)) throw new Error("linked cleanup backup destination");
+    } else {
+      try {
+        if (stat.isFile()) await fsp.link(file, destination);
+        else throw new Error("unsupported cleanup backup entry");
+      } catch (error) { if (error.code !== "EEXIST") throw error; }
+    }
+  });
+}
+
+async function removeWithBackup(target, gitdir, remove, warn) {
+  const backup = await fsp.mkdtemp(path.join(path.dirname(target), ".pane-cleanup-"));
+  const tree = path.join(backup, "tree");
+  const metadata = path.join(backup, "git");
+  let retain = false;
+  try {
+    // Git also deletes registration metadata after a partial filesystem failure.
+    await linkTree(target, tree);
+    await fsp.cp(gitdir, metadata, { recursive: true });
+    retain = true;
+    try { await remove(); } catch (error) {
+      await fsp.cp(metadata, gitdir, { recursive: true, force: false });
+      await linkTree(tree, target);
+      retain = false;
+      throw error;
+    }
+    retain = false;
+  } finally {
+    if (!retain) await fsp.rm(backup, { recursive: true }).catch(warn);
+  }
+}
+
 export async function readCleanupPins(dataDir) {
   const pins = [];
   for (const name of ["bots.json", "groups.json"]) {
@@ -213,17 +252,20 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const registration = registered.split("\n\n").find((record) => record.split("\n").some((line) => line.startsWith("worktree ") && normalize(line.slice(9)) === normalize(target)));
     if (!registration || /^locked(?: |$)/m.test(registration)) return;
     const common = await git(target, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-    if (normalize(await git(target, ["rev-parse", "--absolute-git-dir"])) === normalize(common)) return;
+    const gitdir = await git(target, ["rev-parse", "--absolute-git-dir"]);
+    if (normalize(gitdir) === normalize(common)) return;
     let changed = (await fsp.lstat(target)).mtimeMs;
     await walk(target, (_file, stat) => { changed = Math.max(changed, stat.mtimeMs); });
     if (now() - changed < DAY_MS || await linkedInto(target) || busy() || await isPinned()) return;
     const tracked = new Set((await git(target, ["ls-files", "-z"])).split("\0").filter(Boolean).map((file) => normalize(path.resolve(target, file))));
     await unlinkLinks(target, tracked);
-    if (busy() || !await directory(target) || await isPinned()) return;
+    if (busy() || !await directory(target) || await isPinned() || await git(target, ["status", "--porcelain"])) return;
+    // Git can traverse tracked Windows junctions while removing the worktree.
+    for (const file of tracked) if ((await fsp.lstat(file)).isSymbolicLink()) return;
     const owned = entries.filter((other) => !other.worktreeDone && inside(target, other.cwd));
     for (const other of owned) other.worktreeDone = true;
     if (!save()) { for (const other of owned) other.worktreeDone = false; return; }
-    try { await git(common, ["worktree", "remove", target]); } catch (error) {
+    try { await removeWithBackup(target, gitdir, () => git(common, ["worktree", "remove", target]), warn); } catch (error) {
       for (const other of owned) other.worktreeDone = false;
       save();
       throw error;
