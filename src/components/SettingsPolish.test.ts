@@ -141,6 +141,26 @@ describe("Settings Polish", () => {
     host.remove();
   });
 
+  it.each(["Bot List Side", "Reply Style"])("sizes %s to its labels in a wrapping shared row", async (label) => {
+    mockState.appSettingsSection = "general";
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal, { defaultAdvancedOpen: true }))));
+    const group = host.querySelector(`[role="radiogroup"][aria-label="${label}"]`)!;
+    expect(group.className).toContain("w-fit");
+    expect(group.parentElement?.className).toContain("flex-wrap");
+    expect(group.querySelector("button")?.className).not.toContain("flex-1");
+  });
+
+  it("puts Chat Box beside the same compact control and allows natural wrapping", async () => {
+    mockState.appSettingsSection = "themes";
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal))));
+    const group = host.querySelector('[role="radiogroup"][aria-label="Chat Box"]')!;
+    expect(group.className).toContain("w-fit");
+    expect(group.parentElement?.className).toContain("flex-wrap");
+    expect(group.previousElementSibling?.textContent).toContain("Chat Box");
+    expect(group.previousElementSibling?.className).toContain("min-w-[min(100%,12rem)]");
+    expect(group.querySelector("button")?.className).not.toContain("flex-1");
+  });
+
   it("the single Usage refresh button carries border border-hairline/40", async () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(UsageSection)));

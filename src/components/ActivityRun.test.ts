@@ -337,6 +337,12 @@ describe("ActivityRun in Korean", () => {
     expect(html).not.toMatch(/steps|edited/);
   });
 
+  it("titles the collapsed run toggle in Korean", () => {
+    const html = korean("steel-gray", createElement(ActivityRun, { messages: [step("Grep", "x", true, 100)], children: null }));
+    expect(html).toContain('title="모든 단계 보기"');
+    expect(html).not.toContain("Show every step");
+  });
+
   it("counts a plain run in Korean", () => {
     const html = korean("steel-gray", createElement(ActivityRun, { messages: [step("Grep", "x", true, 100), step("Grep", "y", true, 100)], children: null }));
     expect(html).toContain("2단계");

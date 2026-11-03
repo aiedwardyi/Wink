@@ -131,7 +131,7 @@ export function SidebarSectionHeader({
             asking && "relative needs-you-glow",
             arrival.playing && "relative arrival-glow",
           )}
-          title="Alt+Up/Down to reorder"
+          title={t("sidebar.reorderHint")}
         >
           {content}
         </button>

@@ -58,7 +58,7 @@ describe("Onboarding engine check", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  it("updates Ready and disables continue after signing out the last ready engine", async () => {
+  it("updates the ready row and disables Continue when the last engine signs out", async () => {
     let authenticated = false;
     const instance = {
       instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
@@ -81,13 +81,38 @@ describe("Onboarding engine check", () => {
     await click("Continue");
     authenticated = true;
     await act(async () => window.dispatchEvent(new Event("focus")));
-    const ready = () => [...host.querySelectorAll("section")].find((section) => section.textContent?.startsWith("Ready"));
-    const next = () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Open Wink")!;
-    expect(ready()).toBeDefined();
+    const ready = () => host.querySelector("[data-onboarding-ready]");
+    const next = () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(ready()).not.toBeNull();
     expect(next().disabled).toBe(false);
-    await click("Sign Out");
-    expect(ready()).toBeUndefined();
+    authenticated = false;
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(ready()).toBeNull();
     expect(next().disabled).toBe(true);
+  });
+
+  it.each(["claude", "codex"])("focuses Continue when %s becomes ready on the engine step", async (readyId) => {
+    localStorage.setItem("omb-locale", "en");
+    const instances = [
+      { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
+        snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] },
+        install: { docsUrl: "https://example.com/claude", signInCommand: "claude auth login" } },
+      { instanceId: "codex", driverKind: "codex", displayName: "Codex",
+        snapshot: { state: "unavailable", authenticated: false }, models: { default: "", options: [] },
+        install: { docsUrl: "https://example.com/codex", command: { win32: "install-codex" } } },
+    ];
+    const host = await renderWith(200, vi.fn(), { instances });
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!.click());
+    const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(next.disabled).toBe(true);
+    const ready = instances.map((instance) => ({ ...instance,
+      snapshot: { state: instance.instanceId === readyId ? "available" : "unavailable", authenticated: instance.instanceId === readyId },
+    }));
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ instances: ready })));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(next.disabled).toBe(false);
+    expect(document.activeElement).toBe(next);
+    expect(host.textContent).not.toContain("You're all set");
   });
 
   it("reuses the sign-in row for an installed engine", async () => {
@@ -103,7 +128,7 @@ describe("Onboarding engine check", () => {
     await act(async () => root.render(createElement(I18nProvider, null, createElement(Onboarding, { onDone: vi.fn() }))));
     const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
     await act(async () => next.click());
-    expect(host.textContent).toContain("Sign In");
+    expect(host.textContent).toContain("Sign in to Claude");
     expect(host.textContent).not.toContain("Details");
     expect(host.textContent).not.toContain("Open Sign-in in Terminal");
   });
@@ -134,7 +159,7 @@ describe("Onboarding engine check", () => {
   it("asks an unpaired phone to sign in instead of blaming the engines", async () => {
     const host = await renderWith(401);
     expect(host.textContent).toContain("Scan the code on your PC");
-    expect(host.textContent).toContain("Settings → Phone.");
+    expect(host.textContent).toContain("Settings → Devices.");
     expect(host.textContent).not.toContain("Copy");
     expect(host.querySelector("button")?.textContent).toBe("Try Again");
     expect(host.textContent).not.toContain("couldn't check the engines");

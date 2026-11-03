@@ -405,7 +405,7 @@ export function createGoogleSync(options: Options) {
     }
     problem = null;
     lastSyncAt = now();
-    if (summary.retryAfterMs === null && !summary.failed.some((path) => path.startsWith("threads-v2"))) chatFirst = false;
+    if (bound.phase === "ready" && summary.retryAfterMs === null && !summary.failed.some((path) => path.startsWith("threads-v2"))) chatFirst = false;
     if (!summary.driveFull) {
       fullStrikes = 0;
       uploadAt = 0;

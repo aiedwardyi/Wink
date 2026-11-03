@@ -247,15 +247,14 @@ export function createTeamRoutes(deps: TeamRouteDeps) {
         // from package-local keys only, then normalized to fresh bot ids.
         for (const room of pkg?.rooms ?? []) {
           const ids = room.members.map((key) => memberIds.get(key)!);
-          let created = store.createGroup(room.name, ids, false, packageSection);
           const defaultResponder = room.defaultResponder.kind === "agent"
             ? { kind: "member" as const, botId: memberIds.get(room.defaultResponder.agent)! }
             : { kind: room.defaultResponder.kind } as const;
-          created = store.patchGroup(created.id, {
+          const created = store.createGroup(room.name, ids, false, packageSection, {
             bulletin: room.bulletin ?? "",
             defaultResponder,
-            setupCompletedAt: Date.now(),
-          }) ?? created;
+            completed: true,
+          });
           createdGroups.push(created);
         }
 
@@ -279,8 +278,8 @@ export function createTeamRoutes(deps: TeamRouteDeps) {
         // The room is created last, so a failure anywhere above leaves no
         // half-built project behind - the catch below deletes the bots and
         // there is no room pointing at them.
-        if (!pkg && importMode === "project" && importedBots.length > 0) {
-          const roomName = url.searchParams.get("room")?.trim() || manifest!.team.name;
+        if (importMode === "project" && importedBots.length > 0) {
+          const roomName = url.searchParams.get("room")?.trim() || importName;
           group = store.createGroup(roomName, importedBots.map((bot) => bot.id));
           if (projectCwd) {
             // `cwd` is the folder the room WANTS; the store pins it on the

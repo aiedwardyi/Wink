@@ -414,6 +414,8 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
         event.preventDefault();
         endCall(group.id);
       } else if (event.code === "Space" && speaker.isSpeaking()) {
+        if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+        if (event.target instanceof Element && event.target.closest('input, textarea, select, button, a[href], summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"])')) return;
         event.preventDefault();
         interruptSpeech();
       }

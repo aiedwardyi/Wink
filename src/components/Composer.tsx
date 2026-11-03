@@ -234,6 +234,7 @@ export function Composer({
   const threadMessages = group ? group.messages : bot ? visibleMessages(bot) : [];
   const approvals = pendingApprovals(threadMessages);
   const approval = approvals[0];
+  const sendBlocked = locked || Boolean(approval);
   // A bot's open ask_user question pins above the composer but never locks
   // it; a pending approval keeps its takeover and the pin waits behind it.
   const question = pinnedQuestion(group ? group.messages : (bot?.messages ?? []), threadMessages);
@@ -613,10 +614,11 @@ export function Composer({
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
   const uploading = attachments.some((attachment) => attachment.kind === "upload");
   const terminalBridge = typeof window === "undefined" ? undefined : window.ogb?.terminal;
-  const canShareTerminal = Boolean(
-    bot && !group && bot.shareTerminalWithChat !== false && terminalBridge?.readBot && terminalBridge?.sendBot,
+  const canSendToTerminal = Boolean(
+    bot && !group && terminalBridge?.readBot && terminalBridge?.sendBot,
   );
   const retryFailedSend = (failed: FailedComposerSend) => {
+    if (sendBlocked) return;
     if (failed.requestText.includes("<attached-image ")) {
       const support = imageTargetsSupport(failed.requestText, failed.after);
       if (support !== "supported") {
@@ -651,7 +653,7 @@ export function Composer({
   };
   const send = (after = false) => {
     const action = composerBusySendAction({
-      locked,
+      locked: sendBlocked,
       isRoom: Boolean(group),
       busy,
       heldCount: queuedRef.current.length,
@@ -723,7 +725,7 @@ export function Composer({
     onSend?.();
   };
   const previewTerminalSend = async () => {
-    if (!bot || group || !canShareTerminal || !terminalBridge?.readBot) return;
+    if (sendBlocked || !bot || group || !canSendToTerminal || !terminalBridge?.readBot) return;
     const liveText = composerSendSourceText(inputRef.current?.value, text);
     if (!liveText.trim()) return;
     if (attachments.length) {
@@ -749,8 +751,8 @@ export function Composer({
     }
   };
   const confirmTerminalSend = async () => {
-    if (!bot || !terminalSendPreview || terminalSendBusy || !canShareTerminal || !terminalBridge?.sendBot) {
-      if (!canShareTerminal) setTerminalSendPreview(null);
+    if (sendBlocked || !bot || !terminalSendPreview || terminalSendBusy || !canSendToTerminal || !terminalBridge?.sendBot) {
+      if (sendBlocked || !canSendToTerminal) setTerminalSendPreview(null);
       return;
     }
     setTerminalSendBusy(true);
@@ -779,6 +781,7 @@ export function Composer({
   };
   useEffect(() => {
     if (!group) return;
+    if (sendBlocked) return;
     if (busy) {
       roomFlushLock.current = false;
       return;
@@ -811,12 +814,16 @@ export function Composer({
         commitQueued(rearmRoomFlushHold(queuedRef.current));
       },
     });
-  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued]);
+  }, [busy, queued, group, members, state.instances, dispatch, restoreDraft, commitQueued, sendBlocked]);
 
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
   useEffect(() => {
     if (!recording) return;
+    if (sendBlocked) {
+      setRecording(false);
+      return;
+    }
     const bridge = window.ogb;
     if (!bridge) {
       setRecording(false);
@@ -843,9 +850,10 @@ export function Composer({
       offEnd();
       void bridge.speechStop();
     };
-  }, [recording, editText]);
+  }, [recording, editText, sendBlocked]);
 
   const toggleMic = () => {
+    if (sendBlocked) return;
     if (!capabilities.dictation.available || !window.ogb) {
       setSpeechError(t("composer.dictationUnavailable"));
       return;
@@ -947,6 +955,7 @@ export function Composer({
             <button
               type="button"
               onClick={() => retryFailedSend(failed)}
+              disabled={sendBlocked}
               className="shrink-0 rounded px-2 py-1 font-medium hover:bg-danger/10"
             >
               {t("composer.retry")}
@@ -1035,7 +1044,9 @@ export function Composer({
             />
           </div>
         )}
+        <div inert={sendBlocked}>
         <ComposerAttachments
+          disabled={sendBlocked}
           items={shownAttachments}
           onAdd={addAttachments}
           onRemove={removeAttachment}
@@ -1050,6 +1061,7 @@ export function Composer({
           onNotice={showNotice}
         />
         </div>
+        </div>
         <div data-orbit-composer-host className="relative shrink-0">
           {/* App-ground from the pill's bottom radius down, full-bleed.
               Bubbles may tuck into the pill; they must not paint under it. */}
@@ -1061,6 +1073,7 @@ export function Composer({
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
           <input
             ref={fileInput}
+            disabled={sendBlocked}
             type="file"
             multiple
             className="hidden"
@@ -1072,6 +1085,7 @@ export function Composer({
           />
           <input
             ref={repickInput}
+            disabled={sendBlocked}
             type="file"
             className="hidden"
             onChange={(e) => {
@@ -1079,7 +1093,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {!locked && (
+          {!sendBlocked && (
             <div className="col-start-1 row-start-2 mt-1 flex items-center gap-1">
               <button
                 type="button"
@@ -1232,7 +1246,7 @@ export function Composer({
             <Square size={12} className="fill-current" />
           </button>
         )}
-        {!locked && !busy && !hasContent && capabilities.dictation.available && (
+        {!sendBlocked && !busy && !hasContent && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.stopDictation") : t("composer.startDictation")}
@@ -1247,10 +1261,10 @@ export function Composer({
             <Mic size={18} />
           </button>
         )}
-        {hasContent && !locked && (
+        {hasContent && !sendBlocked && (
           <>
           {/* Hidden while sharing is on: the bot types into its own panes. */}
-          {canShareTerminal && bot?.shareTerminalWithChat === false && !busy && (
+          {canSendToTerminal && bot?.shareTerminalWithChat === false && !busy && (
             <button
               type="button"
               onClick={() => void previewTerminalSend()}

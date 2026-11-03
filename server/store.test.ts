@@ -343,11 +343,11 @@ describe("Store", () => {
     expect(colors.every((color) => color === "white")).toBe(true);
   });
 
-  it("defaults a room to its first member and repairs the lead when membership changes", () => {
+  it("repairs a saved lead when membership changes", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
-    const group = store.createGroup("Team", [first.id, second.id]);
+    const group = store.createGroup("Team", [first.id, second.id], false, undefined, { defaultResponder: { kind: "member", botId: first.id } });
 
     expect(group.defaultResponder).toEqual({ kind: "member", botId: first.id });
     store.patchGroup(group.id, { memberIds: [second.id] });

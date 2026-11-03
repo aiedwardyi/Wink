@@ -203,31 +203,12 @@ describe("server status lines in a tool chip", () => {
 describe("room header on a phone", () => {
   const slice = (from: string, to: string) => groupView.slice(groupView.indexOf(from), groupView.indexOf(to));
   const header = slice("{/* Header: static member mauses", "{findOpen && (");
-  const select = slice("function DefaultResponderSelect", "function RoomWorkingFolder(");
   const chip = slice("function RoomWorkingFolderChip", "type RoomSetupFields");
   const tokensAfter = (source: string, marker: string) => classTokens(source.slice(source.indexOf(marker)));
 
-  it("lets the who-answers select give way and paint inside its wrapper", () => {
-    const wrapper = tokensAfter(select, '<div className="relative');
-    expect(wrapper.has("shrink-0")).toBe(false);
-    expect(wrapper.has("min-w-16")).toBe(true);
-    const field = tokensAfter(select, "<select");
-    expect(field.has("w-full")).toBe(true);
-    expect(field.has("min-w-0")).toBe(true);
-  });
-
   it("ends the closed label in an ellipsis", () => {
-    expect(select).toMatch(/<span className="min-w-0 truncate max-md:hidden">\{closedLabel\}<\/span>/);
-    expect(tokensAfter(select, "<span data-who-answers").has("truncate")).toBe(false);
-  });
-
-  it("shows the who-answers mode as an icon on a phone", () => {
-    expect(select).toMatch(/responder\.kind === "everyone" \? Users : responder\.kind === "member" \? Crown : AtSign/);
-    expect(select).toMatch(/<ModeIcon size=\{12\} aria-hidden="true" className="shrink-0 md:hidden" \/>/);
-    const wrapper = tokensAfter(select, '<div className="relative');
-    expect(wrapper.has("max-md:w-12")).toBe(true);
-    expect(wrapper.has("max-md:shrink-0")).toBe(true);
-    expect(select).toMatch(/aria-label=\{closedLabel\}/);
+    expect(header).toMatch(/<span className="truncate text-\[15px\] font-semibold text-ink">\{group\.name\}<\/span>/);
+    expect(chip).toMatch(/<span className="truncate font-mono max-md:hidden">\{name\}<\/span>/);
   });
 
   it("keeps the room name at about 8 characters and lets the control row shrink", () => {

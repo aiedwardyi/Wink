@@ -33,8 +33,10 @@ describe("onboarding empty-engine path", () => {
     expect(source).not.toContain('t("noEngines.checkAgain")');
   });
 
-  it("does not suffix Ready tiles with a CLI version token", () => {
-    expect(source).toContain("{instance.displayName}");
+  it("uses EngineConnect instead of the old ready and setup cards", () => {
+    expect(source).not.toContain("ReadyTile");
+    expect(source).not.toContain("SetupRow");
+    expect(source).not.toContain("CORE_DRIVERS");
     expect(source).not.toContain("snapshot.version?.split");
     expect(source).not.toMatch(/displayName\}.*version \? ` · \$\{version\}/);
   });

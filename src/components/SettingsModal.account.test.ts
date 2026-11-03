@@ -150,7 +150,7 @@ describe("Account settings", () => {
     expect(pane.querySelector("[data-phone-settings]")).not.toBeNull();
     expect(pane.querySelector("#settings-profile-name")).toBeNull();
     expect(pane.querySelector("[data-phone-access-setup]")).toBeNull();
-    const relay = [...pane.querySelectorAll("button")].find((node) => node.textContent === "Have a relay setup code?")!;
+    const relay = [...pane.querySelectorAll("button")].find((node) => node.textContent === "Have a setup code?")!;
     await act(async () => relay.click());
     expect(pane.querySelector("[data-phone-access-setup]")).not.toBeNull();
   });

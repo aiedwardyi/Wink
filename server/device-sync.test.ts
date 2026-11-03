@@ -10,6 +10,7 @@ import {
   deviceDisplayName,
   listDevices,
   loadDeviceName,
+  namedDevicePeers,
   pickerDevices,
   saveDeviceName,
   scanDevices,
@@ -21,6 +22,15 @@ const freshDir = () => mkdtempSync(join(tmpdir(), "orbit-devices-"));
 const rec = (id: string, host = `${id}.tail1234.ts.net`) => ({ deviceId: id, name: id, host });
 
 describe("device sync", () => {
+  it("uses Wink names for setup peers and keeps host names only as a fallback", () => {
+    const peers = [rec("desktop"), rec("laptop"), rec("unknown")];
+    const devices = [{ ...rec("desktop"), name: "Home" }, { ...rec("laptop"), name: "Work" }];
+    expect(namedDevicePeers(peers, devices)).toEqual([
+      { ...rec("desktop"), name: "Home" }, { ...rec("laptop"), name: "Work" }, rec("unknown"),
+    ]);
+    expect(namedDevicePeers(peers, [{ ...rec("desktop"), name: "  " }])[0]?.name).toBe("desktop");
+  });
+
   it("writes name, host and time only, never a secret", () => {
     const folder = freshDir();
     writeDeviceRecord(folder, { ...rec("home"), key: "a".repeat(64), cookie: "orbit_remote=x" } as never, NOW);

@@ -605,7 +605,6 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit,
   onRegenerate,
   onReply,
-  onFocusComposer,
   onMessageMenu,
   onOpenTerminalPane,
   workers,
@@ -628,7 +627,6 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit: (id: string, text: string) => void;
   onRegenerate: () => void;
   onReply: (message: Message) => void;
-  onFocusComposer: () => void;
   onMessageMenu: (menu: MessageMenuRequest) => void;
   onOpenTerminalPane?: (sessionId: string) => void;
   workers: ShownRun[];
@@ -829,7 +827,6 @@ const MessagesList = memo(function MessagesList({
                   onRegenerate={m.id === lastBotTextId ? onRegenerate : undefined}
                   replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : undefined}
                   onReply={onReply}
-                  onFocusComposer={onFocusComposer}
                   onMessageMenu={onMessageMenu}
                 />
               );
@@ -1724,7 +1721,6 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
             onSubmitEdit={submitEdit}
             onRegenerate={regenerate}
             onReply={selectReply}
-            onFocusComposer={focusComposer}
             onMessageMenu={setMenu}
             onOpenTerminalPane={onOpenTerminalPane}
             workers={rowWorkers}
@@ -1791,7 +1787,6 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
                 onCancelEdit={cancelEdit}
                 onSubmitEdit={submitEdit}
                 onReply={selectReply}
-                onFocusComposer={focusComposer}
                 onMessageMenu={setMenu}
               />
             </div>

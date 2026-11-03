@@ -472,7 +472,11 @@ describe("harness HTTP API", () => {
     const [lead, other] = await Promise.all([api("POST", "/api/bots"), api("POST", "/api/bots")]).then((created) =>
       created.map((response) => response.body.bot),
     );
-    const room = (await api("POST", "/api/groups", { name: "Handover", memberIds: [lead.id, other.id] })).body.group;
+    const room = (await api("POST", "/api/groups", {
+      name: "Handover",
+      memberIds: [lead.id, other.id],
+      setup: { bulletin: "", defaultResponder: { kind: "member", botId: lead.id } },
+    })).body.group;
     try {
       expect(room.defaultResponder).toEqual({ kind: "member", botId: lead.id });
       const patched = await api("PATCH", `/api/groups/${room.id}`, { memberIds: [other.id] });
@@ -1976,7 +1980,11 @@ describe("harness HTTP API", () => {
       computer: "off",
     });
     const groupsBefore = (await api("GET", "/api/bots")).body.groups.length;
-    const room = (await api("POST", "/api/groups", { memberIds: [trusted.id], name: "War Room" })).body.group;
+    const room = (await api("POST", "/api/groups", {
+      memberIds: [trusted.id],
+      name: "War Room",
+      setup: { bulletin: "", defaultResponder: { kind: "member", botId: trusted.id } },
+    })).body.group;
 
     const smuggled = {
       format: "openmaus.team",

@@ -9,8 +9,6 @@ export type QuestionChoiceCardProps = {
   question?: string | null;
   options: string[];
   onPick: (option: string) => void;
-  /** Focus the existing composer (or open a local custom path). */
-  onWriteOwn?: () => void;
   /** Exact option text when a listed choice was selected. */
   selectedOption?: string | null;
   /** True when a free-text / custom answer was accepted without matching a row. */
@@ -22,8 +20,6 @@ export type QuestionChoiceCardProps = {
   subtitle?: string | null;
   /** Trailing header control (e.g. dismiss). */
   headerEnd?: ReactNode;
-  /** Hide the write-own footer action (permission cards, etc.). */
-  hideWriteOwn?: boolean;
   className?: string;
 };
 
@@ -35,14 +31,12 @@ export function QuestionChoiceCard({
   question,
   options,
   onPick,
-  onWriteOwn,
   selectedOption = null,
   customAnswered = false,
   pending = false,
   disabled = false,
   subtitle,
   headerEnd,
-  hideWriteOwn = false,
   className,
 }: QuestionChoiceCardProps) {
   const { t } = useI18n();
@@ -132,27 +126,11 @@ export function QuestionChoiceCard({
         })}
       </div>
 
-      <div className="flex min-h-[46px] items-center justify-between gap-3 border-t border-hairline px-[18px] py-[11px]">
-        {answered ? (
+      {answered && (
+        <div className="flex min-h-[46px] items-center border-t border-hairline px-[18px] py-[11px]">
           <span className="text-[12px] text-accent-text">✓ {t("chat.answerSent")}</span>
-        ) : (
-          <>
-            {!hideWriteOwn && onWriteOwn ? (
-              <button
-                type="button"
-                disabled={locked}
-                onClick={onWriteOwn}
-                className="border-0 bg-transparent p-0 text-left text-[12px] text-ink-secondary hover:text-ink hover:underline hover:underline-offset-[3px] disabled:opacity-40"
-              >
-                {t("chat.writeOwnAnswer")} <span aria-hidden="true">↗</span>
-              </button>
-            ) : (
-              <span />
-            )}
-            <span className="text-[10px] text-ink-secondary max-[720px]:hidden">{t("chat.clickChoiceHint")}</span>
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
       <div role="status" className="sr-only">
         {status}

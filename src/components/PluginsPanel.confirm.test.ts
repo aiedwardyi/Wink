@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
+import { CONNECTED_APPS_CACHE_KEY } from "@/lib/connected-apps-cache";
 
 const { api, dispatch } = vi.hoisted(() => ({ api: vi.fn(), dispatch: vi.fn() }));
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -59,6 +60,60 @@ it("keeps account confirmation in Korean and owns focus above the Connected Apps
     await act(async () => root.unmount());
     host.remove();
     applyLocale("en");
+    vi.unstubAllGlobals();
+  }
+});
+
+it.each(["live", "offline"])("rechecks disk inventory after a failed preload with a %s result", async (result) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.resetModules();
+  const { PluginsPanel, preloadConnectedApps } = await import("./PluginsPanel");
+  const services = { gmail: { connected: true, accounts: [{ id: "ca_work", alias: "work", status: "ACTIVE" }] } };
+  const snapshot = JSON.stringify({ at: 1, services });
+  localStorage.setItem(CONNECTED_APPS_CACHE_KEY, snapshot);
+  api.mockRejectedValue(new Error("startup offline"));
+  await preloadConnectedApps();
+  api.mockReset();
+  let resolve: (value: unknown) => void = () => {};
+  let reject: (cause: Error) => void = () => {};
+  const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+  void pending.catch(() => {});
+  api.mockImplementation((path: string) => path.endsWith("/connected")
+    ? pending
+    : Promise.resolve({ configured: true, mode: "managed", cards: [{ slug: "gmail", label: "Gmail", blurb: "Mail", logo: null, domain: null }] }));
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(host);
+  const checks = () => api.mock.calls.filter(([path]) => path === "/api/connectors/connected");
+  try {
+    await act(async () => root.render(createElement(PluginsPanel)));
+    await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+    expect.soft(checks()).toHaveLength(1);
+    expect.soft(host.textContent).toContain("work");
+    expect.soft(host.textContent).not.toContain("Checking connected apps");
+    expect.soft(host.textContent).toContain("Showing the last known connections");
+    expect.soft(localStorage.getItem(CONNECTED_APPS_CACHE_KEY)).toBe(snapshot);
+    await act(async () => {
+      if (result === "live") resolve({ services: {} });
+      else reject(new Error("still offline"));
+      await preloadConnectedApps();
+    });
+    if (result === "live") {
+      expect.soft(host.textContent).not.toContain("work");
+      expect.soft(host.textContent).not.toContain("Showing the last known connections");
+      expect.soft(JSON.parse(localStorage.getItem(CONNECTED_APPS_CACHE_KEY)!).services).toEqual({});
+    } else {
+      expect.soft(host.textContent).toContain("work");
+      expect.soft(host.textContent).toContain("Showing the last known connections");
+      expect.soft(localStorage.getItem(CONNECTED_APPS_CACHE_KEY)).toBe(snapshot);
+    }
+    await act(async () => root.render(null));
+    await act(async () => root.render(createElement(PluginsPanel)));
+    expect.soft(checks()).toHaveLength(2);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    localStorage.removeItem(CONNECTED_APPS_CACHE_KEY);
+    api.mockReset();
     vi.unstubAllGlobals();
   }
 });

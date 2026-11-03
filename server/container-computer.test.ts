@@ -13,6 +13,7 @@ import {
   IMAGE_LAYER_LABEL,
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
+  SHARED_LOCAL_VM_TARGET,
   TARGET_LABEL,
   VM_WORKSPACE_DIR,
   VM_WORKSPACE_GUEST,
@@ -646,6 +647,73 @@ describe("Cua integration", () => {
 });
 
 describe("containerComputerAction", () => {
+  describe.each(["docker", "podman", "container"] as const)("%s ownership", (runtime) => {
+    it.each([
+      ["stop", DRIVER_LABEL], ["remove", DRIVER_LABEL],
+      ["stop", BASE_IMAGE_LABEL], ["remove", BASE_IMAGE_LABEL],
+      ["stop", IMAGE_LAYER_LABEL], ["remove", IMAGE_LAYER_LABEL],
+    ] as const)("permits %s with an old %s label", async (action, label) => {
+      const target = runtime === "container" ? SHARED_LOCAL_VM_TARGET : perBotLocalVmTarget("bot-a");
+      const detail = JSON.parse(perBotReadyInspect("bot-a", 49152))[0];
+      const labels = { ...detail.Config.Labels, [TARGET_LABEL]: target.label, [label]: "old" };
+      detail.Config.Labels = labels;
+      const inspect = runtime === "container"
+        ? JSON.stringify([{ configuration: { labels }, status: { state: "running" } }])
+        : JSON.stringify([detail]);
+      const command = `${runtime} ${action === "remove" ? `rm ${runtime === "container" ? "--force" : "-f"}` : "stop"} ${target.containerName}`;
+      const fake = runner({
+        "/usr/bin/which docker": runtime === "docker" ? "docker\n" : new Error("missing"),
+        "/usr/bin/which podman": runtime === "podman" ? "podman\n" : new Error("missing"),
+        "/usr/bin/which container": runtime === "container" ? "container\n" : new Error("missing"),
+        "docker info --format {{.ServerVersion}}": "29\n",
+        "podman info --format json": "{}\n",
+        "container system status": "running\n",
+        [`${runtime} image inspect ${IMAGE}`]: preparedImageInspect(),
+        [`${runtime} inspect ${target.containerName}`]: inspect,
+        [command]: "",
+      });
+      const platform = runtime === "container" ? "darwin" : "linux";
+      const status = await containerComputerStatus(fake.run, platform, target);
+      expect(status.managed).toBe(false);
+
+      await containerComputerAction(action, fake.run, platform, target);
+      expect(fake.calls).toContain(command);
+      expect(status.owned).toBe(true);
+    });
+  });
+
+  it.each(["stop", "remove"] as const)("refuses %s for an unmanaged same-name container but permits an owned one", async (action) => {
+    const target = perBotLocalVmTarget("bot-a");
+    const command = `docker ${action === "remove" ? "rm -f" : "stop"} ${target.containerName}`;
+    for (const labels of [undefined, { [MANAGED_LABEL]: "1", [TARGET_LABEL]: perBotLocalVmTarget("bot-b").label }]) {
+      const fake = runner({
+        "/usr/bin/which docker": "docker\n",
+        "/usr/bin/which podman": new Error("missing"),
+        "docker info --format {{.ServerVersion}}": "29\n",
+        [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+        [`docker inspect ${target.containerName}`]: readyInspect({ Config: { Image: IMAGE, Labels: labels } }),
+        [command]: "",
+      });
+
+      await expect(containerComputerAction(action, fake.run, "linux", target)).rejects.toMatchObject({
+        status: 409,
+        message: "This container was not created by Wink; manage it with your container runtime",
+      });
+      expect(fake.calls).not.toContain(command);
+    }
+
+    const owned = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${target.containerName}`]: perBotReadyInspect("bot-a", 49152),
+      [command]: "",
+    });
+    await containerComputerAction(action, owned.run, "linux", target);
+    expect(owned.calls).toContain(command);
+  });
+
   it("fails closed instead of giving Apple container an invalid dynamic-port spec", async () => {
     const target = perBotLocalVmTarget("bot-a");
     const fake = runner({

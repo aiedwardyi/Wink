@@ -274,6 +274,7 @@ import {
   deviceNameSchema,
   listDevices,
   loadDeviceName,
+  namedDevicePeers,
   pickerDevices,
   saveDeviceName,
   writeDeviceRecord,
@@ -3153,7 +3154,7 @@ function localVmIdleFor(target: LocalVmTarget): LocalVmIdleTimer {
         // The desktop leaves a stale X lock after stop, so idle cleanup
         // removes only the disposable container. Its target-specific durable
         // workspace and the shared prepared image remain.
-        if (status.container === "running") {
+        if (status.owned && status.container === "running") {
           await containerComputerAction("remove", undefined, undefined, target);
         }
       } finally {
@@ -3181,7 +3182,7 @@ void (async () => {
     : [SHARED_LOCAL_VM_TARGET];
   for (const target of targets) {
     const status = await containerComputerStatus(undefined, undefined, target).catch(() => null);
-    if (status?.container === "running") localVmIdleFor(target).touch();
+    if (status?.owned && status.container === "running") localVmIdleFor(target).touch();
   }
 })();
 
@@ -7393,7 +7394,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: await remoteRetry.devices() } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
         phones: phoneVisits.list(),
       });
     }
