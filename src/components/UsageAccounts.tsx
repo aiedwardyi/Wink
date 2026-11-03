@@ -31,7 +31,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     finally { setBusy(false); }
   };
   const arrows = others.length > 1 && (
-    <span className="ml-auto flex shrink-0 items-center">
+    <span className="flex shrink-0 items-center">
       <button type="button" aria-label={t("accounts.previous")} disabled={index === 0}
         onClick={() => setPage(index - 1)} className="flex size-7 items-center justify-center text-ink-secondary hover:text-ink disabled:opacity-30 [@media(pointer:coarse)]:size-11">
         <ChevronLeft size={15} aria-hidden="true" />
@@ -43,11 +43,15 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     </span>
   );
   const heading = (account: UsageAccount, other = false) => (
-    <div className="flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink">
+    <div className="flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
       <EngineMark instance={account} size={16} tapToShow />
-      <span className="min-w-0 truncate" title={account.snapshot.account}>{account.snapshot.account || account.displayName}</span>
-      {!other && <span className="shrink-0 rounded border border-hairline px-1.5 py-0.5 text-[11px]">{t("accounts.main")}</span>}
-      {other && arrows}
+      {!other && <span className="min-w-0 truncate">{account.displayName}</span>}
+      <span className="ml-auto flex shrink-0 items-center gap-2">
+        {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
+          className="text-[12px] font-normal text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.setAsMain")}</button>
+          : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
+        <span className="flex w-14 shrink-0 [@media(pointer:coarse)]:w-22">{other && arrows}</span>
+      </span>
     </div>
   );
   const column = (account: UsageAccount, other = false) => (
@@ -56,8 +60,6 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
         {heading(account, other)}
         <div className="mt-2 text-[12px] text-ink-secondary">{t("accounts.signedOut")}</div>
       </>}
-      {other && accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
-        className="mt-2 text-[12px] text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.setAsMain")}</button>}
     </div>
   );
   return (

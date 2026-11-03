@@ -72,7 +72,7 @@ it("groups pushed accounts immediately and after returning without a side fetch"
   request.mockImplementation(() => new Promise(() => {}));
   await render();
   expect(host.querySelectorAll('[data-account-column="main"]')).toHaveLength(1);
-  expect(other().textContent).toContain("second@example.com");
+  expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   await act(async () => root.unmount());
   root = createRoot(host);
   await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
@@ -80,14 +80,14 @@ it("groups pushed accounts immediately and after returning without a side fetch"
   expect(request).not.toHaveBeenCalled();
 });
 
-it("puts email headings and Main above the matching account's bars", async () => {
+it("puts icon headings and Main above the matching account's bars without email text", async () => {
   await render();
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   expect(main().textContent).not.toContain("Set as Main");
   expect(other().textContent).toContain("Set as Main");
-  expect(main().textContent).toContain("claude@example.comMain");
-  expect(other().textContent).toContain("second@example.com");
+  expect(main().textContent).toContain("ClaudeMain");
+  expect(host.textContent).not.toContain("@example.com");
   expect(other().textContent).not.toContain("MainSet");
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
@@ -121,7 +121,7 @@ it("pages three accounts and keeps hidden pages in the same grid cell", async ()
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
 });
 
-it("keeps the icon's account details available beside its email heading", async () => {
+it("shows the account's email only in the icon's card", async () => {
   await render();
   expect(document.querySelector('[data-engine-card]')).toBeNull();
   const mark = other().querySelector<HTMLElement>('[data-engine-hover]')!;
@@ -130,7 +130,7 @@ it("keeps the icon's account details available beside its email heading", async 
     mark.click();
   });
   expect(document.querySelector('[data-engine-card]')?.textContent).toContain("second@example.com");
-  expect(other().textContent).toContain("second@example.com");
+  expect(other().textContent).not.toContain("second@example.com");
   await act(async () => {
     mark.dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true }));
     mark.click();
@@ -188,8 +188,34 @@ it("translates account controls into Korean", async () => {
   persistPreference("ko");
   await render(3);
   expect(button("기본으로 설정")).toBeDefined();
-  expect(main().textContent).toContain("claude@example.com기본");
+  expect(main().textContent).toContain("Claude기본");
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
+});
+
+it("keeps Main and Set as Main in the same head action slot with or without paging", async () => {
+  for (const count of [2, 3]) {
+    await render(count);
+    const pick = button("Set as Main");
+    const tag = [...main().querySelectorAll("span")].find((node) => !node.children.length && node.textContent === "Main")!;
+    expect(tag.parentElement?.className).toBe(pick.parentElement?.className);
+    expect(tag.nextElementSibling).not.toBeNull();
+    expect(pick.nextElementSibling).not.toBeNull();
+    expect(tag.nextElementSibling?.className).toBe(pick.nextElementSibling?.className);
+    expect(pick.nextElementSibling?.querySelectorAll("button")).toHaveLength(count === 3 ? 2 : 0);
+  }
+});
+
+it.each([1, 2])("keeps a 5h placeholder above weekly-only Claude usage for %i accounts", async (count) => {
+  await render(count);
+  state.instances = state.instances.map((account) => ({ ...account,
+    rateLimits: { observedAt: new Date().toISOString(), windows: [{ id: "seven_day", usedPercent: 37, resetsAt: null }] },
+  }));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
+  expect(host.querySelectorAll('[aria-label="7d: 63% remaining"]')).toHaveLength(count);
+  expect(host.textContent?.match(/5h–/g)).toHaveLength(count);
+  expect(host.querySelector('[aria-label^="5h:"]')).toBeNull();
+  const weekly = host.querySelector('[aria-label="7d: 63% remaining"]')!;
+  expect(weekly.parentElement?.previousElementSibling?.textContent).toBe("5h–");
 });
 
 it.each(["en", "ko"] as const)("shows default refusal messages in %s", async (locale) => {

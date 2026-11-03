@@ -3,7 +3,7 @@ import { act, createElement, type ComponentProps, type ReactElement } from "reac
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { applyLocale, I18nProvider, persistPreference } from "@/lib/i18n";
 import { StoreProvider, type InstanceInfo } from "@/state/store";
 import { EngineSignIn } from "./EngineSetup";
 import { EngineRow as EngineRowView } from "./EnginesSettings";
@@ -95,7 +95,7 @@ describe("engine sign-in row", () => {
     expect(host.textContent).not.toContain("Connected");
     await act(async () => root!.render(createElement(I18nProvider, null,
       createElement(EngineRow, { instance: { ...row, snapshot: { state: "available", authenticated: true } } }))));
-    expect(host.textContent).toContain("Connected");
+    expect(host.textContent).toBe("museAgentSign Out");
     expect(host.textContent).not.toContain("Sign In");
   });
 
@@ -131,6 +131,18 @@ describe("engine sign-in row", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     await click("Sign In");
     expect(host.textContent).toContain("Cancel");
+  });
+
+  it.each(["en", "ko"] as const)("uses the same browser-code hint in shared sign-in surfaces in %s", async (locale) => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    persistPreference(locale);
+    vi.stubGlobal("fetch", vi.fn(async () => json({})));
+    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", {
+      loginState: "pending", loginCapture: { url: "https://example.com/login", inputGeneration: 1 },
+    }) }));
+    expect(host.querySelector("input")?.placeholder).toBe(locale === "en" ? "Paste the code here" : "여기에 코드를 붙여넣으세요");
+    expect(host.textContent).toContain(locale === "en" ? "Sign in with your browser" : "브라우저로 로그인하세요");
+    persistPreference("en");
   });
 
   it("keeps stopped credentials actionable until the account is ready", async () => {
@@ -298,7 +310,7 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toBe("Connected");
   });
 
-  it("keeps a still-authenticated engine Connected after failed sign-out without polling", async () => {
+  it("keeps a still-authenticated engine signed in after failed sign-out without polling", async () => {
     const row = instance("museAgent", { snapshot: { state: "available", authenticated: true } });
     const fetchMock = vi.fn(async (url: string) => url.endsWith("/sign-out")
       ? new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 })
@@ -306,7 +318,7 @@ describe("engine sign-in row", () => {
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRowView, { instance: row }));
     await click("Sign Out");
-    expect(host.textContent).toContain("Connected");
+    expect([...host.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Sign Out"]);
     expect(host.textContent).toContain("Didn't finish");
     const calls = fetchMock.mock.calls.length;
     await act(async () => vi.advanceTimersByTimeAsync(6000));
@@ -332,7 +344,7 @@ describe("engine sign-in row", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRow, { instance: row }));
-    expect(host.textContent).toBe("codexConnectedSign Out");
+    expect(host.textContent).toBe("codexSign Out");
     expect(host.querySelector("input, select, code, a")).toBeNull();
     await click("Sign Out");
     expect(fetchMock).toHaveBeenCalledWith("/api/instances/codex/sign-out", expect.objectContaining({ method: "POST", body: "{}" }));
