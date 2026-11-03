@@ -4,12 +4,14 @@
 // summed here; nothing is fetched. Plan usage sits above the table: how full
 // each engine's subscription window is, straight from the engine's own
 // report from its last turn or refresh, so nobody has to guess from a token count.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, RefreshCw } from "lucide-react";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
 import { EngineMark } from "./EngineMark";
+import { UsageAccounts } from "./UsageAccounts";
+import { accountReady, useAccounts, type UsageAccount } from "@/lib/accounts";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { showUsagePerBotTable } from "@/lib/friends-chrome";
 import { splitFriendsEngines } from "@/lib/engine-rail";
@@ -45,7 +47,9 @@ const PLAN_USAGE_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent", "museAg
 // Muse limits arrive only inside a model reply, so it joins the refresh run
 // through a check (one small message) instead.
 const REFRESH_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent"]);
-const canRefresh = (instance: InstanceInfo) => REFRESH_DRIVERS.has(instance.driverKind);
+const canRefresh = (instance: UsageAccount) => REFRESH_DRIVERS.has(instance.driverKind)
+  && !(instance.driverKind === "claudeAgent" && (instance.instanceId.startsWith("acct_")
+    || (instance.accountInfo && instance.accountInfo.id !== instance.accountInfo.of)));
 type RefreshResult = { error?: string; status?: string };
 // The server words these failures in English, without a period.
 function refreshErrorText(error: string, t: Translate): string {
@@ -65,11 +69,13 @@ function EnginePlanRow({
   now,
   error,
   limit,
+  heading,
 }: {
   instance: InstanceInfo;
   now: number;
   error?: string;
   limit?: { resetsAt: number | null };
+  heading?: ReactNode;
 }) {
   const { t } = useI18n();
   const muse = instance.driverKind === "museAgent";
@@ -97,11 +103,11 @@ function EnginePlanRow({
   const stale = instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) > STALE_READING_MS;
   return (
     <div>
-      <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+      {heading ?? <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
         <EngineMark instance={instance} size={16}>
           <span className="truncate">{instance.displayName}</span>
         </EngineMark>
-      </div>
+      </div>}
       {windows.length > 0 && (
         <div className="mt-2 flex flex-col items-start gap-1.5">
           {windows.map((window) => {
@@ -160,21 +166,25 @@ function PlanUsage() {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const now = useNow();
+  const { groups, reload } = useAccounts(state.instances);
   const mode = useUsageMode();
   const [refreshing, setRefreshing] = useState(false);
   const refreshingRef = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
   const [refreshErrors, setRefreshErrors] = useState<Record<string, string>>({});
   const engines = useMemo(
-    () => splitFriendsEngines(state.instances).friends.filter((instance) => PLAN_USAGE_DRIVERS.has(instance.driverKind)),
-    [state.instances],
+    () => splitFriendsEngines(groups.map((accounts) => accounts[0]!)).friends
+      .filter((instance) => PLAN_USAGE_DRIVERS.has(instance.driverKind))
+      .map((instance) => groups.find((accounts) => accounts[0] === instance)!),
+    [groups],
   );
   const shown = useMemo(
-    () => engines.filter((instance) => instance.snapshot.state === "available" || instance.rateLimits),
+    () => engines.filter((accounts) => accounts.some((instance) => instance.snapshot.state === "available" || instance.rateLimits)),
     [engines],
   );
   const refreshable = useMemo(
-    () => shown.filter((instance) => canRefresh(instance) || instance.driverKind === "museAgent"),
+    () => shown.flat().filter((instance) => (instance.snapshot.authenticated !== false && (!instance.accountInfo || accountReady(instance)))
+      && (canRefresh(instance) || instance.driverKind === "museAgent")),
     [shown],
   );
   const [limits, setLimits] = useState<CheckLimits>({});
@@ -265,13 +275,13 @@ function PlanUsage() {
         <div className="text-[13px] text-ink-secondary">{t("usage.limits.empty")}</div>
       ) : (
         <div className="flex flex-col gap-5">
-          {shown.map((instance) => (
-            <EnginePlanRow
-              key={instance.instanceId}
-              instance={instance}
-              now={now}
-              error={refreshErrors[instance.instanceId]}
-              limit={limits[instance.instanceId]}
+          {shown.map((accounts) => (
+            <UsageAccounts
+              key={accounts[0]!.accountInfo?.of ?? accounts[0]!.instanceId}
+              accounts={accounts}
+              reload={reload}
+              renderRow={(instance, heading) => <EnginePlanRow instance={instance} now={now} heading={heading}
+                error={refreshErrors[instance.instanceId]} limit={limits[instance.instanceId]} />}
             />
           ))}
         </div>

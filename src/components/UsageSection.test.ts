@@ -64,7 +64,7 @@ const { mockState, mockApi } = vi.hoisted(() => {
         }),
       ],
     },
-    mockApi: vi.fn(async (_path: string): Promise<{ report?: { windows: { id: string; usedPercent: number }[]; observedAt: string }; error?: string; status?: string }> => ({
+    mockApi: vi.fn(async (_path: string, _init?: RequestInit): Promise<{ report?: { windows: { id: string; usedPercent: number }[]; observedAt: string }; error?: string; status?: string }> => ({
       report: { windows: [], observedAt: "2026-01-01T00:00:00.000Z" },
     })),
   };
@@ -74,7 +74,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
     ...actual,
-    api: mockApi,
+    api: (path: string, init?: RequestInit) => path === "/api/accounts" ? Promise.resolve({ accounts: [] }) : mockApi(path, init),
     useStore: () => ({
       state: mockState,
       dispatch: () => undefined,

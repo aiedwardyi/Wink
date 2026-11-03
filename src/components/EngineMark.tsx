@@ -23,16 +23,16 @@ export function engineHoverText(instance: InstanceInfo, t: Translate): string {
   return t("engines.accountLine", { engine: instance.displayName, status });
 }
 
-export function EngineMark({ instance, size, className, children }: { instance: InstanceInfo; size?: number; className?: string; children?: ReactNode }) {
+export function EngineMark({ instance, size, className, children, tapToShow = false }: { instance: InstanceInfo; size?: number; className?: string; children?: ReactNode; tapToShow?: boolean }) {
   const { t } = useI18n();
   return (
-    <EngineHover text={engineHoverText(instance, t)} label={children}>
+    <EngineHover text={engineHoverText(instance, t)} label={children} tapToShow={tapToShow}>
       <ProviderMark driverKind={instance.driverKind} size={size} className={className} />
     </EngineHover>
   );
 }
 
-function EngineHover({ text, label, children }: { text: string; label?: ReactNode; children: ReactNode }) {
+function EngineHover({ text, label, children, tapToShow }: { text: string; label?: ReactNode; children: ReactNode; tapToShow?: boolean }) {
   const id = useId();
   const triggerRef = useRef<HTMLSpanElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -122,7 +122,7 @@ function EngineHover({ text, label, children }: { text: string; label?: ReactNod
 
   const standalone = owner === null;
   // A label inside must still read as text, so the account line moves onto the mark alone.
-  const markRole = standalone ? "img" : undefined;
+  const markRole = standalone ? tapToShow ? "button" : "img" : undefined;
   const markLabel = standalone ? text : undefined;
   return (
     <>
@@ -132,7 +132,8 @@ function EngineHover({ text, label, children }: { text: string; label?: ReactNod
         tabIndex={standalone ? 0 : undefined}
         role={label ? undefined : markRole}
         aria-label={label ? undefined : markLabel}
-        className={cn("inline-flex shrink-0 rounded-sm", label && "min-w-0 shrink items-center gap-2", standalone && "select-none [-webkit-touch-callout:none] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text")}
+        aria-expanded={tapToShow && standalone ? open : undefined}
+        className={cn("inline-flex shrink-0 rounded-sm", label && "min-w-0 shrink items-center gap-2", standalone && "select-none [-webkit-touch-callout:none] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text", tapToShow && "relative [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-3.5")}
         onPointerEnter={(e) => {
           if (e.pointerType !== "mouse") return;
           cancel();
@@ -141,9 +142,21 @@ function EngineHover({ text, label, children }: { text: string; label?: ReactNod
         onPointerLeave={(e) => {
           if (e.pointerType === "mouse") close();
         }}
+        onClick={() => {
+          if (tapToShow && standalone) {
+            cancel();
+            setOpen((current) => !current);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (tapToShow && standalone && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            setOpen((current) => !current);
+          }
+        }}
         onPointerDown={(e) => {
-          if (e.pointerType === "mouse") close();
-          if (e.pointerType !== "touch" || !standalone) return;
+          if (e.pointerType === "mouse" && !tapToShow) close();
+          if (e.pointerType !== "touch" || !standalone || tapToShow) return;
           if (open) {
             close();
             return;
