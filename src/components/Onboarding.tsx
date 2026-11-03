@@ -71,8 +71,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const controls = () => [...dialog.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )];
+    const primary = step === 1 && instances?.some(engineReady)
+      ? dialog.querySelector<HTMLElement>("[data-engine-connect-primary]:not([disabled])") : null;
     // The last step takes focus itself, so a held Enter cannot skip it.
-    (step === 2 ? dialog : controls()[0])?.focus();
+    (step === 2 ? dialog : primary ?? controls()[0])?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const focusable = controls();

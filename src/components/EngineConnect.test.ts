@@ -314,12 +314,28 @@ describe("first engine connection", () => {
     expect(window.ogb!.openEngineSignIn).not.toHaveBeenCalled();
   });
 
-  it("disables the ready status button", async () => {
-    instances[0]!.snapshot = { state: "available", authenticated: true };
+  it.each(["claude", "codex", "grok", "antigravity", "muse"])("renders ready %s as a row with a disabled status pill and no install help", async (id) => {
+    const instance = instances.find((row) => row.instanceId === id)!;
+    instance.snapshot = { state: "available", authenticated: true };
     await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
-    const button = host.querySelector<HTMLButtonElement>('[data-engine-connect="claude"] button')!;
-    expect(button.textContent).toBe("Claude is ready");
+    const row = host.querySelector(`[data-engine-connect="${id}"]`)!;
+    const button = row.querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent).toBe(`${instance.displayName} is ready`);
     expect(button.disabled).toBe(true);
+    expect(button.className).not.toContain("w-full");
+    expect(row.className).not.toContain("bg-card");
+    expect(row.querySelector("p")).toBeNull();
+    expect(host.textContent).not.toContain("A window opens and installs Claude.");
+  });
+
+  it.each(["en", "ko"] as const)("shows sign-in help instead of install help for installed Claude in %s", async (locale) => {
+    persistPreference(locale);
+    instances[0]!.snapshot = { state: "available", authenticated: false };
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="claude"]')!;
+    expect(row.className).toContain("bg-card");
+    expect(row.textContent).toContain(locale === "en" ? "Claude can answer once you're signed in." : "로그인하면 Claude이(가) 답할 수 있어요.");
+    expect(row.textContent).not.toContain(locale === "en" ? "A window opens and installs Claude." : "창이 열리고 Claude를 설치합니다.");
   });
 
   it("resets the connect session on Back after an engine becomes available", async () => {

@@ -91,6 +91,30 @@ describe("Onboarding engine check", () => {
     expect(next().disabled).toBe(true);
   });
 
+  it.each(["claude", "codex"])("focuses Continue when %s becomes ready on the engine step", async (readyId) => {
+    localStorage.setItem("omb-locale", "en");
+    const instances = [
+      { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",
+        snapshot: { state: "available", authenticated: false }, models: { default: "", options: [] },
+        install: { docsUrl: "https://example.com/claude", signInCommand: "claude auth login" } },
+      { instanceId: "codex", driverKind: "codex", displayName: "Codex",
+        snapshot: { state: "unavailable", authenticated: false }, models: { default: "", options: [] },
+        install: { docsUrl: "https://example.com/codex", command: { win32: "install-codex" } } },
+    ];
+    const host = await renderWith(200, vi.fn(), { instances });
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!.click());
+    const next = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    expect(next.disabled).toBe(true);
+    const ready = instances.map((instance) => ({ ...instance,
+      snapshot: { state: instance.instanceId === readyId ? "available" : "unavailable", authenticated: instance.instanceId === readyId },
+    }));
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ instances: ready })));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(next.disabled).toBe(false);
+    expect(document.activeElement).toBe(next);
+    expect(host.textContent).not.toContain("You're all set");
+  });
+
   it("reuses the sign-in row for an installed engine", async () => {
     const instance = {
       instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude",

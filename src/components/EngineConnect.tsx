@@ -50,6 +50,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const row = (instance: InstanceInfo, recommended = false) => {
     const installed = instance.snapshot.state === "available";
     const ready = installed && instance.snapshot.authenticated !== false;
+    const featured = recommended && !ready;
     const attempt = attempts[instance.instanceId];
     const working = !installed && attempt && !attempt.failed;
     const failed = !installed && attempt?.failed;
@@ -61,7 +62,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
             : failed ? t("engineConnect.tryAgain")
               : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
-    const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${recommended ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
+    const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${featured ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
     const button = installed && !ready ? <EngineSignIn instance={instance} buttonLabel={label} buttonClassName={buttonClassName}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
       : <button type="button" disabled={Boolean(ready || working || busy[instance.instanceId])}
@@ -70,11 +71,11 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       {label}
     </button>;
     return <div key={instance.instanceId} data-engine-connect={instance.instanceId} data-onboarding-ready={ready ? "" : undefined}
-      className={recommended ? "rounded-xl border border-hairline/50 bg-card p-4" : "border-b border-hairline/30 py-3 last:border-0"}>
-      {recommended ? <>
+      className={featured ? "rounded-xl border border-hairline/50 bg-card p-4" : "border-b border-hairline/30 py-3 last:border-0"}>
+      {featured ? <>
         <div className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-ink"><ProviderMark driverKind={instance.driverKind} size={20} />{instance.displayName}</div>
         {button}
-        <p className="mt-2.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("engineConnect.note")}</p>
+        <p className="mt-2.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t(installed ? "chat.signInHelp" : "engineConnect.note", { name: instance.displayName })}</p>
       </> : <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5"><ProviderMark driverKind={instance.driverKind} size={16} />
           <div><div className="text-[13px] font-medium text-ink">{instance.displayName}</div>
@@ -100,7 +101,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       {footer && <button type="button" onClick={footer.back} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>}
       <button type="button" aria-expanded={commands} aria-controls={commandsId} onClick={() => setCommands((current) => !current)}
         className="rounded-xl px-3 py-2.5 text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink">{t("engineConnect.commands")}</button>
-      {footer && <button type="button" onClick={footer.open} disabled={footer.disabled} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>}
+      {footer && <button type="button" data-engine-connect-primary onClick={footer.open} disabled={footer.disabled} className="rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">{t(footer.label ?? "onboarding.openOrbit")}</button>}
     </div>
   </div>;
 }
