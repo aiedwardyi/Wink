@@ -38,6 +38,7 @@ async function render(count = 2, component = UsageSection) {
 }
 beforeEach(() => {
   persistPreference("en");
+  state.bots.splice(1);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -180,9 +181,64 @@ it("requires two taps to sign out and sends the selected destination", async () 
   expect(request.mock.calls.some(([path]) => String(path).endsWith("/sign-out"))).toBe(false);
   expect(host.textContent).toContain("1 bot uses this account.");
   const choices = host.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+  expect([...choices].map((choice) => choice.getAttribute("aria-label"))).toEqual(["second@example.com", "third@example.com"]);
+  expect([...choices].map((choice) => choice.closest("label")?.textContent)).toEqual(["second@example.com", "third@example.com"]);
   await act(async () => choices[1]!.click());
   await act(async () => button("Move and Sign Out").click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "third" }) });
+});
+
+it("names connected accounts and keeps full labels available when truncated", async () => {
+  await render(2, EnginesSettings);
+  const label = "personal.account.with.a.very.long.address@example.com";
+  state.instances = [state.instances[0]!, { ...state.instances[1]!, snapshot: { ...state.instances[1]!.snapshot, account: label } }];
+  await act(async () => root.render(createElement(EnginesSettings)));
+  expect(host.textContent).toContain("claude@example.com");
+  expect(host.textContent).toContain(label);
+  expect(host.textContent).not.toContain("Connected");
+  const identity = host.querySelector<HTMLElement>(`span[title="${label}"]`)!;
+  expect(identity.textContent).toBe(label);
+  expect(identity.classList.contains("truncate")).toBe(true);
+});
+
+it.each(["Personal account", undefined])("uses the engine account label when no email is available (%s)", async (label) => {
+  await render(2, EnginesSettings);
+  state.instances = [state.instances[0]!, { ...state.instances[1]!, snapshot: { ...state.instances[1]!.snapshot, account: label } }];
+  await act(async () => root.render(createElement(EnginesSettings)));
+  expect(host.querySelector(`span[title="${label ?? "Claude"}"]`)?.textContent).toBe(label ?? "Claude");
+});
+
+it.each(["en", "ko"] as const)("names the only ready destination without radios in %s", async (locale) => {
+  persistPreference(locale);
+  state.bots.push({ ...state.bots[0]!, id: "second-bot" });
+  await render(2, EnginesSettings);
+  await act(async () => button(locale === "en" ? "Sign Out" : "로그아웃").click());
+  expect(host.querySelector('[role="radiogroup"]')).toBeNull();
+  expect(host.querySelector('input[type="radio"]')).toBeNull();
+  expect(host.textContent).toContain(locale === "en"
+    ? "2 bots use this account. They move to second@example.com."
+    : "봇 2개가 이 계정을 써요. second@example.com 계정으로 옮겨져요.");
+  await act(async () => button(locale === "en" ? "Move and Sign Out" : "옮기고 로그아웃").click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: JSON.stringify({ destinationId: "second" }) });
+});
+
+it("excludes signed-out accounts when choosing the only ready destination", async () => {
+  await render(3, EnginesSettings);
+  state.instances = [state.instances[0]!, state.instances[1]!, engine("third", 95, false)];
+  await act(async () => root.render(createElement(EnginesSettings)));
+  expect(host.textContent).toContain("Signed out.");
+  await act(async () => button("Sign Out").click());
+  expect(host.querySelector('input[type="radio"]')).toBeNull();
+  expect(host.textContent).toContain("1 bot uses this account. It moves to second@example.com.");
+});
+
+it("names both radio destinations in Korean", async () => {
+  persistPreference("ko");
+  await render(3, EnginesSettings);
+  await act(async () => button("로그아웃").click());
+  const choices = host.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+  expect([...choices].map((choice) => choice.closest("label")?.textContent)).toEqual(["second@example.com", "third@example.com"]);
+  expect(host.textContent).toContain("옮길 계정");
 });
 
 it("cancels removal without sending a sign-out", async () => {
