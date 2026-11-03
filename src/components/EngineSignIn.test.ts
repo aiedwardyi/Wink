@@ -79,7 +79,7 @@ describe("engine sign-in row", () => {
     expect(host.textContent).not.toContain("Connected");
     await act(async () => root!.render(createElement(I18nProvider, null,
       createElement(EngineRow, { instance: { ...row, snapshot: { state: "available", authenticated: true } } }))));
-    expect(host.textContent).toContain("Connected");
+    expect(host.textContent).toBe("museAgentSign Out");
     expect(host.textContent).not.toContain("Sign In");
   });
 
@@ -282,7 +282,7 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toBe("Connected");
   });
 
-  it("keeps a still-authenticated engine Connected after failed sign-out without polling", async () => {
+  it("keeps a still-authenticated engine signed in after failed sign-out without polling", async () => {
     const row = instance("museAgent", { snapshot: { state: "available", authenticated: true } });
     const fetchMock = vi.fn(async (url: string) => url.endsWith("/sign-out")
       ? new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 })
@@ -290,7 +290,7 @@ describe("engine sign-in row", () => {
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRowView, { instance: row }));
     await click("Sign Out");
-    expect(host.textContent).toContain("Connected");
+    expect([...host.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Sign Out"]);
     expect(host.textContent).toContain("Didn't finish");
     const calls = fetchMock.mock.calls.length;
     await act(async () => vi.advanceTimersByTimeAsync(6000));
@@ -316,7 +316,7 @@ describe("engine sign-in row", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await render(createElement(EngineRow, { instance: row }));
-    expect(host.textContent).toBe("codexConnectedSign Out");
+    expect(host.textContent).toBe("codexSign Out");
     expect(host.querySelector("input, select, code, a")).toBeNull();
     await click("Sign Out");
     expect(fetchMock).toHaveBeenCalledWith("/api/instances/codex/sign-out", expect.objectContaining({ method: "POST", body: "{}" }));

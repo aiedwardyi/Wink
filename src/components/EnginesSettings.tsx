@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 
 import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/state/store";
 import { EngineMark } from "./EngineMark";
-import { AccountConnections } from "./AccountConnections";
+import { AccountConnections, CONNECTION_ACTION, ConnectionRow, SignInRow } from "./AccountConnections";
 import { groupAccounts } from "@/lib/accounts";
-import { EngineSignIn, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
+import { installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
 
@@ -44,45 +44,38 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
     } catch { setInstallStatus("failed"); }
     finally { setBusy(false); }
   };
+  const mark = <EngineMark instance={current} size={16} />;
+  const name = <span className="min-w-0 break-words text-[13px] text-ink">{current.displayName}</span>;
   return (
-    <div data-engine-row={current.instanceId} className="min-w-0 py-2">
-      <div className="flex min-h-[44px] items-start gap-2 text-[13px]">
-        <span className="mt-2 shrink-0"><EngineMark instance={current} size={16} /></span>
-        <span className="flex-1 break-words py-1.5 text-ink">{current.displayName}</span>
-        <div className="min-w-0 max-w-[65%] py-1.5 has-[>div>button:first-child]:py-0">
-          {current.snapshot.state !== "available" ? (
-            <div className="flex flex-wrap items-center justify-end gap-x-3 break-keep text-[12px] text-ink-secondary">
-              <span aria-live="polite">{installStatus === "opened" || installStatus === "running" ? t("engine.terminalOpened")
-                : installStatus === "copied" ? t("engine.commandCopied")
-                  : installStatus === "failed" && !current.install?.docsUrl ? t("engines.installFailed") : t("engines.notInstalled")}</span>
-              {installCommand && !(installStatus === "failed" && current.install?.docsUrl) ? <button type="button" onClick={() => void install()} disabled={busy}
-                className="text-ink hover:underline disabled:opacity-50">{t("engines.install")}</button>
-                : current.install?.docsUrl && <a href={current.install.docsUrl} target="_blank" rel="noreferrer"
-                className="text-ink hover:underline">{t("engines.install")}</a>}
-              {(installStatus === "opened" || installStatus === "running") && (
-                <p className="w-full text-right text-[11px] leading-[14px] text-ink-secondary/70">{t(installStatus !== "running" ? "engine.pasteAndEnter" : installSignsIn(current.install) ? "engine.followSignIn" : "engine.installRunning")}</p>
-              )}
-              {current.install?.needsNode && installCommand?.includes("npm") && !(window.ogb?.openEngineInstall && window.ogb.platform === "win32") && (
-                <p className="w-full text-right text-[11px] leading-[14px] text-ink-secondary/70">{t("engine.needsNode")}</p>
-              )}
-            </div>
-          ) : isEngineConnected(current) ? (
-            <div aria-live="polite" className="flex flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
-              <div className="flex flex-wrap items-center justify-end gap-x-3">
-                <span>{t("connections.connected")}</span>
-                {canSignOut && <button type="button" onClick={() => void signOut()} disabled={busy}
-                  className="text-ink hover:underline disabled:opacity-50">{t("engines.signOut")}</button>}
-              </div>
-              {error && <span role="alert">{t("engines.didntFinish")}</span>}
-            </div>
-          ) : (
-            <EngineSignIn instance={current} onUpdated={(next) => {
-              setCurrent(next);
-              if (next.snapshot.authenticated === true) onConnected?.();
-            }} />
-          )}
-        </div>
-      </div>
+    <div data-engine-row={current.instanceId} className="min-w-0 py-1.5">
+      {current.snapshot.state !== "available" ? (
+        <ConnectionRow mark={mark} label={name} actions={
+          <div className="flex flex-wrap items-center justify-end gap-x-3">
+            <span aria-live="polite">{installStatus === "opened" || installStatus === "running" ? t("engine.terminalOpened")
+              : installStatus === "copied" ? t("engine.commandCopied")
+                : installStatus === "failed" && !current.install?.docsUrl ? t("engines.installFailed") : t("engines.notInstalled")}</span>
+            {installCommand && !(installStatus === "failed" && current.install?.docsUrl) ? <button type="button" onClick={() => void install()} disabled={busy}
+              className="text-ink hover:underline disabled:opacity-50">{t("engines.install")}</button>
+              : current.install?.docsUrl && <a href={current.install.docsUrl} target="_blank" rel="noreferrer"
+              className="text-ink hover:underline">{t("engines.install")}</a>}
+            {(installStatus === "opened" || installStatus === "running") && (
+              <p className="w-full text-right text-[11px] leading-[14px] text-ink-secondary/70">{t(installStatus !== "running" ? "engine.pasteAndEnter" : installSignsIn(current.install) ? "engine.followSignIn" : "engine.installRunning")}</p>
+            )}
+            {current.install?.needsNode && installCommand?.includes("npm") && !(window.ogb?.openEngineInstall && window.ogb.platform === "win32") && (
+              <p className="w-full text-right text-[11px] leading-[14px] text-ink-secondary/70">{t("engine.needsNode")}</p>
+            )}
+          </div>} />
+      ) : isEngineConnected(current) ? (
+        <ConnectionRow mark={mark} label={name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
+          className={CONNECTION_ACTION}>{t("engines.signOut")}</button> : <span>{t("connections.connected")}</span>}>
+          {error && <span role="alert">{t("engines.didntFinish")}</span>}
+        </ConnectionRow>
+      ) : (
+        <SignInRow instance={current} mark={mark} name={name} onUpdated={(next) => {
+          setCurrent(next);
+          if (next.snapshot.authenticated === true) onConnected?.();
+        }} />
+      )}
     </div>
   );
 }

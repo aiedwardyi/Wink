@@ -50,7 +50,7 @@ it("starts unchecked, reads local consent and changes it only on an explicit cli
     expect(setErrorReportConsent).not.toHaveBeenCalled();
     await act(async () => resolve(false));
     expect(toggle.disabled).toBe(false);
-    expect(host.textContent).toContain("Anonymous crash reports and usage counts. No chats or files. Turn off anytime.");
+    expect(host.textContent).toContain("Anonymous. No chats or files.");
     await act(async () => toggle.click());
     expect(setErrorReportConsent).toHaveBeenLastCalledWith(true);
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: '{"enabled":true}' });
@@ -80,7 +80,7 @@ it.each(["en", "ko"] as const)("turns off both consents after first-run usage op
     expect(host.querySelectorAll('[role="switch"]')).toHaveLength(1);
     const toggle = host.querySelector("button")!;
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(toggle.getAttribute("aria-label")).toBe(locale === "en" ? "Error reports and usage stats" : "오류 보고 및 사용 통계");
+    expect(toggle.getAttribute("aria-label")).toBe(locale === "en" ? "Crash reports and stats" : "오류 보고와 통계");
     expect(setErrorReportConsent).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledTimes(1);
     await act(async () => toggle.click());

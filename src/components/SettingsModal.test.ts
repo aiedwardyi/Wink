@@ -232,8 +232,8 @@ describe("SettingsModal friends chrome", () => {
   it("keeps one combined privacy switch on General and hides separate usage stats", () => {
     Object.defineProperty(window, "ogb", { value: { errorReportConsent: vi.fn(), setErrorReportConsent: vi.fn() }, configurable: true, writable: true });
     const html = markup("general");
-    expect(html).toContain('aria-label="Error reports and usage stats"');
-    expect(html).toContain("Anonymous crash reports and usage counts. No chats or files. Turn off anytime.");
+    expect(html).toContain('aria-label="Crash reports and stats"');
+    expect(html).toContain("Anonymous. No chats or files.");
     expect(html).not.toContain("Send Anonymous Usage Stats");
     expect((html.match(/role="switch"/g) ?? [])).toHaveLength(1);
     Object.defineProperty(window, "ogb", { value: undefined, configurable: true, writable: true });

@@ -206,8 +206,7 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
   );
 }
 
-export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean }) {
-  const { t } = useI18n();
+export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
   const [waiting, setWaiting] = useState(instance.loginState === "pending");
   const [failed, setFailed] = useState(instance.loginState === "failed");
@@ -315,9 +314,15 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
     } catch { if (request === generation.current) setFailed(true); }
     finally { if (request === generation.current) setBusy(false); }
   };
+  const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;
+  return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode };
+}
 
+export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean }) {
+  const { t } = useI18n();
+  const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
-  if (!forceSignIn && !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState) return null;
+  if (!forceSignIn && loading) return null;
   if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   return (
     <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">

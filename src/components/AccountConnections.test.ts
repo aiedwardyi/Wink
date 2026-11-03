@@ -75,15 +75,15 @@ it("keeps main-account sign-out disabled when no other account is ready", async 
   expect(buttons("Sign In")).toHaveLength(1);
 });
 
-it("names connected accounts and keeps the full truncated label available", async () => {
+it("names connected accounts and shows a long label in full, wrapping after @", async () => {
   await render();
   const label = "personal.account.with.a.very.long.address@example.com";
   state.instances[1]!.snapshot.account = label;
   await update();
   expect(host.textContent).toContain("claude@example.com");
-  const identity = host.querySelector<HTMLElement>(`span[title="${label}"]`)!;
-  expect(identity.textContent).toBe(label);
-  expect(identity.classList.contains("truncate")).toBe(true);
+  const identity = [...host.querySelectorAll("span")].find((node) => node.textContent === label)!;
+  expect(identity.classList.contains("truncate")).toBe(false);
+  expect(identity.innerHTML).toBe("personal.account.with.a.very.long.address@<wbr>example.com");
   expect(buttons("Sign Out")).toHaveLength(2);
 });
 
@@ -107,7 +107,7 @@ it.each(["Personal account", undefined])("uses the engine account label without 
   await render(1);
   state.instances[0]!.snapshot.account = label;
   await update();
-  expect(host.querySelector(`span[title="${label ?? "Claude"}"]`)?.textContent).toBe(label ?? "Claude");
+  expect(host.textContent).toContain(`${label ?? "Claude"}Sign Out`);
 });
 
 it.each(["en", "ko"] as const)("offers one Add Account per engine, including a single account, in %s", async (locale) => {

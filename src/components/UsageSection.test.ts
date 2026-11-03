@@ -932,16 +932,18 @@ describe("UsageSection friends plan card", () => {
     }
   });
 
-  it("keeps an unreported reset in English and Korean", () => {
+  it("keeps an unreported reset on its row's hover in English and Korean", () => {
     const report = mockState.instances[0].rateLimits;
     if (!report) throw new Error("claude fixture missing rateLimits");
     const original = report.windows;
     try {
       report.windows = [...original, { id: "secondary", usedPercent: 46, windowMinutes: 10080, resetsAt: null }];
       persistPreference("en");
-      expect(renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)))).toContain(">Reset time not reported<");
+      const en = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      expect(en).toMatch(/title="Reset time not reported"[^>]*><div role="group" aria-label="7d: /);
+      expect(en).not.toContain(">Reset time not reported<");
       persistPreference("ko");
-      expect(renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)))).toContain(">초기화 시각이 보고되지 않았습니다<");
+      expect(renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)))).toContain('title="초기화 시각이 보고되지 않았습니다"');
     } finally {
       report.windows = original;
       persistPreference("en");

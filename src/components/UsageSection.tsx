@@ -34,6 +34,7 @@ import {
   windowKind,
 } from "@/lib/usage";
 import { PLAN_WINDOW_SHORT_LABEL_KEY, PlanWindowMeter, useNow } from "./PlanUsageBar";
+import type { RateLimitWindow } from "../../server/contracts.ts";
 
 // Chat lists the session window before the weekly one; Settings keeps every
 // window the engine reported but in that same priority. Array sort is stable,
@@ -41,6 +42,13 @@ import { PLAN_WINDOW_SHORT_LABEL_KEY, PlanWindowMeter, useNow } from "./PlanUsag
 function windowRank(id: string, windowMinutes?: number): number {
   const kind = windowKind(id, windowMinutes);
   return kind === "session" ? 0 : kind === "weekly" ? 1 : 2;
+}
+
+// Side-by-side accounts get a row for every window any of them reports, so their columns line up.
+function windowSlots(accounts: UsageAccount[]): RateLimitWindow[] {
+  const slots = new Map<string, RateLimitWindow>();
+  for (const window of accounts.flatMap((account) => account.rateLimits?.windows ?? [])) if (!slots.has(window.id)) slots.set(window.id, window);
+  return [...slots.values()].sort((a, b) => windowRank(a.id, a.windowMinutes) - windowRank(b.id, b.windowMinutes));
 }
 
 const PLAN_USAGE_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent", "museAgent"]);
@@ -70,12 +78,14 @@ function EnginePlanRow({
   error,
   limit,
   heading,
+  slots,
 }: {
   instance: InstanceInfo;
   now: number;
   error?: string;
   limit?: { resetsAt: number | null };
   heading?: ReactNode;
+  slots?: RateLimitWindow[];
 }) {
   const { t } = useI18n();
   const muse = instance.driverKind === "museAgent";
@@ -101,6 +111,7 @@ function EnginePlanRow({
   // A reading older than an hour says so under the rows: engines like Muse
   // only report what their own host observed, so an old reading can look current.
   const stale = instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) > STALE_READING_MS;
+  const rows = (slots ?? windows).map((slot) => ({ slot, window: windows.find((window) => window.id === slot.id) }));
   return (
     <div>
       {heading ?? <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
@@ -108,25 +119,31 @@ function EnginePlanRow({
           <span className="truncate">{instance.displayName}</span>
         </EngineMark>
       </div>}
-      {windows.length > 0 && (
+      {rows.length > 0 && (
         <div className="mt-2 flex flex-col items-start gap-1.5">
-          {windows.map((window) => {
-            const opus = window.id === "seven_day_opus";
-            const shortLabel = t(PLAN_WINDOW_SHORT_LABEL_KEY[windowKind(window.id, window.windowMinutes)]);
+          {rows.map(({ slot, window }) => {
+            const opus = slot.id === "seven_day_opus";
+            const shortLabel = t(PLAN_WINDOW_SHORT_LABEL_KEY[windowKind(slot.id, slot.windowMinutes)]);
+            if (!window) return (
+              <div key={slot.id} aria-hidden="true" className="flex gap-2 text-[12.5px] leading-5 text-ink-secondary">
+                {opus && <span>{t("usage.limits.opusShort")}</span>}
+                <span>{shortLabel}</span>
+                <span>–</span>
+              </div>
+            );
+            const expired = windowExpired(window.resetsAt, now);
             return (
               <div key={window.id} role={opus ? "group" : undefined} aria-label={opus ? `${t("usage.limits.opusShort")} ${shortLabel}` : undefined}
-                className="flex min-w-0 flex-wrap items-center gap-2 text-[12.5px] text-ink">
+                title={expired || resetCompact(window.resetsAt, now) ? undefined : t("usage.limits.resetUnknown")}
+                className="flex min-w-0 flex-wrap items-center gap-2 text-[12.5px] leading-5 text-ink">
                 {opus && <span aria-hidden="true">{t("usage.limits.opusShort")}</span>}
-                {windowExpired(window.resetsAt, now) ? (
+                {expired ? (
                   <span>
                     {shortLabel}{" "}
                     <span className="text-ink-secondary">{t(muse ? "usage.limits.resetPassedCheck" : "usage.limits.resetPassed")}</span>
                   </span>
                 ) : (
-                  <>
-                    <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} />
-                    {!resetCompact(window.resetsAt, now) && <span className="text-ink-secondary">{t("usage.limits.resetUnknown")}</span>}
-                  </>
+                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} />
                 )}
               </div>
             );
@@ -281,6 +298,7 @@ function PlanUsage() {
               accounts={accounts}
               reload={reload}
               renderRow={(instance, heading) => <EnginePlanRow instance={instance} now={now} heading={heading}
+                slots={accounts.length > 1 ? windowSlots(accounts) : undefined}
                 error={refreshErrors[instance.instanceId]} limit={limits[instance.instanceId]} />}
             />
           ))}
