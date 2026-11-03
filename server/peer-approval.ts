@@ -187,8 +187,8 @@ export function cancelPeerApprovalsForThread(threadId: string): void {
  * crashed run doesn't leave a thread with a permanently blocked composer. */
 export function dismissStalePeerCards(bus: ApprovalBus): number {
   let dismissed = 0;
-  for (const bot of bus.store.bots) {
-    const threadIds = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
+  for (const conversation of [...bus.store.bots, ...bus.store.groups]) {
+    const threadIds = new Set([conversation.threadId, ...(conversation.tasks ?? []).map((task) => task.threadId)]);
     for (const threadId of threadIds) {
       for (const message of bus.store.messagesFor(threadId)) {
         const card = message.card;

@@ -1,4 +1,4 @@
-// Owner's counts for today in Korea, with local archives as the old-relay fallback.
+// Owner-wide counts for today in Korea; unavailable relay totals stay unknown.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -86,8 +86,8 @@ export async function teamTodayRoute(
   return {
     status: 200,
     body: {
-      snags: counts?.snags ?? todaySnags(join(dataDir, "team-snags.jsonl"), start),
-      bugs: counts?.bugs ?? todayReports(join(dataDir, "team-report-inbox"), start),
+      snags: relay ? counts?.snags ?? null : todaySnags(join(dataDir, "team-snags.jsonl"), start),
+      bugs: relay ? counts?.bugs ?? null : todayReports(join(dataDir, "team-report-inbox"), start),
       crashes,
       crashCount: crashes ? await crashCount() : null,
     },

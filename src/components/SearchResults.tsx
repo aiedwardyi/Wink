@@ -65,7 +65,7 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
           ? t("search.messagesCount", { count: `${shown.length}${hits?.length === 40 ? "+" : ""}` })
           : t("palette.messages")}
       </div>
-      {error && <div className="px-3 py-2 text-[12.5px] text-danger">couldn't search: {error}</div>}
+      {error && <div className="px-3 py-2 text-[12.5px] text-danger">{t("search.error", { error })}</div>}
       {shown && shown.length === 0 && !error && <div className="px-3 py-3 text-[13px] text-ink-secondary">{t("search.noMatch", { query: q })}</div>}
       {shown?.map((hit) => {
         const bot = hit.botId ? state.bots.find((b) => b.id === hit.botId) : undefined;
@@ -92,7 +92,7 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
               </span>
               {!hit.onActivePath && (
                 <span className="mt-0.5 flex items-center gap-1 text-[11px] text-ink-secondary">
-                  <GitBranch size={10} /> other version
+                  <GitBranch size={10} /> {t("search.otherVersion")}
                 </span>
               )}
             </span>

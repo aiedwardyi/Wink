@@ -58,7 +58,6 @@ describe("GroupView ask records", () => {
             streamingMessage: null,
             dock: null,
             onReply: () => undefined,
-            onFocusComposer: () => undefined,
             onMessageMenu: () => undefined,
             workers: [],
           }),

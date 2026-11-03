@@ -36,7 +36,7 @@ describe("deleting a bot that leads a room", () => {
     const { store, roomResponders } = await freshStore();
     const lead = store.createBot();
     const other = store.createBot();
-    const room = store.createGroup("Product", [lead.id, other.id]);
+    const room = store.createGroup("Product", [lead.id, other.id], false, undefined, { defaultResponder: { kind: "member", botId: lead.id } });
     store.patchGroup(room.id, { busyBotId: lead.id });
     const changes: unknown[] = [];
     store.onChange((change) => changes.push(change));

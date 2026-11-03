@@ -76,7 +76,7 @@ export function teamSnagNote(snags: ClaimedSnag[], file: string, timeZone?: stri
   return [...parts, pointer].join("\n\n");
 }
 
-const ownerChief = (store: Store) => store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section)) ?? store.bots.find((bot) => bot.chiefOfStaff);
+export const ownerChief = (store: Store) => store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section)) ?? store.bots.find((bot) => bot.chiefOfStaff);
 
 /** The default section's Chief, else the first Chief, gets a note that cannot schedule a wake. */
 export function postChiefNote(store: Store, deviceId: string | undefined, text: string, ids?: string[], reportIds?: string[]): boolean {

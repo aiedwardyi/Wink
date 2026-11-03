@@ -5,6 +5,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { applyLocale } from "@/lib/i18n";
 import type { Action, Bot, Group, InstanceInfo } from "@/state/store";
 
 const dispatched: Action[] = [];
@@ -95,9 +96,9 @@ function pickRow(host: HTMLElement, name: string): HTMLButtonElement {
   return found;
 }
 
-function jobInputs(host: HTMLElement): HTMLInputElement[] {
-  // SAFETY: the selector targets only the wizard job fields rendered above.
-  return [...host.querySelectorAll('input[placeholder="For example, research flight options"]')] as HTMLInputElement[];
+function nameInputs(host: HTMLElement): HTMLInputElement[] {
+  // SAFETY: the selector targets only the wizard bot name fields rendered above.
+  return [...host.querySelectorAll('input[id^="group-wizard-name-"]')] as HTMLInputElement[];
 }
 
 async function toMembers(host: HTMLElement) {
@@ -118,6 +119,7 @@ function findCreate(): Extract<Action, { type: "createGroup" }> {
 }
 
 afterEach(() => {
+  applyLocale("en");
   document.body.replaceChildren();
   dispatched.length = 0;
   apiCalls.length = 0;
@@ -128,6 +130,39 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
+
+  it.each([
+    ["en", "+ New bot", "Name your bot", "For example, Researcher", "Add bot", "Add a name first."],
+    ["ko", "+ 새 봇", "봇 이름 짓기", "예: 리서처", "봇 추가", "먼저 이름을 입력해 주세요."],
+  ] as const)("names an inline bot directly in %s", async (locale, addRow, label, placeholder, add, required) => {
+    applyLocale(locale);
+    apiImpl = () => Promise.resolve({ bot: { id: "new", name: "research Desk v2 / Seoul HQ" } });
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => button(host, addRow).click());
+      const [input] = nameInputs(host);
+      expect(input).toBeDefined();
+      expect(host.querySelector(`label[for="${input!.id}"]`)?.textContent).toBe(label);
+      expect(input!.placeholder).toBe(placeholder);
+      expect(input!.maxLength).toBe(40);
+      await act(async () => button(host, add).click());
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe(required);
+      expect(apiCalls).toHaveLength(0);
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+        setter.call(input, "  research Desk v2 / Seoul HQ  ");
+        input!.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+      await flush();
+      expect(JSON.parse(String(apiCalls[0]!.init?.body))).toEqual({
+        name: "research Desk v2 / Seoul HQ",
+        modelSelection: { instanceId: "codex-1", model: "codex-1-model" },
+      });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
 
   it("shows the name, members and reply rule on one card", async () => {
     const { host, root } = await renderWizard();
@@ -220,19 +255,18 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      const [job1] = jobInputs(host);
+      const [name1] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        native.call(job1, "review my code");
-        job1!.dispatchEvent(new Event("input", { bubbles: true }));
+        native.call(name1, "review my code");
+        name1!.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await act(async () => {
         button(host, "Add bot").click();
       });
       await flush();
       expect(JSON.parse(String(apiCalls[0]!.init?.body))).toEqual({
-        job: "review my code",
-        name: "Review my code",
+        name: "review my code",
         modelSelection: { instanceId: "codex-1", model: "codex-1-model" },
       });
       await act(async () => {
@@ -242,11 +276,11 @@ describe("GroupWizard members", () => {
       const selects = [...host.querySelectorAll('select[aria-label="Change model"]')] as HTMLSelectElement[];
       expect(selects).toHaveLength(1);
       expect(selects[0]!.value).toBe("muse-1-model");
-      const [job2] = jobInputs(host);
+      const [name2] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        native.call(job2, "plan trips");
-        job2!.dispatchEvent(new Event("input", { bubbles: true }));
+        native.call(name2, "plan trips");
+        name2!.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await act(async () => {
         button(host, "Add bot").click();
@@ -298,11 +332,11 @@ describe("GroupWizard members", () => {
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      const [job1] = jobInputs(host);
+      const [name1] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        native.call(job1, "review my code");
-        job1!.dispatchEvent(new Event("input", { bubbles: true }));
+        native.call(name1, "review my code");
+        name1!.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await act(async () => {
         button(host, "Add bot").click();
@@ -348,7 +382,7 @@ describe("GroupWizard members", () => {
     const { host, root } = await renderWizard();
     try {
       await toMembers(host);
-      expect(jobInputs(host)).toHaveLength(1);
+      expect(nameInputs(host)).toHaveLength(1);
       expect(host.querySelectorAll('button[role="checkbox"]')).toHaveLength(0);
       expect(host.textContent).not.toContain("+ New bot");
     } finally {
@@ -358,33 +392,33 @@ describe("GroupWizard members", () => {
     }
   });
 
-  it("validates an empty bot purpose inline and clears it on input", async () => {
+  it("validates an empty bot name inline and clears it on input", async () => {
     const { host, root } = await renderWizard();
     try {
       await toMembers(host);
       await act(async () => {
         button(host, "+ New bot").click();
       });
-      const [job] = jobInputs(host);
+      const [nameInput] = nameInputs(host);
       expect(host.textContent).not.toContain("unlock Add bot");
       await act(async () => {
         button(host, "Add bot").click();
       });
-      expect(document.activeElement).toBe(job);
-      expect(job!.getAttribute("aria-invalid")).toBe("true");
-      const errorId = job!.getAttribute("aria-describedby");
+      expect(document.activeElement).toBe(nameInput);
+      expect(nameInput!.getAttribute("aria-invalid")).toBe("true");
+      const errorId = nameInput!.getAttribute("aria-describedby");
       expect(errorId).toBeTruthy();
       const error = document.getElementById(errorId!);
       expect(error?.getAttribute("role")).toBe("alert");
-      expect(error?.textContent).toBe("Add a purpose first.");
+      expect(error?.textContent).toBe("Add a name first.");
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        native.call(job, "review my code");
-        job!.dispatchEvent(new Event("input", { bubbles: true }));
+        native.call(nameInput, "review my code");
+        nameInput!.dispatchEvent(new Event("input", { bubbles: true }));
       });
-      expect(job!.getAttribute("aria-invalid")).toBeNull();
-      expect(job!.getAttribute("aria-describedby")).toBeNull();
-      expect(host.textContent).not.toContain("Add a purpose first.");
+      expect(nameInput!.getAttribute("aria-invalid")).toBeNull();
+      expect(nameInput!.getAttribute("aria-describedby")).toBeNull();
+      expect(host.textContent).not.toContain("Add a name first.");
     } finally {
       await act(async () => {
         root.unmount();
@@ -436,11 +470,11 @@ describe("GroupWizard members", () => {
       // SAFETY: the selector targets only the row model dropdowns rendered above.
       const modelSelect = host.querySelector('select[aria-label="Change model"]') as HTMLSelectElement;
       expect(modelSelect.value).toBe("muse-1-model");
-      const [job] = jobInputs(host);
+      const [nameInput] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        native.call(job, "plan trips");
-        job!.dispatchEvent(new Event("input", { bubbles: true }));
+        native.call(nameInput, "plan trips");
+        nameInput!.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await act(async () => {
         button(host, "Add bot").click();
@@ -494,11 +528,11 @@ describe("GroupWizard members", () => {
       // The engine default (3.5) is not offered, so the select resolves to
       // 3.8 Flash High even though Argon is listed first.
       expect(modelSelect.value).toBe("gemini-3.8-flash-high");
-      const [job] = jobInputs(host);
+      const [nameInput] = nameInputs(host);
       await act(async () => {
         const native = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-        native.call(job, "summarize docs");
-        job!.dispatchEvent(new Event("input", { bubbles: true }));
+        native.call(nameInput, "summarize docs");
+        nameInput!.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await act(async () => {
         button(host, "Add bot").click();

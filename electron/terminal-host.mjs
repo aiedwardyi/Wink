@@ -18,6 +18,8 @@ export const TERMINAL_ACTIVITY_COALESCE_MS = 750;
 export const TERMINAL_ACTIVITY_ACK_COOLDOWN_MS = 3_000;
 export const TERMINAL_STALL_MS = 120_000;
 export const TERMINAL_TURN_END_MS = 90_000;
+// A final report can leave the spinner up while the worker signs off.
+const REPORT_WRAP_MS = 60_000;
 // A worker idle on its own background jobs keeps its turn-end note this long at most.
 const JOBS_HOLD_MS = 30 * 60_000;
 // Long enough for an agent woken by its finished job to show busy and drop the note.
@@ -919,10 +921,13 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           // Past the trust menu, so stop scanning every chunk for it.
           session.claudeTrustAnswered = true;
           session.autoNote = null;
-          if (!session.agentBusy) {
+          const resumed = session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt
+            && (!session.agentBusy || now() - session.reportAt >= REPORT_WRAP_MS);
+          if (!session.agentBusy || resumed) {
             session.autoDelivered = false;
             session.autoReported = false;
           }
+          if (resumed) session.stallArmedAt = now();
         }
         session.agentBusy = busy;
       }

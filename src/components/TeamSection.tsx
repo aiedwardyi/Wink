@@ -19,7 +19,7 @@ export interface TeamView {
   people: TeamPerson[];
 }
 
-export const teamTodaySchema = z.object({ snags: z.number(), bugs: z.number(), crashes: z.string().nullable(), crashCount: z.number().nullable() });
+export const teamTodaySchema = z.object({ snags: z.number().nullable(), bugs: z.number().nullable(), crashes: z.string().nullable(), crashCount: z.number().nullable() });
 export type TeamToday = z.infer<typeof teamTodaySchema>;
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -87,10 +87,11 @@ export function TeamSection({ stats, today }: { stats: TeamView; today?: TeamTod
 
 function TodayCounts({ today }: { today: TeamToday }) {
   const { t } = useI18n();
-  const cell = (big: ReactNode, label: string) => (
+  const cell = (big: ReactNode, label: string, link?: ReactNode) => (
     <div className="min-w-0">
       <div className="flex h-7 items-end text-[22px] font-semibold leading-tight tracking-tight text-ink tabular-nums">{big}</div>
       <div className="text-[12px] text-ink-secondary">{label}</div>
+      {link && <div className="mt-0.5 text-[12px] text-ink-secondary">{link}</div>}
     </div>
   );
   const crashes = today.crashes ? (
@@ -98,18 +99,19 @@ function TodayCounts({ today }: { today: TeamToday }) {
       href={today.crashes}
       target="_blank"
       rel="noopener noreferrer"
-      className={`${today.crashCount === null ? "text-[15px] font-medium " : ""}rounded-sm underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus`}
+      className="rounded-sm underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
     >
       {today.crashCount === null ? t("teamToday.open") : today.crashCount}
     </a>
-  ) : "-";
+  ) : null;
+  const unknownCrashes = today.crashCount === null;
   return (
     <section className="@container/today flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-card p-4">
       <div className="w-full shrink-0 text-[15px] font-medium text-ink @[34rem]/today:w-auto" title={t("teamToday.since")}>{t("teamToday.title")}</div>
-      <div className="flex min-w-0 flex-1 flex-wrap items-end justify-between gap-x-4 gap-y-2 @[34rem]/today:justify-end @[34rem]/today:gap-x-7">
-        {cell(crashes, t("teamToday.crashes"))}
-        {cell(String(today.snags), t("teamToday.snags"))}
-        {cell(String(today.bugs), t("teamToday.bugs"))}
+      <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-4 gap-y-2 @[34rem]/today:justify-end @[34rem]/today:gap-x-7">
+        {cell(unknownCrashes ? null : crashes ?? "-", t("teamToday.crashes"), unknownCrashes ? crashes : undefined)}
+        {cell(today.snags ?? "-", t("teamToday.snags"))}
+        {cell(today.bugs ?? "-", t("teamToday.bugs"))}
       </div>
     </section>
   );

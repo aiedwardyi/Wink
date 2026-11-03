@@ -232,7 +232,7 @@ import {
 } from "./turn-context.ts";
 import { stallErrorActivity } from "./room-error-attribution.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
-import { foldContinuationStart } from "./continuation-turn.ts";
+import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
@@ -282,6 +282,7 @@ import {
   deviceNameSchema,
   listDevices,
   loadDeviceName,
+  namedDevicePeers,
   pickerDevices,
   saveDeviceName,
   writeDeviceRecord,
@@ -3092,8 +3093,11 @@ bus.subscribe((event: RuntimeEvent) => {
 // Continuation turns carry the provider's own turnId. Disowned ones settle
 // without touching the bot, which is busy on another thread.
 const disownedTurnIds = new Set<string>();
+const runningTurnIdByThread = new Map<string, string>();
 bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed" && runningTurnIdByThread.get(event.threadId) === event.turnId) runningTurnIdByThread.delete(event.threadId);
   if (event.type !== "turn.started") return;
+  if (event.turnId) runningTurnIdByThread.set(event.threadId, event.turnId);
   foldContinuationStart(event, {
     botByThread: (threadId) => store.botByThread(threadId),
     claimed: (botId) => turnStartClaims.has(botId),
@@ -3190,7 +3194,7 @@ function localVmIdleFor(target: LocalVmTarget): LocalVmIdleTimer {
         // The desktop leaves a stale X lock after stop, so idle cleanup
         // removes only the disposable container. Its target-specific durable
         // workspace and the shared prepared image remain.
-        if (status.container === "running") {
+        if (status.owned && status.container === "running") {
           await containerComputerAction("remove", undefined, undefined, target);
         }
       } finally {
@@ -3218,7 +3222,7 @@ void (async () => {
     : [SHARED_LOCAL_VM_TARGET];
   for (const target of targets) {
     const status = await containerComputerStatus(undefined, undefined, target).catch(() => null);
-    if (status?.container === "running") localVmIdleFor(target).touch();
+    if (status?.owned && status.container === "running") localVmIdleFor(target).touch();
   }
 })();
 
@@ -5467,6 +5471,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           limitWaits.track(bot.id, threadId, selection, opts?.limitWaitId, { unattended: opts?.unattended, keepGoingWake: opts?.keepGoingWake, paneNoteWake: opts?.paneNoteWake });
         }
         pendingInterruptThreads.started(threadId, bot.id, epoch);
+        const joined = await joinRunningTurn(live.adapter, { threadId, text, resumeCursor, systemUpdate }, runningTurnIdByThread.get(threadId));
+        if (joined) {
+          disownedTurnIds.delete(joined.turnId);
+          turnRegistry.started(joined.turnId, threadId);
+          limitWaits.bind(threadId, joined.turnId);
+          return joined;
+        }
         return live.adapter.sendTurn({
         threadId,
         text,
@@ -7435,11 +7446,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── phone link (this PC's own /remote?key= url, never synced) ──
     if (method === "GET" && path === "/api/remote-link") {
       const setupOpen = url.searchParams.get("setup") === "1";
-      if (setupOpen || REMOTE_HOST === undefined) await remoteRetry.refresh(setupOpen);
+      if (setupOpen || REMOTE_HOST === undefined) await remoteRetry.refresh(setupOpen && url.searchParams.get("cached") !== "1");
       return json(res, 200, {
         url: remoteLinkUrl(REMOTE_HOST, REMOTE_KEY) ?? null,
         setup: remoteLinkSetup(REMOTE_HOST, remoteRetry.status(), setupOpen),
-        ...(setupOpen ? { pcs: await remoteRetry.devices() } : {}),
+        ...(setupOpen ? { pcs: namedDevicePeers(await remoteRetry.devices(), profileSyncSettings.folder ? listDevices(profileSyncSettings.folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : []) } : {}),
         phones: phoneVisits.list(),
       });
     }
@@ -8367,7 +8378,7 @@ startTeamSnagOwner({
 });
 startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => phoneAccess.base(), baked: googleEnv.teamRelay,
   owner: googleEnv.teamOwner, email: () => googleAccount.owner()?.email ?? null, tokens: googleAccount,
-  ...reportOwnerPost(store, profileSyncSettings.deviceId), warn: (line) => console.warn(line) });
+  ...reportOwnerPost(store, profileSyncSettings.deviceId, (botId, threadId) => paneWake.noteArrived(botId, threadId)), warn: (line) => console.warn(line) });
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
 for (const bot of store.bots) {

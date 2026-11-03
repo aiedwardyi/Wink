@@ -1046,7 +1046,7 @@ export class Store {
       memberIds,
       defaultResponder: dm
         ? { kind: "mentions" }
-        : normalizeGroupDefaultResponder(setup?.defaultResponder, memberIds, false),
+        : normalizeGroupDefaultResponder(setup?.defaultResponder ?? { kind: "everyone" }, memberIds, false),
       bulletin: setup?.bulletin ?? "",
       unread: false,
       createdAt,

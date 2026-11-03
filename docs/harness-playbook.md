@@ -37,6 +37,11 @@ What to build or fix, and why. Two to five lines.
 - If a choice this card does not cover would change the result, stop and report BLOCKED with the question.
 - Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.
 - Size heavy local runs (test browsers, servers, builds) to the PC: check cores, free memory and load first, and scale up only while it stays responsive.
+- Waits over 10 min: start the job hidden, then poll it in the foreground.
+- Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
+
+## Already built
+- The built.md lines this touches and the live files to open first.
 
 ## Files
 - The files it should start from.
@@ -46,7 +51,7 @@ Keep <card path minus .md>.progress.md current at each milestone:
 done, ruled out, and any edit in flight (file, what, why).
 
 ## Report
-The exact shape of its final message, plus one line: cleanup, removed / kept and why.
+The exact shape of its final message, plus two lines: what it reused, and cleanup: removed / kept and why.
 ```
 
 - NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`).
@@ -90,6 +95,9 @@ Every step re-reads the worker's whole context, so long runs cost more.
 
 - Ask the auditor to walk the user's first real session end to end. That walk
   finds the bugs normal use hits first.
+- A walk logs every snag it sees to one shared findings list. Before the next
+  walk, read that list and walk only the screens changed since, unless the
+  user asks for more.
 - Probe scripts read PORT, HOME and ROOT from env, so a fix branch can be
   re-checked with one command.
 - Triage findings by "can this hit normal use soon?" Fix those. Park the rest in
@@ -182,6 +190,7 @@ scratch copy.
 Keep one line per user-facing feature in `built.md` (project notes, else repo
 `docs/`): `- Name | where: device, size, setting | files | PRs`.
 
+- No built.md yet: write it from the code before the first build card.
 - Before you say a feature exists, works a certain way, or is missing, grep
   built.md, then read the code it names. No line: search the code.
 - When you land a user-facing change, add or edit its one line in the same step.

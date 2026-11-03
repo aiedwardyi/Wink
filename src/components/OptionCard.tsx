@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
 import { useStore, visibleMessages, type Message } from "@/state/store";
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -33,7 +33,6 @@ export function OptionCard({
   const { t } = useI18n();
   const [custom, setCustom] = useState("");
   const [pending, setPending] = useState(false);
-  const customRef = useRef<HTMLInputElement>(null);
   const card = message.card;
   const bot = state.bots.find((candidate) => candidate.id === botId);
   const transcript = bot ? visibleMessages(bot) : [];
@@ -56,14 +55,6 @@ export function OptionCard({
     dispatch({ type: "answerCard", botId, messageId: message.id, answer: trimmed });
   };
 
-  // Live provider free-text still goes through answerCard (requestId). Wiring
-  // the docked composer to that requestId needs a larger store change — keep
-  // local custom entry for correctness; "Write my own" focuses that field.
-  const writeOwn = () => {
-    if (card.tool) return;
-    customRef.current?.focus();
-  };
-
   return (
     <div className="flex w-full flex-col gap-2">
       <QuestionChoiceCard
@@ -73,9 +64,7 @@ export function OptionCard({
         pending={pending}
         selectedOption={selectedOption}
         customAnswered={customAnswered}
-        hideWriteOwn={Boolean(card.tool) || Boolean(card.answered)}
         onPick={answer}
-        onWriteOwn={card.tool || card.answered ? undefined : writeOwn}
         headerEnd={
           <button
             type="button"
@@ -92,7 +81,6 @@ export function OptionCard({
           allow/deny, so typing here used to fail silently */}
       {!card.answered && !card.tool && (
         <input
-          ref={customRef}
           value={custom}
           onChange={(e) => setCustom(e.target.value)}
           onKeyDown={(e) => {

@@ -118,14 +118,11 @@ describe("chat option chips wiring", () => {
     expect(groupView).toContain("ChatOptionChips");
   });
 
-  it("offers write-own via the composer, not an inline chip input", () => {
+  it("keeps the composer available for custom answers", () => {
     const chips = readFileSync(join(dir, "../components/ChatOptionChips.tsx"), "utf8");
-    expect(chips).toContain("focusOrbitComposer");
     expect(chips).toContain("QuestionChoiceCard");
     expect(chips).not.toContain("sendCustom");
     expect(chatView).toContain("composerRef={composerInputRef}");
-    expect(chatView).toContain("onFocusComposer={focusComposer}");
     expect(groupView).toContain("composerRef={composerInputRef}");
-    expect(groupView).toContain("onFocusComposer={focusComposer}");
   });
 });

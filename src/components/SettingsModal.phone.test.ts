@@ -7,6 +7,8 @@ import App from "@/App";
 import { SNAPSHOT_CACHE_KEY } from "@/state/snapshot-cache";
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
+import { applyTerminalMatch, readTerminalMatch } from "@/lib/terminal-appearance";
+import { saveTerminalPopups, terminalPopupsEnabled } from "@/lib/terminal-popups";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -90,6 +92,44 @@ describe("phone Settings navigation", () => {
     expect(rows.map((node) => node.textContent)).toEqual(labels);
     expect(rows.every((node) => node.querySelector(".lucide-chevron-right"))).toBe(true);
     expect(dialog()!.querySelector('[role="radiogroup"]')).toBeNull();
+  });
+
+  it("shows only Profile on phone Account", async () => {
+    await open();
+    await tap("Account");
+    const pane = dialog()!.querySelector("[data-settings-page] .overflow-y-auto")!;
+    expect(pane.textContent).toContain("Profile");
+    expect(pane.children).toHaveLength(1);
+    expect(pane.textContent).not.toContain("Sync");
+  });
+
+  it("keeps Vibration in one row without its help text", async () => {
+    Object.defineProperty(navigator, "vibrate", { value: vi.fn(), configurable: true });
+    await open();
+    await tap("General");
+    const toggle = button("Vibration")!;
+    expect(toggle).toBeDefined();
+    expect(toggle.parentElement?.textContent).toBe("Vibration");
+    expect(dialog()!.textContent).not.toContain("A short buzz on phones.");
+    const enabled = toggle.getAttribute("aria-checked") === "true";
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-checked")).toBe(String(!enabled));
+    await act(async () => toggle.click());
+    Reflect.deleteProperty(navigator, "vibrate");
+  });
+
+  it("keeps saved terminal preferences while their controls stay hidden", async () => {
+    saveTerminalPopups(true);
+    applyTerminalMatch(true);
+    await open();
+    await tap("General");
+    await tap("Advanced");
+    expect(button("Terminal Alerts")).toBeNull();
+    expect(dialog()!.textContent).not.toContain("Terminal Colors");
+    expect(terminalPopupsEnabled()).toBe(true);
+    expect(readTerminalMatch()).toBe(true);
+    saveTerminalPopups(false);
+    applyTerminalMatch(false);
   });
 
   it("pushes a page and pops with the button before Escape closes Settings", async () => {

@@ -21,9 +21,9 @@ import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { readTerminalAppearance } from "./terminal-appearance.mjs";
-import { applyPendingUpdateInstall, consumePendingUpdateInstall, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
+import { applyPendingUpdateInstall, consumePendingUpdateInstall, isUpdateInstallPending, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
 import { channelFromCommandLine } from "./update-channel.mjs";
-import { completeQuitAfterCleanup } from "./app-quit.mjs";
+import { completeQuitAfterCleanup, hideWindowsForQuit } from "./app-quit.mjs";
 import { createCloseGuard } from "./close-guard.mjs";
 import { applyStartFresh, requestStartFresh } from "./start-fresh.mjs";
 import { installMainCrashLogging } from "./crash-log.mjs";
@@ -458,11 +458,12 @@ export function openSecureCredentialDocument(stored) {
   return secureCredentials;
 }
 
-async function persistMigratedCredentials(credentials) {
+async function persistMigratedCredentials(derive) {
   if (secureCredentialState) {
-    await updateSecureCredentialDocument(() => credentials);
+    await updateSecureCredentialDocument(derive);
     return;
   }
+  const credentials = derive(structuredClone(secureCredentials));
   await saveSecureCredentials(credentials);
   secureCredentials = credentials;
 }
@@ -493,10 +494,10 @@ export async function secureComposioConfig() {
     let changed = false;
     const apiKey = config?.composio?.apiKey;
     if (typeof apiKey === "string" && apiKey.trim().startsWith("ak_")) {
-      if (!secureCredentials.composioApiKey) {
-        secureCredentials.composioApiKey = apiKey.trim();
-        await persistMigratedCredentials(secureCredentials);
-      }
+      await persistMigratedCredentials((credentials) => ({
+        ...credentials,
+        composioApiKey: credentials.composioApiKey || apiKey.trim(),
+      }));
       config.composio.apiKey = "";
       changed = true;
     } else if (typeof apiKey === "string" && apiKey.trim()) {
@@ -531,12 +532,11 @@ export async function secureWorkspaceConfig() {
   const configPath = path.join(dataDir, "config.json");
   try {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const migrated = migrateWorkspaceCredentials(config, secureCredentials);
+    const migrated = migrateWorkspaceCredentials(config, {});
     // credentials.bin first: if the OS store cannot take the secrets, the
     // plaintext stays put and the next boot retries — losing the only copy
     // is the one unacceptable outcome
-    if (migrated.credentialsChanged) await persistMigratedCredentials(migrated.credentials);
-    secureCredentials = migrated.credentials;
+    if (migrated.credentialsChanged) await persistMigratedCredentials((credentials) => migrateWorkspaceCredentials(config, credentials).credentials);
     if (!migrated.configChanged) return;
     const temporary = `${configPath}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(migrated.config, null, 2), { mode: 0o600 });
@@ -1188,13 +1188,14 @@ async function openDeviceWindow(rawHost, rawName) {
     const devices = win.webContents.session;
     devices.setPermissionCheckHandler((_webContents, permission) => permission === "clipboard-sanitized-write");
     devices.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === "clipboard-sanitized-write"));
-    // One listener per session: route each 401 and main-frame 403 to the device window that made it.
+    // One listener per session: route device-origin 401s and main-frame 403s to their window.
     devices.webRequest.onCompleted({ urls: ["https://*/*"] }, ({ statusCode, webContentsId, resourceType, url: href }) => {
       if (statusCode !== 401 && !(statusCode === 403 && resourceType === "mainFrame")) return;
-      const target = [...deviceWindows.values()].find((open) => !open.isDestroyed() && open.webContents.id === webContentsId);
+      const [origin, target] = [...deviceWindows].find(([, open]) => !open.isDestroyed() && open.webContents.id === webContentsId) ?? [];
+      if (!target || !sameDesktopViewerOrigin(href, origin)) return;
       if (statusCode === 403) return deviceLoads.get(target)?.refused(href);
       // Not a data: check: a retry from the unreachable page answers 401 before it commits.
-      if (target && target.webContents.getURL() !== deviceLinkPages.get(target)) void target.loadURL(deviceLinkPages.get(target));
+      if (target.webContents.getURL() !== deviceLinkPages.get(target)) void target.loadURL(deviceLinkPages.get(target));
     });
     win.on("page-title-updated", (event) => {
       event.preventDefault();
@@ -1461,7 +1462,7 @@ function createWindow() {
   return win;
 }
 
-function connectingPageHref(backgroundColor) {
+function connectingPageHref(backgroundColor, key = "packaged.connecting") {
   const persistedSkin = readPersistedSkin(app.getPath("userData"));
   const chrome = skinChrome(persistedSkin);
   return buildConnectingPage({
@@ -1469,7 +1470,7 @@ function connectingPageHref(backgroundColor) {
     fontStack: uiFontStack(),
     backgroundColor: backgroundColor ?? chrome.color,
     color: chrome.symbolColor,
-    message: nativeText("packaged.connecting"),
+    message: nativeText(key),
     captionInset: process.platform === "win32" ? WINDOWS_CAPTION_HEIGHT : 0,
   });
 }
@@ -2128,9 +2129,7 @@ app.on("before-quit", (e) => {
   // stop it here so quitting never orphans a recording process
   if (nativeActions.appleSpeech) stopSpeech();
   // Panes stop one at a time below, so the windows go now rather than at the final quit.
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.hide();
-  }
+  hideWindowsForQuit(BrowserWindow.getAllWindows(), mainWindow, isUpdateInstallPending() ? connectingPageHref(undefined, "packaged.updating") : null);
   const terminalsStopped = terminalHost.dispose();
   const cleanup = Promise.race([
     Promise.all([

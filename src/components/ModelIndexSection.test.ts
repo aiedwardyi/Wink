@@ -85,6 +85,14 @@ describe("benchmark hotkey", () => {
 });
 
 describe("coding tabs", () => {
+  it("fits desktop tabs with compact padding and hides the scrollbar on every pointer type", () => {
+    const tabs = group("Benchmark")!;
+    expect(tabs.className).toContain("[scrollbar-width:none]");
+    expect(tabs.className).not.toContain("pointer-coarse:");
+    expect(tabs.querySelector("button")?.className).toContain("px-2");
+    expect(tabs.className).toContain("overflow-x-auto");
+  });
+
   it("puts Terminal-Bench first under Coding, FrontierCode second, and no Agentic tab", () => {
     expect([...group("Benchmark")!.querySelectorAll('[role="radio"]')].map((el) => el.textContent)).toEqual([
       "Intelligence",
@@ -403,13 +411,13 @@ describe("index tabs", () => {
     return el.style.maskImage;
   };
 
-  it("fades the edge with more tabs past it and hides the scrollbar on touch screens", () => {
+  it("fades the edge with more tabs past it and hides the scrollbar", () => {
     const row = host.querySelector<HTMLElement>('[role="radiogroup"]')!;
     expect(scroll(row, { scrollWidth: 500, clientWidth: 300, scrollLeft: 0 })).toMatch(/^linear-gradient\(to right, black, .*transparent\)$/);
     expect(scroll(row, { scrollWidth: 500, clientWidth: 300, scrollLeft: 100 })).toMatch(/^linear-gradient\(to right, transparent, .*transparent\)$/);
     expect(scroll(row, { scrollWidth: 500, clientWidth: 300, scrollLeft: 200 })).toMatch(/^linear-gradient\(to right, transparent, .*black\)$/);
     expect(scroll(row, { scrollWidth: 300, clientWidth: 300, scrollLeft: 0 })).toBe("");
-    expect(row.className).toContain("pointer-coarse:[scrollbar-width:none]");
+    expect(row.className).toContain("[scrollbar-width:none]");
   });
 });
 

@@ -36,7 +36,7 @@ it("starts unchecked, reads local consent and changes it only on an explicit cli
     expect(setErrorReportConsent).not.toHaveBeenCalled();
     await act(async () => resolve(false));
     expect(toggle.disabled).toBe(false);
-    expect(host.textContent).toContain("App version, OS and error codes only. Never chats, files or paths.");
+    expect(host.textContent).toContain("Error codes only. Never chats, files or paths.");
     await act(async () => toggle.click());
     expect(setErrorReportConsent).toHaveBeenLastCalledWith(true);
     expect(toggle.getAttribute("aria-checked")).toBe("true");

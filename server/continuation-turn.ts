@@ -2,6 +2,7 @@
 // after `result` (a background task's notification) and the driver opened a
 // continuation turn. An idle 1:1 bot adopts it like a user-sent turn, so the
 // composer locks, the watchdog runs, and queued sends wait for its settle.
+import type { ProviderAdapter, SendTurnInput, TurnStartResult } from "./contracts.ts";
 
 export interface ContinuationBot {
   id: string;
@@ -33,4 +34,16 @@ export function foldContinuationStart(
   }
   deps.adopt(bot.id, event.threadId, event.turnId);
   return "adopted";
+}
+
+/** A dispatch whose thread the engine took after the busy gate joins that turn like a mid-turn send; null sends as usual. */
+export async function joinRunningTurn(
+  adapter: Pick<ProviderAdapter, "capabilities" | "hasSession" | "steer">,
+  turn: Pick<SendTurnInput, "threadId" | "text" | "resumeCursor" | "systemUpdate">,
+  runningTurnId: string | undefined,
+): Promise<TurnStartResult | null> {
+  if (!runningTurnId || adapter.capabilities.queueing !== true || !adapter.steer || !adapter.hasSession(turn.threadId)) return null;
+  // a fresh session's text replays the thread, and a steer carries no systemUpdate
+  if (turn.resumeCursor === undefined || turn.systemUpdate) return null;
+  return (await adapter.steer(turn.threadId, turn.text).catch(() => false)) ? { turnId: runningTurnId } : null;
 }

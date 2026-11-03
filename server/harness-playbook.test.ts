@@ -114,6 +114,16 @@ describe("harness playbook", () => {
     expect(prompt.replace(/\s+/g, " ")).toContain("Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.");
   });
 
+  it("writes the built list before building and quotes it in cards", () => {
+    const prompt = harnessPlaybookPrompt(true).replace(/\s+/g, " ");
+    expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
+    expect(prompt).toContain("## Already built - The built.md lines this touches and the live files to open first.");
+  });
+
+  it("logs every walk snag to one shared list", () => {
+    expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain("A walk logs every snag it sees to one shared findings list. Before the next walk, read that list and walk only the screens changed since, unless the user asks for more.");
+  });
+
   it("matches the model to the job", () => {
     expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain("Match the model to the job: the strongest for architecture, audits and hard bugs; a mid model for routine builds; the cheapest for searches and mechanical edits. Spread jobs across engines so no single plan runs out.");
   });
@@ -148,6 +158,11 @@ describe("harness playbook", () => {
     expect(harnessPlaybookPrompt(true)).toContain("- Keep processes off the user's screen: run in the pane, start servers hidden, and wait for checks in the foreground: a hidden process sends no alert when it ends.");
   });
 
+  it("keeps long waits and deletes unattended-safe", () => {
+    expect(harnessPlaybookPrompt(true)).toContain("start the job hidden, then poll it in the foreground");
+    expect(harnessPlaybookPrompt(true)).toContain("never `cd` then relative `rm`");
+  });
+
   it("carries the four house rules", () => {
     const prompt = harnessPlaybookPrompt(true);
     expect(prompt).toContain("- Launch only cards that serve the current goal or that the user asked for. A new idea is a one-line proposal that waits for a yes.");
@@ -176,7 +191,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13243);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13764);
   });
 
   it("fills the worktree path from the configured root", () => {

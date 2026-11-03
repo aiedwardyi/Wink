@@ -43,7 +43,7 @@ import {
 } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
-import { useManualCheck, useUpdaterState } from "@/lib/updater";
+import { useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -113,24 +113,18 @@ const SIDEBAR_MOTION = { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)"
 
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
-/** Manual update check, next to the settings gear. Packaged app only (no
- * bridge in dev/browser). One button, state-dependent: check → download →
- * restart, with a brief "up to date" tick when a check finds nothing so a
- * click is never silent. The bottom-left popup handles the loud cases. */
 export function UpdateButton() {
   const { t } = useI18n();
   const s = useUpdaterState();
   const updater = window.ogb?.updater;
   const status = s?.status ?? "idle";
-  // download and install both round-trip through main before the status
-  // changes — spin on the click itself, and let the new status clear it
+  // Main reports download and install status asynchronously.
   const [pending, setPending] = useState(false);
   useEffect(() => setPending(false), [status]);
-  const { acknowledged: upToDate, check } = useManualCheck(status);
-  if (!updater) return null;
+  if (!updater || !["available", "downloading", "downloaded", "installing", "error"].includes(status)) return null;
 
   const working =
-    pending || status === "checking" || status === "downloading" || status === "installing";
+    pending || status === "downloading" || status === "installing";
   const label =
     status === "available"
       ? t("update.versionAvailable", { version: s?.version ?? "" })
@@ -142,11 +136,7 @@ export function UpdateButton() {
           ? t("update.versionReady", { version: s?.version ?? "" })
           : status === "installing"
             ? t("update.restarting")
-            : status === "checking"
-              ? t("update.checking")
-              : upToDate
-                ? t("update.upToDate")
-                : t("settings.updates.check");
+            : t("settings.updates.check");
 
   return (
     <button
@@ -159,7 +149,7 @@ export function UpdateButton() {
           setPending(true);
           return void updater.download();
         }
-        check();
+        void updater.check();
       }}
       disabled={working}
       title={label}
@@ -168,8 +158,6 @@ export function UpdateButton() {
     >
       {working ? (
         <Loader2 size={18} className="animate-spin" />
-      ) : upToDate ? (
-        <Check size={18} />
       ) : status === "available" ? (
         <ArrowDownToLine size={18} />
       ) : (
@@ -381,7 +369,7 @@ function SectionPicker({
   const top = Math.max(8, Math.min(anchor.y, window.innerHeight - 300));
   const left = Math.min(anchor.x, window.innerWidth - 260);
 
-  return (
+  return createPortal(
     <div
       data-section-picker
       data-closing={closing || undefined}
@@ -450,7 +438,8 @@ function SectionPicker({
           </button>
         </>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -524,7 +513,7 @@ function BotContextMenu({
   );
   const divider = (key: string) => <div key={key} className="mx-2 my-1 border-t border-hairline/40" />;
 
-  return (
+  return createPortal(
     <div
       data-bot-menu
       data-closing={closing || undefined}
@@ -564,7 +553,8 @@ function BotContextMenu({
           danger: true,
         }),
       ]}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

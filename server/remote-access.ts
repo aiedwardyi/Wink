@@ -342,7 +342,7 @@ export function remoteHostRetry(
     refresh(open = false): Promise<void> {
       if (pending) return pending;
       if (!open && (setup.state === "disabled" || setup.state === "ready" || now() < nextRetryAt)) return Promise.resolve();
-      nextRetryAt = now() + 5_000;
+      nextRetryAt = now() + (open ? 6_000 : 5_000);
       pending = autoRemoteHost(env, port, exec, logChange, platform, (value) => { setup = value; }, open ? setup : undefined)
         .then((host) => {
           // Tailscale often starts after Wink at login, and only Phone Link would ask again.

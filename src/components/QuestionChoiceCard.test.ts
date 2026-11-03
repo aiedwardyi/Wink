@@ -5,14 +5,13 @@ import { QuestionChoiceCard } from "./QuestionChoiceCard";
 import { applyLocale } from "@/lib/i18n";
 
 describe("QuestionChoiceCard", () => {
-  it("renders the compact choice layout with A/B markers and write-own", () => {
+  it("renders the compact choice layout with A/B markers and no unanswered footer", () => {
     applyLocale("en");
     const html = renderToStaticMarkup(
       createElement(QuestionChoiceCard, {
         question: "How should the app close?",
         options: ["Finish the current task, then close", "Ask me each time"],
         onPick: () => {},
-        onWriteOwn: () => {},
       }),
     );
     expect(html).toContain("orbit-question-card");
@@ -20,9 +19,11 @@ describe("QuestionChoiceCard", () => {
     expect(html).toContain("How should the app close?");
     expect(html).toContain(">A<");
     expect(html).toContain(">B<");
-    expect(html).toContain("Write my own answer");
-    expect(html).toContain("Click a choice to reply");
-    expect(html).not.toContain("rounded-full border"); // pill chips; signal dot may be rounded-full
+    expect(html).not.toContain("Write my own answer");
+    expect(html).not.toContain("Click a choice to reply");
+    expect(html).not.toContain("Answer sent");
+    expect(html).not.toContain("min-h-[46px]");
+    expect(html).not.toContain("rounded-full border");
   });
 
   it("shows Answer sent and locks rows when a listed choice was picked", () => {

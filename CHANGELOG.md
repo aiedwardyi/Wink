@@ -2,6 +2,52 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.226] - 2026-11-03
+
+### Added
+- Settings > Devices: guided Tailscale setup for phones and PCs, with store QR codes, Sign In, and Connect a Device in the Your PCs menu.
+- Servo Gray theme. Themes shows 8 featured skins up front, with the rest under More Themes.
+- An infinity mark for Agentic Mode.
+- Summaries for Grok and Muse bots.
+- First run offers a GitHub star and asks before sending anonymous usage stats.
+- New team bug reports wake the lead bot right away.
+
+### Changed
+- Pewter, Blueprint Gray and Charcoal use a softer, lighter font and selection.
+- Messages start faster: turn snapshots, the built-in browser, the computer panel and other hidden screens are gone (about 20,000 lines).
+- Bots reply in the language you write in.
+
+### Fixed
+- Bot-to-bot replies are never lost, survive a restart, and wake an idle bot that handed off the job.
+- Today counts are right across PCs and after midnight.
+- The phone usage meter is back.
+- Worker panes send notes again after a worker resumes past its report.
+- First run no longer says "You're all set" before an engine is ready; narrow windows show the phone QR code; Devices checks Tailscale far less often and still finds new devices.
+- A Codex steer note shows only after an answer is on screen.
+
+## [1.0.225] - 2026-11-02
+
+### Added
+- Memory view in Bot Details: what the bot learned from your chats and its current task come first, with the raw memory file folded below.
+- A "Sign in" card above the message box when a bot's engine is signed out, shown before you type.
+
+### Changed
+- The model chip has a light bevel.
+- New groups are one short card, with the reply rule spelled out.
+- Find leaves the chat header (Ctrl+F still opens it), and Start Fresh moves under Advanced.
+- Removed Team Map and section notes.
+
+### Fixed
+- The model dial selects on the first tap after a swipe, and Max gives a double buzz.
+- A signed-out Claude bot says so instead of showing nothing.
+- Teammate bug reports reach the owner's lead bot when it sits in a named section.
+- A Codex usage limit sends one note, even with a background terminal open.
+
+## [1.0.224] - 2026-11-02
+
+### Fixed
+- Codex keeps its short reply to a message you send mid-answer, so both the earlier task and the new one get answered.
+
 ## [1.0.223] - 2026-11-02
 
 ### Changed
@@ -442,6 +488,15 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.226]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.226
+[1.0.225]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.225
+[1.0.224]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.224
+[1.0.223]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.223
+[1.0.222]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.222
+[1.0.221]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.221
+[1.0.220]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.220
+[1.0.219]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.219
+[1.0.218]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.218
 [1.0.217]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.217
 [1.0.216]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.216
 [1.0.215]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.215

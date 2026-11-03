@@ -78,7 +78,7 @@ describe("team today", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["old-relay", "offline", "invalid", "yesterday", "no-token"])("falls back to local counts for %s", async (failure) => {
+  it.each(["old-relay", "offline", "invalid", "yesterday", "no-token"])("never substitutes this PC's inbox for unavailable team totals: %s", async (failure) => {
     snags(["a", MIDNIGHT]);
     report("r1", MIDNIGHT);
     const fetchImpl = vi.fn<typeof fetch>(async () => {
@@ -88,7 +88,7 @@ describe("team today", () => {
     });
     const tokens = { idToken: () => null, freshIdToken: async () => failure === "no-token" ? null : "fixture-token" };
     const reply = await teamTodayRoute(dir, OWNER, "owner@example.com", null, undefined, MIDNIGHT, { base: "example.test", baked: null, tokens, fetchImpl });
-    expect(reply.body).toMatchObject({ snags: 1, bugs: 1 });
+    expect(reply.body).toMatchObject({ snags: null, bugs: null });
     if (failure === "no-token") expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

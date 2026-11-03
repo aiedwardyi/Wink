@@ -13,8 +13,6 @@ import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
 import { ProviderMark } from "./ProviderIcons";
 
-const CHIP_LIMIT = 3;
-
 export const WORKER_STATUS = {
   working: { glyph: "●", key: "workers.working", text: "text-accent", dot: "bg-accent" },
   waiting: { glyph: "‖", key: "workers.waiting", text: "text-warning", dot: "bg-warning" },
@@ -249,15 +247,6 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane }: { t
   );
 }
 
-function Mark({ run, state, className }: ShownRun & { className?: string }) {
-  return (
-    <span data-worker-state={state} className={cn("relative flex", className)}>
-      <WorkerMark provider={run.provider} />
-      <span aria-hidden className={cn("absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-2 ring-app", WORKER_STATUS[state].dot)} />
-    </span>
-  );
-}
-
 /** Header chip for this chat's listed runs. Opens the worker list. */
 export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLive = false, onOpenTerminalPane }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void }) {
   const { t } = useI18n();
@@ -352,8 +341,6 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
     failed: listed.filter((shown) => shown.state === "failed").length,
     done: listed.filter((shown) => shown.state === "done").length,
   };
-  const face = listed.slice(0, CHIP_LIMIT);
-  const more = listed.length - face.length;
   const close = () => setOpen(false);
   return (
     <div ref={rootRef} className="relative shrink-0">
@@ -365,17 +352,18 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={t("workers.stripAria", counts)}
+        title={t("workers.tooltip")}
         className="relative flex shrink-0 items-center whitespace-nowrap"
       >
-        <span data-worker-chip-desktop className="hidden items-center gap-1 md:flex @max-4xl/chathead:!hidden">
-          {face.map((shown) => (
-            <Mark key={shown.run.id} {...shown} />
-          ))}
-          {more > 0 && <span aria-hidden className="ml-2 text-[12px] text-ink-secondary">+{more}</span>}
+        <span data-worker-chip-desktop className="hidden items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-raised md:flex @max-4xl/chathead:!hidden">
+          <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
+          <span aria-hidden className="text-[13px] text-ink-secondary">{t(listed.length === 1 ? "workers.countOne" : "workers.countMany", { count: listed.length })}</span>
+          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />
         </span>
-        <span data-worker-chip-phone className="relative flex items-center gap-0.5 md:hidden @max-4xl/chathead:!flex">
-          <Mark {...first} />
-          {listed.length >= 2 && <span aria-hidden className="text-[11px] tabular-nums text-ink-secondary">{listed.length}</span>}
+        <span data-worker-chip-phone className="relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex">
+          <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
+          {listed.length >= 2 && <span aria-hidden className="text-[12px] tabular-nums text-ink-secondary">{listed.length}</span>}
+          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />
           <span aria-hidden className="absolute left-1/2 top-1/2 size-11 -translate-x-1/2 -translate-y-1/2" />
         </span>
       </button>

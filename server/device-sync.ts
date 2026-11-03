@@ -31,6 +31,11 @@ const deviceSchema = z.object({
 export type DeviceRecord = z.infer<typeof deviceSchema>;
 export type DeviceListItem = DeviceRecord & { current: boolean; offline: boolean };
 
+export function namedDevicePeers<T extends { name: string; host: string }>(peers: T[], devices: { name: string; host: string }[]): T[] {
+  const names = new Map(devices.map((device) => [device.host, device.name.trim()]));
+  return peers.map((peer) => ({ ...peer, name: names.get(peer.host) || peer.name }));
+}
+
 export function writeDeviceRecord(folder: string, record: Omit<DeviceRecord, "lastSeen">, now: number): void {
   const parsed = deviceSchema.parse({ deviceId: record.deviceId, name: record.name, host: record.host, relayHost: record.relayHost, lastSeen: now, laptop: record.laptop, chatSync: record.chatSync });
   const directory = join(folder, DEVICE_DIR);
