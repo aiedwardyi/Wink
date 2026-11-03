@@ -219,6 +219,11 @@ function probeLoginShellPath(): void {
       if (err || !stdout) return;
       const m = /__OMB_PATH__([^\n]*)/.exec(stdout);
       if (!m || !m[1]) return;
+      if (loginShellPath !== m[1]) {
+        scanGeneration += 1;
+        candidates.clear();
+        windowsFiles.clear();
+      }
       loginShellPath = m[1];
       cached = mergePaths([...(cached ?? "").split(delimiter), ...m[1].split(delimiter)]);
     },
