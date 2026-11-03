@@ -745,7 +745,7 @@ describe("KeepGoing server wiring", () => {
   const usageStart = source.indexOf("  usage:", source.indexOf("const keepGoing = new KeepGoing("));
   const usage = source.slice(usageStart + "  usage: ".length, source.indexOf(",\n  livePanes:", usageStart));
   const readUsageCall = new Function("scope", `with (scope) { return (${usage})("b1"); }`);
-  const readUsage = (scope: object) => readUsageCall({ accounts: { snapshot: [] }, botAccounts: { hasBinding: () => false }, ...scope });
+  const readUsage = (scope: object) => readUsageCall({ accounts: { snapshot: [], defaultFor: () => undefined }, ...scope });
   const routeHandler = (file: string, name: string, params: string) => {
     const routes = readFileSync(new URL(file, import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const from = routes.indexOf("\n", routes.indexOf(`    ${name}: async (`)) + 1;
@@ -818,7 +818,7 @@ describe("KeepGoing server wiring", () => {
     const config = { config: { cli: "fake-cli" }, environment: { FAKE: "1" } };
     const scope = {
       store: { bot: () => ({ modelSelection: { instanceId: "engine" } }) },
-      accounts: { snapshot: [] }, rateLimitsByInstance, cfg: {}, instanceConfigs: () => ({ engine: config }),
+      accounts: { snapshot: [], defaultFor: () => undefined }, rateLimitsByInstance, cfg: {}, instanceConfigs: () => ({ engine: config }),
       registry: { get: () => ({ driverKind: "claude" }) }, refreshUsage, scheduleSaveRateLimits,
       KEEP_GOING_USAGE_FRESH_MS, DATA_DIR: dir, z,
     };
@@ -835,11 +835,11 @@ describe("KeepGoing server wiring", () => {
     expect(scheduleSaveRateLimits).toHaveBeenCalledTimes(1);
   });
 
-  it("retains fresh cached usage for an unbound offline bot", async () => {
+  it("retains fresh cached usage for an offline bot with no default", async () => {
     const report = { windows: [{ id: "five_hour", usedPercent: 20, resetsAt: null }], observedAt: new Date().toISOString() };
     const instance = vi.fn(() => null);
     const scope = { store: { bot: () => ({ modelSelection: { instanceId: "engine" } }) },
-      botAccounts: { hasBinding: () => false, instance }, rateLimitsByInstance: new Map([["engine", report]]),
+      botAccounts: { instance }, rateLimitsByInstance: new Map([["engine", report]]),
       cfg: {}, instanceConfigs: () => ({ engine: {} }), registry: { get: () => null }, KEEP_GOING_USAGE_FRESH_MS,
     };
     expect(await readUsage(scope)).toEqual(report);
