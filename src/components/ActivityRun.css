@@ -1,0 +1,102 @@
+@scope (:is([data-skin^="terminal"], [data-skin^="tui"], [data-skin="paper-tape"], [data-skin="logfile"], [data-skin="multiplexer"], [data-skin="modal"])) to ([data-skin]) {
+  .term-step {
+    position: relative;
+    padding-left: 2ch;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--color-ink-secondary);
+  }
+
+  .term-step::before {
+    content: "●";
+    position: absolute;
+    left: 0;
+    color: var(--color-success);
+  }
+
+  .term-step[data-term-step="failed"]::before {
+    color: var(--color-danger);
+  }
+
+  .term-step[data-term-step="running"]::before {
+    color: var(--color-ink-secondary);
+  }
+
+  .term-step .term-step-head {
+    display: block;
+    list-style: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+
+  .term-step-head::marker,
+  .term-step-head::-webkit-details-marker {
+    display: none;
+  }
+
+  .term-step-out,
+  .term-step-result,
+  .term-notice {
+    position: relative;
+    padding-left: 3ch;
+    text-indent: 0;
+  }
+
+  .term-step .term-step-result,
+  .term-notice[data-term-notice] {
+    text-indent: 0;
+  }
+
+  .term-step-out::before,
+  .term-step-result::before,
+  .term-notice::before {
+    content: "⎿\00a0\00a0" / "";
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+
+  .term-step .term-step-out > div {
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .term-step:not(:has(> details[open])) [data-term-changes] {
+    display: none;
+  }
+
+  .term-step details[open] > .term-step-head,
+  .term-step:has(> details[open]) .term-step-out > div,
+  [data-term-call] {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .term-step-head:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .term-step[data-term-step="failed"] .term-step-out > div,
+  .term-notice[data-term-notice="failed"] {
+    color: var(--color-danger);
+  }
+
+  [data-term-row="add"] {
+    background: color-mix(in srgb, var(--color-success) 22%, var(--color-app));
+    color: var(--color-ink);
+  }
+
+  [data-term-row="remove"] {
+    background: color-mix(in srgb, var(--color-danger) 22%, var(--color-app));
+    color: var(--color-ink);
+  }
+
+  .term-search {
+    font-size: 13.5px;
+    color: var(--color-ink-secondary);
+  }
+}
