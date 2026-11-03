@@ -24,7 +24,7 @@ import { shortPath } from "@/lib/short-path";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { MemoryFile, MemoryGroup, MemoryTask, NotedLines } from "./MemoryGroups";
+import { MemoryFile, MemoryGroup, MemoryTask, NotedLines, notedLines } from "./MemoryGroups";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 
@@ -388,9 +388,9 @@ function MemoryCard({ bot }: { bot: Bot }) {
         </span>
       </div>
       <div className="overflow-hidden rounded-xl bg-card">
-        <MemoryGroup title={t("bot.memoryFromChats")}>
+        <MemoryGroup>
           <NotedLines text={text} />
-          <div className="mt-3 flex items-center justify-between gap-4">
+          <div className={cn("flex items-center justify-between gap-4", notedLines(text).length > 0 && "mt-3")}>
             <div className="min-w-0">
               <div className="text-[14px] font-medium text-ink">{t("settings.memoryNotes.toggle")}</div>
               <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.memoryNotes.help")}</div>

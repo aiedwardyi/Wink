@@ -15,7 +15,7 @@ applyLocale("en");
  * expired if it were timed from the click. */
 const SLOW_CHECK_MS = 5000;
 
-function installUpdater() {
+function installUpdater(status: UpdaterState["status"] = "idle") {
   const listeners = new Set<(s: UpdaterState) => void>();
   const emit = (s: UpdaterState) => listeners.forEach((cb) => cb(s));
   const updater = {
@@ -31,7 +31,7 @@ function installUpdater() {
     install: () => Promise.resolve(),
     onState: (cb: (s: UpdaterState) => void) => {
       listeners.add(cb);
-      cb({ status: "idle" });
+      cb({ status, version: "1.0.227" });
       return () => listeners.delete(cb);
     },
   };
@@ -66,23 +66,21 @@ describe("manual update check acknowledgement", () => {
     vi.useRealTimers();
   });
 
-  it("ticks the sidebar button when a slow check finds nothing", async () => {
+  it.each(["idle", "checking"] as const)("hides the sidebar button while %s", async (status) => {
+    installUpdater(status);
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(UpdateButton)));
     });
-    await clickAndSettle(host);
-    expect(host.querySelector("button")!.getAttribute("aria-label")).toBe("You're up to date");
+    expect(host.querySelector("button")).toBeNull();
   });
 
-  it("clears the sidebar tick once the acknowledgement window closes", async () => {
+  it("shows the sidebar download button for an available update", async () => {
+    installUpdater("available");
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(UpdateButton)));
     });
-    await clickAndSettle(host);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
-    expect(host.querySelector("button")!.getAttribute("aria-label")).toBe("Check for Updates");
+    expect(host.querySelector("button")!.getAttribute("aria-label")).toContain("1.0.227");
+    expect(host.querySelector(".lucide-arrow-down-to-line")).not.toBeNull();
   });
 
   it("acknowledges a slow check in the Settings updates row", async () => {

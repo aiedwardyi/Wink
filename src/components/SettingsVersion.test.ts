@@ -40,12 +40,16 @@ describe("settings version label", () => {
     host.remove();
   });
 
-  it("shows the installed version next to the check button", async () => {
+  it("groups the installed version and status below Updates beside the button", async () => {
     installOgb("1.0.41");
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(UpdatesRow)));
     });
     expect(host.textContent).toContain("v1.0.41");
+    const status = [...host.querySelectorAll("div")].find((node) => node.textContent === "v1.0.41 · Up to date.");
+    expect(status).toBeDefined();
+    expect(status?.previousElementSibling?.textContent).toBe("Updates");
+    expect(status?.parentElement?.nextElementSibling).toBe(host.querySelector("button"));
     expect(host.querySelector("button")!.textContent).toBe("Check for Updates");
   });
 

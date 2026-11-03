@@ -161,7 +161,6 @@ export function ConnectDevices() {
         <StepMark done step={1} label={t("settings.phone.pcReady")} />
         <span className="text-ink">{t("settings.devices.thisPc")}</span>
         {account && <span>· {t("settings.devices.signedInAs", { account })}</span>}
-        <span>· <GetTailscaleLink onOpen={waitForChange} /></span>
       </div> : <ol className="mt-3 flex flex-col gap-2">
         <Step n={1} done={installed} active={!installed} title={t("settings.phone.getTailscale")} label={t("settings.phone.pcReady")}>
           {setup.state === "missing" ? <GetTailscaleLink primary onOpen={waitForChange} /> : <div className="mt-1"><GetTailscaleLink onOpen={waitForChange} /></div>}

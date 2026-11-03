@@ -328,7 +328,8 @@ describe("SettingsPanel memory groups", () => {
   it("puts noted facts first, then the task and the memory file", async () => {
     await render({ ...claudeBot, tasks });
     const text = host.textContent ?? "";
-    const order = ["From Your Chats", "Lives in Seoul", "+1 more", "Auto Notes", "Current Task", "Memory File", "8 lines", "Project Folder"];
+    const order = ["Lives in Seoul", "+1 more", "Auto Notes", "Current Task", "Memory File", "8 lines", "Project Folder"];
+    expect(text).not.toContain("From Your Chats");
     const at = order.map((label) => text.indexOf(label));
     expect(at).not.toContain(-1);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
@@ -361,7 +362,8 @@ describe("SettingsPanel memory groups", () => {
     localStorage.setItem("omb-locale", "ko");
     await render({ ...claudeBot, tasks });
     const text = host.textContent ?? "";
-    for (const label of ["메모리 파일", "8줄", "+1개 더", "채팅에서", "현재 작업", "3단계 중 1단계 완료", "다음: Tag the release"]) {
+    expect(text).not.toContain("채팅에서");
+    for (const label of ["메모리 파일", "8줄", "+1개 더", "현재 작업", "3단계 중 1단계 완료", "다음: Tag the release"]) {
       expect(text).toContain(label);
     }
   });

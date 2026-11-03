@@ -228,7 +228,7 @@ function PlanUsage() {
   }, [refreshAll, refreshable.length]);
 
   return (
-    <Card title={t("usage.limits.title")}>
+    <Card>
       <div className="mb-4 flex flex-nowrap items-center gap-2">
         <div className="flex flex-wrap gap-1" role="group" aria-label={t("usage.limits.direction")}>
           {(["used", "remaining"] as const).map((value) => (

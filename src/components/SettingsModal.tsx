@@ -30,6 +30,7 @@ import { saveRainbowBox, useRainbowBox, type RainbowBox } from "@/lib/rainbow-bo
 import { saveTerminalPopups, useTerminalPopups } from "@/lib/terminal-popups";
 import { saveReplyStyle, useReplyStyle, type ReplyStyle } from "@/lib/reply-style";
 import { cn } from "@/lib/cn";
+import { showTerminalAlerts, showTerminalColors, showUsageStats } from "@/lib/friends-chrome";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
@@ -109,8 +110,12 @@ export function UpdatesRow() {
                   ? t("update.upToDate")
                   : t("settings.updates.latest");
   return (
-    <Card title={t("settings.updates.title")} subtitle={label}>
-      <div className="flex items-center gap-3">
+    <Card>
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[14px] font-medium text-ink">{t("settings.updates.title")}</div>
+          <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{version ? `v${version} · ` : ""}{label}</div>
+        </div>
         <button
           onClick={() => {
             if (s?.status === "available") return void updater.download().catch(() => {});
@@ -118,7 +123,7 @@ export function UpdatesRow() {
             check();
           }}
           disabled={s?.status === "checking" || s?.status === "downloading" || s?.status === "installing"}
-          className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
+          className="shrink-0 rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
         >
           {s?.status === "available"
             ? t("settings.updates.download")
@@ -126,7 +131,6 @@ export function UpdatesRow() {
               ? t("settings.updates.restart")
               : t("settings.updates.check")}
         </button>
-        {version ? <span className="text-[12px] text-ink-secondary">v{version}</span> : null}
       </div>
     </Card>
   );
@@ -157,7 +161,7 @@ function ToolCallsRow() {
   };
 
   return (
-    <Card title={t("settings.toolCalls.title")}>
+    <div className="py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-[14px] font-medium text-ink">{t("settings.toolCalls.toggle")}</div>
@@ -177,7 +181,7 @@ function ToolCallsRow() {
         </button>
       </div>
       {error ? <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p> : null}
-    </Card>
+    </div>
   );
 }
 
@@ -185,8 +189,9 @@ function ReplyStyleRow() {
   const { t } = useI18n();
   const style = useReplyStyle();
   return (
-    <Card title={t("settings.replyStyle.title")}>
-      <div role="radiogroup" aria-label={t("settings.replyStyle.title")} className="flex gap-1 rounded-lg bg-inset p-0.5">
+    <div className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
+      <div className="min-w-0 text-[14px] font-medium text-ink">{t("settings.replyStyle.title")}</div>
+      <div role="radiogroup" aria-label={t("settings.replyStyle.title")} className="flex shrink-0 gap-1 rounded-lg bg-inset p-0.5">
         {(["paragraphs", "live"] as ReplyStyle[]).map((option) => (
           <button
             key={option}
@@ -195,7 +200,7 @@ function ReplyStyleRow() {
             aria-checked={style === option}
             onClick={() => saveReplyStyle(option)}
             className={cn(
-              "min-w-0 flex-1 rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
+              "flex-1 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
               style === option ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
             )}
           >
@@ -203,7 +208,7 @@ function ReplyStyleRow() {
           </button>
         ))}
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -232,7 +237,7 @@ function DetailedRepliesRow() {
   };
 
   return (
-    <Card title={t("settings.detailedReplies.title")}>
+    <div className="py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-[14px] font-medium text-ink">{t("settings.detailedReplies.toggle")}</div>
@@ -249,7 +254,7 @@ function DetailedRepliesRow() {
         </button>
       </div>
       {error ? <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p> : null}
-    </Card>
+    </div>
   );
 }
 
@@ -259,8 +264,9 @@ function SidebarSideRow() {
   const { t } = useI18n();
   const [side, setSide] = useState<SidebarSide>(() => loadSidebarSide());
   return (
-    <Card title={t("settings.sidebarSide.title")}>
-      <div role="radiogroup" aria-label={t("settings.sidebarSide.title")} className="flex gap-1 rounded-lg bg-inset p-0.5">
+    <div className="flex items-center justify-between gap-4 py-4 first:pt-0 last:pb-0">
+      <div className="min-w-0 text-[14px] font-medium text-ink">{t("settings.sidebarSide.title")}</div>
+      <div role="radiogroup" aria-label={t("settings.sidebarSide.title")} className="flex shrink-0 gap-1 rounded-lg bg-inset p-0.5">
         {SIDEBAR_SIDE_OPTIONS.map((option) => {
           const selected = side === option;
           return (
@@ -271,7 +277,7 @@ function SidebarSideRow() {
               aria-checked={selected}
               onClick={() => { saveSidebarSide(option); setSide(option); }}
               className={cn(
-                "min-w-0 flex-1 rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
+                "flex-1 whitespace-nowrap rounded-[max(0px,calc(var(--radius-lg)_-_2px))] px-2 py-1.5 text-center text-[13px] font-medium transition-colors",
                 selected ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
               )}
             >
@@ -280,7 +286,7 @@ function SidebarSideRow() {
           );
         })}
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -289,11 +295,9 @@ function VibrationRow() {
   const [on, setOn] = useState(() => vibrationEnabled());
   if (!isPhone() || !window.navigator?.vibrate) return null;
   return (
-    <Card title={t("settings.vibration.title")}>
+    <Card>
       <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[12px] leading-relaxed text-ink-secondary">{t("settings.vibration.help")}</div>
-        </div>
+        <div className="min-w-0 text-[14px] font-medium text-ink">{t("settings.vibration.title")}</div>
         <button
           role="switch"
           aria-checked={on}
@@ -637,7 +641,7 @@ export function SettingsModal({
                 <Card title={t("settings.profile.title")}>
                   <ProfileFields />
                 </Card>
-                <SyncPanel onAccountEmail={setAccountEmail} />
+                {!phone && <SyncPanel onAccountEmail={setAccountEmail} />}
               </>
             )}
 
@@ -650,7 +654,7 @@ export function SettingsModal({
                 <VibrationRow />
                 <UpdatesRow />
                 <ErrorReportsRow />
-                <AnalyticsRow />
+                {showUsageStats() && <AnalyticsRow />}
                 <button
                   type="button"
                   aria-expanded={preferencesOpen}
@@ -664,14 +668,18 @@ export function SettingsModal({
                   />
                 </button>
                 {preferencesOpen && (
-                  <div data-settings-preferences className="flex flex-col gap-4">
-                    <SidebarSideRow />
-                    <ReplyStyleRow />
-                    <TerminalAppearanceRow />
-                    <ToolCallsRow />
-                    <DetailedRepliesRow />
-                    <NotificationsRow />
-                    <StartFreshRow />
+                  <div data-settings-preferences>
+                    <Card>
+                      <div className="divide-y divide-hairline/40">
+                        <SidebarSideRow />
+                        <ReplyStyleRow />
+                        {showTerminalColors() && <TerminalAppearanceRow />}
+                        <ToolCallsRow />
+                        <DetailedRepliesRow />
+                        {showTerminalAlerts() && <NotificationsRow />}
+                      </div>
+                      <StartFreshRow />
+                    </Card>
                   </div>
                 )}
               </>
@@ -689,7 +697,7 @@ export function SettingsModal({
             {section === "themes" && (
               <>
                 <RainbowBoxRow />
-                <Card title={t("settings.skin.title")}>
+                <Card>
                   <SkinPicker />
                 </Card>
               </>
