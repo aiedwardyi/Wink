@@ -2,7 +2,7 @@
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { SERVER_TIMEOUTS, currentEarlyListen } from "./early-listen.ts";
 import { homedir, hostname as osHostname } from "node:os";
@@ -375,6 +375,7 @@ import "./team-library.ts";
 import "./bot-package.ts";
 import "./team-manifest.ts";
 import "./thread-events.ts";
+import { removeRotatingLog } from "./rotating-log.ts";
 import { memberTurnSelection } from "./member-turn.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
@@ -1728,9 +1729,7 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   store.deleteBot(bot.id);
   for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
     for (const threadId of threadIds) {
-      try {
-        unlinkSync(join(dir, `${threadId}.ndjson`));
-      } catch {}
+      removeRotatingLog(join(dir, `${threadId}.ndjson`));
     }
   }
 }

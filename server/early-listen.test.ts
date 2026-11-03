@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_QUEUED_EARLY_REQUESTS,
@@ -13,6 +13,10 @@ import {
   serveEarlyRequest,
   startEarlyListen,
 } from "./early-listen.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 afterEach(async () => {
   await resetEarlyListenForTests();
@@ -54,7 +58,7 @@ describe("startEarlyListen", () => {
   });
 
   it("serves the packaged UI from disk without waiting for the harness", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-early-ui-"));
+    const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
     writeFileSync(join(dir, "index.html"), "<html><body>composer shell</body></html>");
     const { base } = await listen();
     const early = currentEarlyListen();
@@ -66,7 +70,7 @@ describe("startEarlyListen", () => {
   });
 
   it("answers a missing chunk from an older build with the reload module", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-early-ui-"));
+    const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
     writeFileSync(join(dir, "index.html"), "<html><body>composer shell</body></html>");
     const { early, base } = await listen();
     early.staticDir = dir;
@@ -79,7 +83,7 @@ describe("startEarlyListen", () => {
   });
 
   it("caches hashed assets for good and keeps the missing-chunk module no-store", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-early-ui-"));
+    const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
     mkdirSync(join(dir, "assets"));
     writeFileSync(join(dir, "assets", "index-AAAA1111.js"), "export {};");
     writeFileSync(join(dir, "sw.js"), "self.addEventListener('push', () => {});");
@@ -93,7 +97,7 @@ describe("startEarlyListen", () => {
   });
 
   it("revalidates index.html with an ETag and sees a new build at once", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "orbit-early-ui-"));
+    const dir = temps.make(join(tmpdir(), "orbit-early-ui-"));
     writeFileSync(join(dir, "index.html"), "<html><body>build one</body></html>");
     const { early, base } = await listen();
     early.staticDir = dir;

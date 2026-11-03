@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
@@ -16,9 +16,13 @@ import {
   scanDevices,
   writeDeviceRecord,
 } from "./device-sync.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const NOW = 1_800_000_000_000;
-const freshDir = () => mkdtempSync(join(tmpdir(), "orbit-devices-"));
+const freshDir = () => temps.make(join(tmpdir(), "orbit-devices-"));
 const rec = (id: string, host = `${id}.tail1234.ts.net`) => ({ deviceId: id, name: id, host });
 
 describe("device sync", () => {

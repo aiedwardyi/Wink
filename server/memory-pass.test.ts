@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   acceptFacts,
@@ -22,6 +22,10 @@ import { memoryNotesEnabled } from "./config.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import type { Message, StoreChange } from "./store.ts";
 import { MEMORY_SEED, memoryFileRaw, writeMemoryFile } from "./workspace.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const MINUTE = 60_000;
 const NOW = new Date(2026, 9, 15, 12).getTime();
@@ -97,7 +101,7 @@ describe("memory pass", () => {
     vi.useFakeTimers({ now: NOW });
     vi.spyOn(console, "info").mockImplementation(() => {});
     store = fakeStore();
-    dataDir = mkdtempSync(join(tmpdir(), "memory-pass-"));
+    dataDir = temps.make(join(tmpdir(), "memory-pass-"));
     busy = new Set();
     generate = vi.fn<NoteGenerator>(async () => "[]");
     generator = generate;

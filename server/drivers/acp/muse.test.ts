@@ -1,16 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MuseAgentDriver, STATIC_MUSE_MODELS, classifyMuseError, museDefaultCli, museIsAuthenticated, museSignInCommand, museWslFallbackCli, resolveWslMuseCli, withWslKeySharing } from "./muse.ts";
 import { BUILT_IN_DRIVERS } from "../builtIn.ts";
 import { augmentedPath, resolveCliSpawn } from "../../env-path.ts";
+import { createTempDirs } from "../../testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 describe("Meta Muse driver catalog", () => {
   it("rejects empty credentials and honors MUSE_AUTH_PATH", () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-muse-auth-shape-"));
+    const home = temps.make(join(tmpdir(), "omb-muse-auth-shape-"));
     const auth = join(home, "auth.json");
     const env = { HOME: home, MUSE_AUTH_PATH: auth };
     const platform = { platform: "linux" } as const;
@@ -21,7 +25,7 @@ describe("Meta Muse driver catalog", () => {
   });
 
   it("accepts a Keychain login that keeps no token in the file", () => {
-    const auth = join(mkdtempSync(join(tmpdir(), "omb-muse-keychain-")), "auth.json");
+    const auth = join(temps.make(join(tmpdir(), "omb-muse-keychain-")), "auth.json");
     const env = { HOME: tmpdir(), MUSE_AUTH_PATH: auth };
     writeFileSync(auth, JSON.stringify({ schema_version: 1, providers: { meta: { storage: "keychain", mechanism: "oauth" } } }));
     expect(museIsAuthenticated(env, undefined, { platform: "darwin" })).toBe(true);
@@ -55,21 +59,21 @@ describe("Meta Muse driver catalog", () => {
     // into (or out of) this assertion. Pinned off-win32 so the `false` cases
     // never reach the real WSL probe, which CI cannot control.
     const platform = { platform: "linux" } as const;
-    const home = mkdtempSync(join(tmpdir(), "omb-muse-nologin-home-"));
-    const env = { HOME: home, XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), "omb-muse-nologin-xdg-")) };
+    const home = temps.make(join(tmpdir(), "omb-muse-nologin-home-"));
+    const env = { HOME: home, XDG_CONFIG_HOME: temps.make(join(tmpdir(), "omb-muse-nologin-xdg-")) };
     expect(museIsAuthenticated({ ...env, META_API_KEY: "meta-key" }, undefined, platform)).toBe(true);
     expect(museIsAuthenticated(env, undefined, platform)).toBe(false);
     expect(museIsAuthenticated({ ...env, META_API_KEY: "  " }, undefined, platform)).toBe(false);
   });
 
   it("accepts native Windows login and falls back to the WSL-side login", () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-muse-win-home-"));
-    const xdg = mkdtempSync(join(tmpdir(), "omb-muse-win-xdg-"));
+    const home = temps.make(join(tmpdir(), "omb-muse-win-home-"));
+    const xdg = temps.make(join(tmpdir(), "omb-muse-win-xdg-"));
     mkdirSync(join(xdg, "muse"), { recursive: true });
     writeFileSync(join(xdg, "muse", "auth.json"), JSON.stringify({ providers: { meta: { access_token: "native" } } }));
     const env = { HOME: home, XDG_CONFIG_HOME: xdg };
     expect(museIsAuthenticated(env, undefined, { platform: "win32", probeWslAuth: () => false })).toBe(true);
-    const empty = { HOME: home, XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), "omb-muse-win-empty-")) };
+    const empty = { HOME: home, XDG_CONFIG_HOME: temps.make(join(tmpdir(), "omb-muse-win-empty-")) };
     expect(museIsAuthenticated(empty, undefined, { platform: "win32", probeWslAuth: () => true })).toBe(true);
     expect(museIsAuthenticated(empty, undefined, { platform: "win32", probeWslAuth: () => false })).toBe(false);
     // a probe that throws (no WSL, timeout) reads as logged out, never crashes
@@ -100,8 +104,8 @@ describe("Meta Muse driver catalog", () => {
   });
 
   it("accepts the native Windows login file and still supports WSL fallback", () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-muse-stale-home-"));
-    const xdg = mkdtempSync(join(tmpdir(), "omb-muse-stale-xdg-"));
+    const home = temps.make(join(tmpdir(), "omb-muse-stale-home-"));
+    const xdg = temps.make(join(tmpdir(), "omb-muse-stale-xdg-"));
     mkdirSync(join(xdg, "muse"), { recursive: true });
     writeFileSync(join(xdg, "muse", "auth.json"), JSON.stringify({ providers: { meta: { access_token: "stale-windows-copy" } } }));
     const env = { HOME: home, XDG_CONFIG_HOME: xdg };
@@ -121,14 +125,14 @@ describe("Meta Muse driver catalog", () => {
   });
 
   it("accepts the stored OIDC login at the XDG path", () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-muse-home-"));
-    const xdg = mkdtempSync(join(tmpdir(), "omb-muse-xdg-"));
+    const home = temps.make(join(tmpdir(), "omb-muse-home-"));
+    const xdg = temps.make(join(tmpdir(), "omb-muse-xdg-"));
     mkdirSync(join(xdg, "muse"), { recursive: true });
     writeFileSync(join(xdg, "muse", "auth.json"), JSON.stringify({ providers: { meta: { access_token: "stored" } } }));
     // Pin off-win32 so the assertion stays independent of the host's login.
     const platform = { platform: "linux" } as const;
     expect(museIsAuthenticated({ HOME: home, XDG_CONFIG_HOME: xdg }, undefined, platform)).toBe(true);
-    expect(museIsAuthenticated({ HOME: home, XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), "omb-muse-empty-")) }, undefined, platform)).toBe(false);
+    expect(museIsAuthenticated({ HOME: home, XDG_CONFIG_HOME: temps.make(join(tmpdir(), "omb-muse-empty-")) }, undefined, platform)).toBe(false);
   });
 
   it("classifies auth failures without coupling to messages", () => {

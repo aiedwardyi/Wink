@@ -426,7 +426,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true }) {
   const sessions = new Map();
   const active = new Map();
   const generations = new Map();
@@ -437,6 +437,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   let reservedPanes = 0;
   let disposed = false;
   let disposal = null;
+  paneCleanup?.start(() => [...sessions.values()].filter((session) => !session.retired));
   // conpty.node edits one unlocked process-wide pty list on every shell exit, so panes stop one at a time.
   let stopTail = null;
   const stopInTurn = (stop) => {
@@ -821,6 +822,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const reclaimExited = () => {
     for (const [id, session] of sessions) {
       if (session.exitCode !== null || session.owner.isDestroyed?.()) {
+        paneCleanup?.exited?.(session);
         active.delete(session.key);
         sessions.delete(id);
         retireQuietly(session, true, true);
@@ -849,6 +851,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (session.botPane) paneRuns?.ended(session.id);
     if (session.exitCode === null) {
       session.exitCode = exitCode;
+      paneCleanup?.exited?.(session);
       if (session.botPane && session.mail && exitCode !== 0 && !(session.reportAt && session.reportAt >= session.stallArmedAt)) session.exitNote = { text: exitNoteText(session.screen.text(), exitCode), tries: 0, retryAt: 0 };
     }
     if (session.autoNote || session.finished.length || session.exitNote) exitNotes.add(session);
@@ -1013,7 +1016,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
     const session = {
-      id, key, botId: input.botId, botPane, owner: event.sender, cwd, shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
+      id, key, botId: input.botId, botPane, owner: event.sender, cwd, tempRoot: paneEnv.TEMP || paneEnv.TMP || os.tmpdir(), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker), workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
@@ -1492,9 +1495,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       deletedBots.add(botId);
       for (const session of botSessions(botId)) if (session.botPane) paneRuns?.closed(session.id);
-      return Promise.all(botSessions(botId).filter((session) => session.botPane).map((session) => retire(session, true)));
+      return Promise.all(botSessions(botId).filter((session) => session.botPane).map((session) => retire(session, true).then(() => { void paneCleanup?.closed(session); })));
     },
-    closeForBot(botId, sessionId) {
+    closeForBot(botId, sessionId, keep = false) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       const match = resolveBotSession(botSessions(botId), sessionId);
@@ -1502,7 +1505,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (!match.session.botPane) throw new Error("Only bot terminals can be closed");
         rememberClosedPane(botId, match.session.id);
         paneRuns?.closed(match.session.id);
-        return retire(match.session, true).then(() => ({ alreadyClosed: false }));
+        return retire(match.session, true).then(() => {
+          void paneCleanup?.closed(match.session, keep);
+          return { alreadyClosed: false };
+        });
       }
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Session ids cross the local proxy boundary.
       if (!match.ambiguous && typeof sessionId === "string" && wasClosedPane(botId, sessionId)) return Promise.resolve({ alreadyClosed: true });
@@ -1560,6 +1566,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
         session.botPane = true;
         session.label = label;
+        paneCleanup?.opened(session);
         session.spawnedAt = now();
         active.set(key, session.id);
       } finally {
@@ -1587,15 +1594,16 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!result || result.needsFolder) throw new Error("Terminal folder is unavailable");
       return { sessionId: result.id, generation: result.generation };
     },
-    close(event, id) {
+    close(event, id, keep = false) {
       const session = owned(event, id);
       if (!session.botPane) throw new Error("Only bot terminals can be closed");
       paneRuns?.closed(session.id);
-      return retire(session, true);
+      return retire(session, true).then(() => { void paneCleanup?.closed(session, keep); });
     },
     dispose() {
       if (disposal) return disposal;
       disposed = true;
+      paneCleanup?.dispose();
       if (stallTimer) clearInterval(stallTimer);
       active.clear();
       const stopping = [...sessions.values()];

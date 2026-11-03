@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { removeRotatingLog } from "./rotating-log.ts";
 
 // deleteBotFully and removeSyncedBots are private to index.ts, which these
 // tests must not boot; their wiring is pinned on source, same idiom as chief-of-staff.test.ts.
@@ -116,7 +117,7 @@ describe("deleteBotFully", () => {
       lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
       computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, limitWaits: { cancel: noop },
       perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
-      EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], join, unlinkSync,
+      EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], join, removeRotatingLog,
     };
     const javascript = ts.transpileModule(`${fn("deleteBotFully")}\n}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const deleteBotFully = new Function(...Object.keys(deps), `${javascript}\nreturn deleteBotFully;`)(...Object.values(deps));

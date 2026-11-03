@@ -8,6 +8,7 @@ import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { EVENTS_DIR } from "../config.ts";
+import { appendRotatingLog } from "../rotating-log.ts";
 import { flushEndedMaskers, redactSecrets, StreamSecretMasker } from "../redact.ts";
 import { newId, type ProviderInstance, type RuntimeEvent, type RuntimeEventListener } from "../contracts.ts";
 
@@ -57,7 +58,7 @@ export class EventBus {
   private pendingLogWarnings = new Map<string, RuntimeEvent>();
   private readonly appendLog: typeof appendFileSync;
 
-  constructor(appendLog: typeof appendFileSync = appendFileSync) {
+  constructor(appendLog: typeof appendFileSync = (file, data) => appendRotatingLog(String(file), String(data))) {
     this.appendLog = appendLog;
   }
 

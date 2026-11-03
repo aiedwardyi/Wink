@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { getCACertificates, setDefaultCACertificates, type TLSSocket } from "node:tls";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { parseOptions, plan } from "../deploy/cli.ts";
 import {
   discover,
@@ -34,6 +34,10 @@ import {
   type Step,
 } from "../deploy/plan.ts";
 import { makeCa } from "./fixtures.ts";
+import { createTempDirs } from "../../server/testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const BASE = "wink.example.com";
 const opts = (over: Partial<DeployOptions> = {}): DeployOptions => ({
@@ -450,7 +454,7 @@ describe("google deploy flags", () => {
   });
 
   it("writes the google block only when the flags were set, and otherwise matches today", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "wink-relay-cfg-"));
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
     try {
       const local = realLocal("/r", dir);
       const plain = {
@@ -492,7 +496,7 @@ describe("google deploy flags", () => {
     expect(() => validate(parsed.opts)).not.toThrow();
     expect(() => validate(parseOptions(argv("update", team)).opts)).toThrow(/needs the Google flags/);
     expect(() => validate(parseOptions(argv("update", [...flags, "--team-owner-email", "nope"])).opts)).toThrow(/invalid --team-owner-email/);
-    const dir = await mkdtemp(join(tmpdir(), "wink-relay-cfg-"));
+    const dir = temps.make(join(tmpdir(), "wink-relay-cfg-"));
     try {
       await realLocal("/r", dir).writeConfig(parsed.opts);
       const written = JSON.parse(await readFile(join(dir, "wink-relay.config.json"), "utf8"));

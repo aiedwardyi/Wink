@@ -208,7 +208,8 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           return json(res, 200, host.readBot(botId));
         }
         if (req.method === "POST" && match[2] === "close") {
-          const result = await host.closeForBot(botId, (await readJson(req))?.sessionId);
+          const input = await readJson(req);
+          const result = await host.closeForBot(botId, input?.sessionId, input?.keep === true);
           return json(res, 200, result?.alreadyClosed === true ? { closed: true, alreadyClosed: true } : { closed: true });
         }
         if (req.method === "POST" && match[2] === "attention") {

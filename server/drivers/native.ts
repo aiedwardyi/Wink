@@ -2,10 +2,10 @@
 // EventNdjsonLogger and agentcal's onRaw: every provider-native message is
 // written verbatim next to the canonical stream, so protocol drift can be
 // diagnosed by diffing the two.
-import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { NATIVE_DIR } from "../config.ts";
+import { appendRotatingLog } from "../rotating-log.ts";
 import { endsContentStream, redactSecrets, redactSecretsInText, StreamSecretMasker } from "../redact.ts";
 
 type NativeEntry = { dir: "in" | "out"; source: string; msg: unknown };
@@ -86,10 +86,9 @@ function writeNative(threadId: string, entry: NativeEntry) {
     // an MCP header can carry a Composio key. These files are ordinary
     // 0644 files people paste into bug reports, so values are masked while
     // the shape stays intact.
-    appendFileSync(
+    appendRotatingLog(
       join(NATIVE_DIR, `${threadId}.ndjson`),
       JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n",
-      { mode: 0o600 },
     );
   } catch {
     /* never let logging break a run */

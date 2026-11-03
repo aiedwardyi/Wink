@@ -1,14 +1,17 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { waitForExit } from "./testing/cleanup.ts";
+import { createTempDirs, waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -54,7 +57,7 @@ const prime = async (first = 100, second = 0) => {
 
 beforeEach(async () => {
   port = await freePortBlock([0, 1], 24_100, 2_000);
-  home = mkdtempSync(join(tmpdir(), "omb-automatic-selection-"));
+  home = temps.make(join(tmpdir(), "omb-automatic-selection-"));
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(join(home, "calls.txt"), "");
   writeFileSync(join(home, ".orbit", "config.json"), JSON.stringify({

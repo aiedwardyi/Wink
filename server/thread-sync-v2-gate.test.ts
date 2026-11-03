@@ -1,12 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { writeDeviceRecord } from "./device-sync.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
 
-const temp = () => mkdtempSync(join(tmpdir(), "sync-v2-gate-"));
+const temps = createTempDirs();
+afterAll(() => temps.remove());
+
+const temp = () => temps.make(join(tmpdir(), "sync-v2-gate-"));
 const now = 1_800_000_000_000;
 const record = (deviceId: string) => ({ deviceId, name: deviceId, host: `${deviceId}.example.com` });
 

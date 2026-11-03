@@ -76,9 +76,17 @@ describe("harness playbook", () => {
     expect(prompt).toContain("-Attributes ReparsePoint | % { [System.IO.Directory]::Delete(");
     expect(prompt).toContain("wipes their targets");
     expect(prompt).toContain("wink-<NICKNAME>");
-    expect(prompt).toContain("Scratch is removed with `orbit-clean <NICKNAME>`.");
+    expect(prompt).toContain("Wink removes it when the pane closes; close with `keep` to hand it to the next card.");
+    expect(prompt).toContain("Wink removes clean worktrees a day after pane close if all commits are on a remote.");
+    expect(prompt).toContain("Squash-landed, unpushed worktrees: use the manual rules above.");
+    expect(prompt).toContain("For manual removals, remove a path only if all hold");
     expect(prompt).toContain("Never delete by wildcard, age or folder size");
     expect(prompt).not.toContain("Remove it once the branch has landed");
+  });
+
+  it("asks reports only what they reused", () => {
+    expect(harnessPlaybookPrompt(true)).toContain("plus one line: what it reused.");
+    expect(harnessPlaybookPrompt(true)).not.toContain("cleanup: removed / kept and why");
   });
 
   it("quotes worktree paths", () => {

@@ -1,14 +1,18 @@
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { INVITE_PREFIX, parseSetupCode, verifyInvite } from "../../shared/relay-protocol.ts";
 import { mintFromFile, mintInviteFromFile } from "../scripts/mint-invite.ts";
 import { loadConfig, operatorKeyPath, readOperatorKey } from "../src/config.ts";
+import { createTempDirs } from "../../server/testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 async function keyFile(mode: number, key = generateKeyPairSync("ed25519").privateKey) {
-  const dir = await mkdtemp(join(tmpdir(), "wink-key-"));
+  const dir = temps.make(join(tmpdir(), "wink-key-"));
   const path = join(dir, "operator.key");
   await writeFile(path, key.export({ format: "pem", type: "pkcs8" }), { mode });
   await chmod(path, mode);
@@ -73,7 +77,7 @@ describe("mint-invite", () => {
 
 describe("config", () => {
   it("loads a config, takes the base as data and prefers the systemd credential", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "wink-cfg-"));
+    const dir = temps.make(join(tmpdir(), "wink-cfg-"));
     const path = join(dir, "config.json");
     await writeFile(
       path,
@@ -93,7 +97,7 @@ describe("config", () => {
   });
 
   it("rejects bad bases, unknown keys and ACME without accepted terms", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "wink-cfg-"));
+    const dir = temps.make(join(tmpdir(), "wink-cfg-"));
     const path = join(dir, "config.json");
     const acme = { directoryUrl: "https://ca.invalid/d", termsOfServiceAgreed: true };
     for (const bad of [

@@ -1,11 +1,11 @@
 // Remote-mode gates without booting the harness: key file, handshake
 // compare, cookie minting, and the Host/Origin/API checks index.ts wires in.
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { sendStaticFile } from "./compression.ts";
 import {
@@ -24,9 +24,13 @@ import {
   resolveRemoteHost,
   type RemoteSetup,
 } from "./remote-access.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+
+const temps = createTempDirs();
+afterAll(() => temps.remove());
 
 const HOST = "home.tail1234.ts.net";
-const freshDir = () => mkdtempSync(join(tmpdir(), "orbit-remote-"));
+const freshDir = () => temps.make(join(tmpdir(), "orbit-remote-"));
 
 describe("remote access", () => {
   it("stays off without ORBIT_REMOTE_HOST", () => {

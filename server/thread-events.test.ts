@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { readThreadEvents } from "./thread-events.ts";
+import { appendRotatingLog } from "./rotating-log.ts";
 
 const dirs: string[] = [];
 function tmp() {
@@ -196,5 +197,20 @@ describe("readThreadEvents", () => {
     const eventsDir = tmp();
     const nativeDir = tmp();
     expect(() => readThreadEvents({ eventsDir, nativeDir, threadId: "../bots" })).toThrow(/thread id/);
+  });
+
+  it.each(["runtime", "native"] as const)("fills recent %s history from the rotated backup", (kind) => {
+    const eventsDir = tmp();
+    const nativeDir = tmp();
+    const file = join(kind === "runtime" ? eventsDir : nativeDir, "t1.ndjson");
+    const records = Array.from({ length: 5 }, (_, i) => kind === "runtime"
+      ? runtime({ eventId: `e${i}`, createdAt: String(i), type: "turn.started" })
+      : { at: String(i), dir: "out", source: "test", msg: i });
+    writeFileSync(file, records.slice(0, 4).map(line).join(""));
+    readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 3 });
+    appendRotatingLog(file, line(records[4]), 1);
+    const page = readThreadEvents({ eventsDir, nativeDir, threadId: "t1", limit: 3 });
+    expect(page.entries.map((entry) => entry.data)).toEqual(records.slice(-3));
+    expect(page.total[kind]).toBe(5);
   });
 });
