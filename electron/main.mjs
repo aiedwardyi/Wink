@@ -20,9 +20,9 @@ import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { readTerminalAppearance } from "./terminal-appearance.mjs";
-import { applyPendingUpdateInstall, consumePendingUpdateInstall, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
+import { applyPendingUpdateInstall, consumePendingUpdateInstall, isUpdateInstallPending, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
 import { channelFromCommandLine } from "./update-channel.mjs";
-import { completeQuitAfterCleanup } from "./app-quit.mjs";
+import { completeQuitAfterCleanup, hideWindowsForQuit } from "./app-quit.mjs";
 import { createCloseGuard } from "./close-guard.mjs";
 import { applyStartFresh, requestStartFresh } from "./start-fresh.mjs";
 import { installMainCrashLogging } from "./crash-log.mjs";
@@ -1459,7 +1459,7 @@ function createWindow() {
   return win;
 }
 
-function connectingPageHref(backgroundColor) {
+function connectingPageHref(backgroundColor, key = "packaged.connecting") {
   const persistedSkin = readPersistedSkin(app.getPath("userData"));
   const chrome = skinChrome(persistedSkin);
   return buildConnectingPage({
@@ -1467,7 +1467,7 @@ function connectingPageHref(backgroundColor) {
     fontStack: uiFontStack(),
     backgroundColor: backgroundColor ?? chrome.color,
     color: chrome.symbolColor,
-    message: nativeText("packaged.connecting"),
+    message: nativeText(key),
     captionInset: process.platform === "win32" ? WINDOWS_CAPTION_HEIGHT : 0,
   });
 }
@@ -2126,9 +2126,7 @@ app.on("before-quit", (e) => {
   // stop it here so quitting never orphans a recording process
   if (nativeActions.appleSpeech) stopSpeech();
   // Panes stop one at a time below, so the windows go now rather than at the final quit.
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.hide();
-  }
+  hideWindowsForQuit(BrowserWindow.getAllWindows(), mainWindow, isUpdateInstallPending() ? connectingPageHref(undefined, "packaged.updating") : null);
   const terminalsStopped = terminalHost.dispose();
   const cleanup = Promise.race([
     Promise.all([

@@ -19,6 +19,15 @@ export function completeQuitAfterCleanup({ pendingUpdateInstall, quitAndInstall,
   return "quit";
 }
 
+/** An update quit keeps the main window up with one line until the installer's banner takes over. */
+export function hideWindowsForQuit(windows, main, updatingPage) {
+  for (const window of windows) {
+    if (window.isDestroyed()) continue;
+    if (updatingPage && window === main) window.loadURL(updatingPage).catch(() => {});
+    else window.hide();
+  }
+}
+
 /** Vendored `BaseUpdater.quitAndInstall` reports install() failures by
  * emitting `error` and returning, without throwing. */
 export function callQuitAndInstall(updater) {
@@ -28,7 +37,7 @@ export function callQuitAndInstall(updater) {
   };
   updater.once("error", onError);
   try {
-    updater.quitAndInstall(true, true);
+    updater.quitAndInstall(false, true);
   } finally {
     updater.removeListener("error", onError);
   }
