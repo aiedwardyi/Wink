@@ -759,7 +759,7 @@ describe("memory pass wiring", () => {
   const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
   it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\)\),[\s\S]*?botHasActiveTurn/);
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(botId\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(store\.bot\(botId\) \?\? undefined\)\),[\s\S]*?botHasActiveTurn/);
     expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId\);/);
     expect(index).toContain("memoryPass.dispose();");
   });

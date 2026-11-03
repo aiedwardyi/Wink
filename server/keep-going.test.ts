@@ -744,7 +744,8 @@ describe("KeepGoing server wiring", () => {
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const usageStart = source.indexOf("  usage:", source.indexOf("const keepGoing = new KeepGoing("));
   const usage = source.slice(usageStart + "  usage: ".length, source.indexOf(",\n  livePanes:", usageStart));
-  const readUsage = new Function("scope", `with (scope) { return (${usage})("b1"); }`);
+  const readUsageCall = new Function("scope", `with (scope) { return (${usage})("b1"); }`);
+  const readUsage = (scope: object) => readUsageCall({ accounts: { snapshot: [] }, botAccounts: { hasBinding: () => false }, ...scope });
   const routeHandler = (file: string, name: string, params: string) => {
     const routes = readFileSync(new URL(file, import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const from = routes.indexOf("\n", routes.indexOf(`    ${name}: async (`)) + 1;
@@ -832,5 +833,16 @@ describe("KeepGoing server wiring", () => {
     });
     expect(await readUsage(scope)).toEqual(report);
     expect(scheduleSaveRateLimits).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains fresh cached usage for an unbound offline bot", async () => {
+    const report = { windows: [{ id: "five_hour", usedPercent: 20, resetsAt: null }], observedAt: new Date().toISOString() };
+    const instance = vi.fn(() => null);
+    const scope = { store: { bot: () => ({ modelSelection: { instanceId: "engine" } }) },
+      botAccounts: { hasBinding: () => false, instance }, rateLimitsByInstance: new Map([["engine", report]]),
+      cfg: {}, instanceConfigs: () => ({ engine: {} }), registry: { get: () => null }, KEEP_GOING_USAGE_FRESH_MS,
+    };
+    expect(await readUsage(scope)).toEqual(report);
+    expect(instance).not.toHaveBeenCalled();
   });
 });

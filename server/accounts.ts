@@ -17,7 +17,17 @@ const recordSchema = z.object({
   generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   state: z.enum(["pending", "ready", "stopped"]), identity: z.string().min(1).max(256).optional(),
 }).strict();
-const stateSchema = z.object({ version: z.literal(1), accounts: z.array(recordSchema), retired: z.array(z.string().regex(ACCOUNT_ID)) }).strict();
+const bindingSchema = z.object({ of: z.string().refine(isInstanceId), accountId: z.string().refine(isInstanceId) }).strict();
+const botBindingSchema = z.object({ current: bindingSchema.optional(), pending: bindingSchema.nullable().optional() }).strict();
+const drainSchema = z.object({ destinationId: z.string().refine(isInstanceId), phase: z.enum(["draining", "logout", "signed-out", "failed"]) }).strict();
+const stateSchema = z.object({
+  version: z.literal(1), accounts: z.array(recordSchema), retired: z.array(z.string().regex(ACCOUNT_ID)),
+  bindings: z.record(z.string().refine(isInstanceId), botBindingSchema).optional(),
+  drains: z.record(z.string().refine(isInstanceId), drainSchema).optional(),
+}).strict();
+export type BotAccountBinding = z.infer<typeof bindingSchema>;
+export type BotAccountState = z.infer<typeof botBindingSchema>;
+export type AccountDrain = z.infer<typeof drainSchema>;
 type SavedAccount = z.infer<typeof recordSchema>;
 type State = z.infer<typeof stateSchema>;
 export interface AccountRecord extends AccountContext {
@@ -41,6 +51,7 @@ function plainDirectory(path: string, create: boolean) {
 export class AccountService {
   private state: State = { version: 1, accounts: [], retired: [] };
   private records: readonly AccountRecord[] = Object.freeze([]);
+  private pendingBots: readonly string[] = Object.freeze([]);
   private queue: Promise<unknown> = Promise.resolve();
   private readonly file: string;
   private readonly root: string;
@@ -77,6 +88,77 @@ export class AccountService {
 
   get snapshot(): readonly AccountRecord[] { return this.records; }
   get(id: string): AccountRecord | undefined { return this.records.find((row) => row.id === id); }
+  binding(botId: string) { return this.state.bindings?.[botId]; }
+  get pendingBindings() { return this.pendingBots; }
+  get drains(): Readonly<Record<string, AccountDrain>> { return this.state.drains ?? {}; }
+
+  bind(updates: readonly { botId: string; binding: BotAccountBinding | null; pending: boolean | (() => boolean) }[]): Promise<void> {
+    return this.change(() => {
+      const bindings = { ...this.state.bindings };
+      for (const update of updates) {
+        if (!isInstanceId(update.botId)) throw new AccountError("Invalid bot id", 400);
+        if (update.binding && this.drains[update.binding.accountId]) throw new AccountError("This account is draining; choose another account");
+        if (update.binding) {
+          this.base(update.binding.of);
+          const account = this.get(update.binding.accountId);
+          if (update.binding.accountId !== update.binding.of && (account?.of !== update.binding.of || account.state !== "ready")) throw new AccountError("This account is unavailable; choose an account");
+        }
+        const current = bindings[update.botId]?.current;
+        if (typeof update.pending === "function" ? update.pending() : update.pending) {
+          const same = current?.accountId === update.binding?.accountId && current?.of === update.binding?.of;
+          bindings[update.botId] = { current, ...(same ? {} : { pending: update.binding }) };
+        } else if (update.binding) bindings[update.botId] = { current: update.binding };
+        else delete bindings[update.botId];
+      }
+      this.commit({ ...this.state, bindings });
+    });
+  }
+
+  settleBinding(botId: string, ready: () => boolean = () => true): Promise<void> {
+    return this.change(() => {
+      const row = this.binding(botId);
+      if (row?.pending === undefined || !ready()) return;
+      const bindings = { ...this.state.bindings };
+      if (row.pending) bindings[botId] = { current: row.pending };
+      else delete bindings[botId];
+      this.commit({ ...this.state, bindings });
+    });
+  }
+
+  drain(id: string, destinationId: string, phase: AccountDrain["phase"] = "draining"): Promise<void> {
+    return this.change(() => {
+      if (!isInstanceId(id) || !isInstanceId(destinationId) || id === destinationId) throw new AccountError("A different destination account id is required", 400);
+      this.commit({ ...this.state,
+        accounts: this.state.accounts.map((row) => row.id === id ? { ...row, state: "stopped" } : row),
+        drains: { ...this.state.drains, [id]: { destinationId, phase } },
+      });
+    });
+  }
+
+  clearDrain(id: string): Promise<void> {
+    return this.change(() => {
+      const drains = { ...this.state.drains };
+      delete drains[id];
+      this.commit({ ...this.state, drains });
+    });
+  }
+
+  finishDrain(id: string, destination: BotAccountBinding, additions: () => Record<string, BotAccountState> = () => ({})): Promise<void> {
+    return this.change(() => {
+      if (this.drains[id]?.phase !== "signed-out") throw new AccountError("Account sign-out is not confirmed");
+      const bindings = Object.fromEntries(Object.entries({ ...this.state.bindings, ...additions() }).map(([botId, row]) => [botId, {
+        ...row,
+        ...(row.current?.accountId === id ? { current: destination } : {}),
+        ...(row.pending?.accountId === id ? { pending: destination } : {}),
+      }]));
+      const drains = { ...this.state.drains };
+      delete drains[id];
+      this.commit({ ...this.state, bindings, drains,
+        accounts: this.state.accounts.filter((row) => row.id !== id),
+        retired: this.get(id) ? [...this.state.retired, id] : this.state.retired,
+      });
+    });
+  }
 
   list() {
     return Object.entries(this.bases()).filter(([, entry]) => entry.enabled !== false && ["claudeAgent", "codex"].includes(entry.driver))
@@ -174,6 +256,7 @@ export class AccountService {
   }
   private publish() {
     this.records = Object.freeze(this.state.accounts.map((row) => Object.freeze({ ...row, home: this.home(row.id) })));
+    this.pendingBots = Object.freeze(Object.entries(this.state.bindings ?? {}).filter(([, row]) => row.pending !== undefined).map(([botId]) => botId));
   }
   private change<T>(run: () => T): Promise<T> {
     const pending = this.queue.then(run);

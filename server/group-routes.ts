@@ -7,16 +7,18 @@ import { askUserCardPatchSchema } from "./ask-user.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import { EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
+import type { ProviderInstance } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { canChangeRoomCwd, repinRoomCwd } from "./room-cwd.ts";
 import { acceptedSendMatch, parseSendId, sendFingerprint, type SendSequencer } from "./send-idempotency.ts";
 import { cancelQueuedRoomParticipations } from "./steer-queue.ts";
-import type { GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
+import type { BotRecord, GroupDefaultResponder, GroupRecord, Message, Store } from "./store.ts";
 import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-flush.ts";
 
 type GroupRouteDeps = {
   store: Store;
   registry: ProviderRegistry;
+  instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   createGroupTaskRequestSchema: z.ZodType<{ title?: string }>;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
   checkedGroupResponder: (value: unknown, memberIds: string[]) => GroupDefaultResponder | null;
@@ -401,7 +403,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       taskResumes.forgetThread(group.threadId);
       cancelQueuedRoomParticipations(group.id, group.threadId);
       const busy = group.busyBotId ? store.bot(group.busyBotId) : undefined;
-      const instance = busy ? registry.get(busy.modelSelection.instanceId) : undefined;
+      const instance = busy ? (deps.instanceForBot ? deps.instanceForBot(busy, group.threadId) : registry.get(busy.modelSelection.instanceId)) : undefined;
       if (busy) {
         const epoch = bumpTurnEpoch(busy.id) - 1;
         markThreadInterrupted(group.threadId, busy.id, epoch);

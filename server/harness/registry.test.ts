@@ -172,9 +172,11 @@ describe("ProviderRegistry", () => {
       await registry.load({ a: { driver: "fake", config: { cli: cli(first) } } });
       await registry.startSignIn("a");
       const pids: number[] = JSON.parse(readFileSync(first, "utf8"));
+      const stopped = registry.logins.wait("a");
       expect(pids.map(alive)).toEqual([true, true]);
       if (action === "replace") await registry.load({ a: { driver: "fake", config: { cli: cli(second) } } });
       else registry.remove("a");
+      await stopped;
       await expect.poll(() => pids.map(alive), { timeout: 5000 }).toEqual([false, false]);
       expect(registry.logins.state("a")).toBeUndefined();
       expect(registry.logins.capture("a")).toEqual({});

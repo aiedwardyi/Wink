@@ -88,6 +88,7 @@ import {
 } from "./config.ts";
 import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
 import { AccountService, isInstanceId } from "./accounts.ts";
+import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountRoutes } from "./account-routes.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
@@ -712,6 +713,7 @@ function askBotAndWait(
 
 const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>[number]): AutomaticCandidate => ({
   instanceId: entry.instanceId,
+  accountOf: "accountOf" in entry ? entry.accountOf : undefined,
   driverKind: entry.driverKind,
   defaultModel: entry.models.default,
   available: entry.snapshot.state === "available",
@@ -731,6 +733,7 @@ function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof regist
 function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate {
   return {
     instanceId: instance.instanceId,
+    accountOf: instance.account?.of,
     driverKind: instance.driverKind,
     defaultModel: instance.models.default,
     available: automaticAvailability.get(instance.instanceId) !== false,
@@ -762,6 +765,16 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
 }
 
 async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
+  if (botAccounts.hasPending(bot.id)) await botAccounts.settle(bot.id, true);
+  const bound = botAccounts.resolve(bot);
+  if (bound !== bot.modelSelection) {
+    const instance = registry.get(bound.instanceId);
+    if (!instance || !resolveAutomaticSelection({
+      candidates: [liveAutomaticCandidate(instance)], current: bound,
+      boundAccountId: bound.instanceId, required: automaticRequirements(bot),
+    })) throw Object.assign(new Error("This account cannot run this bot's tools; choose an account"), { status: 409 });
+    return bound;
+  }
   if (bot.modelSelection.mode !== "automatic") return bot.modelSelection;
   const preferredIds = [...new Set([task?.lastInstanceId, bot.modelSelection.instanceId].filter(Boolean))];
   const preferred = preferredIds.flatMap((instanceId) => {
@@ -833,6 +846,7 @@ function checkedModelSelection(
   raw: unknown,
   existing = false,
   requireAvailableModel = false,
+  botId?: string,
 ): { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, status: 400, error: "modelSelection must be an object" };
@@ -848,7 +862,7 @@ function checkedModelSelection(
   if (!mode.success) {
     return { ok: false, status: 400, error: "modelSelection.mode must be automatic or pinned" };
   }
-  const selection: ModelSelection = {
+  let selection: ModelSelection = {
     instanceId: value.instanceId.trim(),
     model: value.model.trim(),
   };
@@ -859,7 +873,9 @@ function checkedModelSelection(
     }
     selection.effort = value.effort;
   }
-  const target = registry.get(selection.instanceId);
+  try { selection = botAccounts.checkSelection(botId ? store.bot(botId) ?? undefined : undefined, selection); }
+  catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
+  const target = registry.get(botAccounts.catalogInstanceId(botId ? store.bot(botId) ?? undefined : undefined, selection));
   // Model IDs remain free-form at the app's general API boundary. Custom
   // engines can accept IDs that are not in their discovery catalog, and
   // several drivers only learn the final catalog when a turn starts. The
@@ -921,6 +937,9 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const botAccounts = new BotAccounts(accounts, registry, store, {
+  active: (id) => botHasActiveTurn(id), captured: (threadId) => providerReload.current(threadId),
+});
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
   userData: snagUserData,
@@ -1140,7 +1159,9 @@ const keepGoing = new KeepGoing({
   wakesPaused: (botId) => store.bot(botId)?.paneWakePaused === true || limitWaits.held(botId),
   packet: (threadId) => taskPacketForWrite(threadId),
   usage: async (botId) => {
-    const instanceId = store.bot(botId)?.modelSelection.instanceId ?? "";
+    const bot = store.bot(botId);
+    const instanceId = bot && botAccounts.hasBinding(bot.id)
+      ? botAccounts.instance(bot)?.instanceId ?? "" : bot?.modelSelection.instanceId ?? "";
     const previous = rateLimitsByInstance.get(instanceId);
     if (previous?.windows.length && Number.isFinite(Date.parse(previous.observedAt)) && Date.now() - Date.parse(previous.observedAt) <= KEEP_GOING_USAGE_FRESH_MS) return previous;
     const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
@@ -1188,6 +1209,7 @@ const limitWaits = new LimitWaits({
     if (!bot || !store.taskByThread(bot.id, bot.threadId) || bot.paneWakePaused) return null;
     const controlKey = createHash("sha256").update(JSON.stringify([
       bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg, accounts.snapshot)[instanceId ?? bot.modelSelection.instanceId],
+      ...(botAccounts.hasBinding(bot.id) ? [accounts.binding(bot.id)] : []),
       lastUserInstruction(store.activePath(bot.threadId))?.messageId,
     ])).digest("hex");
     return { threadId: bot.threadId, controlKey, busy: botHasActiveTurn(botId) || hasQueuedSends(botId) };
@@ -1493,6 +1515,7 @@ function publishProfileChanges(): number {
 }
 
 function instanceOffersModel(instanceId: string, model: string): boolean {
+  if (accounts.get(instanceId)) return false;
   const instance = registry.get(instanceId);
   return Boolean(instance && (model === instance.models.default || instance.models.options.some((option) => option.id === model)));
 }
@@ -1683,7 +1706,7 @@ async function localVmDeleteRefusal(botId: string): Promise<string | null> {
 async function deleteBotFully(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
-  const instance = registry.get(bot.modelSelection.instanceId);
+  const instance = botAccounts.instance(bot);
   const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
   if (busyGroup) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
@@ -2696,7 +2719,7 @@ const summaryBuild = createSummaryBuild({
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: () => noteGenerator(registry.instances()),
+  generate: (botId) => noteGenerator(registry.instances(), botAccounts.noteAccount(store.bot(botId) ?? undefined)),
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);
@@ -2860,7 +2883,10 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 // not per turn, so it lives here and rides /api/instances rather than being
 // banked on a task. Persisted so a restart keeps the last report until a turn or refresh replaces it.
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
-const refreshUsage = createUsageRefresh({ accountIdentity: (account, identity) => accountRuntime.observe(account.id, { state: "available", authenticated: true, accountIdentity: identity }, account.generation) });
+const refreshUsage = createUsageRefresh({
+  accountIdentity: (account, identity) => accountRuntime.observe(account.id, { state: "available", authenticated: true, accountIdentity: identity }, account.generation),
+  accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
+});
 const checkMuseUsage = createMuseCheck();
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
@@ -2874,12 +2900,11 @@ const spawnUsage = createSpawnUsage({
   environment: (instanceId) => instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment,
 });
 const accountRuntime = createAccountRuntime({
-  accounts, registry, providers: providerReload, store, reload: reloadProviders,
+  accounts, registry, providers: providerReload, store, reload: reloadProviders, bots: botAccounts,
   rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
   invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
 });
-if (accounts.snapshot.length) await accountRuntime.restore();
 const accountRoutes = createAccountRoutes(accountRuntime, registry);
 
 function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
@@ -2928,7 +2953,7 @@ const watchdog = new TurnWatchdog({
         turnsAtWrite: store.taskByThread(turn.botId, turn.threadId)?.usage?.turns ?? 0,
       }));
     }
-    const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
+    const instance = bot ? botAccounts.instance(bot, turn.threadId) : null;
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
     const minutes = Math.round(TURN_STALL_MS / 60_000);
     store.appendMessage(
@@ -3397,7 +3422,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
-          : registry.get(asker.modelSelection.instanceId);
+          : botAccounts.instance(asker, event.threadId);
         const requestId = event.requestId;
         const { tool, summary } = event;
         // answered at once: a desktop card nobody can see would stall the turn
@@ -3440,7 +3465,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const settled = verdict.approve;
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
-          : registry.get(asker.modelSelection.instanceId);
+          : botAccounts.instance(asker, event.threadId);
         const requestId = event.requestId;
         const { tool, summary } = event;
         // The chip is written only AFTER the provider takes the answer.
@@ -3528,7 +3553,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.background) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
-          : asker && registry.get(asker.modelSelection.instanceId);
+          : asker && botAccounts.instance(asker, event.threadId);
         if (instance && event.requestId) {
           void instance.adapter
             .respondToRequest(event.threadId, event.requestId, { behavior: "deny", message: BACKGROUND_DENY_NOTE })
@@ -3590,7 +3615,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // Review stays on the provider boundary that opened the request.
         // Falling back to an arbitrary sibling could disclose action details
         // to a provider the user did not choose for this bot.
-        const instance = registry.get(event.providerInstanceId ?? asker.modelSelection.instanceId);
+        const instance = event.providerInstanceId ? registry.get(event.providerInstanceId) : botAccounts.instance(asker, event.threadId);
         if (instance?.reviewPermission) {
           reviewTask = reviewPermissionCard({
             instance,
@@ -4057,6 +4082,7 @@ bus.subscribe((event: RuntimeEvent) => {
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   providerReload.settled(event.threadId);
+  if (accounts.pendingBindings.length) void botAccounts.settlePending().catch(console.error);
   drainQueuedSends();
   paneWake.settled();
   // after both, so held sends and pane wakes claim the bot before a queued routine;
@@ -4122,7 +4148,7 @@ const noteSteer = new NoteSteerer({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   steer: (botId, threadId, text) => {
     const bot = store.bot(botId);
-    const adapter = bot ? registry.get(bot.modelSelection.instanceId)?.adapter : undefined;
+    const adapter = bot ? botAccounts.instance(bot, threadId)?.adapter : undefined;
     return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));
   },
   messages: (threadId) => store.activePath(threadId),
@@ -5658,7 +5684,7 @@ routines = new RoutineManager({
     const instance = runOn === "cloud"
       ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
       : bot
-        ? registry.get(bot.modelSelection.instanceId)
+        ? botAccounts.instance(bot, threadId)
         : null;
     await instance?.adapter.interruptTurn(threadId).catch(() => {});
     closeOpenApprovals(threadId);
@@ -6883,10 +6909,12 @@ function reloadProviders() {
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
+if (accounts.snapshot.length || Object.keys(accounts.drains).length || accounts.pendingBindings.length) await accountRuntime.restore();
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });
 const groupRoutes = createGroupRoutes({
+  instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   store,
   registry,
   createGroupTaskRequestSchema,
@@ -6942,6 +6970,7 @@ const internalRoutes = createInternalRoutes({
   maybeResumeConnectors,
 });
 const botRoutes = createBotRoutes({
+  accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
   cfg,
   registry,
@@ -6962,6 +6991,7 @@ const botRoutes = createBotRoutes({
   resumePaneWakes,
 });
 const botChatRoutes = createBotChatRoutes({
+  instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,
   threadSyncGate,
@@ -7004,6 +7034,7 @@ const botChatRoutes = createBotChatRoutes({
   resumeSecretCard,
 });
 const threadRoutes = createThreadRoutes({
+  instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cfg,
   threadSyncGate,
   store,
@@ -8394,6 +8425,7 @@ hostShutdown = () => {
   summaryBuild.dispose();
   summaryRepair.dispose();
   memoryPass.dispose();
+  accountRuntime.dispose();
   void registry.disposeAll().finally(() => process.exit(0));
 };
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

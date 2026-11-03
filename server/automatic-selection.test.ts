@@ -100,6 +100,45 @@ describe("automatic usage ranking", () => {
 });
 
 describe("resolveAutomaticSelection", () => {
+  it("keeps an explicit account ahead of task continuity", () => {
+    expect(resolveAutomaticSelection({
+      candidates: [candidate("claude"), candidate("added", { accountOf: "claude" })],
+      current: { mode: "automatic", instanceId: "added", model: "picked" },
+      continuity: { instanceId: "claude", model: "old" },
+      boundAccountId: "added",
+    })).toMatchObject({ instanceId: "added", model: "picked", mode: "pinned" });
+  });
+
+  it("never introduces an added account to a fresh exhausted Auto pick", () => {
+    expect(resolveAutomaticSelection({ candidates: [
+      candidate("claude", { rateLimits: [{ id: "seven_day", usedPercent: 100, resetsAt: null }] }),
+      candidate("added", { accountOf: "claude" }),
+    ] })?.instanceId).toBe("claude");
+  });
+
+  it("keeps the pinned model ahead of same-account continuity", () => {
+    expect(resolveAutomaticSelection({ candidates: [candidate("added", { accountOf: "claude" })],
+      current: { mode: "automatic", instanceId: "added", model: "picked" },
+      continuity: { instanceId: "added", model: "old" }, boundAccountId: "added",
+    })).toMatchObject({ instanceId: "added", model: "picked", mode: "pinned" });
+  });
+
+  it.each(["missing", "offline", "incapable"])("does not replace a %s bound account", (reason) => {
+    const bound = candidate("added", { accountOf: "claude", available: reason !== "offline", capabilities: {} });
+    expect(resolveAutomaticSelection({
+      candidates: [candidate("claude", { capabilities: { browserMcp: true } }), ...(reason === "missing" ? [] : [bound])],
+      current: { mode: "automatic", instanceId: "added", model: "picked" },
+      boundAccountId: "added", required: ["browserMcp"],
+    })).toBeNull();
+  });
+
+  it("does not revive an added account from unbound task continuity", () => {
+    expect(resolveAutomaticSelection({
+      candidates: [candidate("claude"), candidate("added", { accountOf: "claude" })],
+      continuity: { instanceId: "added", model: "old" },
+    })?.instanceId).toBe("claude");
+  });
+
   it.each([
     ["codex", "gpt-6-astra", "low"],
     ["codex", "gpt-6.1-terra", "medium"],

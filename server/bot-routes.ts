@@ -8,6 +8,7 @@ import { sameModelSelection } from "../shared/model-selection.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import type { BotAccounts } from "./bot-accounts.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
@@ -27,10 +28,11 @@ type BotRouteDeps = {
   cancelUsageWait?: (botId: string) => void;
   cfg: AppConfig;
   registry: ProviderRegistry;
+  accountBots?: BotAccounts;
   MAX_WORKSPACE_BOTS: number;
   defaultSelection: () => Promise<ModelSelection>;
   botJobSchema: z.ZodString;
-  checkedModelSelection: (raw: unknown, existing?: boolean, requireAvailableModel?: boolean) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
+  checkedModelSelection: (raw: unknown, existing?: boolean, requireAvailableModel?: boolean, botId?: string) => { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string };
   store: Store;
   keepGoing: KeepGoing;
   wireBot: (bot: BotRecord) => Record<string, unknown>;
@@ -278,7 +280,7 @@ export function createBotRoutes(deps: BotRouteDeps) {
       }
       let normalizedSelection: ModelSelection | undefined;
       if (rawSelection !== undefined) {
-        const checked = checkedModelSelection(rawSelection, Boolean(existingBot), body.requireAvailableModel === true);
+        const checked = checkedModelSelection(rawSelection, Boolean(existingBot), body.requireAvailableModel === true, existingBot?.id);
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
         normalizedSelection = checked.selection;
       }
@@ -427,10 +429,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
         patch.alwaysAllow = [...new Set(body.alwaysAllow as string[])].slice(0, 200);
       }
       if (existingBot?.computer === "local" && body.computer !== undefined && body.computer !== "local") {
-        await registry
-          .get(existingBot.modelSelection.instanceId)
-          ?.adapter.interruptTurn(existingBot.threadId)
-          .catch(() => {});
+        const instance = deps.accountBots ? deps.accountBots.instance(existingBot) : registry.get(existingBot.modelSelection.instanceId);
+        await instance?.adapter.interruptTurn(existingBot.threadId).catch(() => {});
       }
       const chiefMovedSections =
         Boolean(existingBot?.chiefOfStaff) &&
@@ -440,7 +440,9 @@ export function createBotRoutes(deps: BotRouteDeps) {
       // After the awaits above, so the pick sees the bot's busy state now.
       if (normalizedSelection && existingBot) {
         if (!sameModelSelection(existingBot.pendingModelSelection ?? existingBot.modelSelection, normalizedSelection)) deps.cancelUsageWait?.(existingBot.id);
-        Object.assign(patch, modelPickPatch(existingBot, normalizedSelection));
+        Object.assign(patch, deps.accountBots?.hasBinding(existingBot.id)
+          ? await deps.accountBots.pickModel(existingBot, normalizedSelection)
+          : modelPickPatch(existingBot, normalizedSelection));
       }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
@@ -457,7 +459,9 @@ export function createBotRoutes(deps: BotRouteDeps) {
           ? store.setChiefOfStaff(bot.id)
           : [];
       if (chiefChanges === null) return json(res, 404, { error: "no such bot" });
-      if (normalizedSelection && body.holdForSwitch !== true) await applyEffortPick(store, registry, bot.id, normalizedSelection);
+      if (normalizedSelection && body.holdForSwitch !== true && !deps.accountBots?.hasPending(bot.id)) {
+        await applyEffortPick(store, registry, bot.id, normalizedSelection, deps.accountBots?.instance(bot)?.instanceId);
+      }
       return json(res, 200, { bot: wireBot(store.bot(bot.id) ?? bot) });
     },
     getMemory: async (res: ServerResponse, m: RegExpMatchArray) => {

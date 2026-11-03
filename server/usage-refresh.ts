@@ -819,6 +819,7 @@ export function createUsageRefresh(deps: {
   platform?: NodeJS.Platform;
   throttleMs?: number;
   accountIdentity?: (account: AccountContext, identity: string | undefined) => Promise<void>;
+  accountBlocked?: (instanceId: string) => boolean;
 } = {}) {
   const request = deps.request ?? fetch;
   const read = deps.read ?? ((path: string) => readFile(path, "utf8"));
@@ -833,12 +834,14 @@ export function createUsageRefresh(deps: {
   const claudeReads = new Map<string, { retryAt: number; limited: number; pending: Promise<Report> }>();
   const skipped = new Set<string>();
   const epochs = new Map<string, number>();
+  const active = new Map<string, number>();
   const skipWindow = (name: string, id: string) => {
     if (skipped.has(`${name}:${id}`)) return;
     skipped.add(`${name}:${id}`);
     console.warn(`usage-refresh: skipped unreadable ${name} window ${id}`);
   };
   const refresh = async (driver: string, options: Options, previous?: Report): Promise<Result> => {
+    if (deps.accountBlocked?.(options.instanceId)) return { report: previous, error: "This account is stopped", retryAt: 0, status: "no_observation" };
     if (options.account && driver === "claudeAgent") return { report: previous, retryAt: 0, status: "no_observation" };
     const name = driver === "claudeAgent" ? "Claude" : driver === "codex" ? "Codex" : driver === "grokAgent" ? "Grok" : driver === "antigravityAgent" ? "Antigravity" : driver === "museAgent" ? "Muse" : undefined;
     if (!name) return { report: previous, error: "Usage refresh is not supported", retryAt: 0 };
@@ -848,6 +851,7 @@ export function createUsageRefresh(deps: {
     const cached = driver === "claudeAgent" ? undefined : cache.get(key);
     if (cached && clock() < cached.retryAt) return cached.pending;
     const retryAt = clock() + (deps.throttleMs ?? 30_000);
+    active.set(options.instanceId, (active.get(options.instanceId) ?? 0) + 1);
     const pending = (async (): Promise<Result> => {
       try {
         const merged: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath(), ...options.environment };
@@ -953,11 +957,16 @@ export function createUsageRefresh(deps: {
         };
       }
     })();
-    const guarded = pending.then((result) => options.account && epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result);
+    const guarded = pending.then((result) => options.account && epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result)
+      .finally(() => {
+        const count = (active.get(options.instanceId) ?? 1) - 1;
+        if (count) active.set(options.instanceId, count);
+        else active.delete(options.instanceId);
+      });
     if (driver !== "claudeAgent") cache.set(key, { retryAt, pending: guarded });
     return guarded;
   };
-  return Object.assign(refresh, { invalidate: (instanceId: string) => {
+  return Object.assign(refresh, { busy: (instanceId: string) => active.has(instanceId), invalidate: (instanceId: string) => {
     epochs.set(instanceId, (epochs.get(instanceId) ?? 0) + 1);
     for (const key of cache.keys()) if (key === instanceId || key.startsWith(`${instanceId}:`)) cache.delete(key);
   } });

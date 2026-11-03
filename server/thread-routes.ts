@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { readAttachment } from "./attachments.ts";
 import { EVENTS_DIR, NATIVE_DIR, type AppConfig } from "./config.ts";
 import { paneNoteText } from "./context-compaction.ts";
-import type { RequestOutcome } from "./contracts.ts";
+import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
-import type { Message, Store } from "./store.ts";
+import type { BotRecord, Message, Store } from "./store.ts";
 import { readThreadEvents } from "./thread-events.ts";
 import type { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { turnIndex } from "./turn-index.ts";
@@ -22,6 +22,7 @@ type ThreadRouteDeps = {
   cfg: AppConfig;
   threadSyncGate: ReturnType<typeof createThreadSyncV2Gate>;
   store: Store;
+  instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   pullSyncedThread: (threadId: string) => void | Promise<void>;
   dataDir: string;
   DEFAULT_PAGE: number;
@@ -257,7 +258,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
           (pending?.from ? store.bot(pending.from.botId) : undefined)
         : store.botByThread(threadId);
       if (!owner && !pending) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
-      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined);
+      const instanceId = owner && deps.instanceForBot ? deps.instanceForBot(owner, threadId)?.instanceId ?? "" : owner?.modelSelection.instanceId ?? "";
+      const outcome = await answerRequest(threadId, instanceId, requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined);
       return json(res, 200, { ok: true, outcome });
     },
     events: async (res: ServerResponse, m: RegExpMatchArray, url: URL) => {

@@ -6,7 +6,7 @@ import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { sameModelSelection } from "../shared/model-selection.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
-import type { RequestOutcome } from "./contracts.ts";
+import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -33,6 +33,7 @@ type BotChatRouteDeps = {
   cfg: AppConfig;
   threadSyncGate: ReturnType<typeof createThreadSyncV2Gate>;
   registry: ProviderRegistry;
+  instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   store: Store;
   sendSequencer: SendSequencer;
   ensureChatLatency: (input: { sendId?: string; threadId: string; userMessageId?: string; turnId?: string }) => void;
@@ -72,10 +73,10 @@ type BotChatRouteDeps = {
 };
 
 export function createBotChatRoutes(deps: BotChatRouteDeps) {
+  const instanceForBot = deps.instanceForBot ?? ((bot: BotRecord) => deps.registry.get(bot.modelSelection.instanceId));
   const {
     cfg,
     threadSyncGate,
-    registry,
     store,
     sendSequencer,
     ensureChatLatency,
@@ -217,7 +218,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
             });
           }
 
-          const adapter = registry.get(currentAtStart.modelSelection.instanceId)?.adapter;
+          const adapter = instanceForBot(currentAtStart, threadId)?.adapter;
           const steering = Boolean(currentAtStart.busy && steersSend(adapter, currentAtStart.busy, body.deliver === "after"));
           cancelUsageWait?.(bot.id, undefined, steering);
           // Claude can accept the message inside its live turn. A turn-start
@@ -374,7 +375,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (!source || source.role !== "user" || source.kind !== "text") {
         return json(res, 404, { error: "only user messages can be edited" });
       }
-      if (!registry.get(bot.modelSelection.instanceId)) {
+      if (!instanceForBot(bot)) {
         return json(res, 409, {
           error: `provider instance "${bot.modelSelection.instanceId}" is unavailable - pick another model in settings`,
         });
@@ -418,13 +419,13 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
+      const outcome = await answerRequest(bot.threadId, instanceForBot(bot)?.instanceId ?? "", String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
       return json(res, 200, { ok: true, outcome });
     },
     prewarm: async (res: ServerResponse, m: RegExpMatchArray) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      const instance = registry.get(bot.modelSelection.instanceId);
+      const instance = instanceForBot(bot);
       if (!instance) return json(res, 404, { error: "no such provider instance" });
       if (typeof instance.prepare !== "function") {
         return json(res, 200, { ok: true, prepared: false, reason: "driver has no prepare" });
@@ -462,7 +463,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         if (requireSettled) return json(res, 200, { ok: true, stopped: inFlight && await threadReleased(bot), returned });
         return json(res, 200, { ok: true, returned });
       }
-      const instance = registry.get(bot.modelSelection.instanceId);
+      const instance = instanceForBot(bot);
       // a bot busy in a ROOM is running on the room's thread - stopping it
       // from its own chat must reach that turn, not just the 1:1 thread
       const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);

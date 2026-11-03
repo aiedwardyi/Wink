@@ -1,0 +1,583 @@
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import fs from "node:fs";
+import fsAsync from "node:fs/promises";
+import children from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { AccountService } from "./accounts.ts";
+import { createAccountRuntime } from "./account-runtime.ts";
+import { createAccountRoutes } from "./account-routes.ts";
+import { DATA_DIR, instanceConfigs } from "./config.ts";
+import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { createBotRoutes } from "./bot-routes.ts";
+import { resolveAutomaticSelection } from "./automatic-selection.ts";
+import type { InstanceConfigMap, ModelSelection } from "./contracts.ts";
+import type { JsonValue } from "./schema.ts";
+import { EventBus } from "./harness/bus.ts";
+import { ProviderRegistry } from "./harness/registry.ts";
+import { ProviderReload } from "./harness/provider-reload.ts";
+import { noteGenerator } from "./memory-pass.ts";
+import { mergeSyncedModelSelection } from "./profile-sync.ts";
+import { Store, type BotRecord } from "./store.ts";
+import { makeFakeDriver } from "./testing/fake-driver.ts";
+import { createUsageRefresh } from "./usage-refresh.ts";
+
+const registries: ProviderRegistry[] = [];
+const controllers: ReturnType<typeof createAccountRuntime>[] = [];
+let serial = 0;
+
+afterEach(async () => {
+  for (const controller of controllers.splice(0)) controller.dispose?.();
+  await Promise.all(registries.splice(0).map((registry) => registry.disposeAll()));
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+  vi.unstubAllGlobals();
+});
+
+async function fixture(empty = false, of = "claude") {
+  const root = join(DATA_DIR, `routing-${++serial}`);
+  mkdirSync(root, { recursive: true });
+  const bases: InstanceConfigMap = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" }, work: { driver: "claudeAgent", environment: { PROFILE: "work" } }, custom: { driver: "custom" } };
+  const accounts = new AccountService(root, () => bases);
+  const added = [];
+  if (!empty) for (let i = 0; i < 3; i++) {
+    const row = await accounts.add(of);
+    added.push(await accounts.identify(row.id, `identity-${i}`));
+  }
+  const active = new Set<string>();
+  const helpers = new Set<string>();
+  const generators = new Map<string, ReturnType<typeof vi.fn<() => Promise<string>>>>();
+  const fakeDrivers = ["claudeAgent", "codex", "custom"].map((kind) => {
+    const fake = makeFakeDriver({ kind, effortLevels: ["low", "medium", "high"] }).driver;
+    const create = fake.create;
+    fake.create = async (input) => {
+      const generateText = vi.fn(async () => input.instanceId);
+      generators.set(input.instanceId, generateText);
+      return { ...await create(input), account: input.account,
+        models: { ...fake.models, options: fake.models.options.map((option) => ({ ...option })) },
+        generateText, accountBusy: () => helpers.has(input.instanceId),
+        snapshot: async () => ({ state: "available", authenticated: true, accountIdentity: accounts.get(input.instanceId)?.identity }),
+      };
+    };
+    return fake;
+  });
+  const registry = new ProviderRegistry(fakeDrivers);
+  registries.push(registry);
+  const configs = () => instanceConfigs({ instances: bases }, accounts.snapshot);
+  await registry.load(configs());
+  const providers = new ProviderReload(registry, new EventBus(() => {}), configs());
+  const store = new Store(() => ({ instanceId: of, model: of === "codex" ? "codex-1" : "claudeAgent-1", mode: "automatic" }));
+  store.bots.length = 0;
+  store.groups.length = 0;
+  const bot = store.createBot({ name: "Routing fixture" });
+  const logout = vi.spyOn(registry, "signOut").mockResolvedValue(true);
+  const panes = vi.fn<typeof fetch>(async () => Response.json({ counts: {} }));
+  vi.stubGlobal("fetch", panes);
+  const deps = { accounts, registry, providers, store, reload: () => providers.reload(configs()),
+    rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(),
+    invalidateHolds: vi.fn(), invalidateWaits: vi.fn(), botActive: (id: string) => active.has(id) || store.bot(id)?.busy === true,
+    terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: () => false };
+  const controller = createAccountRuntime(deps);
+  controllers.push(controller);
+  const request = async (method: string, path: string, value: unknown = {}) => {
+    const req = Object.assign(Readable.from([JSON.stringify(value)]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
+    let status = 0;
+    let output = "";
+    const res = { writeHead: (code: number) => { status = code; }, end: (body: string) => { output = body; } } as unknown as ServerResponse;
+    const handled = await createAccountRoutes(controller, registry)(req, res, method, path);
+    return { handled, status, body: output ? JSON.parse(output) : undefined };
+  };
+  const bind = (id: string, botId = bot.id) => request("POST", `/api/bots/${botId}/account`, { accountId: id });
+  const resolve = () => controller.bots?.resolve(bot) ?? bot.modelSelection;
+  const notes = () => noteGenerator(registry.instances(), controller.bots?.noteAccount(bot));
+  const patchModel = async (selection: ModelSelection) => {
+    const routes = createBotRoutes({ cfg: {}, store, registry, accountBots: controller.bots, wireBot: (record: BotRecord) => record,
+      checkedModelSelection: (raw: unknown) => {
+        try { return { ok: true, selection: controller.bots?.checkSelection(bot, raw as ModelSelection) ?? raw as ModelSelection }; }
+        catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
+      },
+    } as unknown as Parameters<typeof createBotRoutes>[0]);
+    let status = 0;
+    const req = Object.assign(Readable.from([JSON.stringify({ modelSelection: selection })]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
+    const res = { writeHead: (code: number) => { status = code; }, end: () => {} } as unknown as ServerResponse;
+    await routes.patch(req, res, ["", bot.id] as RegExpMatchArray);
+    return status;
+  };
+  return { root, bases, accounts, added, registry, providers, store, bot, active, helpers, generators, logout, controller, deps, panes, request, bind, resolve, notes, patchModel };
+}
+
+describe("local bot account routing", () => {
+  it("persists account 3 by local bot id while portable model fields retain the base", async () => {
+    const f = await fixture();
+    expect((await f.bind(f.added[2].id)).status).toBe(200);
+    expect(f.resolve()).toMatchObject({ instanceId: f.added[2].id, mode: "pinned" });
+    expect(f.bot.modelSelection).toMatchObject({ instanceId: "claude", mode: "pinned" });
+    const disk = JSON.parse(readFileSync(join(f.root, "accounts.json"), "utf8"));
+    expect(disk.bindings[f.bot.id].current).toEqual({ of: "claude", accountId: f.added[2].id });
+    expect(JSON.stringify(f.bot)).not.toContain(f.added[2].id);
+  });
+
+  it("keeps this PC's account when another PC imports a base model change", async () => {
+    const f = await fixture();
+    await f.bind(f.added[2].id);
+    f.store.patchBot(f.bot.id, { modelSelection: mergeSyncedModelSelection(f.bot.modelSelection,
+      { instanceId: "claude", model: "new-model", modelMode: "automatic" }, () => true) });
+    f.registry.get(f.added[2].id)!.models.options.push({ id: "new-model", label: "New" });
+    expect(f.resolve()).toMatchObject({ instanceId: f.added[2].id, model: "new-model", mode: "pinned" });
+    expect(f.bot.modelSelection.instanceId).toBe("claude");
+  });
+
+  it("holds an account pick until the active turn has settled without changing task continuity", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    const task = f.store.taskByThread(f.bot.id, f.bot.threadId)!;
+    task.lastInstanceId = f.added[0].id;
+    f.store.setActivity(f.bot.id, "working", f.bot.threadId);
+    f.providers.started(f.bot.threadId, f.added[0].id);
+    await f.bind(f.added[2].id);
+    expect(f.resolve().instanceId).toBe(f.added[0].id);
+    expect(f.controller.bots?.instance(f.bot, f.bot.threadId)?.instanceId).toBe(f.added[0].id);
+    expect(task.lastInstanceId).toBe(f.added[0].id);
+    f.providers.settled(f.bot.threadId);
+    f.store.setActivity(f.bot.id, "idle");
+    await f.controller.bots?.settle(f.bot.id);
+    expect(f.resolve().instanceId).toBe(f.added[2].id);
+    expect(task.lastInstanceId).toBe(f.added[0].id);
+  });
+
+  it("applies a held account choice after restart without changing portable ids", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    f.active.add(f.bot.id);
+    await f.bind(f.added[2].id);
+    f.active.clear();
+    f.controller.dispose?.();
+    const accounts = new AccountService(f.root, () => f.bases);
+    const controller = createAccountRuntime({ ...f.deps, accounts });
+    controllers.push(controller);
+    await controller.restore();
+    expect(controller.bots?.resolve(f.bot).instanceId).toBe(f.added[2].id);
+    expect(f.bot.modelSelection.instanceId).toBe("claude");
+  });
+
+  it.each(["stopped", "missing"])("asks for a choice for a %s bound account", async (reason) => {
+    const f = await fixture();
+    await f.bind(f.added[2].id);
+    if (reason === "stopped") await f.accounts.stop(f.added[2].id);
+    else f.registry.remove(f.added[2].id);
+    expect(f.resolve).toThrow(/account|choose/i);
+    expect(f.logout).not.toHaveBeenCalled();
+  });
+
+  it("keeps separately configured profiles outside explicit account groups", async () => {
+    const f = await fixture();
+    const result = await f.request("GET", "/api/accounts");
+    expect(result.body.accounts.filter((row: { of: string }) => row.of === "claude")).toHaveLength(4);
+    expect(result.body.accounts.find((row: { id: string }) => row.id === "work")).toMatchObject({ of: "work", models: { default: "claudeAgent-1" } });
+    await f.bind(f.added[2].id);
+    Object.assign(f.registry.get(f.added[2].id)!.models, { default: "exclusive", options: [{ id: "exclusive", label: "Exclusive" }] });
+    const selected = await f.request("GET", `/api/bots/${f.bot.id}/account`);
+    expect(selected.body.models.default).toBe("exclusive");
+    expect(f.bases.work.environment).toEqual({ PROFILE: "work" });
+  });
+
+  it.each(["model", "effort"])("refuses unsupported %s before committing an account change", async (kind) => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    if (kind === "model") Object.assign(f.registry.get(f.added[2].id)!.models, { default: "other", options: [] });
+    else f.registry.get(f.added[2].id)!.adapter.capabilities.effortLevels = ["low"];
+    if (kind === "effort") f.store.patchBot(f.bot.id, { modelSelection: { ...f.bot.modelSelection, effort: "high" } });
+    const before = readFileSync(join(f.root, "accounts.json"), "utf8");
+    expect((await f.bind(f.added[2].id)).status).toBe(400);
+    expect(readFileSync(join(f.root, "accounts.json"), "utf8")).toBe(before);
+    expect(f.resolve().instanceId).toBe(f.added[0].id);
+  });
+
+  it("keeps a same-profile model pick on the chosen account", async () => {
+    const f = await fixture();
+    await f.bind(f.added[2].id);
+    f.registry.get(f.added[2].id)!.models.options.push({ id: "new-model", label: "New" });
+    const next: ModelSelection = { instanceId: "claude", model: "new-model", mode: "automatic" };
+    const selection = f.controller.bots?.checkSelection(f.bot, next) ?? next;
+    f.store.patchBot(f.bot.id, { modelSelection: selection });
+    expect(f.resolve()).toMatchObject({ instanceId: f.added[2].id, model: "new-model", mode: "pinned" });
+  });
+
+  it("validates HTTP model picks against the bound catalog and keeps portable ids", async () => {
+    const f = await fixture();
+    await f.bind(f.added[2].id);
+    f.registry.get(f.added[2].id)!.models.options.push({ id: "exclusive", label: "Exclusive" });
+    expect(await f.patchModel({ instanceId: "claude", model: "exclusive", mode: "automatic" })).toBe(200);
+    expect(f.resolve()).toMatchObject({ instanceId: f.added[2].id, model: "exclusive", mode: "pinned" });
+    const before = JSON.stringify(f.bot.modelSelection);
+    expect(await f.patchModel({ instanceId: "claude", model: "base-only" })).toBe(400);
+    expect(await f.patchModel({ instanceId: f.added[0].id, model: "claudeAgent-1" })).toBe(400);
+    expect(JSON.stringify(f.bot.modelSelection)).toBe(before);
+    expect(before).not.toContain("acct_");
+  });
+
+  it("keeps an explicit custom-engine pick available after an account binding", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    expect(await f.patchModel({ instanceId: "custom", model: "custom-1", mode: "pinned" })).toBe(200);
+    expect(f.resolve().instanceId).toBe("custom");
+  });
+
+  it("applies live effort only to the captured account", async () => {
+    const f = await fixture();
+    await f.bind(f.added[2].id);
+    f.store.setActivity(f.bot.id, "working", f.bot.threadId);
+    f.providers.started(f.bot.threadId, f.added[2].id);
+    const selected = vi.fn(async () => true);
+    const base = vi.fn(async () => true);
+    f.registry.get(f.added[2].id)!.adapter.applyEffort = selected;
+    f.registry.get("claude")!.adapter.applyEffort = base;
+    expect(await f.patchModel({ ...f.bot.modelSelection, effort: "high" })).toBe(200);
+    expect(selected).toHaveBeenCalledWith(f.bot.threadId, "high");
+    expect(base).not.toHaveBeenCalled();
+    expect(f.bot.modelSelection).toMatchObject({ instanceId: "claude", effort: "high" });
+    f.providers.settled(f.bot.threadId);
+  });
+
+  it("rechecks dispatch claims when a binding reaches the atomic write", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    const bind = f.accounts.bind?.bind(f.accounts);
+    if (bind) vi.spyOn(f.accounts, "bind").mockImplementation((updates) => {
+      f.active.add(f.bot.id);
+      return bind(updates);
+    });
+    await f.bind(f.added[2].id);
+    expect(f.resolve().instanceId).toBe(f.added[0].id);
+    expect(f.accounts.binding(f.bot.id)?.pending?.accountId).toBe(f.added[2].id);
+  });
+
+  it.each(["respond", "interrupt"] as const)("keeps %s on the captured account during a drain and pending pick", async (action) => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    f.store.setActivity(f.bot.id, "working", f.bot.threadId);
+    f.providers.started(f.bot.threadId, f.added[0].id);
+    await f.bind(f.added[2].id);
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    const respond = vi.fn(async (_threadId: string, _instanceId: string) => "allowed-once" as const);
+    const interrupt = vi.spyOn(f.registry.get(f.added[0].id)!.adapter, "interruptTurn");
+    const baseInterrupt = vi.spyOn(f.registry.get("claude")!.adapter, "interruptTurn");
+    const routes = createBotChatRoutes({ store: f.store, registry: f.registry,
+      instanceForBot: (bot: BotRecord, threadId?: string) => f.controller.bots?.instance(bot, threadId) ?? null,
+      answerRequest: respond, requestBehavior: () => "allow", resolveAndSendRoutine: () => false,
+      routines: { activeRunForBot: () => null }, taskResumes: { forgetBot: () => {} },
+      bumpTurnEpoch: () => 1, markThreadInterrupted: () => {}, flushInterruptedTask: () => null,
+      closeOpenApprovals: () => {}, releaseInterruptedBot: () => {}, broadcast: () => {},
+      botHasActiveTurn: () => true,
+    } as unknown as Parameters<typeof createBotChatRoutes>[0]);
+    const req = Object.assign(Readable.from([JSON.stringify({ requestId: "approval", behavior: "allow" })]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
+    const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as ServerResponse;
+    await routes[action](req, res, ["", f.bot.id] as RegExpMatchArray);
+    if (action === "respond") expect(respond.mock.calls[0]?.[1]).toBe(f.added[0].id);
+    else { expect(interrupt).toHaveBeenCalledWith(f.bot.threadId); expect(baseInterrupt).not.toHaveBeenCalled(); }
+    expect(f.logout).not.toHaveBeenCalled();
+    f.providers.settled(f.bot.threadId);
+  });
+});
+
+describe("account removal drain", () => {
+  it("keeps last-account sign-out available without migrating its bound bots", async () => {
+    const f = await fixture(true);
+    await f.bind("claude");
+    await f.controller.remove("claude");
+    expect(f.accounts.binding?.(f.bot.id)?.current?.accountId).toBe("claude");
+    expect(f.registry.accountBlocked("claude")).toBe(true);
+    expect(f.resolve).toThrow(/account/i);
+    vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});
+    await f.controller.signIn("claude");
+    await f.controller.settled("claude");
+    expect(f.resolve()).toMatchObject({ instanceId: "claude", mode: "pinned" });
+  });
+
+  it("moves unbound base-account bots while preserving sibling account bindings", async () => {
+    const f = await fixture();
+    const sibling = f.store.createBot({ name: "Sibling account" });
+    await f.bind(f.added[0].id, sibling.id);
+    await f.controller.remove("claude", f.added[2].id);
+    expect(f.resolve()).toMatchObject({ instanceId: f.added[2].id, mode: "pinned" });
+    expect(f.controller.bots?.resolve(sibling).instanceId).toBe(f.added[0].id);
+    expect(f.bot.modelSelection).toMatchObject({ instanceId: "claude", mode: "pinned" });
+    expect(f.registry.get("claude")).not.toBeNull();
+    expect(f.registry.accountBlocked("claude")).toBe(true);
+    expect(f.accounts.get(f.added[0].id)).toBeDefined();
+  });
+
+  it("does not turn a draining unbound base selection into an Auto fallback", async () => {
+    const f = await fixture();
+    f.active.add(f.bot.id);
+    await f.controller.remove("claude", f.added[2].id);
+    expect(f.resolve).toThrow(/draining|account/i);
+    expect(f.logout).not.toHaveBeenCalled();
+  });
+
+  it("waits for a helper captured on the existing sign-in before a named drain", async () => {
+    const f = await fixture();
+    let finish!: (value: string) => void;
+    const generated = f.generators.get("claude")!;
+    generated.mockImplementationOnce(async () => new Promise<string>((resolve) => { finish = resolve; }));
+    const work = f.registry.get("claude")!.generateText!("notes");
+    expect(generated).toHaveBeenCalledTimes(1);
+    await f.controller.remove("claude", f.added[2].id);
+    expect(f.logout).not.toHaveBeenCalled();
+    await expect(f.registry.get("claude")!.generateText!("again")).rejects.toThrow(/auth/i);
+    finish("done");
+    await work;
+    await f.controller.resumeDrains();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith("claude");
+  });
+
+  it.each(["turn", "claim", "queued", "routine", "helper", "pending"])("waits for a live %s before logout and moves only after success", async (kind) => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    if (kind === "pending") await f.bind(f.added[1].id);
+    if (kind === "helper") f.helpers.add(f.added[0].id);
+    else if (kind === "routine") f.providers.started("routine-thread", f.added[0].id);
+    else {
+      f.active.add(f.bot.id);
+      if (kind === "turn" || kind === "pending") f.providers.started(f.bot.threadId, kind === "pending" ? f.added[1].id : f.added[0].id);
+      if (kind === "pending") await f.bind(f.added[0].id);
+    }
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    expect(f.accounts.get(f.added[0].id)).toBeDefined();
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked(f.added[0].id)).toBe(true);
+    expect((await f.bind(f.added[0].id)).status).toBe(409);
+    expect(f.providers.started("new-thread", f.added[0].id)).toBeNull();
+    f.active.clear(); f.helpers.clear();
+    f.providers.settled(f.bot.threadId); f.providers.settled("routine-thread");
+    await f.controller.resumeDrains?.();
+    await f.controller.bots?.settle(f.bot.id);
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.added[0].id);
+    expect(f.accounts.get(f.added[0].id)).toBeUndefined();
+    expect(f.resolve().instanceId).toBe(f.added[2].id);
+  });
+
+  it("requires one named destination and refuses a draining destination", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    expect((await f.request("POST", `/api/accounts/${f.added[0].id}/sign-out`)).status).toBe(400);
+    expect(f.logout).not.toHaveBeenCalled();
+    f.active.add(f.bot.id);
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    expect((await f.bind(f.added[0].id)).status).toBe(409);
+    await expect(f.controller.remove(f.added[2].id)).rejects.toThrow(/destination/i);
+  });
+
+  it.each(["model", "effort"])("refuses a destination with unsupported %s before starting a drain", async (kind) => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    if (kind === "model") Object.assign(f.registry.get(f.added[2].id)!.models, { default: "other", options: [] });
+    else {
+      f.store.patchBot(f.bot.id, { modelSelection: { ...f.bot.modelSelection, effort: "high" } });
+      f.registry.get(f.added[2].id)!.adapter.capabilities.effortLevels = ["low"];
+    }
+    const before = readFileSync(join(f.root, "accounts.json"), "utf8");
+    await expect(f.controller.remove(f.added[0].id, f.added[2].id)).rejects.toThrow(/model|effort/i);
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(readFileSync(join(f.root, "accounts.json"), "utf8")).toBe(before);
+  });
+
+  it("keeps bindings and pending picks unchanged after failed logout and does not retry on restart", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    f.logout.mockResolvedValue(false);
+    await expect(f.controller.remove(f.added[0].id, f.added[2].id)).rejects.toThrow(/stopped|finish/i);
+    const disk = JSON.parse(readFileSync(join(f.root, "accounts.json"), "utf8"));
+    expect(disk.bindings?.[f.bot.id]?.current?.accountId).toBe(f.added[0].id);
+    expect(disk.drains[f.added[0].id].phase).toBe("failed");
+    await f.controller.resumeDrains?.();
+    await f.controller.restore();
+    expect(f.logout).toHaveBeenCalledTimes(1);
+    expect(f.registry.accountBlocked(f.added[0].id)).toBe(true);
+  });
+
+  it("leaves the original account usable if the drain intent cannot be saved", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    if (typeof f.accounts.drain === "function") vi.spyOn(f.accounts, "drain").mockRejectedValueOnce(new Error("fixture disk full"));
+    await expect(f.controller.remove(f.added[0].id, f.added[2].id)).rejects.toThrow("fixture disk full");
+    expect(f.logout).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked(f.added[0].id)).toBe(false);
+    expect(f.resolve().instanceId).toBe(f.added[0].id);
+  });
+
+  it("resumes the recorded destination after a restart mid-drain", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    f.active.add(f.bot.id);
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    f.controller.dispose?.();
+    const accounts = new AccountService(f.root, () => f.bases);
+    const controller = createAccountRuntime({ ...f.deps, accounts });
+    controllers.push(controller);
+    f.active.clear();
+    await controller.restore();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.added[0].id);
+    expect(accounts.get(f.added[0].id)).toBeUndefined();
+    expect(controller.bots?.resolve(f.bot).instanceId).toBe(f.added[2].id);
+  });
+
+  it("does not repeat an unknown logout outcome after a restart", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    let finish!: (value: boolean) => void;
+    f.logout.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const removing = f.controller.remove(f.added[0].id, f.added[2].id);
+    await vi.waitFor(() => expect(f.logout).toHaveBeenCalledTimes(1));
+    const accounts = new AccountService(f.root, () => f.bases);
+    const controller = createAccountRuntime({ ...f.deps, accounts });
+    controllers.push(controller);
+    await controller.restore();
+    expect(f.logout).toHaveBeenCalledTimes(1);
+    expect(accounts.get(f.added[0].id)?.state).toBe("stopped");
+    expect(() => controller.bots?.resolve(f.bot) ?? f.bot.modelSelection).toThrow();
+    finish(false);
+    await expect(removing).rejects.toThrow();
+  });
+
+  it("commits a confirmed logout after restart without logging out twice", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    if (typeof f.accounts.finishDrain === "function") vi.spyOn(f.accounts, "finishDrain").mockRejectedValueOnce(new Error("fixture disk busy"));
+    await expect(f.controller.remove(f.added[0].id, f.added[2].id)).rejects.toThrow("fixture disk busy");
+    expect(f.accounts.drains[f.added[0].id]?.phase).toBe("signed-out");
+    f.controller.dispose();
+    const accounts = new AccountService(f.root, () => f.bases);
+    const controller = createAccountRuntime({ ...f.deps, accounts });
+    controllers.push(controller);
+    await controller.restore();
+    expect(f.logout).toHaveBeenCalledTimes(1);
+    expect(controller.bots?.resolve(f.bot).instanceId).toBe(f.added[2].id);
+    expect(accounts.get(f.added[0].id)).toBeUndefined();
+  });
+
+  it("waits for a captured usage refresh and refuses another during drain", async () => {
+    const f = await fixture(false, "codex");
+    await f.bind(f.added[0].id);
+    let finish!: (value: JsonValue) => void;
+    const rpc = vi.fn(async () => new Promise<JsonValue>((resolve) => { finish = resolve; }));
+    f.deps.usage = createUsageRefresh({ rpc, accountBlocked: (id) => Boolean(f.accounts.drains[id]) });
+    const options = { instanceId: f.added[0].id, account: f.added[0] };
+    const reading = f.deps.usage("codex", options);
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    expect(f.logout).not.toHaveBeenCalled();
+    await f.deps.usage("codex", options);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    finish({ account: { type: "chatgpt", email: "fixture@example.test" }, rateLimits: { primary: { usedPercent: 1, windowDurationMins: 300, resetsAt: 2000000000 } } });
+    await reading;
+    await f.controller.resumeDrains();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.added[0].id);
+    expect(f.resolve().instanceId).toBe(f.added[2].id);
+  });
+
+  it.each(["probe", "catalog"])("waits for an active %s and prevents another on the draining account", async (kind) => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => { finish = resolve; });
+    const instance = f.registry.get(f.added[0].id)!;
+    const work = vi.fn(async () => { await blocked; return { state: "available" as const, authenticated: true, accountIdentity: f.added[0].identity }; });
+    if (kind === "probe") instance.snapshot = work;
+    else Object.assign(instance, { refreshModels: async () => { await work(); } });
+    const probing = f.registry.describe({ refresh: true });
+    await vi.waitFor(() => expect(work).toHaveBeenCalledTimes(1));
+    await f.controller.remove(f.added[0].id, f.added[2].id);
+    expect(f.logout).not.toHaveBeenCalled();
+    const polling = f.registry.describe({ refresh: true });
+    expect(work).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.all([probing, polling]);
+    await f.controller.resumeDrains();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.added[0].id);
+  });
+
+  it("moves all bots to the named account through the UI seam and then removes", async () => {
+    const f = await fixture();
+    const sibling = f.store.createBot({ name: "Sibling" });
+    await f.bind(f.added[0].id); await f.bind(f.added[0].id, sibling.id);
+    const moved = await f.request("POST", `/api/accounts/${f.added[0].id}/move-bots`, { destinationId: f.added[2].id });
+    expect(moved.status).toBe(200);
+    expect(moved.body.moved).toBe(2);
+    expect(f.controller.bots?.resolve(sibling).instanceId).toBe(f.added[2].id);
+    await f.controller.remove(f.added[0].id);
+    expect(f.accounts.get(f.added[0].id)).toBeUndefined();
+  });
+
+  it("retains the conservative refusal for live or unknown panes", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    f.panes.mockResolvedValue(Response.json({ counts: { [f.bot.id]: 1 } }));
+    await expect(f.controller.remove(f.added[0].id, f.added[2].id)).rejects.toThrow(/pane|still used/i);
+    expect(f.logout).not.toHaveBeenCalled();
+  });
+});
+
+describe("account-aware Claude notes", () => {
+  it("runs a bound Claude bot's notes on account 3", async () => {
+    const f = await fixture();
+    await f.bind(f.added[1].id);
+    await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe(f.added[1].id);
+  });
+
+  it("uses an idle held Claude choice even before its settle notification", async () => {
+    const f = await fixture();
+    await f.bind(f.added[0].id);
+    f.active.add(f.bot.id);
+    await f.bind(f.added[2].id);
+    f.active.clear();
+    await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe(f.added[2].id);
+  });
+
+  it.each(["signed out", "draining"])("skips a %s bound Claude account without falling back", async (state) => {
+    const f = await fixture();
+    const first = vi.spyOn(f.registry.get("claude")!, "generateText");
+    await f.bind(f.added[2].id);
+    if (state === "signed out") await f.accounts.stop(f.added[2].id);
+    else { f.active.add(f.bot.id); await f.controller.remove(f.added[2].id, f.added[0].id); }
+    expect(f.notes()).toBeNull();
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it.each(["unbound Claude", "unbound Codex", "bound Codex", "no accounts"])("preserves first-Claude notes for %s", async (state) => {
+    const f = await fixture(state === "no accounts");
+    if (state.includes("Codex")) f.store.patchBot(f.bot.id, { modelSelection: { instanceId: "codex", model: "codex-1" } });
+    if (state === "bound Codex") {
+      const account = await f.accounts.add("codex");
+      await f.accounts.identify(account.id, "codex-identity");
+      await f.deps.reload();
+      await f.bind(account.id);
+    }
+    await expect(f.notes()?.("notes", new AbortController().signal)).resolves.toBe("claude");
+  });
+
+  it("does no account file or subprocess work when no accounts.json exists", async () => {
+    const f = await fixture(true);
+    const before = existsSync(join(f.root, "accounts.json"));
+    const calls = [
+      ...["readFileSync", "writeFileSync", "lstatSync", "statSync", "openSync", "readdirSync", "realpathSync"].map((name) => vi.spyOn(fs, name as "readFileSync")),
+      ...["readFile", "writeFile", "lstat", "stat", "open", "readdir", "realpath"].map((name) => vi.spyOn(fsAsync, name as "readFile")),
+      ...["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync"].map((name) => vi.spyOn(children, name as "spawn")),
+    ];
+    syncBuiltinESMExports();
+    for (let i = 0; i < 20; i++) {
+      expect(f.resolve()).toBe(f.bot.modelSelection);
+      expect(resolveAutomaticSelection({ candidates: [{ instanceId: "claude", driverKind: "claudeAgent", available: true, defaultModel: "claudeAgent-1", capabilities: {} }], current: f.bot.modelSelection })?.instanceId).toBe("claude");
+      await f.providers.started(f.bot.threadId, f.resolve().instanceId)?.adapter.sendTurn({ threadId: f.bot.threadId, text: "test" });
+      f.providers.settled(f.bot.threadId);
+      await f.notes()?.("notes", new AbortController().signal);
+    }
+    for (const call of calls) expect(call).not.toHaveBeenCalled();
+    expect(before).toBe(false);
+    expect(existsSync(join(f.root, "accounts.json"))).toBe(false);
+    expect(f.logout).not.toHaveBeenCalled();
+  });
+});

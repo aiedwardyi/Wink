@@ -27,6 +27,7 @@ export class ProviderReload {
   }
 
   inUse(instanceId: string): boolean { return [...this.active.values()].includes(instanceId); }
+  current(threadId: string): ProviderInstance | null { return this.registry.get(this.active.get(threadId) ?? ""); }
 
   settled(threadId: string) {
     const instanceId = this.active.get(threadId);

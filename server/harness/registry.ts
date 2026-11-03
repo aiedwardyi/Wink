@@ -107,6 +107,8 @@ export class ProviderRegistry {
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
   private probed = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
+  private helperWork = new Map<InstanceId, number>();
+  private tracked = new WeakSet<ProviderInstance>();
   private driversByKind: Map<string, AnyProviderDriver>;
   private readonly now: () => number;
   private readonly modelRefreshTtlMs: number;
@@ -188,6 +190,7 @@ export class ProviderRegistry {
       this.byId.set(result.entry.instanceId, result.entry);
       result.entry.live?.setAccountBlocked?.(this.blockedAccounts.has(result.entry.instanceId));
       const live = result.entry.live;
+      if (live) this.trackWork(live);
       const driver = live && this.driversByKind.get(live.driverKind);
       if (driver && this.cacheDir) {
         const key = createHash("sha256").update(JSON.stringify([
@@ -230,6 +233,26 @@ export class ProviderRegistry {
     return this.byId.get(instanceId)?.live ?? null;
   }
 
+  private trackWork(instance: ProviderInstance) {
+    if (this.tracked.has(instance)) return;
+    this.tracked.add(instance);
+    const id = instance.instanceId;
+    for (const key of ["generateText", "reviewPermission", "prepare", "snapshot"] as const) {
+      const method = instance[key];
+      if (!method) continue;
+      Object.assign(instance, { [key]: async (...args: unknown[]) => {
+        if (key !== "snapshot" && this.accountBlocked(id)) throw new Error("Account authentication is unavailable");
+        this.helperWork.set(id, (this.helperWork.get(id) ?? 0) + 1);
+        try { return await Reflect.apply(method, instance, args); }
+        finally {
+          const count = (this.helperWork.get(id) ?? 1) - 1;
+          if (count) this.helperWork.set(id, count);
+          else this.helperWork.delete(id);
+        }
+      } });
+    }
+  }
+
   onAccountIdentity(listener: (id: string, snapshot: ProviderSnapshot) => Promise<void>) { this.accountIdentity = listener; }
   blockAccount(id: string, blocked: boolean) {
     if (blocked) this.blockedAccounts.add(id);
@@ -237,6 +260,11 @@ export class ProviderRegistry {
     this.get(id)?.setAccountBlocked?.(blocked);
   }
   accountBlocked(id: string) { return this.blockedAccounts.has(id); }
+  accountAvailable(id: string) {
+    const snapshot = this.probed.get(id)?.snapshot;
+    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
+  }
+  accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
   invalidateAccount(id: string) { this.get(id)?.invalidateAccount?.(); this.forget(id); }
 
   signIn(instanceId: InstanceId) {
@@ -321,7 +349,7 @@ export class ProviderRegistry {
   async refreshLogins() {
     await Promise.all(this.entries().map(async (entry) => {
       const live = entry.live;
-      if (!live || live.account || this.signingOut.has(entry.instanceId) || !this.logins.needsRefresh(entry.instanceId)) return;
+      if (!live || live.account || this.accountBlocked(entry.instanceId) || this.signingOut.has(entry.instanceId) || !this.logins.needsRefresh(entry.instanceId)) return;
       const previous = this.probed.get(entry.instanceId);
       if (!previous) return;
       const generation = this.logins.generation(entry.instanceId);
@@ -451,6 +479,7 @@ export class ProviderRegistry {
     opts?: { rescan?: boolean; refresh?: boolean },
   ): Promise<Probe> {
     const id = entry.instanceId;
+    if (this.accountBlocked(id)) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
     const pending = this.probe(entry, candidatesFor, opts);
     this.probing.set(id, pending);
     void pending.then((probe) => {
