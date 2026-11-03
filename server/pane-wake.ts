@@ -21,19 +21,21 @@ export interface PaneWakeDeps {
   now?(): number;
 }
 
+const isReportNote = (message: Message) => message.kind === "note" && Boolean(message.reportIds?.length);
+
 export function isWakeNote(message: Message): boolean {
-  return !message.quiet && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
+  return (!message.quiet || isReportNote(message)) && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
 }
 
 export function paneNoteWaiting(store: Pick<Store, "bot" | "taskByThread" | "activePath">, botId: string, threadId: string): boolean {
-  if (store.bot(botId)?.shareTerminalWithChat === false) return false;
+  const sharing = store.bot(botId)?.shareTerminalWithChat !== false;
   const deliveredId = store.taskByThread(botId, threadId)?.paneNotesDeliveredId;
   const messages = store.activePath(threadId);
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId) break;
     if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
-    if (message.kind === "note" && isWakeNote(message) && message.text?.trim()) return true;
+    if (message.kind === "note" && (sharing || isReportNote(message)) && isWakeNote(message) && message.text?.trim()) return true;
   }
   return false;
 }
@@ -48,7 +50,7 @@ export function paneWakeEnabled(store: Store, botId: string, threadId: string): 
     const message = messages[index]!;
     if (message.id === task?.paneNotesDeliveredId || message.id === task?.paneNotesSkippedId) break;
     if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
-    if (message.kind === "activity" && isWakeNote(message) && message.text?.trim()) return true;
+    if ((message.kind === "activity" || isReportNote(message)) && isWakeNote(message) && message.text?.trim()) return true;
   }
   return false;
 }
@@ -58,7 +60,7 @@ export function hasLocalUndeliveredPaneNote(messages: Message[], deliveredId: st
     const message = messages[index]!;
     if (message.id === deliveredId || message.id === skippedId) break;
     if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
-    if (isWakeNote(message) && message.text?.trim() && message.origin === deviceId) return true;
+    if (!message.quiet && isWakeNote(message) && message.text?.trim() && message.origin === deviceId) return true;
   }
   return false;
 }
