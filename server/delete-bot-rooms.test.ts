@@ -111,6 +111,7 @@ describe("deleteBotFully", () => {
     }
     const noop = () => {};
     const deps = {
+      botAccounts: { instance: () => undefined },
       registry: { get: () => undefined }, store: { groups: [], deleteBot: noop },
       stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
       lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,

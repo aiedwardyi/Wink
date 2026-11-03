@@ -19,6 +19,7 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { readFileSync, writeFileSync, writeSync } from "node:fs";
+import { join } from "node:path";
 
 const mode = process.env.FAKE_CODEX_MODE ?? "happy";
 
@@ -168,6 +169,14 @@ process.stdin.on("data", (chunk) => {
           });
         }
         break;
+      case "account/read": {
+        let apiKey = false;
+        if (process.env.CODEX_HOME) {
+          try { apiKey = JSON.parse(readFileSync(join(process.env.CODEX_HOME, "auth.json"), "utf8")).auth_mode === "apikey"; } catch {}
+        }
+        out({ jsonrpc: "2.0", id: msg.id, result: { account: mode === "logged-out" ? null : apiKey ? { type: "apiKey" } : { type: "chatgpt", email: "fixture@example.test", planType: "pro" } } });
+        break;
+      }
       case "thread/resume":
         if (mode === "resume") {
           out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId } } });

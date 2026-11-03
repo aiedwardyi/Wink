@@ -6,7 +6,7 @@ import { sameModelSelection } from "../shared/model-selection.ts";
 import type { Store } from "./store.ts";
 
 /** Commits a busy bot's effort-only pick once its running turn carries it; false leaves it held. */
-export async function applyEffortPick(store: Store, registry: ProviderRegistry, botId: string, selection: ModelSelection): Promise<boolean> {
+export async function applyEffortPick(store: Store, registry: ProviderRegistry, botId: string, selection: ModelSelection, instanceId?: string): Promise<boolean> {
   const bot = store.bot(botId);
   if (!bot?.busy || !selection.effort) return false;
   const running = bot.modelSelection;
@@ -16,7 +16,7 @@ export async function applyEffortPick(store: Store, registry: ProviderRegistry, 
     selection.model !== running.model ||
     (selection.mode ?? "pinned") !== (running.mode ?? "pinned")
   ) return false;
-  const adapter = registry.get(running.instanceId)?.adapter;
+  const adapter = registry.get(instanceId ?? running.instanceId)?.adapter;
   if (!adapter?.applyEffort) return false;
   let applied = false;
   try {

@@ -20,6 +20,9 @@ import { realpathSync, statSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { basename, isAbsolute, join } from "node:path";
 import { findCliCandidates, resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
+import { accountLaunch, type AccountContext } from "./account-policy.ts";
+
+type AccountLaunchOptions = { account?: AccountContext; accountDriver?: string };
 
 export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
   return resolveCliSpawn(cli, args);
@@ -28,11 +31,14 @@ export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
 export function spawnCli(
   cli: string,
   args: string[],
-  opts: SpawnOptions,
+  opts: SpawnOptions & AccountLaunchOptions,
 ): ChildProcessByStdio<Writable, Readable, Readable> {
   const resolved = resolveCli(cli, args);
-  const child = spawn(resolved.command, resolved.args, {
-    ...opts,
+  const { account, accountDriver, ...options } = opts;
+  const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env);
+  const child = spawn(resolved.command, launch.args, {
+    ...options,
+    ...(account ? { env: launch.env } : {}),
     // posix: own process group so kill(-pid) reaps child MCP servers;
     // win32: taskkill /T does the reaping instead (see killCliTree)
     ...(process.platform === "win32" ? { windowsHide: true } : { detached: true }),
@@ -79,19 +85,26 @@ function binaryKey(cli: string, resolved: ResolvedSpawn, env: NodeJS.ProcessEnv 
   return parts.join("\n");
 }
 
+export function cliRevision(cli: string): string | null {
+  if (!cli) return null;
+  try { return binaryKey(cli, resolveCli(cli), undefined); } catch { return null; }
+}
+
 export function execCli(
   cli: string,
   args: string[],
-  opts: ExecFileOptions,
+  opts: ExecFileOptions & AccountLaunchOptions,
   cb: (err: Error | null, stdout: string, stderr?: string) => void,
 ): void {
   const resolved = resolveCli(cli, args);
+  const { account, accountDriver, ...options } = opts;
+  const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env);
   // Every engine check asks each CLI for --version; an unchanged binary
   // answers the same, and a launch is what can stall the server on Windows.
   const versionKey = args.length === 1 && args[0] === "--version" ? binaryKey(cli, resolved, opts.env) : null;
   const known = versionKey ? versionByBinary.get(versionKey) : undefined;
   if (known !== undefined) return queueMicrotask(() => cb(null, known, ""));
-  execFile(resolved.command, resolved.args, { ...opts, windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) => {
+  execFile(resolved.command, launch.args, { ...options, ...(account ? { env: launch.env } : {}), windowsHide: true, encoding: "utf8" }, (err, stdout, stderr) => {
     if (versionKey && !err) {
       if (versionByBinary.size >= VERSION_CACHE_MAX) versionByBinary.clear();
       versionByBinary.set(versionKey, stdout);
@@ -130,13 +143,15 @@ export function describeSpawnFailure(err: NodeJS.ErrnoException, cli: string, cw
 }
 
 /** Stop a CLI and every process it spawned (MCP proxies included). */
-export function killCliTree(child: ChildProcess): void {
+export function killCliTree(child: ChildProcess, stopped?: () => void): void {
   const pid = child.pid;
-  if (!pid || child.exitCode !== null || child.signalCode !== null) return;
+  if (!pid || child.exitCode !== null || child.signalCode !== null) { stopped?.(); return; }
 
   if (process.platform === "win32") {
-    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (err) => {
-      if (!err) return;
+    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (err, _stdout, stderr) => {
+      if (!err) { stopped?.(); return; }
+      // The CLI can finish before taskkill starts.
+      if (child.exitCode !== null && err.code === 128 && /not found|not exist/i.test(String(stderr))) { stopped?.(); return; }
       try {
         // taskkill is unavailable or the tree lookup failed. At least stop
         // the process we own instead of leaving the entire turn running.
@@ -149,6 +164,7 @@ export function killCliTree(child: ChildProcess): void {
   }
   try {
     process.kill(-pid, "SIGTERM");
+    stopped?.();
   } catch {
     try {
       child.kill("SIGTERM");

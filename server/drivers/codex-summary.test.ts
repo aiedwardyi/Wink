@@ -56,6 +56,7 @@ describe("Codex summaries", () => {
           const send = (value: unknown) => stdout.write(`${JSON.stringify(value)}\n`);
           queueMicrotask(() => {
             if (msg.method === "initialize") send({ id: msg.id, result: {} });
+            if (msg.method === "account/read") send({ id: msg.id, result: { account: { type: "chatgpt", email: "fixture@example.test" } } });
             if (msg.method === "config/read") send({ id: msg.id, result: { config: { mcp_servers: { custom: { command: "never-run" } } } } });
             if (msg.method === "model/list") send({ id: msg.id, result: { data: [{ id: "gpt-6.1-sol", isDefault: true }] } });
             if (msg.method === "thread/start") send({ id: msg.id, result: { thread: { id: "summary-thread" } } });

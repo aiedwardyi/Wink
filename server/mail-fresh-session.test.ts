@@ -93,6 +93,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, modelContextWindow: 200_000,
       taskRecord: undefined, durableTaskRecordText: "", contextCompacted: false,
       providerReload: { started: () => instance }, privateWorkspace: false, opensHostFiles: () => false,
+      accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "Verify the delegated work.", cwd: ".", projectFolderPrompt: () => "", projectNotesPrompt: () => "",
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",

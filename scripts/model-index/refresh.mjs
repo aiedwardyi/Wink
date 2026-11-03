@@ -3,14 +3,14 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import * as lmarena from "./fetch-lmarena.mjs";
+import * as rams from "./fetch-rams.mjs";
 import * as listPrices from "./fetch-list-prices.mjs";
 import * as vals from "./fetch-vals.mjs";
 import * as aa from "./fetch-aa.mjs";
 import { beginRun, readModels, readSnapshot, root, saveRaw, writeSnapshot } from "./lib.mjs";
 
 const FETCHED = [
-  { name: "lmarena-webdev", fetcher: lmarena },
+  { name: "rams-index", fetcher: rams },
   { name: "vals-legal-research", fetcher: vals.legalResearch },
   { name: "vals-cyberbench", fetcher: vals.cyber },
   { name: "list-prices", fetcher: listPrices },

@@ -86,9 +86,18 @@ import {
   EVENTS_DIR,
   NATIVE_DIR,
 } from "./config.ts";
-import { loadRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
+import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
+import { AccountService, isInstanceId } from "./accounts.ts";
+import { BotAccounts } from "./bot-accounts.ts";
+import { createAccountRuntime } from "./account-runtime.ts";
+import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
+import { createAccountRoutes } from "./account-routes.ts";
+import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
+import { createWorkerTurns } from "./worker-turn.ts";
+import { createWorkerLaunch } from "./worker-launch.ts";
+import { enableWorkerAccounts, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
@@ -408,6 +417,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
   console.warn(`config: could not remove the legacy OpenCode section from ${join(DATA_DIR, "config.json")}; delete the opencodeGo key manually`);
 }
 const cfg = loadConfig();
+const accounts = new AccountService(DATA_DIR, () => instanceConfigs(cfg));
 // Before registry.load: a prewarmed engine child would inherit the token.
 const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
@@ -418,7 +428,7 @@ if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { cacheDir: DATA_DIR });
-await registry.load(instanceConfigs(cfg));
+await registry.load(instanceConfigs(cfg, accounts.snapshot));
 const bundledSkills = loadBundledSkills();
 const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DATA_DIR, "skills")));
 
@@ -456,7 +466,7 @@ utilityParentPort?.on("message", (event) => {
 
 const bus = new EventBus();
 bus.attach(registry.instances());
-const providerReload = new ProviderReload(registry, bus, instanceConfigs(cfg));
+const providerReload = new ProviderReload(registry, bus, instanceConfigs(cfg, accounts.snapshot));
 
 // ── peer-agent comms wiring ────────────────────────────────────────────
 // A shared secret guards the localhost-only /api/internal endpoints the
@@ -577,6 +587,8 @@ let terminalBridgeAccess =
   process.env.OMB_TERMINAL_URL?.trim() && process.env.OMB_TERMINAL_TOKEN?.trim()
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
+if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess)
+  .catch(() => console.error("Worker account routing is unavailable at startup"));
 
 function agentsIntegration(botId: string, threadId: string, depth: number) {
   return {
@@ -710,15 +722,16 @@ function askBotAndWait(
   });
 }
 
-const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>[number]): AutomaticCandidate => ({
+const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>[number]): AutomaticCandidate => botAccounts.automaticCandidate({
   instanceId: entry.instanceId,
+  accountOf: "accountOf" in entry ? entry.accountOf : undefined,
   driverKind: entry.driverKind,
   defaultModel: entry.models.default,
   available: entry.snapshot.state === "available",
   capabilities: entry.capabilities,
   effortLevels: entry.capabilities.effortLevels,
   rateLimits: rateLimitsByInstance.get(entry.instanceId)?.windows,
-});
+}, (id) => { const instance = registry.get(id); return instance ? liveAutomaticCandidate(instance) : undefined; });
 
 const automaticAvailability = new Map<string, boolean>();
 
@@ -729,8 +742,9 @@ function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof regist
 }
 
 function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate {
-  return {
+  return botAccounts.automaticCandidate({
     instanceId: instance.instanceId,
+    accountOf: instance.account?.of,
     driverKind: instance.driverKind,
     defaultModel: instance.models.default,
     available: automaticAvailability.get(instance.instanceId) !== false,
@@ -744,7 +758,7 @@ function liveAutomaticCandidate(instance: ProviderInstance): AutomaticCandidate 
     },
     effortLevels: instance.adapter.capabilities.effortLevels,
     rateLimits: rateLimitsByInstance.get(instance.instanceId)?.windows,
-  };
+  }, (id) => { const selected = registry.get(id); return selected ? liveAutomaticCandidate(selected) : undefined; });
 }
 
 function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
@@ -762,15 +776,16 @@ function automaticRequirements(bot: BotRecord): AutomaticCapability[] {
 }
 
 async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<ModelSelection> {
-  if (bot.modelSelection.mode !== "automatic") return bot.modelSelection;
-  const preferredIds = [...new Set([task?.lastInstanceId, bot.modelSelection.instanceId].filter(Boolean))];
+  if (bot.modelSelection.mode !== "automatic") return botAccounts.resolve(bot, automaticRequirements(bot));
+  const continuityId = task?.lastInstanceId && (accounts.get(task.lastInstanceId)?.of ?? task.lastInstanceId);
+  const preferredIds = [...new Set([continuityId, bot.modelSelection.instanceId].filter(Boolean))];
   const preferred = preferredIds.flatMap((instanceId) => {
     const instance = registry.get(instanceId!);
     return instance ? [liveAutomaticCandidate(instance)] : [];
   });
   const input = {
     current: bot.modelSelection,
-    continuity: task ? { instanceId: task.lastInstanceId, model: task.lastModel } : undefined,
+    continuity: task ? { instanceId: continuityId || undefined, model: task.lastModel } : undefined,
     required: automaticRequirements(bot),
   };
   let selection = resolveAutomaticSelection({ candidates: preferred, ...input });
@@ -789,7 +804,7 @@ async function resolvedBotSelection(bot: BotRecord, task?: TaskRecord): Promise<
   ) {
     store.patchBot(bot.id, { modelSelection: selection });
   }
-  return selection;
+  return botAccounts.resolve({ modelSelection: selection });
 }
 
 // New bots prefer working engines without cached exhaustion. Automatic keeps the choice
@@ -848,7 +863,7 @@ function checkedModelSelection(
   if (!mode.success) {
     return { ok: false, status: 400, error: "modelSelection.mode must be automatic or pinned" };
   }
-  const selection: ModelSelection = {
+  let selection: ModelSelection = {
     instanceId: value.instanceId.trim(),
     model: value.model.trim(),
   };
@@ -859,7 +874,9 @@ function checkedModelSelection(
     }
     selection.effort = value.effort;
   }
-  const target = registry.get(selection.instanceId);
+  try { selection = botAccounts.checkSelection(selection); }
+  catch (error) { return { ok: false, status: 400, error: (error as Error).message }; }
+  const target = registry.get(botAccounts.catalogInstanceId(selection));
   // Model IDs remain free-form at the app's general API boundary. Custom
   // engines can accept IDs that are not in their discovery catalog, and
   // several drivers only learn the final catalog when a turn starts. The
@@ -921,6 +938,9 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const botAccounts = new BotAccounts(accounts, registry, store, {
+  captured: (threadId) => providerReload.current(threadId),
+});
 const snagUserData = process.env.OMB_USER_DATA;
 const teamSnags = snagUserData ? new TeamSnags({
   userData: snagUserData,
@@ -1140,16 +1160,19 @@ const keepGoing = new KeepGoing({
   wakesPaused: (botId) => store.bot(botId)?.paneWakePaused === true || limitWaits.held(botId),
   packet: (threadId) => taskPacketForWrite(threadId),
   usage: async (botId) => {
-    const instanceId = store.bot(botId)?.modelSelection.instanceId ?? "";
+    const bot = store.bot(botId);
+    const instanceId = bot && accounts.defaultFor(bot.modelSelection.instanceId)
+      ? botAccounts.instance(bot)?.instanceId ?? "" : bot?.modelSelection.instanceId ?? "";
     const previous = rateLimitsByInstance.get(instanceId);
     if (previous?.windows.length && Number.isFinite(Date.parse(previous.observedAt)) && Date.now() - Date.parse(previous.observedAt) <= KEEP_GOING_USAGE_FRESH_MS) return previous;
-    const config = instanceConfigs(cfg)[instanceId];
+    const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
     const instance = registry.get(instanceId);
     if (!config || !instance) return null;
     const result = await refreshUsage(instance.driverKind, {
       instanceId,
       cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
       environment: config.environment,
+      account: config.account,
     }, previous);
     if (result.report) {
       const current = rateLimitsByInstance.get(instanceId);
@@ -1178,27 +1201,29 @@ const limitWaits = new LimitWaits({
   deviceId: () => profileSyncSettings.deviceId,
   canRead: (selection) => {
     const instance = registry.get(selection.instanceId);
-    const config = instanceConfigs(cfg)[selection.instanceId];
-    return Boolean(instance && config && canRefreshUsage(instance.driverKind, config.environment));
+    const config = instanceConfigs(cfg, accounts.snapshot)[selection.instanceId];
+    return Boolean(instance && config && canRefreshUsage(instance.driverKind, config.environment, undefined, config.account));
   },
   released: (row) => paneWake.noteArrived(row.botId, row.threadId),
   current: (botId, instanceId) => {
     const bot = store.bot(botId);
     if (!bot || !store.taskByThread(bot.id, bot.threadId) || bot.paneWakePaused) return null;
     const controlKey = createHash("sha256").update(JSON.stringify([
-      bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg)[instanceId ?? bot.modelSelection.instanceId],
+      bot.modelSelection, bot.pendingModelSelection, instanceConfigs(cfg, accounts.snapshot)[instanceId ?? bot.modelSelection.instanceId],
+      ...(accounts.snapshot.length ? [accounts.defaultFor(bot.modelSelection.instanceId), bot.pendingModelSelection && accounts.defaultFor(bot.pendingModelSelection.instanceId)] : []),
       lastUserInstruction(store.activePath(bot.threadId))?.messageId,
     ])).digest("hex");
     return { threadId: bot.threadId, controlKey, busy: botHasActiveTurn(botId) || hasQueuedSends(botId) };
   },
   usage: async (row) => {
     const instance = registry.get(row.selection.instanceId);
-    const config = instanceConfigs(cfg)[row.selection.instanceId];
+    const config = instanceConfigs(cfg, accounts.snapshot)[row.selection.instanceId];
     if (!instance || !config) return { error: "Usage unavailable", retryAt: Date.now() + 30_000 };
     const result = await refreshUsage(instance.driverKind, {
       instanceId: row.selection.instanceId,
       cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
       environment: config.environment,
+      account: config.account,
     });
     if (result.report && !result.error) {
       rateLimitsByInstance.set(row.selection.instanceId, result.report);
@@ -1491,6 +1516,7 @@ function publishProfileChanges(): number {
 }
 
 function instanceOffersModel(instanceId: string, model: string): boolean {
+  if (accounts.get(instanceId)) return false;
   const instance = registry.get(instanceId);
   return Boolean(instance && (model === instance.models.default || instance.models.options.some((option) => option.id === model)));
 }
@@ -1681,7 +1707,7 @@ async function localVmDeleteRefusal(botId: string): Promise<string | null> {
 async function deleteBotFully(bot: BotRecord): Promise<void> {
   limitWaits.cancel(bot.id);
   // a running turn dies with its bot, including one on a room's thread
-  const instance = registry.get(bot.modelSelection.instanceId);
+  const instance = botAccounts.instance(bot);
   const busyGroup = store.groups.find((g) => g.busyBotId === bot.id);
   if (busyGroup) await instance?.adapter.interruptTurn(busyGroup.threadId).catch(() => {});
   await instance?.adapter.interruptTurn(bot.threadId).catch(() => {});
@@ -2692,7 +2718,7 @@ const summaryBuild = createSummaryBuild({
 const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
-  generate: () => noteGenerator(registry.instances()),
+  generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);
@@ -2856,18 +2882,42 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 // not per turn, so it lives here and rides /api/instances rather than being
 // banked on a task. Persisted so a restart keeps the last report until a turn or refresh replaces it.
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
-const refreshUsage = createUsageRefresh();
+const refreshUsage = createUsageRefresh({
+  accountIdentity: (account, identity) => accountRuntime.observe(account.id, { state: "available", authenticated: true, accountIdentity: identity }, account.generation),
+  accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
+});
 const checkMuseUsage = createMuseCheck();
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
   save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR),
   refresh: async (instanceId, previous) => {
-    const config = instanceConfigs(cfg)[instanceId];
+    const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
     const instance = registry.get(instanceId);
     if (!config || !instance) return {};
-    return refreshUsage(instance.driverKind, { instanceId, cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli, environment: config.environment }, previous);
+    return refreshUsage(instance.driverKind, { instanceId, cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli, environment: config.environment, account: config.account }, previous);
   },
-  environment: (instanceId) => instanceConfigs(cfg)[instanceId]?.environment,
+  environment: (instanceId) => instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment,
+});
+const workerTurns = createWorkerTurns();
+const workerLaunch = createWorkerLaunch({
+  enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
+  bases: () => instanceConfigs(cfg), usage: spawnUsage,
+  available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
+    && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
+});
+const accountRuntime = createAccountRuntime({
+  accounts, registry, providers: providerReload, store, reload: reloadProviders, bots: botAccounts,
+  changed: (id) => { void accountUpdates(id); },
+  rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
+  invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
+  botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
+});
+const accountRoutes = createAccountRoutes(accountRuntime, registry);
+const accountUpdates = createAccountUpdates({
+  describe: async () => botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(await registry.describeCached()))),
+  publish: (instances) => { rememberAutomaticAvailability(instances); broadcast({ kind: "instances", instances }); },
+  usage: createAccountUsage({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
+    rateLimits: rateLimitsByInstance, save: () => saveRateLimits(rateLimitsByInstance, DATA_DIR) }),
 });
 
 function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
@@ -2916,7 +2966,7 @@ const watchdog = new TurnWatchdog({
         turnsAtWrite: store.taskByThread(turn.botId, turn.threadId)?.usage?.turns ?? 0,
       }));
     }
-    const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
+    const instance = bot ? botAccounts.instance(bot, turn.threadId) : null;
     void instance?.adapter.interruptTurn(turn.threadId).catch(() => {});
     const minutes = Math.round(TURN_STALL_MS / 60_000);
     store.appendMessage(
@@ -2933,6 +2983,7 @@ const watchdog = new TurnWatchdog({
     // clears it first when the adapter responds.
     const release = setTimeout(() => {
       providerReload.settled(turn.threadId);
+      workerTurns.settled(turn.threadId);
       if (stalledTurnId && turnRegistry.get(stalledTurnId)) {
         if (settleMail(store, turn.threadId, stalledTurnId, false, "interrupted")) paneWake.noteArrived(turn.botId, turn.threadId);
         turnRegistry.settle(stalledTurnId);
@@ -3061,6 +3112,8 @@ bus.subscribe((event: RuntimeEvent) => {
     botByThread: (threadId) => store.botByThread(threadId),
     claimed: (botId) => turnStartClaims.has(botId),
     adopt: (botId, threadId, turnId) => {
+      const instance = event.providerInstanceId ? providerReload.started(threadId, event.providerInstanceId) : null;
+      if (instance) workerTurns.capture(botId, threadId, instance);
       turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0 });
       store.setActivity(botId, "working", threadId);
       dispatchedThreads.set(botId, threadId);
@@ -3388,7 +3441,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (verdict?.source === "away-desktop-deny" && asker && event.requestId) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
-          : registry.get(asker.modelSelection.instanceId);
+          : botAccounts.instance(asker, event.threadId);
         const requestId = event.requestId;
         const { tool, summary } = event;
         // answered at once: a desktop card nobody can see would stall the turn
@@ -3431,7 +3484,7 @@ bus.subscribe((event: RuntimeEvent) => {
         const settled = verdict.approve;
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
-          : registry.get(asker.modelSelection.instanceId);
+          : botAccounts.instance(asker, event.threadId);
         const requestId = event.requestId;
         const { tool, summary } = event;
         // The chip is written only AFTER the provider takes the answer.
@@ -3519,7 +3572,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.background) {
         const instance = event.providerInstanceId
           ? registry.get(event.providerInstanceId)
-          : asker && registry.get(asker.modelSelection.instanceId);
+          : asker && botAccounts.instance(asker, event.threadId);
         if (instance && event.requestId) {
           void instance.adapter
             .respondToRequest(event.threadId, event.requestId, { behavior: "deny", message: BACKGROUND_DENY_NOTE })
@@ -3581,7 +3634,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // Review stays on the provider boundary that opened the request.
         // Falling back to an arbitrary sibling could disclose action details
         // to a provider the user did not choose for this bot.
-        const instance = registry.get(event.providerInstanceId ?? asker.modelSelection.instanceId);
+        const instance = event.providerInstanceId ? registry.get(event.providerInstanceId) : botAccounts.instance(asker, event.threadId);
         if (instance?.reviewPermission) {
           reviewTask = reviewPermissionCard({
             instance,
@@ -4049,6 +4102,7 @@ bus.subscribe((event: RuntimeEvent) => {
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   providerReload.settled(event.threadId);
+  workerTurns.settled(event.threadId);
   drainQueuedSends();
   paneWake.settled();
   // after both, so held sends and pane wakes claim the bot before a queued routine;
@@ -4114,7 +4168,7 @@ const noteSteer = new NoteSteerer({
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
   steer: (botId, threadId, text) => {
     const bot = store.bot(botId);
-    const adapter = bot ? registry.get(bot.modelSelection.instanceId)?.adapter : undefined;
+    const adapter = bot ? botAccounts.instance(bot, threadId)?.adapter : undefined;
     return steerUntilTaken(adapter, threadId, text, () => peerInputJoined(threadId));
   },
   messages: (threadId) => store.activePath(threadId),
@@ -5288,6 +5342,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         }
         const live = providerReload.started(threadId, instanceId);
         if (!live) return Promise.reject(new Error(`provider instance "${instanceId}" is unavailable`));
+        workerTurns.capture(bot.id, threadId, live);
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
@@ -5479,6 +5534,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
       turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
+      workerTurns.settled(threadId);
       releaseLocalVmThread(threadId);
       if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
       watchdog.settle(threadId);
@@ -5657,7 +5713,7 @@ routines = new RoutineManager({
     const instance = runOn === "cloud"
       ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
       : bot
-        ? registry.get(bot.modelSelection.instanceId)
+        ? botAccounts.instance(bot, threadId)
         : null;
     await instance?.adapter.interruptTurn(threadId).catch(() => {});
     closeOpenApprovals(threadId);
@@ -6321,6 +6377,7 @@ async function runClaimedGroupMemberTurn(
       }
       const live = providerReload.started(threadId, selection.instanceId);
       if (!live) return Promise.reject(new Error(`${bot.name}'s model is unavailable`));
+      workerTurns.capture(bot.id, threadId, live);
       pendingInterruptThreads.started(threadId, bot.id, epoch);
       return live.adapter.sendTurn({
         threadId,
@@ -6342,6 +6399,7 @@ async function runClaimedGroupMemberTurn(
       .catch((err) => {
         pendingInterruptThreads.bind(threadId, bot.id, epoch);
         providerReload.settled(threadId);
+        workerTurns.settled(threadId);
         if (err?.cancelled) {
           watchdog.settle(threadId);
           finish("dispatch_failed");
@@ -6874,17 +6932,20 @@ function configStatus() {
 }
 
 function reloadProviders() {
-  return providerReload.reload(instanceConfigs(cfg));
+  accounts.validateBases();
+  return providerReload.reload(instanceConfigs(cfg, accounts.snapshot));
 }
 
 // Config writes rebuild the whole provider registry. Keep the read-modify-write
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
+if (accounts.snapshot.length || Object.keys(accounts.drains).length) await accountRuntime.restore();
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });
 const groupRoutes = createGroupRoutes({
+  instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   store,
   registry,
   createGroupTaskRequestSchema,
@@ -6940,6 +7001,7 @@ const internalRoutes = createInternalRoutes({
   maybeResumeConnectors,
 });
 const botRoutes = createBotRoutes({
+  accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
   cfg,
   registry,
@@ -6960,6 +7022,7 @@ const botRoutes = createBotRoutes({
   resumePaneWakes,
 });
 const botChatRoutes = createBotChatRoutes({
+  instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,
   threadSyncGate,
@@ -7002,6 +7065,7 @@ const botChatRoutes = createBotChatRoutes({
   resumeSecretCard,
 });
 const threadRoutes = createThreadRoutes({
+  instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cfg,
   threadSyncGate,
   store,
@@ -7107,6 +7171,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "terminal bridge must be a loopback HTTP endpoint" });
         }
         terminalBridgeAccess = { url, token };
+        if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess);
         return json(res, 200, { ok: true });
       }
       if ((method === "PUT" || method === "DELETE") && path === "/api/internal/google-account") {
@@ -7167,7 +7232,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readBody(req);
         const from = store.bot(String(body.fromBotId ?? ""));
         if (!from) return json(res, 403, { error: "unknown sender" });
+        if (accounts.snapshot.length) return json(res, 200, {});
         return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
+      }
+      if (method === "POST" && path === "/api/internal/worker-launch") {
+        const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], await readBody(req), workerLaunch);
+        return json(res, result.status, result.body);
       }
       // The show_image tool: a copy of a local image lands as a settled
       // screen message that references the attachment, never inline pixels.
@@ -7889,10 +7959,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── the fleet-wide authorization decision log ──
     // ── provider instances (model picker) ──
     // check spends one Muse message; refresh only reads what a host already saw.
-    m = path.match(/^\/api\/usage\/(refresh|check)\/([\w-]+)$/);
+    if (method === "POST" && path === "/api/accounts") await enableWorkerAccounts(terminalBridgeAccess);
+    if (await accountRoutes(req, res, method, path)) return;
+    m = path.match(/^\/api\/usage\/(refresh|check)\/([^/]+)$/);
     if (m && method === "POST") {
       const instanceId = m[2];
-      const config = instanceConfigs(cfg)[instanceId];
+      if (!isInstanceId(instanceId)) return json(res, 400, { error: "Invalid instance id" });
+      const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
       const instance = registry.get(instanceId);
       if (!config || !instance || (m[1] === "check" && instance.driverKind !== "museAgent")) return json(res, 404, { error: "unknown provider instance" });
       const previous = rateLimitsByInstance.get(instanceId);
@@ -7900,6 +7973,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         instanceId,
         cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli,
         environment: config.environment,
+        account: config.account,
       };
       const result = m[1] === "check"
         ? await checkMuseUsage({
@@ -7924,12 +7998,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }));
     }
 
-    const engineInstall = /^\/api\/instances\/([\w.-]+)\/install$/.exec(path);
+    const engineInstall = /^\/api\/instances\/([^/]+)\/install$/.exec(path);
     if (method === "GET" && engineInstall) {
+      if (!isInstanceId(engineInstall[1])) return json(res, 400, { error: "Invalid instance id" });
       const install = registry.install(engineInstall[1]);
       return install ? json(res, 200, install) : json(res, 404, { error: "Unknown engine install" });
     }
-    const engineSignIn = /^\/api\/instances\/([\w.-]+)\/sign-in$/.exec(path);
+    const engineSignIn = /^\/api\/instances\/([^/]+)\/sign-in$/.exec(path);
+    if (engineSignIn && !isInstanceId(engineSignIn[1])) return json(res, 400, { error: "Invalid instance id" });
     if (method === "POST" && engineSignIn) {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
@@ -7943,7 +8019,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await registry.cancelSignIn(engineSignIn[1])
         ? json(res, 200, {}) : json(res, 404, { error: "Unknown engine sign-in" });
     }
-    const engineSignOut = /^\/api\/instances\/([\w.-]+)\/sign-out$/.exec(path);
+    const engineSignOut = /^\/api\/instances\/([^/]+)\/sign-out$/.exec(path);
+    if (engineSignOut && !isInstanceId(engineSignOut[1])) return json(res, 400, { error: "Invalid instance id" });
     if (method === "POST" && engineSignOut) {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
@@ -7969,7 +8046,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (probe !== "cached") resetPathCache();
       const instances = withRateLimits(await describeInstances(probe));
       rememberAutomaticAvailability(instances);
-      return json(res, 200, { instances });
+      return json(res, 200, { instances: botAccounts.pickerInstances(botAccounts.accountInstances(instances)) });
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──
@@ -8018,7 +8095,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (externalSecretStorage && !credentials.bearerOk) return json(res, 403, { error: "forbidden" });
       const customKeyError = customKeyStorageError(patch, req.headers, REMOTE_HOST, externalSecretStorage, relay, !credentials.bearerOk);
       if (customKeyError) return json(res, 400, { error: customKeyError });
-      if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
+      if (providerConfigBusy || accountRuntime.busy) return json(res, 409, { error: "provider settings are already being updated" });
       if (patch.vps !== undefined) {
         const currentAlias = vpsSshAlias(cfg);
         const nextAlias = vpsSshAlias({ ...cfg, vps: patch.vps });
@@ -8080,6 +8157,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!check.ok) return json(res, 400, { error: check.message });
       }
       const previousPerson = (cfg.profile?.name ?? "").trim();
+      validateAccountSettings(accounts, cfg, patch);
       if (externalSecretStorage) {
         // The packaged Electron caller commits supplied credentials to the
         // OS-encrypted store before entering this route. Persist every
@@ -8345,7 +8423,7 @@ void serverServing.then(() => setTimeout(() => {
     .then(() => registry.describeCached())
     .then((instances) => {
       rememberAutomaticAvailability(instances);
-      broadcast({ kind: "instances", instances: withRateLimits(instances) });
+      broadcast({ kind: "instances", instances: botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(instances))) });
       return defaultSelection();
     })
     .then((sel) => {
@@ -8386,6 +8464,7 @@ hostShutdown = () => {
   summaryBuild.dispose();
   summaryRepair.dispose();
   memoryPass.dispose();
+  accountRuntime.dispose();
   void registry.disposeAll().finally(() => process.exit(0));
 };
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

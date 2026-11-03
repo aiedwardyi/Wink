@@ -7,6 +7,8 @@ import type { ChildProcess } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { canonicalAccountHome, type AccountContext } from "../account-policy.ts";
+import { parseCodexAccount, type CodexAccount } from "./codex-account.ts";
 
 import type { ModelCatalog } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
@@ -60,21 +62,25 @@ export function decodeCodexSelection(id: string | null | undefined): {
 
 // A new app-server started while a force-killed one still holds CODEX_HOME
 // exits with "failed to initialize state runtime", so spawns wait these out.
-const dyingAppServers = new Set<Promise<void>>();
+const dyingAppServers = new Map<string, Set<Promise<void>>>();
 
-export function retireAppServer(child: ChildProcess): void {
+export function retireAppServer(child: ChildProcess, home = codexHome(process.env)): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
+  const key = canonicalAccountHome(home);
+  let dying = dyingAppServers.get(key);
+  if (!dying) dyingAppServers.set(key, dying = new Set());
   const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
-  dyingAppServers.add(closed);
-  void closed.then(() => dyingAppServers.delete(closed));
+  dying.add(closed);
+  void closed.then(() => { dying.delete(closed); if (!dying.size && dyingAppServers.get(key) === dying) dyingAppServers.delete(key); });
   killCliTree(child);
 }
 
-export async function awaitDyingAppServers(limitMs = 2_000): Promise<void> {
-  if (!dyingAppServers.size) return;
+export async function awaitDyingAppServers(limitMs = 2_000, home = codexHome(process.env)): Promise<void> {
+  const dying = dyingAppServers.get(canonicalAccountHome(home));
+  if (!dying?.size) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
-    Promise.all(dyingAppServers),
+    Promise.all(dying),
     new Promise<void>((resolve) => {
       timer = setTimeout(resolve, limitMs);
     }),
@@ -97,11 +103,13 @@ export function readCodexAppServerModelCatalog(
   cli: string,
   env: Record<string, string | undefined>,
   timeoutMs = 8_000,
+  policy?: { account?: AccountContext; onAccount?: (value: CodexAccount) => void },
 ): Promise<ModelCatalog | null> {
-  return new Promise((resolve) => {
+  return awaitDyingAppServers(2_000, policy?.account?.home ?? codexHome(env)).then(() => new Promise<ModelCatalog | null>((resolve) => {
     const child = spawnCli(cli, ["app-server"], {
       cwd: homedir(),
       env,
+      ...(policy?.account ? { account: policy.account, accountDriver: "codex" } : {}),
       stdio: ["pipe", "pipe", "pipe"],
     });
     let settled = false;
@@ -109,16 +117,18 @@ export function readCodexAppServerModelCatalog(
     let nextId = 1;
     const models: CodexAppServerModel[] = [];
     const cursors = new Set<string>();
-    const pending = new Map<number, "initialize" | "models">();
+    const pending = new Map<number, "initialize" | "models" | "account">();
+    let accountReady = !policy?.onAccount;
+    let catalogReady: ModelCatalog | null = null;
 
     const finish = (catalog: ModelCatalog | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      retireAppServer(child);
-      void awaitDyingAppServers().then(() => resolve(catalog));
+      retireAppServer(child, policy?.account?.home ?? codexHome(env));
+      void awaitDyingAppServers(2_000, policy?.account?.home ?? codexHome(env)).then(() => resolve(catalog));
     };
-    const request = (method: string, params: unknown, kind: "initialize" | "models") => {
+    const request = (method: string, params: unknown, kind: "initialize" | "models" | "account") => {
       const id = nextId++;
       pending.set(id, kind);
       try {
@@ -151,6 +161,12 @@ export function readCodexAppServerModelCatalog(
         if (!kind) continue;
         pending.delete(message.id);
         if (message.error) {
+          if (kind === "account") {
+            policy?.onAccount?.({});
+            accountReady = true;
+            if (catalogReady) finish(catalogReady);
+            continue;
+          }
           finish(null);
           return;
         }
@@ -161,7 +177,15 @@ export function readCodexAppServerModelCatalog(
             finish(null);
             return;
           }
+          if (policy?.onAccount) request("account/read", { refreshToken: false }, "account");
           requestModels(null);
+          continue;
+        }
+
+        if (kind === "account") {
+          policy?.onAccount?.(parseCodexAccount(message.result));
+          accountReady = true;
+          if (catalogReady) finish(catalogReady);
           continue;
         }
 
@@ -190,16 +214,17 @@ export function readCodexAppServerModelCatalog(
           finish(null);
           return;
         }
-        finish({
+        catalogReady = {
           default: defaultModel && seen.has(defaultModel) ? defaultModel : options[0].id,
           options,
-        });
+        };
+        if (accountReady) finish(catalogReady);
       }
     });
     child.on("error", () => finish(null));
     child.on("close", () => finish(null));
     request("initialize", { clientInfo: { name: "openmausbot", version: "1" } }, "initialize");
-  });
+  }));
 }
 
 export function codexHome(env: Record<string, string | undefined>): string {
@@ -420,9 +445,11 @@ export async function readCodexModelCatalog(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
   cli?: string,
+  policy?: { account?: AccountContext; onAccount?: (value: CodexAccount) => void },
 ): Promise<ModelCatalog> {
-  const advertised = cli ? await readCodexAppServerModelCatalog(cli, env) : null;
+  const advertised = cli ? await readCodexAppServerModelCatalog(cli, env, 8_000, policy) : null;
   const official = advertised ? withCodexTerra61(withCodexSol61(withSuggestedCodexAstra(advertised))) : STATIC_CODEX_MODELS;
+  if (policy?.account) return official;
   const home = codexHome(env);
   const mainText = readText(join(home, "config.toml"));
   if (!mainText) return mergeLocalInject(official, env, fetchImpl);

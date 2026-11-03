@@ -97,7 +97,7 @@ export function ModelPickerControl({
   const blocked = Boolean(instance && (needsCli(instance) || (!isCustom && needsSignIn(instance))));
   const canCommit = (candidate: ModelSelection) => {
     if (candidate.instanceId === selection.instanceId && candidate.model === selection.model) return true;
-    const target = state.instances.find((item) => item.instanceId === candidate.instanceId);
+    const target = rows.find((item) => item.instance.instanceId === candidate.instanceId)?.instance;
     if (!target) return false;
     const customOption = target.models.options.some((option) => option.id === candidate.model && option.custom);
     if (needsCli(target) || (!customOption && needsSignIn(target))) return false;

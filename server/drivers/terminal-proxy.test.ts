@@ -98,7 +98,7 @@ describe("terminal proxy", () => {
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());
-    expect(workerModelsText().length).toBeLessThan(820);
+    expect(workerModelsText().length).toBeLessThan(860);
     expect(description).toContain("Gemini: Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id).");
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     for (const family of WORKER_GEMINI_FAMILIES) {
@@ -112,6 +112,14 @@ describe("terminal proxy", () => {
     expect(workerReportText("linux").agy).toBe("");
     expect(TOOLS[2].description).toContain(`Gemini: ${workerReportText(process.platform).agy}${flags}`);
     expect(TOOLS[2].description.indexOf("Gemini: ")).toBeGreaterThan(TOOLS[2].description.indexOf("Grok: grok"));
+  });
+
+  it("lists Grok 4.7 efforts without max in the spawn description", () => {
+    for (const description of [workerModelsText(), TOOLS[2].description]) {
+      const grok = description.match(/Grok: Grok 4\.7 = grok-4\.7[^\n]*?(?= Gemini:)/)?.[0];
+      expect(grok).toContain("(effort low/medium/high/xhigh)");
+      expect(grok).not.toMatch(/\bmax\b/);
+    }
   });
 
   it("adds Codex pane env, notify and orbit-msg reports on Windows only", () => {
@@ -612,6 +620,64 @@ describe("terminal proxy", () => {
     "  ▰▰▰▱▱ 59% │ ↑409.3k ↓444 │ 5h: ▱▱▱▱▱ 0% (1h47m) │ 7d: ▰▰▰▰▱ 82% (1d3h) │ 1h54m",
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
   ].join("\n");
+
+  const muse = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/muse/terminal-screens.json", import.meta.url), "utf8"));
+  const claudeIdle = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/idle-background-shell.json", import.meta.url), "utf8"));
+
+  it.each(["busy", "idle"])("does not label a recorded Muse %s screen as Claude", async (state) => {
+    const screenText = muse.reply[state].join("\n");
+    expect(claudeState(screenText)).toBeUndefined();
+    const snapshot = { sessionId: "s1", generation: 2, screenText, panes: [{ sessionId: "s1", generation: 2, label: "Muse", screenText }] };
+    const result = await callTool("terminal_read", scripted(snapshot), CONFIG);
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).not.toContain("Claude:");
+    const fetchImpl = scripted(snapshot);
+    const sent = await send(fetchImpl, { key: "esc", sessionId: "s1", generation: 2 });
+    expect(sent.isError).toBeUndefined();
+    expect(sent.content[0].text).not.toContain("Claude:");
+    expect(posted(fetchImpl)).toEqual(["\x1b"]);
+  });
+
+  it("keeps the recorded Claude background-shell screen idle", async () => {
+    const screenText = claudeIdle.reply.screen.join("\n");
+    expect(claudeState(screenText)).toBe("idle");
+    expect(terminalSnapshotText({ screenText })).toContain("Claude: idle");
+    const fetchImpl = scripted({ screenText });
+    expect((await send(fetchImpl, { key: "esc", sessionId: "s1", generation: 2 })).isError).toBeUndefined();
+    expect(posted(fetchImpl)).toEqual(["\x1b"]);
+  });
+
+  it.each(["busy", "idle"])("rules out the recorded Muse %s screen after its banner scrolls off", (state) => {
+    const screenText = muse.reply[state].slice(7).join("\n");
+    expect(claudeState(screenText)).toBeUndefined();
+    expect(terminalSnapshotText({ screenText })).not.toContain("Claude:");
+  });
+
+  it.each([
+    ["manual", "busy"],
+    ["manual", "idle"],
+    ["plan", "busy"],
+    ["plan", "idle"],
+  ])("keeps a footerless %s-mode Claude pane %s", async (mode, state) => {
+    const screenText = [
+      state === "busy" ? "✽ Undulating… (3s · ↓ 75 tokens)" : "✻ Sautéed for 5s",
+      `──⏸─${mode}─mode─on──────────`,
+      "❯",
+      "────────────────────",
+    ].join("\n");
+    expect(claudeState(screenText)).toBe(state);
+    expect(terminalSnapshotText({ screenText })).toContain(`Claude: ${state}`);
+    const fetchImpl = scripted({ screenText });
+    const result = await send(fetchImpl, { key: "esc", sessionId: "s1", generation: 2 });
+    if (state === "busy") {
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("esc would interrupt the running Claude turn");
+      expect(posted(fetchImpl)).toEqual([]);
+    } else {
+      expect(result.isError).toBeUndefined();
+      expect(posted(fetchImpl)).toEqual(["\x1b"]);
+    }
+  });
 
   it.each([
     ["a running turn", BUSY, "busy"],

@@ -100,6 +100,20 @@ describe("automatic usage ranking", () => {
 });
 
 describe("resolveAutomaticSelection", () => {
+  it("never introduces an added account to a fresh exhausted Auto pick", () => {
+    expect(resolveAutomaticSelection({ candidates: [
+      candidate("claude", { rateLimits: [{ id: "seven_day", usedPercent: 100, resetsAt: null }] }),
+      candidate("added", { accountOf: "claude" }),
+    ] })?.instanceId).toBe("claude");
+  });
+
+  it("does not revive an added account from unbound task continuity", () => {
+    expect(resolveAutomaticSelection({
+      candidates: [candidate("claude"), candidate("added", { accountOf: "claude" })],
+      continuity: { instanceId: "added", model: "old" },
+    })?.instanceId).toBe("claude");
+  });
+
   it.each([
     ["codex", "gpt-6-astra", "low"],
     ["codex", "gpt-6.1-terra", "medium"],

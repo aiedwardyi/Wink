@@ -1,0 +1,80 @@
+{
+  "stamp": {
+    "engine": "codex",
+    "cliVersion": "0.165.0",
+    "recordedAt": "2026-11-01T08:23:43.484Z",
+    "sourcePc": "home",
+    "source": "Real app-server completion notifications with isolated HOME/CODEX_HOME; ids and local paths redacted",
+    "model": "gpt-6.1-sol",
+    "effort": "low",
+    "prompt": "Post one short progress update, run exactly one PowerShell command Write-Output 863, then give a short final answer containing the command output. Do not read or write any files."
+  },
+  "reply": {
+    "events": [
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "<redacted>",
+            "text": "I’ll run the command now.",
+            "phase": "commentary",
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "<redacted>",
+          "turnId": "<redacted>",
+          "completedAtMs": 1793521420926
+        },
+        "emittedAtMs": 1793521420926
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "<redacted>",
+            "text": "The command was blocked by policy; no output was produced.",
+            "phase": "final_answer",
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "<redacted>",
+          "turnId": "<redacted>",
+          "completedAtMs": 1793521423480
+        },
+        "emittedAtMs": 1793521423480
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "<redacted>",
+          "turn": {
+            "id": "<redacted>",
+            "rootTurnId": "<redacted>",
+            "items": [
+              {
+                "type": "agentMessage",
+                "id": "<redacted>",
+                "text": "The command was blocked by policy; no output was produced.",
+                "phase": "final_answer",
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1793521418,
+            "completedAt": 1793521423,
+            "durationMs": 5466
+          }
+        },
+        "emittedAtMs": 1793521423484
+      }
+    ]
+  }
+}

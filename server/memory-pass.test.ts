@@ -127,6 +127,29 @@ describe("memory pass", () => {
     expect(generate.mock.calls[0]![0]).toContain("i'm 38");
   });
 
+  it("saves a recorded Claude reply through the bot's bound account", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/memory-notes.json", import.meta.url), "utf8"));
+    const defaultGenerateText = vi.fn(async () => "[]");
+    const generateText = vi.fn(async () => recorded.reply.text);
+    generator = noteGenerator([
+      { instanceId: "claude-default", driverKind: "claudeAgent", enabled: true, generateText: defaultGenerateText },
+      { instanceId: "claude-bound", driverKind: "claudeAgent", enabled: true, generateText },
+    ], { instanceId: "claude-bound", available: true });
+    say("t1", "I prefer concise replies.");
+    say("t1", "I use pnpm for my projects.");
+    await settle("t1", 3 * MINUTE);
+    expect(defaultGenerateText).not.toHaveBeenCalled();
+    expect(generateText).toHaveBeenCalledExactlyOnceWith(recorded.stamp.prompt, {
+      signal: expect.any(AbortSignal), timeoutMs: 120_000, ephemeral: true, lean: true,
+    });
+    expect(memoryFileRaw("bot-t1")).toBe(
+      `${MEMORY_SEED}- Prefers concise replies (noted 2026-10-15)\n- Uses pnpm for projects (noted 2026-10-15)\n`,
+    );
+    expect(chips("t1")).toHaveLength(1);
+    expect(chips("t1")[0]!.tool).toEqual({ name: MEMORY_SAVE_TOOL, ok: true, spoken: "Prefers concise replies, Uses pnpm for projects" });
+    expect(stored()).toEqual({ threads: {} });
+  });
+
   it("runs right at the turn end after 8 new user messages", async () => {
     for (let i = 0; i < 8; i += 1) say("t1", `line ${i}`);
     await settle("t1");
@@ -763,7 +786,7 @@ describe("memory pass wiring", () => {
   const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
   it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
-    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\)\),[\s\S]*?botHasActiveTurn/);
+    expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
     expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId\);/);
     expect(index).toContain("memoryPass.dispose();");
   });

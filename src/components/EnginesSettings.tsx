@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/state/store";
 import { EngineMark } from "./EngineMark";
+import { AccountConnections } from "./AccountConnections";
+import { groupAccounts } from "@/lib/accounts";
 import { EngineSignIn, installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
@@ -88,6 +90,8 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
 export function EnginesSettings() {
   const { t } = useI18n();
   const { state, refreshInstances } = useStore();
+  const groups = groupAccounts(state.instances);
+  const reload = refreshInstances;
   const [showAll, setShowAll] = useState(false);
   // Same guard as the store's focus probe: a rescan can flash a window that
   // steals focus, so only a real trip away (a terminal sign-in) rescans.
@@ -118,13 +122,17 @@ export function EnginesSettings() {
       window.removeEventListener("focus", onFocus);
     };
   }, [refreshInstances]);
-  const rows = orderFriendsEngines(state.instances.filter(isFriendsCliEngine));
+  const rows = orderFriendsEngines(groups.map((accounts) => accounts[0]!).filter(isFriendsCliEngine));
   const installed = rows.filter((row) => row.snapshot.state === "available");
   const missing = rows.filter((row) => row.snapshot.state !== "available");
   return (
     <div className="flex min-w-0 flex-col">
       {rows.length === 0 && <p className="text-[13px] text-ink-secondary">{t("engines.none")}</p>}
-      {installed.map((instance) => <EngineRow key={instance.instanceId} instance={instance} />)}
+      {installed.map((instance) => {
+        const accounts = groups.find((group) => group[0] === instance)!;
+        return ["claudeAgent", "codex"].includes(instance.driverKind) ? <AccountConnections key={instance.instanceId} accounts={accounts} reload={reload} />
+          : <EngineRow key={instance.instanceId} instance={instance} />;
+      })}
       {missing.length > 0 && <>
         <button type="button" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}
           className="mt-3 self-start py-2 text-[12px] text-ink-secondary underline hover:text-ink">{t("engines.moreEngines")}</button>

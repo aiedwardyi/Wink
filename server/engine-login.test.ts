@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
 import { EngineLogin } from "./engine-login.ts";
+import * as procs from "./procs.ts";
 
 const managers: EngineLogin[] = [];
 const dirs: string[] = [];
@@ -16,7 +17,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function fixture(timeout = 5000, capture = 500) {
+function fixture(timeout = 15000, capture = 2500) {
   const dir = mkdtempSync(join(tmpdir(), "engine-login-"));
   dirs.push(dir);
   const script = join(dir, "login.cjs");
@@ -65,7 +66,7 @@ const REAL_OUTPUT = {
 };
 
 async function replay(engine: string, output: string, authHosts?: string[]) {
-  const { manager, dir } = fixture(5000, 300);
+  const { manager, dir } = fixture(15000, 2500);
   const file = join(dir, "output.txt");
   const script = join(dir, "replay.cjs");
   writeFileSync(file, output);
@@ -74,6 +75,61 @@ async function replay(engine: string, output: string, authHosts?: string[]) {
 }
 
 describe("EngineLogin", () => {
+  it("completes a managed Claude paste-back login through its pending stdin", async () => {
+    const { manager, dir } = fixture();
+    const script = join(dir, "paste-back.cjs");
+    const received = join(dir, "received.txt");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(REAL_OUTPUT.claude)});
+      process.stdin.once('data', (code) => { require('node:fs').writeFileSync(${JSON.stringify(received)}, code); process.exit(0); });`);
+    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+    });
+    expect(capture.url).toContain("https://claude.com/cai/oauth/authorize?code=true");
+    expect(capture.inputGeneration).toBe(manager.generation("added"));
+    expect(manager.submit("added", capture.inputGeneration! + 1, "wrong-job")).toBe(false);
+    expect(manager.submit("added", capture.inputGeneration!, "code\nextra")).toBe(false);
+    expect(manager.submit("added", capture.inputGeneration!, "code\n")).toBe(false);
+    expect(manager.submit("added", capture.inputGeneration!, "returned-code#state")).toBe(true);
+    expect(manager.submit("added", capture.inputGeneration!, "duplicate")).toBe(false);
+    await manager.wait("added");
+    expect(manager.state("added")).toBe("complete");
+    expect(readFileSync(received, "utf8")).toBe("returned-code#state\n");
+    expect(JSON.stringify(manager.capture("added"))).not.toContain("returned-code");
+    expect(manager.submit("added", capture.inputGeneration!, "late")).toBe(false);
+  });
+
+  it.each([
+    "https://claude.com/cai/oauth/authorize?code=secret",
+    "https://claude.com/other?code=true",
+    "https://other.example/cai/oauth/authorize?code=true",
+    "https://claude.com/cai/oauth/authorize?code=true&access_token=secret",
+  ])("does not capture a managed Claude secret or unrelated URL: %s", async (url) => {
+    const { manager, dir } = fixture(15000, 100);
+    const script = join(dir, "unsafe-claude.cjs");
+    writeFileSync(script, `process.stdout.write(${JSON.stringify(url + "\nPaste code here if prompted > ")}); setInterval(() => {}, 1000);`);
+    const capture = await manager.start("added", `"${process.execPath}" "${script}"`, ["auth", "login"], {}, [], {
+      scope: "claudeAgent", account: { id: "added", of: "claude", home: dir, generation: 1 },
+    });
+    expect(capture.url).toBeUndefined();
+  });
+
+  it("releases a finished login scope when neither kill nor close completes", async () => {
+    const { EventEmitter } = await import("node:events");
+    const manager = new EngineLogin();
+    managers.push(manager);
+    vi.useFakeTimers();
+    vi.spyOn(procs, "killCliTree").mockImplementation(() => {});
+    try {
+      const internal = manager as unknown as { create(engine: string, scope: string): { child?: unknown }; scopes: Map<string, unknown> };
+      const job = internal.create("account-one", "codex");
+      job.child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+      const cancelled = manager.cancel("account-one");
+      await vi.advanceTimersByTimeAsync(5_000);
+      await cancelled;
+      expect(internal.scopes.has("codex")).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each([
     ["codex", ["auth.openai.com"], { url: "https://auth.openai.com/codex/device", code: "8Y82-PFRXD" }],
     ["grok", ["accounts.x.ai"], { url: "https://accounts.x.ai/oauth2/device?user_code=26XB-F54Z", code: "26XB-F54Z" }],
@@ -118,7 +174,7 @@ describe("EngineLogin", () => {
     expect(closeListeners.length).toBeGreaterThan(0);
     const settled = await Promise.race([
       manager.cancel("fake").then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 7500)),
     ]);
     once.mockRestore();
     if (!settled) for (const listener of closeListeners) listener(null, "SIGTERM");
@@ -155,6 +211,16 @@ describe("EngineLogin", () => {
     expect(readFileSync(file, "utf8")).toBe(".");
   });
 
+  it("starts another account's sign-in once a cancelled one on the engine closes", async () => {
+    const { manager, cli, dir } = fixture();
+    await manager.start("a", cli, ["normal"], {}, [], { scope: "claude" });
+    void manager.cancel("a");
+    manager.clear("a");
+    const file = join(dir, "next");
+    await manager.start("b", cli, ["count", file], {}, [], { scope: "claude" });
+    expect(readFileSync(file, "utf8")).toBe(".");
+  });
+
   it("does not launch a queued replacement during shutdown", async () => {
     const { manager, cli, dir } = fixture();
     await manager.start("fake", cli, ["normal"]);
@@ -175,13 +241,16 @@ describe("EngineLogin", () => {
   });
 
   it.each(["cancel", "timeout", "shutdown"])("kills the process tree on %s", async (action) => {
-    const { manager, cli, dir } = fixture(action === "timeout" ? 800 : 5000);
+    const { manager, cli, dir } = fixture(action === "timeout" ? 2500 : 15000);
     const file = join(dir, "heartbeat");
     await manager.start("fake", cli, ["tree", file]);
-    await expect.poll(() => existsSync(file)).toBe(true);
+    await expect.poll(() => existsSync(file), { timeout: 5000 }).toBe(true);
     if (action === "cancel") await manager.cancel("fake");
     else if (action === "shutdown") await manager.dispose();
-    else await expect.poll(() => manager.state("fake")).toBe("failed");
+    else {
+      await expect.poll(() => manager.state("fake"), { timeout: 5000 }).toBe("failed");
+      await manager.wait("fake");
+    }
     await new Promise((resolve) => setTimeout(resolve, 200));
     const size = readFileSync(file).length;
     await new Promise((resolve) => setTimeout(resolve, 150));

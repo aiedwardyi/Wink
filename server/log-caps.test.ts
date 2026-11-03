@@ -53,6 +53,7 @@ describe("thread log caps", () => {
     const declaration = find(parsed)!;
     const javascript = ts.transpileModule(`const invoke = ${declaration.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const deps = {
+      botAccounts: { instance: () => undefined },
       registry: { get: () => undefined }, store: { groups: [], deleteBot: noop, group: () => record, deleteGroup: noop },
       limitWaits: { cancel: noop }, stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop },
       lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegationsFrom: noop, commsBus: {},

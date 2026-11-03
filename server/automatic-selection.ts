@@ -13,6 +13,7 @@ export type AutomaticCapability =
 export interface AutomaticCandidate {
   instanceId: string;
   driverKind?: string;
+  accountOf?: string;
   defaultModel: string;
   available: boolean;
   capabilities: Partial<Record<AutomaticCapability, boolean>>;
@@ -34,6 +35,7 @@ export function resolveAutomaticSelection(input: {
   const eligible = input.candidates.filter(
     (candidate) =>
       candidate.available &&
+      !candidate.accountOf &&
       candidate.defaultModel &&
       !isRetiredEngineKind(candidate.driverKind) &&
       required.every((capability) => candidate.capabilities[capability] === true),

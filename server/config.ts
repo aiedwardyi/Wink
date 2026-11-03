@@ -442,7 +442,7 @@ export const PROVIDER_CREDENTIAL_ENV = [
  * trailing noun rather than a full name is what makes it general: KEY covers
  * API_KEY and AWS's SECRET_ACCESS_KEY alike, KEY_ID covers ACCESS_KEY_ID, and
  * TOKEN covers every AUTH_/ACCESS_/SESSION_ spelling. */
-const CREDENTIAL_ENV_NAME = /(^|_)(KEY|KEY_ID|SECRET|TOKEN|PASSWORD)$/;
+const CREDENTIAL_ENV_NAME = /(^|_)(KEY|KEY_ID|SECRET|TOKEN|PASSWORD|CREDENTIALS)$/i;
 
 /** Drop every credential from a child env (in place) except the names
  * `allowed` grants. Allowlist, not denylist: a provider key nobody has added
@@ -452,12 +452,10 @@ export function applyCredentialAllowlist(
   env: Record<string, string | undefined>,
   allowed: Iterable<string> = [],
 ): void {
-  const keep = new Set(allowed);
-  for (const key of [...PROVIDER_CREDENTIAL_ENV, ...WORKSPACE_CREDENTIAL_ENV]) {
-    if (!keep.has(key)) delete env[key];
-  }
+  const keep = new Set([...allowed].map((key) => key.toUpperCase()));
+  const named = new Set<string>([...PROVIDER_CREDENTIAL_ENV, ...WORKSPACE_CREDENTIAL_ENV]);
   for (const key of Object.keys(env)) {
-    if (!keep.has(key) && CREDENTIAL_ENV_NAME.test(key)) delete env[key];
+    if (!keep.has(key.toUpperCase()) && (named.has(key.toUpperCase()) || CREDENTIAL_ENV_NAME.test(key))) delete env[key];
   }
 }
 
@@ -509,7 +507,7 @@ function injectedEnvironment(cfg: AppConfig, driver: string): Map<string, string
 // Config-file keys are injected as per-instance environment so drivers
 // see them without needing real process env vars — but only into the
 // driver that consumes each key (injectedEnvironment above).
-export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
+export function instanceConfigs(cfg: AppConfig, accounts?: readonly import("./account-policy.ts").AccountContext[]): InstanceConfigMap {
   // The default `grok` instance rides the `grokAgent` driver: like claude and
   // codex it needs no credential from us, just the CLI installed and logged
   // in (it shows up unavailable otherwise).
@@ -552,6 +550,11 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     const environment = { ...entry.environment };
     for (const [key, value] of injectedEnvironment(cfg, entry.driver)) environment[key] = value;
     entry.environment = environment;
+  }
+  if (accounts?.length) for (const account of accounts) {
+    if (!Object.hasOwn(map, account.of) || Object.hasOwn(map, account.id)) throw new Error("Invalid account instance");
+    const base = map[account.of];
+    map[account.id] = { ...base, environment: { ...base.environment }, account };
   }
   return map;
 }
