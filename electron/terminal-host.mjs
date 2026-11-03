@@ -6,6 +6,7 @@ import path from "node:path";
 import { postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
+import { managedWorkerCommand } from "./terminal-worker.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -331,7 +332,7 @@ function commandHash(command) {
 }
 
 // Wrap the existing reader without loading a module; Write-Error preserves a failed $? for the user's prompt.
-export function workerShellArgs(id) {
+export function workerShellArgs(id, noProfile = false) {
   const script = `$global:OrbitPrompt = $function:prompt
 $global:OrbitReadLine = $null
 $global:OrbitHash = $null
@@ -353,7 +354,7 @@ function global:prompt {
   if (-not $ok) { Write-Error '' -ErrorAction Ignore }
   & $global:OrbitPrompt
 }`;
-  return ["-NoLogo", "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+  return ["-NoLogo", ...(noProfile ? ["-NoProfile"] : []), "-NoExit", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
 }
 
 // X10/RXVT (ESC [ M + 3 bytes), SGR (ESC [ < ... M/m), focus (ESC [ I/O).
@@ -425,7 +426,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, botNames = async () => ({}), snag = () => {} }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true }) {
   const sessions = new Map();
   const active = new Map();
   const generations = new Map();
@@ -989,17 +990,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     for (const text of session.command && !queued.includes(session.command) ? [session.command, ...queued] : queued) typeIntoPane(session, text);
   };
-  const start = async ({ key, event, input, folder, cwd, cancelPromise, botPane = false }) => {
+  const start = async ({ key, event, input, folder, cwd, cancelPromise, botPane = false, worker = null }) => {
     const shell = platform === "win32"
       ? [path.join(env.ProgramFiles || "C:\\Program Files", "PowerShell", "7", "pwsh.exe"), path.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")].find((file) => fs.existsSync(file))
-      : (env.SHELL || "/bin/sh");
+      : (worker?.kind === "managed" ? "/bin/sh" : env.SHELL || "/bin/sh");
     if (!shell) throw new Error("No terminal shell is available");
     const id = randomUUID();
     // A pane without orbit-msg beats no pane at all.
     const mail = await Promise.resolve().then(mailbox).catch(() => null);
-    const paneEnv = terminalPaneEnv(terminalEnvironment(env), { pane: id, bot: input.botId, teacher: folder.teacher, mailbox: mail });
+    const managed = worker?.kind === "managed";
+    const source = managed ? { ...worker.environment } : terminalEnvironment(env);
+    if (managed) for (const key of ["ENV", "BASH_ENV", "ZDOTDIR"]) delete source[key];
+    const paneEnv = terminalPaneEnv(source, { pane: id, bot: input.botId, teacher: folder.teacher, mailbox: mail });
     if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
-    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id) : ["-NoLogo"]) : [], {
+    const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
     });
     let pty;
@@ -1010,6 +1014,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     const session = {
       id, key, botId: input.botId, botPane, owner: event.sender, cwd, shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
+      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker), workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
@@ -1034,6 +1039,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (kind !== "D" || !/^\d+$/.test(value)) return;
       if (session.shellExecuting) {
         session.worker = false;
+        session.workerFinished = true;
         paneRuns?.ended(session.id);
         session.autoNote = null;
         session.autoDelivered = true;
@@ -1081,7 +1087,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
   };
-  const botWrite = (session, raw) => {
+  const botWrite = (session, raw, worker) => {
     const text = normalizeTerminalText(raw);
     clearActivityTimer(session);
     const echo = inputEchoText(text);
@@ -1105,7 +1111,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const launched = session.botPane ? WORKER_CLI_RE.exec(text) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
-        const args = text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+        const args = worker?.kind === "managed" ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
         session.claudeTrust = session.engine === "claude" && args.includes("--dangerously-skip-permissions");
         session.claudeTrustMoved = false;
         session.claudeTrustAnswered = false;
@@ -1397,6 +1403,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         return { ...snap, waited: "timeout" };
       })();
     },
+    enableWorkerAccounts() {
+      if (!workerLaunch) throw new Error("Worker launch service is unavailable");
+      workerAccountsEnabled = true;
+    },
     paneLabels() {
       const labels = {};
       for (const session of sessions.values()) {
@@ -1411,6 +1421,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (session.botPane && !session.retired && session.exitCode === null && active.get(session.key) === session.id) count++;
       }
       return count;
+    },
+    livePanesForAccount(accountId) {
+      let count = 0;
+      let unknown = reservedPanes;
+      const generations = {};
+      for (const session of sessions.values()) {
+        if (!session.botPane || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
+        if (!session.workerAccount) { if (!session.workerAccountKnown) unknown++; continue; }
+        if (session.workerFinished || session.workerAccount.id !== accountId) continue;
+        count++;
+        const generation = session.workerAccount.generation;
+        generations[generation] = (generations[generation] ?? 0) + 1;
+      }
+      return { count, unknown, generations };
     },
     sendBot(botId, input) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
@@ -1431,6 +1455,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!session || session.generation !== input.generation) throw new Error("Terminal session is stale; take a fresh snapshot");
       if (session.exitCode !== null) throw new Error("Terminal has exited");
       if (input.text.includes("\x03")) throw new Error("Ctrl+C is not allowed in a confirmed terminal send");
+      if (workerAccountsEnabled && workerLaunch && !session.worker && (!session.workerAccount || session.workerFinished)) {
+        return Promise.resolve(workerLaunch({ botId, command: `${session.commandInput}${input.text}`.replace(/\x1b\[(?:200|201)~/g, ""), environment: terminalEnvironment(env), mode: "send" }))
+          .then(() => botWrite(session, input.text)).then(() => snapshot(session));
+      }
       const result = botWrite(session, input.text);
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may acknowledge writes synchronously or asynchronously.
       return result && typeof result.then === "function" ? result.then(() => snapshot(session)) : snapshot(session);
@@ -1507,7 +1535,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       paneReservations.set(botId, botReserved + 1);
       reservedPanes += 1;
       let session;
+      let worker;
       try {
+        worker = workerAccountsEnabled && workerLaunch ? await workerLaunch({ botId, label, command: input.command ?? "", environment: terminalEnvironment(env) }) : null;
+        if (worker?.kind === "hold") return { hold: worker.hold };
         const folder = await resolveFolder({ botId, cwd: input.cwd });
         if (folder.needsFolder) throw new Error("Terminal folder is unavailable");
         const cwd = folder.cwd;
@@ -1518,7 +1549,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (disposed) throw new Error("Terminal host is shutting down");
         if (deletedBots.has(botId)) throw new Error("Terminal bot was deleted");
         const key = `${sender.id}:${botId}:pane:${randomUUID()}`;
-        session = await start({ key, event: { sender }, input: { botId, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true });
+        session = await start({ key, event: { sender }, input: { botId, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true, worker });
         if (disposed) {
           await retire(session, true);
           throw new Error("Terminal host is shutting down");
@@ -1539,11 +1570,11 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
       if (input.command) {
-        const command = normalizeTerminalText(input.command);
+        const command = normalizeTerminalText(worker?.kind === "managed" ? managedWorkerCommand(worker, session.workerEnvironment, platform, session.mail?.binDir) : input.command);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
-        await botWrite(session, session.command);
+        await botWrite(session, session.command, worker);
       }
-      return { sessionId: session.id, generation: session.generation };
+      return { sessionId: session.id, generation: session.generation, ...(worker?.line ? { line: worker.line } : {}) };
     },
     /** Starts the bot's main shell for a remote viewer: the same session the host's panel attaches to. */
     async openMainForBot(botId) {

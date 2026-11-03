@@ -35,7 +35,7 @@ export type DroppedNotes = z.infer<typeof droppedSchema>;
 export interface MemoryPassDeps {
   store: Pick<Store, "onChange" | "messagesFor" | "groupByThread" | "botByThread" | "appendMessage">;
   /** The Claude one-shot call, whatever engine the bot runs; null when no Claude CLI is set up. */
-  generate(): NoteGenerator | null;
+  generate(botId: string): NoteGenerator | null;
   /** The bot's Auto notes switch, read live. */
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
@@ -55,9 +55,12 @@ export interface MemoryPass {
   dispose(): void;
 }
 
-/** The first enabled Claude instance's one-shot call, or null when there is none. */
-export function noteGenerator(instances: readonly Pick<ProviderInstance, "driverKind" | "enabled" | "generateText">[]): NoteGenerator | null {
-  const claude = instances.find((instance) => instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
+export function noteGenerator(
+  instances: readonly (Pick<ProviderInstance, "driverKind" | "enabled" | "generateText"> & { instanceId?: string })[],
+  account?: { instanceId: string; available: boolean },
+): NoteGenerator | null {
+  if (account && !account.available) return null;
+  const claude = instances.find((instance) => (!account || instance.instanceId === account.instanceId) && instance.driverKind === "claudeAgent" && instance.enabled && instance.generateText);
   return claude ? (prompt, signal) => claude.generateText!(prompt, { signal, timeoutMs: PASS_TIMEOUT_MS, ephemeral: true, lean: true }) : null;
 }
 
@@ -364,7 +367,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (pending.has(threadId) && !held.has(threadId)) arm(botId, threadId);
       return;
     }
-    const generate = deps.generate();
+    const generate = deps.generate(botId);
     if (!generate) return warnOnce("no Claude CLI instance");
     const rows = pendingRows(deps.store.messagesFor(threadId), ids);
     const lines = ids.flatMap((id) => {

@@ -24,7 +24,7 @@ describe("pane-note quiet finish", () => {
   it("alerts a continuation adopted after a note, keeps the note turn quiet", () => {
     const at = index.indexOf("adopt: (botId, threadId, turnId) => {");
     expect(at).toBeGreaterThan(0);
-    expect(index.slice(at, at + 600)).toContain("paneNoteTurnThreads.delete(threadId)");
+    expect(index.slice(at, at + 800)).toContain("paneNoteTurnThreads.delete(threadId)");
     expect(index).toContain("paneNoteTurn: paneNoteTurnThreads.has(event.threadId)");
   });
 });

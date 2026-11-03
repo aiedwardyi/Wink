@@ -335,11 +335,11 @@ describe("EnginesSettings friends Connections list", () => {
     };
   }
 
-  it("shows a connected engine as Connected with a quiet Sign Out and nothing else", async () => {
+  it("shows a single account with its label, Sign Out and Add Account", async () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });
     const { root, row } = await renderList();
     try {
-      expect(row("claude").textContent).toBe("ClaudeConnectedSign Out");
+      expect(row("claude").textContent).toBe("ClaudeClaudeSign OutAdd Account");
       expect(row("claude").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -347,15 +347,15 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
-  it("shows a signed-out engine with only Sign In", async () => {
+  it("keeps a signed-out engine state and Add Account", async () => {
     const restore = stage("codex", {
       snapshot: { state: "available", authenticated: false },
       install: { login: { args: ["login"] }, logout: ["logout"], signInCommand: "codex login", docsUrl: "https://example.com/codex" },
     });
     const { root, row } = await renderList();
     try {
-      expect([...row("codex").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Sign In"]);
-      expect(row("codex").textContent).toBe("CodexSign In");
+      expect([...row("codex").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Sign In", "Add Account"]);
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign InAdd Account");
       expect(row("codex").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -478,7 +478,7 @@ describe("EnginesSettings friends Connections list", () => {
       });
       vi.setSystemTime(Date.now() + 6000);
       await act(async () => window.dispatchEvent(new Event("focus")));
-      expect(row("codex").textContent).toBe("CodexSign In");
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign InAdd Account");
       expect(row("codex").querySelector("a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -491,9 +491,10 @@ describe("EnginesSettings friends Connections list", () => {
   it("shows installed engines once with no path or Details controls", () => {
     const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(EnginesSettings)));
     for (const name of ["Claude", "Codex", "Grok", "Gemini (Antigravity)", "Meta Muse"]) {
-      expect(html.split(name)).toHaveLength(2);
+      expect(html).toContain(name);
     }
-    expect(html.match(/>Connected</g)).toHaveLength(5);
+    expect(html.match(/>Add Account</g)).toHaveLength(2);
+    expect(html.match(/>Connected</g)).toHaveLength(3);
     expect(html).not.toContain("Details");
     expect(html).not.toContain("Advanced");
     expect(html).not.toMatch(/<(input|select|code)/);

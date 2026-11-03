@@ -276,7 +276,7 @@ export function readTerminalSnapshot(fetchImpl: typeof fetch = fetch, config: Te
 }
 
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
-export function spawnTerminalPane(args: Record<string, unknown>, fetchImpl: typeof fetch = fetch, config: TerminalConfig = {}): Promise<{ sessionId: string; generation: number }> {
+export function spawnTerminalPane(args: Record<string, unknown>, fetchImpl: typeof fetch = fetch, config: TerminalConfig = {}): Promise<{ sessionId: string; generation: number; hold?: string; line?: string }> {
   const { label, cwd, command } = args;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
   if (typeof label !== "string" || !label.trim() || (cwd !== undefined && typeof cwd !== "string") || (command !== undefined && typeof command !== "string")) {
@@ -422,9 +422,11 @@ export async function callTool(
       const usage = await spawnUsage(fetchImpl, config, args);
       if (usage.hold) return { content: [{ type: "text", text: usage.hold }] };
       const pane = await spawnTerminalPane(args, fetchImpl, config);
+      if (pane.hold) return { content: [{ type: "text", text: pane.hold }] };
       void postLaunchNote(fetchImpl, config, pane.sessionId);
       const opened = `Opened pane "${String(args.label).trim()}": sessionId ${pane.sessionId} (generation ${pane.generation}). Use terminal_read and terminal_send with this sessionId.`;
-      return { content: [{ type: "text", text: usage.line ? `${opened}\n${usage.line}` : opened }] };
+      const line = pane.line ?? usage.line;
+      return { content: [{ type: "text", text: line ? `${opened}\n${line}` : opened }] };
     }
     if (name === "terminal_close") {
       const result = await closeTerminalPane(args, fetchImpl, config);

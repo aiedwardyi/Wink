@@ -1,0 +1,14 @@
+{
+  "stamp": {
+    "engine": "claude",
+    "cliVersion": "2.1.317",
+    "recordedAt": "2026-11-03T04:30:41.168Z",
+    "sourcePc": "home",
+    "source": "ClaudeDriver.generateText via noteGenerator on the signed-in default account, lean and ephemeral; text output contains no ids",
+    "model": "claude-haiku-5-5",
+    "prompt": "You pick durable facts about the user out of their own chat messages, for their notes file.\n\nRules:\n- Use only USER LINES. Never guess, infer or add anything they did not say.\n- Keep facts that stay true: who they are, their age, languages, tools they use, likes and dislikes, how they want things done.\n- Skip one-off requests, questions, task details, and anything CURRENT NOTES already says.\n- Never record passwords, PINs, codes, keys, tokens, account numbers or one-time codes.\n- fact: one short plain line about the user, for example \"38 years old\" or \"Can't read Korean\".\n- quote: the user's exact words that state the fact, copied verbatim, 120 characters max.\n- replaces: only when the fact makes a CURRENT NOTES line untrue or outdated, that whole line copied exactly. Otherwise leave it out.\n\nReply with JSON only: [{\"fact\": \"...\", \"quote\": \"...\", \"replaces\": \"...\"}], or [] when nothing qualifies.\n\nCURRENT NOTES:\n<notes>\n(empty)\n</notes>\n\nUSER LINES:\n<user_lines>\nI prefer concise replies.\n\nI use pnpm for my projects.\n</user_lines>"
+  },
+  "reply": {
+    "text": "[{\"fact\": \"Prefers concise replies\", \"quote\": \"I prefer concise replies.\", \"replaces\": \"\"}, {\"fact\": \"Uses pnpm for projects\", \"quote\": \"I use pnpm for my projects.\", \"replaces\": \"\"}]"
+  }
+}

@@ -152,6 +152,7 @@ describe("summary grace dispatch", () => {
       const seed = { cursor: "session" as unknown, compactionId: null as string | null };
       const scope = {
         currentTurnEpoch: () => 1, epoch: 1,
+        accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
         providerReload: { started: () => {
           if (fold === "dispatch") enqueue();
           if (event === "setup note") store.appendMessage("thread", { role: "bot", kind: "note", text: "[pane build] setup finished" });

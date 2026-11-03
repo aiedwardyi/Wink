@@ -8,6 +8,7 @@ import { sameModelSelection } from "../shared/model-selection.ts";
 import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
+import type { BotAccounts } from "./bot-accounts.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
@@ -27,6 +28,7 @@ type BotRouteDeps = {
   cancelUsageWait?: (botId: string) => void;
   cfg: AppConfig;
   registry: ProviderRegistry;
+  accountBots?: BotAccounts;
   MAX_WORKSPACE_BOTS: number;
   defaultSelection: () => Promise<ModelSelection>;
   botJobSchema: z.ZodString;
@@ -427,10 +429,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
         patch.alwaysAllow = [...new Set(body.alwaysAllow as string[])].slice(0, 200);
       }
       if (existingBot?.computer === "local" && body.computer !== undefined && body.computer !== "local") {
-        await registry
-          .get(existingBot.modelSelection.instanceId)
-          ?.adapter.interruptTurn(existingBot.threadId)
-          .catch(() => {});
+        const instance = deps.accountBots ? deps.accountBots.instance(existingBot) : registry.get(existingBot.modelSelection.instanceId);
+        await instance?.adapter.interruptTurn(existingBot.threadId).catch(() => {});
       }
       const chiefMovedSections =
         Boolean(existingBot?.chiefOfStaff) &&
@@ -457,7 +457,9 @@ export function createBotRoutes(deps: BotRouteDeps) {
           ? store.setChiefOfStaff(bot.id)
           : [];
       if (chiefChanges === null) return json(res, 404, { error: "no such bot" });
-      if (normalizedSelection && body.holdForSwitch !== true) await applyEffortPick(store, registry, bot.id, normalizedSelection);
+      if (normalizedSelection && body.holdForSwitch !== true) {
+        await applyEffortPick(store, registry, bot.id, normalizedSelection, deps.accountBots?.instance(bot)?.instanceId);
+      }
       return json(res, 200, { bot: wireBot(store.bot(bot.id) ?? bot) });
     },
     getMemory: async (res: ServerResponse, m: RegExpMatchArray) => {

@@ -12,7 +12,8 @@ import { z } from "zod";
 import { writeFileAtomic } from "../atomic.ts";
 import { applyCredentialAllowlist } from "../config.ts";
 import { findCliCandidates, refreshPathCache, splitCliString } from "../env-path.ts";
-import { clearVersionCache } from "../procs.ts";
+import { clearVersionCache, cliRevision } from "../procs.ts";
+import { accountLaunch, type AccountContext } from "../account-policy.ts";
 import { EngineLogin } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
 import { retiredEngineLabel } from "../../shared/model-selection.ts";
@@ -40,6 +41,7 @@ export type RegistryEntry =
   | { instanceId: InstanceId; live?: undefined; shadow: ShadowInstance };
 
 const MODEL_REFRESH_TTL_MS = 5_000;
+const PROBE_REVISION = 2;
 
 /** The part of a describe() row that costs process launches. */
 interface Probe {
@@ -93,6 +95,9 @@ function cliOfRaw(raw: unknown): string | undefined {
 export class ProviderRegistry {
   readonly logins = new EngineLogin();
   private signingOut = new Set<string>();
+  private accounts = new Map<string, AccountContext>();
+  private blockedAccounts = new Set<string>();
+  private accountIdentity?: (id: string, snapshot: ProviderSnapshot) => Promise<void>;
   private environmentByInstance = new Map<InstanceId, Record<string, string>>();
   private byId = new Map<InstanceId, RegistryEntry>();
   /** decoded per-instance `cli` overrides, for describe() — drivers spawn
@@ -102,6 +107,8 @@ export class ProviderRegistry {
   private modelRefreshInFlight = new Map<InstanceId, Promise<void>>();
   private probed = new Map<InstanceId, Probe>();
   private probing = new Map<InstanceId, Promise<Probe>>();
+  private helperWork = new Map<InstanceId, number>();
+  private tracked = new WeakSet<ProviderInstance>();
   private driversByKind: Map<string, AnyProviderDriver>;
   private readonly now: () => number;
   private readonly modelRefreshTtlMs: number;
@@ -124,6 +131,8 @@ export class ProviderRegistry {
     }
     const loaded = await Promise.all(Object.entries(configs).map(async ([instanceId, entry]) => {
       this.environmentByInstance.set(instanceId, entry.environment ?? {});
+      if (entry.account) this.accounts.set(instanceId, entry.account);
+      else this.accounts.delete(instanceId);
       const driver = this.driversByKind.get(entry.driver);
       if (!driver) {
         return {
@@ -152,6 +161,7 @@ export class ProviderRegistry {
           environment: entry.environment ?? {},
           enabled: entry.enabled ?? true,
           config,
+          ...(entry.account ? { account: entry.account } : {}),
         });
         return { entry: { instanceId, live }, rawCli } satisfies { entry: RegistryEntry; rawCli?: string };
       } catch (e) {
@@ -178,15 +188,18 @@ export class ProviderRegistry {
       if (result.rawCli) this.cliByInstance.set(result.entry.instanceId, result.rawCli);
       else this.cliByInstance.delete(result.entry.instanceId);
       this.byId.set(result.entry.instanceId, result.entry);
+      result.entry.live?.setAccountBlocked?.(this.blockedAccounts.has(result.entry.instanceId));
       const live = result.entry.live;
+      if (live) this.trackWork(live);
       const driver = live && this.driversByKind.get(live.driverKind);
       if (driver && this.cacheDir) {
         const key = createHash("sha256").update(JSON.stringify([
-          process.platform, configs[result.entry.instanceId], driver.defaultConfig(), driver.models,
+          PROBE_REVISION, process.platform, configs[result.entry.instanceId], driver.defaultConfig(), driver.models,
+          cliRevision(result.rawCli ?? cliDefaultOf(driver) ?? ""),
         ])).digest("hex");
         this.cacheKeys.set(result.entry.instanceId, key);
         const probe = savedProbeSchema.safeParse(saved?.[result.entry.instanceId]);
-        if (probe.success && probe.data.key === key) this.probed.set(result.entry.instanceId, probe.data);
+        if (!this.accounts.has(result.entry.instanceId) && probe.success && probe.data.key === key) this.probed.set(result.entry.instanceId, probe.data);
       }
       if (live?.modelsReady) {
         const ready = live.modelsReady
@@ -220,6 +233,44 @@ export class ProviderRegistry {
     return this.byId.get(instanceId)?.live ?? null;
   }
 
+  private trackWork(instance: ProviderInstance) {
+    if (this.tracked.has(instance)) return;
+    this.tracked.add(instance);
+    const id = instance.instanceId;
+    for (const key of ["generateText", "reviewPermission", "prepare", "snapshot"] as const) {
+      const method = instance[key];
+      if (!method) continue;
+      Object.assign(instance, { [key]: async (...args: unknown[]) => {
+        if (key !== "snapshot" && this.accountBlocked(id)) throw new Error("Account authentication is unavailable");
+        this.helperWork.set(id, (this.helperWork.get(id) ?? 0) + 1);
+        try { return await Reflect.apply(method, instance, args); }
+        finally {
+          const count = (this.helperWork.get(id) ?? 1) - 1;
+          if (count) this.helperWork.set(id, count);
+          else this.helperWork.delete(id);
+        }
+      } });
+    }
+  }
+
+  onAccountIdentity(listener: (id: string, snapshot: ProviderSnapshot) => Promise<void>) { this.accountIdentity = listener; }
+  blockAccount(id: string, blocked: boolean) {
+    if (blocked) this.blockedAccounts.add(id);
+    else this.blockedAccounts.delete(id);
+    this.get(id)?.setAccountBlocked?.(blocked);
+  }
+  accountBlocked(id: string) { return this.blockedAccounts.has(id); }
+  async retryAccount(id: string) {
+    const entry = this.byId.get(id);
+    if (entry?.live?.account) await (this.probing.get(id) ?? this.startProbe(entry, this.candidateScan(), { refresh: true }, true));
+  }
+  accountAvailable(id: string) {
+    const snapshot = this.probed.get(id)?.snapshot;
+    return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
+  }
+  accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
+  invalidateAccount(id: string) { this.get(id)?.invalidateAccount?.(); this.forget(id); }
+
   signIn(instanceId: InstanceId) {
     const entry = this.byId.get(instanceId);
     const kind = entry?.live?.driverKind ?? entry?.shadow?.driverKind;
@@ -244,9 +295,12 @@ export class ProviderRegistry {
     const cli = resolved?.cli ?? this.cliByInstance.get(instanceId) ?? cliDefaultOf(driver || undefined);
     const env = resolved?.env ?? { ...process.env, ...this.environmentByInstance.get(instanceId) };
     if (!resolved) applyCredentialAllowlist(env);
+    const account = this.accounts.get(instanceId);
+    const merged = { ...env, ...driver?.install?.login?.env };
     return live && driver && cli ? {
       engine: driver.driverKind, cli, install: driver.install,
-      env: { ...env, ...driver.install?.login?.env },
+      env: account ? accountLaunch(account, driver.driverKind, [], merged).env : merged,
+      account,
     } : null;
   }
 
@@ -257,8 +311,10 @@ export class ProviderRegistry {
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
     if (!args) return null;
-    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts);
-    return login?.deviceArgs ? capture : capture.url ? { url: capture.url } : {};
+    const capture = await this.logins.start(instanceId, config.cli, args, config.env, login?.authHosts, { scope: config.engine, account: config.account });
+    return login?.deviceArgs ? capture : { ...(capture.url ? { url: capture.url } : {}), ...(capture.error ? { error: capture.error } : {}),
+      ...(config.account && config.engine === "claudeAgent" && capture.inputGeneration ? { inputGeneration: capture.inputGeneration } : {}),
+    };
   }
 
   async cancelSignIn(instanceId: InstanceId) {
@@ -276,16 +332,16 @@ export class ProviderRegistry {
     this.signingOut.add(instanceId);
     try {
       await this.logins.cancel(instanceId);
-      await this.logins.start(instanceId, config.cli, config.install.logout, config.env);
+      await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
       await this.logins.wait(instanceId);
       let success = this.logins.state(instanceId) === "complete";
-      if (success) {
-        this.logins.clear(instanceId);
+      if (success || this.accounts.has(instanceId)) {
+        if (success) this.logins.clear(instanceId);
         const previous = this.probed.get(instanceId);
         const live = this.get(instanceId);
         if (live) {
           const snapshot = await live.snapshot({ refresh: true });
-          success = snapshot.authenticated === false;
+          success = success && (this.accounts.has(instanceId) ? snapshot.accountAuthenticated === false : snapshot.authenticated === false);
           if (previous && this.get(instanceId) === live) this.probed.set(instanceId, { ...previous, snapshot });
           this.probeVersion += 1;
         }
@@ -299,7 +355,7 @@ export class ProviderRegistry {
   async refreshLogins() {
     await Promise.all(this.entries().map(async (entry) => {
       const live = entry.live;
-      if (!live || this.signingOut.has(entry.instanceId) || !this.logins.needsRefresh(entry.instanceId)) return;
+      if (!live || live.account || this.accountBlocked(entry.instanceId) || this.signingOut.has(entry.instanceId) || !this.logins.needsRefresh(entry.instanceId)) return;
       const previous = this.probed.get(entry.instanceId);
       if (!previous) return;
       const generation = this.logins.generation(entry.instanceId);
@@ -327,6 +383,8 @@ export class ProviderRegistry {
     this.byId.delete(instanceId);
     this.cliByInstance.delete(instanceId);
     this.environmentByInstance.delete(instanceId);
+    this.accounts.delete(instanceId);
+    this.blockedAccounts.delete(instanceId);
     this.modelRefreshAt.delete(instanceId);
     this.modelRefreshInFlight.delete(instanceId);
     this.forget(instanceId);
@@ -345,7 +403,7 @@ export class ProviderRegistry {
       }
       const rows = await Promise.all(pending);
       this.saveProbes();
-      return rows;
+      return this.currentAccountRows(rows);
     };
     return this.prepareProbes(probe);
   }
@@ -360,7 +418,7 @@ export class ProviderRegistry {
           await (this.probing.get(entry.instanceId) ?? this.startProbe(entry, candidatesFor)))),
       );
       this.saveProbes();
-      return rows;
+      return this.currentAccountRows(rows);
     };
     return this.entries().some((entry) => !this.probed.has(entry.instanceId) && !this.probing.has(entry.instanceId))
       ? this.prepareProbes(read) : read();
@@ -372,6 +430,19 @@ export class ProviderRegistry {
       const probe = this.probed.get(entry.instanceId);
       return probe ? [this.row(entry, probe)] : [];
     });
+  }
+
+  private async currentAccountRows(rows: ReturnType<ProviderRegistry["row"]>[]) {
+    const current = await Promise.all(rows.map(async (row) => {
+      for (let attempt = 0; "accountGeneration" in row && row.accountGeneration !== undefined && this.accounts.get(row.instanceId)?.generation !== row.accountGeneration; attempt++) {
+        const entry = this.byId.get(row.instanceId);
+        if (!entry || attempt > 0 || entry.live?.account?.generation !== this.accounts.get(row.instanceId)?.generation) return [];
+        const probe = this.probed.get(row.instanceId) ?? await (this.probing.get(row.instanceId) ?? this.startProbe(entry, this.candidateScan()));
+        row = this.row(entry, probe);
+      }
+      return [row];
+    }));
+    return current.flat();
   }
 
   private async prepareProbes<T>(probe: () => Promise<T>): Promise<T> {
@@ -392,7 +463,10 @@ export class ProviderRegistry {
       mkdirSync(this.cacheDir, { recursive: true });
       const saved = Object.fromEntries([...this.probed].flatMap(([id, probe]) => {
         const key = this.cacheKeys.get(id);
-        return key && probe.models ? [[id, { key, ...probe }]] : [];
+        const snapshot = { ...probe.snapshot };
+        delete snapshot.accountIdentity;
+        delete snapshot.accountAuthenticated;
+        return key && probe.models ? [[id, { key, ...probe, snapshot }]] : [];
       }));
       writeFileAtomic(join(this.cacheDir, "provider-probes.json"), JSON.stringify(saved), { mode: 0o600 });
       this.savedVersion = this.probeVersion;
@@ -418,17 +492,31 @@ export class ProviderRegistry {
     entry: RegistryEntry,
     candidatesFor: (driver: AnyProviderDriver | undefined) => string[],
     opts?: { rescan?: boolean; refresh?: boolean },
+    retryAccount = false,
   ): Promise<Probe> {
     const id = entry.instanceId;
-    const pending = this.probe(entry, candidatesFor, opts);
-    this.probing.set(id, pending);
-    void pending.then((probe) => {
+    if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
+    const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
         this.probed.set(id, probe);
+        // Identity observation must not count its own completed probe as live work.
         this.probing.delete(id);
         this.probeVersion += 1;
+        if (entry.live?.account) {
+          try { await this.accountIdentity?.(id, probe.snapshot); }
+          catch (error) {
+            const failed = { ...probe, snapshot: { state: "unavailable" as const, reason: error instanceof Error ? error.message : String(error) } };
+            if (this.byId.get(id) === entry && this.probed.get(id) === probe) {
+              this.probed.set(id, failed);
+              this.probeVersion += 1;
+            }
+            return failed;
+          }
+        }
       }
+      return probe;
     });
+    this.probing.set(id, pending);
     return pending;
   }
 
@@ -498,12 +586,18 @@ export class ProviderRegistry {
 
   private row(entry: RegistryEntry, probe: Probe) {
     const driver = this.driversByKind.get(entry.shadow?.driverKind ?? entry.live!.driverKind);
+    const snapshot = { ...probe.snapshot };
+    delete snapshot.accountIdentity;
+    delete snapshot.accountAuthenticated;
     if (entry.shadow) {
       return {
         instanceId: entry.instanceId,
+        loginState: undefined,
+        loginCapture: undefined,
+        loginError: undefined,
         driverKind: entry.shadow.driverKind,
         displayName: entry.shadow.displayName ?? retiredEngineLabel(entry.shadow.driverKind) ?? entry.shadow.driverKind,
-        snapshot: probe.snapshot,
+        snapshot,
         models: { default: "", options: [] },
         capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
         // an unknown driver has no driver record, hence no install path
@@ -517,13 +611,18 @@ export class ProviderRegistry {
     const inst = entry.live;
     return {
       instanceId: inst.instanceId,
+      ...(inst.account ? { accountOf: inst.account.of, accountGeneration: inst.account.generation, canRefreshUsage: true } : {}),
+      ...(this.logins.capture(inst.instanceId).error ? { loginError: this.logins.capture(inst.instanceId).error } : {}),
       loginState: this.signingOut.has(inst.instanceId) ? "cancelled" : this.logins.state(inst.instanceId),
       loginCapture: this.signingOut.has(inst.instanceId) ? {}
         : driver?.install?.login?.deviceArgs ? this.logins.capture(inst.instanceId)
-        : { url: this.logins.capture(inst.instanceId).url },
+        : { url: this.logins.capture(inst.instanceId).url,
+          ...(inst.account && inst.driverKind === "claudeAgent" && this.logins.capture(inst.instanceId).inputGeneration
+            ? { inputGeneration: this.logins.capture(inst.instanceId).inputGeneration } : {}),
+        },
       driverKind: inst.driverKind,
       displayName: inst.displayName ?? inst.driverKind,
-      snapshot: probe.snapshot,
+      snapshot,
       models: probe.models ?? inst.models,
       capabilities: {
         computerMcp: inst.adapter.capabilities.computerMcp === true,

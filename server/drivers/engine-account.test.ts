@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { accountLabel, storedAccount } from "./auth-status.ts";
 import { claudeAuthStatus } from "./claude.ts";
-import { codexAccount } from "./codex.ts";
+import { parseCodexAccount } from "./codex-account.ts";
 import { grokAccount } from "./acp/grok.ts";
 import { museAccount } from "./acp/muse.ts";
 
@@ -26,8 +26,6 @@ function writeJson(path: string, value: unknown) {
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, JSON.stringify(value));
 }
-
-const jwt = (claims: unknown) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
 
 describe("accountLabel", () => {
   it("takes the first non-blank string", () => {
@@ -71,25 +69,18 @@ describe("claude account", () => {
 });
 
 describe("codex account", () => {
-  it("reads the ChatGPT email from CODEX_HOME's id token", () => {
-    const home = scratch();
-    writeJson(join(home, "auth.json"), { auth_mode: "chatgpt", tokens: { id_token: jwt({ email: "gpt@example.com", name: "G" }), access_token: "x" } });
-    expect(codexAccount({ CODEX_HOME: home })).toBe("gpt@example.com");
+  it("uses the engine's ChatGPT account metadata", () => {
+    expect(parseCodexAccount({ account: { type: "chatgpt", email: "gpt@example.com" } })).toMatchObject({ type: "chatgpt", authenticated: true, label: "gpt@example.com" });
   });
 
-  it("falls back to the name and to HOME/.codex", () => {
-    const home = scratch();
-    writeJson(join(home, ".codex", "auth.json"), { tokens: { id_token: jwt({ name: "Codex User" }) } });
-    expect(codexAccount({ HOME: home })).toBe("Codex User");
+  it("accepts a nullable label without inventing an identity", () => {
+    expect(parseCodexAccount({ account: { type: "chatgpt", email: null } })).toEqual({ type: "chatgpt", authenticated: true, label: undefined });
   });
 
-  it("names no account for an API key, a bad token or no file", () => {
-    const home = scratch();
-    expect(codexAccount({ CODEX_HOME: home })).toBeUndefined();
-    writeJson(join(home, "auth.json"), { auth_mode: "apikey", OPENAI_API_KEY: "sk-x", tokens: { id_token: jwt({ email: "gpt@example.com" }) } });
-    expect(codexAccount({ CODEX_HOME: home })).toBeUndefined();
-    writeJson(join(home, "auth.json"), { auth_mode: "chatgpt", tokens: { id_token: "garbage" } });
-    expect(codexAccount({ CODEX_HOME: home })).toBeUndefined();
+  it("never derives identity from credential or token payloads", () => {
+    expect(parseCodexAccount({ account: { type: "apiKey" } }).label).toBeUndefined();
+    expect(parseCodexAccount({ account: null })).toEqual({ authenticated: false });
+    expect(parseCodexAccount({ tokens: { id_token: "fake-token" } })).toEqual({});
   });
 });
 

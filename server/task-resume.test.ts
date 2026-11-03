@@ -56,7 +56,8 @@ function groupRoute(name: string, deps: Record<string, unknown>) {
   const javascript = ts.transpileModule(`async function ${name}(${params}) ${handler!.body.getText(groupParsed)}`, {
     compilerOptions: { target: ts.ScriptTarget.ESNext },
   }).outputText;
-  return new Function(...Object.keys(deps), `${javascript}\nreturn ${name};`)(...Object.values(deps));
+  const scope = { ...deps, deps };
+  return new Function(...Object.keys(scope), `${javascript}\nreturn ${name};`)(...Object.values(scope));
 }
 
 const botChatSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "bot-chat-routes.ts"), "utf8");
@@ -74,7 +75,8 @@ function botChatRoute(name: string, deps: Record<string, unknown>) {
   const javascript = ts.transpileModule(`async function ${name}(${params}) ${handler!.body.getText(botChatParsed)}`, {
     compilerOptions: { target: ts.ScriptTarget.ESNext },
   }).outputText;
-  return new Function(...Object.keys(deps), `${javascript}\nreturn ${name};`)(...Object.values(deps));
+  const scope = { ...deps, instanceForBot: (bot: BotRecord) => (deps.registry as { get(id: string): unknown }).get(bot.modelSelection.instanceId) };
+  return new Function(...Object.keys(scope), `${javascript}\nreturn ${name};`)(...Object.values(scope));
 }
 
 function interruptRig() {
@@ -242,10 +244,14 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     compilerOptions: { target: ts.ScriptTarget.ESNext },
   }).outputText;
   let settle!: (event: { type: string; threadId: string }) => void;
-  new Function("bus", "providerReload", "drainQueuedSends", "paneWake", "routines", "followPendingSyncImports", "store", "syncMemory", fold)(
-    { subscribe: (fn: typeof settle) => { settle = fn; } }, { settled: noop }, drainQueuedSends, paneWake, { tick: noop }, noop, store, noop,
-  );
+  const deps = {
+    bus: { subscribe: (fn: typeof settle) => { settle = fn; } }, providerReload: { settled: noop },
+    workerTurns: { capture() {}, settled() {} }, drainQueuedSends, paneWake, routines: { tick: noop },
+    followPendingSyncImports: noop, store, syncMemory: noop,
+  };
+  new Function(...Object.keys(deps), fold)(...Object.values(deps));
   const deleteBotFully = load("deleteBotFully", {
+    botAccounts: { instance: () => undefined },
     registry: { get: () => undefined }, store: { ...store, deleteBot: noop },
     stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
     lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
@@ -520,9 +526,10 @@ function routineOption(name: string, deps: Record<string, unknown>) {
 describe("routine cancel", () => {
   it("closes the provider cards a cancelled routine left open", async () => {
     const closed: string[] = [];
+    const registry = { get: () => ({ adapter: { interruptTurn: async () => { throw new Error("no session"); } } }) };
     const interruptTurn = routineOption("interruptTurn", {
       store: { bot: () => ({ modelSelection: { instanceId: "fake" } }) },
-      registry: { get: () => ({ adapter: { interruptTurn: async () => { throw new Error("no session"); } } }) },
+      registry, botAccounts: { instance: registry.get },
       closeOpenApprovals: (threadId: string) => closed.push(threadId),
     });
     await interruptTurn("bot-1", "thread-1", "maus");

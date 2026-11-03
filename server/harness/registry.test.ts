@@ -113,7 +113,7 @@ describe("ProviderRegistry", () => {
     } finally { await registry.disposeAll(); }
   });
 
-  it("isolates login jobs and cancellation for two Claude config directories", async () => {
+  it("gates Claude login listeners while keeping cancellation scoped", async () => {
     const dir = mkdtempSync(join(homedir(), "login-instances-"));
     const script = join(dir, "cli.cjs");
     writeFileSync(script, `
@@ -133,9 +133,11 @@ describe("ProviderRegistry", () => {
         a: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: first } },
         b: { driver: "claudeAgent", environment: { CLAUDE_CONFIG_DIR: second } },
       });
-      await Promise.all([registry.startSignIn("a"), registry.startSignIn("b")]);
-      expect([existsSync(first), existsSync(second)]).toEqual([true, true]);
+      await registry.startSignIn("a");
+      await expect(registry.startSignIn("b")).rejects.toThrow("Another sign-in");
+      expect([existsSync(first), existsSync(second)]).toEqual([true, false]);
       await registry.cancelSignIn("a");
+      await registry.startSignIn("b");
       const rows = await registry.describe();
       expect(rows.find((row) => row.instanceId === "a")?.loginState).toBe("cancelled");
       expect(rows.find((row) => row.instanceId === "b")?.loginState).toBe("pending");
@@ -170,9 +172,11 @@ describe("ProviderRegistry", () => {
       await registry.load({ a: { driver: "fake", config: { cli: cli(first) } } });
       await registry.startSignIn("a");
       const pids: number[] = JSON.parse(readFileSync(first, "utf8"));
+      const stopped = registry.logins.wait("a");
       expect(pids.map(alive)).toEqual([true, true]);
       if (action === "replace") await registry.load({ a: { driver: "fake", config: { cli: cli(second) } } });
       else registry.remove("a");
+      await stopped;
       await expect.poll(() => pids.map(alive), { timeout: 5000 }).toEqual([false, false]);
       expect(registry.logins.state("a")).toBeUndefined();
       expect(registry.logins.capture("a")).toEqual({});
@@ -312,7 +316,7 @@ describe("ProviderRegistry", () => {
     await registry.load({ a: { driver: "fake", config: { cli: "custom-cli", login: { args: ["untrusted"] } }, environment: { TEST_ENV: "yes" } } });
     const start = vi.spyOn(registry.logins, "start").mockResolvedValue({ url: "https://example.com/login" });
     await registry.startSignIn("a", true);
-    expect(start).toHaveBeenCalledExactlyOnceWith("a", "custom-cli", ["device"], expect.objectContaining({ TEST_ENV: "yes", MUSE_LOGIN: "0" }), ["auth.example"]);
+    expect(start).toHaveBeenCalledExactlyOnceWith("a", "custom-cli", ["device"], expect.objectContaining({ TEST_ENV: "yes", MUSE_LOGIN: "0" }), ["auth.example"], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("missing")).toBeNull();
     await registry.disposeAll();
   });
@@ -341,6 +345,22 @@ describe("ProviderRegistry", () => {
     expect(await registry.startSignIn("a")).toEqual({ url: "https://example.com/login" });
     expect(await registry.startSignIn("a", true)).toBeNull();
     await registry.disposeAll();
+  });
+
+  it("retains managed Claude paste-back input for start and pushed rows", async () => {
+    const fake = makeFakeDriver({ kind: "claudeAgent" });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }),
+      install: { login: { args: ["auth", "login"] } },
+      create: async (input) => ({ ...await fake.driver.create(input), account: input.account }),
+    }]);
+    try {
+      await registry.load({ added: { driver: "claudeAgent", account: { id: "added", of: "claude", home: homedir(), generation: 1 } } });
+      const capture = { url: "https://claude.com/cai/oauth/authorize?code=true", inputGeneration: 7 };
+      vi.spyOn(registry.logins, "start").mockResolvedValue({ ...capture, code: "ABCD-EFGH" });
+      vi.spyOn(registry.logins, "capture").mockReturnValue({ ...capture, code: "ABCD-EFGH" });
+      expect(await registry.startSignIn("added")).toEqual(capture);
+      expect((await registry.describeCached())[0].loginCapture).toEqual(capture);
+    } finally { await registry.disposeAll(); vi.restoreAllMocks(); }
   });
 
   it("discards an old auth probe after a login is replaced", async () => {
@@ -375,7 +395,7 @@ describe("ProviderRegistry", () => {
     const logout = registry.signOut("a");
     await Promise.resolve();
     expect(cancel).toHaveBeenCalledWith("a");
-    expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object));
+    expect(start).toHaveBeenCalledWith("a", "fake-cli", ["logout"], expect.any(Object), [], { scope: "fake", account: undefined });
     expect(await registry.startSignIn("a")).toBeNull();
     expect(await registry.signOut("a")).toBe(false);
     finish();

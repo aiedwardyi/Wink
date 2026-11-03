@@ -112,7 +112,7 @@ describe("user stop on queued sends", () => {
   it("is what the bot Stop route does before it releases the bot", () => {
     const source = readFileSync(new URL("./bot-chat-routes.ts", import.meta.url), "utf8");
     const route = source.slice(source.indexOf("    interrupt: async ("), source.indexOf("    resumeTask: async ("));
-    const [routine, turn] = route.split("const instance = registry.get(bot.modelSelection.instanceId);");
+    const [routine, turn] = route.split("const instance = instanceForBot(bot);");
     for (const branch of [routine!, turn!]) {
       const cancel = branch.indexOf("const returned = cancelQueuedSends(bot.id);");
       expect(cancel).toBeGreaterThan(-1);

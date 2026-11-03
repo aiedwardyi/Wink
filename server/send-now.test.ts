@@ -42,6 +42,7 @@ function harness(steer = vi.fn(async () => true)) {
     noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: (_thread: string, id?: string) => messages.find((m) => m.id === id),
     botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing: true }, steer, interruptTurn } }]]),
+    instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer, interruptTurn } }),
     steerTakeover: () => ({ consumed: noop, accepted: noop }), cfg: {},
     composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text,
     userTurnReactionKeys: () => [], hasPeerWatch: () => false, clearUnattended: noop,

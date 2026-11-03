@@ -64,8 +64,9 @@ import { switchEffort, type EffortRequest } from "./claude-effort.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
+import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 
-const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional() });
+const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 
 /** Whether `claude` is signed in, and as whom.
  *
@@ -78,13 +79,18 @@ export function claudeAuthStatus(
   cli: string,
   env: NodeJS.ProcessEnv,
   run: typeof execCli = execCli,
-): Promise<{ signedIn?: boolean; account?: string }> {
+  account?: AccountContext,
+): Promise<{ signedIn?: boolean; account?: string; identity?: string; engineSignedIn?: boolean }> {
   return new Promise((resolve) => {
-    run(cli, ["auth", "status", "--json"], { timeout: 3000, env }, (_error, stdout) => {
+    run(cli, ["auth", "status", "--json"], { timeout: 3000, env, ...(account ? { account, accountDriver: "claudeAgent" } : {}) }, (_error, stdout) => {
       try {
         const parsed = claudeAuthSchema.safeParse(JSON.parse(stdout));
         if (!parsed.success) resolve({});
-        else resolve({ signedIn: parsed.data.loggedIn, account: parsed.data.loggedIn ? accountLabel(parsed.data.email, parsed.data.orgName) : undefined });
+        else {
+          const status = parsed.data;
+          const admission = claudeAccountAdmission(status, account);
+          resolve({ ...admission, account: admission.signedIn ? accountLabel(status.email, status.orgName) : undefined });
+        }
       } catch {
         resolve({});
       }
@@ -110,6 +116,7 @@ export function claudeSignedIn(
 function claudeEnvironment(
   model?: string | null,
   source: NodeJS.ProcessEnv = process.env,
+  account?: AccountContext,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...source, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
   delete env.CLAUDECODE;
@@ -122,9 +129,9 @@ function claudeEnvironment(
   // env, and the tokens it writes are the only credentials the CLI is granted.
   // Everything else the harness holds — every other provider's key, the
   // workspace secrets, whatever key ships next — is someone else's.
-  const applied = applyClaudeInject(env, model);
+  const applied = account ? { injected: false } : applyClaudeInject(env, model);
   applyCredentialAllowlist(env, applied.injected ? ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] : []);
-  return env;
+  return account ? accountLaunch(account, "claudeAgent", [], env).env : env;
 }
 
 const DRIVER_KIND = "claudeAgent";
@@ -720,11 +727,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
 
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
+    const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
+    let admitted = !input.account;
+    let accountBlocked = false;
+    let helpers = 0;
     const catalogEnv: Record<string, string | undefined> = { ...process.env, ...input.environment };
     let models = STATIC_CLAUDE_MODELS;
     const refreshModels = async () => {
       try {
-        const resolved = await mergeLocalInject(readClaudeModelCatalog(catalogEnv), catalogEnv);
+        const resolved = input.account ? STATIC_CLAUDE_MODELS : await mergeLocalInject(readClaudeModelCatalog(catalogEnv), catalogEnv);
         if (resolved.options.length) models = resolved;
       } catch {
         // Keep the last usable catalog when settings.json is unreadable.
@@ -956,6 +967,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       relaunchOf?: string,
       restart?: { turn: NonNullable<Session["turn"]>; steerAcks: Session["steerAcks"] },
     ) => {
+      if (!admitted || accountBlocked) throw new Error("Sign in to this Claude account before starting a turn");
       const { threadId } = turn;
       if (active.has(threadId) && !(restart && active.get(threadId)?.turnId === relaunchOf)) throw new Error("a turn is already running on this thread");
       const controlsHost = turn.integrations?.localComputer?.scope === "local-computer";
@@ -1003,9 +1015,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
       turnEnvironment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= "300000";
-      const turnModel = await resolveClaudeTurnModel(turn.model, turnEnvironment);
+      const turnModel = input.account ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
+      if (input.account && turnModel && !models.options.some((model) => model.id === turnModel)) throw new Error("Unsupported subscription model");
       if (restart?.turn.settled) return { turnId };
-      const injected = applyClaudeInject({ ...turnEnvironment }, turnModel);
+      const injected = input.account ? { model: turnModel, injected: false } : applyClaudeInject({ ...turnEnvironment }, turnModel);
       if (injected.model) args.push("--model", injected.model);
       if (turn.effort) args.push("--effort", turn.effort);
       if (turn.leanStartup === true) args.push("--setting-sources", "project");
@@ -1106,7 +1119,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
       }
 
-      const env = claudeEnvironment(turnModel, turnEnvironment);
+      const env = claudeEnvironment(turnModel, turnEnvironment, input.account);
       const cwd = turn.cwd ?? homedir();
       // everything that shapes the process, minus session/turn specifics
       // (the --mcp-config file is a fresh temp path each time; its CONTENT
@@ -1239,6 +1252,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           args.splice(args.indexOf("--append-system-prompt"), 2, "--append-system-prompt-file", systemPromptPath);
         }
         child = spawnCli(config.cli, args, {
+          ...launchPolicy,
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1939,22 +1953,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     };
 
     const authStatus = cachedSignIn(
-      () => claudeAuthStatus(config.cli, claudeEnvironment(undefined, { ...process.env, ...input.environment })),
+      () => claudeAuthStatus(config.cli, claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account), execCli, input.account),
       (status) => status.signedIn === true,
     );
     const snapshot = async (opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot> => {
-      const env = claudeEnvironment(undefined, { ...process.env, ...input.environment });
+      const env = claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account);
       const version = await new Promise<string | null>((resolve) => {
-        execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
+        execCli(config.cli, ["--version"], { timeout: 8000, env, ...launchPolicy }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const { signedIn: authenticated, account } = await authStatus(opts?.rescan || opts?.refresh);
+      const { signedIn: authenticated, account, identity, engineSignedIn } = await authStatus(opts?.rescan || opts?.refresh);
+      if (input.account) admitted = authenticated === true;
       // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
       // CLI's own login (Pro/Max): the cost it reports is what the call
       // WOULD bill, not a charge
-      return { state: "available", version, authenticated, account, billing: "subscription" };
+      return { state: "available", version, authenticated, account, ...(input.account ? { accountIdentity: identity, accountAuthenticated: engineSignedIn } : {}), billing: "subscription" };
     };
 
     /** Prompts go on stdin, never argv, since they can hold secrets.
@@ -1968,6 +1983,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       lean = false,
     ): Promise<string> =>
       new Promise((resolve, reject) => {
+        if (!admitted || accountBlocked) return reject(new Error("Sign in to this Claude account before using helpers"));
         if (lean) mkdirSync(HELPER_DIR, { recursive: true });
         const child = spawnCli(
           config.cli,
@@ -1978,17 +1994,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             ...(ephemeral ? ["--no-session-persistence"] : []),
           ],
           {
+            ...launchPolicy,
             ...(lean ? { cwd: HELPER_DIR } : {}),
             stdio: ["pipe", "pipe", "pipe"],
-            env: claudeEnvironment("claude-haiku-5-5", { ...process.env, ...input.environment }),
+            env: claudeEnvironment("claude-haiku-5-5", { ...process.env, ...input.environment }, input.account),
           },
         );
+        helpers += 1;
         let stdout = "";
         let stderr = "";
         let settled = false;
         const finish = (error?: Error) => {
           if (settled) return;
           settled = true;
+          helpers -= 1;
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
@@ -2048,8 +2067,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
+    if (input.account) admitted = (await authStatus(true)).signedIn === true;
     return {
       instanceId,
+      ...(input.account ? { account: input.account } : {}),
+      ...(input.account ? { invalidateAccount: () => { admitted = false; listeners.clear(); } } : {}),
+      ...(input.account ? { accountBusy: () => active.size > 0 || helpers > 0, setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; } } : {}),
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
@@ -2058,7 +2081,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       },
       refreshModels,
       snapshot,
-      loginConfig: () => ({ cli: config.cli, env: claudeEnvironment(undefined, { ...process.env, ...input.environment }) }),
+      loginConfig: () => ({ cli: config.cli, env: claudeEnvironment(undefined, { ...process.env, ...input.environment }, input.account) }),
       adapter: {
         provider: DRIVER_KIND,
         capabilities: {

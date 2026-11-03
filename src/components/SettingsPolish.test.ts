@@ -73,7 +73,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
     ...actual,
-    api: mockApi,
+    api: (path: string, init?: RequestInit) => path === "/api/accounts" ? Promise.resolve({ accounts: [] }) : mockApi(path, init),
     useStore: () => ({
       state: mockState,
       dispatch: () => undefined,

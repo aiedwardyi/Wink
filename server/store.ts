@@ -20,6 +20,7 @@ import { workspaceDir } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { applyPendingModel } from "./pending-model.ts";
+import { clearAccountSessions } from "./account-sessions.ts";
 import { validateProjectNotes } from "./project-notes.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { redactToolMessage } from "./tool-detail.ts";
@@ -1596,6 +1597,12 @@ export class Store {
     if (!threadId || bot.threadId === threadId) bot.resumeCursors[instanceId] = cursor;
     this.saveBots();
     this.emit({ type: "bot", botId });
+  }
+
+  clearAccountSessions(instanceId: string) {
+    const changed = clearAccountSessions(this.bots, instanceId);
+    if (changed.length) this.saveBots();
+    for (const botId of changed) this.emit({ type: "bot", botId });
   }
 
   /** The system text a resumed session holds: what it started with, plus

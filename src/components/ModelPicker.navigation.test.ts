@@ -686,6 +686,19 @@ describe("ModelPicker cross navigation", () => {
 });
 
 describe("ModelPicker commit and selection", () => {
+  it.each(["claude", "grok"])("commits a Main-backed engine model from %s", async (from) => {
+    const claude = engine("claude", "claudeAgent", ["claude-opus-5-5", "claude-sonnet-5-5"]);
+    claude.snapshot.authenticated = false;
+    claude.pickerSnapshot = { state: "available", authenticated: true };
+    mock.instances = [claude, engine("grok", "grokAgent", ["grok-4.7"])];
+    await mount({ instanceId: from, model: from === "claude" ? "claude-opus-5-5" : "grok-4.7", mode: "pinned" });
+    const cell = document.querySelector<HTMLButtonElement>('[data-model-cell="claude-sonnet-5-5"]')!;
+    await act(async () => cell.click());
+    await key("Enter");
+    expect(mock.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "setModel", botId: "bot-1",
+      selection: { instanceId: "claude", model: "claude-sonnet-5-5", mode: "pinned" } });
+  });
+
   it("commits an effort-only change with Enter when the effort cell has focus", async () => {
     mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1"], ["low", "medium", "high", "xhigh", "max"])];
     await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned" });
