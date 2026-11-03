@@ -10,6 +10,7 @@ import { createSpawnUsage } from "./spawn-usage.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { callTool, workerReportText } from "./drivers/terminal-proxy.ts";
+import { foldContinuationStart } from "./continuation-turn.ts";
 
 const workers = await import("./worker-launch.ts").catch(() => null);
 const captures = await import("./worker-turn.ts").catch(() => null);
@@ -42,6 +43,55 @@ async function fixture() {
 }
 
 describe("trusted worker accounts", () => {
+  it("captures the emitting account when adopting a continuation", async () => {
+    const f = await fixture();
+    f.turns.settled("thread");
+    const live = { instanceId: f.third.id, driverKind: "codex", account: f.third };
+    const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+    let statement = "";
+    const visit = (node: ts.Node) => {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "foldContinuationStart") statement = node.getText(source);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    const noop = () => {};
+    runInNewContext(ts.transpile(statement, { target: ts.ScriptTarget.ES2022 }), {
+      event: { type: "turn.started", threadId: "thread", turnId: "continued", providerInstanceId: f.third.id }, foldContinuationStart,
+      store: { botByThread: () => ({ id: "bot" }), setActivity: noop }, turnStartClaims: new Set(),
+      registry: { get: (id: string) => id === f.third.id ? live : null }, providerReload: { started: (_thread: string, id: string) => id === f.third.id ? live : null },
+      workerTurns: f.turns, turnRegistry: { start: noop }, dispatchedThreads: new Map(), liveTurnIdByThread: new Map(),
+      turnDispatchedAt: new Map(), tickTurnClock: () => 1, turnStartedAtMs: new Map(), watchdog: { watch: noop },
+      paneNoteTurnThreads: new Set(), disownedTurnIds: new Set(),
+    });
+    expect(await f.prepare(f.input)).toMatchObject({ kind: "managed", account: { id: f.third.id, generation: f.third.generation } });
+  });
+
+  it("survives a rejected worker-account startup handshake", async () => {
+    const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+    const statement = source.statements.find((node) => ts.isIfStatement(node) && node.getText(source).includes("await enableWorkerAccounts"))!;
+    const error = vi.fn();
+    await expect(runInNewContext(`(async () => { ${ts.transpile(statement.getText(source), { target: ts.ScriptTarget.ES2022 })} })()`, {
+      accounts: { snapshot: [{}] }, terminalBridgeAccess: null, enableWorkerAccounts: async () => { throw new Error("offline fixture"); }, console: { error },
+    })).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, "send"] as const)("allows unrelated shell environment prefixes in %s mode", async (mode) => {
+    const f = await fixture();
+    expect(await f.prepare({ ...f.input, command: "$env:CI='1'; pnpm test", mode })).toEqual({ kind: "shell" });
+    await expect(f.prepare({ ...f.input, command: "$env:HOME='x'; npm test" })).rejects.toThrow(/Conflicting worker home override/);
+    await expect(f.prepare({ ...f.input, command: "$env:CI='1'; codex task" })).rejects.toThrow(/Conflicting worker environment override/);
+  });
+
+  it.each(["codex; id", "codex|more", "(codex 'task')", "$(codex 'task')", "{ codex }"])("refuses a nested or adjacent engine: %s", (command) => {
+    expect(() => workers!.workerCommand(command)).toThrow(/Ambiguous worker/);
+  });
+
+  it("preserves Claude continue prompts that mention login", async () => {
+    const f = await fixture();
+    expect(await f.prepare({ ...f.input, command: "claude -c 'fix the login bug'" })).toMatchObject({ kind: "managed", args: expect.arrayContaining(["-c", "fix the login bug"]) });
+  });
+
   it.each(["linux", "darwin"])("preserves POSIX worker quoting on %s", (platform) => {
     vi.stubGlobal("process", { ...process, platform });
     try {
@@ -88,7 +138,7 @@ describe("trusted worker accounts", () => {
     const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
     const dispatches: string[] = [];
     const visit = (node: ts.Node) => {
-      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "workerTurns.capture") {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "workerTurns.capture" && node.expression.arguments[2]?.getText(source) === "live") {
         dispatches.push((ts.isIfStatement(node.parent) ? node.parent : node).getText(source));
       }
       ts.forEachChild(node, visit);

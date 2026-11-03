@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
@@ -39,7 +39,8 @@ export class AccountError extends Error {
 function plainDirectory(path: string, create: boolean) {
   if (create) mkdirSync(path, { recursive: true, mode: 0o700 });
   const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || resolve(realpathSync(path)).toLowerCase() !== resolve(path).toLowerCase()) {
+  const canonical = (value: string) => process.platform === "win32" ? resolve(value).toLowerCase() : resolve(value);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || canonical(realpathSync(path)) !== canonical(join(realpathSync(dirname(path)), basename(path)))) {
     throw new AccountError("Account home must not use a link or alias");
   }
 }

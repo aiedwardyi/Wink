@@ -160,7 +160,10 @@ export class EngineLogin {
             if (this.scopes.get(scope) === job) this.scopes.delete(scope);
             closed();
           };
-          const fallback = setTimeout(closed, 5000);
+          const fallback = setTimeout(() => {
+            if (this.scopes.get(scope) === job) this.scopes.delete(scope);
+            closed();
+          }, 5000);
           fallback.unref();
           job.child.once("close", () => { childClosed = true; finish(); });
           killCliTree(job.child, () => { treeStopped = true; finish(); });

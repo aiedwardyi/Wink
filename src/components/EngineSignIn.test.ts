@@ -59,6 +59,21 @@ afterEach(async () => {
 });
 
 describe("engine sign-in row", () => {
+  it("keeps stopped credentials actionable until the account is ready", async () => {
+    const row = instance("claudeAgent", { accountState: "stopped", snapshot: { state: "available", authenticated: true } });
+    const fetchMock = vi.fn(async (url: string) => json(url === "/api/instances" ? { instances: [{ ...row, loginState: "pending", loginCapture: capture }] } : capture));
+    vi.stubGlobal("fetch", fetchMock);
+    await render(createElement(EngineSignIn, { instance: row }));
+    expect(host.textContent).toBe("Sign In");
+    await click("Sign In");
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(host.textContent).toContain(capture.code);
+    expect(host.textContent).not.toContain("Connected");
+    fetchMock.mockImplementation(async () => json({ instances: [{ ...row, accountState: "ready" }] }));
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(host.textContent).toBe("Connected");
+  });
+
   it("runs desktop login without opening a second browser, then cancels", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(capture));
     vi.stubGlobal("fetch", fetchMock);

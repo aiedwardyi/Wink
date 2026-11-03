@@ -856,6 +856,14 @@ export function createUsageRefresh(deps: {
     if (cached && clock() < cached.retryAt) return cached.pending;
     const retryAt = clock() + (deps.throttleMs ?? 30_000);
     active.set(options.instanceId, (active.get(options.instanceId) ?? 0) + 1);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const count = (active.get(options.instanceId) ?? 1) - 1;
+      if (count) active.set(options.instanceId, count);
+      else active.delete(options.instanceId);
+    };
     const pending = (async (): Promise<Result> => {
       try {
         const merged: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath(), ...options.environment };
@@ -869,6 +877,7 @@ export function createUsageRefresh(deps: {
             if (epochs.get(options.instanceId) !== epoch) return { retryAt: 0 };
             const identity = parseCodexAccount(payload);
             if (identity.type !== "chatgpt") throw new Error("signin");
+            release();
             await deps.accountIdentity?.(options.account, identity.identity);
           }
           const result = z.object({ rateLimits: z.json(), rateLimitsByLimitId: z.record(z.string(), z.json()).optional() }).parse(payload);
@@ -967,11 +976,7 @@ export function createUsageRefresh(deps: {
       }
     })();
     const guarded = pending.then((result) => options.account && epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result)
-      .finally(() => {
-        const count = (active.get(options.instanceId) ?? 1) - 1;
-        if (count) active.set(options.instanceId, count);
-        else active.delete(options.instanceId);
-      });
+      .finally(release);
     if (driver !== "claudeAgent") cache.set(key, { retryAt, pending: guarded });
     return guarded;
   };

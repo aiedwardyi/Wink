@@ -292,7 +292,7 @@ it("gates listeners per engine and cancels only the owning account", async () =>
   } finally { await manager.dispose(); }
 });
 
-it("holds the login gate until the process-tree stop is confirmed", async () => {
+it("holds the login gate until the process-tree stop before the fallback deadline", async () => {
   const f = fixture("codex");
   f.login("pending");
   const stopped: Array<() => void> = [];
@@ -304,13 +304,18 @@ it("holds the login gate until the process-tree stop is confirmed", async () => 
   const manager = new EngineLogin(5000, 50);
   try {
     await manager.start("account-a", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    vi.useFakeTimers();
     const cancelled = manager.cancel("account-a");
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await expect(manager.start("account-b", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account })).rejects.toThrow("Another sign-in");
+    const next = manager.start("account-b", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(f.launches).toHaveLength(1);
     stopped.shift()!();
     await cancelled;
-    await manager.start("account-b", "fixture-cli", ["login"], {}, [], { scope: "codex", account: f.account });
+    await vi.advanceTimersByTimeAsync(50);
+    await next;
+    expect(f.launches).toHaveLength(2);
   } finally {
+    vi.useRealTimers();
     stopped.splice(0).forEach((done) => done());
     vi.mocked(procs.killCliTree).mockImplementation((value, done) => {
       Object.assign(value, { exitCode: 0 });

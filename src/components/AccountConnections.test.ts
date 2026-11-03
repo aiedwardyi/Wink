@@ -49,6 +49,7 @@ afterEach(async () => {
   host.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 it.each(["en", "ko"] as const)("signs out a non-main account in one tap in %s", async (locale) => {
@@ -187,6 +188,33 @@ it("keeps single-account sign-out unchanged", async () => {
   await act(async () => buttons("Sign Out")[0]!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/claude/sign-out", { method: "POST", body: "{}" });
   expect(host.textContent).not.toContain("Set another account");
+});
+
+it("uses browser login when Claude does not advertise device login", async () => {
+  await render(1);
+  state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  await update();
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts", { method: "POST", body: JSON.stringify({ of: "claude", device: false }) });
+});
+
+it("keeps computer-only guidance for Claude account creation on a phone", async () => {
+  await render(1);
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  await update();
+  expect(buttons("Add Account")).toHaveLength(0);
+  expect(host.textContent).toContain("Sign in on a computer");
+  expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
+});
+
+it("offers recovery for a stopped account whose credentials remain valid", async () => {
+  await render();
+  state.instances[1]!.accountState = "stopped";
+  await update();
+  expect(buttons("Sign In")).toHaveLength(1);
+  await act(async () => buttons("Sign In")[0]!.click());
+  expect(request).toHaveBeenCalledWith("/api/instances/account-1/sign-in", { method: "POST", body: JSON.stringify({ device: false }) });
 });
 
 

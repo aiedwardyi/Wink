@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { useI18n } from "@/lib/i18n";
+import { isPhone } from "@/lib/phone-swipe";
 import { EngineMark } from "./EngineMark";
 import { EngineSignIn } from "./EngineSetup";
 
@@ -12,6 +13,8 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
+  const login = accounts[0]!.install?.login;
+  const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object) => {
     if (busy) return;
     setBusy(true);
@@ -48,8 +51,9 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
           </div>
         );
       })}
-      {accounts.length < 8 && <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb })}
-        className="min-h-11 text-[12px] text-ink hover:underline disabled:opacity-50">{t("accounts.add")}</button>}
+      {accounts.length < 8 && (computerOnly ? <span className="text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>
+        : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
+          className="min-h-11 text-[12px] text-ink hover:underline disabled:opacity-50">{t("accounts.add")}</button>)}
       {error && <div role="alert" className="text-[12px] text-danger">{error}</div>}
     </div>
   );

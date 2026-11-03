@@ -77,6 +77,74 @@ async function fixture() {
 }
 
 describe("account lifecycle", () => {
+  it("handles failed base sign-in snapshots", async () => {
+    const f = await fixture();
+    f.registry.blockAccount("claude", true);
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const snapshot = vi.spyOn(f.registry.get("claude")!, "snapshot").mockRejectedValue(new Error("fixture probe failure"));
+    await f.controller.signIn("claude");
+    const finished = f.controller.settled("claude");
+    release();
+    await expect(finished).resolves.toBeUndefined();
+    expect(snapshot).toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(true);
+  });
+
+  it("retains a newer base sign-in's pending entry", async () => {
+    const f = await fixture();
+    f.registry.blockAccount("claude", true);
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const newer = Promise.resolve();
+    const pending = (f.controller as unknown as { pending: Map<string, Promise<void>> }).pending;
+    vi.spyOn(f.registry.get("claude")!, "snapshot").mockImplementation(async () => {
+      pending.set("claude", newer);
+      return { state: "available", authenticated: true };
+    });
+    await f.controller.signIn("claude");
+    const finished = f.controller.settled("claude");
+    release();
+    await finished;
+    expect(pending.get("claude")).toBe(newer);
+  });
+
+  it.each(["turn", "pane", "unreachable"])("guards base sign-in against a live %s when accounts exist", async (kind) => {
+    const f = await fixture();
+    await f.add();
+    if (kind === "turn") f.references.add("claude");
+    else (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => true;
+    f.start.mockClear();
+    await expect(f.controller.signIn("claude")).rejects.toThrow(/active work/);
+    expect(f.start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+  });
+
+  it("restores base availability when login cannot start", async () => {
+    const f = await fixture();
+    await f.add();
+    vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new Error("Another sign-in is running"));
+    await expect(f.controller.signIn("claude")).rejects.toThrow("Another sign-in");
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+  });
+
+  it("omits stale live account rows during reload without spinning", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    await f.registry.describe();
+    const registry = f.registry as unknown as { currentAccountRows(rows: unknown[]): Promise<unknown[]>; row(entry: unknown, probe: unknown): unknown; byId: Map<string, unknown>; probed: Map<string, unknown>; accounts: Map<string, typeof account> };
+    const row = registry.row(registry.byId.get(account.id), registry.probed.get(account.id));
+    registry.accounts.set(account.id, { ...account, generation: account.generation + 1 });
+    const original = registry.accounts.get.bind(registry.accounts);
+    const get = vi.spyOn(registry.accounts, "get");
+    let reads = 0;
+    get.mockImplementation((id) => {
+      if (++reads > 10) throw new Error("stale row loop did not yield");
+      return original(id);
+    });
+    await expect(registry.currentAccountRows([row])).resolves.toEqual([]);
+  });
+
   it("publishes accepted and removed accounts after their rows are ready", async () => {
     const f = await fixture();
     const added = await f.add();

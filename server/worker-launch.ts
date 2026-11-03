@@ -69,17 +69,17 @@ export function workerCommand(command: string, unmanaged = false) {
       if (unmanaged) return { kind: "unmanaged" as const };
       throw new Error("Conflicting worker home override");
     }
-    if (match[1].toUpperCase() !== "AGY_CLI_DISABLE_AUTO_UPDATE") throw new Error("Conflicting worker environment override");
-    environment.AGY_CLI_DISABLE_AUTO_UPDATE = match[2].replace(/^['"]|['"]$/g, "");
+    environment[match[1].toUpperCase()] = match[2].replace(/^['"]|['"]$/g, "");
     rest = rest.slice(match[0].length);
   }
   const first = /^\s*([^\s]+)/.exec(rest)?.[1] ?? "";
   const engine = ENGINES.get(first.toLowerCase());
   if (!engine) {
-    if (WRAPPER.test(first) || /(?:^|[;&|\r\n])\s*&?\s*["']?(?:[^\s"']*[\\/])?(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=[\s"']|$)/i.test(rest)
+    if (WRAPPER.test(first) || /(?:^|[;&|(){}\r\n])\s*&?\s*["']?(?:[^\s"']*[\\/])?(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=[\s"';&|(){}<>]|$)/i.test(rest)
       || /^(?:pnpm|npm|npx|bunx)\s+(?:exec\s+)?(?:claude|codex|grok|muse|agy)\b/i.test(rest)) throw new Error("Ambiguous worker launch; use a direct engine command");
     return { kind: "shell" as const };
   }
+  if (Object.keys(environment).some((name) => name !== "AGY_CLI_DISABLE_AUTO_UPDATE")) throw new Error("Conflicting worker environment override");
   const [executable, ...args] = tokens(rest);
   if (engineToken(executable) !== first.toLowerCase()) throw new Error("Ambiguous worker executable");
   return { kind: "managed" as const, executable, args, environment, ...engine };
@@ -121,7 +121,7 @@ export function createWorkerLaunch(deps: {
         return true;
       });
     }
-    for (let i = 0; i < args.length; i++) {
+    for (let i = 0; command.driver === "codex" && i < args.length; i++) {
       const value = /^(?:--config|-c)$/.test(args[i]) ? args[++i] : /^(?:--config=|-c=?)(.+)$/.exec(args[i])?.[1];
       const key = value?.split("=", 1)[0].trim();
       if (key && !/^shell_environment_policy\.set\.ORBIT_(?:PANE|BOT|TEACHER|URL|MSG_AUTH)$/.test(key)

@@ -432,9 +432,9 @@ export class ProviderRegistry {
 
   private async currentAccountRows(rows: ReturnType<ProviderRegistry["row"]>[]) {
     const current = await Promise.all(rows.map(async (row) => {
-      while ("accountGeneration" in row && row.accountGeneration !== undefined && this.accounts.get(row.instanceId)?.generation !== row.accountGeneration) {
+      for (let attempt = 0; "accountGeneration" in row && row.accountGeneration !== undefined && this.accounts.get(row.instanceId)?.generation !== row.accountGeneration; attempt++) {
         const entry = this.byId.get(row.instanceId);
-        if (!entry) return [];
+        if (!entry || attempt > 0 || entry.live?.account?.generation !== this.accounts.get(row.instanceId)?.generation) return [];
         const probe = this.probed.get(row.instanceId) ?? await (this.probing.get(row.instanceId) ?? this.startProbe(entry, this.candidateScan()));
         row = this.row(entry, probe);
       }

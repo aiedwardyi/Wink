@@ -7,6 +7,7 @@ import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } fro
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
+import { accountReady } from "@/lib/accounts";
 
 type Platform = "darwin" | "win32" | "linux";
 
@@ -220,7 +221,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const computerOnly = phone && (external || !login?.deviceArgs);
   // Same argv both ways is a device-only flow (Muse): nothing opens on desktop either.
   const deviceFlow = phone || Boolean(login?.deviceArgs && login.deviceArgs.length === login.args.length && login.deviceArgs.every((arg, i) => arg === login.args[i]));
-  const connected = current.snapshot.state === "available" && current.snapshot.authenticated === true;
+  const connected = accountReady(current);
   const path = `/api/instances/${encodeURIComponent(instance.instanceId)}/sign-in`;
 
   useEffect(() => {
@@ -237,7 +238,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
       setWaiting(true);
       setCapture(instance.loginCapture ?? {});
     }
-    if (instance.snapshot.authenticated === true) setWaiting(false);
+    if (accountReady(instance)) setWaiting(false);
   }, [instance]);
 
   useEngineLoginRefresh(waiting, (instances) => {
@@ -246,7 +247,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
     setCurrent(next);
     setCapture(next.loginCapture ?? {});
     onUpdated?.(next);
-    if (next.snapshot.authenticated === true) { setWaiting(false); setFailed(false); }
+    if (accountReady(next)) { setWaiting(false); setFailed(false); }
     else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled"); }
   });
 

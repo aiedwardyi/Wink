@@ -586,7 +586,8 @@ let terminalBridgeAccess =
   process.env.OMB_TERMINAL_URL?.trim() && process.env.OMB_TERMINAL_TOKEN?.trim()
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
-if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess);
+if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess)
+  .catch(() => console.error("Worker account routing is unavailable at startup"));
 
 function agentsIntegration(botId: string, threadId: string, depth: number) {
   return {
@@ -3112,6 +3113,8 @@ bus.subscribe((event: RuntimeEvent) => {
     botByThread: (threadId) => store.botByThread(threadId),
     claimed: (botId) => turnStartClaims.has(botId),
     adopt: (botId, threadId, turnId) => {
+      const instance = event.providerInstanceId ? providerReload.started(threadId, event.providerInstanceId) : null;
+      if (instance) workerTurns.capture(botId, threadId, instance);
       turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0 });
       store.setActivity(botId, "working", threadId);
       dispatchedThreads.set(botId, threadId);

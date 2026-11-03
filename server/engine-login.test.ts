@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
 import { EngineLogin } from "./engine-login.ts";
+import * as procs from "./procs.ts";
 
 const managers: EngineLogin[] = [];
 const dirs: string[] = [];
@@ -74,6 +75,23 @@ async function replay(engine: string, output: string, authHosts?: string[]) {
 }
 
 describe("EngineLogin", () => {
+  it("releases a finished login scope when neither kill nor close completes", async () => {
+    const { EventEmitter } = await import("node:events");
+    const manager = new EngineLogin();
+    managers.push(manager);
+    vi.useFakeTimers();
+    vi.spyOn(procs, "killCliTree").mockImplementation(() => {});
+    try {
+      const internal = manager as unknown as { create(engine: string, scope: string): { child?: unknown }; scopes: Map<string, unknown> };
+      const job = internal.create("account-one", "codex");
+      job.child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+      const cancelled = manager.cancel("account-one");
+      await vi.advanceTimersByTimeAsync(5_000);
+      await cancelled;
+      expect(internal.scopes.has("codex")).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each([
     ["codex", ["auth.openai.com"], { url: "https://auth.openai.com/codex/device", code: "8Y82-PFRXD" }],
     ["grok", ["accounts.x.ai"], { url: "https://accounts.x.ai/oauth2/device?user_code=26XB-F54Z", code: "26XB-F54Z" }],

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -180,6 +181,36 @@ test("managed command serialization preserves prompt text and expands only pane 
   assert.ok(workers, "managed command serialization exists");
   const worker = { executable: "codex", args: ["task'; echo wrong", "value=\u0000ORBIT_PANE\u0000"] };
   assert.equal(workers.managedWorkerCommand(worker, { ORBIT_PANE: "trusted-pane" }, "win32"), "& 'codex' 'task''; echo wrong' 'value=trusted-pane'");
+});
+
+test("managed Windows commands preserve smart quotes as one literal argument", () => {
+  for (const prompt of ["don\u2019t", "x\u2019; calc; \u2019y", "a\u2018b", "a\u201ab", "a\u201bb"]) {
+    const command = workers.managedWorkerCommand({ executable: "codex", args: [prompt] }, {}, "win32");
+    assert.equal(command, `& 'codex' '${prompt.replace(/['\u2018\u2019\u201a\u201b]/g, (mark) => mark + mark)}'`);
+  }
+});
+
+test("PowerShell parses smart-quoted prompts without extra commands", { skip: process.platform !== "win32" }, () => {
+  const prompts = ["don\u2019t", "x\u2019; calc; \u2019y", "a\u2018b", "a\u201ab", "a\u201bb"];
+  const commands = prompts.map((prompt) => workers.managedWorkerCommand({ executable: "codex", args: [prompt] }, {}, "win32"));
+  const script = `[Console]::InputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    $commands = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $values = foreach ($command in $commands) {
+      $tokens = $null; $errors = $null
+      $ast = [Management.Automation.Language.Parser]::ParseInput($command, [ref]$tokens, [ref]$errors)
+      if ($errors.Count -or $ast.EndBlock.Statements.Count -ne 1 -or $ast.EndBlock.Statements[0].PipelineElements.Count -ne 1) { throw 'Unexpected command structure' }
+      $ast.EndBlock.Statements[0].PipelineElements[0].CommandElements[1].Value
+    }
+    ConvertTo-Json -Compress -InputObject @($values)`;
+  const parsed = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+    input: JSON.stringify(commands), encoding: "utf8", windowsHide: true,
+  });
+  assert.deepEqual(JSON.parse(parsed), prompts);
+});
+
+test("the terminal test command includes worker account regressions", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.ok(manifest.scripts["test:terminal"].includes("electron/terminal-worker.node-test.mjs"));
 });
 
 test("private worker policy requests fail closed and never return an inherited launch", async () => {

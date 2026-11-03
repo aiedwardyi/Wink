@@ -17,6 +17,22 @@ const payload = { account: { type: "chatgpt", email: "fixture@example.test" }, r
 afterEach(() => vi.restoreAllMocks());
 
 describe("account cache generations", () => {
+  it.each([false, true])("excludes only its completed read from identity observation with overlapping work %s", async (overlap) => {
+    let release!: (value: typeof payload) => void;
+    const rpc = vi.fn().mockResolvedValueOnce(payload).mockImplementation(() => new Promise((done) => { release = done; }));
+    const busy: boolean[] = [];
+    const refresh = createUsageRefresh({ rpc, throttleMs: 0, accountIdentity: async () => { busy.push(refresh.busy(account.id)); } });
+    let other: Promise<unknown> | undefined;
+    if (overlap) {
+      rpc.mockReset().mockImplementationOnce(() => new Promise((done) => { release = done; })).mockResolvedValue(payload);
+      other = refresh("codex", { instanceId: account.id, account });
+    }
+    await refresh("codex", { instanceId: account.id, account });
+    expect(busy).toEqual([overlap]);
+    if (other) { release(payload); await other; }
+    expect(refresh.busy(account.id)).toBe(false);
+  });
+
   it("keys refresh caches by both the immutable id and generation", async () => {
     const rpc = vi.fn(async () => payload);
     const refresh = createUsageRefresh({ rpc });

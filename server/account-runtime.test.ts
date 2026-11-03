@@ -24,7 +24,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function fixture(kind = "codex") {
+async function fixture(kind = "codex", usage = createUsageRefresh()) {
   expect(core, "account service exists").not.toBeNull();
   expect(runtime, "account runtime exists").not.toBeNull();
   const root = join(DATA_DIR, `runtime-${++serial}`);
@@ -51,7 +51,6 @@ async function fixture(kind = "codex") {
   const logout = vi.spyOn(registry, "signOut").mockResolvedValue(true);
   const rateLimits: RateLimitsMap = new Map([[account.id, { observedAt: new Date().toISOString(), windows: [] }], ["codex", { observedAt: new Date().toISOString(), windows: [] }]]);
   const availability = new Map([[account.id, true], ["codex", true]]);
-  const usage = createUsageRefresh();
   const invalidate = vi.spyOn(usage, "invalidate");
   const holds = vi.fn();
   const waits = vi.fn();
@@ -67,6 +66,28 @@ async function fixture(kind = "codex") {
 }
 
 describe("account removal references", () => {
+  it("accepts an idle identity change discovered by its completed usage RPC", async () => {
+    const usage = createUsageRefresh({
+      rpc: async () => ({ account: { type: "chatgpt", email: "changed@example.test" }, rateLimits: { primary: { usedPercent: 42, windowDurationMins: 300 } } }),
+      accountIdentity: async (account, identity) => f.controller.observe(account.id, { state: "available", authenticated: true, accountIdentity: identity }, account.generation),
+    });
+    const f = await fixture("codex", usage);
+    await usage("codex", { instanceId: f.account.id, account: f.account });
+    expect(f.accounts.get(f.account.id)).toMatchObject({ state: "ready", generation: f.account.generation + 1 });
+    expect(f.registry.accountAvailable(f.account.id)).toBe(true);
+  });
+
+  it.each(["pane", "unknown", "unreachable"])("refuses base sign-in with %s account pane state", async (state) => {
+    const f = await fixture();
+    const start = vi.spyOn(f.registry, "startSignIn").mockResolvedValue({});
+    if (state === "pane") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
+    if (state === "unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
+    if (state === "unreachable") f.request.mockRejectedValue(new Error("unreachable fixture"));
+    await expect(f.controller.signIn("codex")).rejects.toThrow(state === "pane" ? "active work" : "Terminal host is unreachable");
+    expect(start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("codex")).toBe(false);
+  });
+
   it.each(["claudeAgent", "codex"])("accepts an idle %s identity change discovered by the registry's own probe", async (kind) => {
     const f = await fixture(kind);
     await f.accounts.setDefault(f.account.of, f.account.id);

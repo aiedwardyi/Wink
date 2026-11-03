@@ -108,13 +108,26 @@ export class AccountLifecycle {
       const account = this.accounts.get(id);
       if (!account) {
         if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
-        if (destinations.length > 0 && (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id))) throw new AccountError("Finish this account's active work before signing in");
-        const capture = await this.registry.startSignIn(id, device);
+        const blocked = this.registry.accountBlocked(id);
+        const guarded = this.accounts.snapshot.length > 0 || destinations.length > 0;
+        if (guarded) {
+          this.registry.blockAccount(id, true);
+          try {
+            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in");
+          } catch (error) {
+            this.registry.blockAccount(id, blocked);
+            throw error;
+          }
+        }
+        let capture;
+        try { capture = await this.registry.startSignIn(id, device); }
+        catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
           const finished = this.registry.logins.wait(id).then(async () => {
             const snapshot = await this.registry.get(id)?.snapshot({ refresh: true });
             if (snapshot?.authenticated === true) this.registry.blockAccount(id, false);
-          }).finally(() => { this.pending.delete(id); });
+          }).catch(() => { console.error("Account sign-in snapshot could not be refreshed"); })
+            .finally(() => { if (this.pending.get(id) === finished) this.pending.delete(id); });
           this.pending.set(id, finished);
         }
         return capture;

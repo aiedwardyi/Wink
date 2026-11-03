@@ -19,6 +19,16 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("PC-local accounts", () => {
+  it("accepts account directories below a linked ancestor", async () => {
+    const { dir } = fixture();
+    const target = join(dir, "target");
+    mkdirSync(target);
+    const alias = join(dir, "alias");
+    symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+    const service = new core!.AccountService(join(alias, "data"), () => bases);
+    await expect(service.add("claude")).resolves.toMatchObject({ of: "claude" });
+  });
+
   it("keeps the fleet first and appends three accounts in add order", async () => {
     const { service } = fixture();
     const added = await Promise.all([service.add("claude"), service.add("codex"), service.add("claude")]);
