@@ -182,8 +182,11 @@ async function side(name) {
     for (const key of Object.keys(env)) if (/^(ELECTRON_|OMB_|OGB_|ORBIT_|GH_TOKEN|GITHUB_TOKEN)/.test(key)) delete env[key];
     mkdirSync(env.USERPROFILE, { recursive: true });
     // Playwright's electron.launch never sees the packaged app ready, so attach to its renderer over CDP instead.
-    const app = spawn(join(inst, "Orbit.exe"), [`--remote-debugging-port=${PORT + 1}`], { env, stdio: "ignore" });
+    const app = spawn(join(inst, "Orbit.exe"), [`--remote-debugging-port=${PORT + 1}`, "--enable-logging=stderr"], { env, stdio: ["ignore", "pipe", "pipe"] });
     const oldPid = app.pid;
+    for (const stream of [app.stdout, app.stderr]) stream.on("data", (chunk) => appendFileSync(join(out, "app-output.log"), chunk));
+    app.on("exit", (code, signal) => { result.oldExit = { code, signal, atS: (Date.now() - launchedAt) / 1000 }; });
+    const launchedAt = Date.now();
     userData = join(process.env.APPDATA, "Wink");
     const browser = await waitFor("the debug port", 120_000, () => chromium.connectOverCDP(`http://127.0.0.1:${PORT + 1}`).catch(() => null), 1000);
     const page = await waitFor("the app page", 120_000, () => browser.contexts().flatMap((c) => c.pages()).find((p) => p.url().startsWith("http://127.0.0.1")));
@@ -266,14 +269,15 @@ async function side(name) {
       process.kill(decoy.pid);
     } catch {}
 
-    for (const file of ["updater.log", "server.log", "main.log"]) {
-      const from = join(userData, "logs", file);
-      if (existsSync(from)) copyFileSync(from, join(out, file));
-    }
   } catch (error) {
     result.error = String(error?.stack ?? error);
     log("error", result.error);
+    if (inst) result.atError = processesUnder(inst).map((p) => `${p.ProcessId} ${p.ExecutablePath}`);
   } finally {
+    for (const file of ["updater.log", "server.log", "main.log"]) {
+      const from = userData && join(userData, "logs", file);
+      if (from && existsSync(from)) copyFileSync(from, join(out, file));
+    }
     if (watcher) {
       writeFileSync(stop, "");
       await sleep(2000);
