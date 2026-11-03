@@ -168,7 +168,7 @@ describe("engine install IPC", () => {
   });
 
   it("wires the command-free preload and main handler", () => {
-    expect(readFileSync(new URL("./preload.cjs", import.meta.url), "utf8")).toContain('openEngineInstall: (instanceId, installOnly) => ipcRenderer.invoke("engine:install", instanceId, installOnly)');
+    expect(readFileSync(new URL("./preload.cjs", import.meta.url), "utf8")).toContain('openEngineInstall: (instanceId, installOnly) => invoke("engine:install", instanceId, installOnly)');
     const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
     expect(main).toContain("registerEngineInstall(ipcMain,");
     expect(main).toContain("trusted: (event) => trustedTerminalSender(event, mainWindow?.webContents, rendererOrigin())");
