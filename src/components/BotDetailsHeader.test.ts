@@ -258,7 +258,7 @@ describe("SettingsPanel still owns folder and usage", () => {
       ),
     );
     expect(html).toContain("Project Folder");
-    expect(html).toContain("Leave empty for a private workspace");
+    expect(html).toContain("Private bot workspace");
     expect(html).toContain("This task uses");
     expect(html).not.toMatch(/you must configure where tools run/i);
     expect(html).not.toContain("Where this bot runs its shell and file tools.");

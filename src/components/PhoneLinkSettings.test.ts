@@ -316,7 +316,7 @@ describe("Phone setup steps", () => {
 
   it("opens the relay code box only from its link", async () => {
     await render({ url: null, setup: { state: "missing" } });
-    const relay = button("Have a relay setup code?");
+    const relay = button("Have a setup code?");
     expect(host.querySelector("[data-phone-access-setup]")).toBeNull();
     expect(document.getElementById(relay.getAttribute("aria-controls")!)?.hidden).toBe(true);
     await act(async () => relay.click());
@@ -332,7 +332,7 @@ describe("Phone setup steps", () => {
     root = createRoot(host);
     await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
     expect(host.querySelector("[data-phone-link-qr] svg")).not.toBeNull();
-    expect(button("Have a relay setup code?")).toBeUndefined();
+    expect(button("Have a setup code?")).toBeUndefined();
     expect(document.getElementById("phone-relay-settings")).toBeNull();
   });
 
@@ -340,19 +340,19 @@ describe("Phone setup steps", () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduce && query.includes("reduce") }));
     const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
     await render({ url: null, setup: { state: "missing" } });
-    await act(async () => button("Have a relay setup code?").click());
+    await act(async () => button("Have a setup code?").click());
     expect(scroll).toHaveBeenCalledTimes(1);
     expect(scroll.mock.contexts[0]).toBe(document.getElementById("phone-relay-settings"));
     expect(scroll).toHaveBeenCalledWith({ block: "nearest", behavior });
     expect(document.activeElement).toBe(host.querySelector("[data-phone-access-setup]"));
-    await act(async () => button("Have a relay setup code?").click());
+    await act(async () => button("Have a setup code?").click());
     expect(scroll).toHaveBeenCalledTimes(1);
   });
 
   it("waits for a relay form that loads late before scrolling to it", async () => {
     const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
     await render({ url: null, setup: { state: "missing" } });
-    const relay = button("Have a relay setup code?");
+    const relay = button("Have a setup code?");
     const box = document.getElementById(relay.getAttribute("aria-controls")!)!;
     const late = vi.spyOn(box, "firstElementChild", "get").mockReturnValue(null);
     await act(async () => relay.click());
@@ -456,6 +456,6 @@ describe("Phone setup steps", () => {
   it("renders all new steps and the relay link in Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
     await render({ url, setup: { state: "ready", phoneJoined: true } });
-    for (const text of ["이 PC", "휴대폰에 Tailscale 설치", "스캔해서 Wink 열기", "링크 복사", "릴레이 설정 코드가 있나요?"]) expect(host.textContent).toContain(text);
+    for (const text of ["이 PC", "휴대폰에 Tailscale 설치", "스캔해서 Wink 열기", "링크 복사", "설정 코드가 있나요?"]) expect(host.textContent).toContain(text);
   });
 });

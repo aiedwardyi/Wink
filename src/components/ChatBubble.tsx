@@ -258,7 +258,6 @@ const Bubble = memo(function Bubble({
   onRegenerate,
   replyTarget,
   onReply,
-  onFocusComposer,
   onMessageMenu,
 }: ReturnType<typeof bubbleBot> & ReturnType<typeof versionProps> & {
   pinned: boolean;
@@ -278,7 +277,6 @@ const Bubble = memo(function Bubble({
   onRegenerate?: () => void;
   replyTarget?: Message;
   onReply: (message: Message) => void;
-  onFocusComposer: () => void;
   onMessageMenu: (menu: MessageMenuRequest) => void;
 }) {
   const { t } = useI18n();
@@ -538,7 +536,6 @@ const Bubble = memo(function Bubble({
           answeredText={answeredChoice}
           disabled={!answeredChoice && busy}
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
-          onWriteOwn={onFocusComposer}
         />
       )}
       <TimestampLabel at={message.at} hidden={streaming} />
