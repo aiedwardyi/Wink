@@ -1,5 +1,5 @@
-import { ChevronLeft, FolderOpen, X } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Brain, ChevronLeft, FolderOpen, Settings, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
 import { WorkingFolderField } from "./WorkingFolderField";
@@ -24,7 +24,7 @@ import { shortPath } from "@/lib/short-path";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { MemoryFile, MemoryGroup, MemoryTask, NotedLines, notedLines } from "./MemoryGroups";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryTask, NotedLines, notedLines } from "./MemoryGroups";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 
@@ -101,19 +101,7 @@ function KeepGoingRow({ bot }: { bot: Bot }) {
   };
 
   useEffect(() => {
-    const row = rowRef.current;
-    const list = row?.parentElement;
-    if (request === 0 || !row || !list) return;
-    const show = () => row.scrollIntoView({ block: "nearest" });
-    show();
-    // Memory above loads late and pushes this row back out of view.
-    const observer = new ResizeObserver(show);
-    observer.observe(list);
-    const stop = setTimeout(() => observer.disconnect(), 1000);
-    return () => {
-      clearTimeout(stop);
-      observer.disconnect();
-    };
+    if (request > 0) rowRef.current?.scrollIntoView({ block: "nearest" });
   }, [request]);
 
   return (
@@ -264,6 +252,15 @@ function MemoryCard({ bot }: { bot: Bot }) {
   useEffect(() => {
     if (conflict) setOpen(true);
   }, [conflict]);
+  const fileRow = useRef<HTMLButtonElement>(null);
+  const shownTopic = useRef(topic);
+  // the file view is far shorter than the editor and list it swaps with, so the kept scroll can leave this row above the fold
+  useLayoutEffect(() => {
+    if (shownTopic.current === topic) return;
+    shownTopic.current = topic;
+    fileRow.current?.scrollIntoView({ block: "nearest" });
+  }, [topic]);
+  const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
 
   const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
     api(`/api/bots/${botId}/memory`);
@@ -380,13 +377,11 @@ function MemoryCard({ bot }: { bot: Bot }) {
   }, []);
 
   return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-2 text-[13px] text-ink-secondary">
-        <span>{t("bot.memory")}</span>
-        <span role="status" className="text-[12px]">
-          {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
-        </span>
-      </div>
+    <div className="relative">
+      <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
+        {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
+      </span>
+      {empty && <MemoryEmpty />}
       <div className="overflow-hidden rounded-xl bg-card">
         <MemoryGroup>
           <NotedLines text={text} />
@@ -407,7 +402,7 @@ function MemoryCard({ bot }: { bot: Bot }) {
           </div>
         </MemoryGroup>
         <MemoryTask bot={bot} />
-        <MemoryFile text={text} topics={topics.length} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
+        <MemoryFile ref={fileRow} text={text} topics={topics.length} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
           {expanded && (
             <div className="px-4 pb-4">
               <div className="mb-3 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("bot.memoryThisBotHelp")}</div>
@@ -521,6 +516,16 @@ export function SettingsPanel({
   const [avatarOpen, setAvatarOpen] = useState(avatarRequest > 0);
   const seenAvatarRequest = useRef(0);
   const avatarSectionRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const keepGoingRequest = state.settingsKeepGoingRequest ?? 0;
+  // a new Agentic Mode request (the chat header mark) lands on its row in Settings
+  const [memoryAt, setMemoryAt] = useState<number | null>(null);
+  const memoryTab = memoryAt === keepGoingRequest;
+  const showTab = (memory: boolean) => {
+    if (memory === memoryTab) return;
+    setMemoryAt(memory ? keepGoingRequest : null);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  };
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
   const patch = (
     p: Partial<
@@ -622,8 +627,27 @@ export function SettingsPanel({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-5">
-        <div className="flex flex-col gap-4 pt-4">
+      <div role="tablist" aria-label={t("bot.details")} className="mx-5 flex gap-1 rounded-xl bg-inset p-1">
+        {([false, true] as const).map((memory) => (
+          <button
+            key={String(memory)}
+            type="button"
+            role="tab"
+            aria-selected={memoryTab === memory}
+            onClick={() => showTab(memory)}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13.5px] transition-colors",
+              memoryTab === memory ? "bg-control text-ink" : "text-ink-secondary hover:text-ink",
+            )}
+          >
+            {memory ? <Brain size={15} aria-hidden="true" /> : <Settings size={15} aria-hidden="true" />}
+            {memory ? t("bot.memory") : t("bot.settingsTab")}
+          </button>
+        ))}
+      </div>
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 pb-5">
+        <div hidden={memoryTab} className="flex flex-col gap-4 pt-4">
           <div ref={avatarSectionRef} className="rounded-xl bg-card p-3">
             <div className="flex items-center gap-3">
               <BotAvatar
@@ -684,7 +708,6 @@ export function SettingsPanel({
             />
           </Field>
 
-          <MemoryCard key={bot.id} bot={bot} />
           <WorkingFolder bot={bot} />
 
           <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
@@ -798,6 +821,9 @@ export function SettingsPanel({
             </>
           )}
 
+        </div>
+        <div hidden={!memoryTab} className="pt-4">
+          <MemoryCard key={bot.id} bot={bot} />
         </div>
       </div>
     </aside>
