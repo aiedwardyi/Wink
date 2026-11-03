@@ -17,7 +17,7 @@ export function createTempDirs() {
       return dir;
     },
     async remove(): Promise<void> {
-      for (const dir of dirs.splice(0)) await removeTempDir(dir);
+      await Promise.all(dirs.splice(0).map(removeTempDir));
     },
   };
 }

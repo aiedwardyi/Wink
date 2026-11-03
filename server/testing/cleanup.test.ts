@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTempDirs } from "./cleanup.ts";
 
 const files = [
@@ -13,6 +14,35 @@ const files = [
 ];
 
 describe("test temp ownership", () => {
+  it("bounds six locked directories to one retry window", async () => {
+    const owned = createTempDirs();
+    const dirs = Array.from({ length: 6 }, () => owned.make(join(tmpdir(), "cleanup-locked-")));
+    const original = fs.rmSync;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const remove = vi.spyOn(fs, "rmSync").mockImplementation((dir, options) => {
+      if (dirs.includes(String(dir))) throw Object.assign(new Error("locked"), { code: "EBUSY" });
+      original(dir, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      let done = false;
+      const pending = owned.remove().then(() => { done = true; });
+      await vi.advanceTimersByTimeAsync(2_000);
+      const bounded = done;
+      await vi.runAllTimersAsync();
+      await pending;
+      expect(bounded).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(6);
+    } finally {
+      remove.mockRestore();
+      syncBuiltinESMExports();
+      vi.useRealTimers();
+      warn.mockRestore();
+      for (const dir of dirs) original(dir, { recursive: true, force: true });
+    }
+  });
+
   it("removes only the directories registered by its suite", async () => {
     const parent = createTempDirs();
     const owned = createTempDirs();

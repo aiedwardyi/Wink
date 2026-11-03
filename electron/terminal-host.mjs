@@ -822,6 +822,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const reclaimExited = () => {
     for (const [id, session] of sessions) {
       if (session.exitCode !== null || session.owner.isDestroyed?.()) {
+        paneCleanup?.exited?.(session);
         active.delete(session.key);
         sessions.delete(id);
         retireQuietly(session, true, true);
@@ -850,6 +851,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (session.botPane) paneRuns?.ended(session.id);
     if (session.exitCode === null) {
       session.exitCode = exitCode;
+      paneCleanup?.exited?.(session);
       if (session.botPane && session.mail && exitCode !== 0 && !(session.reportAt && session.reportAt >= session.stallArmedAt)) session.exitNote = { text: exitNoteText(session.screen.text(), exitCode), tries: 0, retryAt: 0 };
     }
     if (session.autoNote || session.finished.length || session.exitNote) exitNotes.add(session);

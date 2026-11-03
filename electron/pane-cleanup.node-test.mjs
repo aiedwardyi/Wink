@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { removeTempDir } from "../server/testing/cleanup.ts";
-import { createPaneCleanup } from "./pane-cleanup.mjs";
+import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
 import { createTerminalHost } from "./terminal-host.mjs";
 
 const DAY_MS = 86_400_000;
@@ -87,6 +87,192 @@ async function eligible(f) {
   await f.cleanup.closed(f.session, true);
   f.advance(4 * DAY_MS);
 }
+
+for (const missing of ["bots.json", "groups.json"]) {
+  test(`absent ${missing} leaves the other pin collection active`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    const data = path.join(f.home, "data");
+    fs.mkdirSync(data);
+    const present = path.join(data, missing === "bots.json" ? "groups.json" : "bots.json");
+    fs.writeFileSync(present, JSON.stringify([{ cwd: target }]));
+    assert.deepEqual(await readCleanupPins(data), [target]);
+    await eligible(f);
+    const cleanup = createPaneCleanup({ ...f.options, pinned: () => readCleanupPins(data) });
+    cleanup.start(() => []);
+    t.after(() => cleanup.dispose());
+    await cleanup.sweep();
+    assert.equal(fs.existsSync(target), true);
+    fs.writeFileSync(present, "[]");
+    await cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+    assert.deepEqual(f.warnings, []);
+  });
+}
+
+for (const pin of ["checkout", "missing child", "ancestor"]) {
+  test(`a symlinked project pin protects its ${pin}`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    const alias = path.join(f.home, "project");
+    fs.symlinkSync(pin === "ancestor" ? f.worktreeRoot : target, alias, process.platform === "win32" ? "junction" : "dir");
+    const cwd = pin === "missing child" ? path.join(alias, "not-created", "child") : alias;
+    await eligible(f);
+    const cleanup = createPaneCleanup({ ...f.options, pinned: [cwd] });
+    cleanup.start(() => []);
+    t.after(() => cleanup.dispose());
+    await cleanup.sweep();
+    assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+    assert.equal(fs.lstatSync(alias).isSymbolicLink(), true);
+    assert.deepEqual(f.warnings, []);
+    fs.unlinkSync(alias);
+  });
+}
+
+test("an existing dangling pin file blocks worktree deletion", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const data = path.join(f.home, "data");
+  fs.mkdirSync(data);
+  fs.writeFileSync(path.join(data, "bots.json"), "[]");
+  const link = path.join(data, "groups.json");
+  fs.symlinkSync(path.join(f.home, "missing"), link, process.platform === "win32" ? "junction" : "dir");
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, pinned: () => readCleanupPins(data) });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.equal(fs.existsSync(target), true);
+  await assert.rejects(readCleanupPins(data), { code: "ENOENT" });
+  fs.unlinkSync(link);
+});
+
+for (const phase of ["traversal", "final directory check"]) {
+  test(`scratch handed off during ${phase} keeps its new ownership`, async (t) => {
+    const f = fixture(t);
+    const link = path.join(f.scratch, "link");
+    fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+    const promises = await import("node:fs/promises");
+    const method = phase === "traversal" ? "readdir" : "realpath";
+    const original = promises.default[method];
+    let visits = 0;
+    let claimed = false;
+    t.mock.method(promises.default, method, async (...args) => {
+      const value = await original(...args);
+      if (path.resolve(args[0]) === path.resolve(f.scratch) && ++visits === (phase === "traversal" ? 1 : 2)) {
+        claimed = true;
+        const next = { ...f.session, id: "next" };
+        f.cleanup.opened(next);
+        await f.cleanup.closed(next, true);
+      }
+      return value;
+    });
+    f.cleanup.opened(f.session);
+    await f.cleanup.closed(f.session);
+    assert.equal(claimed, true);
+    assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+    assert.equal(f.ledger().find((entry) => entry.id === "next").scratchDone, undefined);
+    if (phase === "traversal") assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.deepEqual(f.warnings, []);
+  });
+}
+
+for (const claim of ["open pane", "recent close", "pin"]) {
+  test(`a worktree claimed by a ${claim} during backup survives`, async (t) => {
+    const f = fixture(t);
+    const { target } = repo(f);
+    await eligible(f);
+    const pins = [];
+    let panes = [];
+    const cleanup = createPaneCleanup({ ...f.options, pinned: () => pins });
+    cleanup.start(() => panes);
+    t.after(() => cleanup.dispose());
+    const promises = await import("node:fs/promises");
+    const original = promises.default.link;
+    let claimed = false;
+    const next = { ...f.session, id: "next", cwd: path.join(target, "not-created") };
+    t.mock.method(promises.default, "link", async (...args) => {
+      const value = await original(...args);
+      if (!claimed) {
+        claimed = true;
+        if (claim === "pin") pins.push(target);
+        else {
+          cleanup.opened(next);
+          if (claim === "open pane") panes = [next];
+          else await cleanup.closed(next, true);
+        }
+      }
+      return value;
+    });
+    await cleanup.sweep();
+    assert.equal(claimed, true);
+    assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+    assert.equal(git(target, "status", "--porcelain"), "");
+    assert.equal(f.ledger().filter((entry) => entry.cwd === target).every((entry) => !entry.worktreeDone), true);
+    assert.deepEqual(fs.readdirSync(f.worktreeRoot), ["worker"]);
+    assert.deepEqual(f.warnings, []);
+    if (claim === "open pane") await cleanup.closed(next, true);
+    panes = [];
+    pins.length = 0;
+    f.advance(4 * DAY_MS);
+    await cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+  });
+}
+
+for (const origin of ["worktree", "scratch"]) {
+  test(`deep ordinary ${origin} folders do not block an unrelated worktree`, async (t) => {
+    const f = fixture(t);
+    const { main, target } = repo(f);
+    const root = origin === "worktree" ? path.join(f.worktreeRoot, "other") : path.join(f.tempRoot, "wink-OTHER");
+    if (origin === "worktree") git(main, "worktree", "add", "--quiet", "-b", "other", root);
+    fs.mkdirSync(path.join(root, "src", "components", "button", "deep", "child"), { recursive: true });
+    await eligible(f);
+    await f.cleanup.sweep();
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(fs.existsSync(root), true);
+    assert.deepEqual(f.warnings, []);
+  });
+}
+
+test("a confirmed non-worktree ledger row finishes without repeated warnings", async (t) => {
+  const f = fixture(t);
+  f.session.cwd = path.join(f.worktreeRoot, "plain");
+  fs.mkdirSync(f.session.cwd);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.deepEqual(f.ledger(), []);
+  await f.cleanup.sweep();
+  assert.deepEqual(f.warnings, []);
+  assert.equal(fs.existsSync(f.session.cwd), true);
+});
+
+test("natural exit starts retention without removing a visible pane's scratch", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const owner = { id: 1, send() {}, isDestroyed: () => false };
+  let exit;
+  const host = createTerminalHost({
+    authorize() {}, owner: () => owner, resolveCwd: async () => target, now: f.options.now,
+    platform: "linux", env: { SHELL: "/bin/sh", TEMP: f.tempRoot }, freeMemory: () => 64 * 1024 ** 3,
+    paneCleanup: f.cleanup,
+    loadPty: () => ({ spawn: () => ({ onData() {}, onExit(cb) { exit = cb; }, write() {}, resize() {}, kill() {} }) }),
+  });
+  t.after(() => host.dispose());
+  const pane = await host.openForBot("bot", { label: "TEST", command: "codex test" });
+  host.attendBot("bot", pane.sessionId, "report");
+  exit({ exitCode: 0 });
+  await f.cleanup.flush();
+  assert.equal(f.ledger()[0].closedAt, f.options.now());
+  assert.equal(fs.existsSync(f.scratch), true);
+  f.advance(4 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(f.scratch), true);
+  await host.dispose();
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.equal(fs.existsSync(target), false);
+});
 
 test("reported scratch is removed and its junction target survives", async (t) => {
   const f = fixture(t);

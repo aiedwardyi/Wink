@@ -77,7 +77,8 @@ describe("harness playbook", () => {
     expect(prompt).toContain("wipes their targets");
     expect(prompt).toContain("wink-<NICKNAME>");
     expect(prompt).toContain("Wink removes it when the pane closes; close with `keep` to hand it to the next card.");
-    expect(prompt).toContain("Wink removes a worker's merged, clean worktree a day after its pane closes.");
+    expect(prompt).toContain("Wink removes clean worktrees a day after pane close if all commits are on a remote.");
+    expect(prompt).toContain("Squash-landed, unpushed worktrees: use the manual rules above.");
     expect(prompt).toContain("For manual removals, remove a path only if all hold");
     expect(prompt).toContain("Never delete by wildcard, age or folder size");
     expect(prompt).not.toContain("Remove it once the branch has landed");
