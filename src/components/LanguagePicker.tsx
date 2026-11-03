@@ -9,15 +9,17 @@ const OPTIONS: LocalePreference[] = ["system", "en", "ko"];
 export function LanguagePicker() {
   const { t, preference, setPreference } = useI18n();
   return (
-    <Card>
-      <SegmentedRow<LocalePreference>
-        label={t("language.title")}
-        value={preference}
-        options={OPTIONS.map((id) => ({
-          id, label: id === "system" ? t("language.matchSystem") : id === "en" ? t("language.name.en") : t("language.name.ko"),
-        }))}
-        onChange={setPreference}
-      />
-    </Card>
+    <div className="w-full md:max-w-md">
+      <Card>
+        <SegmentedRow<LocalePreference>
+          label={t("language.title")}
+          value={preference}
+          options={OPTIONS.map((id) => ({
+            id, label: id === "system" ? t("language.matchSystem") : id === "en" ? t("language.name.en") : t("language.name.ko"),
+          }))}
+          onChange={setPreference}
+        />
+      </Card>
+    </div>
   );
 }
