@@ -192,6 +192,32 @@ it("translates account controls into Korean", async () => {
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
 });
 
+it("keeps Main and Set as Main in the same head action slot with or without paging", async () => {
+  for (const count of [2, 3]) {
+    await render(count);
+    const pick = button("Set as Main");
+    const tag = [...main().querySelectorAll("span")].find((node) => !node.children.length && node.textContent === "Main")!;
+    expect(tag.parentElement?.className).toBe(pick.parentElement?.className);
+    expect(tag.nextElementSibling).not.toBeNull();
+    expect(pick.nextElementSibling).not.toBeNull();
+    expect(tag.nextElementSibling?.className).toBe(pick.nextElementSibling?.className);
+    expect(pick.nextElementSibling?.querySelectorAll("button")).toHaveLength(count === 3 ? 2 : 0);
+  }
+});
+
+it.each([1, 2])("keeps a 5h placeholder above weekly-only Claude usage for %i accounts", async (count) => {
+  await render(count);
+  state.instances = state.instances.map((account) => ({ ...account,
+    rateLimits: { observedAt: new Date().toISOString(), windows: [{ id: "seven_day", usedPercent: 37, resetsAt: null }] },
+  }));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
+  expect(host.querySelectorAll('[aria-label="7d: 63% remaining"]')).toHaveLength(count);
+  expect(host.textContent?.match(/5h–/g)).toHaveLength(count);
+  expect(host.querySelector('[aria-label^="5h:"]')).toBeNull();
+  const weekly = host.querySelector('[aria-label="7d: 63% remaining"]')!;
+  expect(weekly.parentElement?.previousElementSibling?.textContent).toBe("5h–");
+});
+
 it.each(["en", "ko"] as const)("shows default refusal messages in %s", async (locale) => {
   persistPreference(locale);
   await render();

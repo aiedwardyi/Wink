@@ -45,14 +45,13 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const heading = (account: UsageAccount, other = false) => (
     <div className="flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
       <EngineMark instance={account} size={16} tapToShow />
-      {other ? <span className="ml-auto flex shrink-0 items-center gap-2">
-        {accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
-          className="text-[12px] font-normal text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.setAsMain")}</button>}
-        {arrows}
-      </span> : <>
-        <span className="min-w-0 truncate">{account.displayName}</span>
-        <span className="shrink-0 text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>
-      </>}
+      {!other && <span className="min-w-0 truncate">{account.displayName}</span>}
+      <span className="ml-auto flex shrink-0 items-center gap-2">
+        {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
+          className="text-[12px] font-normal text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.setAsMain")}</button>
+          : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
+        <span className="flex w-14 shrink-0 [@media(pointer:coarse)]:w-22">{other && arrows}</span>
+      </span>
     </div>
   );
   const column = (account: UsageAccount, other = false) => (

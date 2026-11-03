@@ -3,7 +3,7 @@ import { act, createElement, type ComponentProps, type ReactElement } from "reac
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { applyLocale, I18nProvider, persistPreference } from "@/lib/i18n";
 import { StoreProvider, type InstanceInfo } from "@/state/store";
 import { EngineSignIn } from "./EngineSetup";
 import { EngineRow as EngineRowView } from "./EnginesSettings";
@@ -115,6 +115,18 @@ describe("engine sign-in row", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     await click("Sign In");
     expect(host.textContent).toContain("Cancel");
+  });
+
+  it.each(["en", "ko"] as const)("uses the same browser-code hint in shared sign-in surfaces in %s", async (locale) => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    persistPreference(locale);
+    vi.stubGlobal("fetch", vi.fn(async () => json({})));
+    await render(createElement(EngineSignIn, { instance: instance("claudeAgent", {
+      loginState: "pending", loginCapture: { url: "https://example.com/login", inputGeneration: 1 },
+    }) }));
+    expect(host.querySelector("input")?.placeholder).toBe(locale === "en" ? "Paste the code here" : "여기에 코드를 붙여넣으세요");
+    expect(host.textContent).toContain(locale === "en" ? "Sign in with your browser" : "브라우저로 로그인하세요");
+    persistPreference("en");
   });
 
   it("keeps stopped credentials actionable until the account is ready", async () => {

@@ -87,6 +87,20 @@ it("names connected accounts and shows a long label in full, wrapping after @", 
   expect(buttons("Sign Out")).toHaveLength(2);
 });
 
+it.each([1, 2])("puts each of %i accounts and its icon on one row, with Add Account on the first", async (count) => {
+  await render(count);
+  const group = host.querySelector('[data-engine-row="claude"]')!;
+  const marks = group.querySelectorAll('[data-engine-hover]');
+  expect(marks).toHaveLength(count);
+  for (const [i, mark] of [...marks].entries()) {
+    const row = mark.parentElement!.parentElement!;
+    expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
+    expect(row.textContent).toContain("Sign Out");
+    expect(row.textContent?.includes("Add Account")).toBe(i === 0);
+  }
+  expect(group.textContent).not.toContain("Claude");
+});
+
 it.each(["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent"])("offers only Sign In while %s is signed out", async (driverKind) => {
   state.instances = [{ ...engine("claude", false), driverKind }];
   await update();
@@ -107,7 +121,8 @@ it.each(["Personal account", undefined])("uses the engine account label without 
   await render(1);
   state.instances[0]!.snapshot.account = label;
   await update();
-  expect(host.textContent).toContain(`${label ?? "Claude"}Sign Out`);
+  expect(host.textContent).toContain(label ?? "Claude");
+  expect(buttons("Sign Out")).toHaveLength(1);
 });
 
 it.each(["en", "ko"] as const)("offers one Add Account per engine, including a single account, in %s", async (locale) => {
@@ -225,6 +240,8 @@ it.each(["en", "ko"] as const)("submits a managed Claude browser code without ex
   await update();
   const input = host.querySelector<HTMLInputElement>('input[type="password"]')!;
   expect(input).not.toBeNull();
+  expect(input.placeholder).toBe(locale === "en" ? "Paste the code here" : "여기에 코드를 붙여넣으세요");
+  expect(host.textContent).toContain(locale === "en" ? "Sign in with your browser" : "브라우저로 로그인하세요");
   await act(async () => {
     input.value = "returned-code#state";
     input.dispatchEvent(new Event("input", { bubbles: true }));

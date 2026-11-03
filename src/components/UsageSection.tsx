@@ -48,6 +48,11 @@ function windowRank(id: string, windowMinutes?: number): number {
 function windowSlots(accounts: UsageAccount[]): RateLimitWindow[] {
   const slots = new Map<string, RateLimitWindow>();
   for (const window of accounts.flatMap((account) => account.rateLimits?.windows ?? [])) if (!slots.has(window.id)) slots.set(window.id, window);
+  if (["claudeAgent", "codex"].includes(accounts[0]!.driverKind)
+    && [...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === "weekly")
+    && ![...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === "session")) {
+    slots.set("five_hour", { id: "five_hour", usedPercent: 0, resetsAt: null });
+  }
   return [...slots.values()].sort((a, b) => windowRank(a.id, a.windowMinutes) - windowRank(b.id, b.windowMinutes));
 }
 
@@ -298,7 +303,7 @@ function PlanUsage() {
               accounts={accounts}
               reload={reload}
               renderRow={(instance, heading) => <EnginePlanRow instance={instance} now={now} heading={heading}
-                slots={accounts.length > 1 ? windowSlots(accounts) : undefined}
+                slots={windowSlots(accounts)}
                 error={refreshErrors[instance.instanceId]} limit={limits[instance.instanceId]} />}
             />
           ))}
