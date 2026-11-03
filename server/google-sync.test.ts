@@ -383,6 +383,49 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     expect(laptop.sync.status().state).toBe("up-to-date");
   });
 
+  it("keeps initial join chat priority through activation until the ready pass finishes", async () => {
+    const home = makePC("home", { bots: [bot("Counsel")] });
+    await startOn(home);
+    const work = makePC("work");
+    work.sync.stop();
+    let reached!: () => void;
+    const reaching = new Promise<void>((done) => { reached = done; });
+    let release!: () => void;
+    const held = new Promise<void>((done) => { release = done; });
+    const priorities: string[] = [];
+    let paused = false;
+    work.sync = boot(work, {
+      openThread: () => {
+        const binding = readGoogleBinding(work.dataDir);
+        if (binding.kind === "ok") priorities.push(binding.binding.phase);
+        return "thread-Counsel";
+      },
+      fetch: async (input, init) => {
+        if (work.activations.length && !paused) {
+          paused = true;
+          reached();
+          await held;
+        }
+        return driveA().fetch(input, init);
+      },
+    });
+    work.account.setSession(A);
+    await work.sync.start();
+    await reaching;
+    try {
+      expect(readGoogleBinding(work.dataDir)).toMatchObject({ kind: "ok", binding: { phase: "ready" } });
+      expect(priorities).toContain("joining");
+    } finally {
+      release();
+      await work.sync.idle();
+    }
+    expect(priorities).toContain("ready");
+    const calls = priorities.length;
+    await settle(work);
+    expect(priorities).toHaveLength(calls);
+    expect(work.sync.catchingUp("thread-Counsel")).toBe(false);
+  });
+
   it("never says a chat is catching up when signed out or in folder mode", async () => {
     const home = makePC("home", { bots: [bot("Counsel")] });
     await startOn(home);
