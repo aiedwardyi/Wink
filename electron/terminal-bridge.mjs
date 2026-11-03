@@ -136,6 +136,15 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         return json(res, 400, { error: "Invalid terminal request" });
       }
       if (parsed.pathname === "/v1/error-reports" && errorReports) return handleServerErrorReport(req, res, token, errorReports);
+      if (parsed.pathname === "/v1/terminal/session") {
+        if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
+        try {
+          const captured = host.captureWorkerSession?.(req.headers.authorization, await readJson(req));
+          return json(res, captured ? 200 : 409, { captured: Boolean(captured) });
+        } catch (error) {
+          return json(res, error?.status === 413 ? 413 : 400, { error: "Invalid worker session" });
+        }
+      }
       if (parsed.pathname === "/v1/credentials") {
         if (!grantMatches(req.headers.authorization, token)) return json(res, 401, { error: "Unauthorized" });
         if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });

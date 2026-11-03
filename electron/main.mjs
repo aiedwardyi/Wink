@@ -314,6 +314,7 @@ const terminalHost = createTerminalHost({
   workerAccountsEnabled: false,
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
+  sessionBridge: () => terminalBridgeAccess?.url,
   paneCleanup: createPaneCleanup({ home: app.getPath("home"), worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(

@@ -7,6 +7,7 @@ import { postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand } from "./terminal-worker.mjs";
+import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -426,7 +427,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
   const sessions = new Map();
   const active = new Map();
   const generations = new Map();
@@ -1004,7 +1005,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const managed = worker?.kind === "managed";
     const source = managed ? { ...worker.environment } : terminalEnvironment(env);
     if (managed) for (const key of ["ENV", "BASH_ENV", "ZDOTDIR"]) delete source[key];
+    if (managed && worker.session) for (const key of Object.keys(source)) if (/^(?:CODEX_(?:THREAD|SESSION|TOOL_CALL)_ID|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_(?:CODE_)?SESSION(?:_ID)?)$/i.test(key)) delete source[key];
+    const workerSession = createWorkerSession(worker, id, cwd, sessionBridge());
     const paneEnv = terminalPaneEnv(source, { pane: id, bot: input.botId, teacher: folder.teacher, mailbox: mail });
+    if (workerSession) Object.assign(paneEnv, workerSession.env);
     if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
     const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
@@ -1016,7 +1020,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
     const session = {
-      id, key, botId: input.botId, botPane, owner: event.sender, cwd, tempRoot: paneEnv.TEMP || paneEnv.TMP || os.tmpdir(), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
+      id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: paneEnv.TEMP || paneEnv.TMP || os.tmpdir(), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker), workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
@@ -1057,6 +1061,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     });
     if (botPane) watchNotes();
     session.generation = (generations.get(key) ?? 0) + 1;
+    if (workerSession) workerSession.run.generation = session.generation;
     generations.set(key, session.generation);
     sessions.set(session.id, session);
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Electron sender mocks may omit lifecycle events.
@@ -1125,7 +1130,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.contextCompactPending = false;
         watchStalls(session);
       }
-      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, spawnedAt: session.spawnedAt });
+      if (session.botPane) paneRuns?.started({ id: session.id, botId: session.botId, teacher: session.teacher, label: session.label, cwd: session.cwd, spawnedAt: session.spawnedAt, session: session.workerFinished ? undefined : session.workerSession?.run });
     }
     if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
     if (session.respawn) {
@@ -1409,6 +1414,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     enableWorkerAccounts() {
       if (!workerLaunch) throw new Error("Worker launch service is unavailable");
       workerAccountsEnabled = true;
+    },
+    captureWorkerSession(authorization, input) {
+      return captureWorkerSession(sessions, paneRuns, authorization, input);
     },
     paneLabels() {
       const labels = {};

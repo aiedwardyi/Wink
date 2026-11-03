@@ -44,6 +44,38 @@ async function fixture() {
 }
 
 describe("trusted worker accounts", () => {
+  it.each(["claude", "codex"])("records %s launch metadata and clears inherited session ids", async (engine) => {
+    const f = await fixture();
+    const launch = await f.prepare({ ...f.input, command: `${engine} --model fixture --effort high 'task'`,
+      environment: { ...f.input.environment, CODEX_THREAD_ID: "parent", CODEX_SESSION_ID: "parent", CLAUDE_SESSION_ID: "parent", CLAUDE_CODE_SESSION_ID: "parent", CLAUDECODE: "1" } });
+    expect(launch).toMatchObject({ session: { engine, model: "fixture", effort: "high", launchGeneration: expect.stringMatching(/^[a-f0-9-]{36}$/) } });
+    if (launch?.kind !== "managed") throw new Error("Expected managed launch");
+    for (const key of ["CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDECODE"]) expect(launch.environment[key]).toBeUndefined();
+    if (engine === "claude") {
+      expect(launch.args).toContain("--session-id");
+      expect(launch.args[launch.args.indexOf("--session-id") + 1]).toBe(launch.session?.nativeId);
+    }
+  });
+
+  it.each(["-r exact-id", "-rexact-id", "--resume=exact-id", "-c", "--continue"])("does not assign a new Claude id on %s", async (flags) => {
+    const f = await fixture();
+    const launch = await f.prepare({ ...f.input, command: `claude ${flags} 'task'` });
+    if (launch?.kind !== "managed") throw new Error("Expected managed launch");
+    expect(launch.args).not.toContain("--session-id");
+    expect(launch).toMatchObject({ session: { nativeId: null } });
+  });
+
+  it.each(["--dangerously-bypass-hook-trust", "-c hooks.SessionStart=[]", "-c hooks.state.x.trusted_hash='x'", "-c ' hooks.SessionStart=[]'"])("rejects model-supplied hook trust overrides: %s", async (flags) => {
+    const f = await fixture();
+    await expect(f.prepare({ ...f.input, command: `codex ${flags} 'task'` })).rejects.toThrow(/hook/i);
+  });
+
+  it("captures native effort config and case-insensitive engine commands", async () => {
+    const f = await fixture();
+    expect(await f.prepare({ ...f.input, command: "CODEX -m fixture -c model_reasoning_effort=high task" }))
+      .toMatchObject({ session: { engine: "codex", model: "fixture", effort: "high" } });
+  });
+
   it.each(["HOME", "USERPROFILE"])("resolves pinned Codex workers from the base profile's %s", async (selector) => {
     const f = await fixture();
     vi.stubEnv("CODEX_HOME", "");

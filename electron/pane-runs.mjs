@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { capturedSession } from "./worker-session.mjs";
 
 const RETRY_MS = 15_000;
 const TRIES = 20;
@@ -26,24 +27,39 @@ export function createPaneRuns(file) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(temporary, JSON.stringify([...runs.values()]));
       fs.renameSync(temporary, file);
+      return true;
     } catch {
       try { fs.unlinkSync(temporary); } catch {}
+      return false;
     }
   };
   const mark = (id, state) => {
     const run = runs.get(id);
     if (!run || prior.has(id) || run.state === state) return;
     run.state = state;
+    if (run.session) run.session.lifecycle = state;
     save();
   };
   save();
   return {
-    started({ id, botId, teacher, label, cwd, spawnedAt }) {
-      const run = { id, botId, teacher, label: label ?? null, cwd, spawnedAt, state: "running" };
+    started({ id, botId, teacher, label, cwd, spawnedAt, session }) {
+      const run = { id, botId, teacher, label: label ?? null, cwd, spawnedAt, state: "running", ...(session ? { session: { ...session } } : {}) };
       const stored = runs.get(id);
+      if (stored?.session && session?.launchGeneration === stored.session.launchGeneration) run.session = { ...stored.session, lifecycle: "running" };
       if (stored && Object.keys(run).every((key) => stored[key] === run[key])) return;
       runs.set(id, run);
       save();
+    },
+    capture(input) {
+      const run = runs.get(input?.pane);
+      if (prior.has(input?.pane)) return false;
+      const session = capturedSession(run, input);
+      if (!session) return false;
+      const previous = run.session;
+      run.session = session;
+      if (save()) return true;
+      run.session = previous;
+      return false;
     },
     reported: (id) => mark(id, "reported"),
     ended: (id) => mark(id, "ended"),

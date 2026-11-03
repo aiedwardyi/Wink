@@ -6,6 +6,7 @@ import type { InstanceConfigMap } from "./contracts.ts";
 import type { createSpawnUsage } from "./spawn-usage.ts";
 import type { WorkerTurnResolver } from "./worker-turn.ts";
 import { applyCredentialAllowlist } from "./config.ts";
+import { workerSession } from "./worker-session.ts";
 
 const ENGINES = new Map([
   ["claude", { driver: "claudeAgent", base: "claude", name: "Claude" }],
@@ -131,6 +132,7 @@ export function createWorkerLaunch(deps: {
         && /(?:home|auth|login|provider|profile|^shell_environment_policy(?:\.|$))/i.test(key)) throw new Error("Conflicting worker account selector");
     }
     const source = { ...input.environment, ...base.environment, ...command.environment };
+    const session = workerSession(command.executable, args, source);
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
     const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source);
     if (command.driver === "claudeAgent" && !(sameEngine && turn.account)
@@ -152,6 +154,6 @@ export function createWorkerLaunch(deps: {
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
     if (!deps.available(account.id, account.generation) || deps.resolveWorkerTurn(input.botId) !== turn) throw new Error("Worker account changed before launch");
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
-      environment: policy.env, workerSettings, line: usage.line };
+      environment: policy.env, workerSettings, session, line: usage.line };
   };
 }
