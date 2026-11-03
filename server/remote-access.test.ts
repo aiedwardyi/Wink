@@ -361,6 +361,24 @@ describe("Phone Link setup", () => {
     expect(retry.status()).toMatchObject({ state: "disabled" });
   });
 
+  it("does not add background CLI runs to slow Devices probes", async () => {
+    vi.useFakeTimers();
+    try {
+      const exec = vi.fn(async () => JSON.stringify({ BackendState: "NeedsLogin" }));
+      const retry = remoteHostRetry({}, 8799, () => {}, exec, quiet, "linux");
+      await retry.refresh(true);
+      for (let i = 0; i < 9; i++) {
+        await vi.advanceTimersByTimeAsync(6_100);
+        await retry.refresh(true);
+      }
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect(exec).toHaveBeenCalledTimes(10);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("picks up a Tailscale that starts after Wink without a request", async () => {
     vi.useFakeTimers();
     try {

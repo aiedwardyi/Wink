@@ -17,8 +17,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function renderWith(status: number, onDone = vi.fn()) {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "x" }), { status })));
+async function renderWith(status: number, onDone = vi.fn(), body: object = { error: "x" }) {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status })));
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -33,6 +33,31 @@ function phoneWidth() {
 }
 
 describe("Onboarding engine check", () => {
+  it("opens the shell directly when no engine is installed", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    localStorage.setItem("omb-locale", "en");
+    const onDone = vi.fn();
+    const host = await renderWith(200, onDone, { instances: [{ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "unavailable" }, models: { default: "", options: [] } }] });
+    const click = async (label: string) => {
+      const button = [...host.querySelectorAll("button")].find((node) => node.textContent === label);
+      expect(button, label).toBeDefined();
+      await act(async () => button!.click());
+    };
+    await click("Connect an Engine");
+    await click("Open Wink");
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(host.textContent).not.toContain("You're all set");
+  });
+
+  it("keeps the all-set step when an engine is ready", async () => {
+    localStorage.setItem("omb-locale", "en");
+    const onDone = vi.fn();
+    const host = await renderWith(200, onDone, { instances: [{ instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available", authenticated: true }, models: { default: "", options: [] } }] });
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue")!.click());
+    expect(host.textContent).toContain("You're all set");
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it("updates Ready and disables continue after signing out the last ready engine", async () => {
     let authenticated = false;
     const instance = {

@@ -97,6 +97,13 @@ function markup(
 }
 
 describe("SettingsModal friends chrome", () => {
+  it("keeps the same dialog height on Devices", () => {
+    vi.stubGlobal("location", { hostname: "localhost" });
+    const dialogClass = (html: string) => html.match(/role="dialog"[^>]*class="([^"]+)"/)?.[1];
+    expect(dialogClass(markup("companion"))).toBe(dialogClass(markup("general")));
+    vi.unstubAllGlobals();
+  });
+
   beforeAll(() => {
     if (typeof document === "undefined") {
       Object.defineProperty(globalThis, "document", {

@@ -553,7 +553,7 @@ export function SettingsModal({
         // hands the excess to the content pane, which is the only thing that scrolls.
         className={cn(
           "animate-pop-in flex max-h-full w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none max-md:relative max-md:flex-col",
-          section === "companion" ? "h-[720px] md:h-[768px]" : "h-[560px]",
+          "h-[560px]",
         )}
       >
         {phone && (
@@ -608,7 +608,7 @@ export function SettingsModal({
         )}
 
         {page && (
-        <div data-settings-page={phone ? section : undefined} className={cn("flex min-w-0 flex-1 flex-col max-md:min-h-0", phone && "relative bg-panel")}>
+        <div data-settings-page={phone ? section : undefined} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", phone && "relative bg-panel")}>
           <div className={phone ? "relative flex shrink-0 items-center gap-3 px-2 py-3" : "flex shrink-0 items-center justify-between px-5 py-3 gap-3"}>
             {phone && (
               <button onClick={back} aria-label={t("settings.sync.back")} className="flex min-h-11 items-center gap-0.5 rounded-md px-1.5 text-[15px] text-accent hover:bg-control">

@@ -42,6 +42,67 @@ async function render(body: object) {
 }
 
 describe("Phone setup steps", () => {
+  it("keeps both QR sections in a narrow desktop window", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.stubGlobal("ogb", { platform: "win32" });
+    await render({ url, setup: { state: "ready" } });
+    expect(host.querySelector("[data-store-codes]")).not.toBeNull();
+    expect(host.querySelector("[data-phone-link-qr]")).not.toBeNull();
+  });
+
+  it("does not probe PC-only relay status from a remote phone", async () => {
+    vi.stubGlobal("ogb", undefined);
+    vi.stubGlobal("location", { hostname: "pc.fixture.ts.net" });
+    await render({ url, setup: { state: "ready" } });
+    expect(store.api.mock.calls.some(([path]) => path === "/api/phone-relay/status")).toBe(false);
+  });
+
+  it("uses cached reads while ready and slow probes while offline", async () => {
+    await render({ url, setup: { state: "ready" } });
+    store.api.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(0);
+    store.api.mockResolvedValue({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    store.api.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(10);
+  });
+
+  it.each(["Get Tailscale", "Sign In"])("caps fast polling after %s", async (action) => {
+    vi.stubGlobal("ogb", { openExternal: vi.fn().mockResolvedValue(true) });
+    const body = { url: null, setup: action === "Sign In" ? { state: "not-running", backendState: "NeedsLogin" } : { state: "missing" } };
+    await render(body);
+    store.api.mockImplementation(async (path: string) => path === "/api/devices/sign-in" ? { url: "https://login.tailscale.com/a/fixture" } : body);
+    await act(async () => button(action).click());
+    store.api.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(store.api).toHaveBeenCalledTimes(30);
+    store.api.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(store.api).toHaveBeenCalledTimes(10);
+  });
+
+  it("keeps ready reads cached after opening the Tailscale download", async () => {
+    vi.stubGlobal("ogb", { openExternal: vi.fn().mockResolvedValue(true) });
+    await render({ url, setup: { state: "ready" } });
+    await act(async () => button("Get Tailscale").click());
+    store.api.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(0);
+  });
+
+  it("stops fast polling when the setup state changes", async () => {
+    vi.stubGlobal("ogb", { openExternal: vi.fn().mockResolvedValue(true) });
+    await render({ url: null, setup: { state: "missing" } });
+    await act(async () => button("Get Tailscale").click());
+    store.api.mockResolvedValue({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    store.api.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(store.api).toHaveBeenCalledTimes(1);
+  });
+
   it.each([undefined, false])("shows and copies a usable phone link without discovery (%s)", async (phoneJoined) => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -72,7 +133,7 @@ describe("Phone setup steps", () => {
     vi.stubGlobal("ogb", { openExternal });
     await render({ url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
     const loginUrl = "https://login.tailscale.com/a/fixture";
-    store.api.mockResolvedValue({ url: loginUrl });
+    store.api.mockImplementation(async (path: string) => path === "/api/devices/sign-in" ? { url: loginUrl } : { url: null, setup: { state: "not-running", backendState: "NeedsLogin" } });
     await act(async () => button("Sign In").click());
     expect(host.textContent).toContain("Finish in your browser.");
     expect(button("Sign In")).toBeDefined();
@@ -179,6 +240,7 @@ describe("Phone setup steps", () => {
 
   it("shows store buttons and no QR on a phone", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width") }));
+    vi.stubGlobal("location", { hostname: "pc.fixture.ts.net" });
     await render({ url, setup: { state: "ready" } });
     expect(button("App Store")).toBeDefined();
     expect(button("Google Play")).toBeDefined();
@@ -304,7 +366,7 @@ describe("Phone setup steps", () => {
     store.api.mockResolvedValue({ url: null, setup: { state: "not-running" } });
     await act(async () => {
       if (trigger === "focus") window.dispatchEvent(new Event("focus"));
-      else await vi.advanceTimersByTimeAsync(2_000);
+      else await vi.advanceTimersByTimeAsync(6_000);
     });
     expect(host.querySelector("[data-phone-link-qr]")).toBeNull();
     await act(async () => root!.unmount());
