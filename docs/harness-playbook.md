@@ -40,6 +40,9 @@ What to build or fix, and why. Two to five lines.
 - Waits over 10 min: start the job hidden, then poll it in the foreground.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
+## Already built
+- The built.md lines this touches and the live files to open first.
+
 ## Files
 - The files it should start from.
 
@@ -48,7 +51,7 @@ Keep <card path minus .md>.progress.md current at each milestone:
 done, ruled out, and any edit in flight (file, what, why).
 
 ## Report
-The exact shape of its final message, plus one line: cleanup, removed / kept and why.
+The exact shape of its final message, plus two lines: what it reused, and cleanup: removed / kept and why.
 ```
 
 - NICKNAME is short and unique, uppercase with dashes (e.g. `HARNESS-PLAYBOOK`).
@@ -187,6 +190,7 @@ scratch copy.
 Keep one line per user-facing feature in `built.md` (project notes, else repo
 `docs/`): `- Name | where: device, size, setting | files | PRs`.
 
+- No built.md yet: write it from the code before the first build card.
 - Before you say a feature exists, works a certain way, or is missing, grep
   built.md, then read the code it names. No line: search the code.
 - When you land a user-facing change, add or edit its one line in the same step.

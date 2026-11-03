@@ -114,6 +114,12 @@ describe("harness playbook", () => {
     expect(prompt.replace(/\s+/g, " ")).toContain("Save Gemini 4 Argon for big jobs that gain from a second model family's view, like a whole-codebase audit or 3D and graphic design. Routine work goes to the other engines.");
   });
 
+  it("writes the built list before building and quotes it in cards", () => {
+    const prompt = harnessPlaybookPrompt(true).replace(/\s+/g, " ");
+    expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
+    expect(prompt).toContain("## Already built - The built.md lines this touches and the live files to open first.");
+  });
+
   it("logs every walk snag to one shared list", () => {
     expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain("A walk logs every snag it sees to one shared findings list. Before the next walk, read that list and walk only the screens changed since, unless the user asks for more.");
   });
@@ -185,7 +191,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13586);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13764);
   });
 
   it("fills the worktree path from the configured root", () => {
