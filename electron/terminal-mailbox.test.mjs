@@ -357,6 +357,17 @@ describe("installOrbitMsg", () => {
     }
   });
 
+  it("skips bypass confirmation in fresh Claude worker settings", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "orbit-install-"));
+    try {
+      const bin = await installOrbitMsg(path.join(dir, "orbit-bin"), "win32");
+      const settings = JSON.parse(readFileSync(path.join(bin, "claude-worker.json"), "utf8"));
+      expect(settings.skipDangerousModePermissionPrompt).toBe(true);
+    } finally {
+      await removeTempDir(dir);
+    }
+  });
+
   it("writes Claude worker settings that post a plain WAITING note on permission prompts", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "orbit-install-"));
     try {
@@ -378,6 +389,7 @@ describe("installOrbitMsg", () => {
       const script = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(bin, "orbit-compact.ps1").replace(/\\/g, "/")}"`;
       expect(JSON.parse(readFileSync(path.join(bin, "claude-worker.json"), "utf8"))).toEqual({
         autoCompactWindow: 300000,
+        skipDangerousModePermissionPrompt: true,
         permissions: { allow: ["Bash(orbit-clean:*)", "PowerShell(orbit-clean *)"] },
         statusLine: { type: "command", command: expect.stringContaining("orbit-status.ps1") },
         hooks: {
