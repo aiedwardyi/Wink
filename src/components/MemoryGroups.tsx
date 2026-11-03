@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
+import type { ReactNode, Ref } from "react";
+import { Brain, ChevronDown } from "lucide-react";
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -29,22 +29,23 @@ export function MemoryGroup({ title, help, children }: { title?: string; help?: 
   );
 }
 
-export function MemoryFile({ text, topics, loading, open, onToggle, children }: {
+export function MemoryFile({ text, topics, loading, open, onToggle, ref, children }: {
   text: string;
   topics: number;
   loading: boolean;
   open: boolean;
   onToggle: () => void;
+  ref?: Ref<HTMLButtonElement>;
   children?: ReactNode;
 }) {
   const { t } = useI18n();
   const lines = text.split("\n").filter((line) => line.trim()).length;
   return (
     <section className="border-t border-hairline/40 first:border-t-0">
-      <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3 p-4 text-left hover:bg-control/40">
+      <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3 p-4 text-left hover:bg-control/40">
         <div className="min-w-0 flex-1">
           <div className="text-[14px] font-medium text-ink">{t("bot.memoryFile")}</div>
-          {!loading && (
+          {!loading && (lines > 0 || topics > 0) && (
             <div className="mt-0.5 flex flex-wrap gap-x-2 text-[12px] text-ink-secondary">
               <span>{t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines })}</span>
               {topics > 0 && <span>{t(topics === 1 ? "bot.memoryFileTopicsOne" : "bot.memoryFileTopics", { count: topics })}</span>}
@@ -78,10 +79,25 @@ export function NotedLines({ text }: { text: string }) {
   );
 }
 
+export function MemoryEmpty() {
+  const { t } = useI18n();
+  return (
+    <div className="flex flex-col items-center gap-2.5 px-6 pb-6 pt-4 text-center text-ink-secondary">
+      <Brain size={24} aria-hidden="true" />
+      <div className="break-keep text-[13px] leading-relaxed">{t("bot.memoryEmpty")}</div>
+    </div>
+  );
+}
+
+export const currentTask = (bot: Bot) => {
+  const packet = bot.tasks?.find((task) => task.threadId === bot.threadId)?.taskState;
+  return packet?.goal.trim() ? packet : null;
+};
+
 export function MemoryTask({ bot }: { bot: Bot }) {
   const { t } = useI18n();
-  const packet = bot.tasks?.find((task) => task.threadId === bot.threadId)?.taskState;
-  if (!packet?.goal.trim()) return null;
+  const packet = currentTask(bot);
+  if (!packet) return null;
   const done = packet.plan.filter((step) => step.status === "done").length;
   return (
     <MemoryGroup title={t("bot.memoryTask")}>
