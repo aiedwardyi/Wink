@@ -13,7 +13,7 @@ const codeSchema = z.object({ generation: z.number().int().positive(), code: z.s
 
 export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry) {
   return async (req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<boolean> => {
-    const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default))?)?$/.exec(path);
+    const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
     const legacy = /^\/api\/instances\/([^/]+)\/(sign-in|sign-out)$/.exec(path);
     const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1]));
     if (!route && !managed) return false;
@@ -31,6 +31,14 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         if (!parsed.success) throw new AccountError("A login generation and one code are required", 400);
         if (!registry.logins.submit(id, parsed.data.generation, parsed.data.code)) throw new AccountError("This sign-in is no longer waiting for a code", 409);
         json(res, 200, {});
+      } else if (id && action === "destination" && method === "GET") {
+        if (!lifecycle.bots) throw new AccountError("Bot account routing is unavailable", 503);
+        const destination = lifecycle.accounts.list().find((account) => {
+          try { lifecycle.bots!.destination(id, account.id); return true; }
+          catch (error) { if (!(error instanceof AccountError)) throw error; return false; }
+        });
+        if (!destination) throw new AccountError("Choose a different account of this profile by id", 400);
+        json(res, 200, { destinationId: destination.id });
       } else if (!id && method === "GET") {
         const instances = await registry.describeCached();
         json(res, 200, { accounts: lifecycle.accounts.list().map((account) => {

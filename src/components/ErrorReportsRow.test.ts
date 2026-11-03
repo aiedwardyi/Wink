@@ -8,7 +8,7 @@ import { ErrorReportsRow } from "./ErrorReportsRow";
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/state/store", () => ({ api: request }));
 beforeEach(() => request.mockReset().mockResolvedValue({ enabled: false }));
-afterEach(() => { delete window.ogb; localStorage.setItem("omb-locale", "en"); });
+afterEach(() => { delete window.ogb; localStorage.setItem("omb-locale", "en"); vi.useRealTimers(); });
 
 it.each([undefined, {}])("renders nothing without the native consent API (%j)", async (bridge) => {
   Object.defineProperty(window, "ogb", { value: bridge, configurable: true });
@@ -118,7 +118,8 @@ it("keeps the switch on after a partial save so opt-out can be retried", async (
   } finally { await act(async () => root.unmount()); }
 });
 
-it.each([true, false])("uses native consent %s after an initial analytics read failure", async (reports) => {
+it("allows opt-out after an initial analytics read failure when native consent is on", async () => {
+  const reports = true;
   request.mockRejectedValueOnce(new Error("offline"));
   const setErrorReportConsent = vi.fn(async (value: boolean) => value);
   Object.defineProperty(window, "ogb", { value: { errorReportConsent: async () => reports, setErrorReportConsent }, configurable: true });
@@ -133,5 +134,67 @@ it.each([true, false])("uses native consent %s after an initial analytics read f
     expect(setErrorReportConsent).toHaveBeenCalledExactlyOnceWith(!reports);
     expect(request).toHaveBeenCalledWith("/api/analytics", { method: "PUT", body: JSON.stringify({ enabled: !reports }) });
     expect(toggle.getAttribute("aria-checked")).toBe(String(!reports));
+  } finally { await act(async () => root.unmount()); }
+});
+
+it.each(["reports", "usage"])("retries unknown %s consent without enabling reports", async (unknown) => {
+  vi.useFakeTimers();
+  const errorReportConsent = vi.fn().mockResolvedValue(false);
+  if (unknown === "reports") errorReportConsent.mockRejectedValueOnce(new Error("offline"));
+  else request.mockRejectedValueOnce(new Error("offline"));
+  const setErrorReportConsent = vi.fn(async (value: boolean) => value);
+  Object.defineProperty(window, "ogb", { value: { errorReportConsent, setErrorReportConsent }, configurable: true });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(ErrorReportsRow))));
+    const toggle = host.querySelector("button")!;
+    expect(toggle.disabled).toBe(true);
+    await act(async () => toggle.click());
+    expect(setErrorReportConsent).not.toHaveBeenCalled();
+    expect(request.mock.calls.every(([, init]) => !init)).toBe(true);
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(setErrorReportConsent).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); }
+});
+
+it.each(["reports", "usage"])("preserves enabled %s consent while its opt-out and recovery read fail", async (failed) => {
+  let reports = true;
+  let usage = true;
+  let offline = false;
+  request.mockImplementation(async (_path: string, init?: RequestInit) => {
+    if (offline && failed === "usage") throw new Error("offline");
+    if (init?.body) usage = JSON.parse(String(init.body)).enabled;
+    return { enabled: usage };
+  });
+  const setErrorReportConsent = vi.fn(async (value: boolean) => {
+    if (offline && failed === "reports") throw new Error("offline");
+    reports = value;
+    return value;
+  });
+  Object.defineProperty(window, "ogb", { value: {
+    errorReportConsent: async () => {
+      if (offline && failed === "reports") throw new Error("offline");
+      return reports;
+    }, setErrorReportConsent,
+  }, configurable: true });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(ErrorReportsRow))));
+    const toggle = host.querySelector("button")!;
+    offline = true;
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.disabled).toBe(false);
+    offline = false;
+    await act(async () => toggle.click());
+    expect(setErrorReportConsent.mock.calls.map(([value]) => value)).toEqual([false, false]);
+    expect(request.mock.calls.filter(([, init]) => init?.body).map(([, init]) => JSON.parse(String(init!.body)).enabled)).toEqual([false, false]);
+    expect(reports).toBe(false);
+    expect(usage).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   } finally { await act(async () => root.unmount()); }
 });

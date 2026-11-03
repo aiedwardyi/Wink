@@ -15,11 +15,12 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
-  const mutate = async (path: string, body: object) => {
+  const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
+      if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
       await api(path, { method: "POST", body: JSON.stringify(body) });
       await reload();
     } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
@@ -31,7 +32,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       {accounts.map((account) => {
         const drain = account.drain;
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
-        const destination = main ? accounts.find((other) => other !== account && accountReady(other)) : undefined;
+        const hasDestination = accounts.some((other) => other !== account && accountReady(other));
         const loading = account.snapshot.authenticated === undefined && !account.loginState;
         return (
           <div key={account.instanceId} className="py-1">
@@ -44,8 +45,8 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
               <div className="ml-auto shrink-0">
                 {drain && drain.phase !== "failed" ? <span role="status">{t("accounts.removing")}</span>
                   : !accountReady(account) && !drain ? <EngineSignIn instance={account} onUpdated={() => void reload()} />
-                    : <button type="button" disabled={busy || (main && !destination && !drain)}
-                      onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : destination ? { destinationId: destination.instanceId } : {})}
+                    : <button type="button" disabled={busy || (main && !hasDestination && !drain)}
+                      onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)}
                       className="min-h-11 text-ink hover:underline disabled:opacity-50">{t(drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
               </div>
             </div>
