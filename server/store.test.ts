@@ -354,7 +354,7 @@ describe("Store", () => {
     expect(group.defaultResponder).toEqual({ kind: "member", botId: second.id });
 
     const reloaded = new Store(selection);
-    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "member", botId: second.id });
+    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "everyone" });
   });
 
   it("persists a channel's context when it is created", () => {
@@ -383,12 +383,12 @@ describe("Store", () => {
     expect(channel.setupCompletedAt).toEqual(expect.any(Number));
     expect(new Store(selection).group(channel.id)).toMatchObject({
       bulletin: "Ship carefully.",
-      defaultResponder: { kind: "mentions" },
+      defaultResponder: { kind: "everyone" },
       setupCompletedAt: channel.setupCompletedAt,
     });
   });
 
-  it("migrates old rooms without routing to their first member", () => {
+  it("loads old rooms without routing with everyone answering", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
@@ -399,7 +399,7 @@ describe("Store", () => {
     writeFileSync(groupsFile, JSON.stringify(saved));
 
     const reloaded = new Store(selection);
-    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "member", botId: first.id });
+    expect(reloaded.group(group.id)?.defaultResponder).toEqual({ kind: "everyone" });
   });
 
   it("stamps readAt when unread clears, not when it is set, and keeps it across a restart", () => {
