@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import * as context from "./context-compaction.ts";
+import { joinRunningTurn } from "./continuation-turn.ts";
 import { _resetPending, drainDelegations, finishDelegatedTurn, queueDelegation, type DelegatedTurn } from "./delegations.ts";
 import * as mail from "./mail.ts";
 import { closeMessageDb } from "./message-db.ts";
@@ -101,6 +102,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },
       pendingInterruptThreads: { started: () => {} }, effort: undefined, leanStartup: false, isUnattended: () => false,
+      joinRunningTurn, runningTurnIdByThread: new Map(),
     });
     store.markTaskDispatched(sender.id, threadId, instanceId, model);
     const cursor = sendTurn.mock.calls.at(-1)![0].resumeCursor ?? "new-provider-session";

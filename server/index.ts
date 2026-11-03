@@ -224,7 +224,7 @@ import {
 } from "./turn-context.ts";
 import { stallErrorActivity } from "./room-error-attribution.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
-import { foldContinuationStart } from "./continuation-turn.ts";
+import { foldContinuationStart, joinRunningTurn } from "./continuation-turn.ts";
 import "./pending-model.ts";
 import { botClears, groupClears } from "./wire-clears.ts";
 import { ownTurnReply, turnAddedMessage, turnSummaries, turnUnread } from "./turn-reply.ts";
@@ -3050,8 +3050,11 @@ bus.subscribe((event: RuntimeEvent) => {
 // Continuation turns carry the provider's own turnId. Disowned ones settle
 // without touching the bot, which is busy on another thread.
 const disownedTurnIds = new Set<string>();
+const runningTurnIdByThread = new Map<string, string>();
 bus.subscribe((event: RuntimeEvent) => {
+  if (event.type === "turn.completed" && runningTurnIdByThread.get(event.threadId) === event.turnId) runningTurnIdByThread.delete(event.threadId);
   if (event.type !== "turn.started") return;
+  if (event.turnId) runningTurnIdByThread.set(event.threadId, event.turnId);
   foldContinuationStart(event, {
     botByThread: (threadId) => store.botByThread(threadId),
     claimed: (botId) => turnStartClaims.has(botId),
@@ -5423,6 +5426,13 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           limitWaits.track(bot.id, threadId, selection, opts?.limitWaitId, { unattended: opts?.unattended, keepGoingWake: opts?.keepGoingWake, paneNoteWake: opts?.paneNoteWake });
         }
         pendingInterruptThreads.started(threadId, bot.id, epoch);
+        const joined = await joinRunningTurn(live.adapter, { threadId, text, resumeCursor, systemUpdate }, runningTurnIdByThread.get(threadId));
+        if (joined) {
+          disownedTurnIds.delete(joined.turnId);
+          turnRegistry.started(joined.turnId, threadId);
+          limitWaits.bind(threadId, joined.turnId);
+          return joined;
+        }
         return live.adapter.sendTurn({
         threadId,
         text,

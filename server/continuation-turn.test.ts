@@ -1,11 +1,20 @@
 // Continuation turns: an idle bot adopts one like a user-sent turn, and a
 // send that arrives meanwhile waits in the queue until it settles.
+import { chmodSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { foldContinuationStart, type ContinuationDeps } from "./continuation-turn.ts";
+import { ensureDirs } from "./config.ts";
+import { foldContinuationStart, joinRunningTurn, type ContinuationDeps } from "./continuation-turn.ts";
+import type { ProviderAdapter, ProviderInstance } from "./contracts.ts";
+import { ClaudeDriver } from "./drivers/claude.ts";
 import { drainSteeredMessages, queueSteeredMessage, _queuedCount, _resetSteerQueue, type SteerStore } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
+import { recordEvents, type EventRecorder } from "./testing/events.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
+
+const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "testing", "fake-claude-cli.ts");
 
 function fakeBot(busy = false): BotRecord {
   return {
@@ -102,5 +111,78 @@ describe("foldContinuationStart", () => {
     drainSteeredMessages(store, run);
     expect(run).toHaveBeenCalledTimes(1);
     expect(messages[0]).toMatchObject({ role: "user", text: "next step" });
+  });
+});
+
+describe("joinRunningTurn", () => {
+  const turn = { threadId: "thread-a", text: "A pane note arrived. Act on it.", resumeCursor: "session-1", systemUpdate: "" };
+
+  function engine(holds: boolean, written = true) {
+    const steered: string[] = [];
+    const adapter = {
+      capabilities: { queueing: true } as ProviderAdapter["capabilities"],
+      hasSession: () => holds,
+      steer: async (_threadId: string, text: string) => {
+        steered.push(text);
+        return written;
+      },
+    };
+    return { adapter, steered };
+  }
+
+  it("leaves an idle thread, a fresh session and a system update to sendTurn", async () => {
+    const idle = engine(false);
+    await expect(joinRunningTurn(idle.adapter, turn, "turn-done")).resolves.toBeNull();
+    const held = engine(true);
+    await expect(joinRunningTurn(held.adapter, { ...turn, resumeCursor: undefined }, "turn-late")).resolves.toBeNull();
+    await expect(joinRunningTurn(held.adapter, { ...turn, systemUpdate: "changed" }, "turn-late")).resolves.toBeNull();
+    expect([...idle.steered, ...held.steered]).toEqual([]);
+  });
+
+  it("sends as usual when the running turn ended before the steer landed", async () => {
+    await expect(joinRunningTurn(engine(true, false).adapter, turn, "turn-late")).resolves.toBeNull();
+  });
+
+  describe("on the Claude driver (fake CLI)", () => {
+    let instance: ProviderInstance | undefined;
+    let recorder: EventRecorder | undefined;
+
+    afterEach(async () => {
+      recorder?.stop();
+      await instance?.dispose();
+      instance = undefined;
+    });
+
+    it("steers a dispatch into the turn the CLI woke into after the busy gate", async () => {
+      ensureDirs();
+      chmodSync(FAKE_CLI, 0o755);
+      instance = await ClaudeDriver.create({
+        instanceId: "claude-join",
+        displayName: "Claude",
+        enabled: true,
+        environment: { FAKE_CLAUDE_MODE: "late-wake" },
+        config: { cli: FAKE_CLI, permissionMode: "acceptEdits" },
+      });
+      const { adapter } = instance;
+      const events = (recorder = recordEvents(adapter));
+      const first = await adapter.sendTurn({ threadId: "t-join", text: "one" });
+      await events.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+      const woke = await events.until((e) => e.type === "turn.started" && e.turnId !== first.turnId);
+      const opened = await events.until((e) => e.type === "request.opened" && e.turnId === woke.turnId);
+
+      const wake = { ...turn, threadId: "t-join" };
+      await expect(adapter.sendTurn(wake)).rejects.toThrow("a turn is already running on this thread");
+      await expect(joinRunningTurn(adapter, wake, woke.turnId)).resolves.toEqual({ turnId: woke.turnId });
+
+      await adapter.respondToRequest("t-join", (opened as { requestId: string }).requestId, { behavior: "allow" });
+      await events.until((e) => e.type === "turn.completed" && e.turnId === woke.turnId);
+      expect(events.events).toContainEqual(expect.objectContaining({
+        type: "item.completed",
+        itemType: "assistant_text",
+        text: `background allow + steered: ${turn.text}`,
+        turnId: woke.turnId,
+      }));
+      expect(events.events.filter((e) => e.type === "turn.started")).toHaveLength(2);
+    });
   });
 });
