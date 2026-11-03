@@ -8,7 +8,22 @@ const DAY_MS = 24 * 60 * 60_000;
 const SWEEP_MS = 6 * 60 * 60_000;
 const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
 const KEEP_RE = /^(?:rel-|nm-)|^(?:relay-deploy|release-gate)$/i;
-const normalize = (file) => process.platform === "win32" ? path.resolve(file).toLowerCase() : path.resolve(file);
+const normalize = (file) => {
+  const resolved = path.resolve(file);
+  if (process.platform !== "win32") return resolved;
+  let current = path.parse(resolved).root;
+  const parts = resolved.slice(current.length).split(path.sep);
+  for (let index = 0; index < parts.length; index++) {
+    current = path.join(current, parts[index]);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) return path.join(current, ...parts.slice(index + 1)).toLowerCase();
+      current = fs.realpathSync.native(current);
+    } catch {
+      return path.join(current, ...parts.slice(index + 1)).toLowerCase();
+    }
+  }
+  return current.toLowerCase();
+};
 const inside = (root, file) => normalize(file) === normalize(root) || normalize(file).startsWith(`${normalize(root)}${path.sep}`);
 const nick = (label) => {
   const first = label?.split("|")[0].trim();
@@ -92,7 +107,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   const scratchBusy = (entry, target) => panes().some((pane) => nick(pane.label) === nick(entry.label) || inside(target, pane.cwd));
   const removeScratch = async (entry, retry = true) => {
     const target = scratchFor(entry);
-    if (!target || entries.findLast((other) => other.scratch === target) !== entry || scratchBusy(entry, target)) return;
+    if (!target || entries.findLast((other) => other.scratch && normalize(other.scratch) === normalize(target)) !== entry || scratchBusy(entry, target)) return;
     try {
       if (!await directory(target)) return;
       await unlinkLinks(target);

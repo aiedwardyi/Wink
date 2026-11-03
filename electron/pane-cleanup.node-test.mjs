@@ -11,8 +11,19 @@ import { createTerminalHost } from "./terminal-host.mjs";
 const DAY_MS = 86_400_000;
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true }).trim();
 
-function fixture(t) {
-  const home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pane-cleanup-")));
+function fixture(t, short = false) {
+  let home = fs.mkdtempSync(path.join(os.tmpdir(), "pane-cleanup-"));
+  if (short) {
+    const script = "$ProgressPreference = 'SilentlyContinue'; (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:PANE_CLEANUP_TEST_HOME).ShortPath";
+    const alias = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PANE_CLEANUP_TEST_HOME: home } }).trim();
+    if (path.resolve(alias).toLowerCase() === fs.realpathSync.native(home).toLowerCase()) {
+      fs.rmdirSync(home);
+      t.skip("8.3 names are disabled on the fixture volume");
+      return null;
+    }
+    assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(home));
+    home = alias;
+  }
   const tempRoot = path.join(home, "temp");
   const worktreeRoot = path.join(home, "worktrees");
   fs.mkdirSync(tempRoot);
@@ -71,6 +82,62 @@ test("reported scratch is removed and its junction target survives", async (t) =
   assert.match(fs.readFileSync(path.join(f.home, ".orbit", "cleanup.log"), "utf8"), /"kind":"scratch"/);
   assert.equal(f.ledger()[0].reported, true);
 });
+
+test("short aliases remove reported scratch without following its junction", { skip: process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
+  const f = fixture(t, true);
+  if (!f) return;
+  const target = path.join(f.home, "user-files");
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, "precious"), "survives");
+  fs.symlinkSync(target, path.join(f.scratch, "link"), "junction");
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.equal(fs.readFileSync(path.join(target, "precious"), "utf8"), "survives");
+  assert.deepEqual(f.warnings, []);
+});
+
+test("short aliases preserve scratch claimed through a long cwd", { skip: process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
+  const f = fixture(t, true);
+  if (!f) return;
+  f.open([{ id: "other", label: "OTHER", cwd: path.join(fs.realpathSync.native(f.scratch), "not-created") }]);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+});
+
+test("short aliases cannot bypass a newer long-path scratch hand-off", { skip: process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
+  const f = fixture(t, true);
+  if (!f) return;
+  await eligible(f);
+  const next = { ...f.session, id: "next", tempRoot: fs.realpathSync.native(f.tempRoot) };
+  f.cleanup.opened(next);
+  await f.cleanup.closed(next, true);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(f.scratch), true);
+  f.advance(3 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(f.scratch), false);
+});
+
+for (const gate of ["TEMP root", "TEMP ancestor"]) {
+  test(`scratch refuses a junction at its ${gate}`, async (t) => {
+    const f = fixture(t);
+    const target = path.join(f.home, "user-files");
+    const temp = path.join(target, "temp");
+    const scratch = path.join(temp, "wink-TEST");
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, "precious"), "survives");
+    const link = path.join(f.home, "linked");
+    fs.symlinkSync(gate === "TEMP root" ? temp : target, link, process.platform === "win32" ? "junction" : "dir");
+    f.session.tempRoot = gate === "TEMP root" ? link : path.join(link, "temp");
+    f.cleanup.opened(f.session);
+    await f.cleanup.closed(f.session);
+    assert.equal(fs.readFileSync(path.join(scratch, "precious"), "utf8"), "survives");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    fs.unlinkSync(link);
+  });
+}
 
 for (const gate of ["keep", "no report", "same nick", "cwd inside", "invalid nick", "not first field", "wrong scratch", "relative temp", "linked root"]) {
   test(`scratch protects ${gate}`, async (t) => {
@@ -209,6 +276,36 @@ test("a saved, clean, idle ledger worktree is removed without its branch or link
   assert.match(git(main, "branch", "--list", "test-worker"), /test-worker/);
   assert.doesNotMatch(git(main, "worktree", "list"), /worktrees[\\/]worker/);
 });
+
+for (const gate of ["none", "open pane", "pinned", "recent close"]) {
+  test(`short aliases keep the worktree gate for ${gate}`, { skip: process.platform !== "win32" && "8.3 aliases require Windows" }, async (t) => {
+    const f = fixture(t, true);
+    if (!f) return;
+    const { main, target } = repo(f);
+    const longTarget = fs.realpathSync.native(target);
+    const shared = path.join(f.home, "shared-packages");
+    fs.mkdirSync(shared);
+    fs.writeFileSync(path.join(shared, "package"), "safe");
+    fs.symlinkSync(shared, path.join(target, "node_modules"), "junction");
+    if (gate === "open pane") f.open([{ id: "other", label: "OTHER", cwd: path.join(longTarget, "not-created") }]);
+    await eligible(f);
+    if (gate === "recent close") {
+      const next = { ...f.session, id: "next", cwd: longTarget };
+      f.cleanup.opened(next);
+      await f.cleanup.closed(next, true);
+    }
+    if (gate === "pinned") {
+      const cleanup = createPaneCleanup({ ...f.options, pinned: [longTarget] });
+      cleanup.start(() => []);
+      t.after(() => cleanup.dispose());
+      await cleanup.sweep();
+    } else await f.cleanup.sweep();
+    assert.equal(fs.existsSync(target), gate !== "none", f.warnings.map(String).join("\n"));
+    assert.equal(fs.readFileSync(path.join(shared, "package"), "utf8"), "safe");
+    assert.match(git(main, "branch", "--list", "test-worker"), /test-worker/);
+    assert.deepEqual(f.warnings, []);
+  });
+}
 
 test("a primary checkout keeps its links even when its cwd is in the ledger", async (t) => {
   const f = fixture(t);
