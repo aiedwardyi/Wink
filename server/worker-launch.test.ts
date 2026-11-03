@@ -107,6 +107,7 @@ describe("trusted worker accounts", () => {
         `pwsh -Command "echo ${engine}"`,
         `bash -c '${engine.slice(0, 2)}"${engine.slice(2)}" task'`,
         `pwsh -Command "\`${engine} task"`, `cmd /c ^${engine} task`, `bash -c '${engine.slice(0, 2)}\\${engine.slice(2)} task'`,
+        `env --split-string='${engine} task'`, `env -S${engine} task`,
       ]) await expect(f.prepare({ ...f.input, command, mode })).rejects.toThrow("Ambiguous worker launch; use a direct engine command");
       expect(f.refresh).not.toHaveBeenCalled();
       expect(f.available).not.toHaveBeenCalled();
