@@ -83,10 +83,11 @@ describe("Phone setup steps", () => {
     expect(store.api).toHaveBeenCalledTimes(10);
   });
 
-  it("keeps ready probes slow after opening the Tailscale download", async () => {
+  it("keeps ready probes slow without a redundant Tailscale download", async () => {
     vi.stubGlobal("ogb", { openExternal: vi.fn().mockResolvedValue(true) });
-    await render({ url, setup: { state: "ready" } });
-    await act(async () => button("Get Tailscale").click());
+    await render({ url, setup: { state: "ready", account: "you@example.com" } });
+    expect(host.querySelector("[data-pc-ready]")?.textContent).toContain("Signed in as you@example.com");
+    expect(host.querySelector("[data-pc-ready]")?.textContent).not.toContain("Get Tailscale");
     store.api.mockClear();
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(store.api.mock.calls.filter(([path]) => path === "/api/remote-link?setup=1")).toHaveLength(2);

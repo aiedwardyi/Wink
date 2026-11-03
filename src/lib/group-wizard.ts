@@ -75,14 +75,7 @@ export function suggestEngine(
   return fallback ? { instance: fallback, substituted: true } : null;
 }
 
-/** A readable bot name from the job text, generated without a roundtrip. */
-export function botNameFromJob(job: string): string {
-  const words = job.trim().split(/\s+/).filter(Boolean).slice(0, 5);
-  if (!words.length) return "";
-  const name = words.join(" ");
-  const capped = name.length > 40 ? `${name.slice(0, 40).trimEnd()}…` : name;
-  return capped.charAt(0).toUpperCase() + capped.slice(1);
-}
+export const WIZARD_BOT_NAME_LIMIT = 40;
 
 export interface WizardBotSelection {
   instanceId: string;
@@ -90,14 +83,12 @@ export interface WizardBotSelection {
 }
 
 export interface WizardBotPayload {
-  job: string;
   name: string;
   modelSelection: WizardBotSelection;
 }
 
-/** Payload for POST /api/bots for an inline-described wizard bot. */
-export function newBotPayload(job: string, selection: WizardBotSelection): WizardBotPayload {
-  return { job: job.trim(), name: botNameFromJob(job), modelSelection: selection };
+export function newBotPayload(name: string, selection: WizardBotSelection): WizardBotPayload {
+  return { name: name.trim().slice(0, WIZARD_BOT_NAME_LIMIT).trimEnd(), modelSelection: selection };
 }
 
 export interface WizardGroupPayload {

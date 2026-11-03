@@ -19,10 +19,10 @@ export function notedLines(text: string): Array<{ fact: string; at: Date }> {
     .sort((a, b) => b.at.getTime() - a.at.getTime());
 }
 
-export function MemoryGroup({ title, help, children }: { title: string; help?: string; children?: ReactNode }) {
+export function MemoryGroup({ title, help, children }: { title?: string; help?: string; children?: ReactNode }) {
   return (
     <section className="border-t border-hairline/40 p-4 first:border-t-0">
-      <div className="text-[14px] font-medium text-ink">{title}</div>
+      {title && <div className="text-[14px] font-medium text-ink">{title}</div>}
       {help && <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{help}</div>}
       {children}
     </section>

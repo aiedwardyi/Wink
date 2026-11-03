@@ -128,8 +128,8 @@ export function ManageMembersPanel({
     setRows((prev) => prev.map((row) => (row.key === key ? { ...row, ...patch } : row)));
 
   const addBot = async (row: NewRow, pick: EnginePick) => {
-    const job = row.job.trim();
-    if (!job || row.saving) return;
+    const name = row.name.trim();
+    if (!name || row.saving) return;
     patchRow(row.key, { saving: true, error: null });
     try {
       const selection = {
@@ -139,7 +139,7 @@ export function ManageMembersPanel({
       const result: { bot: Bot } = await api("/api/bots", {
         method: "POST",
         body: JSON.stringify({
-          ...newBotPayload(job, selection),
+          ...newBotPayload(name, selection),
           section: group.section?.trim() || undefined,
         }),
       });
@@ -187,7 +187,7 @@ export function ManageMembersPanel({
               const key = nextRowKey.current++;
               setRows((prev) => [
                 ...prev,
-                { key, job: "", instanceId: null, model: null, saving: false, error: null },
+                { key, name: "", instanceId: null, model: null, saving: false, error: null },
               ]);
             }}
             className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
