@@ -15,17 +15,39 @@ export interface SegmentedProps<T extends string> {
   onChange: (id: T) => void;
   disabled?: (id: T) => boolean;
   title?: string;
+  peek?: boolean;
 }
 
-export function Segmented<T extends string>({ label, value, options, onChange, disabled, title }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ label, value, options, onChange, disabled, title, peek }: SegmentedProps<T>) {
   const ref = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ x: number; w: number } | null>(null);
   const [mask, setMask] = useState<string | undefined>();
+  const [peekWidth, setPeekWidth] = useState<number>();
   useLayoutEffect(() => {
     const group = ref.current;
     if (!group) return;
     const place = () => {
       const on = group.querySelector<HTMLElement>('[aria-checked="true"]');
+      let width: number | undefined;
+      const available = group.parentElement?.clientWidth ?? group.clientWidth;
+      if (peek && window.matchMedia("(max-width: 767px)").matches && group.scrollWidth > available) {
+        width = available;
+        const buttons = [...group.querySelectorAll("button")];
+        const edge = buttons.findIndex((button) => button.offsetLeft + button.offsetWidth >= available - 3);
+        const button = buttons[edge];
+        if (button) {
+          const visible = available - button.offsetLeft;
+          if (visible < 24 || button.offsetWidth - visible < 12) {
+            const cut = visible < 24 ? buttons[edge - 1] : button;
+            if (cut) width = cut.offsetLeft + Math.min(32, cut.offsetWidth / 2);
+          }
+        }
+      }
+      setPeekWidth(width);
+      if (peek && on && group.scrollWidth > (width ?? group.clientWidth)) {
+        const right = on.offsetLeft + on.offsetWidth + 3 - (width ?? group.clientWidth);
+        group.scrollLeft = Math.max(0, Math.min(on.offsetLeft - 3, Math.max(group.scrollLeft, right)));
+      }
       setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
       setMask(edgeFade(group));
     };
@@ -33,9 +55,10 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(place);
     observer.observe(group);
+    if (peek && group.parentElement) observer.observe(group.parentElement);
     for (const button of group.querySelectorAll("button")) observer.observe(button);
     return () => observer.disconnect();
-  }, [value, options.length]);
+  }, [value, options.length, peek]);
   return (
     <div
       ref={ref}
@@ -44,7 +67,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
       title={title}
       onScroll={(e) => setMask(edgeFade(e.currentTarget))}
       className="relative flex w-fit min-w-0 max-w-full shrink-0 gap-0.5 overflow-x-auto rounded-lg bg-inset p-[3px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
+      style={{ maxWidth: peekWidth, maskImage: peekWidth ? undefined : mask, WebkitMaskImage: peekWidth ? undefined : mask }}
     >
       {thumb && (
         <span
