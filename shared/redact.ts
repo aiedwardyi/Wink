@@ -177,6 +177,7 @@ function couldBeJwt(s: string): boolean {
 
 function couldBeKeyPrefix(s: string): boolean {
   if (couldBeJwt(s)) return true;
+  if (/^(?:[a-f0-9]{1,8}|[a-f0-9]{8}\.[A-Za-z0-9_-]{0,42})$/.test(s)) return true;
   for (const [starter, charset] of KEY_STARTERS) {
     if (starter.startsWith(s)) return true;
     if (s.startsWith(starter) && charsetRun(s.slice(starter.length), charset)) return true;
