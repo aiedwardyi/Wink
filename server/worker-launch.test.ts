@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
@@ -134,6 +135,45 @@ describe("trusted worker accounts", () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
+  it.each(["codex", "claude"])("leaves the default Claude config selector unset from a %s turn", async (engine) => {
+    const f = await fixture();
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+    try {
+      delete f.bases.claude.environment;
+      f.turns.capture("bot", "thread", { instanceId: engine, driverKind: engine === "claude" ? "claudeAgent" : "codex" });
+      const launch = await f.prepare({ ...f.input, command: "claude 'task'", environment: { ...f.input.environment, Claude_Config_Dir: "inherited-wrong" } });
+      expect(launch).toMatchObject({ kind: "managed", account: { id: "claude", generation: 0 } });
+      if (launch?.kind !== "managed") throw new Error("expected managed launch");
+      expect(launch.environment.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(Object.keys(launch.environment).filter((key) => key.toUpperCase() === "CLAUDE_CONFIG_DIR")).toEqual([]);
+      expect(f.available).toHaveBeenCalledWith("claude", 0);
+      expect(f.refresh).toHaveBeenCalledExactlyOnceWith("claude", undefined);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("keeps the default Codex home and isolated worker state", async () => {
+    const f = await fixture();
+    vi.stubEnv("CODEX_HOME", undefined);
+    try {
+      delete f.bases.codex.environment;
+      f.turns.capture("bot", "thread", { instanceId: "codex", driverKind: "codex" });
+      expect(await f.prepare(f.input)).toMatchObject({ account: { id: "codex", generation: 0 },
+        environment: { CODEX_HOME: join(homedir(), ".codex"), CODEX_SQLITE_HOME: join(homedir(), ".codex", "state") } });
+      expect(f.refresh).toHaveBeenCalledExactlyOnceWith("codex", undefined);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(["CLAUDE_CONFIG_DIR", "Claude_Config_Dir"])("preserves an explicit default Claude directory via %s", async (selector) => {
+    const f = await fixture();
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+    try {
+      f.bases.claude.environment = { [selector]: join(homedir(), ".claude") };
+      expect(await f.prepare({ ...f.input, command: "claude 'task'" })).toMatchObject({
+        environment: { CLAUDE_CONFIG_DIR: join(homedir(), ".claude") },
+      });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it.each([0, 1])("captures dispatch %i before the first account is added", async (index) => {
     const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
     const dispatches: string[] = [];
@@ -197,8 +237,9 @@ describe("trusted worker accounts", () => {
     expect(launch.args).toContain("--no-daemon");
   });
 
-  it("routes Claude account 3 and replaces only the installed worker settings hook", async () => {
+  it.each([true, false])("routes Claude account 3 with a configured base %s and replaces only the installed worker settings hook", async (configured) => {
     const f = await fixture();
+    if (!configured) delete f.bases.claude.environment;
     await f.accounts.add("claude");
     const added = await f.accounts.add("claude");
     const third = await f.accounts.identify(added.id, "claude-fixture");
