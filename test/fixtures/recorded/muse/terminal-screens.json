@@ -1,0 +1,47 @@
+{
+  "stamp": {
+    "engine": "muse",
+    "cliVersion": "1.4.14-R7309.1",
+    "recordedAt": "2026-11-03T12:45:32.188Z",
+    "sourcePc": "home",
+    "source": "Hidden node-pty run, 120x40; terminal-screen.mjs snapshots; installed muse binary, updates bypassed",
+    "args": [
+      "--model",
+      "muse-spark-1.3",
+      "--reasoning-effort",
+      "low",
+      "--yolo",
+      "say hi"
+    ]
+  },
+  "reply": {
+    "busy": [
+      "",
+      "  Muse Code 1.4.14",
+      "",
+      "❯ say hi",
+      "",
+      "◆ Hi - I'm Muse Code powered by Meta Muse Spark.",
+      "",
+      "◆ Double checking (6s · esc to interrupt)",
+      "",
+      "── Voice input (Alt+V to start) ────────────────────────────────────────────────────────────────────────────────────────",
+      "❯",
+      "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+      "  muse-spark-1.3 · low · C:\\Users\\mredw\\AppData\\Local\\Temp\\wink-PANE-ENGINE-STATE · YOLO"
+    ],
+    "idle": [
+      "",
+      "  Muse Code 1.4.14",
+      "",
+      "❯ say hi",
+      "",
+      "◆ Hi - I'm Muse Code powered by Meta Muse Spark.",
+      "",
+      "── Voice input (Alt+V to start) ────────────────────────────────────────────────────────────────────────────────────────",
+      "❯",
+      "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+      "  muse-spark-1.3 · low · C:\\Users\\mredw\\AppData\\Local\\Temp\\wink-PANE-ENGINE-STATE · YOLO"
+    ]
+  }
+}

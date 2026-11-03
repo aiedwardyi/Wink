@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,8 +12,8 @@ import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
 import { TOOLS, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeState, readTerminalSnapshot, terminalReadGrant, terminalSnapshotText, workerModelsText, workerReportText } from "./terminal-proxy.ts";
 
 const CONFIG = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
-const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────";
-const IDLE = "● pong\n✻ Sautéed for 5s · done 11:34 PM\n──⏸─manual─mode─on──────────\n❯\n────────────────────";
+const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────\n  ⏵⏵ bypass permissions on";
+const IDLE = "● pong\n✻ Sautéed for 5s · done 11:34 PM\n──⏸─manual─mode─on──────────\n❯\n────────────────────\n  ⏵⏵ bypass permissions on";
 const CODEX_MENU = "Select Model and Effort\n› 1. GPT-6.1-Sol (current)\n  2. GPT-6-Astra\n\n  enter select · esc back";
 
 type FetchMock = Mock<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>;
@@ -96,7 +97,7 @@ describe("terminal proxy", () => {
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());
-    expect(workerModelsText().length).toBeLessThan(820);
+    expect(workerModelsText().length).toBeLessThan(860);
     expect(description).toContain("Gemini: Gemini 4 Argon = gemini-4-argon-<effort>, Gemini 3.8 Flash = gemini-3.8-flash-<effort> (effort high/medium/low, part of the id).");
     const ids = STATIC_ANTIGRAVITY_MODELS.options.map((option) => option.id);
     for (const family of WORKER_GEMINI_FAMILIES) {
@@ -110,6 +111,14 @@ describe("terminal proxy", () => {
     expect(workerReportText("linux").agy).toBe("");
     expect(TOOLS[2].description).toContain(`Gemini: ${workerReportText(process.platform).agy}${flags}`);
     expect(TOOLS[2].description.indexOf("Gemini: ")).toBeGreaterThan(TOOLS[2].description.indexOf("Grok: grok"));
+  });
+
+  it("lists Grok 4.7 efforts without max in the spawn description", () => {
+    for (const description of [workerModelsText(), TOOLS[2].description]) {
+      const grok = description.match(/Grok: Grok 4\.7 = grok-4\.7[^\n]*?(?= Gemini:)/)?.[0];
+      expect(grok).toContain("(effort low/medium/high/xhigh)");
+      expect(grok).not.toMatch(/\bmax\b/);
+    }
   });
 
   it("adds Codex pane env, notify and orbit-msg reports on Windows only", () => {
@@ -598,15 +607,42 @@ describe("terminal proxy", () => {
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
   ].join("\n");
 
+  const muse = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/muse/terminal-screens.json", import.meta.url), "utf8"));
+  const claudeIdle = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/idle-background-shell.json", import.meta.url), "utf8"));
+
+  it.each(["busy", "idle"])("does not label a recorded Muse %s screen as Claude", async (state) => {
+    const screenText = muse.reply[state].join("\n");
+    expect(claudeState(screenText)).toBeUndefined();
+    const snapshot = { sessionId: "s1", generation: 2, screenText, panes: [{ sessionId: "s1", generation: 2, label: "Muse", screenText }] };
+    const result = await callTool("terminal_read", scripted(snapshot), CONFIG);
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).not.toContain("Claude:");
+    const fetchImpl = scripted(snapshot);
+    const sent = await send(fetchImpl, { key: "esc", sessionId: "s1", generation: 2 });
+    expect(sent.isError).toBeUndefined();
+    expect(sent.content[0].text).not.toContain("Claude:");
+    expect(posted(fetchImpl)).toEqual(["\x1b"]);
+  });
+
+  it("keeps the recorded Claude background-shell screen idle", async () => {
+    const screenText = claudeIdle.reply.screen.join("\n");
+    expect(claudeState(screenText)).toBe("idle");
+    expect(terminalSnapshotText({ screenText })).toContain("Claude: idle");
+    const fetchImpl = scripted({ screenText });
+    expect((await send(fetchImpl, { key: "esc", sessionId: "s1", generation: 2 })).isError).toBeUndefined();
+    expect(posted(fetchImpl)).toEqual(["\x1b"]);
+  });
+
   it.each([
     ["a running turn", BUSY, "busy"],
-    ["the first spinner frame", "❯ go\n* Fermenting…\n────────────\n❯", "busy"],
+    ["the first spinner frame", "Claude Code\n❯ go\n* Fermenting…\n────────────\n❯", "busy"],
     ["a finished turn at its prompt", IDLE, "idle"],
     ["a shell", "PS C:\\work> echo done…", undefined],
     ["an idle 2.1.293 pane at its > prompt", IDLE_GT, "idle"],
     ["a busy 2.1.293 pane above its > prompt", `* Considering… (10m 9s · ↓ 32.8k tokens · thinking with max effort)\n${IDLE_GT}`, "busy"],
     ["PowerShell with a continuation prompt", "PS C:\\> Get-ChildItem |\n>> Select-Object Name\n>> \nPS C:\\>", undefined],
     ["Codex at its prompt", "────────────\n› Ask Codex to do anything\n\n  ? for shortcuts", undefined],
+    ["an unidentified screen with a Claude-like spinner and prompt", "* Fermenting…\n────────────\n❯", undefined],
   ])("reads the Claude state from %s", (_label, screenText, state) => {
     expect(claudeState(screenText)).toBe(state);
     const text = terminalSnapshotText({ sessionId: "s1", generation: 1, screenText });
