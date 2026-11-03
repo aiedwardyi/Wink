@@ -4,7 +4,7 @@
 // default responder; @mentions override that routing.
 import { ErrorRow } from "./ChatView";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -1085,7 +1085,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
           />
         </label>
 
-        {error && <div role="alert" className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+        {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-hairline/50 bg-inset px-3 py-2 text-[12.5px] text-ink"><AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" /><span className="min-w-0 break-words">{error}</span></div>}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"

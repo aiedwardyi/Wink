@@ -111,7 +111,7 @@ describe("RoomToolChip", () => {
       "Delegation to @Atlas denied by user",
       "Delegation to @Atlas waiting \u2014 they're busy (retry 1/3 when they finish)",
     ]);
-    expect(Array.from(host.querySelectorAll(".text-danger span.break-words")).map((span) => span.textContent)).toEqual(["The bot couldn't finish that.", "The bot couldn't finish that."]);
+    expect(Array.from(host.querySelectorAll(".bg-inset.text-ink span.break-words")).map((span) => span.textContent)).toEqual(["The bot couldn't finish that.", "The bot couldn't finish that."]);
     expect(Array.from(host.querySelectorAll("details div")).map((div) => div.textContent)).toEqual(["delegation failed \u2014 Atlas is offline", "the CLI exited"]);
     await act(async () => { root.unmount(); });
     host.remove();
@@ -121,7 +121,7 @@ describe("RoomToolChip", () => {
       "@Atlas에게 한 위임을 사용자가 거부했습니다",
       "@Atlas에게 한 위임 대기 중 - 상대가 작업 중입니다 (끝나면 1/3번째 재시도)",
     ]);
-    expect(Array.from(host.querySelectorAll(".text-danger span.break-words")).map((span) => span.textContent)).toEqual(["봇: 작업을 마치지 못했어요.", "봇: 작업을 마치지 못했어요."]);
+    expect(Array.from(host.querySelectorAll(".bg-inset.text-ink span.break-words")).map((span) => span.textContent)).toEqual(["봇: 작업을 마치지 못했어요.", "봇: 작업을 마치지 못했어요."]);
     expect(Array.from(host.querySelectorAll("summary")).map((summary) => summary.textContent)).toEqual(["자세히", "자세히"]);
     expect(Array.from(host.querySelectorAll("details div")).map((div) => div.textContent)).toEqual(["delegation failed \u2014 Atlas is offline", "the CLI exited"]);
   });
@@ -140,7 +140,7 @@ describe("RoomToolChip", () => {
       "min-w-0 max-w-[480px] break-words",
       "min-w-0 max-w-[480px] truncate font-mono",
     ]);
-    expect(host.querySelector(".text-danger .break-words")?.className).not.toMatch(/font-mono|truncate/);
+    expect(host.querySelector(".bg-inset.text-ink .break-words")?.className).not.toMatch(/font-mono|truncate/);
   });
 
   it("translates Message from and the failed-turn details label into Korean in a room", async () => {

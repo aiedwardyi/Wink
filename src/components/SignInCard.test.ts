@@ -43,5 +43,5 @@ it("flips to Retry once the engine is signed in", () => {
 it("keeps the install card in the error box while the CLI is missing", () => {
   const html = row(instance({ state: "unavailable" }));
   expect(html).not.toContain("data-sign-in-card");
-  expect(html).toContain("danger");
+  expect(html).toContain("border-hairline/50 bg-inset");
 });
