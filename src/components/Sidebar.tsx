@@ -369,7 +369,7 @@ function SectionPicker({
   const top = Math.max(8, Math.min(anchor.y, window.innerHeight - 300));
   const left = Math.min(anchor.x, window.innerWidth - 260);
 
-  return (
+  return createPortal(
     <div
       data-section-picker
       data-closing={closing || undefined}
@@ -438,7 +438,8 @@ function SectionPicker({
           </button>
         </>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -512,7 +513,7 @@ function BotContextMenu({
   );
   const divider = (key: string) => <div key={key} className="mx-2 my-1 border-t border-hairline/40" />;
 
-  return (
+  return createPortal(
     <div
       data-bot-menu
       data-closing={closing || undefined}
@@ -552,7 +553,8 @@ function BotContextMenu({
           danger: true,
         }),
       ]}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

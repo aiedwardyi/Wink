@@ -8,6 +8,7 @@ import {
   attachmentBasename,
   attachmentImageUrl,
   composeMessage,
+  editedMessageText,
   imageSupportForTargets,
   imageSupportNotice,
   intakeFiles,
@@ -81,7 +82,7 @@ describe("splitAttachedImages", () => {
     const text = 'héllo\r\n</pasted-text>\n<attached-file path="literal.txt" />\n<pasted-text index="2">\n<attached-image path="literal.png" />\n&lt; &amp;';
     const attachment = pasteAttachment(text);
     const stored = composeMessage("", [attachment]);
-    expect(splitAttachedImages(stored)).toEqual({ display: text, images: [], files: [] });
+    expect(splitAttachedImages(stored)).toEqual({ display: text, images: [], files: [], tags: [] });
     expect(attachment.text).toBe(text);
     expect(new TextEncoder().encode(attachment.text)).toEqual(new TextEncoder().encode(text));
   });
@@ -145,6 +146,33 @@ describe("splitAttachedImages", () => {
     const { display, images } = splitAttachedImages(composeMessage("", [pasteAttachment(inner)]));
     expect(display).toBe(inner);
     expect(images).toEqual([]);
+  });
+});
+
+describe("editedMessageText", () => {
+  it("round-trips unchanged pastes with interleaved attachments and whitespace", () => {
+    const initial = '  intro\n\n<attached-image path="real.png" />\n\n<pasted-text index="2">\n<attached-image path="example.png" />\n</pasted-text>\n\n<attached-file path="real.txt" />\n\noutro  ';
+    expect(editedMessageText(initial, splitAttachedImages(initial).display)).toBe(initial.trim());
+  });
+
+  it("keeps unchanged pasted blocks when typed text changes", () => {
+    const initial = composeMessage("intro", [pasteAttachment('<attached-image path="example.png" />'), pasteAttachment("quoted statement")]);
+    const draft = splitAttachedImages(initial).display.replace("intro", "updated");
+    const sent = editedMessageText(initial, draft);
+    expect(sent).toBe(initial.replace("intro", "updated"));
+    expect(splitAttachedImages(sent).images).toEqual([]);
+  });
+
+  it("leaves an edited pasted block as typing and keeps other blocks wrapped", () => {
+    const initial = composeMessage("intro", [pasteAttachment("first quote"), pasteAttachment("second quote")]);
+    const draft = splitAttachedImages(initial).display.replace("first quote", "edited quote");
+    expect(editedMessageText(initial, draft)).toBe('intro\n\nedited quote\n\n<pasted-text index="2">\nsecond quote\n</pasted-text>');
+  });
+
+  it("restores repeated pasted blocks once each without nesting", () => {
+    const initial = composeMessage("intro", [pasteAttachment("same quote"), pasteAttachment("same quote")]);
+    const draft = splitAttachedImages(initial).display.replace("intro", "updated");
+    expect(editedMessageText(initial, draft)).toBe(initial.replace("intro", "updated"));
   });
 });
 

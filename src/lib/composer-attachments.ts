@@ -374,6 +374,7 @@ function unescapeAttribute(value: string): string {
 export type AttachedFile = { path: string; name: string; size?: number };
 
 const ATTACHED_FILE = /<attached-file\s+path="([^"]*)"((?:\s+[a-z]+="[^"]*")*)\s*\/?>/g;
+const PASTED_TEXT = /<pasted-text(?:\s+index="\d+")?(\s+encoding="xml")?>\n?([\s\S]*?)\n?<\/pasted-text>/g;
 
 function attachedFile(rawPath: string, rawAttributes: string): AttachedFile {
   const path = unescapeAttribute(rawPath);
@@ -393,35 +394,51 @@ export function attachedFilePreview(text: string, label = (name: string) => name
 
 /** Split a stored user message into its display text and the images and
  * files it attached, for transcript rendering. Tags never show in the bubble. */
-export function splitAttachedImages(text: string): { display: string; images: string[]; files: AttachedFile[] } {
+export function splitAttachedImages(text: string): { display: string; images: string[]; files: AttachedFile[]; tags: string[] } {
   return splitAttachments(text);
 }
 
-function splitAttachments(text: string, label?: (name: string) => string): { display: string; images: string[]; files: AttachedFile[] } {
+function splitAttachments(text: string, label?: (name: string) => string): { display: string; images: string[]; files: AttachedFile[]; tags: string[] } {
   const pasted: string[] = [];
   let display = text.replace(
-    /<pasted-text(?:\s+index="\d+")?(\s+encoding="xml")?>\n?([\s\S]*?)\n?<\/pasted-text>/g,
+    PASTED_TEXT,
     (_match, encoded: string | undefined, inner: string) => {
       pasted.push(encoded ? unescapeAttribute(inner) : inner);
       return `\0PASTE${pasted.length - 1}\0`;
     },
   );
   const images: string[] = [];
-  display = display.replace(/<attached-image\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (_match, raw: string) => {
+  const tags: string[] = [];
+  display = display.replace(/<attached-image\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (match, raw: string) => {
+    tags.push(match.trim());
     const path = unescapeAttribute(raw);
     if (path) images.push(path);
     return "";
   });
   const files: AttachedFile[] = [];
   const filePattern = label ? ATTACHED_FILE : new RegExp(`${ATTACHED_FILE.source}(?:\\s*\\n)?`, "g");
-  display = display.replace(filePattern, (_match, path: string, rest: string) => {
+  display = display.replace(filePattern, (match, path: string, rest: string) => {
+    tags.push(match.trim());
     const file = attachedFile(path, rest);
     files.push(file);
     if (label) return label(file.name);
     return "";
   });
   display = display.replace(/\0PASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)] ?? "");
-  return { display: display.trim(), images, files };
+  return { display: display.trim(), images, files, tags };
+}
+
+export function editedMessageText(initial: string, draft: string): string {
+  const attached = splitAttachedImages(initial);
+  if (draft.trim() === attached.display) return initial.trim();
+  const pasted = [...initial.matchAll(PASTED_TEXT)];
+  let text = draft;
+  pasted.forEach(([, encoded, raw], index) => {
+    const inner = encoded ? unescapeAttribute(raw) : raw;
+    if (inner) text = text.replace(inner, () => `\0EDITPASTE${index}\0`);
+  });
+  text = text.replace(/\0EDITPASTE(\d+)\0/g, (_match, index: string) => pasted[Number(index)]?.[0] ?? "");
+  return [text.trim(), ...attached.tags].filter(Boolean).join("\n\n");
 }
 
 /** The bare filename a saved attachment path ends in — what the serving

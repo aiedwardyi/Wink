@@ -496,6 +496,8 @@ function Call({ bot }: { bot: Bot }) {
         e.preventDefault();
         endCall(bot.id);
       } else if (e.code === "Space" && speaker.isSpeaking()) {
+        if (e.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+        if (e.target instanceof Element && e.target.closest('input, textarea, select, button, a[href], summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"])')) return;
         e.preventDefault();
         sayGeneration.current += 1;
         speaker.stop();

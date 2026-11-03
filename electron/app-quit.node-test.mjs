@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-import { callQuitAndInstall, completeQuitAfterCleanup } from "./app-quit.mjs";
+import { callQuitAndInstall, completeQuitAfterCleanup, hideWindowsForQuit } from "./app-quit.mjs";
 
 function quitFixture(pendingUpdateInstall = true) {
   const calls = [];
@@ -14,13 +14,19 @@ function quitFixture(pendingUpdateInstall = true) {
   const disposed = new Promise((resolve) => { releaseDispose = resolve; });
   const app = new EventEmitter();
   app.quit = () => calls.push("quit");
+  const windows = [0, 1, 2].map((id) => ({
+    isDestroyed: () => id === 2,
+    hide: () => calls.push(`hide-${id}`),
+    loadURL: async (url) => calls.push(`load-${id} ${url}`),
+  }));
   const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
   const cleanup = source.slice(source.indexOf("const CUA_STOP_TIMEOUT_MS ="));
   assert.ok(cleanup.startsWith("const CUA_STOP_TIMEOUT_MS ="));
   runInNewContext(cleanup, {
     app, process: { once() {} }, closeGuard: { leave() {} }, keepAwake: { stop() {} }, nativeActions: {},
     errorReports: { stop() {} },
-    BrowserWindow: { getAllWindows: () => [0, 1, 2].map((id) => ({ isDestroyed: () => id === 2, hide: () => calls.push(`hide-${id}`) })) },
+    BrowserWindow: { getAllWindows: () => windows }, mainWindow: windows[0], hideWindowsForQuit,
+    isUpdateInstallPending: () => pendingUpdateInstall, connectingPageHref: (_background, key) => key,
     terminalHost: { dispose() { calls.push("dispose"); return disposed; } }, serverProc: null,
     stopUtilityChild: async () => {}, stopCua: async () => {}, terminalBridge: { close: async () => {} }, stopDesktopCompanion: async () => {},
     consumePendingUpdateInstall: () => pendingUpdateInstall, applyPendingUpdateInstall: () => { calls.push("install"); return true; }, completeQuitAfterCleanup,
@@ -43,9 +49,15 @@ for (const pendingUpdateInstall of [true, false]) {
 }
 
 test("main hides all live windows before waiting for terminal disposal", () => {
-  const f = quitFixture();
+  const f = quitFixture(false);
   f.quit();
   assert.deepEqual(f.calls.slice(0, 3), ["hide-0", "hide-1", "dispose"]);
+});
+
+test("an update quit keeps the main window up with the updating line", () => {
+  const f = quitFixture();
+  f.quit();
+  assert.deepEqual(f.calls.slice(0, 3), ["load-0 packaged.updating", "hide-1", "dispose"]);
 });
 
 test("main waits for disposal until the existing 2.5 second cleanup cap", async () => {
@@ -110,10 +122,12 @@ test("falls back to quit when quitAndInstall reports that install did not start"
   assert.deepEqual(calls, ["install", "quit"]);
 });
 
-test("callQuitAndInstall returns true when the updater starts the installer", () => {
+test("callQuitAndInstall runs the installer with its progress banner and relaunches", () => {
   const updater = new EventEmitter();
-  updater.quitAndInstall = () => {};
+  const calls = [];
+  updater.quitAndInstall = (...args) => calls.push(args);
   assert.equal(callQuitAndInstall(updater), true);
+  assert.deepEqual(calls, [[false, true]]);
 });
 
 test("callQuitAndInstall returns false when the updater emits error without throwing", () => {

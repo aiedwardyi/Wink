@@ -151,6 +151,8 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
   let retries = 0;
   let failed = false;
   let showingFailure = false;
+  let hung = null;
+  let automaticRetry = false;
   const cancel = () => {
     if (retry) stop(retry);
     retry = null;
@@ -170,13 +172,33 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
     retry = every(() => {
       retries += 1;
       if (retries * DEVICE_RETRY_MS >= DEVICE_RETRY_LIMIT_MS) cancel();
-      if (!webContents.isDestroyed()) void webContents.loadURL(url).catch(() => {});
+      if (!webContents.isDestroyed()) {
+        automaticRetry = true;
+        void webContents.loadURL(url).catch(() => {});
+      }
     }, DEVICE_RETRY_MS);
   };
-  // a sleeping PC can stall the first load far longer than this without failing it
-  const hung = after(() => {
-    if (!failed) fail(`no page after ${DEVICE_COMMIT_MS / 1000} s`);
-  }, DEVICE_COMMIT_MS);
+  const armCommitTimeout = () => {
+    forget(hung);
+    failed = false;
+    hung = after(() => {
+      if (!failed) fail(`no page after ${DEVICE_COMMIT_MS / 1000} s`);
+    }, DEVICE_COMMIT_MS);
+  };
+  armCommitTimeout();
+  webContents.on("did-start-navigation", (_event, target, isInPlace, isMainFrame) => {
+    if (!isMainFrame || isInPlace) return;
+    forget(hung);
+    hung = null;
+    const automatic = automaticRetry;
+    automaticRetry = false;
+    if (!sameDesktopViewerOrigin(target, new URL(url).origin)) return;
+    if (!automatic) {
+      cancel();
+      retries = 0;
+    }
+    armCommitTimeout();
+  });
   webContents.on("did-fail-load", (_event, code, description, validatedUrl, isMainFrame) => {
     if (!isMainFrame || code === ERR_ABORTED || String(validatedUrl).startsWith("data:")) return;
     fail(`did-fail-load ${code} ${description}`);
@@ -207,6 +229,9 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
     /** Reloads a window left on the failure page, a crash or nothing at all. */
     reloadIfStuck() {
       if (webContents.isDestroyed() || !(failed || !webContents.getURL() || webContents.isCrashed())) return;
+      cancel();
+      retries = 0;
+      automaticRetry = false;
       void webContents.loadURL(url).catch(() => {});
     },
     /** Treats a main-frame 403 from the PC's own origin as a failed load. */

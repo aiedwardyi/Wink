@@ -413,9 +413,12 @@ describe("relative file links", () => {
       }
     };
 
-    it("opens every backslash and punctuation pair, plain and in angle brackets", async () => {
+    it("opens every backslash and punctuation pair with encoded URL delimiters, plain and in angle brackets", async () => {
       const files = [..."._-()[]#~!$&'+,;=@^`{}"].map((mark) => `C:\\Users\\me\\.orbit\\${mark}x\\clip.mp4`).concat("C:\\.hidden\\x.txt");
-      const text = files.map((file) => `[a](${file}) [b](<${file}>)`).join("\n\n");
+      const text = files.map((file) => {
+        const href = file.replaceAll("#", "%23");
+        return `[a](${href}) [b](<${href}>)`;
+      }).join("\n\n");
       expect((await open(text)).opened).toEqual(files.flatMap((file) => [file, file]));
     });
 

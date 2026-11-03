@@ -42,6 +42,10 @@ export function consumePendingUpdateInstall() {
   return pending;
 }
 
+export function isUpdateInstallPending() {
+  return pendingUpdateInstall;
+}
+
 export function applyPendingUpdateInstall() {
   if (!autoUpdater) throw new Error("updater unavailable");
   return callQuitAndInstall(autoUpdater);
