@@ -10,7 +10,6 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { usePresence } from "@/lib/use-presence";
 import { EngineMark } from "./EngineMark";
 import { MENU_CLASS } from "./MessageMenu";
-import { ROW_BUTTON } from "./SettingsPrimitives";
 
 const PRESS = "transition-[background-color,transform] duration-100 motion-reduce:transition-none";
 
@@ -58,7 +57,7 @@ function AccountPicker({ account, accounts, mainId, label, mark, select }: {
       <button ref={trigger} type="button" title={label(account)} aria-label={t("accounts.choose", { account: label(account) })}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
         className="flex h-7 min-w-0 items-center gap-1 pr-1.5 max-md:h-11 [@media(pointer:coarse)]:ml-1.5 [@media(pointer:coarse)]:h-11">
-        <span className="min-w-0 truncate">{label(account)}</span>
+        <span className="min-w-0 truncate">{account.displayName}</span>
         <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform duration-150 motion-reduce:transition-none", open && "rotate-180")} />
       </button>
       {presence.mounted && <div ref={menu} id={id} role="menu" data-closing={presence.closing || undefined}
@@ -165,7 +164,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   };
   const arrow = "flex size-7 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink enabled:hover:bg-raised-hover enabled:active:scale-90 enabled:active:bg-raised-hover disabled:opacity-25 max-md:size-11 [@media(pointer:coarse)]:size-11";
   const arrows = pages.length > 1 && (
-    <span className="ml-auto flex shrink-0 items-center">
+    <span className="flex shrink-0 items-center">
       <button type="button" aria-label={t("accounts.previous")} disabled={index === 0}
         onClick={() => go(pages[index - 1]!.instanceId)} className={cn(arrow, PRESS)}>
         <ChevronLeft size={16} aria-hidden="true" />
@@ -178,22 +177,17 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   );
   const heading = (account: UsageAccount, other = false) => {
     const mark = <EngineMark instance={account} size={16} tapToShow />;
-    const picker = (phone || other) && pages.length > 1;
-    const line = "relative flex min-h-7 items-center gap-2 [@media(pointer:coarse)]:min-h-11";
-    // The email gets the whole first line, so Set as Main and the arrows never squeeze it.
     return (
-      <div data-account-head="" className="text-[13px] font-medium text-ink">
-        <div className={line}>
-          {picker
-            ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label} mark={mark} select={(id) => go(id, true)} />
-            : <>{mark}<span className="min-w-0 truncate" title={label(account)}>{label(account)}</span></>}
-        </div>
-        <div className={cn(line, "pl-6", picker && "[@media(pointer:coarse)]:pl-7.5")}>
+      <div data-account-head="" className="relative flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
+        {(phone || other) && pages.length > 1
+          ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label} mark={mark} select={(id) => go(id, true)} />
+          : <>{mark}{!other && <span className="min-w-0 truncate">{account.displayName}</span>}</>}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
           {other ? accountReady(account) && <button type="button" data-set-main="" disabled={busy} onClick={() => void setAsMain(account)}
-            className={ROW_BUTTON}>{t("accounts.setAsMain")}</button>
+            className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>
             : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
-          {(phone || other) && arrows}
-        </div>
+          <span className="flex w-14 shrink-0 max-md:w-22 [@media(pointer:coarse)]:w-22">{(phone || other) && arrows}</span>
+        </span>
       </div>
     );
   };
