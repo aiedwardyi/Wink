@@ -122,10 +122,10 @@ describe("Team settings", () => {
     return [...host.querySelectorAll("nav button")].map((button) => button.getAttribute("aria-label"));
   }
 
-  it("shows Team after Usage for the owner, with one card per person", async () => {
+  it("shows Team after Themes for the owner, with one card per person", async () => {
     await render();
     await vi.waitFor(() => expect(labels()).toContain("Team"));
-    expect(labels()).toEqual(["Account", "General", "Connections", "Devices", "Themes", "Usage", "Team", "Model Index", "Shortcuts"]);
+    expect(labels()).toEqual(["Account", "General", "Connections", "Usage", "Devices", "Themes", "Team", "Model Index", "Shortcuts"]);
     const team = [...host.querySelectorAll("nav button")].find((button) => button.getAttribute("aria-label") === "Team");
     await act(async () => team!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await vi.waitFor(() => expect(host.textContent).toContain("Ada"));

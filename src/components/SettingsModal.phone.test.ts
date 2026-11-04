@@ -84,8 +84,8 @@ afterEach(async () => {
 
 describe("phone Settings navigation", () => {
   it.each([
-    ["en", ["Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index"]],
-    ["ko", ["계정", "일반", "연결", "기기", "테마", "사용량", "모델 지표"]],
+    ["en", ["Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index"]],
+    ["ko", ["계정", "일반", "연결", "사용량", "기기", "테마", "모델 지표"]],
   ])("opens the labeled list in %s without mounting a page or Shortcuts", async (locale, labels) => {
     await open(locale);
     const rows = [...dialog()!.querySelectorAll("nav button")].filter((node) => node.querySelector(".lucide-chevron-right"));
@@ -214,7 +214,7 @@ describe("phone Settings navigation", () => {
     phone = false;
     await open();
     expect([...dialog()!.querySelectorAll("nav button")].map((node) => node.getAttribute("aria-label"))).toEqual([
-      "Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index", "Shortcuts",
+      "Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
     expect(button("General")?.getAttribute("aria-current")).toBe("page");
     expect(button("Back")).toBeNull();
