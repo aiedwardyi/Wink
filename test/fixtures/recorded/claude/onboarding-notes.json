@@ -1,0 +1,48 @@
+{
+  "stamp": {
+    "engine": "claude",
+    "cliVersion": "2.1.318 (Claude Code)",
+    "recordedAt": "2026-11-04T14:50:01.451Z",
+    "sourcePc": "notes-home-30",
+    "source": "Isolated unsigned-in node-pty first run with Bedrock provider and no credentials, Enter at theme, 120x30"
+  },
+  "reply": {
+    "cols": 120,
+    "rows": 30,
+    "chunks": [
+      {
+        "t": 10,
+        "data": "\u001b[?9001h\u001b[?1004h"
+      },
+      {
+        "t": 210,
+        "data": "\u001b[?25l\u001b[2J\u001b[m\u001b[H\u001b]0;claude\u0007\u001b[?25h"
+      },
+      {
+        "t": 411,
+        "data": "\u001b[?2004h\u001b[?2031h\u001b[?1004h"
+      },
+      {
+        "t": 418,
+        "data": "\u001b[?25l"
+      },
+      {
+        "t": 429,
+        "data": "Welcome\u001b[1Cto\u001b[1CClaude\u001b[1CCode\u001b[1Cv2.1.318\r\n..........................................................\u001b[4;6H*\u001b[39C█████▓▓░\u001b[5;34H*\u001b[9C███▓░\u001b[5C░░\u001b[6;13H░░░░░░\u001b[24C███▓░\u001b[7;5H░░░\u001b[3C░░░░░░░░░░\u001b[22C███▓░\u001b[8;4H░░░░░░░░░░░░░░░░░░░\u001b[4C*\u001b[16C██▓░░\u001b[6C▓\u001b[9;46H░▓▓███▓▓░\u001b[10;2H*\u001b[33C░░░░\u001b[11;34H░░░░░░░░\u001b[12;32H░░░░░░░░░░░░░░░░\u001b[13;8H█████████\u001b[40C*\u001b[14;7H██▄█████▄██\u001b[24C*\u001b[15;8H█████████\u001b[6C*\r\n.......█\u001b[1C█\u001b[3C█\u001b[1C█..........................................\u001b[18;2HLet's\u001b[1Cget\u001b[1Cstarted.\u001b[20;2HChoose\u001b[1Cthe\u001b[1Ctext\u001b[1Cstyle\u001b[1Cthat\u001b[1Clooks\u001b[1Cbest\u001b[1Cwith\u001b[1Cyour\u001b[1Cterminal\u001b[21;2HTo\u001b[1Cchange\u001b[1Cthis\u001b[1Clater,\u001b[1Crun\u001b[1C/theme\u001b[23;6HAuto\u001b[1C(match\u001b[1Cterminal)\u001b[24;2H❯\u001b[1C✔\u001b[1CDark\u001b[1Cmode\u001b[25;6HLight\u001b[1Cmode\u001b[26;6HDark\u001b[1Cmode\u001b[1C(colorblind-friendly)\u001b[27;6HLight\u001b[1Cmode\u001b[1C(colorblind-friendly)\u001b[28;6HDark\u001b[1Cmode\u001b[1C(ANSI\u001b[1Ccolors\u001b[1Conly)\u001b[29;6HLight\u001b[1Cmode\u001b[1C(ANSI\u001b[1Ccolors\u001b[1Conly)\r\n\n ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ \r\n \u001b[38;5;231m\u001b[2m 1\u001b[m  \u001b[38;5;81mfunction \u001b[38;5;148mgreet\u001b[38;5;231m() {\u001b[K\u001b[97C\u001b[m\r\n \u001b[38;5;167m\u001b[48;5;52m 2 -  \u001b[38;5;231mconsole.log(\"Hello, World!\");\u001b[79X\u001b[m\u001b[79C     \r\n \u001b[38;5;77m\u001b[48;5;22m 2 +  \u001b[38;5;231mconsole.\u001b[38;5;148mlog\u001b[38;5;231m(\u001b[38;5;186m\"Hello, \u001b[48;5;28mClaude\u001b[48;5;22m!\"\u001b[38;5;231m);\u001b[78X\u001b[m\u001b[78C     \r\n \u001b[38;5;231m\u001b[2m 3\u001b[m  \u001b[38;5;231m}\u001b[K\u001b[114C\u001b[m\r\n ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ \r\n  Syntax theme: Monokai Extended (ctrl+t to disable)\u001b[68C"
+      },
+      {
+        "t": 431,
+        "data": "\u001b[>0q\u001b[?u\u001b]7501;?\u0007"
+      },
+      {
+        "t": 433,
+        "data": "\r\n\u001b[120C"
+      },
+      {
+        "t": 3012,
+        "data": "\u001b[HWelcome to Claude Code v2.1.318\u001b[K\r\n..........................................................\u001b[K\r\n\u001b[K\r\n     *                                       █████▓▓░\u001b[K\r\n                                 *         ███▓░     ░░\u001b[K\r\n            ░░░░░░                        ███▓░\u001b[K\r\n    ░░░   ░░░░░░░░░░                      ███▓░\u001b[K\r\n   ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓\u001b[K\r\n                                             ░▓▓███▓▓░\u001b[K\r\n *                                 ░░░░\u001b[K\r\n                                 ░░░░░░░░\u001b[K\r\n                               ░░░░░░░░░░░░░░░░\u001b[K\r\n       █████████                                        *\u001b[K\r\n      ██▄█████▄██                        *\u001b[K\r\n       █████████      *\u001b[K\r\n.......█ █   █ █..........................................\u001b[K\r\n\u001b[K\r\n Security notes:\u001b[K\r\n\u001b[K\r\n 1. Claude can make mistakes.\u001b[K\r\n    You're responsible for Claude's actions and should always\u001b[K\r\n    review them, especially when running code.\u001b[K\r\n\u001b[K\r\n 2. Due to prompt injection risks, only use it with code you trust\u001b[K\r\n    Learn more: https://code.claude.com/docs/en/security\u001b[K\r\n\u001b[K\r\n Press Enter to continue…\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[120C"
+      }
+    ],
+    "screen": "Welcome to Claude Code v2.1.318\n..........................................................\n\n     *                                       █████▓▓░\n                                 *         ███▓░     ░░\n            ░░░░░░                        ███▓░\n    ░░░   ░░░░░░░░░░                      ███▓░\n   ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓\n                                             ░▓▓███▓▓░\n *                                 ░░░░\n                                 ░░░░░░░░\n                               ░░░░░░░░░░░░░░░░\n       █████████                                        *\n      ██▄█████▄██                        *\n       █████████      *\n.......█ █   █ █..........................................\n\n Security notes:\n\n 1. Claude can make mistakes.\n    You're responsible for Claude's actions and should always\n    review them, especially when running code.\n\n 2. Due to prompt injection risks, only use it with code you trust\n    Learn more: https://code.claude.com/docs/en/security\n\n Press Enter to continue…\n\n\n"
+  }
+}

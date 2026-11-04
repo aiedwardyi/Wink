@@ -8,6 +8,7 @@ export function workerResumeStatus(session) {
   if (session.workerSession?.confirmed === "resume") return "resumed";
   const screen = session.screen.text();
   if (/^\s*(?:(?:Error: )?No conversation found with session ID: [a-f0-9-]+|(?:Error: )?No saved session found with ID [a-f0-9-]+\. Run `codex resume`[^\r\n]*|(?:[■•] )?Failed to resume session from [^\r\n]+: [^\r\n]+)\s*$/im.test(screen)) return "resume failed";
+  if (session.worker && session.botPane && session.engine === "claude" && session.claudeStartupScreen === screen) return "pending";
   if (/(?:select a (?:session|conversation)|resume a (?:session|conversation)|choose (?:a |an )?(?:session|conversation|account)|sign in to|log in to|how do you want to log in|do you trust|trust this folder|allow once|allow for this session)/i.test(screen)) return "unexpected menu";
   return "pending";
 }
