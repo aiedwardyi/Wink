@@ -17,6 +17,17 @@ const validate = async (text: string, changes: unknown[], file: "MEMORY.md" | `m
   (await load()).validateChangeList({ text, list: list(changes, file), file, typed });
 
 describe("change list validation", () => {
+  it.each(["The", "Uploads", "Monthly", "Post"])("allows rewording sentence-initial %s while preserving facts", async (word) => {
+    const text = `- ${word} task finished. ${word} work ended.\n- other work ended\n- met Eddie at C:\\repo with 792 TASKID\n- Eddie finished\n- iPhone shipped\n- V2 shipped\n- ALLCAPS shipped`;
+    const merge = (ids: number[], text: string) => [{ op: "merge", ids, text, reason: "Same subject" }];
+    expect(await validate(text, merge([1, 2], "- task and other work finished"))).toMatchObject({ ok: true });
+    for (const [ids, value] of [[[3, 4], "- met at C:\\repo with 792 TASKID"], [[3, 4], "- met Eddie with 792 TASKID"], [[3, 4], "- met Eddie at C:\\repo with TASKID"], [[3, 4], "- met Eddie at C:\\repo with 792"], [[4, 5], "- Eddie shipped"], [[4, 6], "- Eddie shipped"], [[4, 7], "- Eddie shipped"]] as Array<[number[], string]>) {
+      expect(await validate(text, merge(ids, value))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "fact-lost" })]) });
+    }
+    expect(await validate(text, merge([3, 4], "- Eddie finished; met Eddie at C:\\repo with 792 TASKID"))).toMatchObject({ ok: true });
+    expect(await validate(text + `\n- tracked ${word} elsewhere`, merge([1, 2], "- task and other work finished"))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "fact-lost" })]) });
+  });
+
   it.each([
     ["shape", "- done", { version: 2 }, "MEMORY.md"],
     ["unknown-id", "- done\n\n", list([retire(2)]), "MEMORY.md"],
@@ -53,8 +64,8 @@ describe("change list validation", () => {
 
   it("keeps numbers, dates, paths, names and quoted strings in a merge", async () => {
     const { factTokens } = await load();
-    const text = '- Eddie used C:\\repo on 2026-11-04\n- Eddie has 12 "red cats"';
-    const merged = '- Eddie used C:\\repo on 2026-11-04; Eddie has 12 "red cats"';
+    const text = '- met Eddie at C:\\repo on 2026-11-04\n- Eddie has 12 "red cats"';
+    const merged = '- met Eddie at C:\\repo on 2026-11-04; Eddie has 12 "red cats"';
     expect(factTokens(text)).toEqual(expect.arrayContaining(["Eddie", "C:\\repo", "2026-11-04", "12", '"red cats"']));
     expect(await validate(text, [{ op: "merge", ids: [1, 2], text: merged, reason: "Same subject" }])).toMatchObject({ ok: true, text: merged });
   });

@@ -20,6 +20,7 @@ export { factTokens, validateChangeList } from "./memory-clean-validate.ts";
 
 const DAY = 86_400_000;
 const QUIET_MS = 10 * 60_000;
+const RUN_INTERVAL_MS = 6 * 60 * 60_000;
 const STATE_FILE = "memory-clean.json";
 const time = z.number().finite().nonnegative();
 const stateSchema = z.object({
@@ -27,6 +28,7 @@ const stateSchema = z.object({
     checkedAt: time.optional(), queued: z.object({ at: time, reason: z.enum(["size", "dropped"]) }).optional(),
     lastRun: z.object({ runId: z.string(), at: time, files: z.array(cleanFileSchema) }).optional(),
     cooldownUntil: time.optional(), backoff: z.record(cleanFileSchema, time).optional(),
+    attemptedAt: time.optional(), unchangedHash: z.string().optional(),
     sideHashes: z.record(cleanFileSchema, z.string()).optional(), typed: z.array(z.string().regex(/^[0-9a-f]{16}$/)).max(2000).optional(),
   })),
 });
@@ -141,8 +143,8 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     if (!home.home || !quiet(botId)) return;
     const newest = histories(botId).at(-1)?.run.header;
     if (state.queued?.reason !== "dropped" && Math.max(state.cooldownUntil ?? 0, newest ? newest.at + 7 * DAY : 0) > now()) return;
-    const engine = await deps.engine(botId);
-    if (!engine || controller.signal.aborted || epoch !== runEpoch || !quiet(botId)) return;
+    const attemptedAt = Math.max(state.attemptedAt ?? -Infinity, newest?.at ?? -Infinity);
+    if (now() - attemptedAt < RUN_INTERVAL_MS) return;
     const base = readMemoryFile(botId);
     const memory = readFile(join(workspaceDir(botId), "MEMORY.md"));
     if (memory === null || (state.backoff?.["MEMORY.md"] ?? 0) > now()) return;
@@ -153,9 +155,15 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
       const text = readFile(join(workspaceDir(botId), file));
       return text !== null && Buffer.byteLength(text) >= 48000 && state.sideHashes?.[file as CleanFile] !== hashText(text) ? [{ file: file as CleanFile, text }] : [];
     }).sort((a, b) => Buffer.byteLength(b.text) - Buffer.byteLength(a.text))[0];
+    const sourceHash = hashText(JSON.stringify([memory, side?.file, side?.text]));
+    if (state.unchangedHash === sourceHash) return;
+    const engine = await deps.engine(botId);
+    if (!engine || controller.signal.aborted || epoch !== runEpoch || !quiet(botId)) return;
     const localTyped = typedHashes(botId, deps.dataDir);
+    update(botId, (state) => { state.attemptedAt = now(); });
     const result = await cleanFiles({ memory, side, history, typed: new Set([...localTyped, ...home.typed]), ...engine, now: now(), signal: controller.signal });
     if (!result.ok) {
+      if (result.stage === "nothing" || result.stage === "validate") update(botId, (state) => { state.unchangedHash = sourceHash; });
       if (result.stage === "recall") update(botId, (state) => {
         (state.backoff ??= {})["MEMORY.md"] = now() + 14 * DAY;
         if (side) state.backoff[side.file] = now() + 14 * DAY;
@@ -190,6 +198,7 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     if (bot) deps.store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: "Tidied memory, nothing lost", tidy: { runId: result.runId } } });
     update(botId, (state) => {
       delete state.queued;
+      delete state.unchangedHash;
       state.lastRun = { runId: result.runId, at: result.header.at, files: Object.keys(result.header.files) as CleanFile[] };
       state.cooldownUntil = result.header.at + 7 * DAY;
       if (result.side) (state.sideHashes ??= {})[result.side.file] = hashText(result.side.text);

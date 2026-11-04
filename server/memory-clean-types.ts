@@ -27,6 +27,8 @@ export type BotCleanState = {
   queued?: { at: number; reason: "size" | "dropped" };
   lastRun?: { runId: string; at: number; files: CleanFile[] };
   cooldownUntil?: number;
+  attemptedAt?: number;
+  unchangedHash?: string;
   backoff?: Partial<Record<CleanFile, number>>;
   sideHashes?: Partial<Record<CleanFile, string>>;
   typed?: string[];

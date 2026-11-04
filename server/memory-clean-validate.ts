@@ -32,9 +32,15 @@ export function protectedLines(text: string, typed: ReadonlySet<string>, include
   return protectedIds;
 }
 
-export function factTokens(text: string): string[] {
-  const matches = text.match(/"[^"\n]+"|“[^”\n]+”|'[^'\n]+'|`[^`\n]+`|(?:[A-Za-z]:[\\/]|\.{0,2}\/|https?:\/\/)[^\s,;<>"`]+|\d{4}-\d{2}-\d{2}|\d+(?:[.,:/%-]\d+)*(?:%|[A-Za-z]+)?|[\p{Lu}][\p{L}\p{N}_-]*|[\p{L}\p{N}_-]+\.(?:md|ts|json|py|txt|com|org)\b/gu) ?? [];
-  return [...new Set(matches)];
+export function factTokens(text: string, base = text): string[] {
+  const pattern = /"[^"\n]+"|“[^”\n]+”|'[^'\n]+'|`[^`\n]+`|(?:[A-Za-z]:[\\/]|\.{0,2}\/|https?:\/\/)[^\s,;<>"`]+|\d{4}-\d{2}-\d{2}|\d+(?:[.,:/%-]\d+)*(?:%|[A-Za-z]+)?|[\p{L}\p{N}_-]+\.(?:md|ts|json|py|txt|com|org)\b|(?<![\p{L}\p{N}_-])[\p{L}_]*[\p{Lu}][\p{L}\p{N}_-]*/gu;
+  const initial = (source: string, at: number) => /(?:^|\n|[.!?]\s+)[ \t>*#+\-\d.)]*$/u.test(source.slice(0, at));
+  const midSentence = new Set([...base.matchAll(pattern)].filter((match) => !initial(base, match.index)).map((match) => match[0]));
+  const matches = [...text.matchAll(pattern)].filter((match) => {
+    const token = match[0];
+    return !/^[\p{Lu}][\p{Ll}_-]+$/u.test(token) || !initial(text, match.index) || midSentence.has(token);
+  });
+  return [...new Set(matches.map((match) => match[0]))];
 }
 
 function newer(a: string, b: string, olderId: number, newerId: number): boolean {
@@ -90,7 +96,8 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
     }
     let wrote: string[] = [];
     if (change.op === "merge") {
-      if (ids.some((n) => factTokens(lines[n - 1]!).some((token) => !factTokens(change.text).includes(token)))) fail("fact-lost", index);
+      const kept = factTokens(change.text, input.text);
+      if (ids.some((n) => factTokens(lines[n - 1]!, input.text).some((token) => !kept.includes(token)))) fail("fact-lost", index);
       wrote = [change.text + (lines[ids[0]! - 1]!.endsWith("\r") ? "\r" : "")];
       counts.merged += ids.length;
     } else if (change.op === "replace") {

@@ -31,6 +31,34 @@ function calls(changes: Change[] = [retire(2)]) {
 }
 
 describe("cleanFiles recall", () => {
+  it.each(["fenced", "plain-fence", "numeric", "boolean", "prose"])("parses %s answers and rejects invalid arrays", async (kind) => {
+    const engine = calls();
+    const input = { memory: "- kept\n- old\n", history: null, typed: new Set<string>(), ...engine };
+    for (const answer of ["[]", JSON.stringify(Array(19).fill(null)), '{"answers":[]}', JSON.stringify(Array(18).fill({ value: 1 })), `\`\`\`json\n${JSON.stringify({ answers: Array(18).fill(null) })}\n\`\`\``]) {
+      engine.recall.mockResolvedValue(answer);
+      expect(await cleanFiles(input)).toMatchObject({ ok: false, stage: "recall" });
+    }
+    const answers: Array<string | number | boolean | null> = questions().map((q) => q.answer);
+    if (kind === "numeric") answers[0] = 792;
+    if (kind === "boolean") answers[0] = false;
+    const json = JSON.stringify(answers);
+    engine.recall.mockResolvedValue(kind === "fenced" ? `\`\`\`json\n${json}\n\`\`\`` : kind === "plain-fence" ? `\`\`\`\n${json}\n\`\`\`` : kind === "prose" ? `Here are the answers:\n${json}\nEnd of answers.` : json);
+    expect(await cleanFiles(input)).toMatchObject({ ok: true });
+    const grade = engine.propose.mock.calls.findLast(([prompt]) => prompt.startsWith("[memory-clean:grade]"))![0];
+    expect(JSON.parse(grade.slice(grade.indexOf("\n\n") + 2))[0].actual).toBe(String(answers[0]));
+  });
+
+  it.each(["propose", "side", "questions", "answers", "grade"])("enforces the prompt budget before %s", async (stage) => {
+    const engine = calls();
+    const memory = stage === "propose" ? "x".repeat(240_000) : "- kept\n- old\n";
+    const side = stage === "side" || stage === "questions" ? { file: "memory/topic.md" as const, text: `- kept\n- old\n${"x".repeat(stage === "side" ? 480_000 : 245_000)}` } : undefined;
+    if (stage === "grade") engine.recall.mockResolvedValue(JSON.stringify(["x".repeat(240_000), ...questions().slice(1).map((q) => q.answer)]));
+    const result = await cleanFiles({ memory, side, history: stage === "answers" ? "x".repeat(240_000) : null, typed: new Set(), ...engine });
+    expect(result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(engine.propose.mock.calls.length + engine.recall.mock.calls.length).toBe({ propose: 0, side: 1, questions: 2, answers: 2, grade: 3 }[stage]);
+    expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + Math.ceil(prompt.length / 4), 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
+  });
+
   it("archives raw lines and uses blind fresh answers with a signal on every call", async () => {
     const engine = calls();
     const signal = new AbortController().signal;
@@ -81,7 +109,7 @@ describe("cleanFiles recall", () => {
   it("rotates a full archive, repoints once and undoes the pointer", async () => {
     const { undoText } = await import("./memory-clean-undo.ts");
     const memory = `- kept\n- old\n${POINTER_LINE}\n`;
-    const result = await cleanFiles({ memory, history: "x".repeat(240 * 1024), typed: new Set(), ...calls(), now: NOW });
+    const result = await cleanFiles({ memory, history: "한".repeat(82_000), typed: new Set(), ...calls(), now: NOW });
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     expect(result.memory).toContain("memory/memory-history-2.md");
@@ -122,6 +150,29 @@ describe("memory cleanup service", () => {
   });
 
   afterEach(() => { service.dispose(); vi.useRealTimers(); });
+
+  it.each(["nothing", "validate"])("waits for changed content and six hours after %s", async (outcome) => {
+    engine = calls(outcome === "nothing" ? [] : [retire(1)]);
+    await run();
+    expect(engine.propose).toHaveBeenCalledTimes(1);
+    for (let minute = 0; minute < 60; minute++) {
+      clock += 60_000; service.tick(); await service.idle();
+    }
+    expect(engine.propose).toHaveBeenCalledTimes(1);
+    clock += 6 * 60 * 60_000;
+    service.dispose();
+    service = createMemoryClean({ store, dataDir, engine: async () => engine, busy: () => false, pending: () => false, dropped: () => true, home: () => home, now: () => clock });
+    service.start(); service.check(bot.id); service.tick(); await service.idle();
+    expect(engine.propose).toHaveBeenCalledTimes(1);
+    writeMemoryFile(bot.id, original + "- edit\n");
+    await run();
+    expect(engine.propose).toHaveBeenCalledTimes(2);
+    writeMemoryFile(bot.id, original + "- next edit\n");
+    await run();
+    expect(engine.propose).toHaveBeenCalledTimes(2);
+    clock += 6 * 60 * 60_000; service.tick(); await service.idle();
+    expect(engine.propose).toHaveBeenCalledTimes(3);
+  });
 
   it.each(["abort", "timeout"])("discards a late signal-ignoring call after %s", async (kind) => {
     vi.useFakeTimers();
@@ -225,6 +276,8 @@ describe("memory cleanup service", () => {
     service.check(bot.id); service.tick(); await service.idle();
     expect(engine.propose).toHaveBeenCalledTimes(count);
     dropped = true; await run();
+    expect(engine.propose).toHaveBeenCalledTimes(count);
+    clock += 6 * 60 * 60_000; await run();
     expect(engine.propose.mock.calls.length).toBeGreaterThan(count);
   });
 
@@ -259,7 +312,7 @@ describe("memory cleanup service", () => {
     expect(readFileSync(join(workspaceDir(bot.id), "memory/small.md"), "utf8")).toBe(small);
     expect(readFileSync(join(workspaceDir(bot.id), "memory/unpointed.md"), "utf8")).toBe(unpointed);
     expect(state().sideHashes["memory/large.md"]).toMatch(/^[0-9a-f]{64}$/);
-    dropped = true; engine.propose.mockClear(); await run();
+    dropped = true; clock += 6 * 60 * 60_000; engine.propose.mockClear(); await run();
     expect(engine.propose.mock.calls.filter(([prompt]) => prompt.startsWith("[memory-clean:propose]")).map(([prompt]) => /"file":"([^"]+)"/.exec(prompt)?.[1])).toEqual(["MEMORY.md", "memory/small.md"]);
   });
 
@@ -309,6 +362,7 @@ describe("memory cleanup service", () => {
     home = { folder, botSyncId: "b", device: "000000000001", talkedAt: 1 };
     await run(); expect(row()).toBeUndefined(); expect(engine.recall).not.toHaveBeenCalled();
     writeFileSync(other, JSON.stringify({ device: "000000000002", talkedAt: 0, typed: ["invalid"] }));
+    writeMemoryFile(bot.id, original + "\r\n"); clock += 6 * 60 * 60_000;
     await run(); expect(row()).toBeDefined();
   });
 
@@ -326,7 +380,7 @@ describe("memory cleanup service", () => {
     expect(await service.undo(bot.id, "absent")).toEqual({ ok: false, error: "no-run" });
     busy = true; expect(await service.undo(bot.id, "absent")).toEqual({ ok: false, error: "busy" }); busy = false;
     await run(); const first = service.summary(bot.id).run!.runId;
-    dropped = true; await run(); const newest = service.summary(bot.id).run!.runId;
+    dropped = true; clock += 6 * 60 * 60_000; await run(); const newest = service.summary(bot.id).run!.runId;
     expect(newest).not.toBe(first);
     expect(await service.undo(bot.id, first)).toEqual({ ok: false, error: "not-newest" });
     expect(await service.undo(bot.id, newest)).toMatchObject({ ok: true });
@@ -340,6 +394,8 @@ describe("memory cleanup service", () => {
     service.start(); service.check(bot.id); clock += QUIET; service.tick(); await service.idle();
     expect(engine.propose).toHaveBeenCalledTimes(count);
     dropped = true; service.check(bot.id); service.tick(); await service.idle();
+    expect(engine.propose).toHaveBeenCalledTimes(count);
+    clock += 6 * 60 * 60_000; service.tick(); await service.idle();
     expect(engine.propose.mock.calls.length).toBeGreaterThan(count);
   });
 });
