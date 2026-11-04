@@ -161,7 +161,15 @@ afterEach(() => {
 });
 
 describe("Google sync journeys", { timeout: 60_000 }, () => {
-  it.each([{ ext: "notes", changes: { memoryNotes: false } }, { ext: "style", changes: { mascotStyle: "icon-36" } }])("counts a PC whose only published change is $ext", async ({ ext, changes }) => {
+  it.each([
+    { ext: "notes", changes: { memoryNotes: false } },
+    { ext: "style", changes: { mascotStyle: "icon-36" } },
+    { ext: "style", changes: { mascotStyle: "icon-49" } },
+    { ext: "avatar", changes: { mascotStyle: "icon-50" } },
+    { ext: "avatar", changes: { mascotStyle: "icon-51" } },
+    { ext: "avatar", changes: { mascotStyle: "icon-52" } },
+    { ext: "avatar", changes: { mascotStyle: "icon-53" } },
+  ])("counts a PC whose only published change is $ext", async ({ ext, changes }) => {
     const home = makePC("home", { bots: [bot("Counsel")] });
     await startOn(home);
     const record = createSyncOperation({
@@ -173,6 +181,9 @@ describe("Google sync journeys", { timeout: 60_000 }, () => {
     const work = makePC("work");
     work.account.setSession(A);
     expect((await work.sync.read()).join).toEqual({ first: false, pcs: 2 });
+    await work.sync.start();
+    await work.sync.idle();
+    expect(readSyncOperations(work.folder!).operations).toContainEqual(record);
   });
 
   it("journey 1: weeks of local data reach Drive and a fresh second PC gets it all", async () => {

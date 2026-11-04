@@ -9,6 +9,7 @@ import { BotAvatar, MausAvatar, type MausAvatarHandle } from "./Avatar";
 import { BotPickerList } from "./BotPickerList";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 
+// jsdom exposes localStorage on window but not as a bare global; wire it up once here.
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: window.localStorage });
 
 async function renderInto(node: ReactNode) {
