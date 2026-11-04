@@ -2,24 +2,24 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
-import { runInNewContext } from "node:vm";
 
 const require = createRequire(import.meta.url);
+const { setDevicePermissions } = require("./device-permissions.cjs");
 
 function deviceHandlers() {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const start = main.indexOf("    const devices = win.webContents.session;");
-  const end = main.indexOf("    // One listener per session:", start);
-  assert.ok(start >= 0 && end > start, "device permission setup not found");
   const handlers = {};
-  const session = {
+  setDevicePermissions({
     setPermissionCheckHandler: (fn) => { handlers.check = fn; },
     setPermissionRequestHandler: (fn) => { handlers.request = fn; },
-  };
-  const imports = main.match(/^const \{ setDevicePermissions \} = require\("\.\/device-permissions.cjs"\);$/m)?.[0] ?? "";
-  runInNewContext(`${imports}\n${main.slice(start, end)}`, { require, win: { webContents: { session } } });
+  });
   return handlers;
 }
+
+test("main process applies the device permissions to PC windows", () => {
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  assert.ok(main.includes('const { setDevicePermissions } = require("./device-permissions.cjs");'));
+  assert.ok(main.includes("setDevicePermissions(devices);"));
+});
 
 for (const [permission, allowed] of [
   ["fullscreen", true],
