@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as recovery from "./task-recovery-flush.ts";
 import { startQueuedTurn, writeChatError } from "./chat-error.ts";
+import { rootForStart } from "./comms-root.ts";
 import {
   _resetSteerQueue,
   cancelQueuedSends,
@@ -163,6 +164,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
       interrupts.bind(bot.threadId, `turn-${starts.length}`, bot.id, turnEpoch);
     },
     turnStartClaims: claims,
+    takeStartingHold: () => () => {},
     queueMicrotask,
     continueQueuedDrainIfIdle,
     drainQueuedSends: () => drainQueuedSends(),
@@ -172,6 +174,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const noop = () => {};
   const taskResumes = load("taskResumes", {
     TaskResumeScheduler: recovery.TaskResumeScheduler,
+    rootForStart,
     groupTaskResumes,
     botHasActiveTurn,
     hasQueuedSendBefore,
@@ -255,7 +258,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     registry: { get: () => undefined }, store: { ...store, deleteBot: noop },
     stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
     lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
-    computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes, limitWaits: { cancel: noop },
+    computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
     perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
     EVENTS_DIR: "events", NATIVE_DIR: "native", join: (...parts: string[]) => parts.join("/"), removeRotatingLog: noop,
   });
@@ -474,8 +477,8 @@ describe("interrupt ownership", () => {
     }
     visit(room);
     const javascript = ts.transpileModule(`const bind = ${binding.getText(parsed)};`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
-    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", `${javascript}\nreturn bind;`)(
-      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [],
+    new Function("bindInterruptedTurn", "threadId", "bot", "epoch", "currentTurnEpoch", "isCancelled", "liveTurnIdByThread", "reply", "markMailRead", "store", "roomMail", "accountNote", "releaseStarting", "boardTurnStarted", `${javascript}\nreturn bind;`)(
+      f.bind, threadId, { id: "bot-1" }, 0, () => 1, () => true, f.liveTurnIdByThread, { claim: () => {} }, () => {}, {}, [], { commit: () => {} }, () => {}, () => {},
     )({ turnId: "stopped-turn" });
     expect(f.liveTurnIdByThread.get(threadId)).toBe("new-turn");
     expect(f.stale(threadId, "new-turn")).toBe(false);
@@ -540,6 +543,7 @@ describe("routine cancel", () => {
     const cancelled = new Set<string>();
     let isCancelled: (() => boolean) | undefined;
     const startChatTurn = routineOption("startChatTurn", {
+      rootForStart,
       routineSourceOwner: () => ({ bot: { id: "bot-1" }, group: { id: "group-1" }, threadId: "room-1" }),
       botHasActiveTurn: () => false,
       busyRejection: (message: string) => new Error(message),

@@ -11,6 +11,7 @@ import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { claimAsk, MAX_ASKS_PER_TURN } from "./comms-budget.ts";
+import { callerSnapshot } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
@@ -41,7 +42,7 @@ type InternalRouteDeps = {
   MAX_COMMS_DEPTH: number;
   MAX_WORKSPACE_BOTS: number;
   computerControl: ComputerControl;
-  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string }) => Promise<AskReply>;
+  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null }) => Promise<AskReply>;
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
@@ -274,13 +275,16 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       return json(res, 201, proposed);
     },
     askBot: async (req: IncomingMessage, res: ServerResponse) => {
+      const scoped = deps.resolveCommsCaller ? caller(req, "", "") : undefined;
+      const captured = scoped ? callerSnapshot(scoped.botId, scoped.threadId) : null;
       const body = await readBody(req);
-      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      const source = deps.resolveCommsCaller ? scoped : caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
       if (!source) return json(res, 403, { error: "unknown sender" });
+      const snapshot = deps.resolveCommsCaller ? captured : callerSnapshot(source.botId, source.threadId);
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
-      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(source.threadId)?.depth ?? 0);
+      const depth = snapshot?.depth ?? 0;
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
@@ -293,10 +297,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const from = store.bot(fromBotId);
       if (!from) return json(res, 403, { error: "unknown sender" });
       const fromThreadId = source.threadId || from.threadId;
-      const requestingTurn = turnRegistry.current(fromThreadId)?.turnId;
+      const requestingTurn = snapshot?.turnId;
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
+      if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
       // Depth stops recursion, not breadth. The claim happens before the
       // approval card so a turn cannot open unbounded cards either.
       if (!claimAsk(fromThreadId)) {
@@ -307,7 +312,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       let currentFrom = from;
       let currentTarget = target;
       const queueAsk = (approved = false) => {
-        const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved });
+        const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth, root: snapshot.rootId ?? undefined }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved, turnId: snapshot.turnId });
         if (queued.id && deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
         return json(res, 200, { botName: currentTarget.name, taskId: queued.id, shown: false, text: `@${currentTarget.name} is working on it. Task id: ${queued.id}. Collect the reply with wait_delegation; do not ask again.` });
       };
@@ -334,6 +339,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           fromThreadId,
         );
         if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
+        if (!turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
         // The card may have been open for minutes. Re-read both records so
         // deleted bots cannot recreate transcripts through stale objects.
         const freshFrom = store.bot(fromBotId);
@@ -349,13 +355,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const channel = getOrCreateChannel(store, currentFrom, currentTarget);
       const sourceChipId = mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
       const prefixed = peerMessagePrompt(currentFrom, message, "ask");
-      const taskId = acceptPeerTask(currentFrom, currentTarget, fromThreadId, "ask", "dispatching");
+      const taskId = acceptPeerTask(currentFrom, currentTarget, fromThreadId, "ask", "dispatching", undefined, snapshot.rootId ?? undefined, snapshot.turnId);
       const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId, {
         sender: currentFrom,
         channel,
         sourceThreadId: fromThreadId,
         transcriptText: message,
         taskId,
+        commsRoot: snapshot.rootId,
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) {
@@ -542,14 +549,17 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       return json(res, polled.code, polled.body);
     },
     delegateBot: async (req: IncomingMessage, res: ServerResponse) => {
+      const scoped = deps.resolveCommsCaller ? caller(req, "", "") : undefined;
+      const captured = scoped ? callerSnapshot(scoped.botId, scoped.threadId) : null;
       const body = await readBody(req);
-      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      const source = deps.resolveCommsCaller ? scoped : caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
       if (!source) return json(res, 403, { error: "unknown sender" });
+      const snapshot = deps.resolveCommsCaller ? captured : callerSnapshot(source.botId, source.threadId);
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
       const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
-      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(source.threadId)?.depth ?? 0);
+      const depth = snapshot?.depth ?? 0;
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       const from = store.bot(fromBotId);
       if (!from) return json(res, 404, { error: "no such bot" });
@@ -559,12 +569,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!connectorThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
+      if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
       const queued = queueDelegation(
         commsBus,
         from,
-        { toBotId, message, reason, depth },
+        { toBotId, message, reason, depth, root: snapshot.rootId ?? undefined },
         MAX_COMMS_DEPTH,
         fromThreadId,
+        { turnId: snapshot.turnId },
       );
       if (queued.result !== "ok" || !queued.id) {
         // the agent reads this string - a bare enum ("too_deep") tells it

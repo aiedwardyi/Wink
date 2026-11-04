@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { estimateContextTokens, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, withoutTurnNotes } from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
+import { adoptHumanRoot } from "./comms-root.ts";
 import { KEEP_GOING_RULES, keepGoingTurnOptions } from "./keep-going.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } from "./steer-queue.ts";
 import type { Message } from "./store.ts";
@@ -53,6 +54,7 @@ describe("summary grace dispatch", () => {
       store: { messagesFor: () => [], setActivity: () => {} },
       bot: { id: "bot" }, threadId: "room", dispatchedThreads: new Map(), releaseTurnStart: undefined,
       keepGoing: { turnStarted }, hop, cardContinuation,
+      takeStartingHold: () => () => {},
     });
     expect(turnStarted).toHaveBeenCalledWith("bot", "room", byUser);
   });
@@ -160,7 +162,7 @@ describe("summary grace dispatch", () => {
           return live;
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-        foldQueuedSends, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
+        foldQueuedSends, adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace,
         clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead() {},
@@ -177,7 +179,7 @@ describe("summary grace dispatch", () => {
         transcript: prepared.transcript, contextCompacted: prepared.compacted, taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, seed,
         summarySkipped: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
-        inlineNotes: null, threadSyncV2: null,
+        inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,

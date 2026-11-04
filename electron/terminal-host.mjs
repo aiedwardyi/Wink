@@ -522,7 +522,21 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     return result;
   };
   const botSessions = (botId) => [...sessions.values()].filter((candidate) => candidate.botId === botId && !candidate.retired && active.get(candidate.key) === candidate.id);
-  const paneSummary = (session) => ({ sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt });
+  const paneSummary = (session) => ({ sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt,
+    ...(session.botPane && session.workerAccount ? { account: session.workerAccount } : {}) });
+  const liveAccountRuns = ({ botId, engine } = {}) => {
+    const runs = [];
+    for (const session of sessions.values()) {
+      const runEngine = session.workerEngine?.toLowerCase();
+      if (!session.botPane || !session.workerAccount || (runEngine !== "claude" && runEngine !== "codex") || session.workerFinished || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
+      if (botId && session.botId !== botId || engine && runEngine !== engine) continue;
+      const text = session.screen.text();
+      const state = usageLimit(text, runEngine, session.cols) ? "limit" : AGENT_BUSY_RE.test(text) ? "busy" : session.agentSeen ? "idle" : "starting";
+      runs.push({ botId: session.botId, paneId: session.id, label: session.label ?? null, engine: runEngine,
+        accountId: session.workerAccount.id, accountGeneration: session.workerAccount.generation, state });
+    }
+    return runs;
+  };
   const owned = (event, id) => {
     authorize(event);
     const session = sessions.get(id);
@@ -1065,7 +1079,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     const session = {
       id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: paneEnv.TEMP || paneEnv.TMP || os.tmpdir(), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
-      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
+      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
@@ -1400,6 +1414,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         ...screen,
       };
     },
+    liveAccountRuns,
     readBot(botId, options = {}) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");

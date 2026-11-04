@@ -90,15 +90,19 @@ import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-l
 import { AccountService, isInstanceId } from "./accounts.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
+import { createAccountNames } from "./account-names.ts";
+import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { createUsageBoard } from "./usage-board.ts";
+import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
-import { enableWorkerAccounts, workerLaunchResponse } from "./worker-panes.ts";
+import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
@@ -148,6 +152,7 @@ import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
+import { adoptHumanRoot, rootForStart } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
@@ -422,6 +427,8 @@ if (sweepLegacyOpencodeKey() === "failed") {
 }
 const cfg = startupTiming.measure("config", loadConfig);
 const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
+const accountNames = createAccountNames(DATA_DIR);
+accountNames.sync(accounts.list());
 // Before registry.load: a prewarmed engine child would inherit the token.
 const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
@@ -627,6 +634,7 @@ function terminalIntegration(botId: string) {
       OMB_BOT_ID: botId,
       OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
       OMB_COMMS_TOKEN: COMMS_TOKEN,
+      OMB_ACCOUNT_NAMES: JSON.stringify(Object.fromEntries(accounts.list().map((row) => [row.id, accountNames.nameOf(row.id, row.driverKind)]))),
     },
   };
 }
@@ -685,7 +693,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -699,6 +707,7 @@ function askBotAndWait(
     fold: ownTurnReply(staleTurnEvent).fold,
     start: (onDispatchError) => startTurn(targetBotId, message, {
       commsDepth: depth + 1,
+      commsRoot: peer?.commsRoot ?? null,
       unattended: isUnattended(fromBotId),
       transcriptText: peer?.transcriptText,
       ...peerAttribution(peer?.sender, peer?.channel),
@@ -734,10 +743,12 @@ const automaticCandidate = (entry: Awaited<ReturnType<typeof registry.describe>>
 }, (id) => { const instance = registry.get(id); return instance ? liveAutomaticCandidate(instance) : undefined; });
 
 const automaticAvailability = new Map<string, boolean>();
+const providerSnapshots = new Map<string, Awaited<ReturnType<typeof registry.describe>>[number]["snapshot"]>();
 
 function rememberAutomaticAvailability(entries: Awaited<ReturnType<typeof registry.describe>>) {
   for (const entry of entries) {
     automaticAvailability.set(entry.instanceId, entry.snapshot.state === "available");
+    providerSnapshots.set(entry.instanceId, entry.snapshot);
   }
 }
 
@@ -1179,6 +1190,7 @@ const keepGoing = new KeepGoing({
       if (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt)) {
         rateLimitsByInstance.set(instanceId, result.report);
         scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+        usageBoard.recordReport(instanceId, result.report);
       }
     }
     return rateLimitsByInstance.get(instanceId) ?? null;
@@ -1228,6 +1240,7 @@ const limitWaits = new LimitWaits({
     if (result.report && !result.error) {
       rateLimitsByInstance.set(row.selection.instanceId, result.report);
       scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+      usageBoard.recordReport(row.selection.instanceId, result.report);
     }
     return result;
   },
@@ -1722,6 +1735,7 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   computerControl.forget(bot.id);
   paneWake.forgetBot(bot.id);
   taskResumes.forgetBot(bot.id);
+  accountNotices.forget(bot.id);
   const target = perBotLocalVmTarget(bot.id);
   localVmIdles.get(target.key)?.cancel();
   localVmIdles.delete(target.key);
@@ -1847,6 +1861,7 @@ const groupWithThread = (group: GroupRecord) => ({
 store.onChange((change) => {
   try {
     if (change.type === "message" && change.message.role === "user" && !change.message.from && !change.message.origin) {
+      if (!change.imported && change.message.kind === "text" && change.message.steered) adoptHumanRoot(change.threadId, change.message.sendId ?? change.message.id);
       const bot = store.botByThread(change.threadId);
       if (bot) limitWaits.cancel(bot.id, undefined, change.message.steered === true);
     }
@@ -2883,6 +2898,31 @@ const turnUsage = new Map<string, { input: number; output: number; cachedInput?:
 // not per turn, so it lives here and rides /api/instances rather than being
 // banked on a task. Persisted so a restart keeps the last report until a turn or refresh replaces it.
 const rateLimitsByInstance = loadRateLimits(DATA_DIR);
+const boardEngines = new Map([["grokAgent", "grok"], ["antigravityAgent", "gemini"], ["museAgent", "muse"]]);
+const usageBoard = createUsageBoard({
+  accounts: {
+    list: () => [
+      ...accounts.list().map((row) => ({ ...row, blocked: registry.accountBlocked(row.id), status: providerSnapshots.get(row.id) })),
+      ...Object.entries(instanceConfigs(cfg)).flatMap(([id, entry]) => {
+        const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
+        return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountBlocked(id), status: providerSnapshots.get(id) }] : [];
+      }),
+    ],
+    defaultFor: (base) => accounts.defaultFor(base),
+    get drains() { return accounts.drains; },
+  },
+  names: accountNames, rateLimits: rateLimitsByInstance, history: createUsageHistory(DATA_DIR),
+  runs: async (timeoutMs) => {
+    const result = await liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs);
+    return result.known ? { known: true, runs: result.runs.map((run) => ({ ...run, label: run.label ?? "" })) } : result;
+  },
+  bots: () => store.bots.map((bot) => ({ id: bot.id, name: bot.name, base: accounts.get(bot.modelSelection.instanceId)?.of ?? bot.modelSelection.instanceId })),
+});
+usageBoard.onFrame((frame) => broadcast(frame));
+function boardTurnStarted(botId: string, threadId: string, turnId: string | undefined) {
+  const captured = providerReload.current(threadId);
+  if (turnId && captured) usageBoard.turnStarted({ turnId, botId, accountId: captured.instanceId, generation: captured.account?.generation ?? 0 });
+}
 const refreshUsage = createUsageRefresh({
   accountIdentity: (account, identity) => accountRuntime.observe(account.id, { state: "available", authenticated: true, accountIdentity: identity }, account.generation),
   accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
@@ -2890,7 +2930,7 @@ const refreshUsage = createUsageRefresh({
 const checkMuseUsage = createMuseCheck();
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
-  save: () => scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR),
+  save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); },
   refresh: async (instanceId, previous) => {
     const config = instanceConfigs(cfg, accounts.snapshot)[instanceId];
     const instance = registry.get(instanceId);
@@ -2898,28 +2938,38 @@ const spawnUsage = createSpawnUsage({
     return refreshUsage(instance.driverKind, { instanceId, cli: z.object({ cli: z.string().optional() }).catch({}).parse(config.config).cli, environment: config.environment, account: config.account }, previous);
   },
   environment: (instanceId) => instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment,
+  nameOf: (id, engine) => accountNames.nameOf(id, engine),
 });
 const workerTurns = createWorkerTurns();
 const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
-  bases: () => instanceConfigs(cfg), usage: spawnUsage,
+  bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
+const accountNotices = createAccountNotices({
+  names: accountNames, sync: () => accountNames.sync(accounts.list()), runs: (timeoutMs) => liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs),
+});
 const accountRuntime = createAccountRuntime({
   accounts, registry, providers: providerReload, store, reload: reloadProviders, bots: botAccounts,
-  changed: (id) => { void accountUpdates(id); },
-  rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
+  changed: (id) => {
+    try { accountNames.sync(accounts.list()); } catch { console.error("Account names could not be saved"); }
+    usageBoard.touch(); void accountUpdates(id);
+  },
+  rateLimits: rateLimitsByInstance, saveRateLimits: () => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.touch(); }, usage: refreshUsage, availability: automaticAvailability,
   invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
+  onMainChanged: (change) => { accountNotices.mainChanged(change); usageBoard.recordMain(change); },
 });
-const accountRoutes = createAccountRoutes(accountRuntime, registry);
+const accountRoutes = createAccountRoutes(accountRuntime, registry, {
+  names: accountNames, onNamesChanged: () => { usageBoard.touch(); void accountUpdates(); },
+});
 const accountUpdates = createAccountUpdates({
   describe: async () => botAccounts.pickerInstances(botAccounts.accountInstances(withRateLimits(await registry.describeCached()))),
   publish: (instances) => { rememberAutomaticAvailability(instances); broadcast({ kind: "instances", instances }); },
   usage: createAccountUsage({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
-    rateLimits: rateLimitsByInstance, save: () => saveRateLimits(rateLimitsByInstance, DATA_DIR) }),
+    rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
 
 function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
@@ -2989,6 +3039,7 @@ const watchdog = new TurnWatchdog({
       if (stalledTurnId && turnRegistry.get(stalledTurnId)) {
         if (settleMail(store, turn.threadId, stalledTurnId, false, "interrupted")) paneWake.noteArrived(turn.botId, turn.threadId);
         turnRegistry.settle(stalledTurnId);
+        usageBoard.turnSettled(stalledTurnId);
       }
       const group = store.groupByThread(turn.threadId);
       const speaker = groupSpeakers.get(turn.threadId);
@@ -3116,7 +3167,7 @@ bus.subscribe((event: RuntimeEvent) => {
     adopt: (botId, threadId, turnId) => {
       const instance = event.providerInstanceId ? providerReload.started(threadId, event.providerInstanceId) : null;
       if (instance) workerTurns.capture(botId, threadId, instance);
-      turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0 });
+      turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0, rootId: rootForStart(threadId, { kind: "automatic" }) });
       store.setActivity(botId, "working", threadId);
       dispatchedThreads.set(botId, threadId);
       liveTurnIdByThread.set(threadId, turnId);
@@ -3276,8 +3327,10 @@ bus.subscribe((event: RuntimeEvent) => {
     const observedAt = event.observedAt ?? event.createdAt;
     const current = rateLimitsByInstance.get(event.providerInstanceId);
     if (!current || Date.parse(observedAt) >= Date.parse(current.observedAt)) {
-      rateLimitsByInstance.set(event.providerInstanceId, { windows: event.windows, observedAt });
+      const report = { windows: event.windows, observedAt };
+      rateLimitsByInstance.set(event.providerInstanceId, report);
       scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+      usageBoard.recordReport(event.providerInstanceId, report);
     }
   }
   const routineRun = routines?.handleRuntimeEvent(
@@ -4017,7 +4070,7 @@ const askHold = watchAskHold(store, bus);
 /** How a drained delegation becomes a real turn on the target. Shared by
  * the settle-time drain and the boot-time drain of what a previous process
  * left queued. */
-const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText) => {
+const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText, root) => {
     // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
     // unavailable provider. Unhandled, that rejection is fatal to the
     // harness (Node's default), which in the packaged app kills the server
@@ -4060,6 +4113,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     };
     return startTurn(toBotId, text, {
       commsDepth,
+      commsRoot: root ?? null,
       commsAsk: ask,
       unattended: isUnattended(sourceBotId),
       transcriptText,
@@ -4081,6 +4135,7 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
     turnRegistry.settle(event.turnId);
+    usageBoard.turnSettled(event.turnId);
   }
   drainQueuedSends();
   if (!event.ok || event.stopReason === "cancelled" || event.stopReason === "interrupted") discardDelegations(commsBus, event.threadId, sourceBotId, event.turnId);
@@ -4337,6 +4392,7 @@ async function finalScreenFrame(botId: string): Promise<Frame | null> {
 type StartTurnOptions = {
   limitWaitId?: string;
   commsDepth?: number;
+  commsRoot?: string | null;
   userMessage?: Message;
   /** Clean copy for user transcript when the model prompt carries an internal harness envelope. */
   transcriptText?: string;
@@ -4398,6 +4454,13 @@ const CORPUS_SEARCH_INSTRUCTIONS =
 
 /** Bot id to the thread its claimed start targets; activeThreadId is only set after preparation. */
 const turnStartClaims = new Map<string, string | undefined>();
+// A resolved turn's account hold belongs to the claim holder until its dispatcher takes it.
+const startingHolds = new Map<string, () => void>();
+function takeStartingHold(botId: string) {
+  const release = startingHolds.get(botId) ?? (() => {});
+  startingHolds.delete(botId);
+  return release;
+}
 
 /** A driver still owns this thread's turn, so its sendTurn would throw.
  * Stop clears `busy` and the turn-start claim synchronously, but the driver
@@ -4475,7 +4538,7 @@ const taskResumes = new TaskResumeScheduler({
       }
       resumePaneWakes(botId);
       let failure: string | undefined;
-      return runGroupMemberTurn(group.id, threadId, botId, 0, new Set(), room.prompt, (message) => { failure = message; }, () => room.operation.cancelled)
+      return runGroupMemberTurn(group.id, threadId, botId, 0, new Set(), room.prompt, (message) => { failure = message; }, () => room.operation.cancelled, undefined, undefined, rootForStart(threadId, { kind: "automatic" }))
         .then(() => { if (failure) throw new Error(failure); });
     }
     if (bot.threadId !== threadId) {
@@ -4502,6 +4565,7 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
   try {
     return await startClaimedTurn(botId, text, opts);
   } finally {
+    takeStartingHold(botId)();
     turnStartClaims.delete(botId);
     // Preparation can fail before a provider turn exists, so no
     // turn.completed event will arrive to wake the next queued send.
@@ -4576,6 +4640,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     );
   }
   const instanceId = instance.instanceId;
+  startingHolds.set(bot.id, accountRuntime.holdStarting(instanceId, instance.account?.generation ?? 0));
   const model = opts?.runOn === "cloud" ? instance.models.default : selection.model;
   // a cloud routine borrows the instance default model, so it borrows no
   // per-bot effort either
@@ -4613,6 +4678,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
         });
   }
+  let rootId = rootForStart(threadId, turnStartedByUser(opts)
+    ? { kind: "human", messageKey: userMessage.sendId ?? userMessage.id }
+    : opts?.commsRoot !== undefined || commsDepth > 0
+      ? { kind: "inherit", rootId: opts?.commsRoot }
+      : { kind: "automatic" });
   // the running turn's stamp source; an ordinary turn clears a failed peer start's leftover
   if (opts?.peerComm) peerReplyComm.set(threadId, opts.peerComm);
   else peerReplyComm.delete(threadId);
@@ -4903,6 +4973,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? foldQueuedSends(store, bot.id, threadId, claimMark)
     : [];
   if (folded.length) {
+    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
     takeOverPeerTurn(threadId);
@@ -4933,7 +5004,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
-  const turnNotes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
+  const accountNote = accountNotices.forTurn(bot.id);
+  const accountNotes = accountNote.text ? [accountNote.text] : [];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5029,6 +5102,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       logSummaryWait();
       return;
     }
+    const releaseStarting = takeStartingHold(bot.id);
     let systemSeed: ReturnType<typeof systemSeeds.set> | undefined;
     try {
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
@@ -5329,7 +5403,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -5342,6 +5416,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const foldLate = () => {
           const queued = foldQueuedSends(store, bot.id, threadId, claimMark);
           if (!queued.length) return;
+          for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
@@ -5450,7 +5525,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -5508,9 +5583,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;
       if (started.turnId && systemSeed) systemSeed.turnId = started.turnId;
       markMailRead(store, threadId, mailParts, started.turnId ?? "");
+      accountNote.commit();
       markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
+      boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (started.turnId && settledTurnIdByThread.get(threadId) !== started.turnId) liveTurnIdByThread.set(threadId, started.turnId);
       // dispatched: the rewind is spent
@@ -5568,6 +5645,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       drainConnectorResumes();
       drainSecretResumes();
     } finally {
+      releaseStarting();
       logSummaryWait();
     }
   })();
@@ -5689,6 +5767,7 @@ routines = new RoutineManager({
         () => routines!.isCancelled(run.id),
         undefined,
         run.cardMessageId ? new Set([run.cardMessageId]) : undefined,
+        rootForStart(source.threadId, { kind: "automatic" }),
       ).then((started) => {
         if (!started) onDispatchError("The routine's room is no longer available");
       }, (error) => onDispatchError(error instanceof Error ? error.message : String(error)));
@@ -5898,11 +5977,13 @@ function queueBusyRoomMember(
   cardContinuation?: string,
   onDispatchError?: (message: string) => void,
   instructionId?: string,
+  rootId?: string | null,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
     groupId,
     hop,
+    rootId: rootId ?? undefined,
     cardContinuation,
     onDispatchError,
     instructionId,
@@ -5921,7 +6002,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (!roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -5954,6 +6035,8 @@ function enqueueDrainedRoomTurn(
       room.onDispatchError,
       () => operation.cancelled,
       operation.instructionId,
+      undefined,
+      room.rootId ?? null,
     );
   });
   const tracked = next.finally(() => finishGroupTurnOperation(room.groupId, operation));
@@ -6014,6 +6097,7 @@ async function runGroupMemberTurn(
   isCancelled?: () => boolean,
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
+  rootId: string | null = null,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6023,12 +6107,13 @@ async function runGroupMemberTurn(
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread) return false;
   if (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
     if (!claimHeld) return;
     claimHeld = false;
+    takeStartingHold(botId)();
     turnStartClaims.delete(botId);
   };
   try {
@@ -6044,6 +6129,7 @@ async function runGroupMemberTurn(
       releaseTurnStart,
       instructionId,
       excludeIds,
+      rootId,
     );
   } finally {
     releaseTurnStart();
@@ -6068,6 +6154,7 @@ async function runClaimedGroupMemberTurn(
   releaseTurnStart?: () => void,
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
+  rootId: string | null = null,
 ): Promise<boolean> {
   const epoch = currentTurnEpoch(botId);
   if (isCancelled?.()) return false;
@@ -6080,7 +6167,7 @@ async function runClaimedGroupMemberTurn(
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
   }
   // Capture before any await. startGroupTurn persists the next instruction
   // on arrival, so a re-read after setup binds this turn to a later message.
@@ -6119,6 +6206,7 @@ async function runClaimedGroupMemberTurn(
     onDispatchError?.(message);
     return true;
   }
+  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
   const taskRecord = taskPacketForWrite(threadId);
   const taskRecordToFlush = taskRecord;
   const modelContextWindow = contextWindowFor(instance.models, selection.model);
@@ -6239,12 +6327,13 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   if (readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
   store.setActivity(bot.id, "working", threadId);
   dispatchedThreads.set(bot.id, threadId);
   keepGoing.turnStarted(bot.id, threadId, hop === 0 && !cardContinuation);
+  const releaseStarting = takeStartingHold(bot.id);
   releaseTurnStart?.();
 
   store.patchGroup(group.id, { busyBotId: bot.id }); // the store's change stream carries the frame
@@ -6365,7 +6454,8 @@ async function runClaimedGroupMemberTurn(
     // through startClaimedTurn, which recycles the native session after
     // Orbit compaction or a pre-compact fat soak.
     keepRoomTurnInstruction = true;
-    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop });
+    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }) });
+    const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6376,7 +6466,9 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, bot.id, epoch);
       return live.adapter.sendTurn({
         threadId,
-        text,
+        text: accountNote.text ? `${accountNote.text}
+
+${text}` : text,
         system: roomSystem,
         approval: bot.autoApprove ? "auto" : "ask",
         attended: !isUnattended(bot.id),
@@ -6388,10 +6480,14 @@ async function runClaimedGroupMemberTurn(
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
+        accountNote.commit();
+        releaseStarting();
+        boardTurnStarted(bot.id, threadId, started.turnId);
         if (started.turnId && currentTurnEpoch(bot.id) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
         if (reply.claim(started.turnId)) finish("settled");
       })
       .catch((err) => {
+        releaseStarting();
         pendingInterruptThreads.bind(threadId, bot.id, epoch);
         providerReload.settled(threadId);
         workerTurns.settled(threadId);
@@ -6443,7 +6539,7 @@ async function runClaimedGroupMemberTurn(
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
       if (spoken.has(next.id)) continue;
-      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId))) {
+      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId))) {
         return false;
       }
     }
@@ -6488,6 +6584,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     replyToId: replyTo?.id,
     sendId,
   });
+  const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
   if (!group.dm) store.titleGroupTaskFromFirstMessage(group.id, text, threadId);
 
@@ -6584,6 +6681,8 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
         undefined,
         () => operation.cancelled,
         operation.instructionId,
+        undefined,
+        rootId,
       ))) break;
     }
   });
@@ -6706,6 +6805,9 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
         prompt,
         (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
         () => operation.cancelled,
+        undefined,
+        undefined,
+        rootForStart(entry.threadId, { kind: "automatic" }),
       );
     });
     const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
@@ -6803,6 +6905,9 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
         prompt,
         (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
         () => operation.cancelled,
+        undefined,
+        undefined,
+        rootForStart(entry.threadId, { kind: "automatic" }),
       );
     });
     const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
@@ -7987,6 +8092,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt)) {
           rateLimitsByInstance.set(instanceId, result.report);
           scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR);
+          usageBoard.recordReport(instanceId, result.report);
         }
       }
       const newest = rateLimitsByInstance.get(instanceId);
@@ -8033,6 +8139,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && engineSignIn) {
       const signIn = registry.signIn(engineSignIn[1]);
       return signIn ? json(res, 200, signIn) : json(res, 404, { error: "Unknown engine sign-in" });
+    }
+
+    if (method === "GET" && path === "/api/usage/board") {
+      const board = await usageBoard.handle(url);
+      return json(res, board.status, board.body);
     }
 
     if (method === "GET" && path === "/api/instances") {

@@ -294,6 +294,7 @@ describe("startup timing", () => {
       async function startClaimedTurn(botId, text, opts) { ${body} dispatch(botId, text, opts); } startTurn`, {
       startupTiming, currentTurnEpoch: () => 0, queueMark, dispatch, store: { bot: () => ({ threadId: "t1" }) }, turnStartClaims: claims,
       tryClaimTurnStart: (id: string) => { if (claims.has(id)) return false; claims.add(id); return true; },
+      takeStartingHold: () => () => {},
       busyRejection: (message: string) => new Error(message), queueMicrotask() {},
     }) as (botId: string, text: string, opts: object) => Promise<void>;
     const pending = startTurn("b1", "queued", opts);
