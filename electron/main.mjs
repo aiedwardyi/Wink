@@ -109,7 +109,8 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { handleDeviceLinkedFile } = require("./linked-file-window.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1190,6 +1191,7 @@ async function openDeviceWindow(rawHost, rawName) {
       invalid: nativeText("packaged.deviceLinkInvalid"),
     }));
     const devices = win.webContents.session;
+    const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
     devices.setPermissionCheckHandler((_webContents, permission) => permission === "clipboard-sanitized-write");
     devices.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === "clipboard-sanitized-write"));
     // One listener per session: route device-origin 401s and main-frame 403s to their window.
@@ -1206,11 +1208,7 @@ async function openDeviceWindow(rawHost, rawName) {
       win.setTitle(title);
     });
     win.webContents.setWindowOpenHandler(({ url: target }) => {
-      const linkedFile = deviceLinkedFileName(target, url.origin);
-      if (linkedFile) {
-        void openDeviceLinkedFile(devices, target, linkedFile);
-        return { action: "deny" };
-      }
+      if (linkedFile(target)) return { action: "deny" };
       const open = safeExternalUrl(target);
       if (open) void shell.openExternal(open);
       return { action: "deny" };
@@ -1219,10 +1217,8 @@ async function openDeviceWindow(rawHost, rawName) {
       routeWindowZoomKeys(event, input, win.webContents);
     });
     win.webContents.on("will-navigate", (event, target) => {
-      const linkedFile = deviceLinkedFileName(target, url.origin);
-      if (linkedFile) {
+      if (linkedFile(target)) {
         event.preventDefault();
-        void openDeviceLinkedFile(devices, target, linkedFile);
         return;
       }
       if (sameDesktopViewerOrigin(target, url.origin)) return;

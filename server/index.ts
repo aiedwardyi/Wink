@@ -7588,7 +7588,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/uploads") && (await uploads.handle(req, res, method, path, url))) return;
 
-    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-file$/);
+    m = path.match(/^\/api\/threads\/([\w-]+)\/linked-file(?:\/.*)?$/);
     if (m && method === "GET") {
       const threadId = m[1]!;
       const bot = store.botByThread(threadId);
@@ -7596,6 +7596,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!bot && !group) return json(res, 404, { error: "no such conversation" });
       const messages = store.messagesFor(threadId).map((message) => ({
         id: message.id,
+        role: message.role,
         text: message.text,
         fromBotId: message.from?.botId,
       }));
