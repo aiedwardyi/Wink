@@ -22,6 +22,7 @@ type TerminalSnapshot = { id: string; cwd: string; shell: string; output: string
 type BotPane = { id: string; label: string | null; exited?: boolean };
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
+const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text";
 
 function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a && !b) return true;
@@ -103,6 +104,7 @@ export function TerminalWorkspace({
   const [replacing, setReplacing] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const [confirmClose, setConfirmClose] = useState<{ id: string; name: string } | null>(null);
   const [panes, setPanes] = useState<BotPane[]>([]);
   const [pane, setPane] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
@@ -715,6 +717,12 @@ export function TerminalWorkspace({
     if (pane === id) setPane(null);
     void Promise.resolve().then(() => window.ogb?.terminal?.close?.(id)).catch(() => {});
   };
+  const requestClosePane = (id: string) => {
+    const target = panes.find((item) => item.id === id);
+    if (!target) return;
+    if (target.exited) closePane(id);
+    else setConfirmClose({ id, name: parseWorkerLabel(target.label).nick ?? id.slice(0, 8) });
+  };
   const chip = rosterChip(workers, panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited })));
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
   const hotkeyOf = (sessionId: string | null) => {
@@ -725,8 +733,8 @@ export function TerminalWorkspace({
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
-      <header className={`@container/chathead flex min-h-[60px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 py-3 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
-        <button type="button" onClick={onClose} className="flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text">
+      <header className={`@container/chathead flex h-[72px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 max-md:h-[60px] ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
+        <button type="button" onClick={onClose} className={`flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] ${HEADER_CONTROL}`}>
           <ArrowLeft size={15} /> {t("terminal.chat")} <kbd className="text-[10px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>
         </button>
         <span className="h-5 border-l border-hairline" aria-hidden />
@@ -740,7 +748,7 @@ export function TerminalWorkspace({
               disabled={choosing || replacing}
               title={folderTooltip}
               aria-label={t("terminal.chooseFolder")}
-              className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-60"
+              className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-[11px] disabled:opacity-60 ${HEADER_CONTROL}`}
             >
               <FolderOpen size={12} className="shrink-0" />
               <span className="min-w-0 truncate font-mono">{folderLabel}</span>
@@ -753,11 +761,11 @@ export function TerminalWorkspace({
         </div>
         {bot.busy && <span className="shrink-0 text-[11px] text-accent-text" role="status">{t("terminal.agentWorking")}</span>}
         {pane !== null && (
-          <button type="button" onClick={() => closePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text">
+          <button type="button" onClick={() => requestClosePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className={`flex shrink-0 items-center justify-center rounded-md p-1.5 ${HEADER_CONTROL}`}>
             <SquareX size={16} />
           </button>
         )}
-        <WorkerChip name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} />
+        <WorkerChip name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} className={`rounded-md [&_.text-ink-secondary]:text-inherit ${HEADER_CONTROL}`} />
       </header>
       {showProjectBanner && (
         <div role="status" className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-inset px-5 py-1.5 text-[12px] text-ink">
@@ -831,6 +839,18 @@ export function TerminalWorkspace({
           <span>{t("terminal.lifetime")}</span>
         )}
       </footer>
+      {confirmClose && (
+        <ConfirmDialog
+          title={t("terminal.closePaneConfirmTitle")}
+          body={t("terminal.closePaneConfirmBody", { name: confirmClose.name })}
+          confirmLabel={t("terminal.closePane")}
+          onCancel={() => setConfirmClose(null)}
+          onConfirm={() => {
+            closePane(confirmClose.id);
+            setConfirmClose(null);
+          }}
+        />
+      )}
       <Presence open={confirmRestart}>
         {(closing) => (
           <ConfirmDialog

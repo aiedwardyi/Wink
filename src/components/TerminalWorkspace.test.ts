@@ -1534,6 +1534,7 @@ it("closes the watched pane from the header Close pane button while ignoring lat
   await act(async () => { f.receive({ id: "pane-one", data: "working", seq: 1 }); });
   expect(terminal.write).toHaveBeenLastCalledWith("working");
   await act(async () => { button.click(); });
+  await act(async () => { document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click(); });
   expect(f.close).toHaveBeenLastCalledWith("pane-one");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(shownPane()).toBe("Desk");
@@ -1544,6 +1545,7 @@ it("closes the watched pane from the header Close pane button while ignoring lat
   expect(terminal.write).not.toHaveBeenCalled();
   await f.select("two");
   await act(async () => { closePaneButton()!.click(); });
+  await act(async () => { document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click(); });
   expect(f.close).toHaveBeenLastCalledWith("pane-two");
   expect(await f.names()).toEqual([]);
   expect(f.open.mock.calls.at(-1)?.[0].sessionId).toBeUndefined();
