@@ -93,9 +93,10 @@ const click = async (node: Element | null | undefined) => {
 const tab = (engine: string) => q(`[role="tab"][data-engine="${engine}"]`);
 const picker = () => q('[data-usage-hero] button[aria-haspopup="menu"]');
 const menuItems = () => [...host.querySelectorAll('[role="menuitemradio"]')];
+const menuName = (item: Element) => text(item.querySelector("span"));
 async function pick(name: string) {
   await click(picker());
-  await click(menuItems().find((item) => text(item) === name));
+  await click(menuItems().find((item) => menuName(item) === name));
   await act(async () => { await vi.advanceTimersByTimeAsync(300); });
 }
 
@@ -208,7 +209,7 @@ describe("Usage desk", () => {
     }
     scan("hover, focus and touch");
     await click(picker());
-    expect(menuItems().map(text)).toEqual(["Claude 1", "Claude 2", "Studio"]);
+    expect(menuItems().map(menuName)).toEqual(["Claude 1", "Claude 2", "Studio"]);
     scan("open picker");
     await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     scan("closing picker");
@@ -233,7 +234,8 @@ describe("Usage desk", () => {
     expect(text(row(CLAUDE_2)?.querySelector("[data-account-name]"))).toBe("Claude 2");
     expect(text(row("claude")?.querySelector("[data-account-name]"))).toBe("Claude 1");
     await click(picker());
-    expect(menuItems().map(text)).toEqual(["Studio", "Claude 1", "Claude 2"]);
+    expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 1", "Claude 2"]);
+    expect(menuItems().map(text)).toEqual(["Studio", "Claude 1Main", "Claude 2"]);
     const all = text(host);
     expect(all).not.toContain("Account 1");
     expect(all).not.toContain(CLAUDE_3);
@@ -424,6 +426,57 @@ describe("Usage desk", () => {
     expect(q("[data-empty-state]")).toBeNull();
   });
 
+  it.each([false, true])("refreshes workers on cached reopen (another subscriber=%s)", async (retained) => {
+    const { useUsageBoard } = await import("@/lib/use-usage-board");
+    const meterHost = document.createElement("div");
+    const meterRoot = createRoot(meterHost);
+    function Meter() { useUsageBoard(); return null; }
+    await mount();
+    if (retained) await act(async () => meterRoot.render(createElement(Meter)));
+    const before = text(row("claude"));
+    expect(before).toContain("3 workers");
+    await unmount();
+    h.state.terminalPanes = { "bot-atlas": [] };
+    accountOf(server.board, "claude").workers = [];
+    const late = deferred<UsageBoard>();
+    server.reply = () => late.promise;
+    const reads = boardGets().length;
+    try {
+      if (retained) await act(async () => meterRoot.render(createElement(Meter)));
+      await mount();
+      expect(text(row("claude")), "cached workers paint first").toBe(before);
+      expect(boardGets().length - reads, "one cached-open read").toBe(1);
+      await act(async () => { late.resolve(server.board); await vi.advanceTimersByTimeAsync(0); });
+      expect(text(row("claude"))).not.toContain("3 workers");
+      expect(text(row("claude"))).not.toContain("Workers unknown");
+      expect(boardGets().length - reads).toBe(1);
+    } finally {
+      await act(async () => meterRoot.unmount());
+    }
+  });
+
+  it("fills both reset lines from an undurationed Codex report", async () => {
+    const { createUsageBoard } = await import("../../server/usage-board");
+    const { codexRateLimitWindows } = await import("../../server/drivers/rate-limits");
+    const report = { observedAt: new Date(usageBoardNow).toISOString(), windows: codexRateLimitWindows({
+      primary: { usedPercent: 24, resetsAt: (usageBoardNow + 60 * MIN) / 1000 },
+      secondary: { usedPercent: 40, resetsAt: (usageBoardNow + 7 * 1440 * MIN) / 1000 },
+    }) };
+    const empty = () => ({ version: 1 as const, accounts: {}, events: {}, seq: 0, counter: 0 });
+    const board = createUsageBoard({
+      accounts: { list: () => [{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }], defaultFor: () => "codex", drains: {} },
+      names: { get: () => null }, rateLimits: { get: () => report },
+      history: { snapshot: empty, since: empty, record: vi.fn(), event: vi.fn(), purge: vi.fn() },
+      runs: async () => ({ known: true, runs: [] }), bots: () => [], now: () => usageBoardNow,
+    });
+    server.board = await board.read();
+    await mount();
+    expect(text(q('[data-reset="session"]'))).toContain("Resets in 1h");
+    expect(text(q('[data-reset="week"]'))).toContain("Resets in 7d");
+    expect(text(q('[data-reset="session"]'))).not.toContain("No data");
+    expect(text(q('[data-reset="week"]'))).not.toContain("No data");
+  });
+
   it("forecasts only under the pace rules", async () => {
     const now = usageBoardNow;
     const cases: Array<[string, UsageBoard, string]> = [
@@ -508,6 +561,9 @@ describe("Usage desk", () => {
     await click(q("button[data-details]"));
     expect(text(q("[data-details-body]"))).toContain("24h");
     expect(text(q("[data-details-body]"))).toContain("82% left");
+    // The daily window keeps no history: no pace line and no chart rather than "No recent data".
+    expect(q("[data-verdict]")).toBeNull();
+    expect(text(q("[data-usage-hero]"))).not.toContain("No history yet");
     await click(tab("muse"));
     expect(heroName()).toBe("Muse");
     expect(text(q("[data-usage-hero]"))).toContain("Last seen 2h ago");

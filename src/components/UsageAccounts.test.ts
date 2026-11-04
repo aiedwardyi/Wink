@@ -54,6 +54,19 @@ it("names accounts only and reports picks by id", async () => {
   expect(document.activeElement).toBe(picker());
 });
 
+it("tags Main in the list in English and Korean", async () => {
+  const list = accounts.map((account) => ({ ...account, main: account.id === "acct-2" }));
+  for (const [locale, main] of [["en", "Main"], ["ko", "기본"]] as const) {
+    persistPreference(locale);
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render(list);
+    await act(async () => picker().click());
+    expect(items().map((item) => item.textContent)).toEqual(["Claude 1", `Claude 2${main}`, "Studio", "Claude 4"]);
+    expect(items()[1]!.getAttribute("aria-label")).toBe(`Claude 2 ${main}`);
+  }
+});
+
 it("supports menu arrow keys, Home, End, Escape, outside dismissal and focus return", async () => {
   await render();
   await act(async () => picker().click());

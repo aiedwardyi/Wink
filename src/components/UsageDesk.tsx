@@ -8,7 +8,7 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
-import { bindingWindow, chartSeries, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
+import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
@@ -285,9 +285,11 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
   const { session, week } = splitWindows(account.windows);
   const facts = windowFacts(account, t);
   const window = facts.binding;
-  const { verdict, projection } = window ? pace(account, window, engine.events, clock.now) : { verdict: undefined, projection: null };
+  // An extra window (Gemini daily, a Codex slot of another length) keeps no history: no pace line and no chart for it.
+  const paced = window && historyColumn(account, window) !== null ? window : undefined;
+  const { verdict, projection } = paced ? pace(account, paced, engine.events, clock.now) : { verdict: undefined, projection: null };
   const tone = toneOf(window, verdict);
-  const series = window ? chartSeries(account, window, engine.events, clock.now) : null;
+  const series = paced ? chartSeries(account, paced, engine.events, clock.now) : null;
   const muse = engine.engine === "muse" ? museReading("museAgent", account.observedAt === null ? undefined : new Date(account.observedAt).toISOString(), clock.now) : null;
   const limited = engine.engine === "muse" && account.windows.find((each) => each.usedPercent >= 100 && !windowExpired(each.resetsAt, clock.now));
   const limitReset = limited ? resetCompact(limited.resetsAt, clock.now) : null;
@@ -338,7 +340,7 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
             ? <UsageChart series={series} projection={projection} tone={tone} terminal={terminal} compact={phone}
               caption={t("usage.desk.quota")} topLeft={vsText && <span data-today-normal="">{vsText}</span>}
               finish={window?.resetsAt != null && window.resetsAt > clock.now ? clockText(window.resetsAt, clock) : undefined} />
-            : <EmptyState>{t("usage.desk.noHistory")}</EmptyState>}
+            : paced && <EmptyState>{t("usage.desk.noHistory")}</EmptyState>}
         </div></Fold>
       </>}
       {account.windows.length > 0 && <>

@@ -3,7 +3,6 @@
 // banked per settled turn on each task (server/store.ts addTaskUsage) and
 // summed here; nothing is fetched. The usage desk above it shows every
 // account's quota windows from the usage board.
-import { useEffect, useRef } from "react";
 import { useStore } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
@@ -12,18 +11,10 @@ import { useI18n } from "@/lib/i18n";
 import { showUsagePerBotTable } from "@/lib/friends-chrome";
 import { botUsage, cachedInput, costCaption, formatTokens, formatUsd, hasFiniteCost, sumUsage, usageDetail } from "@/lib/usage";
 import { useAutoRefresh } from "@/lib/usage-auto-refresh";
-import { invalidateUsageBoard } from "@/lib/usage-board-client";
 
-// The stale-provider recheck stays; a report it brings back asks the board once for the new values.
+// The stale-provider recheck stays; a report it brings back bumps the board revision, and the live frame reads it.
 function PlanUsage() {
-  const { state } = useStore();
   useAutoRefresh();
-  const seen = useRef<string | null>(null);
-  const observed = state.instances.map((instance) => instance.rateLimits?.observedAt ?? "").join("|");
-  useEffect(() => {
-    if (seen.current !== null && seen.current !== observed) invalidateUsageBoard();
-    seen.current = observed;
-  }, [observed]);
   return <Card><UsageDesk /></Card>;
 }
 

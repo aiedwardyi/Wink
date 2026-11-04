@@ -135,11 +135,11 @@ describe("chartSeries", () => {
 
 describe("todayVsNormal", () => {
   const midnight = new Date(2026, 10, 4).getTime();
-  // Hourly coarse points from `days` days back, using `perHour` % each hour.
+  // Hourly coarse points from the hour before `days` days back, using `perHour` % each hour.
   function coarse(days: number, perHour: number[]): UsageBoardSample[] {
     const out: UsageBoardSample[] = [];
     let used = 0;
-    for (let at = midnight - days * 24 * HOUR; at <= NOW; at += HOUR) {
+    for (let at = midnight - days * 24 * HOUR - HOUR; at <= NOW; at += HOUR) {
       const dayIndex = Math.floor((at - (midnight - days * 24 * HOUR)) / (24 * HOUR));
       used += perHour[Math.min(dayIndex, perHour.length - 1)] ?? 0;
       out.push([at / MIN, null, used]);
@@ -151,6 +151,17 @@ describe("todayVsNormal", () => {
     const acct = account([week()], [], coarse(3, [1, 2, 3, 2]));
     // Today 15 h at 2 %/h = 30; earlier days 15, 30, 45: median 30.
     expect(todayVsNormal(acct, NOW)).toBeCloseTo(1, 5);
+  });
+
+  it("compares completed hours only, so a fresh hour does not read as quieter", () => {
+    // Constant use (0.1 % every 5 min), observed every 5 min; each hourly point holds the hour's latest reading.
+    const now = midnight + 65 * MIN;
+    const buckets = new Map<number, number>();
+    for (let at = midnight - 5 * 24 * HOUR; at <= now; at += 5 * MIN) {
+      buckets.set(Math.floor(at / HOUR) * HOUR, Math.round(((at - (midnight - 5 * 24 * HOUR)) / (5 * MIN)) * 0.1 * 10) / 10);
+    }
+    const samples: UsageBoardSample[] = [...buckets].map(([at, used]) => [at / MIN, null, used]);
+    expect(todayVsNormal(account([week()], [], samples), now)).toBeCloseTo(1, 5);
   });
 
   it("is omitted with fewer than three covered days", () => {
