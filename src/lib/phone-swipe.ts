@@ -1,12 +1,13 @@
+import { EASE_ENTRANCE, MOTION_LARGE_MS } from "./motion";
 import { SIDEBAR_INLINE_BREAKPOINT, type SidebarSide } from "./sidebar-preferences";
 
 export const SWIPE_SLOP = 10;
 export const SWIPE_EDGE = 24;
 export const SWIPE_DISTANCE = 0.3;
 export const SWIPE_VELOCITY = 0.4;
-export const SWIPE_MOTION_MS = 260;
-// critically damped spring: fast start, no overshoot
-export const SWIPE_SPRING = "cubic-bezier(0.22, 1, 0.36, 1)";
+// follow-through once a swipe lets go: the shared large move, slowing from the finger's speed
+export const SWIPE_MOTION_MS = MOTION_LARGE_MS;
+export const SWIPE_SPRING = EASE_ENTRANCE;
 export const VIBRATION_KEY = "omb-vibration";
 
 export type SwipeAxis = "x" | "y" | null;

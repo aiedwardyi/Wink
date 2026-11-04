@@ -4,11 +4,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { LIGHT_SKIN_IDS, SKINS, applySkin, nextSkin, type SkinId } from "@/lib/skins";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { SkinPicker } from "./SkinPicker";
 
 let root: Root;
 const featured = ["Wink", "Precision", "GitHub Dimmed", "Tokyo Night", "Kanagawa", "Terminal", "Wink Day", "Notebook"];
 const names = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].map((button) => button.textContent);
+// the extra themes fold away on the shared motion before they unmount
+const folded = () => act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
 
 async function mount(skin: SkinId = "precision", locale: "en" | "ko" = "en") {
   vi.stubGlobal("localStorage", window.localStorage);
@@ -42,6 +45,8 @@ describe("featured themes", () => {
     expect(names()).toHaveLength(SKINS.length);
     expect(new Set(names()).size).toBe(SKINS.length);
     await act(async () => more.click());
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    await folded();
     expect(names()).toEqual(featured);
   });
 
@@ -77,6 +82,7 @@ describe("featured themes", () => {
     expect(document.activeElement).toBe(servo);
     expect(servo.getAttribute("aria-pressed")).toBe("true");
     await act(async () => more.click());
+    await folded();
     expect(names()).toEqual([...featured.slice(0, 6), "Servo Gray", ...featured.slice(6)]);
   });
 

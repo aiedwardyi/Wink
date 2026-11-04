@@ -626,7 +626,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         aria-hidden
         data-phone-drawer-scrim
         onMouseDown={(e) => e.target === e.currentTarget && setDrawerOpen(false)}
-        className={`absolute inset-0 z-30 bg-black/50 transition-opacity duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none md:hidden ${drawerOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
+        className={`absolute inset-0 z-30 bg-black/50 transition-opacity duration-(--motion-large) ease-entrance motion-reduce:transition-none md:hidden ${drawerOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
       />
       <Sidebar
         open={drawerOpen}
@@ -682,11 +682,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           </LazyView>
         )}
       </Presence>
-      {state.inspectorOpen && bot && (
-        <LazyView overlay>
-          <InspectorPanel bot={bot} />
-        </LazyView>
-      )}
+      <Presence open={Boolean(state.inspectorOpen && bot)}>
+        {(closing) => bot && (
+          <LazyView overlay>
+            <InspectorPanel bot={bot} closing={closing} />
+          </LazyView>
+        )}
+      </Presence>
       <Presence open={state.appSettingsOpen}>
         {(closing) => (
           <LazyView overlay>

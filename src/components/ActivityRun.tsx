@@ -4,13 +4,14 @@
 // force it open so a hit is not stuck behind the fold. A failure shows as a
 // quiet cross beside the summary; the row itself never goes red.
 import { memo, useEffect, useState } from "react";
-import { Bot, ChevronRight, Check, FileText, Globe, Loader2, Pencil, Search, SquareTerminal, Wrench, X } from "lucide-react";
+import { Bot, ChevronDown, Check, FileText, Globe, Loader2, Pencil, Search, SquareTerminal, Wrench, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { classifyServerNotice, describeRun, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { APPROVAL_WORD, TERM_STEP_WORD, termBlock, termHeaderArgs, termResultLine, termStepAria, termStepState, termUpdatedLine, termVerb } from "@/lib/terminal-skin";
 import "./ActivityRun.css";
+import { Fold } from "./Fold";
 
 function StepStatus({ ok }: { ok: boolean | undefined }) {
   if (ok === undefined) return <Loader2 data-idle-hide size={13} className="shrink-0 animate-spin" />;
@@ -143,42 +144,43 @@ export function ActivityRun({
           {running && <span> · {t("task.running")}</span>}
           {failed && <span> · {t("workers.failed")}</span>}
         </button>
-        {open && children}
+        <Fold open={open}>
+          <div className="flex flex-col">{children}</div>
+        </Fold>
       </div>
     );
   }
-  if (open) {
-    return (
-      <div className="flex flex-col gap-1">
-        <div className="flex justify-start">
+  return (
+    <div className="flex flex-col">
+      <div className="flex justify-start">
+        {open ? (
           <button
             type="button"
             onClick={() => setOpen(false)}
             aria-expanded
             className="flex items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control focus-visible:bg-control"
           >
-            <ChevronRight size={13} className="rotate-90" />
+            <ChevronDown size={13} className="rotate-180" />
             <span>{describeRun(messages, t)}<span data-idle-hide={running ? "" : undefined}> ·</span></span>
             <StepStatus ok={running ? undefined : !failed} />
           </button>
-        </div>
-        {children}
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-expanded={false}
+            title={t("activity.showEveryStep")}
+            className="flex items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control focus-visible:bg-control"
+          >
+            <span className="max-w-[480px] truncate">{describeRun(messages, t)}<span data-idle-hide={running ? "" : undefined}> ·</span></span>
+            <StepStatus ok={running ? undefined : !failed} />
+            <ChevronDown size={13} />
+          </button>
+        )}
       </div>
-    );
-  }
-  return (
-    <div className="flex justify-start">
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-expanded={false}
-        title={t("activity.showEveryStep")}
-        className="flex items-center gap-2 rounded-lg border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-control focus-visible:bg-control"
-      >
-        <span className="max-w-[480px] truncate">{describeRun(messages, t)}<span data-idle-hide={running ? "" : undefined}> ·</span></span>
-        <StepStatus ok={running ? undefined : !failed} />
-        <ChevronRight size={13} />
-      </button>
+      <Fold open={open}>
+        <div className="flex flex-col gap-1 pt-1">{children}</div>
+      </Fold>
     </div>
   );
 }

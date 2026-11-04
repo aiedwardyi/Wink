@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRESENCE_EXIT_MS, Presence, usePresence } from "./use-presence";
 
 const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
+const motion = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../motion.css"), "utf8");
 
 let host: HTMLDivElement;
 let root: Root;
@@ -125,15 +126,16 @@ describe("usePresence", () => {
 
 describe("overlay motion styles", () => {
   it("fades a closing surface out over the hook's exit time without catching taps", () => {
-    const closing = css.match(/\[data-closing\] \{([^}]*)\}/)?.[1] ?? "";
-    expect(closing).toContain(`fade-out ${PRESENCE_EXIT_MS / 1000}s`);
+    const closing = motion.match(/\[data-closing\] \{([^}]*)\}/)?.[1] ?? "";
+    expect(closing).toContain("fade-out var(--motion-fast)");
+    expect(motion).toContain(`--motion-fast: ${PRESENCE_EXIT_MS}ms;`);
     expect(closing).toContain("forwards");
     expect(closing).toContain("pointer-events: none;");
   });
 
   it("enters pop, panel and fade surfaces on one timing and curve", () => {
-    const timings = ["panel-in", "pop-in", "fade-in"].map((name) => css.match(new RegExp(`--animate-${name}: ${name} ([^;]*);`))?.[1]);
-    expect(timings).toEqual(Array(3).fill("0.16s cubic-bezier(0.22, 1, 0.36, 1)"));
+    const timings = ["panel-in", "pop-in", "fade-in"].map((name) => motion.match(new RegExp(`--animate-${name}: ${name} ([^;]*);`))?.[1]);
+    expect(timings).toEqual(Array(3).fill("var(--motion-moderate) var(--ease-entrance)"));
   });
 
   it("drops the enter animations under reduced motion", () => {

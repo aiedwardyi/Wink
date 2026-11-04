@@ -303,7 +303,7 @@ export function ModelPickerControl({
           <><span className="max-md:hidden">{effortFull}</span><span className="md:hidden">{effortShort}</span></>
         )}</span>
       )}
-      <ChevronDown size={14} className={cn("shrink-0 text-ink-secondary", !contained && active && "@max-4xl/chathead:hidden")} />
+      <ChevronDown size={14} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180", !contained && active && "@max-4xl/chathead:hidden")} />
     </button>
   );
 

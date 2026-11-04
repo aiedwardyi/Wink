@@ -27,6 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { conversationPreview } from "@/lib/conversation-preview";
+import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import {
   moveSection,
   placeSection,
@@ -109,7 +110,7 @@ import { t, useI18n } from "@/lib/i18n";
 import { collapsedUnreadCount, formatCollapsedUnreadBadge, unreadConversationCount } from "@/lib/unread";
 
 // Effect-level easing: getComputedTiming().progress is then the eased edge position.
-const SIDEBAR_MOTION = { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
+const SIDEBAR_MOTION = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
 
 export { compactSidebarModelLabel } from "./SidebarConversations";
 
@@ -1446,7 +1447,7 @@ export function Sidebar({
         // desktop.
         "max-md:absolute max-md:inset-y-0 max-md:z-40",
         sidebarOnRight ? "max-md:right-0" : "max-md:left-0",
-        "max-md:will-change-transform max-md:transition-transform max-md:duration-[260ms] max-md:ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+        "max-md:will-change-transform max-md:transition-transform max-md:duration-(--motion-large) max-md:ease-entrance motion-reduce:transition-none",
         open
           ? "max-md:translate-x-0"
           : sidebarOnRight ? "max-md:translate-x-full" : "max-md:-translate-x-full",
