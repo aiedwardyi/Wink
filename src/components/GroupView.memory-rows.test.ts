@@ -7,6 +7,7 @@ import { StoreProvider, type Group, type Message } from "@/state/store";
 
 import { setFindCurrent } from "@/lib/chat-find";
 import { applyLocale } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { Transcript } from "./GroupView";
 
 const from = (botId: string) => ({ botId, name: botId, color: "blue" as const });
@@ -93,6 +94,9 @@ describe("GroupView memory rows", () => {
     expect(fold().getAttribute("aria-expanded")).toBe("true");
     expect(notes()).toEqual(["Memory updated: likes short replies", "Memory updated: lives in Seoul", "Memory updated: prefers dark mode"]);
     await act(async () => fold().click());
+    expect(fold().getAttribute("aria-expanded")).toBe("false");
+    // the notes fold away on the shared motion, then unmount
+    await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
     expect(notes()).toEqual([]);
   });
 
