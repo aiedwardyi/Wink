@@ -9,7 +9,7 @@ const DOTS = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 let brailleOk: boolean | undefined;
 /** Braille glyphs that render narrower or wider than the mono cell fall back to block glyphs. */
-function brailleFits(): boolean {
+export function brailleFits(): boolean {
   if (brailleOk !== undefined) return brailleOk;
   const context = typeof document === "undefined" ? null : document.createElement("canvas").getContext?.("2d");
   if (!context) return (brailleOk = true);

@@ -25,9 +25,9 @@ const HOUR = 60 * MIN;
 const ENGINE_NAME: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" };
 const ENGINE_DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "geminiAgent", muse: "museAgent" };
 const TONE_TEXT: Record<ChartTone, string> = { ok: "text-ink", warn: "text-warning", out: "text-danger" };
-const engineName = (engine: string) => ENGINE_NAME[engine] ?? engine;
+export const engineName = (engine: string) => ENGINE_NAME[engine] ?? engine;
 
-type Clock = { t: Translate; locale: string; now: number };
+export type Clock = { t: Translate; locale: string; now: number };
 
 function toneOf(window: UsageBoardWindow | undefined, verdict: Verdict | undefined): ChartTone {
   if (window && window.usedPercent >= 100) return "out";
@@ -37,14 +37,14 @@ function toneOf(window: UsageBoardWindow | undefined, verdict: Verdict | undefin
 function sameDay(a: number, b: number) {
   return new Date(a).toDateString() === new Date(b).toDateString();
 }
-function clockText(at: number, { locale, now }: Clock) {
+export function clockText(at: number, { locale, now }: Clock) {
   const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(at);
   return sameDay(at, now) ? time : `${new Intl.DateTimeFormat(locale, { weekday: "short" }).format(at)} ${time}`;
 }
 const fullText = (at: number, locale: string) =>
   new Intl.DateTimeFormat(locale, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }).format(at);
 
-function countdown(ms: number, t: Translate) {
+export function countdown(ms: number, t: Translate) {
   const seconds = Math.max(0, Math.ceil(ms / 1000));
   if (seconds < 3600) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   const minutes = Math.floor(seconds / 60);
@@ -53,7 +53,7 @@ function countdown(ms: number, t: Translate) {
   return days > 0 ? t("usage.desk.countDh", { days, hours }) : t("usage.desk.countHm", { hours, minutes: minutes % 60 });
 }
 
-function shortLabel(window: UsageBoardWindow, t: Translate) {
+export function shortLabel(window: UsageBoardWindow, t: Translate) {
   if (window.kind === "session") return t("usage.limits.sessionShort");
   if (window.windowMinutes === 10080 || (window.kind === "week" && window.windowMinutes === null)) return t("usage.limits.weeklyShort");
   return durationText(window.windowMinutes, t);
@@ -64,7 +64,7 @@ function durationText(minutes: number | null, t: Translate) {
 }
 
 /** Both tracked windows, binding first: `5h 34%` then `7d 59%`, or what the empty slot truly means. */
-function windowFacts(account: UsageBoardAccount, t: Translate) {
+export function windowFacts(account: UsageBoardAccount, t: Translate) {
   const { session, week } = splitWindows(account.windows);
   const binding = bindingWindow([session, week].filter((window): window is UsageBoardWindow => Boolean(window)))
     ?? bindingWindow(account.windows);
@@ -215,7 +215,7 @@ function Who({ account, runs, phone, t }: { account: UsageBoardAccount; runs: Us
 
 const SIGN_IN_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "accounts.signedOut", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
 
-function AccountRow({ engine, account, board, state, checked, phone, terminal, clock, reloadInstances }: {
+export function AccountRow({ engine, account, board, state, checked, phone, terminal, clock, reloadInstances }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
   phone: boolean; terminal: boolean; clock: Clock; reloadInstances: () => unknown;
 }) {
@@ -266,13 +266,15 @@ function AccountRow({ engine, account, board, state, checked, phone, terminal, c
   );
 }
 
-function Hero({ engine, account, accounts, select, terminal, phone, clock, instances }: {
+export function Hero({ engine, account, accounts, select, terminal, phone, clock, instances, foldChart = false }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; accounts: UsageBoardAccount[]; select: (id: string) => void;
-  terminal: boolean; phone: boolean; clock: Clock; instances: { instanceId: string; capabilities?: { rateLimits?: boolean } }[];
+  terminal: boolean; phone: boolean; clock: Clock; instances: { instanceId: string; capabilities?: { rateLimits?: boolean } }[]; foldChart?: boolean;
 }) {
   const { t } = clock;
   const ref = useRef<HTMLElement>(null);
   const [details, setDetails] = useState(false);
+  const [chartOpen, setChartOpen] = useState(!foldChart);
+  const chartId = useId();
   const detailsId = useId();
   const shown = useRef(account.id);
   useLayoutEffect(() => {
@@ -327,13 +329,17 @@ function Hero({ engine, account, accounts, select, terminal, phone, clock, insta
         {limited && <div className="mt-1 text-[12px] text-danger">
           {limitReset ? t("usage.limits.checkLimitResets", { time: t(limitReset.key, limitReset.vars) }) : t("usage.limits.checkLimit")}
         </div>}
-        <div className="mt-3">
+        {foldChart && <button type="button" data-chart-fold="" aria-expanded={chartOpen} aria-controls={chartId} onClick={() => setChartOpen(!chartOpen)}
+          className="mt-2 inline-flex h-7 items-center rounded-[3px] [corner-shape:bevel] px-1.5 text-[12px] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:h-11">
+          {t("usage.chat.chart")}
+        </button>}
+        <Fold open={chartOpen} id={chartId}><div className="mt-3">
           {series && series.segments.length > 0
             ? <UsageChart series={series} projection={projection} tone={tone} terminal={terminal} compact={phone}
               caption={t("usage.desk.quota")} topLeft={vsText && <span data-today-normal="">{vsText}</span>}
               finish={window?.resetsAt != null && window.resetsAt > clock.now ? clockText(window.resetsAt, clock) : undefined} />
             : <EmptyState>{t("usage.desk.noHistory")}</EmptyState>}
-        </div>
+        </div></Fold>
       </>}
       {account.windows.length > 0 && <>
         <button type="button" data-details="" aria-expanded={details} aria-controls={detailsId} onClick={() => setDetails(!details)}
