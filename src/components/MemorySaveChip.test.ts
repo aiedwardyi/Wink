@@ -3,9 +3,13 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { applyLocale } from "@/lib/i18n";
 import type { Message } from "@/state/store";
 
 import { MemorySaveChip, MemorySaveRun } from "./MemorySaveChip";
+
+const store = vi.hoisted(() => ({ dispatch: vi.fn() }));
+vi.mock("@/state/store", () => ({ useStore: () => store }));
 
 const NOW = 1_800_000_000_000;
 
@@ -38,12 +42,12 @@ describe("MemorySaveChip", () => {
     }
   });
 
-  it("draws the row flat", async () => {
+  it("keeps the tap target flat with rounded corners", async () => {
     const { host, root } = await renderChip(NOW - 60_000);
     try {
       const cls = new Set(host.querySelector("span")!.parentElement!.className.split(/\s+/));
       expect(cls.has("border-transparent")).toBe(true);
-      expect([...cls].filter((c) => /^(bg-|border-hairline|rounded-)/.test(c))).toEqual([]);
+      expect([...cls].filter((c) => /^(bg-|border-hairline)/.test(c))).toEqual([]);
     } finally {
       await act(async () => root.unmount());
     }
@@ -83,7 +87,7 @@ describe("MemorySaveRun", () => {
       expect(cls.has("border-transparent")).toBe(true);
       expect([...cls].filter((c) => /^(bg-|border-hairline|rounded-(full|2xl))/.test(c))).toEqual([]);
       expect(button.textContent).toBe("Memory updated · 2 notes");
-      expect(button.querySelector("svg.text-success")).not.toBeNull();
+      expect(button.querySelector("svg.lucide-brain")).not.toBeNull();
     } finally {
       await act(async () => root.unmount());
     }
@@ -116,5 +120,51 @@ describe("MemorySaveRun", () => {
     } finally {
       await act(async () => root.unmount());
     }
+  });
+});
+
+let root: ReturnType<typeof createRoot>;
+let host: HTMLDivElement;
+afterEach(async () => {
+  await act(async () => root?.unmount());
+  host?.remove();
+  applyLocale("en");
+  vi.clearAllMocks();
+});
+async function mount(props: Parameters<typeof MemorySaveChip>[0]) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => root.render(createElement(MemorySaveChip, props)));
+}
+
+describe("memory chip", () => {
+  it("uses a muted brain and dispatches the line matching its summary", async () => {
+    await mount({ summary: "Lives in Seoul", at: 1, lines: ["- Other", "- Lives in Seoul (noted 2026-11-04)"] });
+    expect(host.querySelector(".lucide-brain")).not.toBeNull();
+    expect(host.querySelector(".lucide-check, .text-success")).toBeNull();
+    const button = host.querySelector("button")!;
+    expect(button.type).toBe("button");
+    await act(async () => button.click());
+    expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "- Lives in Seoul (noted 2026-11-04)" } });
+  });
+  it("falls back to the first line or an older summary", async () => {
+    await mount({ summary: "Old...", at: 1 });
+    await act(async () => host.querySelector("button")!.click());
+    expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "Old..." } });
+  });
+  it("keeps a room chip inert", async () => {
+    await mount({ summary: "Room note", at: 1, room: true });
+    expect(host.querySelector("button")).toBeNull();
+    expect(host.querySelector(".lucide-brain")).not.toBeNull();
+    expect(store.dispatch).not.toHaveBeenCalled();
+  });
+  it("uses the brain on a folded run and buttons inside it", async () => {
+    await mount({ summary: "One", at: 1 });
+    const messages = [1, 2].map((at) => ({ id: String(at), at, role: "bot" as const, kind: "activity" as const }));
+    await act(async () => root.render(createElement(MemorySaveRun, { messages, forceOpen: true, children: createElement(MemorySaveChip, { summary: "One", at: 1 }) })));
+    expect(host.querySelectorAll("button")).toHaveLength(2);
+    expect(host.querySelectorAll(".lucide-brain")).toHaveLength(2);
   });
 });

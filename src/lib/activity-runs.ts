@@ -229,7 +229,7 @@ function isWorkStep(message: Message): boolean {
 }
 
 function isMemorySave(message: Message): boolean {
-  return message.kind === "activity" && message.tool?.name === "memory.save" && message.tool.ok !== false;
+  return message.kind === "activity" && message.tool?.name === "memory.save" && message.tool.ok !== false && !message.tool.tidy;
 }
 
 /** One bot's stretch within one day; a fold never spans two. */

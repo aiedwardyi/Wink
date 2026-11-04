@@ -1,4 +1,4 @@
-import { Brain, ChevronLeft, FolderOpen, Settings, X } from "lucide-react";
+import { ChevronLeft, FolderOpen, Settings, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
@@ -24,7 +24,12 @@ import { shortPath } from "@/lib/short-path";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryTask, NotedLines, notedLines } from "./MemoryGroups";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryTask, NotedLines } from "./MemoryGroups";
+import { MemoryCleanRow } from "./MemoryCleanRow";
+import { MemoryCleanIcon } from "./MemoryCleanMotion";
+import { useMemoryClean } from "@/lib/memory-clean";
+import { recentLines, memoryTargetLine } from "@/lib/memory-recent";
+import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 
@@ -231,9 +236,11 @@ const formatBytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.ro
  * what the bot believes. Fetched on expand, not on mount: settings opens for
  * every bot and most visits never look at memory — and an expand also
  * re-reads, so notes the bot wrote mid-session show up on the next open. */
-function MemoryCard({ bot }: { bot: Bot }) {
+function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
+  const { run, undo } = useMemoryClean(bot.id, bot.messages, active);
+  const target = active ? state.settingsMemoryTarget : null;
   const autoNotes = memoryNotesEnabled(state.config, bot);
   const [botId] = useState(bot.id);
   const [loading, setLoading] = useState(true);
@@ -284,6 +291,20 @@ function MemoryCard({ bot }: { bot: Bot }) {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!active) return;
+    return watchMemoryArrival(botId, () => { void refresh(); });
+  }, [active, botId]);
+  useEffect(() => {
+    if (!active || loading || !target) return;
+    if ("line" in target.target && memoryTargetLine(text, target.target.line, bot.messages)) return;
+    if ("cleanup" in target.target && run) return;
+    fileRow.current?.closest(".overflow-y-auto")?.scrollTo({ top: 0, behavior: "instant" });
+  }, [active, loading, target?.nonce, text, run]);
+
+  const tidyRows = bot.messages.filter((message) => message.tool?.tidy).map((message) => `${message.id}:${message.tool!.tidy!.undoneAt ?? ""}`).join("|");
+  useEffect(() => { if (active) void refresh(); }, [active, tidyRows]);
 
   // start from the newest memory, so a conflict means a real simultaneous edit
   const refresh = async () => {
@@ -384,8 +405,8 @@ function MemoryCard({ bot }: { bot: Bot }) {
       {empty && <MemoryEmpty />}
       <div className="overflow-hidden rounded-xl bg-card">
         <MemoryGroup>
-          <NotedLines text={text} />
-          <div className={cn("flex items-center justify-between gap-4", notedLines(text).length > 0 && "mt-3")}>
+          <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} />
+          <div className={cn("flex items-center justify-between gap-4", recentLines(text, bot.messages).length > 0 && "mt-3")}>
             <div className="min-w-0">
               <div className="text-[14px] font-medium text-ink">{t("settings.memoryNotes.toggle")}</div>
               <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.memoryNotes.help")}</div>
@@ -403,6 +424,7 @@ function MemoryCard({ bot }: { bot: Bot }) {
         </MemoryGroup>
         <MemoryTask bot={bot} />
         <MemoryFile ref={fileRow} text={text} topics={topics.length} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
+          {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} />}
           {expanded && (
             <div className="px-4 pb-4">
               <div className="mb-3 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("bot.memoryThisBotHelp")}</div>
@@ -520,7 +542,14 @@ export function SettingsPanel({
   const keepGoingRequest = state.settingsKeepGoingRequest ?? 0;
   // a new Agentic Mode request (the chat header mark) lands on its row in Settings
   const [memoryAt, setMemoryAt] = useState<number | null>(null);
-  const memoryTab = memoryAt === keepGoingRequest;
+  const memoryRequest = state.settingsMemoryTarget?.nonce ?? 0;
+  const [seenMemoryRequest, setSeenMemoryRequest] = useState(memoryRequest);
+  const memoryTab = memoryAt === keepGoingRequest || memoryRequest !== seenMemoryRequest;
+  useEffect(() => {
+    if (!memoryRequest) return;
+    setMemoryAt(keepGoingRequest);
+    setSeenMemoryRequest(memoryRequest);
+  }, [memoryRequest, keepGoingRequest]);
   const showTab = (memory: boolean) => {
     if (memory === memoryTab) return;
     setMemoryAt(memory ? keepGoingRequest : null);
@@ -640,7 +669,7 @@ export function SettingsPanel({
               memoryTab === memory ? "bg-control text-ink" : "text-ink-secondary hover:text-ink",
             )}
           >
-            {memory ? <Brain size={15} aria-hidden="true" /> : <Settings size={15} aria-hidden="true" />}
+            {memory ? <MemoryCleanIcon botId={bot.id} active={memoryTab} /> : <Settings size={15} aria-hidden="true" />}
             {memory ? t("bot.memory") : t("bot.settingsTab")}
           </button>
         ))}
@@ -823,7 +852,7 @@ export function SettingsPanel({
 
         </div>
         <div hidden={!memoryTab} className="pt-4">
-          <MemoryCard key={bot.id} bot={bot} />
+          <MemoryCard key={bot.id} bot={bot} active={memoryTab} />
         </div>
       </div>
     </aside>

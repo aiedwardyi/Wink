@@ -1,8 +1,12 @@
-import type { ReactNode, Ref } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Brain, ChevronDown } from "lucide-react";
-import type { Bot } from "@/state/store";
+import type { AppState, Bot, Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
+
+import { memoryLineText, memoryTargetLine, recentLines } from "@/lib/memory-recent";
+import { watchMemoryArrival } from "@/lib/memory-clean-events";
+import { MemoryCleanTint, reducedMemoryMotion } from "./MemoryCleanMotion";
 
 // the stamp memory-pass.ts appendNotes puts on every Auto notes line
 const NOTED = /^\s*[-*+]\s+(.+?)\s+\(noted (\d{4})-(\d{2})-(\d{2})\)\s*$/;
@@ -59,21 +63,42 @@ export function MemoryFile({ text, topics, loading, open, onToggle, ref, childre
   );
 }
 
-export function NotedLines({ text }: { text: string }) {
+function RecentLine({ line, day, nonce, fresh }: { line: ReturnType<typeof recentLines>[number]; day: Intl.DateTimeFormat; nonce?: number; fresh: boolean }) {
+  const row = useRef<HTMLLIElement>(null);
+  const [arrived, setArrived] = useState(false);
+  useEffect(() => { setArrived(fresh && !reducedMemoryMotion()); }, [fresh]);
+  return (
+    <li ref={row} className={`mc-target flex items-baseline justify-between gap-3 text-[13px] text-ink${arrived ? " mc-in" : ""}`} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setArrived(false); }}>
+      {nonce !== undefined && <MemoryCleanTint key={nonce} nonce={nonce} row={row} />}
+      <span className="min-w-0 break-keep break-words">{line.fact}</span>
+      <span className="shrink-0 text-[11.5px] text-ink-secondary">{day.format(line.at)}</span>
+    </li>
+  );
+}
+
+export function NotedLines({ text, messages = [], target, botId, active = true }: { text: string; messages?: Message[]; target?: AppState["settingsMemoryTarget"]; botId?: string; active?: boolean }) {
   const { t, locale } = useI18n();
-  const lines = notedLines(text);
+  const lines = recentLines(text, messages);
+  const [fresh, setFresh] = useState<string[]>([]);
+  const known = useRef(new Set<string>());
+  known.current = new Set(lines.map((line) => line.line));
+  useEffect(() => {
+    if (!botId || !active) { setFresh([]); return; }
+    return watchMemoryArrival(botId, (message) => {
+      if (reducedMemoryMotion() || message.tool?.tidy) return;
+      const incoming = (message.tool?.lines ?? [message.tool?.spoken ?? ""]).filter((saved) => ![...known.current].some((line) => line === saved.trimEnd() || memoryLineText(line).startsWith(saved.replace(/\.\.\.$/, "").trim())));
+      setFresh((previous) => [...previous, ...incoming]);
+    });
+  }, [botId, active]);
+  const targetLine = target && "line" in target.target ? memoryTargetLine(text, target.target.line, messages) : undefined;
+  const shown = Math.max(SHOWN, lines.findIndex((line) => line.line === targetLine) + 1);
   if (!lines.length) return null;
   const day = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" });
   return (
     <ul className="mt-2 flex flex-col gap-1.5">
-      {lines.slice(0, SHOWN).map((line, index) => (
-        <li key={index} className="flex items-baseline justify-between gap-3 text-[13px] text-ink">
-          <span className="min-w-0 break-words">{line.fact}</span>
-          <span className="shrink-0 text-[11.5px] text-ink-secondary">{day.format(line.at)}</span>
-        </li>
-      ))}
-      {lines.length > SHOWN && (
-        <li className="text-[12px] text-ink-secondary">{t("bot.memoryMore", { count: lines.length - SHOWN })}</li>
+      {lines.slice(0, shown).map((line) => <RecentLine key={line.line} line={line} day={day} nonce={line.line === targetLine ? target?.nonce : undefined} fresh={fresh.some((saved) => memoryTargetLine(text, saved) === line.line)} />)}
+      {lines.length > shown && (
+        <li className="text-[12px] text-ink-secondary">{t("bot.memoryMore", { count: lines.length - shown })}</li>
       )}
     </ul>
   );

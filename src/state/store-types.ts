@@ -79,6 +79,8 @@ export interface Message {
     verb?: string;
     ok?: boolean;
     spoken?: string;
+    lines?: string[];
+    tidy?: { runId: string; undoneAt?: number };
     summary?: string;
     durationMs?: number;
     detail?: ToolDetail;
@@ -462,6 +464,8 @@ export interface AppState {
   settingsAvatarRequest: number;
   /** Bumps when the chat header's keep going mark asks bot details to show that switch. */
   settingsKeepGoingRequest: number;
+  settingsMemoryTarget: { target: MemoryTarget; nonce: number } | null;
+  settingsMemoryNonce: number;
   pluginsOpen: boolean;
   /** the per-thread event inspector (runtime stream + native protocol tee) */
   inspectorOpen: boolean;
@@ -520,6 +524,8 @@ interface QueueReceiptSnapshot {
 }
 
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
+
+export type MemoryTarget = { line: string } | { cleanup: true };
 
 export type Action =
   | {
@@ -649,7 +655,7 @@ export type Action =
   | { type: "stopReleased"; botId: string; until: number }
   | { type: "connected"; value: boolean }
   | { type: "error"; message: string | null }
-  | { type: "toggleSettings"; open?: boolean; avatar?: boolean; keepGoing?: boolean }
+  | { type: "toggleSettings"; open?: boolean; avatar?: boolean; keepGoing?: boolean; memory?: MemoryTarget }
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleInspector"; open?: boolean }
   | { type: "setWorkspaceOpen"; open: boolean }

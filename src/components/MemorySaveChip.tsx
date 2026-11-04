@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Check, ChevronRight, Loader2 } from "lucide-react";
+import { Brain, ChevronRight, Loader2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import type { Message } from "@/state/store";
+import { useStore, type Message } from "@/state/store";
+import { memorySaveTarget } from "@/lib/memory-recent";
 
 const FLICKER_MS = 700;
 
@@ -22,17 +23,19 @@ function useSaved(at: number): boolean {
 
 const ROW = "flex min-w-0 max-w-full items-center gap-2 border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary";
 
-export function MemorySaveChip({ summary, at }: { summary: string; at: number }) {
+export function MemorySaveChip({ summary, at, lines, room = false }: { summary: string; at: number; lines?: string[]; room?: boolean }) {
+  const { dispatch } = useStore();
+  const Tag = room ? "div" : "button";
   const { t } = useI18n();
   const saved = useSaved(at);
   return (
     <div className="flex justify-start">
-      <div className={ROW}>
-        {saved ? <Check size={13} className="shrink-0 text-success" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
+      <Tag type={room ? undefined : "button"} onClick={room ? undefined : () => dispatch({ type: "toggleSettings", open: true, memory: { line: memorySaveTarget(summary, lines) } })} className={room ? ROW : `${ROW} rounded-lg hover:bg-control focus-visible:bg-control active:bg-control`}>
+        {saved ? <Brain size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
         <span className="min-w-0 max-w-[480px] truncate">
           {saved ? t("chat.savedMemory", { summary }) : t("chat.savingMemory")}
         </span>
-      </div>
+      </Tag>
     </div>
   );
 }
@@ -52,9 +55,9 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
           type="button"
           onClick={() => setOpen(!open)}
           aria-expanded={open}
-          className={`${ROW} rounded-lg hover:bg-control focus-visible:bg-control`}
+          className={`${ROW} rounded-lg hover:bg-control focus-visible:bg-control active:bg-control`}
         >
-          {saved ? <Check size={13} className="shrink-0 text-success" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
+          {saved ? <Brain size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
           <span className="min-w-0 max-w-[480px] truncate">
             {saved ? t("chat.savedMemoryMany", { count: messages.length }) : t("chat.savingMemory")}
           </span>
