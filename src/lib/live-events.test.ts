@@ -10,6 +10,9 @@ import {
   type LiveEventsPlatform,
 } from "./live-events";
 
+const { firstStreamId, noteSse } = vi.hoisted(() => ({ firstStreamId: vi.fn(), noteSse: vi.fn() }));
+vi.mock("./cold-open-timing", async (importOriginal) => ({ ...(await importOriginal<object>()), firstStreamId, noteSse }));
+
 class FakeTarget {
   private readonly listeners = new Map<string, Set<(event?: unknown) => void>>();
 
@@ -89,7 +92,10 @@ function harness(options?: { online?: boolean; visible?: boolean; now?: number }
   };
 }
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+  noteSse.mockClear();
+});
 afterEach(() => vi.useRealTimers());
 
 describe("live events URL", () => {
@@ -101,10 +107,24 @@ describe("live events URL", () => {
       "/api/events?since=ab12cd34%3A9&screens=off",
     );
     expect(liveEventsUrl({ screens: false })).toBe("/api/events?screens=off");
+    expect(liveEventsUrl({ coldOpen: "0123456789abcdef" })).toBe("/api/events?coldOpen=0123456789abcdef");
   });
 });
 
 describe("live events supervisor", () => {
+  it("tells the cold-open timing about the first stream only", () => {
+    const test = harness();
+    firstStreamId.mockReturnValueOnce("0123456789abcdef");
+    const stop = openLiveEvents({ onFrame: vi.fn(), onSnapshotRequired: async () => true }, test.platform);
+    expect(test.sources[0].url).toBe("/api/events?coldOpen=0123456789abcdef");
+    test.sources[0].error();
+    vi.advanceTimersByTime(500);
+    expect(test.sources[1].url).toBe("/api/events");
+    test.sources[1].open();
+    expect(noteSse.mock.calls).toEqual([["created"], ["error"], ["created"], ["open"]]);
+    stop();
+  });
+
   it("uses data pings as liveness without forwarding them", () => {
     const test = harness();
     const onFrame = vi.fn();

@@ -40,7 +40,7 @@ import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
 import { Presence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
-import { markColdOpen, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
+import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
 import { useMonoHud } from "@/lib/use-mono-hud";
 
@@ -402,6 +402,8 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const shownThread = state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
   // No deps: a warm tap onto the chat already on screen changes nothing here but still needs its paint time.
   useEffect(() => noteChatShown(shownThread));
+  const cachedThread = !state.hydrated && shown?.messages?.length ? shown.threadId : undefined;
+  useEffect(() => noteCacheShown(cachedThread));
 
   const taskbarBusy = state.bots.some((candidate) => candidate.busy);
   useEffect(() => {
