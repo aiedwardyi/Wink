@@ -2,6 +2,16 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.233] - 2026-11-05
+
+### Changed
+- Bots know which account each of their workers runs on, shown as a number (Claude 1, Claude 2) or your nickname.
+- After you change an engine's Main account, bots with workers on that engine get one short note naming the workers still on the old account.
+
+### Fixed
+- Workers on a newly signed-in Claude account no longer stop at Claude's first-run screens.
+- A Claude worker waiting on a long background command no longer gets a stall alert every 30 minutes; the first comes after 2 hours.
+
 ## [1.0.231] - 2026-11-05
 
 ### Added
@@ -592,6 +602,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.233]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.233
 [1.0.231]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.231
 [1.0.230]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.230
 [1.0.229]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.229
