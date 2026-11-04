@@ -4513,6 +4513,7 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 }
 
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
+  await startupTiming.waitFor("accounts").catch(() => {});
   const epoch = currentTurnEpoch(botId);
   // Sends queued before this claim belong to drain, not to this turn's folds.
   const claimMark = queueMark();
@@ -8043,7 +8044,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/instances") {
-      await startupTiming.waitFor("probes");
+      await startupTiming.waitFor("accounts").catch(() => {});
       // A plain GET runs on every page load, so it answers from the last probe:
       // one CLI launch on Windows can stall the whole server for ~5 s.
       // ?refresh=1 re-probes for a CLI installed or signed in since;

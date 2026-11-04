@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createStartupTiming } from "./startup-timing.ts";
@@ -53,7 +54,16 @@ describe("startup timing", () => {
     startup.afterPaint("accounts", async () => { throw new Error("failed"); });
     startup.serving();
     startup.paint();
-    await expect(startup.waitFor("accounts")).rejects.toThrow("failed");
+    const action = vi.fn();
+    const probes = vi.fn(async () => {});
+    startup.afterPaint("probes", async () => { await startup.waitFor("accounts"); await probes(); });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await startup.beforeRequest("POST", "/api/bots/b1/send")!.then(action);
+      await expect(startup.waitFor("accounts")).resolves.toBeUndefined();
+    }
+    await startup.waitFor("probes");
+    expect(action).toHaveBeenCalledTimes(3);
+    expect(probes).toHaveBeenCalledOnce();
     expect(JSON.parse(write.mock.calls[0][0].slice(8))).toMatchObject({ errors: 1 });
     log.mockRestore();
   });
@@ -89,6 +99,19 @@ describe("startup timing", () => {
     expect(JSON.parse(write.mock.calls[0][0].slice(8))).toMatchObject({ closed: 1 });
   });
 
+  it("logs shutdown before serving without recording skipped task durations", async () => {
+    const write = vi.fn();
+    const work = vi.fn(async () => {});
+    const startup = createStartupTiming({ write });
+    startup.afterPaint("accounts", work);
+    startup.close();
+    await startup.waitFor("accounts");
+    expect(write).toHaveBeenCalledOnce();
+    expect(JSON.parse(write.mock.calls[0][0].slice(8))).toMatchObject({ closed: 1 });
+    expect(JSON.parse(write.mock.calls[0][0].slice(8))).not.toHaveProperty("accounts");
+    expect(work).not.toHaveBeenCalled();
+  });
+
   it("logs pending work once when shutdown interrupts a slow probe", async () => {
     const write = vi.fn();
     let release!: () => void;
@@ -108,7 +131,7 @@ describe("startup timing", () => {
   });
 
   it("keeps the HTTP boot path independent of account probe completion", async () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const statement = source.split("\n").find((line) => line.startsWith("if (accounts.snapshot.length") && line.includes("accountRuntime.restore"));
     expect(statement).toBeTruthy();
     let release!: () => void;
@@ -137,7 +160,7 @@ describe("startup timing", () => {
   });
 
   it("waits for paint instead of racing it with the boot probe timer", async () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const start = source.search(/(?:startupTiming.afterPaint\("probes"|void serverServing.then\(\(\) => setTimeout)/);
     const statement = source.slice(start, source.indexOf("hostShutdown =", start));
     const schedule = vi.fn(() => ({ unref() {} }));
@@ -158,41 +181,70 @@ describe("startup timing", () => {
   });
 
   it("does not await the native worker bridge before installing HTTP handlers", async () => {
-    const text = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const source = text.slice(0, text.indexOf("function agentsIntegration"));
-    const start = source.indexOf("if (accounts.snapshot.length) await enableWorkerAccounts");
-    const statement = start < 0 ? "" : source.slice(start);
+    const text = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const source = ts.createSourceFile("index.ts", text, ts.ScriptTarget.Latest, true);
+    const statement = source.statements.filter((node) => (ts.isIfStatement(node) || ts.isExpressionStatement(node)) && /(?:enableWorkerAccounts|restoreStartupAccounts)\(/.test(node.getText(source))).map((node) => node.getText(source)).join("\n");
+    expect(statement).toBeTruthy();
     let release!: () => void;
     const enableWorkerAccounts = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const restore = vi.fn(async () => {});
+    const startupTiming = createStartupTiming({ write: () => {} });
     let ready = false;
     const boot = runInNewContext(`(async () => { ${statement}; ready(); })()`, {
-      accounts: { snapshot: [{}] }, terminalBridgeAccess: null, enableWorkerAccounts, console,
+      accounts: { snapshot: [{}], drains: {} }, terminalBridgeAccess: null, startupTiming,
+      enableWorkerAccounts, console,
+      accountRuntime: { restore }, restoreStartupAccounts: async () => { await enableWorkerAccounts(); await restore(); },
       ready: () => { ready = true; },
     }) as Promise<void>;
     try {
       await Promise.resolve();
       expect(ready).toBe(true);
       expect(enableWorkerAccounts).not.toHaveBeenCalled();
+      startupTiming.paint();
+      await Promise.resolve();
+      expect(enableWorkerAccounts).toHaveBeenCalledOnce();
+      expect(restore).not.toHaveBeenCalled();
     } finally {
       release?.();
       await boot;
+      await startupTiming.waitFor("accounts");
     }
+    expect(restore).toHaveBeenCalledOnce();
   });
 
   it("keeps worker launch behind account recovery", async () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const route = source.slice(source.indexOf('path === "/api/internal/worker-launch"'));
-    const wait = route.indexOf('await startupTiming.waitFor("accounts")');
-    expect(wait).toBeGreaterThan(0);
-    expect(wait).toBeLessThan(route.indexOf("await workerLaunchResponse"));
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const start = source.indexOf('if (method === "POST" && path === "/api/internal/worker-launch")');
+    const route = source.slice(start, source.indexOf("// The show_image tool", start));
+    let release!: () => void;
+    const startupTiming = createStartupTiming({ write: () => {} });
+    startupTiming.afterPaint("accounts", () => new Promise<void>((resolve) => { release = resolve; }));
+    const workerLaunchResponse = vi.fn(async () => ({ status: 200, body: {} }));
+    const pending = runInNewContext(`(async () => { ${route} })()`, {
+      method: "POST", path: "/api/internal/worker-launch", startupTiming, workerLaunchResponse,
+      terminalBridgeAccess: null, req: { headers: {} }, readBody: async () => ({}), workerLaunch: {}, res: {}, json() {},
+    }) as Promise<void>;
+    expect(workerLaunchResponse).not.toHaveBeenCalled();
+    startupTiming.paint();
+    await Promise.resolve();
+    expect(workerLaunchResponse).not.toHaveBeenCalled();
+    release();
+    await pending;
+    expect(workerLaunchResponse).toHaveBeenCalledOnce();
   });
 
-  it("keeps renderer instance discovery behind the startup probes", async () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  it.each(["none", "restored", "failed"])("answers instance discovery after accounts settle without waiting for refresh: %s", async (accounts) => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const start = source.indexOf('if (method === "GET" && path === "/api/instances")');
     const statement = source.slice(start, source.indexOf("// ── app config", start));
     let release!: () => void;
+    let restore!: () => void;
     const startupTiming = createStartupTiming({ write: () => {} });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    if (accounts !== "none") startupTiming.afterPaint("accounts", async () => {
+      await new Promise<void>((resolve) => { restore = resolve; });
+      if (accounts === "failed") throw new Error("restore failed");
+    });
     startupTiming.afterPaint("probes", () => new Promise<void>((resolve) => { release = resolve; }));
     const describeInstances = vi.fn(async () => []);
     const pending = runInNewContext(`(async () => { ${statement} })()`, {
@@ -202,14 +254,55 @@ describe("startup timing", () => {
       botAccounts: { pickerInstances: (value: unknown) => value, accountInstances: (value: unknown) => value },
     }) as Promise<void>;
     try {
-      await Promise.resolve();
-      expect(describeInstances).not.toHaveBeenCalled();
+      await new Promise(setImmediate);
+      if (accounts === "none") expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
+      else expect(describeInstances).not.toHaveBeenCalled();
       startupTiming.paint();
       await Promise.resolve();
+      if (accounts !== "none") {
+        expect(describeInstances).not.toHaveBeenCalled();
+        restore();
+      }
+      await new Promise(setImmediate);
+      expect(describeInstances).toHaveBeenCalledExactlyOnceWith("cached");
+      await pending;
     } finally {
+      startupTiming.paint();
+      await Promise.resolve();
+      restore?.();
       release?.();
       await pending;
+      log.mockRestore();
     }
     expect(describeInstances).toHaveBeenCalledOnce();
+  });
+
+  it.each([{}, { paneNoteWake: true }])("holds an internal turn claim until account restore completes: %j", async (opts) => {
+    const text = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const source = ts.createSourceFile("index.ts", text, ts.ScriptTarget.Latest, true);
+    const turn = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "startTurn")!;
+    const start = text.indexOf("async function startClaimedTurn(");
+    const body = text.slice(text.indexOf("{\n", start) + 2, text.indexOf("  const epoch =", start));
+    const startupTiming = createStartupTiming({ write: () => {} });
+    let release!: () => void;
+    startupTiming.afterPaint("accounts", () => new Promise<void>((resolve) => { release = resolve; }));
+    const dispatch = vi.fn();
+    const claims = new Set<string>();
+    const startTurn = runInNewContext(`${ts.transpile(turn.getText(source), { target: ts.ScriptTarget.ES2022 })}
+      async function startClaimedTurn(botId, text, opts) { ${body} dispatch(botId, text, opts); } startTurn`, {
+      startupTiming, dispatch, store: { bot: () => ({ threadId: "t1" }) }, turnStartClaims: claims,
+      tryClaimTurnStart: (id: string) => { if (claims.has(id)) return false; claims.add(id); return true; },
+      busyRejection: (message: string) => new Error(message), queueMicrotask() {},
+    }) as (botId: string, text: string, opts: object) => Promise<void>;
+    const pending = startTurn("b1", "queued", opts);
+    expect(dispatch).not.toHaveBeenCalled();
+    await expect(startTurn("b1", "duplicate", opts)).rejects.toThrow("already working");
+    startupTiming.paint();
+    await Promise.resolve();
+    expect(dispatch).not.toHaveBeenCalled();
+    release();
+    await pending;
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith("b1", "queued", opts);
+    expect(claims.size).toBe(0);
   });
 });

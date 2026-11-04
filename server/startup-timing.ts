@@ -19,7 +19,7 @@ export function createStartupTiming(options: {
   let errors = 0;
 
   const finish = (force = false) => {
-    if (!serving || !released || (!force && pending) || logged) return;
+    if ((!serving && !force) || !released || (!force && pending) || logged) return;
     logged = true;
     const values = Object.fromEntries(Object.entries({ ...spans, ...(pending ? { pending, closedAt: now() } : { checksReady: now() }), errors })
       .filter(([, value]) => Number.isFinite(value))
@@ -72,11 +72,11 @@ export function createStartupTiming(options: {
       void task.catch(() => console.error(`startup task failed: ${name}`));
     },
     waitFor(name: string): Promise<unknown> {
-      return tasks.get(name) ?? Promise.resolve();
+      return tasks.get(name)?.then(() => {}, () => {}) ?? Promise.resolve();
     },
     beforeRequest(method: string, path: string): Promise<unknown> | undefined {
       if (["GET", "HEAD", "OPTIONS"].includes(method) || ["/api/diag/cold-open", "/api/internal/google-account", "/api/internal/terminal-bridge"].includes(path)) return;
-      return tasks.get("accounts");
+      return tasks.get("accounts")?.then(() => {}, () => {});
     },
     close(): void {
       closed = true;

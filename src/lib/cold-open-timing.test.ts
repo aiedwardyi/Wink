@@ -82,6 +82,29 @@ afterEach(() => {
 });
 
 describe("cold-open timing", () => {
+  it("starts desktop paint reporting through the browser entry point", async () => {
+    vi.resetModules();
+    const timing = await import("./cold-open-timing");
+    const fetch = vi.fn(async (_url: string, _init: RequestInit) => ({}));
+    class Navigation { type = "navigate"; }
+    vi.stubGlobal("window", { ogb: {}, location: { href: "http://localhost/" }, matchMedia: () => ({ matches: false }) });
+    vi.stubGlobal("document", { visibilityState: "visible", querySelector: () => null });
+    vi.stubGlobal("navigator", { userAgent: "desktop fixture" });
+    vi.stubGlobal("PerformanceNavigationTiming", Navigation);
+    vi.stubGlobal("performance", { timeOrigin: ORIGIN, now: () => 100, getEntriesByType: (type: string) => type === "navigation" ? [new Navigation()] : [] });
+    vi.stubGlobal("requestAnimationFrame", (done: () => void) => done());
+    vi.stubGlobal("fetch", fetch);
+    try {
+      timing.startColdOpenTiming();
+      timing.noteChatShown("t1");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(fetch.mock.calls[0][1].body))).toMatchObject({ desktop: true, chatPaint: 100 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("identifies a desktop's first hydrated chat", () => {
     const fake = fakePage("http://127.0.0.1:8799/");
     const timing = createColdOpenTiming({ ...fake.page, desktop: true });

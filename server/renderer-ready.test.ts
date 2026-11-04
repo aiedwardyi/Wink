@@ -10,7 +10,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("renderer startup", () => {
   it("leaves health and the first HTML response ahead of the fat import", async () => {
-    const source = readFileSync(new URL("./packaged-boot.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./packaged-boot.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const statement = source.split("\n").find((line) => line.startsWith('await startupTiming.track("firstPage"')) ?? "";
     const server = new EventEmitter() as Server;
     const response = new EventEmitter() as ServerResponse;
