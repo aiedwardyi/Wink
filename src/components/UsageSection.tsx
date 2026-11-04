@@ -44,10 +44,21 @@ function windowRank(id: string, windowMinutes?: number): number {
   return kind === "session" ? 0 : kind === "weekly" ? 1 : 2;
 }
 
+function windowSlotId(window: RateLimitWindow, driverKind: string): string {
+  if (driverKind === "codex") {
+    if (window.id === "primary" && (window.windowMinutes === undefined || window.windowMinutes === 300)) return "five_hour";
+    if (window.id === "secondary" && (window.windowMinutes === undefined || window.windowMinutes === 10080)) return "seven_day";
+  }
+  return window.id;
+}
+
 // Side-by-side accounts get a row for every window any of them reports, so their columns line up.
 function windowSlots(accounts: UsageAccount[]): RateLimitWindow[] {
   const slots = new Map<string, RateLimitWindow>();
-  for (const window of accounts.flatMap((account) => account.rateLimits?.windows ?? [])) if (!slots.has(window.id)) slots.set(window.id, window);
+  for (const account of accounts) for (const window of account.rateLimits?.windows ?? []) {
+    const id = windowSlotId(window, account.driverKind);
+    if (!slots.has(id)) slots.set(id, window);
+  }
   if (["claudeAgent", "codex"].includes(accounts[0]!.driverKind)
     && [...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === "weekly")
     && ![...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === "session")) {
@@ -116,7 +127,8 @@ function EnginePlanRow({
   // A reading older than an hour says so under the rows: engines like Muse
   // only report what their own host observed, so an old reading can look current.
   const stale = instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) > STALE_READING_MS;
-  const rows = (slots ?? windows).map((slot) => ({ slot, window: windows.find((window) => window.id === slot.id) }));
+  const rows = (slots ?? windows).map((slot) => ({ slot, window: windows.find((window) =>
+    windowSlotId(window, instance.driverKind) === windowSlotId(slot, instance.driverKind)) }));
   return (
     <div>
       {heading ?? <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
@@ -150,6 +162,7 @@ function EnginePlanRow({
                 ) : (
                   <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} />
                 )}
+                {window.resetsAt === null && <span className="sr-only">{t("usage.limits.resetUnknown")}</span>}
               </div>
             );
           })}
