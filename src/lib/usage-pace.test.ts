@@ -55,6 +55,30 @@ describe("pace", () => {
     expect(projection !== null).toBe(expected === "runsOut" || expected === "lasts");
   });
 
+  it("keeps a 14:59 observation fresh at 15:01 despite its 14:55 bucket", () => {
+    const window = session();
+    const acct = account([window], trail(NOW - 5 * MIN, 13, 80, 0.5));
+    acct.observedAt = NOW - MIN;
+    const { verdict, projection } = pace(acct, window, [], NOW + MIN);
+    expect(verdict.kind).toBe("runsOut");
+    expect(projection).not.toBeNull();
+    expect(projection!.from).toEqual({ at: NOW - 5 * MIN, used: 80 });
+  });
+
+  it("expires the same 14:59 observation at 15:05", () => {
+    const window = session();
+    const acct = account([window], trail(NOW - 5 * MIN, 13, 80, 0.5));
+    acct.observedAt = NOW - MIN;
+    expect(pace(acct, window, [], NOW + 5 * MIN)).toEqual({ verdict: { kind: "noRecent" }, projection: null });
+  });
+
+  it("does not freshen a 14:57 window from a valueless 15:03 report", () => {
+    const window = session();
+    const acct = account([window], [...trail(NOW - 5 * MIN, 13, 80, 0.5), [NOW / MIN, null, 11]]);
+    acct.observedAt = NOW + 3 * MIN;
+    expect(pace(acct, window, [], NOW + 3 * MIN)).toEqual({ verdict: { kind: "noRecent" }, projection: null });
+  });
+
   it("rounds the shown run-out time to 10 minutes only after the margin test", () => {
     // 80% at 0.5 %/min runs out 40 min from now; the reset 51 min out clears the 10-min margin.
     const { verdict } = verdictOf(session({ resetsAt: NOW + 51 * MIN }), trail(NOW, 13, 80, 0.5));
