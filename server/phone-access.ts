@@ -11,6 +11,7 @@ import { z } from "zod";
 import { googleDiscoveryKeySource, type GoogleKeySource } from "../shared/google-id-token.ts";
 import { PHONE_RELAY_OFF, SETUP_PREFIX, labelFromHost, parseSetupCode, type PhoneRelayStatus, type SetupCodeProblem, type TeamSnag } from "../shared/relay-protocol.ts";
 import type { HarnessHandler } from "./early-listen.ts";
+import { linkedFileGrant } from "./linked-files.ts";
 import {
   RateLimiter,
   enrollError,
@@ -343,7 +344,7 @@ export class PhoneAccess {
     };
   }
 
-  /** Runs before any route for a relay request. `phone` is null only for public files. */
+  /** Runs before any route for a relay request. `phone` is null only for public files and linked page grants. */
   async gate(req: IncomingMessage, res: ServerResponse): Promise<RelayGate> {
     const host = this.relay?.status().host ?? null;
     if (!host) {
@@ -374,6 +375,7 @@ export class PhoneAccess {
     const phone = this.session(req, res);
     if (phone) return { handled: false, phone };
     const path = new URL(req.url ?? "/", "https://relay.invalid").pathname;
+    if (linkedFileGrant(req.method, path)) return { handled: false, phone: null };
     if (path.startsWith("/api/")) {
       send(res, 401, { error: "unauthorized" });
       return HANDLED;

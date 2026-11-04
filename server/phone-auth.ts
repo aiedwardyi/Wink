@@ -1,10 +1,11 @@
 // Rules for requests that arrived through the phone relay (docs/phone-relay-design.md
 // section 9). Transport comes from socket identity (isRelayRequest), never a header;
-// relay traffic authenticates only with its __Host-wink_phone session.
+// relay traffic authenticates only with its __Host-wink_phone session or a linked page's grant.
 import type { IncomingHttpHeaders } from "node:http";
 import { isIP } from "node:net";
 
 import type { PhoneRelayState } from "../shared/relay-protocol.ts";
+import { linkedFileGrant } from "./linked-files.ts";
 
 export const PHONE_COOKIE = "__Host-wink_phone";
 /** 400 days, the browser cap; the server re-sets it weekly and expires idle phones itself. */
@@ -53,13 +54,13 @@ export function relayVerdict(req: RelayRequestLine, relayHost: string): RelayVer
   if (hosts.length > 1) return { kind: "deny", status: 400, error: "bad request" };
   if (hosts[0]?.trim().toLowerCase() !== relayHost) return { kind: "deny", status: 403, error: "forbidden: relay host required" };
   const method = req.method ?? "GET";
+  const path = new URL(target, "https://relay.invalid").pathname;
   const origins = headerValues(req.rawHeaders, "origin");
-  if (origins.length > 1 || (origins.length === 1 && origins[0] !== `https://${relayHost}`)) {
+  if (origins.length > 1 || (origins.length === 1 && origins[0] !== `https://${relayHost}` && !(origins[0] === "null" && linkedFileGrant(method, path)))) {
     return { kind: "deny", status: 403, error: "forbidden: cross-origin request" };
   }
   const read = method === "GET" || method === "HEAD";
   if (!origins.length && !read) return { kind: "deny", status: 403, error: "forbidden: origin required" };
-  const path = new URL(target, "https://relay.invalid").pathname;
   if (localOnly(path)) return { kind: "deny", status: 404, error: "not found" };
   if (path === "/api/health" && read) return { kind: "health" };
   if (path === "/pair" && read) return { kind: "pair-page" };
