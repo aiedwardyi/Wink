@@ -2,6 +2,19 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.230] - 2026-11-04
+
+### Added
+- Usage has an account menu beside each engine icon, so you can jump straight to any account. The bars slide to the one you pick.
+- Videos in another PC's window can play full screen.
+
+### Fixed
+- The PCs menu no longer shows an off PC as online: each PC says Checking, then Online or Offline within about 2 seconds.
+- Opening another PC shows a Connecting screen instead of a black window.
+- The Update button shows in the desktop bot list again when an update is ready.
+- Pressing Enter in the model picker's List View picks the model and stays in List View.
+- Running the tests can no longer touch your real Wink data.
+
 ## [1.0.229] - 2026-11-04
 
 ### Added
@@ -561,6 +574,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.230]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.230
 [1.0.229]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.229
 [1.0.228]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.228
 [1.0.227]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.227
