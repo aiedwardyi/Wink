@@ -141,12 +141,12 @@ export function createUsageBoardClient(
       load();
     },
     invalidate: load,
-    /** One save per engine: a repeat while one is pending sends nothing. The check moves only on the confirming read. */
+    /** One save per board group (its `base`): a repeat while one is pending sends nothing. The check moves only on the confirming read. */
     requestMain(engine: string, accountId: string, afterSave?: () => unknown) {
       if (state.pending[engine]) return;
       const failed = new Set(state.failed);
       failed.delete(engine);
-      const from = state.board?.engines.find((each) => each.engine === engine)?.mainId ?? null;
+      const from = state.board?.engines.find((each) => each.base === engine)?.mainId ?? null;
       set({ pending: { ...state.pending, [engine]: { target: accountId, from, after: null } }, failed });
       saveMain(accountId).then(() => {
         set({ pending: { ...state.pending, [engine]: { target: accountId, from, after: started } } });
@@ -181,5 +181,5 @@ export const requestMain = client.requestMain;
 
 /** Where the check sits: the committed Main, held on the old one while a save waits for its confirming read. */
 export function checkedMain(state: UsageBoardState, engine: string): string | null {
-  return state.pending[engine]?.from ?? state.board?.engines.find((each) => each.engine === engine)?.mainId ?? null;
+  return state.pending[engine]?.from ?? state.board?.engines.find((each) => each.base === engine)?.mainId ?? null;
 }

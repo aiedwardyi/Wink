@@ -151,8 +151,9 @@ function eventLines(engine: UsageBoardEngine, board: UsageBoard, clock: Clock) {
   return lines.sort((a, b) => b.at - a.at);
 }
 
-function Ticker({ board, engineId, select, phone, terminal, clock }: {
-  board: UsageBoard; engineId: string; select: (engine: string) => void; phone: boolean; terminal: boolean; clock: Clock;
+function Ticker({ board, engineId, select, phone, terminal, clock, instances }: {
+  board: UsageBoard; engineId: string; select: (base: string) => void; phone: boolean; terminal: boolean; clock: Clock;
+  instances: { instanceId: string; displayName?: string }[];
 }) {
   const { t } = clock;
   return (
@@ -161,15 +162,18 @@ function Ticker({ board, engineId, select, phone, terminal, clock }: {
       {board.engines.map((engine) => {
         const main = engine.accounts.find((account) => account.id === engine.mainId) ?? engine.accounts[0];
         const facts = main ? windowFacts(main, t) : null;
-        const selected = engine.engine === engineId;
+        // Groups are one per base; two instances of one driver share `engine`, so the twin tab names its instance.
+        const selected = engine.base === engineId;
+        const twin = board.engines.some((other) => other !== engine && other.engine === engine.engine);
+        const label = (twin && instances.find((each) => each.instanceId === engine.base)?.displayName) || engineName(engine.engine);
         const series = main && facts?.binding ? chartSeries(main, facts.binding, engine.events, clock.now) : null;
         const tone = toneOf(facts?.binding, undefined);
         return (
-          <button key={engine.engine} type="button" role="tab" data-engine={engine.engine} aria-selected={selected} onClick={() => select(engine.engine)}
+          <button key={engine.base} type="button" role="tab" data-engine={engine.engine} aria-selected={selected} onClick={() => select(engine.base)}
             className={cn("flex min-w-0 flex-col items-start gap-1 rounded-[3px] [corner-shape:bevel] py-1.5 text-left", phone ? "px-1.5" : "px-2",
               " transition-colors duration-100 motion-reduce:transition-none",
               selected ? "bg-raised" : "hover:bg-raised-hover")}>
-            <span className="max-w-full truncate text-[11.5px] leading-none text-ink-secondary">{engineName(engine.engine)}</span>
+            <span className="max-w-full truncate text-[11.5px] leading-none text-ink-secondary">{label}</span>
             <span className="flex w-full items-end justify-between gap-1">
               <span className="usage-num min-w-0">
                 <span className={cn("block leading-tight", phone ? "whitespace-nowrap text-[12px]" : "truncate text-[13px]", TONE_TEXT[tone])}>{facts?.first}</span>
@@ -222,7 +226,7 @@ export function AccountRow({ engine, account, board, state, checked, phone, term
   const { t } = clock;
   const facts = windowFacts(account, t);
   const tone = toneOf(facts.binding, undefined);
-  const pending = state.pending[engine.engine];
+  const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
   const series = facts.binding ? chartSeries(account, facts.binding, engine.events, clock.now) : null;
   let control: ReactNode;
@@ -231,7 +235,7 @@ export function AccountRow({ engine, account, board, state, checked, phone, term
   else control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
-      onClick={() => requestMain(engine.engine, account.id, reloadInstances)}
+      onClick={() => requestMain(engine.base, account.id, reloadInstances)}
       className={cn("relative inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2.5 text-[12px] text-ink-secondary transition-colors duration-100 hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11",
         pending && !switching && "opacity-50")}>
       {switching ? t("usage.desk.switching") : t("usage.desk.use")}
@@ -377,22 +381,22 @@ export function UsageDesk() {
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const minute = useVisibleClock();
   const board = state.board;
-  const engine = board?.engines.find((each) => each.engine === engineId) ?? board?.engines[0];
+  const engine = board?.engines.find((each) => each.base === engineId) ?? board?.engines[0];
   const main = engine?.accounts.find((each) => each.id === engine.mainId) ?? engine?.accounts[0];
-  const account = engine?.accounts.find((each) => each.id === viewed[engine.engine]) ?? main;
+  const account = engine?.accounts.find((each) => each.id === viewed[engine.base]) ?? main;
   const soon = account?.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR) ?? false;
   const now = useVisibleClock(soon);
   const clock: Clock = { t, locale: localeTag(locale), now };
   if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
   if (!engine || !account) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
-  const checked = checkedMain(state, engine.engine);
+  const checked = checkedMain(state, engine.base);
   return (
     <div data-usage-desk="" className="flex min-w-0 flex-col gap-4">
-      <Ticker board={board} engineId={engine.engine} select={setEngineId} phone={phone} terminal={terminal} clock={clock} />
+      <Ticker board={board} engineId={engine.base} select={setEngineId} phone={phone} terminal={terminal} clock={clock} instances={store.instances} />
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
-      <Hero key={engine.engine} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}
-        instances={store.instances} select={(id) => setViewed((current) => ({ ...current, [engine.engine]: id }))} />
-      {state.failed.has(engine.engine) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+      <Hero key={engine.base} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}
+        instances={store.instances} select={(id) => setViewed((current) => ({ ...current, [engine.base]: id }))} />
+      {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
       {engine.accounts.length > 1 && <div role="group" aria-label={engineName(engine.engine)} className="flex min-w-0 flex-col divide-y divide-hairline/40 overflow-hidden rounded-[3px] [corner-shape:bevel] bg-inset">
         {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
           phone={phone} terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
