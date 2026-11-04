@@ -33,6 +33,19 @@ afterEach(() => {
 });
 
 describe("usage history", () => {
+  it.each(["claude.fixture", "a".repeat(128)])("persists valid instance id %s through a restart", async (accountId) => {
+    const history = createUsageHistory(root, options());
+    history.record(accountId, 1, origin, 20, 30);
+    const event = history.event(accountId, { kind: "main", at: origin, from: "claude", to: accountId });
+    expect(history.snapshot().accounts[accountId]?.fine).toEqual([[origin / minute, 20, 30]]);
+    expect(event).toMatchObject({ kind: "main", to: accountId });
+    await history.flush();
+    expect(createUsageHistory(root, options()).snapshot()).toMatchObject({
+      accounts: { [accountId]: { generation: 1, fine: [[origin / minute, 20, 30]] } },
+      events: { [accountId]: [{ kind: "main", at: origin, from: "claude", to: accountId }] },
+    });
+  });
+
   it("keeps 288 five-minute and 168 hourly points per account", () => {
     const history = createUsageHistory(root, options());
     for (let i = 0; i < 9 * 24 * 12; i++) history.record("claude", 0, origin + i * 5 * minute, 12.345, 45.678);

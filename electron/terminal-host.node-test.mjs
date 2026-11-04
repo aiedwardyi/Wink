@@ -32,6 +32,17 @@ function fixture(options = {}) {
 }
 
 describe("captured worker account projections", () => {
+  test("normalizes supported engines and excludes other managed engines from account runs", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async ({ command }) => ({ kind: "managed", executable: command,
+      args: [], account: { id: "claude.fixture", generation: 0 }, environment: {} }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    for (const command of ["grok", "muse", "agy", "Claude", "CODEX"]) await f.host.openForBot("bot-1", { label: command, command });
+    assert.deepEqual(f.host.liveAccountRuns().map((run) => run.engine), ["claude", "codex"]);
+    assert.deepEqual(f.host.liveAccountRuns({ engine: "claude" }).map((run) => run.label), ["Claude"]);
+  });
+
   test("uses captured worker accounts in both account-runs and Panes", async (t) => {
     let main = { id: "claude.fixture", generation: 3 };
     let owner;

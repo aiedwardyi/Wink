@@ -85,6 +85,7 @@ export function createAccountNames(dataDir: string): AccountNames {
   };
   return {
     sync(list) {
+      if (list.some((row) => row.error)) return;
       const supported = list.filter((row) => row.driverKind === "claudeAgent" || row.driverKind === "codex");
       const ordered = [...supported.filter((row) => row.id === row.of), ...supported.filter((row) => row.id !== row.of)];
       const engineOf = (row: AccountRow): Engine => row.driverKind === "claudeAgent" ? "claude" : "codex";

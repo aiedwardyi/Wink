@@ -5,12 +5,13 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import type { UsageBoardEvent, UsageBoardSample } from "../src/lib/usage-board.ts";
+import { isInstanceId } from "./accounts.ts";
 
 const CAP = 256 * 1024;
 const READ_CAP = 1024 * 1024;
 const WRITE_INTERVAL = 30_000;
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const id = z.string().regex(/^[A-Za-z0-9_-]{1,96}$/).refine((value) => !["__proto__", "constructor", "prototype"].includes(value));
+const id = z.string().refine(isInstanceId);
 const percent = z.number().finite().nonnegative().max(1_000_000).nullable();
 const sampleSchema = z.tuple([integer, percent, percent]);
 const eventSchema = z.object({

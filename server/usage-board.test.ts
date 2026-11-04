@@ -74,6 +74,12 @@ afterEach(() => {
 });
 
 describe("usage board", () => {
+  it("rejects reserved instance ids consistently with account storage", async () => {
+    const s = setup();
+    s.setRows([{ ...s.rows()[0], id: "Constructor", of: "Constructor" }]);
+    expect((await s.board.read()).engines).toEqual([]);
+  });
+
   it("returns one row per account with every contract field", async () => {
     const s = setup();
     s.rateLimits.set("claude", report());
@@ -499,6 +505,42 @@ describe("usage board", () => {
     expect(record).toHaveBeenCalledTimes(800);
     expect(account(await s.board.read()).history.fine).toEqual([[origin / 60_000, 79.9, 40]]);
     expect(s.schedule).toHaveBeenCalledOnce();
+  });
+
+  it("ignores measurement noise when recording reset events", async () => {
+    const s = setup();
+    s.accept("claude", report(24.5, origin));
+    s.accept("claude", report(24.4, origin + 1));
+    s.accept("claude", report(100, origin + 2));
+    s.accept("claude", report(99.9, origin + 3));
+    await settle();
+    expect((await s.board.read()).engines[0].events).toEqual([
+      { seq: 1, at: origin + 2, kind: "limit", accountId: "claude", window: "five_hour" },
+    ]);
+  });
+
+  it("compares new reports with persisted reports after a restart", async () => {
+    const s = setup();
+    s.accept("claude", report(100, origin));
+    await settle();
+    const restarted = createUsageBoard(s.deps);
+    restarted.recordReport("claude", report(100, origin + 1));
+    await settle();
+    expect((await restarted.read()).engines[0].events.map((event) => event.kind)).toEqual(["limit"]);
+    const reset = createUsageBoard(s.deps);
+    reset.recordReport("claude", report(5, origin + 60_000));
+    await settle();
+    expect((await reset.read()).engines[0].events.map((event) => event.kind)).toEqual(["limit", "reset"]);
+  });
+
+  it("records a below-limit reset when the observed window rolls over", async () => {
+    const s = setup();
+    s.accept("claude", report(40, origin));
+    s.accept("claude", report(5, origin + 60_000));
+    await settle();
+    expect((await s.board.read()).engines[0].events).toEqual([
+      { seq: 1, at: origin + 60_000, kind: "reset", accountId: "claude", window: "five_hour" },
+    ]);
   });
 
   it("records limit and reset events once using observation time", async () => {

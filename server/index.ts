@@ -2950,7 +2950,10 @@ const accountNotices = createAccountNotices({
 });
 const accountRuntime = createAccountRuntime({
   accounts, registry, providers: providerReload, store, reload: reloadProviders, bots: botAccounts,
-  changed: (id) => { accountNames.sync(accounts.list()); usageBoard.touch(); void accountUpdates(id); },
+  changed: (id) => {
+    try { accountNames.sync(accounts.list()); } catch { console.error("Account names could not be saved"); }
+    usageBoard.touch(); void accountUpdates(id);
+  },
   rateLimits: rateLimitsByInstance, saveRateLimits: () => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.touch(); }, usage: refreshUsage, availability: automaticAvailability,
   invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
@@ -3033,6 +3036,7 @@ const watchdog = new TurnWatchdog({
       if (stalledTurnId && turnRegistry.get(stalledTurnId)) {
         if (settleMail(store, turn.threadId, stalledTurnId, false, "interrupted")) paneWake.noteArrived(turn.botId, turn.threadId);
         turnRegistry.settle(stalledTurnId);
+        usageBoard.turnSettled(stalledTurnId);
       }
       const group = store.groupByThread(turn.threadId);
       const speaker = groupSpeakers.get(turn.threadId);

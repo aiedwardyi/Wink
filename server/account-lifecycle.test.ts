@@ -458,6 +458,24 @@ async function request(f: Awaited<ReturnType<typeof fixture>>, method: string, p
 describe("Main changes", () => {
   const main = (id: string, generation = 0) => ({ id, generation });
 
+  it("reports a committed Main change when the following reload fails", async () => {
+    const hook = vi.fn();
+    const f = await fixture(hook);
+    const first = await f.add();
+    const second = await f.add();
+    await f.controller.useForBots(first.id);
+    hook.mockClear();
+    vi.spyOn(f.providers, "reload").mockRejectedValueOnce(new Error("fixture reload failure"));
+    await expect(f.controller.remove(first.id, second.id)).rejects.toThrow("fixture reload failure");
+    expect(f.accounts.defaultFor("claude")).toBe(second.id);
+    expect(f.accounts.drains[first.id]).toBeUndefined();
+    expect(hook.mock.calls.map(([change]) => [change.from, change.to])).toEqual([
+      [main(first.id, first.generation), main(second.id, second.generation)],
+    ]);
+    await f.controller.resumeDrains();
+    expect(hook).toHaveBeenCalledTimes(1);
+  });
+
   it("calls the Main hook once after a committed Main change", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const hook = vi.fn(() => { throw new Error("fixture hook failure"); });

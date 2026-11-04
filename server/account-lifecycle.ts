@@ -394,9 +394,8 @@ export class AccountLifecycle {
     const pending = this.queue.then(async () => {
       if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated");
       const before = this.hooks.onMainChanged && this.mains();
-      const result = await run();
-      if (before) this.reportMains(before);
-      return result;
+      try { return await run(); }
+      finally { if (before) this.reportMains(before); }
     }).finally(() => {
       this.mutations -= 1;
       this.hooks.changed?.();

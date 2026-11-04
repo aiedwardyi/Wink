@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngineId, UsageBoardEvent, UsageBoardFrame, UsageBoardRun, UsageBoardWindow } from "../src/lib/usage-board.ts";
-import type { AccountDrain } from "./accounts.ts";
+import { isInstanceId, type AccountDrain } from "./accounts.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import type { createUsageHistory } from "./usage-history.ts";
 
@@ -33,7 +33,6 @@ type Deps = {
 type Cursor = { boot: string; revision: number; counter: number; accounts: string; epoch: number };
 const engines = new Map<string, UsageBoardEngineId>([["claudeAgent", "claude"], ["codex", "codex"], ["grok", "grok"], ["gemini", "gemini"], ["muse", "muse"]]);
 const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" } satisfies Record<UsageBoardEngineId, string>;
-const safeId = (value: string) => /^[A-Za-z0-9_.-]{1,128}$/.test(value) && !["__proto__", "constructor", "prototype", ".", ".."].includes(value);
 
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
   if (window.windowMinutes === 300 || window.id === "five_hour") return "session";
@@ -58,6 +57,12 @@ export function createUsageBoard(deps: Deps) {
   let epoch = 0;
   let previous = new Map<string, number>();
 
+  for (const row of deps.accounts.list()) {
+    const report = deps.rateLimits.get(row.id);
+    const at = report ? Date.parse(report.observedAt) : NaN;
+    if (report && Number.isSafeInteger(at) && at >= 0) reports.set(row.id, { generation: row.generation, at, windows: report.windows.map((window) => ({ ...window })) });
+  }
+
   function publish() {
     if (!listeners.size || frameTimer) return;
     frameTimer = setTimeout(() => {
@@ -72,7 +77,7 @@ export function createUsageBoard(deps: Deps) {
   function bump() { revision = Math.max(revision + 1, now()); publish(); }
 
   function accounts() {
-    const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && safeId(row.id) && safeId(row.of));
+    const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && isInstanceId(row.id) && isInstanceId(row.of));
     const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
       const current = new Map(rows.map((row) => [row.id, row.generation]));
@@ -122,7 +127,9 @@ export function createUsageBoard(deps: Deps) {
         const before = last?.windows.find((value) => value.id === window.id);
         if (window.usedPercent >= 100 && (!before || before.usedPercent < 100)) {
           deps.history.event(row.of, { kind: "limit", at, accountId, window: window.id });
-        } else if (before && window.usedPercent < before.usedPercent) {
+        } else if (before && window.usedPercent < before.usedPercent
+          && ((before.resetsAt != null && before.resetsAt <= at && window.resetsAt != null && window.resetsAt > before.resetsAt)
+            || (before.usedPercent >= 95 && window.usedPercent < 10))) {
           deps.history.event(row.of, { kind: "reset", at, accountId, window: window.id });
         }
       }

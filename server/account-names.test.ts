@@ -30,6 +30,20 @@ function code(names: AccountNames, id: string, value: string | null) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("account names", () => {
+  it("preserves saved names when account storage reports an error", async () => {
+    const f = fixture();
+    const account = await f.accounts.add("claude");
+    f.sync();
+    f.names.setNickname(account.id, "Studio");
+    const saved = readFileSync(f.file, "utf8");
+    writeFileSync(join(f.dir, "accounts.json"), "{broken");
+    const broken = new AccountService(f.dir, () => f.bases);
+    expect(broken.list()[0].error).toBeTruthy();
+    f.names.sync(broken.list());
+    expect(readFileSync(f.file, "utf8")).toBe(saved);
+    expect(createAccountNames(f.dir).get(account.id)).toMatchObject({ number: 2, nickname: "Studio" });
+  });
+
   it("numbers the PC sign-in 1 and existing accounts in accounts.json order on first read", async () => {
     const f = fixture();
     const first = await f.accounts.add("claude");

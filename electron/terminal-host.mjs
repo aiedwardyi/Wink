@@ -527,11 +527,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const liveAccountRuns = ({ botId, engine } = {}) => {
     const runs = [];
     for (const session of sessions.values()) {
-      if (!session.botPane || !session.workerAccount || session.workerFinished || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
-      if (botId && session.botId !== botId || engine && session.workerEngine !== engine) continue;
+      const runEngine = session.workerEngine?.toLowerCase();
+      if (!session.botPane || !session.workerAccount || (runEngine !== "claude" && runEngine !== "codex") || session.workerFinished || session.retired || session.exitCode !== null || active.get(session.key) !== session.id) continue;
+      if (botId && session.botId !== botId || engine && runEngine !== engine) continue;
       const text = session.screen.text();
-      const state = usageLimit(text, session.workerEngine, session.cols) ? "limit" : AGENT_BUSY_RE.test(text) ? "busy" : session.agentSeen ? "idle" : "starting";
-      runs.push({ botId: session.botId, paneId: session.id, label: session.label ?? null, engine: session.workerEngine,
+      const state = usageLimit(text, runEngine, session.cols) ? "limit" : AGENT_BUSY_RE.test(text) ? "busy" : session.agentSeen ? "idle" : "starting";
+      runs.push({ botId: session.botId, paneId: session.id, label: session.label ?? null, engine: runEngine,
         accountId: session.workerAccount.id, accountGeneration: session.workerAccount.generation, state });
     }
     return runs;

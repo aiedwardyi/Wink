@@ -129,6 +129,32 @@ it("tracks room and continuation turns on their captured accounts", async () => 
   expect(await busy()).toEqual([["claude", 0], ["acct_studio", 0]]);
 });
 
+it("keeps account updates running when saving names fails", async () => {
+  const s = await wired();
+  const accountUpdates = vi.fn();
+  const touch = vi.spyOn(s.usageBoard, "touch");
+  const changed = section("  changed: (id) =>", "\n  rateLimits:");
+  const callback = await compile(`return { ${changed} }.changed;`)({ ...s,
+    accountNames: { sync() { throw new Error("fixture save failure"); } }, accountUpdates,
+  });
+  expect(() => callback("claude")).not.toThrow();
+  expect(touch).toHaveBeenCalledOnce();
+  expect(accountUpdates).toHaveBeenCalledWith("claude");
+});
+
+it("settles a stalled board turn when the watchdog releases it", async () => {
+  const s = await wired();
+  s.usageBoard.turnStarted({ turnId: "stalled", botId: "atlas", accountId: "claude", generation: 0 });
+  const release = section("      providerReload.settled(turn.threadId);", "\n      const group = store.groupByThread(turn.threadId);");
+  const turnRegistry = { get: () => ({}), settle: vi.fn() };
+  const scope = { ...s, turn: { threadId: "thread", botId: "atlas" }, stalledTurnId: "stalled", turnRegistry,
+    providerReload: { settled() {} }, workerTurns: { settled() {} }, settleMail: () => false,
+  };
+  await compile(release)(scope);
+  expect(turnRegistry.settle).toHaveBeenCalledWith("stalled");
+  expect((await s.usageBoard.read()).engines[0].accounts[0].bots).toEqual([{ botId: "atlas", bot: "Atlas", busy: false }]);
+});
+
 it("holds a starting turn's account until it is accepted", async () => {
   const helpers = section("const startingHolds = new Map", "\n\n");
   const turn = section("async function startClaimedTurn(", "\n  return startedTurn(userMessage);\n}");

@@ -13,7 +13,8 @@ const UPDATE_GRANT_PREFIX = "orbit-update-v1";
 const MAX_SEND_BODY = 16 * 1024;
 const accountRunsSchema = z.array(z.object({
   botId: z.string().regex(BOT_ID_RE), paneId: z.string().min(1).max(128), label: z.string().max(40).nullable(),
-  engine: z.enum(["claude", "codex"]), accountId: z.string().regex(/^[\w.-]{1,128}$/),
+  engine: z.enum(["claude", "codex"]), accountId: z.string().regex(/^[\w.-]{1,128}$/)
+    .refine((value) => !["constructor", "prototype", "__proto__", ".", ".."].includes(value.toLowerCase())),
   accountGeneration: z.number().int().nonnegative(), state: z.enum(["busy", "idle", "limit", "starting"]),
 }));
 

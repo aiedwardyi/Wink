@@ -90,6 +90,20 @@ test("reports host errors and malformed run output as unavailable", async (t) =>
   }
 });
 
+test("rejects reserved account ids in worker run output", async (t) => {
+  let accountId;
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, liveAccountRuns: () => [
+    { botId: "bot-1", paneId: "pane", label: null, engine: "claude", accountId, accountGeneration: 0, state: "busy" },
+  ] } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  for (accountId of ["constructor", "Constructor", "prototype", "__proto__", ".", ".."]) {
+    const response = await fetch(`${access.url}/v1/terminal/account-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` } });
+    assert.equal(response.status, 503, accountId);
+    assert.deepEqual(await response.json(), { error: "Worker account runs are unavailable" });
+  }
+});
+
 test("credential saves require the full bridge bearer, never terminal or updater grants", async (t) => {
   const calls = [];
   const bridge = createTerminalBridge({
