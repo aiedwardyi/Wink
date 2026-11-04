@@ -10,7 +10,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 
 ### Fixed
 - Workers on a newly signed-in Claude account no longer stop at Claude's first-run screens.
-- A Claude worker waiting on a long background job no longer gets a stall alert every 30 minutes; the first comes after 2 hours.
+- A Claude worker waiting on a long background command no longer gets a stall alert every 30 minutes; the first comes after 2 hours.
 
 ## [1.0.231] - 2026-11-05
 
