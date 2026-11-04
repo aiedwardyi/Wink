@@ -72,7 +72,10 @@ export function pace(account: UsageBoardAccount, window: UsageBoardWindow, event
   const trail = window.kind === "session" ? HOUR : DAY;
   const points = all.filter((point) => point.at >= Math.max(start, now - trail));
   const last = points.at(-1);
-  if (last ? now - last.at > 5 * MIN : account.observedAt === null || now - account.observedAt > 5 * MIN) return none({ kind: "noRecent" });
+  const observedAt = account.observedAt;
+  const latest = last && observedAt !== null && observedAt >= last.at && observedAt < last.at + 5 * MIN
+    ? observedAt : last?.at ?? observedAt;
+  if (latest === null || now - latest > 5 * MIN) return none({ kind: "noRecent" });
   const first = points[0];
   if (!first || !last || points.length < 3 || last.at - first.at < 15 * MIN) return none({ kind: "learning" });
   for (let i = 1; i < points.length; i += 1) if (points[i]!.at - points[i - 1]!.at > trail / 4) return none({ kind: "noRecent" });
