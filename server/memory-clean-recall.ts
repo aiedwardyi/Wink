@@ -54,10 +54,14 @@ const normalize = (text: string) => text.toLowerCase().replace(/["'`“”‘’
 
 const words = (text: string) => normalize(text).split(" ").map(normalize).filter(Boolean);
 
-export function gradeByCode(key: string | null, answer: string | null, question = ""): boolean | undefined {
+const within = (text: string, part: string) => !!part && ` ${words(text).join(" ")} `.includes(` ${part} `);
+
+// A quote of one original line cannot carry a merge's swapped value, and a key from a merged line never passes on null.
+export function gradeByCode(key: string | null, answer: string | null, question = "", original: string[] = [], merged: string[] = []): boolean | undefined {
   if (key === null) return answer === null;
-  if (answer === null) return false;
   const asked = new Set(words(question));
   const bare = words(key).filter((word) => !asked.has(word)).join(" ");
-  return normalize(key) === normalize(answer) || (!!bare && bare === words(answer).join(" ")) || undefined;
+  if (answer === null) return original.some((line) => within(line, bare)) && !merged.some((line) => within(line, bare));
+  const said = words(answer).join(" ");
+  return normalize(key) === normalize(answer) || (!!bare && bare === said) || (within(answer, bare) && original.some((line) => within(line, said))) || undefined;
 }

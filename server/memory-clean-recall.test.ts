@@ -100,6 +100,40 @@ describe("recall grading", () => {
     expect(gradeByCode("Tern, version", "on", question)).not.toBe(true);
   });
 
+  it("passes a key quoted with the words of its own source line, and nothing that could hide a swap", async () => {
+    const { gradeByCode } = await load();
+    const source = [
+      "- Feature flags live in flags.yaml at the repo root; flip them by PR only (09-24).",
+      "- 2026-09-14: Kite beta moved to the Tuesday train (owner Mina).",
+      "- Tern 2.3 shipped to 40 users on 2026-10-02.",
+      "- Release notes go to `docs/release.md`, never the wiki.",
+    ];
+    for (const [question, key, answer] of [
+      ["Where do feature flags live?", "flags.yaml", "flags.yaml at the repo root"],
+      ["Which train did the Kite beta move to?", "Tuesday train", "2026-09-14: Kite beta moved to the Tuesday train"],
+      ["How many users got Tern 2.3?", "40", "Tern 2.3 shipped to 40 users"],
+      ["Where do release notes go?", "docs/release.md", "`docs/release.md`, never the wiki"],
+    ] as const) expect(gradeByCode(key, answer, question, source)).toBe(true);
+    expect(gradeByCode("3", "Tern 13 shipped", "", ["- Tern 13 shipped"])).toBeUndefined();
+    expect(gradeByCode("flags.yaml", "flags.yaml in the repo root", "", source)).toBeUndefined();
+    expect(gradeByCode("2.3", "Tern 40 shipped to 2.3 users", "", source)).toBeUndefined();
+  });
+
+  it("passes a null answer only when its key sits in a line the answerer had and in no merged line", async () => {
+    const { gradeByCode } = await load();
+    const lines = ["- q138 ticket 5138 closed day 138"];
+    expect(gradeByCode("5138", null, 'What comes after "q138 ticket"?', lines)).toBe(true);
+    expect(gradeByCode("5138", null, "", lines, ["- Kite 5138 build"])).toBe(false);
+    expect(gradeByCode("513", null, "", lines)).toBe(false);
+    expect(gradeByCode("ticket", null, "Which ticket?", lines)).toBe(false);
+  });
+
+  it("grades a key quoted from its line in code and sends only the rest to the grade call", async () => {
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["Tern 2.3 shipped to 40 users", "it is value 1", ...keys.slice(2)], ["40", ...keys.slice(1)]);
+    expect(await cleanFiles({ ...input(engine), memory: "- kept\n- old\n- Tern 2.3 shipped to 40 users on 2026-10-02\n" })).toMatchObject({ ok: true });
+    expect(engine.prompts("grade").map(pairs)).toEqual([[{ question: "Fact 1?", expected: "value 1", actual: "it is value 1" }]]);
+  });
+
   it("passes a key that repeats the question without a grade call", async () => {
     const key = ["Fact 0: 2.3", ...keys.slice(1)];
     const engine = calls({ "MEMORY.md": [retire(2)] }, ["2.3", ...keys.slice(1)], key);
@@ -111,7 +145,7 @@ describe("recall grading", () => {
     const engine = calls({ "MEMORY.md": [retire(2)] });
     expect(await cleanFiles(input(engine))).toMatchObject({ ok: true, recall: { passed: 18 } });
     expect(engine.prompts("grade")).toEqual([]);
-    expect(engine.prompts("answers")[0]).toContain("each just the asked value with no extra detail");
+    expect(engine.prompts("answers")[0]).toContain("each just the asked value as written, with no extra detail");
   });
 
   it("sends only an undecided paraphrase to the grade call", async () => {
@@ -138,6 +172,47 @@ describe("recall grading", () => {
     const side = { file: "memory/queued.md" as const, text: `- kept\n- old\n${"- task line\n".repeat(25_000)}` };
     expect(await cleanFiles({ ...input(engine), side })).toEqual({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.prompts("propose").map((prompt) => /"file":"([^"]+)"/.exec(prompt)?.[1])).toEqual(["MEMORY.md"]);
+  });
+});
+
+describe("pair.mjs sabotaged merge", () => {
+  const memory = ["# Memory", ...Array.from({ length: 119 }, (_, i) => i + 2).map((id) => id === 109 ? "- Kite beta 2.3 shipped 2026-03-14 reaching 40 users"
+    : id === 110 ? "- Kite crash build 7 hit 9 devices across 3 regions" : [100, 105, 115, 118].includes(id) ? `- Never touch m${id} key ${7000 + id}` : `- m${id} memo`)].join("\n") + "\n";
+  const side = ["# Queue", ...Array.from({ length: 149 }, (_, i) => i + 2).map((id) => [24, 67, 138].includes(id) ? `- q${id} ticket ${5000 + id} closed day ${id}` : `- q${id} open`)].join("\n") + "\n";
+  const honest = "- Kite beta 2.3 shipped 2026-03-14 reaching 40 users Kite crash build 7 hit 9 devices across 3 regions";
+  const sabotaged = "- Kite beta 7 shipped 2026-03-14 reaching 40 users Kite crash build 2.3 hit 9 devices across 3 regions";
+  const cues: Array<[string, string | null]> = [
+    ["beta", "2.3"], ["shipped", "2026-03-14"], ["reaching", "40"], ["build", "7"], ["hit", "9"], ["across", "3"],
+    ["q24 ticket", "5024"], ["q67 ticket", "5067"], ["q138 ticket", "5138"], ["5024 closed day", "24"], ["5067 closed day", "67"], ["5138 closed day", "138"],
+    ["m100 key", "7100"], ["m105 key", "7105"], ["m115 key", "7115"], ["m118 key", "7118"], ["zeta", null], ["omega", null],
+  ];
+  const asked = cues.map(([cue, answer], i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `What comes after "${cue}"?`, answer }));
+
+  async function run(text: string) {
+    const lists = { "MEMORY.md": [{ op: "merge", ids: [109, 110], text, reason: "Same subject" }], "memory/queued.md": [retire(24), retire(67), retire(138)] } satisfies Partial<Record<CleanFile, Change[]>>;
+    const propose = vi.fn<TextCall>(async (prompt) => {
+      if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(asked);
+      if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify((pairs(prompt) as Array<{ expected: string; actual: string }>).map((pair) => pair.actual === pair.expected));
+      const file = /"file":"([^"]+)"/.exec(prompt)![1] as CleanFile;
+      return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
+    });
+    const recall = vi.fn<TextCall>(async (prompt) => {
+      const files = prompt.slice(prompt.indexOf("\n\n", prompt.indexOf("Questions: ")));
+      return JSON.stringify(cues.map(([cue]) => cue === "q138 ticket" || cue === "m100 key" ? null : [...files.matchAll(new RegExp(`${cue} (\\S+)`, "g"))].at(-1)?.[1] ?? null));
+    });
+    const result = await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history: null, typed: new Set(), propose, recall });
+    const sent = (tag: string) => propose.mock.calls.map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));
+    return { result, questions: sent("questions")[0], graded: sent("grade").flatMap(pairs).map((pair) => (pair as { question: string }).question) };
+  }
+
+  it("lands the honest merge when the answerer misses facts it had, and fails the sabotaged one on both swapped numbers", async () => {
+    const good = await run(honest);
+    expect(good.result).toMatchObject({ ok: true, recall: { passed: 18 } });
+    expect(good.questions).toContain('"op":"merge"');
+    expect(good.questions).toContain("Give every distinct number in merge lines its own changed question first.");
+    const bad = await run(sabotaged);
+    expect(bad.result).toEqual({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
+    expect(bad.graded).toEqual(['What comes after "beta"?', 'What comes after "build"?']);
   });
 });
 

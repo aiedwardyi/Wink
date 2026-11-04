@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryClean, cleanFiles, parseHistory, POINTER_LINE, type Change, type TextCall } from "./memory-clean.ts";
+import { callTokens } from "./memory-clean-engine.ts";
 import type { HomeInput } from "./memory-clean-home.ts";
 import { Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
@@ -48,6 +49,25 @@ describe("cleanFiles recall", () => {
     expect(grade && JSON.parse(grade.slice(grade.indexOf("\n\n") + 2))[0].actual).toBe(kind === "numeric" || kind === "boolean" ? String(answers[0]) : undefined);
   });
 
+  it.each([
+    ["questions", (json: string) => `\`\`\`json\n${json}\n\`\`\``],
+    ["grade", (json: string) => json + "\n\nNotes: answer 1 adds words around [value 0], so {strict} grading flags it.".padEnd(796, " More notes.")],
+  ])("parses the gate's %s reply shape", async (tag, shape) => {
+    const engine = calls();
+    const reply = engine.propose.getMockImplementation()!;
+    engine.propose.mockImplementation(async (prompt, options) => prompt.startsWith(`[memory-clean:${tag}]`) ? shape(await reply(prompt, options)) : reply(prompt, options));
+    engine.recall.mockResolvedValue(JSON.stringify(["it is value 0", ...questions().slice(1).map((q) => q.answer)]));
+    expect(await cleanFiles({ memory: "- kept\n- old\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: true });
+    expect(engine.propose.mock.calls.filter(([prompt]) => prompt.startsWith("[memory-clean:grade]"))).toHaveLength(1);
+  });
+
+  it("bounds each call of the gate's Codex rules run, still affords its answers and trips before its grade", () => {
+    const run = [[25_808, 18_950], [15_814, 16_856], [17_480, 10_872], [685, 12_280]].map(([bytes, used]) => ({ counted: callTokens("x".repeat(bytes!)), used: used! }));
+    for (const call of run) expect(call.counted).toBeGreaterThanOrEqual(call.used);
+    expect(run.slice(0, 3).reduce((sum, call) => sum + call.counted, 0)).toBeLessThanOrEqual(60_000);
+    expect(run.reduce((sum, call) => sum + call.counted, 0)).toBeGreaterThan(60_000);
+  });
+
   it.each(["propose", "side", "questions", "answers", "grade"])("enforces the prompt budget before %s", async (stage) => {
     const engine = calls();
     const memory = stage === "propose" ? "x".repeat(240_000) : "- kept\n- old\n";
@@ -57,7 +77,7 @@ describe("cleanFiles recall", () => {
     const result = await cleanFiles({ memory, side, history: null, typed: new Set(), ...engine });
     expect(result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.propose.mock.calls.length + engine.recall.mock.calls.length).toBe({ propose: 0, side: 1, questions: 2, answers: 2, grade: 3 }[stage]);
-    expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + Math.ceil(Buffer.byteLength(prompt) / 2.5) + 8_000, 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
+    expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + callTokens(prompt), 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
   });
 
   it("archives raw lines and uses blind fresh answers with a signal on every call", async () => {
