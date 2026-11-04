@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const index = readFileSync(join(here, "index.ts"), "utf8");
+const index = readFileSync(join(here, "index.ts"), "utf8").replace(/\r\n/g, "\n");
 const teams = readFileSync(join(here, "team-routes.ts"), "utf8");
 const bots = readFileSync(join(here, "bot-routes.ts"), "utf8");
 
@@ -12,22 +12,22 @@ describe("harness listen is not blocked on engine describe", () => {
   it("does not start defaultSelection until after listen or early attach", () => {
     const bootAssign = index.indexOf("bootSelection = await defaultSelection()");
     expect(bootAssign).toBe(-1);
-    expect(index).toMatch(/void describeInstances\("refresh"\)/);
+    expect(index).toMatch(/return describeInstances\("refresh"\)/);
     expect(index).toMatch(/function describeInstances\(/);
     expect(index).toMatch(/currentEarlyListen\(/);
     expect(index).toMatch(/early\.setHandler\(/);
     const listenAt = index.indexOf("server.listen(");
     const attachAt = index.indexOf("early.setHandler(");
-    const scheduleAt = index.indexOf('void describeInstances("refresh")');
+    const scheduleAt = index.indexOf('return describeInstances("refresh")');
     expect(listenAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(-1);
     expect(scheduleAt).toBeGreaterThan(-1);
     expect(scheduleAt).toBeGreaterThan(listenAt);
     expect(scheduleAt).toBeGreaterThan(attachAt);
-    const deferredAt = index.lastIndexOf("setTimeout(", scheduleAt);
+    const deferredAt = index.lastIndexOf('startupTiming.afterPaint("probes"', scheduleAt);
     expect(deferredAt).toBeGreaterThan(attachAt);
     expect(deferredAt).toBeLessThan(scheduleAt);
-    expect(index.slice(deferredAt - 32, deferredAt)).toContain("serverServing.then");
+    expect(index.slice(deferredAt, scheduleAt)).toContain('await startupTiming.waitFor("accounts")');
   });
 
   it("seeds automatic availability from saved probes before serving", () => {

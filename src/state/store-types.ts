@@ -63,6 +63,7 @@ export interface Message {
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
   text?: string;
+  noteType?: "team-report";
   /** Versioned model-context state. Unknown versions stay intact on disk. */
   compaction?: unknown;
   card?: OptionCardData;
@@ -478,6 +479,7 @@ export interface AppState {
    * same message be focused twice in a row */
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean; query?: string } | null;
   connected: boolean;
+  hasConnected: boolean;
   /** true once the first `hydrate` action has landed and state.bots reflects the real snapshot */
   hydrated: boolean;
   error: string | null;

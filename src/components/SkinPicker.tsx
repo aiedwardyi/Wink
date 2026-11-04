@@ -10,6 +10,7 @@ import { LIGHT_SKIN_IDS, SKINS, SKIN_CHANGE_EVENT, applySkin, readSkin, type Ski
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { Section } from "./SettingsPrimitives";
+import { Fold } from "./Fold";
 
 const FEATURED_SKIN_IDS: readonly SkinId[] = ["wink", "precision", "github-dimmed", "tokyo-night", "kanagawa", "terminal", "wink-day", "notebook"];
 
@@ -153,9 +154,9 @@ export function SkinPicker() {
         {t("settings.skin.more", { count: extra.length })}
         <ChevronDown size={16} className={cn("shrink-0 transition-transform", expanded && "rotate-180")} />
       </button>
-      <div id={moreId} hidden={!expanded} className={expanded ? "flex flex-col gap-4" : undefined}>
-        {expanded && renderGroups(extra, true)}
-      </div>
+      <Fold open={expanded} id={moreId} className="-mt-4">
+        <div className="flex flex-col gap-4 pt-4">{renderGroups(extra, true)}</div>
+      </Fold>
     </div>
   );
 }

@@ -26,6 +26,15 @@ const freshDir = () => temps.make(join(tmpdir(), "orbit-devices-"));
 const rec = (id: string, host = `${id}.tail1234.ts.net`) => ({ deviceId: id, name: id, host });
 
 describe("device sync", () => {
+  it("keeps launch presence checking until its mirror record is known", () => {
+    const folder = freshDir();
+    for (const id of ["home", "laptop", "work"]) writeDeviceRecord(folder, rec(id), NOW - DEVICE_STALE_MS - 1);
+    const items = listDevices(folder, "home", NOW, undefined, (id) => id === "laptop");
+    expect(items.find((item) => item.deviceId === "home")).toMatchObject({ current: true, offline: false, checking: false });
+    expect(items.find((item) => item.deviceId === "work")).toMatchObject({ offline: false, checking: true });
+    expect(items.find((item) => item.deviceId === "laptop")).toMatchObject({ offline: true, checking: false });
+  });
+
   it("uses Wink names for setup peers and keeps host names only as a fallback", () => {
     const peers = [rec("desktop"), rec("laptop"), rec("unknown")];
     const devices = [{ ...rec("desktop"), name: "Home" }, { ...rec("laptop"), name: "Work" }];
@@ -195,8 +204,8 @@ describe("relay presence", () => {
     writeDeviceRecord(folder, rec("work"), NOW);
     const picked = pickerDevices(listDevices(folder, "home", NOW), null);
     expect(picked).toEqual([
-      { deviceId: "home", name: "home", host: "home.tail1234.ts.net", lastSeen: NOW, current: true, offline: false },
-      { deviceId: "work", name: "work", host: "work.tail1234.ts.net", lastSeen: NOW, current: false, offline: false },
+      { deviceId: "home", name: "home", host: "home.tail1234.ts.net", lastSeen: NOW, current: true, offline: false, checking: false },
+      { deviceId: "work", name: "work", host: "work.tail1234.ts.net", lastSeen: NOW, current: false, offline: false, checking: false },
     ]);
   });
 });

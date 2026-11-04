@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
+import { Fold } from "./Fold";
 
 export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boolean {
   return instance.snapshot.state === "available" && instance.snapshot.authenticated === true;
@@ -131,9 +132,11 @@ export function EnginesSettings() {
       {missing.length > 0 && <>
         <button type="button" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}
           className={cn(ROW_BUTTON, "mt-3 self-start")}>{t("engines.moreEngines")}</button>
-        {showAll && <div className="mt-2 flex min-w-0 flex-col">
-          {missing.map((instance) => <EngineRow key={instance.instanceId} instance={instance} />)}
-        </div>}
+        <Fold open={showAll}>
+          <div className="mt-2 flex min-w-0 flex-col">
+            {missing.map((instance) => <EngineRow key={instance.instanceId} instance={instance} />)}
+          </div>
+        </Fold>
       </>}
     </div>
   );

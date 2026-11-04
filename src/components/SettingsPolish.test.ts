@@ -343,7 +343,7 @@ describe("Settings Polish", () => {
     expect(connectionsLabels).toHaveLength(1);
   });
 
-  it("the empty-state folder text is not monospace, while a real path still is", async () => {
+  it("reads the folder in the row font, empty or set", async () => {
     const emptyBot: Bot = {
       id: "bot-empty",
       threadId: "t1",
@@ -368,8 +368,8 @@ describe("Settings Polish", () => {
       (s) => s.textContent?.trim() === "Private bot workspace",
     );
     expect(emptySpan).toBeDefined();
-    expect(emptySpan?.parentElement?.className).toContain("font-mono");
-    expect(emptySpan?.className).toContain("font-sans");
+    expect(emptySpan?.parentElement?.className).toContain("text-[13px]");
+    expect(emptySpan?.parentElement?.className).not.toContain("font-mono");
 
     // Re-render with real path
     const populatedBot: Bot = {
@@ -384,8 +384,8 @@ describe("Settings Polish", () => {
 
     const populatedBox = host.querySelector('[title="/home/user/my-project"]');
     expect(populatedBox).toBeTruthy();
-    expect(populatedBox?.className).toContain("font-mono");
+    expect(populatedBox?.className).toContain("text-[13px]");
+    expect(populatedBox?.className).not.toContain("font-mono");
     expect(populatedBox?.textContent).toContain("my-project");
-    expect(populatedBox?.querySelector(".font-sans")).toBeNull();
   });
 });

@@ -239,6 +239,23 @@ describe("ModelDial", () => {
     expect(saved()).toBeUndefined();
   });
 
+  it.each([false, true])("commits on Enter after clicking the view toggle (back to dial %s)", async (backToDial) => {
+    media();
+    await mount();
+    const toggle = () => document.querySelector<HTMLButtonElement>(".model-dial-view")!;
+    for (let i = 0; i < (backToDial ? 2 : 1); i++) {
+      await act(async () => { toggle().focus(); toggle().click(); });
+    }
+    expect(localStorage.getItem("omb-model-picker-view")).toBe(backToDial ? "dial" : "list");
+    await key("Enter");
+    expect(saved()).toEqual({ instanceId: "claude", model: "claude-opus-5-5", effort: "high", mode: "pinned" });
+    await wait(200);
+    expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click());
+    expect(Boolean(document.querySelector(".model-dial"))).toBe(backToDial);
+    expect(localStorage.getItem("omb-model-picker-view")).toBe(backToDial ? "dial" : "list");
+  });
+
   it.each([
     ["claude-opus-5-5", ["53.6", "54.0", "2.94"]],
     ["unlisted-model", ["Unavailable", "Unavailable", "Unavailable"]],

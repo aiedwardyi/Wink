@@ -40,6 +40,7 @@ import { SyncPanel } from "./SyncPanel";
 import { StartFreshRow } from "./StartFreshRow";
 import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
+import { Fold } from "./Fold";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -631,8 +632,8 @@ export function SettingsModal({
                     className={cn("text-ink-secondary transition-transform", preferencesOpen && "rotate-180")}
                   />
                 </button>
-                {preferencesOpen && (
-                  <div data-settings-preferences>
+                <Fold open={preferencesOpen} className="-mt-4">
+                  <div data-settings-preferences className="pt-4">
                     <Card>
                       <div className="divide-y divide-hairline/40">
                         <SidebarSideRow />
@@ -645,7 +646,7 @@ export function SettingsModal({
                       <StartFreshRow />
                     </Card>
                   </div>
-                )}
+                </Fold>
               </>
             )}
 

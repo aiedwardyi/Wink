@@ -303,7 +303,7 @@ export function ModelPickerControl({
           <><span className="max-md:hidden">{effortFull}</span><span className="md:hidden">{effortShort}</span></>
         )}</span>
       )}
-      <ChevronDown size={14} className={cn("shrink-0 text-ink-secondary", !contained && active && "@max-4xl/chathead:hidden")} />
+      <ChevronDown size={14} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180", !contained && active && "@max-4xl/chathead:hidden")} />
     </button>
   );
 
@@ -368,6 +368,7 @@ export function ModelPickerControl({
           {dial && dialFits && <button type="button" className="model-dial-view" onClick={() => {
             setListView(!listView);
             saveModelPickerView(listView ? "dial" : "list");
+            dialogRef.current?.focus();
           }}>{t(listView ? "model.dial.dial" : "model.dial.list")}</button>}
           <button data-picker-action type="button" onClick={close} aria-label={t("createBot.cancel")}><X size={18} /></button>
         </header>

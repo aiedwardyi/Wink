@@ -58,7 +58,7 @@ function AccountPicker({ account, accounts, mainId, label, mark, select }: {
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
         className="flex h-7 min-w-0 items-center gap-1 pr-1.5 max-md:h-11 [@media(pointer:coarse)]:ml-1.5 [@media(pointer:coarse)]:h-11">
         <span className="min-w-0 truncate">{account.displayName}</span>
-        <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform duration-150 motion-reduce:transition-none", open && "rotate-180")} />
+        <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
       </button>
       {presence.mounted && <div ref={menu} id={id} role="menu" data-closing={presence.closing || undefined}
         className={cn(MENU_CLASS, "absolute -left-1.5 top-full mt-1 max-h-72 w-[248px] max-w-[calc(100%+0.375rem)] origin-top-left overflow-y-auto rounded-[3px] [corner-shape:bevel] [@media(pointer:coarse)]:w-[304px]")}

@@ -1,5 +1,6 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
+import { Fold } from "./Fold";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
@@ -158,7 +159,7 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
         </span>
         <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
       </button>
-      {open && (
+      <Fold open={open}>
         <ol className="ml-2 border-l border-hairline/40 pb-2 pl-3">
           {recent.map((event) => (
             <li key={event.id} className="relative flex items-center gap-2 py-1 text-[12px] text-ink-secondary">
@@ -181,7 +182,7 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
             </li>
           ))}
         </ol>
-      )}
+      </Fold>
     </div>
   );
 }
@@ -373,7 +374,7 @@ const NoteMessage = memo(function NoteMessage({ message }: { message: Message })
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const note = parsePaneNote(message.text ?? "");
-  const title = note.label ? t("chat.noteFrom", { label: note.label }) : t(note.pane8 ? "chat.noteFromWorker" : "chat.note");
+  const title = message.noteType === "team-report" ? t("chat.bugReport") : note.label ? t("chat.noteFrom", { label: note.label }) : t(note.pane8 ? "chat.noteFromWorker" : "chat.note");
   return (
     <div className="flex w-full flex-col items-start gap-1">
       <button
@@ -382,15 +383,15 @@ const NoteMessage = memo(function NoteMessage({ message }: { message: Message })
         aria-expanded={open}
         className="flex items-center gap-1 rounded-lg border border-hairline/30 bg-inset/25 px-3 py-1.5 text-[12.5px] text-ink-secondary hover:text-ink"
       >
-        <ChevronRight size={12} className={cn("transition-transform", open && "rotate-90")} />
+        <ChevronDown size={12} className={cn("transition-transform", open && "rotate-180")} />
         {title}
       </button>
-      {open && (
-        // pane text is untrusted; plain text only, never markdown
+      <Fold open={open} className="w-full">
+        {/* pane text is untrusted; plain text only, never markdown */}
         <div data-orbit-note className="w-full max-w-2xl whitespace-pre-wrap break-words rounded-lg border border-hairline/30 bg-inset/25 px-3 py-2 text-[12.5px] leading-relaxed text-ink-secondary">
           <NoteReport note={note} />
         </div>
-      )}
+      </Fold>
     </div>
   );
 });

@@ -290,6 +290,7 @@ import {
   writeDeviceRecord,
 } from "./device-sync.ts";
 import { PhoneAccess } from "./phone-access.ts";
+import { createDevicePresence } from "./device-presence.ts";
 import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awake.ts";
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
@@ -395,6 +396,8 @@ import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
+import { startupTiming } from "./startup-timing.ts";
+import { restoreStartupAccounts } from "./startup-accounts.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -417,8 +420,8 @@ ensureDirs();
 if (sweepLegacyOpencodeKey() === "failed") {
   console.warn(`config: could not remove the legacy OpenCode section from ${join(DATA_DIR, "config.json")}; delete the opencodeGo key manually`);
 }
-const cfg = loadConfig();
-const accounts = new AccountService(DATA_DIR, () => instanceConfigs(cfg));
+const cfg = startupTiming.measure("config", loadConfig);
+const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
 // Before registry.load: a prewarmed engine child would inherit the token.
 const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
@@ -429,7 +432,7 @@ if (!existsSync(join(DATA_DIR, "profile-sync.json"))) {
   profileSyncSettings = saveProfileSyncSettings(DATA_DIR, profileSyncSettings);
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { cacheDir: DATA_DIR });
-await registry.load(instanceConfigs(cfg, accounts.snapshot));
+await startupTiming.track("registry", () => registry.load(instanceConfigs(cfg, accounts.snapshot)));
 const bundledSkills = loadBundledSkills();
 const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DATA_DIR, "skills")));
 
@@ -570,9 +573,7 @@ function authorizedComms(header: string | string[] | undefined): boolean {
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
-// Cap message chains: depth 0 = a user-initiated turn (may ask a peer);
-// a peer invoked via ask_bot runs at depth 1 and gets NO agents tool, so
-// A→B is allowed but B→C (and A→B→A loops) never start.
+// Peer turns retain their tools; the comms endpoints refuse another hop.
 const MAX_COMMS_DEPTH = 1;
 const MAX_WORKSPACE_BOTS = 100;
 const createGroupTaskRequestSchema = z.object({ title: z.string().optional() });
@@ -588,8 +589,6 @@ let terminalBridgeAccess =
   process.env.OMB_TERMINAL_URL?.trim() && process.env.OMB_TERMINAL_TOKEN?.trim()
     ? { url: process.env.OMB_TERMINAL_URL.trim().replace(/\/$/, ""), token: process.env.OMB_TERMINAL_TOKEN.trim() }
     : null;
-if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess)
-  .catch(() => console.error("Worker account routing is unavailable at startup"));
 
 function agentsIntegration(botId: string, threadId: string, depth: number) {
   return {
@@ -938,7 +937,7 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
   return { ok: true, memberIds };
 }
 let bootSelection = { instanceId: "", model: "" };
-const store = new Store(() => bootSelection);
+const store = startupTiming.measure("store", () => new Store(() => bootSelection));
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
@@ -2172,6 +2171,7 @@ function startDevicePresence(): void {
   });
 }
 
+const devicePresence = createDevicePresence();
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
   if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
@@ -2736,7 +2736,7 @@ const projectNotesCheck = createProjectNotesCheck({
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
-void memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id));
+void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
 const roomTurnInstruction = new Map<string, string>();
 const interruptedTurnIds = new Set<string>();
@@ -4516,6 +4516,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const epoch = currentTurnEpoch(botId);
   // Sends queued before this claim belong to drain, not to this turn's folds.
   const claimMark = queueMark();
+  await startupTiming.waitFor("accounts").catch(() => {});
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (!opts?.limitWaitId && turnStartedByUser(opts)) limitWaits.cancel(botId);
@@ -5270,29 +5271,20 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           : "Open Computer and enable Start VPS automatically, or choose Cloud to start it manually.";
         throw new Error(`${autoVpsProblem}. ${hint}`);
       }
-      // Agent control tools include peer comms and the secure credential
-      // request card. A comms-invoked turn (depth ≥ cap) gets none — hard recursion
-      // stop, so the user's tokens can't be burned by a bot-to-bot loop.
-      // Only drivers that mount the tools get the integration (and, via the
-      // integrations.agents gate below, the prompt hint) — a bot on a driver
-      // without it must not be told about tools it cannot call. Any bot can
-      // still be the TARGET of ask_bot regardless of its driver.
       const sectionPeers = store.bots.filter(
         (candidate) =>
           candidate.id !== bot.id &&
           !candidate.hidden &&
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
-      if (
-        commsDepth < MAX_COMMS_DEPTH &&
-        instance.adapter.capabilities.agentsMcp === true
-      ) {
+      if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
+      const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
       // itself, so the harness stays the single owner of turns/permissions
-      const tagged = integrations.agents
+      const tagged = canMessage
         ? mentionedBots(
             text,
             sectionPeers,
@@ -5306,24 +5298,24 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         ? chiefOfStaffSystemPrompt(
             bot.id,
             store.bots,
-            Boolean(integrations.agents),
+            canMessage,
             openMausStatusSystemPrompt(),
             false,
             tagged.length > 0,
             turnLimit,
           )
-        : integrations.agents && sectionPeers.length > 0
+        : canMessage && sectionPeers.length > 0
           ? peerAgentsSystemPrompt()
           : "";
-      const credentialPrompt = integrations.agents ? ` ${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}` : "";
-      const routinePrompt = integrations.agents
+      const credentialPrompt = canMessage ? ` ${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}` : "";
+      const routinePrompt = canMessage
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation."
         : "";
       const taskStatePrompt = integrations.agents
         ? " Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn."
         : "";
-      const reactPrompt = integrations.agents ? ` ${reactionToolGuidance()}` : "";
-      const showImagePrompt = integrations.agents ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
+      const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
+      const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
 
       if (currentTurnEpoch(bot.id) !== epoch) {
         releaseLocalVmThread(threadId);
@@ -5398,7 +5390,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           taskStatePrompt +
           reactPrompt +
           showImagePrompt +
-          (integrations.agents ? teamReports.prompt() : "") +
+          (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           CORPUS_SEARCH_INSTRUCTIONS +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
@@ -5997,7 +5989,7 @@ const approvalBus: ApprovalBus = { store, broadcast };
 // whose resolver died with the previous process. Left alone it can never be
 // answered, and the composer stays disabled behind it — settle them at boot.
 {
-  const stale = dismissStalePeerCards(approvalBus);
+  const stale = startupTiming.measure("peerRecovery", () => dismissStalePeerCards(approvalBus));
   if (stale) console.log(`peer approvals: dismissed ${stale} card(s) left by a previous run`);
 }
 
@@ -6208,9 +6200,10 @@ async function runClaimedGroupMemberTurn(
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
-  if (hop < MAX_COMMS_DEPTH && instance.adapter.capabilities.agentsMcp === true) {
+  if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
+  const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
     instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
@@ -6269,7 +6262,7 @@ async function runClaimedGroupMemberTurn(
     ? chiefOfStaffSystemPrompt(
         bot.id,
         store.bots,
-        Boolean(integrations.agents),
+        canMessage,
         openMausStatusSystemPrompt(),
         true,
         // a room turn is a coordination context by definition; the room
@@ -6277,7 +6270,7 @@ async function runClaimedGroupMemberTurn(
         true,
         hop >= MAX_COMMS_DEPTH ? "room" : undefined,
       )
-    : integrations.agents
+    : canMessage
       ? peerAgentsSystemPrompt(true)
       : "";
   const system = [
@@ -6289,14 +6282,14 @@ async function runClaimedGroupMemberTurn(
     `Reply as yourself, ${detailedRepliesEnabled(cfg) ? "" : "briefly and "}conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     reactionSystemGuidance(),
     coordinationPrompt,
-    integrations.agents && teamReports.prompt().trimStart(),
-    integrations.agents && `${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}`,
-    integrations.agents &&
+    canMessage && teamReports.prompt().trimStart(),
+    canMessage && `${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}`,
+    canMessage &&
       "If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation.",
     integrations.agents &&
       "Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn.",
-    integrations.agents && reactionToolGuidance(),
-    integrations.agents && SHOW_IMAGE_GUIDANCE,
+    canMessage && reactionToolGuidance(),
+    canMessage && SHOW_IMAGE_GUIDANCE,
   ]
     .filter(Boolean)
     .join("\n");
@@ -6942,7 +6935,7 @@ function reloadProviders() {
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
-if (accounts.snapshot.length || Object.keys(accounts.drains).length) await accountRuntime.restore();
+if (accounts.snapshot.length || Object.keys(accounts.drains).length) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length ? terminalBridgeAccess : null, () => accountRuntime.restore()));
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });
@@ -7111,6 +7104,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
     const credentials = requestCredentials(relay, phone !== null, authorizedComms(req.headers.authorization), REMOTE_KEY);
+    const startupWait = startupTiming.beforeRequest(method, path);
+    if (startupWait) await startupWait;
     // Terminal panes hold a per-pane grant, never the comms token. The note
     // itself never starts a turn: a busy teacher has it steered into its live
     // turn, else paneWake may start one once the teacher is idle.
@@ -7238,6 +7233,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, await spawnUsage(from.id, String(body.label ?? ""), String(body.command ?? "")));
       }
       if (method === "POST" && path === "/api/internal/worker-launch") {
+        await startupTiming.waitFor("accounts");
         const result = await workerLaunchResponse(terminalBridgeAccess, req.headers["x-orbit-terminal-host"], await readBody(req), workerLaunch);
         return json(res, result.status, result.body);
       }
@@ -7485,7 +7481,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
-      const devices = pickerDevices(listed, relay ? phoneAccess.base() : null);
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null);
       return json(res, 200, { devices });
     }
     if (method === "PUT" && path === "/api/devices/name") {
@@ -8040,6 +8036,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     if (method === "GET" && path === "/api/instances") {
+      await startupTiming.waitFor("accounts").catch(() => {});
       // A plain GET runs on every page load, so it answers from the last probe:
       // one CLI launch on Windows can stall the whole server for ~5 s.
       // ?refresh=1 re-probes for a CLI installed or signed in since;
@@ -8375,12 +8372,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   }
 };
 
-syncAllThreads();
+startupTiming.measure("sync", syncAllThreads);
 limitWaits.reconcile();
 setImmediate(() => void limitWaits.tick().catch((error) => console.error("limit-waits: startup failed", error)));
 setImmediate(drainQueuedSends);
 googleSync.resume();
-uploads.sweep();
+startupTiming.measure("uploads", () => uploads.sweep());
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 startTeamSnagOwner({
@@ -8399,32 +8396,36 @@ startTeamReportOwner({ dir: join(DATA_DIR, "team-report-inbox"), base: () => pho
   ...reportOwnerPost(store, profileSyncSettings.deviceId, (botId, threadId) => paneWake.noteArrived(botId, threadId)), warn: (line) => console.warn(line) });
 // Wake timers die with the process; re-arm teachers whose stored notes are
 // undelivered. Untracked legacy tasks wait for the next send, as before.
-for (const bot of store.bots) {
-  const task = store.taskByThread(bot.id, bot.threadId);
-  const deliveredId = task?.paneNotesDeliveredId;
-  if (deliveredId !== undefined && hasLocalUndeliveredPaneNote(store.activePath(bot.threadId), deliveredId ?? undefined, profileSyncSettings.deviceId, task?.paneNotesSkippedId)) {
-    paneWake.noteArrived(bot.id, bot.threadId);
+startupTiming.measure("paneWake", () => {
+  for (const bot of store.bots) {
+    const task = store.taskByThread(bot.id, bot.threadId);
+    const deliveredId = task?.paneNotesDeliveredId;
+    if (deliveredId !== undefined && hasLocalUndeliveredPaneNote(store.activePath(bot.threadId), deliveredId ?? undefined, profileSyncSettings.deviceId, task?.paneNotesSkippedId)) {
+      paneWake.noteArrived(bot.id, bot.threadId);
+    }
   }
-}
+});
 // Saved probes steer automatic picks until the deferred refresh lands.
 rememberAutomaticAvailability(registry.describeSaved());
 const early = currentEarlyListen();
 if (early) {
   early.setHandler(handleRequest);
   markServerServing();
+  startupTiming.serving();
 } else {
   const server = createServer(SERVER_TIMEOUTS, handleRequest);
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`wink server on http://127.0.0.1:${PORT}`);
     markServerServing();
+    startupTiming.serving();
   });
 }
 phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
-// Let the first chat drain before refreshing the saved engine probes.
-void serverServing.then(() => setTimeout(() => {
-  void describeInstances("refresh")
+startupTiming.afterPaint("probes", async () => {
+  await startupTiming.waitFor("accounts");
+  return describeInstances("refresh")
     .then(() => registry.describeCached())
     .then((instances) => {
       rememberAutomaticAvailability(instances);
@@ -8437,11 +8438,12 @@ void serverServing.then(() => setTimeout(() => {
     .catch((error) => {
       console.error(`[boot] default engine scan failed: ${error instanceof Error ? error.message : String(error)}`);
     });
-}, 1_000).unref());
+});
 
 hostShutdown = () => {
   if (hostShutdownStarted) return;
   hostShutdownStarted = true;
+  startupTiming.close();
   askHold.flush();
   const routineThreadByBotId: Record<string, string> = {};
   for (const bot of store.bots) {

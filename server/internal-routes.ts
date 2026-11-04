@@ -280,7 +280,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
-      const depth = Number(body.depth ?? 0) || 0;
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(source.threadId)?.depth ?? 0);
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
@@ -549,7 +549,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
       const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
-      const depth = Number(body.depth ?? 0) || 0;
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(source.threadId)?.depth ?? 0);
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       const from = store.bot(fromBotId);
       if (!from) return json(res, 404, { error: "no such bot" });
@@ -571,7 +571,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         // nothing about what to do instead
         const said: Record<Exclude<QueueResult, "ok">, string> = {
           self: "a bot cannot delegate to itself",
-          too_deep: "delegation chains are limited to one hop - do this one yourself",
+          too_deep: "message chains are limited to one hop",
           no_target: "no such bot",
           too_many: "too many delegations queued on this turn - finish some first",
         };
@@ -588,10 +588,13 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     },
     createBot: async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
-      const fromBotId = String(body.fromBotId ?? "");
-      const chief = store.bot(fromBotId);
+      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      if (!source) return json(res, 403, { error: "unknown sender" });
+      const chief = store.bot(source.botId);
       if (!chief) return json(res, 403, { error: "unknown sender" });
-      const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+      const fromThreadId = source.threadId || chief.threadId;
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(fromThreadId)?.depth ?? 0);
+      if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
       if (!connectorThread(chief.id, fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
       }
@@ -649,10 +652,13 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "channel must be a JSON object" });
       }
-      const fromBotId = String(body.fromBotId ?? "");
-      const sender = store.bot(fromBotId);
+      const source = caller(req, String(body.fromBotId ?? ""), String(body.fromThreadId ?? ""));
+      if (!source) return json(res, 403, { error: "unknown sender" });
+      const sender = store.bot(source.botId);
       if (!sender) return json(res, 403, { error: "unknown sender" });
-      const fromThreadId = String(body.fromThreadId ?? sender.threadId);
+      const fromThreadId = source.threadId || sender.threadId;
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(fromThreadId)?.depth ?? 0);
+      if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
       if (!connectorThread(sender.id, fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
       }

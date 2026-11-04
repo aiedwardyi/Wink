@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bot, ChevronRight, ScrollText, TerminalSquare, X } from "lucide-react";
+import { Bot, ChevronDown, ScrollText, TerminalSquare, X } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -12,6 +12,7 @@ import { useSheetSwipe } from "@/lib/use-phone-swipe";
 import type { Message } from "@/state/store";
 import { listedRuns, listedSessionId, workerAnchors, type WorkerRun, type WorkerShownState } from "@/lib/worker-runs";
 import { ProviderMark } from "./ProviderIcons";
+import { Fold } from "./Fold";
 
 export const WORKER_STATUS = {
   working: { glyph: "●", key: "workers.working", text: "text-accent", dot: "bg-accent" },
@@ -100,10 +101,10 @@ export function WorkerRow({ run, state, live, onOpenTerminalPane, open: expanded
         className="flex w-full items-center gap-2.5 border-b border-hairline/40 py-2 text-left text-[13px] hover:bg-raised/40"
       >
         <WorkerLine run={run} state={state} />
-        <ChevronRight size={12} aria-hidden className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-90")} />
+        <ChevronDown size={12} aria-hidden className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180")} />
       </button>
-      {open && (
-        // pane text is untrusted; plain text only, never markdown
+      <Fold open={open}>
+        {/* pane text is untrusted; plain text only, never markdown */}
         <div data-orbit-worker className="flex flex-col gap-2 border-b border-hairline/40 py-2 pl-8.5 text-[12.5px] leading-relaxed text-ink-secondary">
           {run.folder && (jump ? (
             <button type="button" onClick={() => onOpenTerminalPane?.(jump)} className="self-start text-left underline-offset-2 hover:text-ink hover:underline">
@@ -119,7 +120,7 @@ export function WorkerRow({ run, state, live, onOpenTerminalPane, open: expanded
             </div>
           ))}
         </div>
-      )}
+      </Fold>
     </div>
   );
 }
@@ -273,7 +274,7 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpe
 }
 
 /** Header chip for this chat's listed runs. Opens the worker list. */
-export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined }) {
+export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf, className }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined; className?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [right, setRight] = useState(0);
@@ -381,9 +382,9 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
         aria-haspopup="dialog"
         aria-label={t("workers.stripAria", counts)}
         title={t("workers.tooltip")}
-        className="relative flex shrink-0 items-center whitespace-nowrap"
+        className={cn("relative flex shrink-0 items-center whitespace-nowrap", className)}
       >
-        <span data-worker-chip-desktop className="hidden items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-raised md:flex @max-4xl/chathead:!hidden">
+        <span data-worker-chip-desktop className={cn("hidden items-center gap-1.5 rounded-md px-1.5 py-1 md:flex @max-4xl/chathead:!hidden", !className && "hover:bg-raised")}>
           <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
           {first && <span aria-hidden className="text-[13px] text-ink-secondary">{t(listed.length === 1 ? "workers.countOne" : "workers.countMany", { count: listed.length })}</span>}
           {first && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />}

@@ -99,6 +99,6 @@ export function startTeamReportOwner(options: ReportOwnerOptions): () => void {
 }
 
 export function reportOwnerPost(store: Store, deviceId: string | undefined, wake?: (botId: string, threadId: string) => void): Pick<ReportOwnerOptions, "post" | "postedIds" | "wake"> {
-  return { post: (text, ids) => postChiefNote(store, deviceId, text, undefined, ids), postedIds: () => chiefReportIds(store),
+  return { post: (text, ids) => postChiefNote(store, deviceId, text, undefined, ids, "team-report"), postedIds: () => chiefReportIds(store),
     wake: () => { const chief = ownerChief(store); if (chief) wake?.(chief.id, chief.threadId); } };
 }

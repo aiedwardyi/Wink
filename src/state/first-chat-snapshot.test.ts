@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   canPrefetchChat,
+  chatFrameAfterSnapshot,
+  createChatSnapshotLoad,
   DEFERRED_INSTANCE_IDLE_MS,
   firstChatPeripherals,
   isFirstChatPeripheral,
@@ -13,16 +15,46 @@ describe("chat snapshot prefetch", () => {
     ["http://127.0.0.1:8799", true],
     ["http://localhost:8799", true],
     ["http://[::1]:8799", true],
-    ["https://[::1]:8799", false],
-    ["https://localhost:9484", false],
-    ["https://127.0.0.1:9484", false],
-    ["https://phone.example", false],
-    ["http://192.168.1.2:8799", false],
-    ["http://127.0.0.1.example", false],
-    ["http://localhost.example", false],
+    ["https://[::1]:8799", true],
+    ["https://localhost:9484", true],
+    ["https://127.0.0.1:9484", true],
+    ["https://phone.example", true],
+    ["http://192.168.1.2:8799", true],
+    ["http://127.0.0.1.example", true],
+    ["http://localhost.example", true],
     ["file:///app/index.html", false],
-  ])("prefetches only the app's HTTP loopback origin: %s", (origin, expected) => {
+  ])("prefetches HTTP origins at boot: %s", (origin, expected) => {
     expect(canPrefetchChat(new URL(origin))).toBe(expected);
+  });
+});
+
+describe("chat snapshot retry failure", () => {
+  it("returns after a failed retry and waits for the next hello to load again", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce({ cursor: "s:1" })
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce({ cursor: "s:3" });
+    const snapshots = createChatSnapshotLoad(fetch, () => true);
+    snapshots.prefetch();
+    await expect(snapshots.load(() => "s:2")).resolves.toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await expect(snapshots.load(() => "s:3")).resolves.toEqual({ cursor: "s:3" });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("chat snapshot frame reconciliation", () => {
+  it("skips numbered chat frames already in the snapshot", () => {
+    expect(chatFrameAfterSnapshot({ kind: "bot", seq: 2 }, "s:3")).toBe(false);
+    expect(chatFrameAfterSnapshot({ kind: "message.patch", seq: 3 }, "s:3")).toBe(false);
+    expect(chatFrameAfterSnapshot({ kind: "message", seq: 4 }, "s:3")).toBe(true);
+  });
+
+  it("keeps transient, peripheral and unnumbered frames", () => {
+    for (const kind of ["runtime", "screen", "config", "instances", "notify", "routine"]) {
+      expect(chatFrameAfterSnapshot({ kind, seq: 2 }, "s:3")).toBe(true);
+    }
+    expect(chatFrameAfterSnapshot({ kind: "bot" }, "s:3")).toBe(true);
+    expect(chatFrameAfterSnapshot({ kind: "bot", seq: 2 })).toBe(true);
   });
 });
 

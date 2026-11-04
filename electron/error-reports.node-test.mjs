@@ -207,7 +207,7 @@ test("own startup kills skip SERVER_GONE but child crashes still report", async 
     proc.kill = () => proc.emit("exit", 1);
     proc.pid = 123;
     const serverToken = "token";
-    const context = { path, process: { resourcesPath: "test", env: {} }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
+    const context = { path, startupWindowMs: 0, process: { resourcesPath: "test", env: {}, uptime: () => 0 }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
     const start = runInNewContext(`${body}\nstartServerOn`, context);
     await start(9311);
     if (outcome === "ready") proc.emit("exit", 1);
@@ -571,6 +571,49 @@ test("unclean marker is consent-gated and graceful shutdown clears it", async (t
   assert.equal(f.queue().records[0].report.code, "UNCLEAN_EXIT");
   next.stop();
   assert.equal(fs.existsSync(path.join(f.dir, "error-report-active")), false);
+});
+
+test("does not report an unclean exit after a version change", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.config.build = "1.0.213";
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 0);
+  assert.equal(fs.existsSync(path.join(f.dir, "error-report-queue.json")), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dir, "error-report-active"), "utf8")), { build: f.config.build });
+});
+
+test("still reports an unclean exit on the same version", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dir, "error-report-active"), "utf8")), { build: f.config.build });
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 1);
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+  assert.equal(f.queue().records[0].report.build, f.config.build);
+});
+
+test("handles an old marker without a version", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  fs.writeFileSync(path.join(f.dir, "error-report-active"), "1");
+  f.reporter.start();
+  await f.reporter.flush();
+  assert.equal(f.received.length, 1);
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dir, "error-report-active"), "utf8")), { build: f.config.build });
+  f.config.build = "1.0.213";
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 1);
+  assert.equal(f.queue().records.length, 1);
 });
 
 test("graceful shutdown preserves a pending report for retry after restart", async (t) => {

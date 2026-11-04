@@ -65,8 +65,8 @@ export function SidebarSectionHeader({
           size={12}
           aria-hidden="true"
           className={cn(
-            "shrink-0 text-ink-secondary transition-transform duration-150 ease-out motion-reduce:transition-none",
-            collapsed && "-rotate-90",
+            "shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none",
+            !collapsed && "rotate-180",
           )}
         />
       )}

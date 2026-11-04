@@ -1,11 +1,59 @@
+import { snapshotCoversHello } from "@/lib/live-events";
+import { streamResetFor } from "@/lib/turn-stage";
+
 /** Peripherals that may ride the first chat snapshot. Engine describe
  * (`instances`) walks PATH and CLI `--version`; keep it off composer paint. */
 export const FIRST_CHAT_PERIPHERAL_KEYS = ["config", "routines"] as const;
 export const DEFERRED_INSTANCE_IDLE_MS = 800;
 
 export function canPrefetchChat(location: Pick<Location, "protocol" | "hostname">): boolean {
-  // TLS may be a single-pipe Serve proxy, even when its hostname is localhost.
-  return location.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+  return location.protocol === "http:" || location.protocol === "https:";
+}
+
+export function createChatSnapshotLoad<T extends { cursor?: string }>(fetchSnapshot: () => Promise<T>, alive: () => boolean) {
+  let prefetched: Promise<T | null> | null = null;
+  return {
+    prefetch() {
+      prefetched ??= fetchSnapshot().catch(() => null);
+    },
+    async load(boundary: () => string | undefined): Promise<T | null> {
+      let pending = prefetched;
+      prefetched = null;
+      while (alive()) {
+        const before = boundary();
+        const fresh = !pending;
+        const snapshot = await (pending ?? fetchSnapshot().catch(() => null));
+        pending = null;
+        if (!alive() || (fresh && !snapshot)) return null;
+        const current = boundary();
+        if (snapshot && (current === undefined || snapshotCoversHello(snapshot.cursor, current)
+          || (fresh && before === current && snapshot.cursor === undefined))) return snapshot;
+        if (fresh && before === current) throw new Error("Chat snapshot is older than the live stream");
+      }
+      return null;
+    },
+  };
+}
+
+const SNAPSHOT_FRAME_KINDS = new Set(["bot", "group", "thread", "message", "message.patch", "bot.deleted", "group.deleted", "bots.order", "groups.order", "task.packet"]);
+
+export function chatFrameAfterSnapshot(frame: { kind: string; seq?: number }, cursor?: string): boolean {
+  if (!cursor || !Number.isSafeInteger(frame.seq) || !SNAPSHOT_FRAME_KINDS.has(frame.kind)) return true;
+  // Pending chat frames share the hello generation and may already be in the snapshot.
+  return !snapshotCoversHello(cursor, `${cursor.slice(0, cursor.lastIndexOf(":"))}:${frame.seq}`);
+}
+
+export function reconcileCoveredChatFrame(
+  frame: { kind: string; threadId?: string; botId?: string; message?: { role?: string; kind?: string } },
+  clearStream: (threadId: string) => void,
+  clearReasoning: (threadId: string) => void,
+  cancelBotPatch: (botId: string) => void,
+): void {
+  if (frame.kind === "bot.deleted" && frame.botId) cancelBotPatch(frame.botId);
+  if (frame.kind !== "message" || !frame.threadId || !frame.message) return;
+  const reset = streamResetFor(frame.message);
+  if (reset === "stream") clearStream(frame.threadId);
+  else if (reset === "reasoning") clearReasoning(frame.threadId);
 }
 
 export function isFirstChatPeripheral(key: string): boolean {

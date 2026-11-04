@@ -19,6 +19,38 @@ function nodes<T extends ts.Node>(guard: (node: ts.Node) => node is T): T[] {
 }
 
 describe("turn setup", () => {
+  it.each([
+    ["direct", 0, 0, true], ["peer", 0, 1, true], ["room", 1, 0, true], ["peer room", 1, 1, true],
+    ["unsupported", 0, 0, false], ["unsupported room", 1, 1, false],
+  ] as const)("mounts agents by capability for %s turns", (_, index, depth, capable) => {
+    const mounts = nodes(ts.isIfStatement).filter((node) => node.thenStatement.getText(source).includes("integrations.agents = agentsIntegration("));
+    expect(mounts).toHaveLength(2);
+    const integration = nodes(ts.isFunctionDeclaration).find((node) => node.name?.text === "agentsIntegration")!;
+    const script = ts.transpileModule(integration.getText(source), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const agentsIntegration = new Function("process", "agentsProxyPath", "AGENTS_NODE_FLAG", "PORT", "commsCallers", "teamReports", `${script}; return agentsIntegration;`)(
+      process, "/agents-proxy.ts", { ELECTRON_RUN_AS_NODE: "1" }, 8799,
+      { token: () => "fixture-token" }, { prompt: () => "" },
+    );
+    const integrations: Record<string, { env: Record<string, string> }> = {};
+    const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", mounts[index]!.getText(source));
+    run(integrations, { adapter: { capabilities: { agentsMcp: capable } } }, { id: "peer" }, "peer-thread", depth, depth, 1, agentsIntegration);
+    if (capable) expect(integrations.agents?.env).toMatchObject({
+      OMB_BOT_ID: "peer", OMB_THREAD_ID: "peer-thread", OMB_COMMS_TOKEN: "fixture-token", OMB_TURN_DEPTH: String(depth),
+    });
+    else expect(integrations.agents).toBeUndefined();
+  });
+
+  it.each([0, 1])("keeps coordination limits with agents mounted on path %s", (index) => {
+    const declarations = nodes(ts.isVariableDeclaration);
+    const gate = declarations.filter((node) => node.name.getText(source) === "canMessage")[index];
+    const coordination = nodes(ts.isCallExpression).filter((node) => node.expression.getText(source) === "chiefOfStaffSystemPrompt")[index]!;
+    const evaluate = new Function("integrations", "commsDepth", "hop", "MAX_COMMS_DEPTH", `const canMessage = ${gate?.initializer?.getText(source) ?? "Boolean(integrations.agents)"}; return ${coordination.arguments[2]!.getText(source)};`);
+    expect(evaluate({ agents: {} }, 0, 0, 1)).toBe(true);
+    expect(evaluate({ agents: {} }, 1, 1, 1)).toBe(false);
+  });
+
   it("dispatches without waiting for a workspace snapshot", async () => {
     const declarations = nodes(ts.isVariableDeclaration);
     const setupEnd = declarations.find((node) => node.name.getText(source) === "showImagePrompt")!;

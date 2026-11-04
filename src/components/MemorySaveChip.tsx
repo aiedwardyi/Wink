@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Brain, ChevronRight, Loader2 } from "lucide-react";
+import { Brain, ChevronDown, Loader2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useStore, type Message } from "@/state/store";
 import { memorySaveTarget } from "@/lib/memory-recent";
+import { Fold } from "./Fold";
 
 const FLICKER_MS = 700;
 
@@ -49,7 +50,7 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col">
       <div className="flex justify-start">
         <button
           type="button"
@@ -61,10 +62,12 @@ export function MemorySaveRun({ messages, forceOpen = false, children }: { messa
           <span className="min-w-0 max-w-[480px] truncate">
             {saved ? t("chat.savedMemoryMany", { count: messages.length }) : t("chat.savingMemory")}
           </span>
-          <ChevronRight size={13} className={open ? "shrink-0 rotate-90" : "shrink-0"} />
+          <ChevronDown size={13} className={open ? "shrink-0 rotate-180 transition-transform" : "shrink-0 transition-transform"} />
         </button>
       </div>
-      {open && children}
+      <Fold open={open}>
+        <div className="flex flex-col gap-1 pt-1">{children}</div>
+      </Fold>
     </div>
   );
 }

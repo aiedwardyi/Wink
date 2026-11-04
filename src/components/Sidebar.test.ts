@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { persistPreference } from "@/lib/i18n";
 import { noteArrival, resetArrivalGlow } from "@/lib/arrival-glow";
 import { hapticTick } from "@/lib/phone-swipe";
+import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import {
   SIDEBAR_COLLAPSED_KEY,
   SIDEBAR_COLLAPSED_SECTIONS_KEY,
@@ -508,7 +509,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     const animate = vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(() => new Animation());
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
-    const motion = { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
+    const motion = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
     const calls = () => animate.mock.calls.map(([keyframes, options], i) => ({ el: animate.mock.contexts[i], keyframes, options }));
     try {
       await act(async () =>
@@ -625,7 +626,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     }) as unknown as Animation);
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
-    const motion = { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
+    const motion = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
     try {
       await act(async () => root.render(createElement(
         StoreProvider,
@@ -683,7 +684,7 @@ describe("Sidebar layout controls with phone collapse restored", () => {
     }) as unknown as Animation);
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
-    const motion = { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
+    const motion = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD };
     try {
       await act(async () => root.render(createElement(
         StoreProvider,
