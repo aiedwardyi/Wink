@@ -1,6 +1,8 @@
 // Where a phone page's open spends its time, from a notification tap or a plain launch.
 export const COLD_OPEN_PATH = "/api/diag/cold-open";
 export const COLD_OPEN_TIMEOUT_MS = 30_000;
+export const COLD_OPEN_HEADER = "x-cold-open";
+export const COLD_OPEN_QUERY = "coldOpen";
 const USER_AGENT_MAX = 512;
 
 export type ColdOpenLabel = "notification" | "open" | "warm";
@@ -27,7 +29,24 @@ export interface ColdOpenRequest {
   encodedBodySize: number;
 }
 
+export interface ColdOpenBots extends ColdOpenRequest {
+  requestStart: number;
+  responseStart: number;
+  decodedBodySize: number;
+  nextHopProtocol: string;
+}
+
+export type ColdOpenSseEvent = "created" | "open" | "error";
+
+export interface ColdOpenSse {
+  created: number;
+  open?: number;
+  errors: number;
+  lastError?: number;
+}
+
 export interface ColdOpenRecord {
+  openId?: string;
   label: ColdOpenLabel;
   t0?: number;
   nav?: Partial<Record<NavField, number>>;
@@ -36,8 +55,10 @@ export interface ColdOpenRecord {
   mount?: number;
   sseOpen?: number;
   hello?: number;
-  bots?: ColdOpenRequest;
+  sse?: ColdOpenSse;
+  bots?: ColdOpenBots;
   taskSwitch?: ColdOpenRequest;
+  cache?: { hit: boolean; paint?: number };
   chatPaint?: number;
   jsCached?: boolean;
   cssCached?: boolean;
@@ -50,7 +71,10 @@ export interface ColdOpenRecord {
 
 type Navigation = Pick<PerformanceNavigationTiming, NavField | "type">;
 type Paint = Pick<PerformanceEntry, "name" | "startTime">;
-type Resource = Pick<PerformanceResourceTiming, "name" | "startTime" | "responseEnd" | "transferSize" | "encodedBodySize">;
+type Resource = Pick<
+  PerformanceResourceTiming,
+  "name" | "startTime" | "responseEnd" | "transferSize" | "encodedBodySize" | "requestStart" | "responseStart" | "decodedBodySize" | "nextHopProtocol"
+>;
 
 export interface ColdOpenPage {
   href: string;
@@ -64,6 +88,7 @@ export interface ColdOpenPage {
   visibility: () => string;
   build: () => string | undefined;
   userAgent: string;
+  randomId: () => string;
   afterPaint: (done: () => void) => void;
   send: (body: string) => void;
 }
@@ -73,6 +98,12 @@ interface Pending {
   t0?: number;
   threadId?: string;
   visibility: string;
+  /** Ties the server's timings for this page's first bots and stream requests to the record. */
+  id?: string;
+  botsSent: boolean;
+  sse: { created?: number; open?: number; errors: number; lastError?: number };
+  cache?: { hit: boolean; paint?: number };
+  cachePainting: boolean;
   marks: Partial<Record<ColdOpenMark, number>>;
   painting: boolean;
   timer: ReturnType<typeof setTimeout>;
@@ -105,6 +136,18 @@ function request(entry: Resource | undefined): ColdOpenRequest | undefined {
   };
 }
 
+function botsRequest(entry: Resource | undefined): ColdOpenBots | undefined {
+  const base = request(entry);
+  if (!entry || !base) return undefined;
+  return {
+    ...base,
+    requestStart: Math.round(entry.requestStart),
+    responseStart: Math.round(entry.responseStart),
+    decodedBodySize: entry.decodedBodySize,
+    nextHopProtocol: entry.nextHopProtocol,
+  };
+}
+
 function cached(entry: Resource | undefined): boolean | undefined {
   return entry ? entry.transferSize === 0 : undefined;
 }
@@ -115,7 +158,8 @@ export function createColdOpenTiming(page: ColdOpenPage) {
 
   const begin = (label: ColdOpenLabel, t0: number | undefined, threadId: string | undefined) => {
     const timer = setTimeout(() => finish(), COLD_OPEN_TIMEOUT_MS);
-    pending = { label, t0, threadId, visibility: page.visibility(), marks: {}, painting: false, timer };
+    const id = label === "warm" ? undefined : page.randomId();
+    pending = { label, t0, threadId, visibility: page.visibility(), id, botsSent: false, sse: { errors: 0 }, cachePainting: false, marks: {}, painting: false, timer };
   };
 
   const record = (open: Pending, chatPaint: number | undefined): ColdOpenRecord => {
@@ -136,15 +180,19 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     const nav = navigation
       ? Object.fromEntries(NAV_FIELDS.flatMap((field) => (Number.isFinite(navigation[field]) ? [[field, Math.round(navigation[field])] as const] : [])))
       : undefined;
+    const { created, ...sse } = open.sse;
     return {
+      openId: open.id,
       label: open.label,
       t0,
       nav,
       firstPaint: paint("first-paint"),
       firstContentfulPaint: paint("first-contentful-paint"),
       ...open.marks,
-      bots: request(resources.find((entry) => BOTS.test(entry.name))),
+      sse: created === undefined ? undefined : { created, ...sse },
+      bots: botsRequest(resources.find((entry) => BOTS.test(entry.name))),
       taskSwitch: request(resources.find((entry) => TASK_SWITCH.test(path(entry)))),
+      cache: open.cache,
       chatPaint,
       jsCached: cached(resources.find((entry) => ENTRY_JS.test(path(entry)))),
       cssCached: cached(resources.find((entry) => ENTRY_CSS.test(path(entry)))),
@@ -177,6 +225,40 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     mark(name: ColdOpenMark) {
       if (!pending || pending.label === "warm" || pending.marks[name] !== undefined) return;
       pending.marks[name] = Math.round(page.now());
+    },
+    /** The id for the first stream address and the first bots request of this page, once each. */
+    streamId() {
+      return pending?.sse.created === undefined ? pending?.id : undefined;
+    },
+    botsHeader(): Record<string, string> {
+      if (!pending?.id || pending.botsSent) return {};
+      pending.botsSent = true;
+      return { [COLD_OPEN_HEADER]: pending.id };
+    },
+    sse(event: ColdOpenSseEvent) {
+      // Only the first connection's road to its first open is measured.
+      if (!pending?.id || pending.sse.open !== undefined) return;
+      const sse = pending.sse;
+      const at = Math.round(page.now());
+      if (event === "created") sse.created ??= at;
+      else if (event === "open") sse.open = at;
+      else {
+        sse.errors += 1;
+        sse.lastError = at;
+      }
+    },
+    cacheLoaded(hit: boolean) {
+      if (pending && pending.label !== "warm") pending.cache ??= { hit };
+    },
+    /** The thread whose saved messages are on screen before the live ones arrive. */
+    cacheShown(threadId: string | undefined) {
+      const open = pending;
+      if (!open?.cache?.hit || open.cache.paint !== undefined || open.cachePainting || !threadId) return;
+      if (open.threadId && open.threadId !== threadId) return;
+      open.cachePainting = true;
+      page.afterPaint(() => {
+        if (pending === open) open.cache!.paint = Math.round(page.now());
+      });
     },
     /** The thread whose fresh messages are on screen, if any. */
     chatShown(threadId: string | undefined) {
@@ -216,6 +298,8 @@ function browserPage(): ColdOpenPage {
     build: () =>
       document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')?.getAttribute("src")?.split("/").pop(),
     userAgent: navigator.userAgent,
+    // getRandomValues works on plain-http origins; randomUUID does not.
+    randomId: () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => byte.toString(16).padStart(2, "0")).join(""),
     afterPaint: (done) => requestAnimationFrame(() => setTimeout(done, 0)),
     send: (body) => {
       void fetch(COLD_OPEN_PATH, { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
@@ -235,6 +319,28 @@ export function markColdOpen(name: ColdOpenMark) {
 
 export function noteChatShown(threadId: string | undefined) {
   active?.chatShown(threadId);
+}
+
+export function noteCacheLoaded(hit: boolean) {
+  active?.cacheLoaded(hit);
+}
+
+export function noteCacheShown(threadId: string | undefined) {
+  active?.cacheShown(threadId);
+}
+
+export function noteSse(event: ColdOpenSseEvent) {
+  active?.sse(event);
+}
+
+/** Query value for the page's first stream address; undefined for every later one. */
+export function firstStreamId() {
+  return active?.streamId();
+}
+
+/** Header for the page's first bots request; empty for every later one. */
+export function firstBotsHeader() {
+  return active?.botsHeader() ?? {};
 }
 
 export function startWarmOpenTiming(t0: number, threadId: string) {

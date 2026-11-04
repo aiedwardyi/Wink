@@ -6,7 +6,7 @@
  * this supervisor uses it as liveness, owns reconnects itself, and carries an
  * explicit replay cursor whenever it replaces the native EventSource.
  */
-import { markColdOpen } from "./cold-open-timing";
+import { COLD_OPEN_QUERY, firstStreamId, markColdOpen, noteSse } from "./cold-open-timing";
 
 export const LIVE_EVENTS_PATH = "/api/events";
 export const LIVE_EVENTS_STALE_MS = 40_000;
@@ -63,10 +63,11 @@ export interface LiveEventsHandlers {
   retryMaxMs?: number;
 }
 
-export function liveEventsUrl(options?: { since?: string | null; screens?: boolean }): string {
+export function liveEventsUrl(options?: { since?: string | null; screens?: boolean; coldOpen?: string }): string {
   const params = new URLSearchParams();
   if (options?.since) params.set("since", options.since);
   if (options?.screens === false) params.set("screens", "off");
+  if (options?.coldOpen) params.set(COLD_OPEN_QUERY, options.coldOpen);
   const query = params.toString();
   return query ? `${LIVE_EVENTS_PATH}?${query}` : LIVE_EVENTS_PATH;
 }
@@ -256,7 +257,7 @@ export function openLiveEvents(
     let current: LiveEventSourceLike;
     try {
       current = platform.createEventSource(
-        liveEventsUrl({ since: cursor, screens: handlers.screens }),
+        liveEventsUrl({ since: cursor, screens: handlers.screens, coldOpen: firstStreamId() }),
       );
     } catch {
       handlers.onError?.();
@@ -264,6 +265,7 @@ export function openLiveEvents(
       return;
     }
 
+    noteSse("created");
     source = current;
     lastHeardAt = platform.now();
     // A resumed hello's cursor is the newest frame the server replays.
@@ -272,9 +274,13 @@ export function openLiveEvents(
       if (stopped || source !== current) return;
       lastHeardAt = platform.now();
       markColdOpen("sseOpen");
+      noteSse("open");
       handlers.onOpen?.();
     };
-    current.onerror = () => connectionLost(current);
+    current.onerror = () => {
+      noteSse("error");
+      connectionLost(current);
+    };
     current.onmessage = (event) => {
       if (stopped || source !== current) return;
       lastHeardAt = platform.now();

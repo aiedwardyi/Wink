@@ -31,6 +31,7 @@ import { canPrefetchChat, firstChatPeripherals, scheduleDeferredInstancesLoad } 
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
+import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { openLiveEvents, snapshotCoversHello } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
@@ -966,6 +967,7 @@ function saveSnapshotCache(state: AppState): void {
 
 function withCachedSnapshot(state: AppState): AppState {
   const cached = readSnapshotCache();
+  noteCacheLoaded(cached !== null);
   return cached ? { ...state, ...cached } : state;
 }
 
@@ -1901,7 +1903,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const prefetchAbort = new AbortController();
     // Other chats come back as a short tail; ChatView pages the rest in when one opens.
     const chatSnapshot = (signal?: AbortSignal) =>
-      api(`/api/bots?messages=${MESSAGE_PAGE}`, { signal, headers: { "x-open-chat": stateRef.current.selectedId } });
+      api(`/api/bots?messages=${MESSAGE_PAGE}`, { signal, headers: { "x-open-chat": stateRef.current.selectedId, ...firstBotsHeader() } });
     let prefetchedChat: Promise<any> | null = null;
     let prefetchStarted = false;
     let snapshotBoundary: string | undefined;

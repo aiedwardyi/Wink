@@ -21,11 +21,23 @@ const paints = [
   { name: "first-contentful-paint", startTime: 1400.7 },
 ];
 
+const hidden = { requestStart: 0, responseStart: 0, decodedBodySize: 0, nextHopProtocol: "" };
+
 const resources = [
-  { name: "https://home.example/assets/index-DNyEQLOj.js", startTime: 320, responseEnd: 800, transferSize: 0, encodedBodySize: 376156 },
-  { name: "https://home.example/assets/index-a1M9JH_P.css", startTime: 320, responseEnd: 500, transferSize: 29059, encodedBodySize: 28759 },
-  { name: "https://home.example/api/bots?messages=200", startTime: 1600.4, responseEnd: 2400.5, transferSize: 285111, encodedBodySize: 284811 },
-  { name: "https://home.example/api/bots/b1/tasks/t-new", startTime: 1500, responseEnd: 2600, transferSize: 900, encodedBodySize: 600 },
+  { name: "https://home.example/assets/index-DNyEQLOj.js", startTime: 320, responseEnd: 800, transferSize: 0, encodedBodySize: 376156, ...hidden },
+  { name: "https://home.example/assets/index-a1M9JH_P.css", startTime: 320, responseEnd: 500, transferSize: 29059, encodedBodySize: 28759, ...hidden },
+  {
+    name: "https://home.example/api/bots?messages=200",
+    startTime: 1600.4,
+    responseEnd: 2400.5,
+    transferSize: 285111,
+    encodedBodySize: 284811,
+    requestStart: 1610.6,
+    responseStart: 2300.2,
+    decodedBodySize: 900000,
+    nextHopProtocol: "h2",
+  },
+  { name: "https://home.example/api/bots/b1/tasks/t-new", startTime: 1500, responseEnd: 2600, transferSize: 900, encodedBodySize: 600, ...hidden },
 ];
 
 const USER_AGENT = "Mozilla/5.0 (Linux; Android 14; SM-S928N) SamsungBrowser/27.0";
@@ -47,6 +59,7 @@ function fakePage(href: string, navType: NavigationTimingType = "navigate", extr
     visibility: () => "visible",
     build: () => "index-DNyEQLOj.js",
     userAgent: extra.userAgent ?? USER_AGENT,
+    randomId: () => "0123456789abcdef",
     afterPaint: (done) => paintsQueued.push(done),
     send: (body) => sent.push(JSON.parse(body)),
   };
@@ -91,6 +104,7 @@ describe("cold-open timing", () => {
     fake.expire();
     expect(fake.sent).toEqual([
       {
+        openId: "0123456789abcdef",
         label: "notification",
         t0: -2000,
         nav: {
@@ -109,7 +123,16 @@ describe("cold-open timing", () => {
         mount: 1200,
         sseOpen: 1500,
         hello: 1590,
-        bots: { start: 1600, end: 2401, transferSize: 285111, encodedBodySize: 284811 },
+        bots: {
+          start: 1600,
+          end: 2401,
+          transferSize: 285111,
+          encodedBodySize: 284811,
+          requestStart: 1611,
+          responseStart: 2300,
+          decodedBodySize: 900000,
+          nextHopProtocol: "h2",
+        },
         taskSwitch: { start: 1500, end: 2600, transferSize: 900, encodedBodySize: 600 },
         chatPaint: 2701,
         jsCached: true,
@@ -121,6 +144,104 @@ describe("cold-open timing", () => {
         userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S928N) SamsungBrowser/27.0",
       },
     ]);
+  });
+
+  it("keeps a bots field the browser hides at 0", () => {
+    const fake = fakePage("https://home.example/");
+    const timing = createColdOpenTiming({ ...fake.page, resources: () => [{ ...resources[2], ...hidden }] });
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent[0].bots).toMatchObject({ requestStart: 0, responseStart: 0, decodedBodySize: 0, nextHopProtocol: "" });
+  });
+
+  it("records the first stream's creation, errors before its first open, and that open", () => {
+    const fake = fakePage("https://home.example/");
+    const timing = createColdOpenTiming(fake.page);
+    expect(timing.streamId()).toBe("0123456789abcdef");
+    fake.at(300.4);
+    timing.sse("created");
+    expect(timing.streamId()).toBeUndefined();
+    fake.at(900);
+    timing.sse("error");
+    fake.at(1400.2);
+    timing.sse("error");
+    timing.sse("created");
+    fake.at(2000);
+    timing.sse("open");
+    fake.at(2500);
+    timing.sse("error");
+    timing.sse("open");
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent[0].sse).toEqual({ created: 300, open: 2000, errors: 2, lastError: 1400 });
+  });
+
+  it("records a stream that never opened without an open time", () => {
+    const fake = fakePage("https://home.example/");
+    const timing = createColdOpenTiming(fake.page);
+    fake.at(300);
+    timing.sse("created");
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent[0].sse).toEqual({ created: 300, errors: 0 });
+  });
+
+  it("omits the stream when none was created", () => {
+    const fake = fakePage("https://home.example/");
+    const timing = createColdOpenTiming(fake.page);
+    timing.sse("error");
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent[0]).not.toHaveProperty("sse");
+  });
+
+  it("hands the first bots request its id once", () => {
+    const fake = fakePage("https://home.example/");
+    const timing = createColdOpenTiming(fake.page);
+    expect(timing.botsHeader()).toEqual({ "x-cold-open": "0123456789abcdef" });
+    expect(timing.botsHeader()).toEqual({});
+    const warm = fakePage("https://home.example/", "reload");
+    const warmTiming = createColdOpenTiming(warm.page);
+    warmTiming.warm(ORIGIN + 1, "t1");
+    expect(warmTiming.botsHeader()).toEqual({});
+    expect(warmTiming.streamId()).toBeUndefined();
+  });
+
+  it("records whether a saved chat loaded and when it first painted", () => {
+    const fake = fakePage("https://home.example/?bot=b1&thread=t-new");
+    const timing = createColdOpenTiming(fake.page);
+    timing.cacheLoaded(true);
+    timing.cacheLoaded(false);
+    timing.cacheShown(undefined);
+    timing.cacheShown("t-old");
+    fake.at(500);
+    timing.cacheShown("t-new");
+    timing.cacheShown("t-new");
+    fake.at(520.4);
+    fake.paint();
+    fake.at(900);
+    timing.cacheShown("t-new");
+    fake.paint();
+    timing.chatShown("t-new");
+    fake.paint();
+    expect(fake.sent[0].cache).toEqual({ hit: true, paint: 520 });
+  });
+
+  it("records a missed cache without a paint and omits an unasked one", () => {
+    const missed = fakePage("https://home.example/");
+    const timing = createColdOpenTiming(missed.page);
+    timing.cacheLoaded(false);
+    timing.cacheShown("t1");
+    missed.paint();
+    timing.chatShown("t1");
+    missed.paint();
+    expect(missed.sent[0].cache).toEqual({ hit: false });
+    const asked = fakePage("https://home.example/");
+    const bare = createColdOpenTiming(asked.page);
+    bare.cacheShown("t1");
+    bare.chatShown("t1");
+    asked.paint();
+    expect(asked.sent[0]).not.toHaveProperty("cache");
   });
 
   it("labels a plain launch as open and takes whichever chat paints", () => {

@@ -127,7 +127,7 @@ import {
   sendWebPushToDevices,
   type PushTarget,
 } from "./web-push.ts";
-import { receiveColdOpen } from "./cold-open-diag.ts";
+import { receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
 import { OPEN_CHAT_HEADER, offscreenLimit } from "./chat-tail.ts";
 import {
   isEffortLevel,
@@ -7335,6 +7335,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
+      traceOpenSse(url, sseClients.size);
       const client: SseClient = { res, screens: url.searchParams.get("screens") !== "off" };
       res.writeHead(200, {
         "content-type": "text/event-stream",
@@ -7534,6 +7535,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // along on this response (the sidebar's group-order refetch reads them
     // here), so do not "fix" this into a separate groups fetch.
     if (method === "GET" && path === "/api/bots") {
+      traceOpenBots(req, res);
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const open = req.headers[OPEN_CHAT_HEADER];
