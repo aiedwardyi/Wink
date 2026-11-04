@@ -3,16 +3,19 @@ export interface LiveTurn {
   threadId: string;
   owner: "user" | "peer" | "room";
   depth: number;
+  rootId: string | null;
   nowWatch: unknown[];
 }
+
+type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };
 
 export class TurnRegistry {
   private readonly turns = new Map<string, LiveTurn>();
   private readonly threads = new Map<string, string>();
   private readonly starting = new Map<string, Omit<LiveTurn, "nowWatch">>();
 
-  prepare(turn: Omit<LiveTurn, "nowWatch">): void {
-    this.starting.set(turn.threadId, turn);
+  prepare(turn: TurnStart): void {
+    this.starting.set(turn.threadId, { ...turn, rootId: turn.rootId ?? null });
   }
 
   started(turnId: string, threadId: string): void {
@@ -27,10 +30,10 @@ export class TurnRegistry {
     this.starting.delete(threadId);
   }
 
-  start(turnId: string, turn: Omit<LiveTurn, "nowWatch">): void {
+  start(turnId: string, turn: TurnStart): void {
     const previous = this.threads.get(turn.threadId);
     if (previous && previous !== turnId) this.turns.delete(previous);
-    this.turns.set(turnId, { ...turn, nowWatch: [] });
+    this.turns.set(turnId, { ...turn, rootId: turn.rootId ?? null, nowWatch: [] });
     this.threads.set(turn.threadId, turnId);
   }
 
@@ -42,6 +45,14 @@ export class TurnRegistry {
     const turnId = this.threads.get(threadId);
     const turn = turnId ? this.turns.get(turnId) : undefined;
     return turnId && turn ? { turnId, ...turn } : undefined;
+  }
+
+  adoptRoot(threadId: string, rootId: string): void {
+    const starting = this.starting.get(threadId);
+    if (starting) starting.rootId = rootId;
+    const turnId = this.threads.get(threadId);
+    const turn = turnId ? this.turns.get(turnId) : undefined;
+    if (turn) turn.rootId = rootId;
   }
 
   settle(turnId: string): void {

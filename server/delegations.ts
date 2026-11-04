@@ -37,6 +37,7 @@ export interface DelegationItem {
   reason?: string;
   /** The source depth; the peer runs at depth + 1 and cannot delegate again. */
   depth: number;
+  root?: string;
 }
 
 interface PendingDelegationItem extends DelegationItem {
@@ -74,6 +75,7 @@ export interface DelegationReceipt {
   target?: { botId: string; threadId?: string; turnId?: string };
   seq?: number;
   publish?: MailDestination[];
+  root?: string;
   fallback?: string;
 }
 
@@ -215,6 +217,7 @@ export function _loadPending(): void {
         const fromBotId = persistedFromBotId.parse(item.fromBotId);
         if (fromBotId) loaded.fromBotId = fromBotId;
         if (typeof item.reason === "string") loaded.reason = item.reason;
+        if (typeof item.root === "string") loaded.root = item.root;
         if (typeof item.turnId === "string") loaded.turnId = item.turnId;
         if (typeof item.seq === "number" && Number.isFinite(item.seq)) loaded.seq = item.seq;
         if (item.kind === "ask" || item.kind === "delegation") loaded.kind = item.kind;
@@ -276,7 +279,7 @@ export function queueDelegation(
   item: DelegationItem,
   maxDepth: number,
   sourceThreadId = from.threadId,
-  options: { kind?: "ask" | "delegation"; ready?: boolean; approved?: boolean } = {},
+  options: { kind?: "ask" | "delegation"; ready?: boolean; approved?: boolean; turnId?: string } = {},
 ): QueuedDelegation {
   if (item.toBotId === from.id) return { result: "self" };
   if (item.depth >= maxDepth) return { result: "too_deep" };
@@ -295,13 +298,13 @@ export function queueDelegation(
     message: redactSecretsInText(item.message),
     id,
     fromBotId: from.id,
-    turnId: turnRegistry.current(sourceThreadId)?.turnId,
+    turnId: options.turnId ?? turnRegistry.current(sourceThreadId)?.turnId,
     kind: options.kind ?? "delegation",
     approved: options.approved,
     attempts: 0,
   };
   if (queued.reason !== undefined) queued.reason = redactSecretsInText(queued.reason);
-  acceptPeerTask(from, target, sourceThreadId, queued.kind!, "held", id);
+  acceptPeerTask(from, target, sourceThreadId, queued.kind!, "held", id, queued.root, queued.turnId);
   if (options.ready) readyItem(queued);
   list.push(queued);
   pendingDelegations.set(sourceThreadId, list);
@@ -324,6 +327,7 @@ export function drainDelegations(
     taskId: string,
     sourceBotId: string,
     transcriptText?: string,
+    root?: string,
   ) => void | Promise<void>,
   sourceBotId?: string,
   waitingOn?: string,
@@ -336,9 +340,9 @@ export function drainDelegations(
   pumpReady(bus, approvalBus, runTarget);
 }
 
-export function acceptPeerTask(from: BotRecord, target: BotRecord, threadId: string, kind: "ask" | "delegation", state: MailState, id = newId()): string {
-  recordDelegationReceipt({ id, sourceThreadId: threadId, toBotId: target.id, toBotName: target.name, status: "queued", kind, deliver: "queued", state,
-    source: { botId: from.id, threadId, turnId: turnRegistry.current(threadId)?.turnId ?? "" }, target: { botId: target.id, ...(state === "dispatching" ? { threadId: target.threadId } : {}) } });
+export function acceptPeerTask(from: BotRecord, target: BotRecord, threadId: string, kind: "ask" | "delegation", state: MailState, id = newId(), root?: string, sourceTurnId?: string): string {
+  recordDelegationReceipt({ id, sourceThreadId: threadId, toBotId: target.id, toBotName: target.name, status: "queued", kind, deliver: "queued", state, root,
+    source: { botId: from.id, threadId, turnId: sourceTurnId ?? turnRegistry.current(threadId)?.turnId ?? "" }, target: { botId: target.id, ...(state === "dispatching" ? { threadId: target.threadId } : {}) } });
   return id;
 }
 
@@ -538,6 +542,7 @@ async function processOne(
     taskId: string,
     sourceBotId: string,
     transcriptText?: string,
+    root?: string,
   ) => void | Promise<void>,
 ): Promise<void> {
   const sender = from;
@@ -549,7 +554,7 @@ async function processOne(
     const prompt = `${delegatedPrompt(sender, item)}\n\nYour earlier reply went to ${item.takenOverBy} because they messaged you mid-turn, so answer @${sender.name} now.`;
     noteMessageFrom(bus, sender, target, channel);
     runningDelegations.set(item.id, { sourceThreadId, item });
-    await runTarget(item.toBotId, prompt, item.depth + 1, sourceThreadId, channel, item.id, sender.id, `Answering ${sender.name}'s earlier request`);
+    await runTarget(item.toBotId, prompt, item.depth + 1, sourceThreadId, channel, item.id, sender.id, `Answering ${sender.name}'s earlier request`, item.root);
     return;
   }
   const channel = getOrCreateChannel(bus.store, sender, target);
@@ -557,7 +562,7 @@ async function processOne(
   const delivered = patchDelegationChip(bus, item.id, { name: `Delivered to @${target.name}` }, commLink(channel, target), body);
   mirrorExchange(bus, sender, target, item.message, channel, sourceThreadId, !delivered);
   runningDelegations.set(item.id, { sourceThreadId, item });
-  await runTarget(item.toBotId, delegatedPrompt(sender, item), item.depth + 1, sourceThreadId, channel, item.id, sender.id, `${item.message}${reasonLine(item)}`);
+  await runTarget(item.toBotId, delegatedPrompt(sender, item), item.depth + 1, sourceThreadId, channel, item.id, sender.id, `${item.message}${reasonLine(item)}`, item.root);
 }
 
 const reasonLine = (item: PendingDelegationItem) => item.reason ? `\n\n[Reason: ${item.reason}]` : "";

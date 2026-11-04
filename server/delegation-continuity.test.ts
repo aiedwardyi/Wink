@@ -8,6 +8,7 @@ import { _resetPending, finishDelegatedTurn, queueDelegation, recordDelegationRe
 import { createInternalRoutes } from "./internal-routes.ts";
 import { markMailRead } from "./mail.ts";
 import { Store, type Message } from "./store.ts";
+import { turnRegistry } from "./turn-registry.ts";
 
 let store: Store;
 let bot: ReturnType<Store["createBot"]>;
@@ -115,6 +116,8 @@ it("keeps the five newest annotations per tool in a mixed rollup", async () => {
 });
 
 it("carries a busy peer's queued ask without a raw ask chip", async () => {
+  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0 });
+  turnRegistry.started("continuity-busy", bot.threadId);
   store.patchBot(peer.id, { busy: true });
   const req = new IncomingMessage(new Socket());
   const output = response();
@@ -133,6 +136,8 @@ it("carries a busy peer's queued ask without a raw ask chip", async () => {
 });
 
 it("keeps a completed synchronous ask out of a later ask's annotation", async () => {
+  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0 });
+  turnRegistry.started("continuity-sync", bot.threadId);
   const calls: Message[] = [];
   for (const replied of [true, false]) {
     calls.push(store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: "ask_bot", ok: true } }));
@@ -178,6 +183,8 @@ it("returns an empty list and rejects a caller outside the source conversation",
 });
 
 it("carries a timed-out ask_bot id before and after its reply settles", async () => {
+  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0 });
+  turnRegistry.started("continuity-timeout", bot.threadId);
   const route = routes(async (_target, _text, _depth, _from, task) => ({ text: "Still working", replied: false, taskId: task!.taskId }));
   const req = new IncomingMessage(new Socket());
   const output = response();
