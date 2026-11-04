@@ -80,14 +80,14 @@ it("groups pushed accounts immediately and after returning without a side fetch"
   expect(request).not.toHaveBeenCalled();
 });
 
-it("puts icon headings and Main above the matching account's bars without email text", async () => {
+it("puts account headings and Main above the matching account's bars", async () => {
   await render();
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   expect(main().textContent).not.toContain("Set as Main");
   expect(other().textContent).toContain("Set as Main");
-  expect(main().textContent).toContain("ClaudeMain");
-  expect(host.textContent).not.toContain("@example.com");
+  expect(main().textContent).toContain("claude@example.comMain");
+  expect(other().textContent).not.toContain("@example.com");
   expect(other().textContent).not.toContain("MainSet");
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
@@ -218,7 +218,7 @@ it("translates account controls into Korean", async () => {
   persistPreference("ko");
   await render(3);
   expect(button("기본으로 설정")).toBeDefined();
-  expect(main().textContent).toContain("Claude기본");
+  expect(main().textContent).toContain("claude@example.com기본");
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
 });
 
@@ -384,4 +384,28 @@ it("marks the base Main without a pushed Main flag and preserves long emails", a
   expect(items()[3]!.textContent).toBe(email);
   await act(async () => items()[3]!.click());
   expect(picker().textContent).toBe(email);
+});
+
+it.each([false, true])("keeps the full picker email in its title and accessible name on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  const email = `${"long".repeat(20)}@example.com`;
+  state.instances = state.instances.map((account) => ({ ...account, snapshot: { ...account.snapshot, account: email } }));
+  await rerender();
+  expect(picker().title).toBe(email);
+  expect(picker().getAttribute("aria-label")).toBe(`Choose account: ${email}`);
+  expect(picker().textContent).toBe(email);
+});
+
+it.each([2, 4])("names desktop Main by email without a selector for %i accounts", async (count) => {
+  await render(count);
+  expect(main().textContent).toContain("claude@example.comMain");
+  expect(main().querySelector('[title="claude@example.com"]')).not.toBeNull();
+  expect(main().querySelector('[aria-haspopup="menu"]')).toBeNull();
+  state.instances[0]!.snapshot.account = undefined;
+  await rerender();
+  expect(main().textContent).toContain("ClaudeMain");
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
+  await rerender();
+  expect(main().textContent).toContain("second@example.comMain");
 });

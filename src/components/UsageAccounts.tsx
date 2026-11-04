@@ -33,11 +33,11 @@ function AccountPicker({ account, accounts, mainId, label, select }: {
   }, [open]);
   return (
     <div className="min-w-0 flex-1">
-      <button ref={trigger} type="button" aria-label={t("accounts.choose", { account: label(account) })}
+      <button ref={trigger} type="button" title={label(account)} aria-label={t("accounts.choose", { account: label(account) })}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
         className="flex min-h-7 w-full items-center gap-2 text-left hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent max-md:min-h-11 [@media(pointer:coarse)]:min-h-11">
         <ProviderMark driverKind={account.driverKind} size={16} className="shrink-0" />
-        <span className="min-w-0 break-words [overflow-wrap:anywhere]">{label(account)}</span>
+        <span className="min-w-0 truncate">{label(account)}</span>
         <ChevronDown size={12} aria-hidden="true" className="ml-auto shrink-0" />
       </button>
       {open && <div ref={menu} id={id} role="menu" aria-label={t("accounts.choose", { account: label(account) })}
@@ -120,7 +120,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
       {(phone || other) && pages.length > 1 ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label}
         select={(id) => { focusSelection.current = id !== currentId; setSelectedId(id); }} /> : <>
         <EngineMark instance={account} size={16} tapToShow />
-        {!other && <span className="min-w-0 truncate">{account.displayName}</span>}
+        {!other && <span title={account.snapshot.account} className="min-w-0 truncate">{account.snapshot.account || account.displayName}</span>}
       </>}
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
