@@ -2,6 +2,31 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.229] - 2026-11-04
+
+### Added
+- Workers come back after Wink restarts or updates, on the same conversation.
+- Bot Details has a Memory tab, so a bot's memory sits in its own place instead of one long page.
+- File links from another PC open in Wink: pictures and videos play inline, web pages open in a Wink window, other files download.
+- Usage refreshes old readings on its own when you open it, and shows how old a reading is until the new one lands.
+
+### Changed
+- Account screens are cleaner: one icon per account, Add Account and Set as Main on the engine row, and accounts with only a weekly limit line up with the rest.
+- Usage shows your Main account in full color and the others faded. On the phone it shows one account at a time, Main first.
+- Usage sits right under Connections in Settings.
+- Workers use the engine's Main account, even when a bot on another engine starts them. If Main is signed out, they use your default account and say so.
+- The terminal has no tab strip: switch panes from the worker list, which now lives in the terminal header.
+- Code sign-in reads "Sign in with your browser", with a "Paste the code here" box.
+- Terminal themes show each work step on one line, with output folded and a click to see more.
+- The name box and Language row in Settings match the other rows' widths.
+
+### Fixed
+- Gemini bots no longer drop a reply after a long command, and their messages to other bots go through.
+- Opening a memory file keeps its header on screen.
+- Rooms set to Lead before an update now answer like new rooms.
+- Model Index tabs fit on the phone.
+- New Claude workers no longer stop on the Bypass Permissions screen.
+
 ## [1.0.228] - 2026-11-04
 
 ### Added
@@ -536,6 +561,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.229]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.229
 [1.0.228]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.228
 [1.0.227]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.227
 [1.0.226]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.226
