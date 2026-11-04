@@ -75,6 +75,13 @@ describe("change list validation", () => {
     expect(await validate("- new (noted 2026-11-04)\n- old (noted 2026-10-01)", [{ op: "replace", id: 2, newer: 1, reason: "Current" }])).toMatchObject({ ok: true });
   });
 
+  it.each(["pending", "PARKED", "await", "awaits", "awaiting", "대기", "보류"])("protects %s from retire but allows replacement", async (marker) => {
+    const text = `- task ${marker}\n- task completed`;
+    expect(await validate(text, [retire(1)])).toMatchObject({ ok: false, errors: [{ reason: "protected", change: 0 }] });
+    expect(await validate(text, [{ op: "replace", id: 1, newer: 2, reason: "Current" }])).toMatchObject({ ok: true, text: "- task completed" });
+    expect(await validate(`${text}\n- task ${marker}`, [retire(1)])).toMatchObject({ ok: false, errors: [{ reason: "protected", change: 0 }] });
+  });
+
   it("splits verbatim fragments and only reminds declined side lines", async () => {
     expect(await validate("- old red green blue", [{ op: "split", id: 1, keep: ["red", "blue"], reason: "Done" }], "memory/topic.md")).toMatchObject({ ok: true, text: "- red blue" });
     expect(await validate("- Declined: a long plan", [{ op: "remind", id: 1, text: "- Declined: plan", reason: "Keep reminder" }], "memory/topic.md")).toMatchObject({ ok: true });

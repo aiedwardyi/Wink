@@ -15,7 +15,7 @@ type EngineDeps = {
 export function memoryCleanEngine(deps: EngineDeps): MemoryCleanDeps["engine"] {
   const now = deps.now ?? Date.now;
   const eligible = async (instance: ProviderInstance) => {
-    if (!instance.enabled || !instance.generateText || !supportsWorkspaceFiles(instance.driverKind) || !deps.available(instance.instanceId) ||
+    if (!["claudeAgent", "codex"].includes(instance.driverKind) || !instance.enabled || !instance.generateText || !supportsWorkspaceFiles(instance.driverKind) || !deps.available(instance.instanceId) ||
       deps.usage(instance.instanceId).some((window) => window.usedPercent > 80 && (window.resetsAt === null || window.resetsAt > now()))) return false;
     try {
       const snapshot = await instance.snapshot();

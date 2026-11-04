@@ -88,6 +88,7 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
     if (change.op === "remind" && !declinedLine(lines[change.id - 1]!)) fail("op-not-allowed", index);
     for (const n of ids) {
       const line = lines[n - 1]!;
+      if (change.op === "retire" && /pending|parked|awaits?|awaiting|대기|보류/i.test(line)) fail("protected", index);
       const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => (op.op === "merge" ? op.ids : [op.id]).includes(i + 1)));
       if (pointerLine(line) && !exactCopy) fail("pointer", index);
       if (!protectedIds.has(n)) continue;

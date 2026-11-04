@@ -189,7 +189,7 @@ describe("pair.mjs sabotaged merge", () => {
   const asked = cues.map(([cue, answer], i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `What comes after "${cue}"?`, answer }));
 
   async function run(text: string) {
-    const lists = { "MEMORY.md": [{ op: "merge", ids: [109, 110], text, reason: "Same subject" }], "memory/queued.md": [retire(24), retire(67), retire(138)] } satisfies Partial<Record<CleanFile, Change[]>>;
+    const lists: Partial<Record<CleanFile, Change[]>> = { "MEMORY.md": [{ op: "merge", ids: [109, 110], text, reason: "Same subject" }], "memory/queued.md": [retire(24), retire(67), retire(138)] };
     const propose = vi.fn<TextCall>(async (prompt) => {
       if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(asked);
       if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify((pairs(prompt) as Array<{ expected: string; actual: string }>).map((pair) => pair.actual === pair.expected));

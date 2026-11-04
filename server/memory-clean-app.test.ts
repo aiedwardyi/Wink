@@ -23,7 +23,7 @@ describe("memory cleanup engines", () => {
     expect(claim("b", "t")).toBe(true); expect(memoryClean.turnStarted).toHaveBeenCalledTimes(1);
     expect(claim("b", "t")).toBe(false); expect(memoryClean.turnStarted).toHaveBeenCalledTimes(1);
   });
-  it.each(["claudeAgent", "codex", "antigravityAgent", "grokAgent", "museAgent"])("passes the bot model and text options to %s", async (kind) => {
+  it.each(["claudeAgent", "codex"])("passes the bot model and text options to %s", async (kind) => {
     const own = instance(kind);
     const engine = await memoryCleanEngine({ selection: async () => ({ instanceId: kind, model: "chosen" }), instances: () => [own], available: () => true, usage: () => [] })("b");
     const signal = new AbortController().signal;
@@ -35,10 +35,23 @@ describe("memory cleanup engines", () => {
   });
 
   it("uses another signed-in family for blind answers", async () => {
-    const own = instance("codex"); const signedOut = instance("claudeAgent", "unavailable", false); const other = instance("grokAgent");
+    const own = instance("codex"); const signedOut = instance("claudeAgent", "unavailable", false); const other = instance("claudeAgent");
     const engine = await memoryCleanEngine({ selection: async () => ({ instanceId: "codex", model: "chosen" }), instances: () => [own, signedOut, other], available: () => true, usage: () => [] })("b");
     await engine!.propose("proposal"); await engine!.recall("blind");
     expect(own.generateText).toHaveBeenCalledTimes(1); expect(other.generateText).toHaveBeenCalledTimes(1); expect(signedOut.generateText).not.toHaveBeenCalled();
+  });
+
+  it.each(["grokAgent", "antigravityAgent", "museAgent"])("skips ungated proposer %s", async (kind) => {
+    const own = instance(kind);
+    const engine = await memoryCleanEngine({ selection: async () => ({ instanceId: kind, model: "chosen" }), instances: () => [own], available: () => true, usage: () => [] })("b");
+    expect(engine).toBeNull(); expect(own.generateText).not.toHaveBeenCalled();
+  });
+
+  it("skips ungated answerers before Codex", async () => {
+    const own = instance("claudeAgent"); const grok = instance("grokAgent"); const other = instance("codex");
+    const engine = await memoryCleanEngine({ selection: async () => ({ instanceId: "claudeAgent", model: "chosen" }), instances: () => [own, grok, other], available: () => true, usage: () => [] })("b");
+    await engine!.recall("blind");
+    expect(other.generateText).toHaveBeenCalledTimes(1); expect(grok.generateText).not.toHaveBeenCalled();
   });
 
   it.each(["claudeAgent", "codex"])("returns %s usage with the text and keeps the latest cumulative report", async (kind) => {
