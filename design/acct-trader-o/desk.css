@@ -1,0 +1,43 @@
+/* Motion for the usage desk. Subtle, short, never bouncy. */
+@keyframes desk-pulse {
+  0% { transform: scale(1); opacity: 0.45; }
+  80%, 100% { transform: scale(3.2); opacity: 0; }
+}
+@keyframes desk-roll-in {
+  from { transform: translateY(0.32em); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes desk-fade-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes desk-drop {
+  from { opacity: 0; transform: translateY(-6px) scale(0.85); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes desk-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.9; }
+}
+@keyframes desk-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes desk-sheet-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.desk-pulse { transform-box: fill-box; transform-origin: center; animation: desk-pulse 2.4s cubic-bezier(0.2, 0.6, 0.3, 1) infinite; }
+.desk-roll { display: inline-block; animation: desk-roll-in 240ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.desk-fade { animation: desk-fade-in 260ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.desk-drop { animation: desk-drop 320ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.desk-pending { animation: desk-breathe 0.9s ease-in-out infinite; }
+.desk-blink { animation: desk-blink 2.4s ease-in-out infinite; }
+.desk-sheet { animation: desk-sheet-up 240ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.desk-check { transition: transform 280ms cubic-bezier(0.2, 0.7, 0.2, 1), opacity 200ms; }
+.desk-braille { font-family: "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", ui-monospace, monospace; line-height: 1; letter-spacing: 0; white-space: pre; font-variant-ligatures: none; }
+.desk-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+@media (prefers-reduced-motion: reduce) {
+  .desk-pulse, .desk-roll, .desk-fade, .desk-drop, .desk-pending, .desk-blink, .desk-sheet { animation: none; }
+  .desk-check { transition: none; }
+}
