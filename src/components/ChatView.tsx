@@ -373,7 +373,7 @@ const NoteMessage = memo(function NoteMessage({ message }: { message: Message })
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const note = parsePaneNote(message.text ?? "");
-  const title = note.label ? t("chat.noteFrom", { label: note.label }) : t(note.pane8 ? "chat.noteFromWorker" : "chat.note");
+  const title = message.noteType === "team-report" ? t("chat.bugReport") : note.label ? t("chat.noteFrom", { label: note.label }) : t(note.pane8 ? "chat.noteFromWorker" : "chat.note");
   return (
     <div className="flex w-full flex-col items-start gap-1">
       <button
