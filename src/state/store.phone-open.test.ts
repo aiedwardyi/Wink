@@ -142,5 +142,56 @@ describe("phone cold open", () => {
     await act(async () => vi.advanceTimersByTimeAsync(2100));
     expect(host.textContent).toBe(locale === "en" ? "Reconnecting" : "다시 연결 중");
   });
+
+  it.each([ ["en", "Updating", "Reconnecting"], ["ko", "업데이트 중", "다시 연결 중"] ] as const)("shows the unreachable-PC cue after ten seconds in %s", async (locale, updating, reconnecting) => {
+    applyLocale(locale);
+    await mount(true);
+    await act(async () => vi.advanceTimersByTimeAsync(9999));
+    expect(host.textContent).toBe(updating);
+    expect(host.querySelector("svg")).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(host.textContent).toBe(reconnecting);
+    expect(host.querySelector("svg")).not.toBeNull();
+  });
+
+  it.each(["bot", "group"])("sends the selected %s read receipt for covered frames without applying their older state", async (kind) => {
+    await mount(true);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const reply: Message = { ...message("m2"), role: "bot" };
+    const record = { ...bot(), name: "Fresh snapshot", unread: true, messages: [message("m1"), reply] };
+    await hello();
+    await emit({ kind: "message", seq: 2, threadId: record.threadId, message: reply }, "s:2");
+    await emit({ kind, seq: 3, [kind]: { ...record, name: "Older frame" } }, "s:3");
+    await act(async () => requests[0]!(Response.json({ bots: kind === "bot" ? [record] : [], groups: kind === "group" ? [record] : [], cursor: "s:3" })));
+    const patch = fetchMock.mock.calls.find(([url, init]) => url === `/api/${kind === "bot" ? "bots" : "groups"}/b1` && init?.method === "PATCH");
+    expect(patch).toBeDefined();
+    expect(JSON.parse(patch![1].body)).toEqual({ unread: false, readAt: 2 });
+    expect((kind === "bot" ? store.state.bots : store.state.groups)[0]!.name).toBe("Fresh snapshot");
+  });
+
+  it("applies a covered queue cancellation receipt after hydration", async () => {
+    await mount(true);
+    await hello();
+    await act(async () => store.dispatch({ type: "pendingQueued", threadId: "tb1", queueId: "q1", text: "queued" }));
+    await emit({ kind: "queue.cancelled", seq: 2, botId: "b1", sends: [{ threadId: "tb1", queueId: "q1" }] }, "s:2");
+    await finish(0, "s:2");
+    expect(store.state.pendingQueued.tb1).toBeUndefined();
+  });
+
+  it("settles a covered task resume acknowledgement after hydration", async () => {
+    await mount(true);
+    await hello();
+    fetchMock.mockImplementation((url: string) => url.endsWith("/resume")
+      ? Promise.resolve(Response.json({ pending: true }))
+      : Promise.resolve(Response.json({})));
+    const settled = vi.fn();
+    await act(async () => store.dispatch({ type: "resumeTask", botId: "b1", threadId: "tb1", onSettled: settled }));
+    expect(settled).toHaveBeenCalledWith(null, true);
+    settled.mockClear();
+    await emit({ kind: "task.resume", seq: 2, botId: "b1", threadId: "tb1" }, "s:2");
+    await finish(0, "s:2");
+    expect(settled).toHaveBeenCalledExactlyOnceWith(null, false);
+  });
 });
 

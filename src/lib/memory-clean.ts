@@ -60,8 +60,9 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
   useEffect(() => {
     const changed = seenSignature.current !== signature;
     seenSignature.current = signature;
+    if (changed) pending.delete(botId);
     if (active || changed) void refresh();
-  }, [active, signature, refresh]);
+  }, [active, botId, signature, refresh]);
   const undo = async () => {
     if (!run?.undoable || busy.current) return;
     busy.current = true;

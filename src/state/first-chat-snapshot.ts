@@ -21,9 +21,9 @@ export function createChatSnapshotLoad<T extends { cursor?: string }>(fetchSnaps
       while (alive()) {
         const before = boundary();
         const fresh = !pending;
-        const snapshot = await (pending ?? fetchSnapshot());
+        const snapshot = await (pending ?? fetchSnapshot().catch(() => null));
         pending = null;
-        if (!alive()) return null;
+        if (!alive() || (fresh && !snapshot)) return null;
         const current = boundary();
         if (snapshot && (current === undefined || snapshotCoversHello(snapshot.cursor, current)
           || (fresh && before === current && snapshot.cursor === undefined))) return snapshot;
@@ -34,7 +34,7 @@ export function createChatSnapshotLoad<T extends { cursor?: string }>(fetchSnaps
   };
 }
 
-const SNAPSHOT_FRAME_KINDS = new Set(["bot", "group", "thread", "message", "message.patch", "bot.deleted", "group.deleted", "bots.order", "groups.order", "queue.cancelled", "task.packet", "task.resume"]);
+const SNAPSHOT_FRAME_KINDS = new Set(["bot", "group", "thread", "message", "message.patch", "bot.deleted", "group.deleted", "bots.order", "groups.order", "task.packet"]);
 
 export function chatFrameAfterSnapshot(frame: { kind: string; seq?: number }, cursor?: string): boolean {
   if (!cursor || !Number.isSafeInteger(frame.seq) || !SNAPSHOT_FRAME_KINDS.has(frame.kind)) return true;

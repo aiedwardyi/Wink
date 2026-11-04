@@ -1908,7 +1908,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const snapshots = createChatSnapshotLoad(() => chatSnapshot(prefetchAbort.signal), () => alive);
     let prefetchStarted = false;
     let snapshotBoundary: string | undefined;
-    let appliedSnapshotCursor: string | undefined;
+    let appliedSnapshot: Pick<AppState, "bots" | "groups"> & { cursor?: string } = { bots: [], groups: [] };
     type PeripheralKey = "instances" | "config" | "routines";
     type PeripheralPart = {
       key: PeripheralKey;
@@ -2000,9 +2000,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const loadAll = async (): Promise<boolean> => {
       const chat = async () => {
         const snapshot = await snapshots.load(() => snapshotBoundary);
-        if (!alive || !snapshot) return;
+        if (!alive) return;
         rehydrateRequested = false;
-        appliedSnapshotCursor = snapshot.cursor;
+        if (!snapshot) throw new Error("Chat snapshot unavailable");
+        appliedSnapshot = { ...snapshot, groups: snapshot.groups ?? [] };
         const { bots, groups } = snapshot;
         rawDispatch({
           type: "hydrate",
@@ -2060,7 +2061,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         } while (alive && rehydrateRequested);
         if (!alive || !loaded) return false;
         hydrated = true;
-        for (const frame of pendingFrames.splice(0)) if (chatFrameAfterSnapshot(frame, appliedSnapshotCursor)) handleFrame(frame);
+        const covered: any[] = [];
+        for (const frame of pendingFrames.splice(0)) if (chatFrameAfterSnapshot(frame, appliedSnapshot.cursor)) handleFrame(frame); else covered.push(frame);
+        const receipt = viewedReplies.current.coveredPatch({ ...stateRef.current, ...appliedSnapshot }, covered, document.visibilityState === "visible" && document.hasFocus());
+        if (receipt) api(receipt.path, { method: "PATCH", body: JSON.stringify(receipt.patch) }).catch(() => {});
         // Text held behind the snapshot is history now: it lands whole.
         flushDeltas();
         return true;

@@ -25,6 +25,27 @@ afterEach(async () => {
 });
 
 describe("cleanup summary", () => {
+  it.each([false, true])("replaces an in-flight read when a tidy signature changes (patch %s)", async (patched) => {
+    const replies: Array<(response: Response) => void> = [];
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
+    vi.stubGlobal("fetch", fetch);
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    await mount();
+    if (patched) {
+      await act(async () => replies[0](Response.json({ run })));
+      await act(async () => root.render(createElement(Probe, { messages: [message] })));
+    }
+    const before = replies.length;
+    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
+    await act(async () => root.render(createElement(Probe, { messages: [changed] })));
+    const reads = replies.length;
+    await act(async () => replies[before - 1](Response.json({ run: null })));
+    if (reads > before) await act(async () => replies[before](Response.json({ run: { ...run, undoneAt: patched ? 3 : null, undoable: !patched } })));
+    expect(reads).toBe(before + 1);
+    expect(value.run?.runId).toBe("r");
+    expect(value.run?.undoable).toBe(!patched);
+  });
+
   it("coalesces same-bot reads across cleanup rows and refetches after settling", async () => {
     let finish!: (response: Response) => void;
     const fetch = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));

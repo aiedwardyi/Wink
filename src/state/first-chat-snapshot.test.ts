@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canPrefetchChat,
   chatFrameAfterSnapshot,
+  createChatSnapshotLoad,
   DEFERRED_INSTANCE_IDLE_MS,
   firstChatPeripherals,
   isFirstChatPeripheral,
@@ -24,6 +25,20 @@ describe("chat snapshot prefetch", () => {
     ["file:///app/index.html", false],
   ])("prefetches HTTP origins at boot: %s", (origin, expected) => {
     expect(canPrefetchChat(new URL(origin))).toBe(expected);
+  });
+});
+
+describe("chat snapshot retry failure", () => {
+  it("returns after a failed retry and waits for the next hello to load again", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce({ cursor: "s:1" })
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce({ cursor: "s:3" });
+    const snapshots = createChatSnapshotLoad(fetch, () => true);
+    snapshots.prefetch();
+    await expect(snapshots.load(() => "s:2")).resolves.toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await expect(snapshots.load(() => "s:3")).resolves.toEqual({ cursor: "s:3" });
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });
 
