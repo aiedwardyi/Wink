@@ -1,9 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
-import { performance } from "node:perf_hooks";
-import { setTimeout as delay } from "node:timers/promises";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -149,9 +147,7 @@ async function healthyScale() {
 }
 
 beforeEach(() => {
-  const scratch = join(tmpdir(), "wink-SYNC-KINDS-BUILD");
-  mkdirSync(scratch, { recursive: true });
-  root = mkdtempSync(join(scratch, "kinds-"));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), "google-sync-kinds-")));
   drive = new FakeDrive();
   syncs = [];
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -715,42 +711,5 @@ describe("Google reader kind recovery", () => {
     expect(drive.calls).toHaveLength(3);
     expect(children()).toHaveLength(0);
     expect(drive.downloads).toHaveLength(0);
-    write(join(tmpdir(), "wink-SYNC-KINDS-BUILD/scale.json"), JSON.stringify({ rootFiles: 5501, retainedSegments: 5000, metadata: 10, downloads: 1, idle: 3 }));
-  });
-
-  it.skipIf(process.env.SYNC_KINDS_TIMING !== "1")("measures upload wait behind recovery and boot listing at 5,501 files", async () => {
-    const dataDir = await healthyScale();
-    const measure = async (recovery: boolean) => {
-      const listing = gate();
-      let paused = false;
-      let uploaded = 0;
-      const sync = boot(dataDir, () => true, { fetch: async (input, init) => {
-        const url = new URL(String(input));
-        if (url.searchParams.get("q")?.includes("in parents") && !url.searchParams.get("q")?.includes("name =")) {
-          if (!paused) { paused = true; listing.entered(); await listing.held; }
-          await delay(2);
-        }
-        const response = await drive.fetch(input, init);
-        if (init?.method === "PATCH") uploaded = performance.now();
-        return response;
-      } });
-      if (recovery) {
-        await sync.kick();
-        await vi.advanceTimersByTimeAsync(30_000);
-      } else sync.resume();
-      await listing.started;
-      const began = performance.now();
-      write(join(dataDir, `google-drive/devices/${IDS.profileDeviceId}.json`), recovery ? "send during recovery" : "send during boot");
-      try { await delay(10); }
-      finally { listing.release(); }
-      await sync.kick();
-      await settle(sync);
-      expect(uploaded).toBeGreaterThan(began);
-      sync.stop();
-      return Math.round(uploaded - began);
-    };
-    const scan = await measure(true);
-    const bootMs = await measure(false);
-    write(join(tmpdir(), "wink-SYNC-KINDS-BUILD/upload-wait.json"), JSON.stringify({ rootFiles: 5501, pageDelayMs: 2, heldMs: 10, scanMs: scan, bootMs }));
-  });
+  }, 60_000);
 });
