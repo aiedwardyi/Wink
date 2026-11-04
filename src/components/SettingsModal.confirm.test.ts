@@ -24,6 +24,10 @@ const { state, dispatch, api } = vi.hoisted(() => ({
   api: vi.fn(async () => ({ uses: {} })),
 }));
 
+vi.mock("@/lib/usage-auto-refresh", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/usage-auto-refresh")>()),
+  useAutoRefresh: () => undefined,
+}));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/state/store")>()),
   useStore: () => ({ state, dispatch }),

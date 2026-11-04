@@ -1,6 +1,6 @@
 // Shared plan-limit meter: the thin Grok-style track Settings already uses,
 // plus the compact 5h / weekly row that sits above the composer.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useUsageMode } from "@/lib/usage-preferences";
@@ -48,6 +48,10 @@ export function planUsageFillClass(fill: number): string {
   return planUsageTone(fill).fillClass;
 }
 
+const SLIDING_CELLS = "relative inline-block [-webkit-text-fill-color:transparent] before:absolute before:left-0 before:top-0 before:content-['▱▱▱▱▱▱▱▱▱▱'] before:[-webkit-text-fill-color:currentColor] "
+  + "after:absolute after:left-0 after:top-0 after:w-(--fill) after:overflow-hidden after:whitespace-nowrap after:content-['▰▰▰▰▰▰▰▰▰▰'] after:[-webkit-text-fill-color:currentColor] "
+  + "after:transition-[width] after:duration-300 after:ease-out motion-reduce:after:transition-none";
+
 export function PlanUsageBar({ fill, usedFill = fill, muted = false, className }: { fill: number; usedFill?: number; muted?: boolean; className?: string }) {
   return (
     <div className={cn("h-1 overflow-hidden rounded-full bg-ink/10", className)} aria-hidden="true">
@@ -62,6 +66,7 @@ export function PlanWindowMeter({
   compact = false,
   muted = false,
   dim = false,
+  slide = false,
 }: {
   window: RateLimitWindow;
   now: number;
@@ -69,6 +74,8 @@ export function PlanWindowMeter({
   /** An old reading: theme greys instead of the warning tones. */
   muted?: boolean;
   dim?: boolean;
+  /** Glide the filled cells to a new reading: the cells are painted by pseudo-elements, the real text stays for readers. */
+  slide?: boolean;
 }) {
   const { t } = useI18n();
   const mode = useUsageMode();
@@ -87,7 +94,8 @@ export function PlanWindowMeter({
       <div role="group" aria-label={label}>
         <div className={cn("flex flex-wrap items-center gap-x-2 text-[12.5px]", muted ? "text-ink-secondary" : "text-ink")}>
           <span>{t(labelKey)}</span>
-          <span aria-hidden="true" className={cn("font-mono tracking-tight", muted ? "text-ink-secondary" : planUsageTone(usedFill).textClass, dim && "opacity-45")}>
+          <span aria-hidden="true" className={cn("font-mono tracking-tight", muted ? "text-ink-secondary" : planUsageTone(usedFill).textClass, dim && "opacity-45", slide && SLIDING_CELLS)}
+            style={slide ? { "--fill": `${percent === null ? 0 : segments * 10}%` } as CSSProperties : undefined}>
             {percent === null ? "▱".repeat(10) : "▰".repeat(segments) + "▱".repeat(10 - segments)}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 tabular-nums">

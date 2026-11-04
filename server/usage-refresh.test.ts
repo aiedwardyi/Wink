@@ -79,6 +79,37 @@ describe("usage refresh route result", () => {
     }
   });
 
+  it("returns the read still running to a second request after the cooldown expires", async () => {
+    let now = 1_000;
+    let finish: (value: JsonValue) => void = () => {};
+    const rpc = vi.fn(() => new Promise<JsonValue>((resolve) => { finish = resolve; }));
+    const refresh = createUsageRefresh({ now: () => now, rpc });
+    const first = refresh("codex", { instanceId: "codex" });
+    now += 31_000;
+    const second = refresh("codex", { instanceId: "codex" });
+    expect(rpc).toHaveBeenCalledTimes(1);
+    finish(real.codex);
+    expect(await second).toBe(await first);
+    now += 31_000;
+    void refresh("codex", { instanceId: "codex" });
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares a Claude credential read that outlives its cooldown", async () => {
+    let now = 1_000;
+    let answer: (response: Response) => void = () => {};
+    const request = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    const refresh = createUsageRefresh({ platform: "linux", now: () => now, read: async () => credentials, request });
+    const first = refresh("claudeAgent", { instanceId: "claude" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    now += 31_000;
+    const second = refresh("claudeAgent", { instanceId: "claude" });
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(1);
+    answer(Response.json(fixtures.claudeAgent));
+    expect((await second).report).toEqual((await first).report);
+  });
+
   it("lists the default Codex bucket once when rateLimitsByLimitId repeats it", async () => {
     const refresh = createUsageRefresh({ rpc: async () => real.codex });
     const result = await refresh("codex", { instanceId: "codex" });

@@ -71,6 +71,10 @@ const { mockState, mockApi } = vi.hoisted(() => {
   };
 });
 
+vi.mock("@/lib/usage-auto-refresh", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/usage-auto-refresh")>()),
+  useAutoRefresh: () => undefined,
+}));
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {
@@ -1016,20 +1020,23 @@ describe("UsageSection friends plan card", () => {
     }
   });
 
-  it("states a reading's age only in the caption past an hour, in English and Korean", () => {
+  it("states a reading's age only in the caption past five minutes, in English and Korean", () => {
     const claude = mockState.instances[0];
     const report = claude.rateLimits;
     if (!report) throw new Error("claude fixture missing rateLimits");
     const original = report.observedAt;
     try {
-      report.observedAt = new Date(Date.now() - 5.5 * 60_000).toISOString();
+      report.observedAt = new Date(Date.now() - 4.5 * 60_000).toISOString();
       persistPreference("en");
+      const fresh = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      expect(fresh).not.toContain("Cached, as of");
+      report.observedAt = new Date(Date.now() - 5.5 * 60_000).toISOString();
       const englishMinutes = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      expect(englishMinutes).toContain(">Cached, as of 5m ago.<");
       expect(englishMinutes).not.toContain("5m old");
-      expect(englishMinutes).not.toContain("Cached, as of");
       persistPreference("ko");
       const koreanMinutes = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
-      expect(koreanMinutes).not.toContain("5분 전");
+      expect(koreanMinutes).toContain(">캐시된 값, 5분 전 기준입니다.<");
       report.observedAt = new Date(Date.now() - 2.5 * 3_600_000).toISOString();
       persistPreference("en");
       const englishHours = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));

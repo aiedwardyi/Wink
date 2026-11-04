@@ -835,8 +835,8 @@ export function createUsageRefresh(deps: {
   const mintedByPath = new Map<string, { accessToken: string; refreshToken: string }>();
   const clock = deps.now ?? Date.now;
   const claudeProbe = createClaudeUsageProbe({ read: deps.claude, now: clock, random: deps.random });
-  const cache = new Map<string, { retryAt: number; pending: Promise<Result> }>();
-  const claudeReads = new Map<string, { retryAt: number; limited: number; pending: Promise<Report> }>();
+  const cache = new Map<string, { retryAt: number; settled: boolean; pending: Promise<Result> }>();
+  const claudeReads = new Map<string, { retryAt: number; settled: boolean; limited: number; pending: Promise<Report> }>();
   const skipped = new Set<string>();
   const epochs = new Map<string, number>();
   const active = new Map<string, number>();
@@ -853,7 +853,7 @@ export function createUsageRefresh(deps: {
     const key = options.account ? `${options.instanceId}:${options.account.generation}` : options.instanceId;
     const epoch = epochs.get(options.instanceId);
     const cached = driver === "claudeAgent" ? undefined : cache.get(key);
-    if (cached && clock() < cached.retryAt) return cached.pending;
+    if (cached && (!cached.settled || clock() < cached.retryAt)) return cached.pending;
     const retryAt = clock() + (deps.throttleMs ?? 30_000);
     active.set(options.instanceId, (active.get(options.instanceId) ?? 0) + 1);
     let released = false;
@@ -922,9 +922,9 @@ export function createUsageRefresh(deps: {
           // One read per account, not per instance: every instance on a credential shares it and its 429 backoff.
           const credential = envToken ? `env:${envToken}` : credentialsPath;
           let shared = claudeReads.get(credential);
-          if (!shared || clock() >= shared.retryAt) {
+          if (!shared || (shared.settled && clock() >= shared.retryAt)) {
             const limited = shared?.limited ?? 0;
-            const entry = { retryAt, limited: 0, pending: Promise.resolve<Report>({ windows: [], observedAt: "" }) };
+            const entry = { retryAt, settled: false, limited: 0, pending: Promise.resolve<Report>({ windows: [], observedAt: "" }) };
             entry.pending = (async () => {
               const response = envToken
                 ? await request(CLAUDE_USAGE_URL, { headers: [["Authorization", `Bearer ${envToken}`], ["anthropic-beta", "oauth-2025-04-20"]], redirect: "error", signal: AbortSignal.timeout(15_000) })
@@ -946,6 +946,8 @@ export function createUsageRefresh(deps: {
               });
               return { windows: found, observedAt: new Date(clock()).toISOString() };
             })();
+            const settle = () => { entry.settled = true; };
+            entry.pending.then(settle, settle);
             claudeReads.set(credential, shared = entry);
           }
           // A shared read keeps its own time, so a newer report from a turn is not overwritten by it.
@@ -977,7 +979,12 @@ export function createUsageRefresh(deps: {
     })();
     const guarded = pending.then((result) => options.account && epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result)
       .finally(release);
-    if (driver !== "claudeAgent") cache.set(key, { retryAt, pending: guarded });
+    if (driver !== "claudeAgent") {
+      const entry = { retryAt, settled: false, pending: guarded };
+      const settle = () => { entry.settled = true; };
+      guarded.then(settle, settle);
+      cache.set(key, entry);
+    }
     return guarded;
   };
   return Object.assign(refresh, { busy: (instanceId: string) => active.has(instanceId), invalidate: (instanceId: string) => {
