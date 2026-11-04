@@ -5523,8 +5523,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         cwd,
       });
       });
-      if (reservation) commit(reservation);
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+      if (reservation) commit(reservation);
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;

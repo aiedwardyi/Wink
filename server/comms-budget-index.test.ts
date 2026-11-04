@@ -31,8 +31,10 @@ it("commits a reservation right on the accepted dispatch result, with no await b
   const statement = commits[0].parent.parent as ts.Statement;
   expect(compact(statement.getText(source))).toBe("if (reservation) commit(reservation);");
   const block = statement.parent as ts.Block;
-  const previous = block.statements[block.statements.indexOf(statement) - 1]!;
-  expect(compact(previous.getText(source))).toMatch(/^const started = await dispatchAdapterTurn\(threadId, /);
+  const index = block.statements.indexOf(statement);
+  // only the synchronous interrupt binding sits between the accepted start and the commit
+  expect(compact(block.statements[index - 1]!.getText(source))).toBe("bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);");
+  expect(compact(block.statements[index - 2]!.getText(source))).toMatch(/^const started = await dispatchAdapterTurn\(threadId, /);
   let owner: ts.Node = statement;
   while (!ts.isFunctionDeclaration(owner)) owner = owner.parent;
   expect(owner.name?.text).toBe("startClaimedTurn");
