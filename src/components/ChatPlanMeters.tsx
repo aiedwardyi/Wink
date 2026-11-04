@@ -22,6 +22,8 @@ type ChatPlanMetersProps = {
   instanceId?: string;
   /** Bot, task and engine; a change shuts an open quick view before the next identity paints. */
   identity?: string;
+  /** The chat is covered (the terminal is open): no quick view, and Alt+U falls through to all Usage. */
+  hidden?: boolean;
   now?: number;
   onOpenUsage: () => void;
 };
@@ -68,7 +70,7 @@ export function lineFacts(windows: UsageBoardWindow[], coverage: UsageBoardAccou
  */
 export function useQuickToggle(quick: boolean, identity: string) {
   const [openFor, setOpenFor] = useState<string | null>(null);
-  if (openFor !== null && openFor !== identity) setOpenFor(null);
+  if (openFor !== null && (openFor !== identity || !quick)) setOpenFor(null);
   const open = openFor === identity;
   const setOpen = (next: boolean) => setOpenFor(next ? identity : null);
   useEffect(() => {
@@ -95,7 +97,7 @@ function TodayMeter({ windows, driverKind, observedAt, now, onOpenUsage }: ChatP
   return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} />;
 }
 
-function BoardMeter({ windows, driverKind, observedAt, instanceId, identity = instanceId, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
+function BoardMeter({ windows, driverKind, observedAt, instanceId, identity = instanceId, hidden, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
   const { state } = useStore();
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
@@ -103,12 +105,12 @@ function BoardMeter({ windows, driverKind, observedAt, instanceId, identity = in
   if (meterWindows(target, windows, at).length === 0) return null;
   const own = state.instances.find((instance) => instance.instanceId === instanceId);
   const base = state.instances.find((instance) => instance.instanceId === (own?.accountOf ?? instanceId));
-  return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} identity={identity}
+  return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden}
     target={target} board={board} engineLabel={base?.displayName} />;
 }
 
-function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = "", target, board, engineLabel }: {
-  windows: RateLimitWindow[] | undefined; driverKind?: string; observedAt?: string; now?: number; onOpen: () => void; identity?: string;
+function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = "", hidden, target, board, engineLabel }: {
+  windows: RateLimitWindow[] | undefined; driverKind?: string; observedAt?: string; now?: number; onOpen: () => void; identity?: string; hidden?: boolean;
   target?: MeterTarget | null; board?: ReturnType<typeof useUsageBoard>; engineLabel?: string;
 }) {
   const { t } = useI18n();
@@ -122,7 +124,7 @@ function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = ""
   const reading = museReading(driverKind, account ? account.observedAt === null ? undefined : new Date(account.observedAt).toISOString() : observedAt, clock);
   const runsOut = target && facts.binding ? pace(target.account, facts.binding, target.engine.events, clock).verdict.kind === "runsOut" : false;
   const name = target && target.engine.accounts.length > 1 ? target.account.name : target ? engineName(target.engine.engine) : engineLabel;
-  const quick = Boolean(target && board?.board && shown.length > 0);
+  const quick = Boolean(!hidden && target && board?.board && shown.length > 0);
   const [open, setOpen] = useQuickToggle(quick, identity);
   const toggle = () => { if (quick) setOpen(!open); else onOpen(); };
   if (shown.length === 0) return null;

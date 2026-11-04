@@ -20,7 +20,7 @@ import "./TermStatusLine.css";
 
 const PHONE_STATUS_QUERY = `${PHONE_QUERY} and (pointer: coarse)`;
 
-export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engine: InstanceInfo | undefined; cwd?: string | null }) {
+export function TermStatusLine({ bot, engine, cwd = bot.cwd, hidden }: { bot: Bot; engine: InstanceInfo | undefined; cwd?: string | null; hidden?: boolean }) {
   const { t } = useI18n();
   const { state } = useStore();
   const { capabilities } = useDesktopCapabilities();
@@ -36,7 +36,7 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engin
   const selection = shownModelSelection(bot);
   const selectedEngine = engine?.instanceId === selection.instanceId ? engine : state.instances.find((instance) => instance.instanceId === selection.instanceId);
   const model = selectedEngine?.models.options.find((option) => option.id === selection.model)?.label ?? selection.model;
-  const ticker = <TermTicker identity={`${bot.id}:${bot.threadId}:${selectedEngine?.accountOf ?? selection.instanceId}`} instance={selectedEngine}
+  const ticker = <TermTicker hidden={hidden} identity={`${bot.id}:${bot.threadId}:${selectedEngine?.accountOf ?? selection.instanceId}`} instance={selectedEngine}
     instanceId={selection.instanceId} tightest={phone && skin === "multiplexer"} phone={phone} />;
   const phoneModel = termModelLabel(model);
   if (phone) return (
@@ -73,7 +73,7 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engin
 const HOUR = 3_600_000;
 
 /** The quota half of the status line: tile, glyph trace, % left and the reset countdown; the words live in its description. */
-function TermTicker({ identity, instance, instanceId, tightest, phone }: { identity: string; instance: InstanceInfo | undefined; instanceId: string; tightest: boolean; phone: boolean }) {
+function TermTicker({ hidden, identity, instance, instanceId, tightest, phone }: { hidden?: boolean; identity: string; instance: InstanceInfo | undefined; instanceId: string; tightest: boolean; phone: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const board = useUsageBoard();
@@ -85,7 +85,7 @@ function TermTicker({ identity, instance, instanceId, tightest, phone }: { ident
   const soon = binding?.resetsAt != null && binding.resetsAt > minute && binding.resetsAt - minute < HOUR;
   const now = useVisibleClock(soon);
   // Only a ticker that renders may take Alt+U; a hidden one leaves the key to all Usage.
-  const quick = Boolean(binding && target && board.board);
+  const quick = Boolean(!hidden && binding && target && board.board);
   const [open, setOpen] = useQuickToggle(quick, identity);
   const button = useRef<HTMLButtonElement>(null);
   const ageId = useId();

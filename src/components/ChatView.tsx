@@ -885,7 +885,7 @@ export function PinnedBanner({
   );
 }
 
-export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
@@ -1818,6 +1818,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
         {!terminal && (
           <ChatPlanMeters
             identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
+            hidden={hidden}
             instanceId={shownEngine?.instanceId}
             windows={shownEngine?.rateLimits?.windows}
             driverKind={shownEngine?.driverKind}
@@ -1837,7 +1838,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
         />
-        {terminal && <TermStatusLine bot={bot} engine={engine} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
+        {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>
       </div>
 
