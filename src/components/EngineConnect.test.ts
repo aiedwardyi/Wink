@@ -3,6 +3,7 @@ import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import type { InstanceInfo } from "@/state/store";
 import { Onboarding } from "./Onboarding";
 import { NoEngines } from "./NoEngines";
@@ -88,6 +89,7 @@ describe("first engine connection", () => {
     expect(host.querySelector("code")?.textContent).toBe("install-claude");
     expect(host.textContent).toContain("View Setup Guide");
     await click("Show Commands");
+    await advance(PRESENCE_EXIT_MS);
     expect(host.querySelector("code")).toBeNull();
   });
 

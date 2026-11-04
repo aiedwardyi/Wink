@@ -8,6 +8,7 @@ import { DETAILS_BOX, DETAILS_ROW, DetailsLabel } from "./BotDetailsRows";
 import { memoryLineText, memoryTargetLine, recentLines } from "@/lib/memory-recent";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { MemoryCleanTint, reducedMemoryMotion } from "./MemoryCleanMotion";
+import { Fold } from "./Fold";
 
 // the stamp memory-pass.ts appendNotes puts on every Auto notes line
 const NOTED = /^\s*[-*+]\s+(.+?)\s+\(noted (\d{4})-(\d{2})-(\d{2})\)\s*$/;
@@ -47,16 +48,17 @@ export function MemoryFold({ title, hint, meta, open, onToggle, ref, children }:
   ref?: Ref<HTMLButtonElement>;
   children?: ReactNode;
 }) {
-  const box = useRef<HTMLElement>(null);
+  const header = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(open);
-  // closing from deep in a long file would leave the reader below a section that just shrank
+  // closing from deep in a long file would leave the reader below a section that is folding
+  // away; its header stops sticking at once, so bring that back, with the box's 1px border
   useLayoutEffect(() => {
-    if (wasOpen.current && !open) box.current?.scrollIntoView({ block: "nearest" });
+    if (wasOpen.current && !open) header.current?.scrollIntoView({ block: "nearest" });
     wasOpen.current = open;
   }, [open]);
   return (
-    <section ref={box} className={DETAILS_BOX}>
-      <div className={cn(open && "sticky top-0 z-10 border-b border-hairline/40 bg-card")}>
+    <section className={DETAILS_BOX}>
+      <div ref={header} className={cn("scroll-my-px", open && "sticky top-0 z-10 border-b border-hairline/40 bg-card")}>
         <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none">
           <div className="min-w-0 flex-1">
             <DetailsLabel label={title} hint={hint} />
@@ -128,8 +130,8 @@ export function TopicFiles({ topics, shown, error, onOpen }: {
       open={open}
       onToggle={() => setOpen(!open)}
     >
-      {open && (
-        <div ref={list} className="animate-fade-in">
+      <Fold open={open}>
+        <div ref={list}>
           {topics.map((entry) => {
             const here = shown?.name === entry.name;
             return (
@@ -155,7 +157,7 @@ export function TopicFiles({ topics, shown, error, onOpen }: {
           })}
           {error && <div className="border-t border-hairline/40 px-4 py-2.5 text-[12px] text-danger">{error}</div>}
         </div>
-      )}
+      </Fold>
     </MemoryFold>
   );
 }

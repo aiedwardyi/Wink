@@ -6,6 +6,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, installCommandFor, openEngineInstallOrCopy } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
+import { Fold } from "./Fold";
 
 const ORDER = ["claudeAgent", "codex", "antigravityAgent", "grokAgent", "museAgent"];
 const ACCOUNTS = { codex: "engineConnect.chatgpt", antigravityAgent: "engineConnect.google", grokAgent: "engineConnect.grok", museAgent: "engineConnect.meta" } as const;
@@ -93,9 +94,11 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       {primary.map((instance) => row(instance, instance.driverKind === "claudeAgent"))}
       <h2 className="mt-5 text-[12px] font-semibold text-ink-secondary">{t("engineConnect.others")}</h2>
       <div>{others.map((instance) => row(instance))}</div>
-      {commands && <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
-        {engines.map((instance) => <EngineSetup key={instance.instanceId} instance={instance} intent="cloud" />)}
-      </div>}
+      <Fold open={commands}>
+        <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
+          {engines.map((instance) => <EngineSetup key={instance.instanceId} instance={instance} intent="cloud" />)}
+        </div>
+      </Fold>
     </div>
     <div className="mt-4 flex shrink-0 items-center justify-between gap-1">
       {footer && <button type="button" onClick={footer.back} className="rounded-xl px-3 py-2.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">{t("onboarding.back")}</button>}

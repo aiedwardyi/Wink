@@ -1,4 +1,4 @@
-import { ChevronLeft, FolderOpen, Settings, X } from "lucide-react";
+import { ChevronRight, FolderOpen, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
@@ -35,6 +35,11 @@ import { recentLines, memoryTargetLine } from "@/lib/memory-recent";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
+import { Fold } from "./Fold";
+
+// One Bot Details is up at a time. A bot switch mounts the next panel (keyed by
+// bot) while the last is still up, and must not replay the slide-in.
+let panelsUp = 0;
 
 function Field({
   label,
@@ -393,8 +398,8 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       <MemoryTask bot={bot} />
       <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
-        {expanded && (
-          <div className="animate-fade-in px-4 pb-4 pt-3">
+        <Fold open={expanded}>
+          <div className="px-4 pb-4 pt-3">
             {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}
             {!loading && (
               <>
@@ -425,7 +430,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
               </>
             )}
           </div>
-        )}
+        </Fold>
         {(loadFailed || error) && (
           <div className="px-4 pb-4">
             {loadFailed && (
@@ -455,6 +460,13 @@ export function SettingsPanel({
   const { state, dispatch } = useStore();
   const { t } = useI18n();
   const panelRef = useRef<HTMLElement>(null);
+  const [slideIn] = useState(() => panelsUp === 0);
+  useEffect(() => {
+    panelsUp += 1;
+    return () => {
+      panelsUp -= 1;
+    };
+  }, []);
   const restoreFocusOnClose = useRef(false);
   const avatarRequest = state.settingsAvatarRequest ?? 0;
   const [avatarOpen, setAvatarOpen] = useState(avatarRequest > 0);
@@ -556,7 +568,7 @@ export function SettingsPanel({
     {/* Below md the sidebar is already a drawer, so docking here would leave a
         ~200px chat column at the window floor. Take the content area instead,
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
-    <aside ref={panelRef} data-settings-panel="" data-closing={closing || undefined} inert={closing} className="animate-panel-in relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full">
+    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} className={cn(slideIn && "animate-panel-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <button
@@ -565,7 +577,7 @@ export function SettingsPanel({
           title={t("bot.collapseDetails")}
           className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
         >
-          <ChevronLeft size={18} />
+          <ChevronRight size={18} />
         </button>
         <span className="text-[15px] font-semibold text-ink">{t("bot.details")}</span>
         <button
@@ -619,7 +631,7 @@ export function SettingsPanel({
                   {avatarOpen ? t("bot.avatarDone") : t("bot.avatarCustomize")}
                 </button>
               </div>
-              {avatarOpen && (
+              <Fold open={avatarOpen}>
                 <div className="mt-3">
                   <BotProfileAvatarCard
                     bot={bot}
@@ -628,7 +640,7 @@ export function SettingsPanel({
                     onPatch={patch}
                   />
                 </div>
-              )}
+              </Fold>
             </div>
             <Field label={t("bot.name")}>
               <input

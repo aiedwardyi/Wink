@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, useStore, type Bot, type Group, type InstanceInfo, type Message } from "@/state/store";
 
 import { setFindCurrent } from "@/lib/chat-find";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 
 import { DRAWER_BUTTON_RIGHT } from "@/lib/drawer-button";
 import { PHONE_HEADER_MENU_RESERVE_PX } from "@/lib/phone-header";
@@ -198,6 +199,8 @@ describe("ChatView worker rows", () => {
       for (const machine of ["[pane", "61902933", "branch=", "sha=", "dirty="]) expect(shown).not.toContain(machine);
       expect(Array.from(host.querySelectorAll("button")).map((b) => b.textContent)).toContain("Note");
       await act(async () => { rows(host)[0]!.click(); });
+      expect(host.querySelector("[data-orbit-worker]")?.closest("[data-fold]")?.getAttribute("data-fold")).toBe("closing");
+      await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
       expect(host.querySelector("[data-orbit-worker]")).toBeNull();
     } finally {
       await unmount();

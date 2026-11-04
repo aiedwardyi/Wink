@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => store);
-vi.mock("./PhoneAccessSettings", () => ({ PhoneAccessSettings: () => createElement("input", { "data-phone-access-setup": true }) }));
+// the real form renders nothing until its status loads
+const access = vi.hoisted(() => ({ loaded: true }));
+vi.mock("./PhoneAccessSettings", () => ({ PhoneAccessSettings: () => (access.loaded ? createElement("input", { "data-phone-access-setup": true }) : null) }));
 
 import { I18nProvider } from "@/lib/i18n";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
@@ -16,6 +18,12 @@ const url = "https://fixture.invalid/remote?key=fixture";
 let root: Root | undefined;
 let host: HTMLDivElement;
 const button = (label: string) => [...host.querySelectorAll("button, a")].find((node) => node.textContent === label) as HTMLElement;
+const foldOpened = () =>
+  act(async () => {
+    const end = new Event("animationend", { bubbles: true });
+    Object.defineProperty(end, "animationName", { value: "fold-open" });
+    document.getElementById("phone-relay-settings")!.dispatchEvent(end);
+  });
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -29,6 +37,7 @@ afterEach(async () => {
   root = undefined;
   host.remove();
   store.api.mockReset();
+  access.loaded = true;
   localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -341,25 +350,33 @@ describe("Phone setup steps", () => {
     const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
     await render({ url: null, setup: { state: "missing" } });
     await act(async () => button("Have a setup code?").click());
+    const field = host.querySelector("[data-phone-access-setup]")!;
+    expect(document.activeElement).toBe(field);
+    // the scroll waits for the fold to open, so it reaches the form where it ends up
+    if (!reduce) {
+      expect(scroll).not.toHaveBeenCalled();
+      await foldOpened();
+    }
     expect(scroll).toHaveBeenCalledTimes(1);
-    expect(scroll.mock.contexts[0]).toBe(document.getElementById("phone-relay-settings"));
+    expect(scroll.mock.contexts[0]).toBe(field.parentElement);
+    expect(document.getElementById("phone-relay-settings")?.contains(field)).toBe(true);
     expect(scroll).toHaveBeenCalledWith({ block: "nearest", behavior });
-    expect(document.activeElement).toBe(host.querySelector("[data-phone-access-setup]"));
     await act(async () => button("Have a setup code?").click());
     expect(scroll).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for a relay form that loads late before scrolling to it", async () => {
+  it("waits for a relay form that loads late, and for its fold to open, before scrolling to it", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
     const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+    access.loaded = false;
     await render({ url: null, setup: { state: "missing" } });
-    const relay = button("Have a setup code?");
-    const box = document.getElementById(relay.getAttribute("aria-controls")!)!;
-    const late = vi.spyOn(box, "firstElementChild", "get").mockReturnValue(null);
-    await act(async () => relay.click());
+    await act(async () => button("Have a setup code?").click());
+    await foldOpened();
     expect(scroll).not.toHaveBeenCalled();
-    late.mockRestore();
-    await act(async () => box.appendChild(document.createElement("span")));
+    access.loaded = true;
+    await act(async () => root!.render(createElement(I18nProvider, null, createElement(PhoneLinkSettings))));
     expect(scroll).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(host.querySelector("[data-phone-access-setup]"));
   });
 
   it.each(["focus", "poll"])("refreshes on %s even after ready and stops on unmount", async (trigger) => {

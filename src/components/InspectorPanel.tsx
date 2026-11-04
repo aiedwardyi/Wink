@@ -10,22 +10,24 @@
 // Nothing here is captured for the panel's sake — both logs already exist
 // under ~/.orbit (server/harness/bus.ts, server/drivers/native.ts).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bug, ChevronDown, ChevronRight, RefreshCw, X } from "lucide-react";
+import { Bug, ChevronDown, RefreshCw, X } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { formatTime, toRows, type InspectorEntry, type InspectorPage, type InspectorRow } from "@/lib/inspector";
 import { openLiveEvents } from "@/lib/live-events";
 import type { RuntimeEvent } from "../../server/contracts.ts";
+import { Fold } from "./Fold";
 
 type Lens = "events" | "raw";
 
-export function InspectorPanel({ bot }: { bot: Bot }) {
+export function InspectorPanel({ bot, closing = false }: { bot: Bot; closing?: boolean }) {
   const { dispatch } = useStore();
   const threadId = bot.threadId;
   const [lens, setLens] = useState<Lens>("events");
   const [page, setPage] = useState<InspectorPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const panelRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const restoreFocusOnUnmount = useRef(false);
@@ -186,6 +188,8 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
   };
 
   useEffect(() => {
+    if (closing) return;
+    restoreFocusOnUnmount.current = false;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -201,7 +205,8 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
       window.removeEventListener("keydown", closeOnEscape);
       if (!restoreFocusOnUnmount.current) return;
       requestAnimationFrame(() => {
-        if (document.activeElement !== document.body) return;
+        const active = document.activeElement;
+        if (active !== document.body && !panelRef.current?.contains(active)) return;
         const target = previousFocus && previousFocus !== document.body && previousFocus.isConnected
           ? previousFocus
           : document.querySelector<HTMLElement>("[data-orbit-composer]:not(:disabled)") ??
@@ -209,10 +214,10 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
         target?.focus();
       });
     };
-  }, [dispatch]);
+  }, [closing, dispatch]);
 
   return (
-    <aside className="animate-panel-in flex h-full w-[460px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <aside ref={panelRef} data-side-panel="" data-closing={closing || undefined} inert={closing} className="animate-panel-in flex h-full w-[460px] shrink-0 flex-col border-l border-hairline/40 bg-panel data-closing:relative data-closing:z-20 data-closing:-ml-[460px]">
       <div className="flex items-center justify-between px-4 py-3">
         <span className="flex items-center gap-2 text-[15px] font-semibold text-ink">
           <Bug size={16} className="text-ink-secondary" /> Inspector
@@ -275,7 +280,7 @@ function Row({ row, open, onToggle }: { row: InspectorRow; open: boolean; onTogg
       )}
     >
       <button onClick={onToggle} className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-raised/60">
-        <span className="mt-[1px] shrink-0 text-ink-secondary">{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
+        <span className="mt-[1px] shrink-0 text-ink-secondary"><ChevronDown size={12} className={cn("transition-transform", open && "rotate-180")} /></span>
         <span className="shrink-0 tabular-nums text-ink-secondary">{formatTime(row.at)}</span>
         <span
           className={cn(
@@ -288,11 +293,11 @@ function Row({ row, open, onToggle }: { row: InspectorRow; open: boolean; onTogg
         </span>
         <span className={cn("min-w-0 flex-1 truncate", row.tone === "error" ? "text-danger" : "text-ink")}>{row.summary}</span>
       </button>
-      {open && (
+      <Fold open={open}>
         <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all border-t border-hairline/20 bg-app px-3 py-2 text-[11px] leading-relaxed text-ink">
           {JSON.stringify(row.data, null, 2)}
         </pre>
-      )}
+      </Fold>
     </div>
   );
 }

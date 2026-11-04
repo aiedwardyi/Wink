@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import type { Bot, Task, TaskResumePacket } from "@/state/store";
 
 const { mockDispatch, mockConfig } = vi.hoisted(() => ({ mockDispatch: vi.fn(), mockConfig: { current: {} as { features?: { memoryNotes?: boolean } } } }));
@@ -364,6 +365,9 @@ describe("SettingsPanel memory groups", () => {
     expect(host.querySelector<HTMLTextAreaElement>("textarea[aria-label=\"Memory\"]")?.value).toBe(memory);
     expect(host.textContent).toContain("Loads at the start of every chat.");
     await act(async () => row.click());
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    // the file folds away on the shared motion, then unmounts
+    await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
     expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
   });
 
@@ -692,7 +696,8 @@ describe("SettingsPanel memory autosave", () => {
       expect(scrolled).toEqual([]);
       await act(async () => memoryRow(host).click());
       expect(memoryRow(host).getAttribute("aria-expanded")).toBe("false");
-      expect(scrolled).toEqual([memoryRow(host).closest("section")]);
+      // its header, which stays put while the file folds away below it
+      expect(scrolled).toEqual([memoryRow(host).parentElement]);
     } finally {
       spy.mockRestore();
     }
