@@ -45,9 +45,9 @@ const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
 const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
-// agy mounts this proxy machine-wide, so a process without a bot's identity
-// (a turn past the comms depth cap, the user's own agy) gets no tools.
+// Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
+const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines"]);
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 
@@ -991,11 +991,12 @@ async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      ok(id, { tools: TOOLS_ENABLED ? TOOLS : [] });
+      ok(id, { tools: TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [] });
       return;
     case "tools/call": {
       const name = params.name as string;
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
+      if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
       try {
         const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json);
         textResult(id, text, isError);

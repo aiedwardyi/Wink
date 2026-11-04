@@ -165,10 +165,54 @@ function response() {
 
 function routes(askBotAndWait = vi.fn()) {
   return createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
+    MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
     delegationWatch: new Map(), askBotAndWait,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 }
+
+it.each(["askBot", "delegateBot", "createBot", "createChannel"] as const)("refuses a second hop through %s", async (method) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  turnRegistry.start("peer-turn", { botId: from.id, threadId: from.threadId, owner: "peer", depth: 1 });
+  const botCount = store.bots.length;
+  const groupCount = store.groups.length;
+  const askBotAndWait = vi.fn();
+  const req = new EventEmitter() as IncomingMessage;
+  const output = response();
+  const pending = routes(askBotAndWait)[method](req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, toBotId: target.id, message: "work", depth: 1, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id] }));
+  req.emit("end");
+  await pending;
+  expect(output.body().error).toContain("limited to one hop");
+  expect(askBotAndWait).not.toHaveBeenCalled();
+  expect(store.bots).toHaveLength(botCount);
+  expect(store.groups).toHaveLength(groupCount);
+});
+
+it.each(["createBot", "createChannel"] as const)("keeps %s available at depth 0", async (method) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  start("user-turn");
+  const req = new EventEmitter() as IncomingMessage;
+  const output = response();
+  const pending = routes()[method](req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id], depth: 0 }));
+  req.emit("end");
+  await pending;
+  expect(output.body().id).toBeTruthy();
+  expect(output.body().error).toBeUndefined();
+});
+
+it.each(["createBot", "createChannel"] as const)("uses the live peer depth to guard %s", async (method) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  turnRegistry.start("peer-turn", { botId: from.id, threadId: from.threadId, owner: "peer", depth: 1 });
+  const req = new EventEmitter() as IncomingMessage;
+  const output = response();
+  const pending = routes()[method](req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id], depth: 0 }));
+  req.emit("end");
+  await pending;
+  expect(output.body().error).toContain("limited to one hop");
+});
 
 it.each(["wait", "ask"])("leaves an old %s caller's reply unread after a replacement turn completes", async (mode) => {
   vi.useFakeTimers();

@@ -592,6 +592,8 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const chief = store.bot(fromBotId);
       if (!chief) return json(res, 403, { error: "unknown sender" });
       const fromThreadId = String(body.fromThreadId ?? chief.threadId);
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(fromThreadId)?.depth ?? 0);
+      if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "bot creation chains are limited to one hop" });
       if (!connectorThread(chief.id, fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
       }
@@ -653,6 +655,8 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const sender = store.bot(fromBotId);
       if (!sender) return json(res, 403, { error: "unknown sender" });
       const fromThreadId = String(body.fromThreadId ?? sender.threadId);
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(fromThreadId)?.depth ?? 0);
+      if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "channel creation chains are limited to one hop" });
       if (!connectorThread(sender.id, fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
       }

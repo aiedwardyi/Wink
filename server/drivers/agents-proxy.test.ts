@@ -1076,8 +1076,7 @@ describe("agents-proxy MCP surface", () => {
   });
 });
 
-/** A short-lived proxy with exactly this OMB_* identity: its tools/list and a react call. */
-function probeWithIdentity(identity: Record<string, string>): Promise<{ list: any; call: any }> {
+function probeWithIdentity(identity: Record<string, string>, name = "react", args: unknown = { emoji: "👍" }): Promise<{ list: any; call: any }> {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OMB_")));
   const proxy = spawn(process.execPath, [PROXY], {
     windowsHide: true,
@@ -1107,7 +1106,7 @@ function probeWithIdentity(identity: Record<string, string>): Promise<{ list: an
       resolve({ list: replies.get(1), call: replies.get(2) });
     });
     proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
-    proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "react", arguments: { emoji: "👍" } } }) + "\n");
+    proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } }) + "\n");
   });
 }
 
@@ -1121,9 +1120,31 @@ describe("agents-proxy identity gate", () => {
     expect(call.error.code).toBe(-32602);
   });
 
-  it("lists every tool once the bot, thread and comms token are all set", async () => {
-    const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN });
+  it("lists every tool with a complete identity at depth 0", async () => {
+    const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
     expect(list.result.tools).toHaveLength(18);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
+  });
+
+  it.each([1, 2])("lists only safe peer tools at depth %s", async (depth) => {
+    const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_TEAM_REPORTS: "1" });
+    expect(list.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
+      "check_delegation", "list_bots", "list_routines", "update_task_state", "wait_delegation",
+    ]);
+  });
+
+  it.each(["ask_bot", "delegate_bot", "create_bot", "create_channel", "ask_user", "react", "show_image", "generate_image", "call_api", "request_credential", "propose_routine", "propose_routine_action", "set_keep_going", "report_issue"])("refuses %s from a peer turn before calling the harness", async (name) => {
+    const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_TEAM_REPORTS: "1" }, name);
+    expect(call.result.isError).toBe(true);
+    expect(call.result.content[0].text).toContain("unavailable in peer turns");
+  });
+
+  it.each([
+    ["update_task_state", { completed_note: "Verified peer work" }],
+    ["check_delegation", { task_id: "38930fab" }],
+  ])("keeps %s callable in a peer turn", async (name, args) => {
+    const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, name as string, args);
+    expect(call.result.isError).toBeFalsy();
   });
 });
