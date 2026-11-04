@@ -72,6 +72,50 @@ const click = (target: Element) => target.dispatchEvent(new MouseEvent("click", 
 const key = (target: Element, name: string) => target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
 
 describe("DeviceSwitcher", () => {
+  it.each([false, true])("keeps newer PC status when overlapping polls finish out of order (phone %s)", async (phone) => {
+    vi.useFakeTimers();
+    try {
+      if (phone) setPhone(true); else setDesktop();
+      const pcs = [device("home", { current: true }), device("work", { checking: true })];
+      const { host } = await renderView(pcs, vi.fn(), DeviceSwitcher, phone);
+      const answers: ((body: { devices: DeviceItem[] }) => void)[] = [];
+      store.api.mockImplementation(() => new Promise((done) => answers.push(done)));
+      await act(async () => click(host.querySelector("button[aria-expanded]")!));
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(answers).toHaveLength(3);
+      const row = () => document.querySelector('[data-device-id="work"]')!;
+      await act(async () => answers[1]({ devices: [pcs[0], { ...pcs[1], name: "Studio", checking: false }] }));
+      expect(row().textContent).toBe("Studio");
+      await act(async () => answers[0]({ devices: [pcs[0], { ...pcs[1], name: "Old PC", checking: false, offline: true }] }));
+      expect(row().textContent).toBe("Studio");
+      expect(row().className).not.toContain("opacity-50");
+      await act(async () => answers[2]({ devices: [pcs[0], { ...pcs[1], name: "Office", checking: false }] }));
+      expect(row().textContent).toBe("Office");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])("refreshes checking PCs and renames while the picker stays open (phone %s)", async (phone) => {
+    vi.useFakeTimers();
+    try {
+      if (phone) setPhone(true); else setDesktop();
+      const pcs = [device("home", { current: true }), device("work", { checking: true } as Partial<DeviceItem>), device("laptop", { offline: true })];
+      const { host } = await renderView(pcs, vi.fn(), DeviceSwitcher, phone);
+      await act(async () => click(host.querySelector("button[aria-expanded]")!));
+      const row = () => document.querySelector('[data-device-id="work"]')!;
+      expect(row().textContent).toContain("Checking");
+      expect(row().className).toContain("opacity-50");
+      store.api.mockResolvedValue({ devices: [pcs[0], { ...pcs[1], name: "Studio", checking: false }, { ...pcs[2], offline: false }] });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(row().textContent).toBe("Studio");
+      expect(row().className).not.toContain("opacity-50");
+      expect(document.body.textContent).not.toContain("Offline");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens Devices from the final Connect a Device row", async () => {
     setDesktop();
     const { host, root } = await renderView([device("home", { current: true }), device("work")]);

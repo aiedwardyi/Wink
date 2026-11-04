@@ -29,7 +29,7 @@ const deviceSchema = z.object({
 });
 
 export type DeviceRecord = z.infer<typeof deviceSchema>;
-export type DeviceListItem = DeviceRecord & { current: boolean; offline: boolean };
+export type DeviceListItem = DeviceRecord & { current: boolean; offline: boolean; checking?: boolean };
 
 export function namedDevicePeers<T extends { name: string; host: string }>(peers: T[], devices: { name: string; host: string }[]): T[] {
   const names = new Map(devices.map((device) => [device.host, device.name.trim()]));
@@ -85,7 +85,7 @@ export function deviceDisplayName(saved: string | null, envName: string | undefi
   return saved || envName?.trim() || hostname;
 }
 
-/** Valid records by name; corrupt files are skipped. A record `known` rejects may be stale, so it never reads as offline. */
+/** Valid records by name; a mirror still catching up leaves peer presence unknown. */
 export function listDevices(folder: string, currentId: string, now: number, limit = MAX_DEVICE_FILES, known: (deviceId: string) => boolean = () => true): DeviceListItem[] {
   const directory = join(folder, DEVICE_DIR);
   let names: string[];
@@ -99,7 +99,9 @@ export function listDevices(folder: string, currentId: string, now: number, limi
     try {
       const parsed = deviceSchema.safeParse(JSON.parse(readFileSync(join(directory, basename(name)), "utf8")));
       if (!parsed.success) continue;
-      items.push({ ...parsed.data, current: parsed.data.deviceId === currentId, offline: now - parsed.data.lastSeen > DEVICE_STALE_MS && known(parsed.data.deviceId) });
+      const current = parsed.data.deviceId === currentId;
+      const checking = !current && !known(parsed.data.deviceId);
+      items.push({ ...parsed.data, current, offline: !current && !checking && now - parsed.data.lastSeen > DEVICE_STALE_MS, checking });
     } catch {}
   }
   return items.sort((a, b) => a.name.localeCompare(b.name));
