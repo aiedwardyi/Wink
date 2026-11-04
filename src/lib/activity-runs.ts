@@ -198,7 +198,8 @@ export const SERVER_LINES: ServerLine[] = [
   },
 ];
 
-function isCommsNotice(name: string): boolean {
+/** The bots-paused lines: finished server notices, never a running step. */
+export function isCommsNotice(name: string): boolean {
   return SERVER_LINES.some((line) => line.file === "comms-notice.ts" && line.re.test(name));
 }
 

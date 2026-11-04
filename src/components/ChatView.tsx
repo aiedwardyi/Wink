@@ -76,7 +76,7 @@ import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { screenImageUrl, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
-import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
+import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
@@ -304,7 +304,7 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
         title={failed ? t("chat.stepDidNotComplete") : approvalHover(notices, t)}
         className="flex min-w-0 max-w-full items-center gap-2 border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary"
       >
-        {tool.ok === undefined ? (
+        {isCommsNotice(tool.name) ? null : tool.ok === undefined ? (
           <Loader2 data-idle-hide size={13} className="shrink-0 animate-spin" />
         ) : failed ? (
           <X size={13} strokeWidth={1.5} className="shrink-0" />

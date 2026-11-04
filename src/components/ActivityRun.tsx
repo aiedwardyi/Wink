@@ -6,7 +6,7 @@
 import { memo, useEffect, useState } from "react";
 import { Bot, ChevronDown, Check, FileText, Globe, Loader2, Pencil, Search, SquareTerminal, Wrench, X } from "lucide-react";
 import type { Message } from "@/state/store";
-import { classifyServerNotice, describeRun, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
+import { classifyServerNotice, describeRun, isCommsNotice, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { APPROVAL_WORD, TERM_STEP_WORD, termBlock, termHeaderArgs, termResultLine, termStepAria, termStepState, termUpdatedLine, termVerb } from "@/lib/terminal-skin";
@@ -47,7 +47,8 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
-  const running = tool?.ok === undefined;
+  const comms = tool ? isCommsNotice(tool.name) : false;
+  const running = tool?.ok === undefined && !comms;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!running) return;
@@ -55,6 +56,7 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
     return () => clearInterval(timer);
   }, [running]);
   if (!tool) return null;
+  if (terminal && comms) return <TermNotice text={localizeServerLine(tool.name, t)} failed={false} />;
   const notice = classifyServerNotice(tool.name);
   if (terminal && notice) {
     if (notice.kind === "approval" && notice.label !== "review" && tool.ok !== false) return null;

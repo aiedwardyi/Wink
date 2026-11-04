@@ -8,6 +8,7 @@ import { StoreProvider, type Bot, type Message } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 
 import { DATA_DIR } from "../../server/config.ts";
+import { _resetCommsRoots, rootForStart } from "../../server/comms-root.ts";
 import type { CommsBus } from "../../server/comms-visibility.ts";
 import {
   drainDelegations,
@@ -79,6 +80,7 @@ describe("a bot's resent request in the target's chat", () => {
     career = store.patchBot(store.createBot().id, { name: "Career" })!;
     wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
     commsBus = { store, broadcast: () => {} };
+    _resetCommsRoots();
   });
 
   const runTarget = (_to: string, _prompt: string, _depth: number, _src: string, channel: GroupRecord | undefined, taskId: string, _from: string, transcriptText?: string) => {
@@ -96,7 +98,9 @@ describe("a bot's resent request in the target's chat", () => {
   const drain = () => drainDelegations(commsBus, { store, broadcast: () => {} }, career.threadId, runTarget);
 
   it("leads with the sender's chip and name, as the original does", async () => {
-    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    // the takeover rerun spends a credit from the human root that asked
+    const root = rootForStart(career.threadId, { kind: "human", messageKey: "send-1" })!;
+    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await vi.waitFor(() => expect(turn && _pendingCount(career.threadId)).toBe(0));
     takeOverDelegatedTurn(commsBus, turn, "Edward");
