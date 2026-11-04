@@ -84,7 +84,8 @@ function TermTicker({ identity, instance, instanceId, tightest, phone }: { ident
   const binding = facts.binding;
   const soon = binding?.resetsAt != null && binding.resetsAt > minute && binding.resetsAt - minute < HOUR;
   const now = useVisibleClock(soon);
-  const quick = Boolean(target && board.board);
+  // Only a ticker that renders may take Alt+U; a hidden one leaves the key to all Usage.
+  const quick = Boolean(binding && target && board.board);
   const [open, setOpen] = useQuickToggle(quick, identity);
   const button = useRef<HTMLButtonElement>(null);
   const ageId = useId();

@@ -122,7 +122,7 @@ function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = ""
   const reading = museReading(driverKind, account ? account.observedAt === null ? undefined : new Date(account.observedAt).toISOString() : observedAt, clock);
   const runsOut = target && facts.binding ? pace(target.account, facts.binding, target.engine.events, clock).verdict.kind === "runsOut" : false;
   const name = target && target.engine.accounts.length > 1 ? target.account.name : target ? engineName(target.engine.engine) : engineLabel;
-  const quick = Boolean(target && board?.board);
+  const quick = Boolean(target && board?.board && shown.length > 0);
   const [open, setOpen] = useQuickToggle(quick, identity);
   const toggle = () => { if (quick) setOpen(!open); else onOpen(); };
   if (shown.length === 0) return null;
