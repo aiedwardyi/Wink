@@ -209,7 +209,7 @@ describe("memory cleanup across two PCs", { timeout: 180_000 }, () => {
     expect(await memory(home!)).toContain("- work note: the van is booked for Monday");
     expect(await home.call("release", { bot: BOT })).toBeNull();
     await rounds(2);
-    expect(await home.call("clean", { bot: BOT, retire: DONE.slice(0, 3) })).toMatch(/^mc-/);
+    expect(await home.call("clean", { bot: BOT, retire: DONE.slice(0, 3), days: 1 })).toMatch(/^mc-/);
     await settle(pcs, before);
   });
 
