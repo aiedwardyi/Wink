@@ -25,7 +25,11 @@ export type WarmEligibilityInput = {
   argsKey: string;
   /** Stable serialization of MCP / integration endpoints. */
   toolsKey: string;
+  /** Captured account or pool generation; legacy callers omit it. */
+  generation?: number;
 };
+
+export type WarmSession = { kind: "fresh" } | { kind: "loaded"; id: string } | { kind: "argv" };
 
 /** Canonical integrations shape — keep warmToolsKey in lockstep with SendTurnInput. */
 export type SendTurnIntegrations = NonNullable<SendTurnInput["integrations"]>;
@@ -136,6 +140,7 @@ export function warmFingerprint(input: WarmEligibilityInput): string {
     input.approval ?? "",
     input.fullAuto ? "1" : "0",
     input.toolsKey,
+    input.generation ?? "",
   ]);
 }
 
@@ -155,4 +160,12 @@ export function canReuseWarmSession(
   if (typeof resumeCursor !== "string" || resumeCursor.length === 0) return false;
   if (resumeCursor !== warmSessionId) return false;
   return warmFingerprint(stored) === warmFingerprint(next);
+}
+
+/** Loaded serves only its own cursor, fresh only a cursorless turn, argv on the fingerprint alone. */
+export function canServeTurn(session: WarmSession, resumeCursor: unknown): boolean {
+  const cursorless = resumeCursor === undefined || resumeCursor === null || resumeCursor === "";
+  if (session.kind === "fresh") return cursorless;
+  if (session.kind === "loaded") return session.id.length > 0 && resumeCursor === session.id;
+  return true;
 }

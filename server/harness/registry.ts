@@ -16,6 +16,7 @@ import { clearVersionCache, cliRevision } from "../procs.ts";
 import { accountLaunch, type AccountContext } from "../account-policy.ts";
 import { EngineLogin } from "../engine-login.ts";
 import { withWslProbeSnapshot } from "../wsl-gate.ts";
+import { warmPool as sharedWarmPool, type WarmPool } from "../drivers/warm-pool.ts";
 import { retiredEngineLabel } from "../../shared/model-selection.ts";
 import type {
   AnyProviderDriver,
@@ -71,6 +72,7 @@ export interface ProviderRegistryOptions {
   now?: () => number;
   modelRefreshTtlMs?: number;
   cacheDir?: string;
+  warmPool?: WarmPool;
 }
 
 /** The `cli` field off a driver's default config, when it has one — the
@@ -116,12 +118,16 @@ export class ProviderRegistry {
   private cacheKeys = new Map<InstanceId, string>();
   private probeVersion = 0;
   private savedVersion = 0;
+  private readonly warmPool: WarmPool;
+  private identityHolds = new Map<InstanceId, { release: () => void; seq: number }>();
+  private holdSeq = 0;
 
   constructor(drivers: readonly AnyProviderDriver[], options: ProviderRegistryOptions = {}) {
     this.driversByKind = new Map(drivers.map((d) => [d.driverKind, d]));
     this.now = options.now ?? Date.now;
     this.modelRefreshTtlMs = options.modelRefreshTtlMs ?? MODEL_REFRESH_TTL_MS;
     this.cacheDir = options.cacheDir;
+    this.warmPool = options.warmPool ?? sharedWarmPool;
   }
 
   async load(configs: InstanceConfigMap) {
@@ -269,7 +275,22 @@ export class ProviderRegistry {
     return Boolean(this.get(id)?.enabled) && !this.accountBlocked(id) && snapshot?.state !== "unavailable" && snapshot?.authenticated !== false;
   }
   accountBusy(id: string) { return this.probing.has(id) || this.modelRefreshInFlight.has(id) || this.helperWork.has(id) || this.logins.state(id) === "pending" || this.get(id)?.accountBusy?.() === true; }
-  invalidateAccount(id: string) { this.get(id)?.invalidateAccount?.(); this.forget(id); }
+  invalidateAccount(id: string) { this.holdIdentity(id, "account"); this.get(id)?.invalidateAccount?.(); this.forget(id); }
+
+  /** Warm helpers for this instance stay unadoptable until a later probe settles who is signed in. */
+  private holdIdentity(id: InstanceId, reason: string) {
+    const release = this.warmPool.barrier({ instanceId: id }, reason);
+    this.identityHolds.get(id)?.release();
+    this.identityHolds.set(id, { release, seq: ++this.holdSeq });
+    return this.holdSeq;
+  }
+
+  private settleIdentity(id: InstanceId, since = this.holdSeq) {
+    const hold = this.identityHolds.get(id);
+    if (!hold || hold.seq > since || this.logins.state(id) === "pending") return;
+    hold.release();
+    this.identityHolds.delete(id);
+  }
 
   signIn(instanceId: InstanceId) {
     const entry = this.byId.get(instanceId);
@@ -285,6 +306,7 @@ export class ProviderRegistry {
     const driver = kind ? this.driversByKind.get(kind) : undefined;
     const install = driver?.install;
     const command = install?.command?.[process.platform as "win32" | "darwin" | "linux"];
+    if (command) this.holdIdentity(instanceId, "install");
     return command ? { driverKind: driver!.driverKind, command, needsNode: Boolean(install?.needsNode), signInCommand: install?.signInCommand } : null;
   }
 
@@ -307,6 +329,7 @@ export class ProviderRegistry {
   async startSignIn(instanceId: InstanceId, device = false) {
     const config = this.loginConfig(instanceId);
     if (!config || this.signingOut.has(instanceId)) return null;
+    this.holdIdentity(instanceId, "sign-in");
     if (config.engine === "antigravityAgent" && !device) return this.logins.waitExternal(instanceId);
     const login = config.install?.login;
     const args = device ? login?.deviceArgs : login?.args;
@@ -330,6 +353,7 @@ export class ProviderRegistry {
     if (!config?.install?.logout) return null;
     if (this.signingOut.has(instanceId)) return false;
     this.signingOut.add(instanceId);
+    this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
       await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
@@ -346,6 +370,7 @@ export class ProviderRegistry {
           this.probeVersion += 1;
         }
       }
+      if (success) this.settleIdentity(instanceId);
       return success;
     } finally {
       this.signingOut.delete(instanceId);
@@ -359,12 +384,17 @@ export class ProviderRegistry {
       const previous = this.probed.get(entry.instanceId);
       if (!previous) return;
       const generation = this.logins.generation(entry.instanceId);
+      let since = this.holdIdentity(entry.instanceId, "refresh");
       const snapshot = await live.snapshot({ refresh: true });
       if (this.signingOut.has(entry.instanceId) || this.logins.generation(entry.instanceId) !== generation || !this.logins.needsRefresh(entry.instanceId)) return;
       this.probed.set(entry.instanceId, { ...previous, snapshot });
       this.probeVersion += 1;
-      if (snapshot.authenticated) this.logins.complete(entry.instanceId);
+      if (snapshot.authenticated) {
+        since = this.holdIdentity(entry.instanceId, "sign-in complete");
+        this.logins.complete(entry.instanceId);
+      }
       this.logins.acknowledge(entry.instanceId, snapshot.authenticated === true);
+      this.settleIdentity(entry.instanceId, since);
     }));
   }
 
@@ -495,6 +525,7 @@ export class ProviderRegistry {
     retryAccount = false,
   ): Promise<Probe> {
     const id = entry.instanceId;
+    const since = this.holdSeq;
     if (this.accountBlocked(id) && !retryAccount) return this.probing.get(id) ?? Promise.resolve(this.probed.get(id) ?? { snapshot: { state: "unavailable" }, cliCandidates: [] });
     const pending: Promise<Probe> = this.probe(entry, candidatesFor, opts).then(async (probe) => {
       if (this.byId.get(id) === entry && this.probing.get(id) === pending) {
@@ -513,6 +544,7 @@ export class ProviderRegistry {
             return failed;
           }
         }
+        if (probe.snapshot.state === "available" && !this.signingOut.has(id)) this.settleIdentity(id, since);
       }
       return probe;
     });
@@ -651,6 +683,7 @@ export class ProviderRegistry {
     await this.logins.dispose();
     this.environmentByInstance.clear();
     await Promise.allSettled(this.instances().map((i) => i.dispose()));
+    await this.warmPool.closeAll("exit", { final: true });
     this.byId.clear();
     this.cliByInstance.clear();
     this.modelRefreshAt.clear();

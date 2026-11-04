@@ -14,6 +14,7 @@ import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { MuseAgentDriver } from "../drivers/acp/muse.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { setWslGateForTests } from "../wsl-gate.ts";
+import { createWarmPool } from "../drivers/warm-pool.ts";
 
 /** A fake driver whose snapshot() and refreshModels() stand in for CLI launches. */
 function countingDriver() {
@@ -47,6 +48,25 @@ function countingDriver() {
 
 const versions = (rows: { instanceId: string; snapshot: { version?: string | null } }[]) =>
   Object.fromEntries(rows.map((row) => [row.instanceId, row.snapshot.version]));
+
+const testPool = () => createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+const warmKey = (threadId: string) => ({ engine: "museAgent", instanceId: "a", threadId });
+const warmCaptured = { generation: 0, incarnation: "muse-1", identity: "auth-hash" };
+const warmChild = () => ({ session: { kind: "fresh" as const }, alive: () => true, close: vi.fn(async () => {}) });
+const canReserve = (pool: ReturnType<typeof testPool>, threadId: string) => pool.reserve(warmKey(threadId), "fp", warmCaptured, "speculative") !== "denied";
+
+/** A Muse-kind fake with a CLI, login and logout, wired to its own warm pool. */
+async function warmRegistry(install: Record<string, unknown> = {}) {
+  const fake = makeFakeDriver({ kind: "museAgent" });
+  const pool = testPool();
+  const registry = new ProviderRegistry([{
+    ...fake.driver, defaultConfig: () => ({ cli: "fake" }),
+    install: { login: { args: ["login"] }, logout: ["logout"], ...install },
+  }], { warmPool: pool });
+  await registry.load({ a: { driver: "museAgent" } });
+  await registry.describe();
+  return { fake, pool, registry };
+}
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
@@ -935,5 +955,102 @@ describe("ProviderRegistry", () => {
     expect(fake.disposed.sort()).toEqual(["a", "b"]);
     expect(registry.entries()).toHaveLength(0);
     expect(registry.get("a")).toBeNull();
+  });
+
+  it("sign-out blocks adoption before its confirmation", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      const lease = pool.reserve(warmKey("t1"), "fp", warmCaptured, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      lease.attach(warmChild());
+      lease.ready();
+      let confirm: (() => void) | undefined;
+      vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      vi.spyOn(registry.logins, "wait").mockImplementation(() => new Promise<void>((resolve) => { confirm = resolve; }));
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: false });
+      const signedOut = registry.signOut("a");
+      expect(pool.take(warmKey("t1"), "fp", warmCaptured, undefined)).toBe("miss");
+      expect(lease.signal.aborted).toBe(true);
+      expect(canReserve(pool, "t2")).toBe(false);
+      await vi.waitFor(() => expect(confirm).toBeDefined());
+      expect(canReserve(pool, "t2")).toBe(false);
+      confirm!();
+      expect(await signedOut).toBe(true);
+      expect(canReserve(pool, "t2")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("a failed logout keeps the barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
+      expect(await registry.signOut("a")).toBe(false);
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describeCached();
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("startSignIn and refreshLogins raise the barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      const barrier = vi.spyOn(pool, "barrier");
+      const start = vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      await registry.startSignIn("a");
+      expect(barrier).toHaveBeenCalledWith({ instanceId: "a" }, "sign-in");
+      expect(barrier.mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+      expect(canReserve(pool, "t1")).toBe(false);
+
+      barrier.mockClear();
+      registry.logins.waitExternal("a");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
+      await registry.refreshLogins();
+      expect(barrier.mock.calls).toEqual([
+        [{ instanceId: "a" }, "refresh"],
+        [{ instanceId: "a" }, "sign-in complete"],
+      ]);
+      expect(registry.logins.state("a")).toBe("complete");
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("install raises the barrier before the command is handed out", async () => {
+    const { pool, registry } = await warmRegistry({ command: { [process.platform]: "npm i -g fake" } });
+    try {
+      const barrier = vi.spyOn(pool, "barrier");
+      expect(registry.install("a")?.command).toBe("npm i -g fake");
+      expect(barrier).toHaveBeenCalledWith({ instanceId: "a" }, "install");
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+      registry.invalidateAccount("a");
+      expect(barrier).toHaveBeenLastCalledWith({ instanceId: "a" }, "account");
+      expect(canReserve(pool, "t2")).toBe(false);
+    } finally {
+      await registry.disposeAll();
+    }
+  });
+
+  it("closes the pool after disposeAll", async () => {
+    const { fake, pool, registry } = await warmRegistry();
+    const disposedAtClose: string[][] = [];
+    const closeAll = vi.spyOn(pool, "closeAll").mockImplementation(async () => { disposedAtClose.push([...fake.disposed]); });
+    await registry.disposeAll();
+    expect(closeAll).toHaveBeenCalledWith("exit", { final: true });
+    expect(disposedAtClose).toEqual([["a"]]);
   });
 });

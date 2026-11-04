@@ -81,6 +81,7 @@ export type RuntimeEvent = RuntimeEventBase &
     | { type: "session.started"; sessionId: string | null; model?: string | null }
     | { type: "session.exited"; reason?: string }
     | { type: "turn.started" }
+    | { type: "turn.stage"; stage: "setup" | "prompt-sent" | "finishing" }
     | {
         type: "turn.retrying";
         /** 1-based: the retry about to be launched (1 = first relaunch). */
@@ -252,6 +253,12 @@ export interface SendTurnInput {
   };
   cwd?: string;
 }
+
+/** The turn a speculative prepare warms for; the driver rechecks it against the real SendTurnInput at take. */
+export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | "resumeCursor" | "approval" | "integrations" | "cwd"> & {
+  depth: 0 | 1 | 2;
+  captured: import("./drivers/warm-pool.ts").Captured;
+};
 
 export interface TurnStartResult {
   turnId: TurnId;
@@ -460,7 +467,7 @@ export interface ProviderInstance {
    * from a generic helper that may expose prompts in argv or lack approvals. */
   reviewPermission?(prompt: string, signal?: AbortSignal): Promise<string>;
   /** Opt-in handshake/CLI prepare for the focused bot only. Not used at boot. */
-  prepare?(): Promise<void>;
+  prepare?(turn?: PrepareTurn): Promise<void>;
   dispose(): Promise<void>;
 }
 
