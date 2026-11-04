@@ -80,9 +80,9 @@ function Tile({ number, terminal }: { number: number; terminal: boolean }) {
     : <span data-tile="" className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border border-hairline bg-raised text-[10.5px] leading-none text-ink">{number}</span>;
 }
 
-function ResetLine({ slot, window, account, clock }: { slot: "session" | "week"; window?: UsageBoardWindow; account: UsageBoardAccount; clock: Clock }) {
+function ResetLine({ slot, window, account, clock }: { slot: "session" | "week" | "extra"; window?: UsageBoardWindow; account: UsageBoardAccount; clock: Clock }) {
   const { t } = clock;
-  const label = t(slot === "session" ? "usage.limits.sessionShort" : "usage.limits.weeklyShort");
+  const label = slot === "extra" && window ? shortLabel(window, t) : t(slot === "session" ? "usage.limits.sessionShort" : "usage.limits.weeklyShort");
   let body: ReactNode;
   if (!window) {
     const week = splitWindows(account.windows).week;
@@ -326,6 +326,7 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
         <div className="mt-2 flex flex-col">
           <ResetLine slot="session" window={session} account={account} clock={clock} />
           <ResetLine slot="week" window={week} account={account} clock={clock} />
+          {window && !paced && <ResetLine slot="extra" window={window} account={account} clock={clock} />}
         </div>
         {muse && <div className={cn("mt-1 text-[12px]", muse.stale ? "text-ink-secondary opacity-70" : "text-ink-secondary")}>{muse.label(t)}</div>}
         {limited && <div className="mt-1 text-[12px] text-danger">
