@@ -305,6 +305,50 @@ describe("Antigravity turns (fake CLI)", () => {
     expect((await instance.snapshot()).authenticated).toBe(true);
   });
 
+  it("emits only the real answer when a system notice precedes it", async () => {
+    const previous = { notice: process.env.FAKE_AGY_SYSTEM_NOTICE, after: process.env.FAKE_AGY_AFTER_NOTICE };
+    process.env.FAKE_AGY_SYSTEM_NOTICE = "1";
+    process.env.FAKE_AGY_AFTER_NOTICE = "\nApplied to the work PC!";
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-notice-then-answer", text: "hi" });
+      await recorder.until((event) => event.type === "turn.completed");
+
+      expect(recorder.events.find((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toMatchObject({
+        text: "Applied to the work PC!",
+      });
+      expect(recorder.events.some((event) => JSON.stringify(event).includes("SYSTEM_MESSAGE"))).toBe(false);
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+    } finally {
+      for (const [key, value] of [["FAKE_AGY_SYSTEM_NOTICE", previous.notice], ["FAKE_AGY_AFTER_NOTICE", previous.after]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("keeps the real reply from a recorded agy turn that echoed background-task notices", async () => {
+    const recorded = JSON.parse(
+      readFileSync(new URL("../../test/fixtures/recorded/antigravity/background-task-notice.json", import.meta.url), "utf8"),
+    );
+    const previous = process.env.FAKE_AGY_REPLAY;
+    process.env.FAKE_AGY_REPLAY = JSON.stringify(recorded.reply.lines);
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-recorded-notice", text: "hi" });
+      await recorder.until((event) => event.type === "turn.completed");
+
+      expect(recorder.events.find((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toMatchObject({
+        text: "Both commands have been launched as background tasks. Waiting for notifications.\nFIXTURE-OK\nFIXTURE-OK\n",
+      });
+      expect(recorder.events.some((event) => /SYSTEM_MESSAGE|finished with result/.test(JSON.stringify(event)))).toBe(false);
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_AGY_REPLAY;
+      else process.env.FAKE_AGY_REPLAY = previous;
+    }
+  });
+
   it("does not render internal system notices from streamed or final text", async () => {
     const previous = process.env.FAKE_AGY_SYSTEM_NOTICE;
     process.env.FAKE_AGY_SYSTEM_NOTICE = "1";
@@ -1331,6 +1375,27 @@ describe("Antigravity computer MCP config", () => {
       teacherRecorder.stop();
       await python.dispose();
       await teacher.dispose();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("gives the agents token precedence over the terminal's in the child env", async () => {
+    ensureDirs();
+    chmodSync(FAKE_CLI, 0o755);
+    const home = mkdtempSync(join(tmpdir(), "omb-agy-token-"));
+    const integrations = botIntegrations("python");
+    integrations.agents.env.OMB_COMMS_TOKEN = "agents-tok";
+    integrations.terminal.env.OMB_COMMS_TOKEN = "global-tok";
+    const instance = await createIn(home, "token", { FAKE_AGY_DUMP: join(home, "token.json") });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      await instance.adapter.sendTurn({ threadId: "t-python", text: "one", integrations });
+      await recorder.until((event) => event.type === "turn.completed");
+      const { env } = JSON.parse(readFileSync(join(home, "token.json"), "utf8"));
+      expect(env).toMatchObject({ OMB_COMMS_TOKEN: "agents-tok", OMB_TERMINAL_TOKEN: "grant-python", OMB_TERMINAL_URL: "http://127.0.0.1:9" });
+    } finally {
+      recorder.stop();
+      await instance.dispose();
       rmSync(home, { recursive: true, force: true });
     }
   });
