@@ -29,8 +29,15 @@ const homes = new Map<string, string>();
 const budgets = new Map<string, { committed: number; pending: Set<string> }>();
 
 function liveRoot(rootId: string | null | undefined): string | null {
-  if (!rootId || !roots.has(rootId)) return null;
-  roots.set(rootId, Date.now());
+  if (!rootId) return null;
+  const touched = roots.get(rootId);
+  if (touched === undefined) return null;
+  const now = Date.now();
+  if (now - touched >= MAX_IDLE) {
+    roots.delete(rootId);
+    return null;
+  }
+  roots.set(rootId, now);
   return rootId;
 }
 
