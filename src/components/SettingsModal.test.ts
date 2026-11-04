@@ -175,11 +175,11 @@ describe("SettingsModal friends chrome", () => {
     expect(html).not.toContain('data-skin="servo-gray"');
   });
 
-  it("orders Devices after Connections", () => {
+  it("orders Usage, then Devices, after Connections", () => {
     const html = markup("general");
     const nav = html.slice(html.indexOf("<nav"), html.indexOf("</nav>"));
     expect([...nav.matchAll(/<button[^>]*aria-label="([^"]+)"/g)].map((match) => match[1])).toEqual([
-      "Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index", "Shortcuts",
+      "Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
   });
 
@@ -196,8 +196,7 @@ describe("SettingsModal friends chrome", () => {
   it("places Model index right after Usage with its shortcuts", () => {
     const source = readFileSync(join(here, "SettingsModal.tsx"), "utf8");
     const block = source.slice(source.indexOf("const SECTIONS"), source.indexOf("];", source.indexOf("const SECTIONS")));
-    expect(block.indexOf('id: "models-index"')).toBeGreaterThan(block.indexOf('id: "usage"'));
-    const html = markup("models-index");
+    expect(block.indexOf('id: "models-index"')).toBeGreaterThan(block.indexOf('id: "usage"'));    const html = markup("models-index");
     expect(html).toContain('aria-keyshortcuts="Alt+I"');
     expect(html).not.toContain("Ctrl+Shift+M");
     expect(html).toContain("Checked ");
