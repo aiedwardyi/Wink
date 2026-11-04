@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -287,6 +287,34 @@ describe("Google reader kind recovery", () => {
     expect(children()).toHaveLength(0);
     expect(receipt(dataDir).changeToken).not.toBe(before.changeToken);
     expect(receipt(dataDir).changeToken).toBe(table(dataDir).changeToken);
+  });
+
+  it("leaves a matching receipt untouched on an idle pass", async () => {
+    const dataDir = await joined();
+    await skipStyle(dataDir);
+    await recover(dataDir);
+    const kindsPath = join(dataDir, RECEIPT);
+    const age = new Date(1_700_000_000_000);
+    utimesSync(kindsPath, age, age);
+    const bytes = readFileSync(kindsPath);
+    const before = statSync(kindsPath, { bigint: true });
+    const token = receipt(dataDir).changeToken;
+    const writes = vi.spyOn(atomic, "writeFileAtomic");
+    await mirror(dataDir, { kindsPath }).syncOnce();
+    const idle = statSync(kindsPath, { bigint: true });
+    expect(readFileSync(kindsPath)).toEqual(bytes);
+    expect(idle.mtimeNs, "idle pass must leave receipt mtimeNs unchanged").toBe(before.mtimeNs);
+    expect([idle.dev, idle.ino]).toEqual([before.dev, before.ino]);
+    expect(writes.mock.calls.filter(([path]) => path === kindsPath)).toHaveLength(0);
+    seed("pictures/advance.png");
+    await mirror(dataDir, { kindsPath }).syncOnce();
+    const advanced = statSync(kindsPath, { bigint: true });
+    expect(receipt(dataDir).changeToken).not.toBe(token);
+    expect(receipt(dataDir).changeToken).toBe(table(dataDir).changeToken);
+    expect(readFileSync(kindsPath)).not.toEqual(bytes);
+    expect(advanced.mtimeNs).not.toBe(before.mtimeNs);
+    expect([advanced.dev, advanced.ino]).not.toEqual([before.dev, before.ino]);
+    expect(writes.mock.calls.filter(([path]) => path === kindsPath)).toHaveLength(1);
   });
 
   it.each([404, 410])("lets cursor expiry %s satisfy a pending receipt without another inventory", async (status) => {

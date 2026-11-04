@@ -425,6 +425,7 @@ export function createDriveMirror(options: Options) {
       if (!handled) { options.listed?.(remote); return; }
       const projected = new Map(remote);
       for (const [path, copies] of projected) {
+        // Only unchanged peer heads: a maintenance rescan must not hold sends for chats it won't download again.
         if (!path.startsWith("threads-v2") || !path.endsWith("/head.json") || drivePathRule(path, ids) !== "peer") continue;
         const file = [...copies].sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id))[0];
         if (file && handled[path]?.md5 === file.md5Checksum && handled[path]?.size === file.size) projected.delete(path);
@@ -757,7 +758,7 @@ export function createDriveMirror(options: Options) {
     remember(cursor);
     if (summary.retryAfterMs === null) rateStrikes = 0;
     check();
-    if (kindsPath && (fullList || kindsMatch) && summary.retryAfterMs === null && summary.failed.length === 0 && table.changeToken) {
+    if (kindsPath && (fullList || kindsMatch) && summary.retryAfterMs === null && summary.failed.length === 0 && table.changeToken && !(kindsMatch && table.changeToken === savedToken)) {
       checkKindsPath();
       writeFileAtomic(kindsPath, `${JSON.stringify({ version: 1, readerRevision: DRIVE_READER_REVISION, binding: table.binding, changeToken: table.changeToken }, null, 2)}\n`, { mode: 0o600 });
     }
