@@ -76,14 +76,14 @@ describe("Account settings", () => {
     return host.querySelector(".overflow-y-auto")!;
   }
 
-  it("orders Devices after Connections with the matching icons", async () => {
+  it("orders Usage and Devices after Connections with the matching icons", async () => {
     await render();
     const buttons = [...host.querySelectorAll("nav button")];
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Account", "General", "Connections", "Devices", "Themes", "Usage", "Model Index", "Shortcuts",
+      "Account", "General", "Connections", "Usage", "Devices", "Themes", "Model Index", "Shortcuts",
     ]);
     expect(buttons.map((button) => button.querySelector("svg")?.classList.item(1))).toEqual([
-      "lucide-user", "lucide-settings", "lucide-key-round", "lucide-monitor-smartphone", "lucide-palette", "lucide-coins", "lucide-chart-scatter", "lucide-keyboard",
+      "lucide-user", "lucide-settings", "lucide-key-round", "lucide-coins", "lucide-monitor-smartphone", "lucide-palette", "lucide-chart-scatter", "lucide-keyboard",
     ]);
   });
 
