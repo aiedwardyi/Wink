@@ -48,13 +48,14 @@ it("settles the dispatch's reservation once the dispatch ends, committed or not"
 
 it("releases a start's credit on a busy rejection and a failure before dispatch, but leaves a dispatching one alone", async () => {
   const rootId = spentRoot(2);
-  const startTurn = new Function("deps", `const { tryClaimTurnStart, busyRejection, startClaimedTurn, release, dispatchingReservations, turnStartClaims, store, continueQueuedDrainIfIdle, botHasActiveTurn, drainQueuedSends, paneWake } = deps;\n${js(fn("startTurn").getText(source))}\nreturn startTurn;`);
+  const startTurn = new Function("deps", `const { tryClaimTurnStart, busyRejection, startClaimedTurn, release, dispatchingReservations, takeStartingHold, turnStartClaims, store, continueQueuedDrainIfIdle, botHasActiveTurn, drainQueuedSends, paneWake } = deps;\n${js(fn("startTurn").getText(source))}\nreturn startTurn;`);
   const dispatchingReservations = new Set<Reservation>();
   let claim = false;
   let claimed: (reservation?: Reservation) => Promise<unknown> = async () => undefined;
   const run = startTurn({
     tryClaimTurnStart: () => claim, busyRejection: (message: string) => Object.assign(new Error(message), { busy: true }),
     startClaimedTurn: (_botId: string, _text: string, opts?: { reservation?: Reservation }) => claimed(opts?.reservation),
+    takeStartingHold: () => () => {},
     release, dispatchingReservations, turnStartClaims: new Set(), store: { bot: () => undefined }, continueQueuedDrainIfIdle: () => {},
   }) as (botId: string, text: string, opts?: { threadId?: string; reservation?: Reservation }) => Promise<unknown>;
   const take = () => (reserve(rootId, "wake") as { reservation: Reservation }).reservation;
