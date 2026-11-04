@@ -418,14 +418,17 @@ describe("trusted worker accounts", () => {
       environment: { CODEX_HOME: f.bases.codex.environment!.CODEX_HOME } });
   });
 
-  it.each(["signed out", "blocked"])("refuses the base when the other engine's Main is %s", async (state) => {
+  it.each(["signed out", "blocked"])("falls back to the base and says so when the other engine's Main is %s", async (state) => {
     const f = await fixture();
     const m = mainRouting(f);
     f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
     await f.accounts.setDefault("codex", f.third.id);
     if (state === "signed out") await f.accounts.stop(f.third.id);
     if (state === "blocked") m.blocked.add(f.third.id);
-    await expect(m.prepare(f.input)).rejects.toThrow("Codex Main is unavailable or signed out. Sign in again in Settings > Connections, or pick another Main");
+    const launch = await m.prepare(f.input);
+    expect(launch).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0 },
+      environment: { CODEX_HOME: f.bases.codex.environment!.CODEX_HOME } });
+    expect(launch && "line" in launch ? launch.line : "").toMatch(/^Codex Main is signed out, so this worker uses your default account\./);
   });
 
   it.each([

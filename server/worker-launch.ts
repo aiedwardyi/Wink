@@ -137,8 +137,8 @@ export function createWorkerLaunch(deps: {
     if (!base || base.enabled === false || base.driver !== command.driver) throw new Error("Worker base account is unavailable");
     const baseEnvironment = { ...process.env, ...base.environment };
     const main = sameEngine ? undefined : deps.mainAccount?.(baseId);
-    if (main === null || (main && !deps.available(main.id, main.generation))) throw new Error(`${command.name} Main is unavailable or signed out. Sign in again in Settings > Connections, or pick another Main`);
-    const account = sameEngine && turn.account ? turn.account : main ?? baseAccount(baseId, command.driver, baseEnvironment);
+    const mainDown = main === null || (main !== undefined && !deps.available(main.id, main.generation));
+    const account = sameEngine && turn.account ? turn.account : main && !mainDown ? main : baseAccount(baseId, command.driver, baseEnvironment);
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
@@ -184,6 +184,7 @@ export function createWorkerLaunch(deps: {
     const nowMain = sameEngine ? undefined : deps.mainAccount?.(baseId);
     if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
-      environment: policy.env, workerSettings, session, line: usage.line };
+      environment: policy.env, workerSettings, session,
+      line: mainDown ? [`${command.name} Main is signed out, so this worker uses your default account.`, usage.line].filter(Boolean).join(" ") : usage.line };
   };
 }
