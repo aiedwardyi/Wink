@@ -261,7 +261,7 @@ export function AccountRow({ engine, account, board, state, checked, phone, term
         {!phone && <Who account={account} runs={board.runs} phone={phone} t={t} />}
       </span>
       {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
-      {!phone && <span className="usage-num flex w-[4.5rem] shrink-0 flex-col items-end">
+      {!phone && <span className="usage-num flex w-[4.5rem] shrink-0 flex-col items-end whitespace-nowrap">
         <span className={cn("text-[13px] leading-tight", TONE_TEXT[tone])}>{facts.first}</span>
         {facts.second && <span className="text-[11px] leading-tight text-ink-secondary">{facts.second}</span>}
       </span>}

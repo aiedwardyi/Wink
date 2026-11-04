@@ -407,13 +407,17 @@ describe("chat usage meter, quick view and wait card", () => {
 
   it.each(["en", "ko"] as const)("names the window a row has no data for (%s)", async (locale) => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, locale });
-    const expected = locale === "en" ? "5h no data" : "5시간 데이터 없음";
+    const expected = locale === "en" ? "5h no data" : "5시간 미확인";
     const settings = q(`[data-usage-section] [data-account-row="${CLAUDE_2}"], [data-account-row="${CLAUDE_2}"]`);
     expect(text(settings), "Settings row").toContain(expected);
     await click(meter());
     const row = quick()!.querySelector(`[data-account-row="${CLAUDE_2}"]`);
     expect(text(row), "quick view row").toContain(expected);
     expect(text(row)).not.toMatch(locale === "en" ? /0%s*No data/ : /0%s*데이터 없음/);
+    const fact = [...row!.querySelectorAll("span")].find((node) => text(node) === expected);
+    expect(fact?.parentElement?.className, "the facts column keeps each fact on one line").toContain("whitespace-nowrap");
+    expect(fact?.parentElement?.className, "at its fixed width, so names and the spark keep their room").toContain("w-[4.5rem]");
+    expect(fact?.parentElement?.className).not.toContain("min-w-[4.5rem]");
   });
 
   it("keeps the board quiet through an equal pane poll", async () => {
