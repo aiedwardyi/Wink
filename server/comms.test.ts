@@ -115,10 +115,6 @@ describe("comms e2e (fake ACP fleet)", () => {
             environment: { FAKE_ACP_MODE: "happy" },
             config: { cli: FAKE_CLI, fullAuto: true },
           },
-          // a separate asker instance for the async-handoff e2e. B can stay
-          // on `grok` because its depth-1 turn runs without the agents
-          // integration either way (the depth guard), so it just plays
-          // plain happy text.
           // a peer that stops on a permission card, so the asking bot's own
           // 1:1 can be checked while the ask is blocked on a human
           helperPermission: {
@@ -444,9 +440,8 @@ describe("comms e2e (fake ACP fleet)", () => {
   // ── async peer handoff (delegate_bot) ───────────────────────────────
   // A's fake CLI uses FAKE_ACP_MODE=delegate-peer, which calls delegate_bot
   // (returns immediately with "Delegation queued"). After A's turn
-  // settles, the harness fires B's depth-1 turn — B runs plain happy text
-  // because the depth guard refuses to inject the agents integration at
-  // depth >= MAX_COMMS_DEPTH. The exchange mirrors into a bot⇄bot channel
+  // settles, the harness fires B's depth-1 turn, which runs plain happy text.
+  // The exchange mirrors into a bot⇄bot channel
   // and shows up as chips on both 1:1 threads, just like ask_bot.
   it(
     "hands the task off async via delegate_bot and lets B run after A's turn settles",
@@ -1109,21 +1104,9 @@ stderr: ${stderr.slice(-2000)}`,
     ).toBe(false);
   }, 50_000);
 
-  // ── depth guard regression ───────────────────────────────────────────
-  // A bot invoked via ask_bot or delegate_bot runs at depth=1, which equals
-  // MAX_COMMS_DEPTH. The depth guard in startTurn must refuse to inject
-  // the agents integration, so B's CLI sees no agents mcpServer and falls
-  // through to its plain happy text — NOT a "one hop" error from a depth-1
-  // ask_bot. If the guard were removed, B's fake (also in ask-peer mode)
-  // would call ask_bot, the harness would refuse recursion, and B's reply
-  // would contain "peer error: ... one hop". The absence of that error is
-  // the regression signal.
-  it("does not inject the agents integration into a depth-1 turn", async () => {
+  it("finishes a peer turn without recursive messaging", async () => {
     const seeded = (await api("GET", "/api/bots")).body.bots[0];
     await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
-    // A runs delegate-peer and hands off to B, which runs ask-peer. If the
-    // depth guard broke, B's depth-1 turn would call ask_bot and its reply
-    // would carry the "one hop" refusal — the regression signal.
     const selection = { instanceId: "grok", model: "fake-model" };
     const askerSelection = { instanceId: "askerDelegate", model: "fake-model" };
     const helper = (await api("POST", "/api/bots")).body.bot;
@@ -1158,9 +1141,6 @@ stderr: ${stderr.slice(-2000)}`,
     const reply = helperBot.messages.findLast(
       (m: any) => m.role === "bot" && m.kind === "text" && m.text?.includes("hello from fake acp"),
     );
-    // If the guard were broken, B would have called ask_bot at depth=1 and
-    // received "message chains are limited to one hop" back from the
-    // harness. That error text would surface here as `peer error: ... one hop`.
     expect(reply.text).toContain("hello from fake acp");
     expect(reply.text).not.toContain("one hop");
     expect(reply.text).not.toContain("peer error");

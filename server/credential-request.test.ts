@@ -130,17 +130,22 @@ describe("saved keys prompt", () => {
 
   it("joins the credential prompt in 1:1 and room turns, read from cfg each turn", () => {
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const gates = [...index.matchAll(/const canMessage = (.*);\n/g)];
     const sites: Array<[string | undefined, string]> = [
       [index.match(/const credentialPrompt = (.*);\n/)?.[1], " Ask first."],
-      [index.match(/\n\s+(integrations\.agents && .*CREDENTIAL_PROMPT.*),\n/)?.[1], "Ask first."],
+      [index.match(/\n\s+(canMessage && .*CREDENTIAL_PROMPT.*),\n/)?.[1], "Ask first."],
     ];
-    for (const [site, base] of sites) {
+    for (const [i, [site, base]] of sites.entries()) {
       const cfg: CredentialConfig = {};
-      const prompt = (agents: boolean) => runInNewContext(site!, { integrations: agents ? { agents: {} } : {}, cfg, CREDENTIAL_PROMPT: "Ask first.", savedKeysPrompt });
+      const prompt = (agents: boolean, depth = 0) => runInNewContext(`const canMessage = ${gates[i]?.[1]}; ${site}`, {
+        integrations: agents ? { agents: {} } : {}, commsDepth: depth, hop: depth, MAX_COMMS_DEPTH: 1,
+        cfg, CREDENTIAL_PROMPT: "Ask first.", savedKeysPrompt,
+      });
       for (const key of ["", "tts-7f3a", ""]) {
         cfg.tts = { key };
         expect(prompt(true)).toBe(key ? `${base}${line("ElevenLabs API Key (ttsKey)")}` : base);
         expect(prompt(false)).toBeFalsy();
+        expect(prompt(true, 1)).toBeFalsy();
       }
     }
   });

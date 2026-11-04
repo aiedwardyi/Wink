@@ -63,6 +63,7 @@ export interface Message {
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
   text?: string;
+  noteType?: "team-report";
   /** Versioned model-context state. Unknown versions stay intact on disk. */
   compaction?: unknown;
   card?: OptionCardData;

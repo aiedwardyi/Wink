@@ -290,6 +290,7 @@ import {
   writeDeviceRecord,
 } from "./device-sync.ts";
 import { PhoneAccess } from "./phone-access.ts";
+import { createDevicePresence } from "./device-presence.ts";
 import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awake.ts";
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
@@ -572,9 +573,7 @@ function authorizedComms(header: string | string[] | undefined): boolean {
   const got = Buffer.from(Array.isArray(header) ? "" : (header ?? ""));
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
-// Cap message chains: depth 0 = a user-initiated turn (may ask a peer);
-// a peer invoked via ask_bot runs at depth 1 and gets NO agents tool, so
-// A→B is allowed but B→C (and A→B→A loops) never start.
+// Peer turns retain their tools; the comms endpoints refuse another hop.
 const MAX_COMMS_DEPTH = 1;
 const MAX_WORKSPACE_BOTS = 100;
 const createGroupTaskRequestSchema = z.object({ title: z.string().optional() });
@@ -2172,6 +2171,7 @@ function startDevicePresence(): void {
   });
 }
 
+const devicePresence = createDevicePresence();
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
   if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
@@ -5271,29 +5271,20 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           : "Open Computer and enable Start VPS automatically, or choose Cloud to start it manually.";
         throw new Error(`${autoVpsProblem}. ${hint}`);
       }
-      // Agent control tools include peer comms and the secure credential
-      // request card. A comms-invoked turn (depth ≥ cap) gets none — hard recursion
-      // stop, so the user's tokens can't be burned by a bot-to-bot loop.
-      // Only drivers that mount the tools get the integration (and, via the
-      // integrations.agents gate below, the prompt hint) — a bot on a driver
-      // without it must not be told about tools it cannot call. Any bot can
-      // still be the TARGET of ask_bot regardless of its driver.
       const sectionPeers = store.bots.filter(
         (candidate) =>
           candidate.id !== bot.id &&
           !candidate.hidden &&
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
-      if (
-        commsDepth < MAX_COMMS_DEPTH &&
-        instance.adapter.capabilities.agentsMcp === true
-      ) {
+      if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
+      const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
       // itself, so the harness stays the single owner of turns/permissions
-      const tagged = integrations.agents
+      const tagged = canMessage
         ? mentionedBots(
             text,
             sectionPeers,
@@ -5307,24 +5298,24 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         ? chiefOfStaffSystemPrompt(
             bot.id,
             store.bots,
-            Boolean(integrations.agents),
+            canMessage,
             openMausStatusSystemPrompt(),
             false,
             tagged.length > 0,
             turnLimit,
           )
-        : integrations.agents && sectionPeers.length > 0
+        : canMessage && sectionPeers.length > 0
           ? peerAgentsSystemPrompt()
           : "";
-      const credentialPrompt = integrations.agents ? ` ${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}` : "";
-      const routinePrompt = integrations.agents
+      const credentialPrompt = canMessage ? ` ${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}` : "";
+      const routinePrompt = canMessage
         ? " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation."
         : "";
       const taskStatePrompt = integrations.agents
         ? " Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn."
         : "";
-      const reactPrompt = integrations.agents ? ` ${reactionToolGuidance()}` : "";
-      const showImagePrompt = integrations.agents ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
+      const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
+      const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
 
       if (currentTurnEpoch(bot.id) !== epoch) {
         releaseLocalVmThread(threadId);
@@ -5399,7 +5390,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           taskStatePrompt +
           reactPrompt +
           showImagePrompt +
-          (integrations.agents ? teamReports.prompt() : "") +
+          (canMessage ? teamReports.prompt() : "") +
           (detailedRepliesEnabled(cfg) ? DETAILED_REPLY_INSTRUCTIONS : ALWAYS_REPLY_INSTRUCTIONS) +
           CORPUS_SEARCH_INSTRUCTIONS +
           (opts?.keepGoingWake ? "" : keepGoing.rules(bot.id)) +
@@ -6209,9 +6200,10 @@ async function runClaimedGroupMemberTurn(
     const terminal = terminalIntegration(bot.id);
     if (terminal) integrations.terminal = terminal;
   }
-  if (hop < MAX_COMMS_DEPTH && instance.adapter.capabilities.agentsMcp === true) {
+  if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
+  const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
     instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
@@ -6270,7 +6262,7 @@ async function runClaimedGroupMemberTurn(
     ? chiefOfStaffSystemPrompt(
         bot.id,
         store.bots,
-        Boolean(integrations.agents),
+        canMessage,
         openMausStatusSystemPrompt(),
         true,
         // a room turn is a coordination context by definition; the room
@@ -6278,7 +6270,7 @@ async function runClaimedGroupMemberTurn(
         true,
         hop >= MAX_COMMS_DEPTH ? "room" : undefined,
       )
-    : integrations.agents
+    : canMessage
       ? peerAgentsSystemPrompt(true)
       : "";
   const system = [
@@ -6290,14 +6282,14 @@ async function runClaimedGroupMemberTurn(
     `Reply as yourself, ${detailedRepliesEnabled(cfg) ? "" : "briefly and "}conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     reactionSystemGuidance(),
     coordinationPrompt,
-    integrations.agents && teamReports.prompt().trimStart(),
-    integrations.agents && `${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}`,
-    integrations.agents &&
+    canMessage && teamReports.prompt().trimStart(),
+    canMessage && `${CREDENTIAL_PROMPT}${savedKeysPrompt(cfg)}`,
+    canMessage &&
       "If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. A proposal is not applied until the user confirms its in-app card, so never claim the action completed before that confirmation.",
     integrations.agents &&
       "Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn.",
-    integrations.agents && reactionToolGuidance(),
-    integrations.agents && SHOW_IMAGE_GUIDANCE,
+    canMessage && reactionToolGuidance(),
+    canMessage && SHOW_IMAGE_GUIDANCE,
   ]
     .filter(Boolean)
     .join("\n");
@@ -7489,7 +7481,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
-      const devices = pickerDevices(listed, relay ? phoneAccess.base() : null);
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null);
       return json(res, 200, { devices });
     }
     if (method === "PUT" && path === "/api/devices/name") {

@@ -565,10 +565,8 @@ function handle(msg: any) {
           }, lateMs);
         }
       };
-      if (mode === "ask-peer" && agentsMcp) {
-        // the comms e2e: reach a peer bot through the injected agents proxy
-        // and reply with whatever it said (the peer's fake runs plain happy
-        // — its depth-1 turn gets no agents server, so no recursion)
+      const peerTurn = agentsMcp?.env?.some(({ name, value }) => name === "OMB_TURN_DEPTH" && Number(value) > 0);
+      if (mode === "ask-peer" && agentsMcp && !peerTurn) {
         void driveMcp(agentsMcp, [
           { name: "list_bots", args: () => ({}) },
           {
@@ -586,7 +584,7 @@ function handle(msg: any) {
           });
         return;
       }
-      if (mode === "channel-peer" && agentsMcp) {
+      if (mode === "channel-peer" && agentsMcp && !peerTurn) {
         // the create_channel e2e: a bot opening a shared room asks for a
         // section of its own choosing — the harness must not honour it
         void driveMcp(agentsMcp, [
@@ -611,7 +609,7 @@ function handle(msg: any) {
           });
         return;
       }
-      if (mode === "create-peer" && agentsMcp) {
+      if (mode === "create-peer" && agentsMcp && !peerTurn) {
         void driveMcp(agentsMcp, [
           {
             name: "create_bot",
@@ -662,7 +660,7 @@ function handle(msg: any) {
         finish();
         return;
       }
-      if (mode === "delegate-peer" && agentsMcp) {
+      if (mode === "delegate-peer" && agentsMcp && !peerTurn) {
         // async peer-handoff e2e: queue the delegation and return
         // immediately; the harness fires the peer's depth-1 turn after our
         // turn settles. We don't need the peer's reply in our text — the

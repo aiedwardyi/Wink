@@ -60,6 +60,56 @@ class FakeWebContents extends EventEmitter {
 
 const URL_ = "https://home.tail1234.ts.net/";
 
+test("paints the named connecting page before showing or contacting the PC", async () => {
+  const { deviceConnectingPage, startDeviceWindow } = require("./device-window.cjs");
+  const loading = deviceConnectingPage({ title: "Wink - Studio", heading: "Connecting to Studio", backgroundColor: "#22272e", color: "#adbac7" });
+  const html = decodeURIComponent(loading);
+  assert.ok(html.includes("Connecting to Studio"));
+  assert.ok(html.includes("background:#22272e"));
+  const steps = [];
+  const win = { isDestroyed: () => false, show: () => steps.push("show"), loadURL: async (url) => steps.push(url) };
+  await startDeviceWindow(win, loading, URL_);
+  assert.deepEqual(steps, [loading, "show", URL_]);
+  const failure = decodeURIComponent(deviceUnreachablePage({ host: "home.ts.net", title: "Wink", heading: "Offline", retry: "Retry", backgroundColor: "#22272e", color: "#adbac7" }));
+  assert.ok(failure.includes("background:#22272e"));
+});
+
+test("shows the window and loads the PC after the connecting load rejects", async () => {
+  const { startDeviceWindow } = require("./device-window.cjs");
+  const steps = [];
+  const win = {
+    isDestroyed: () => false,
+    show: () => steps.push("show"),
+    loadURL: async (url) => {
+      steps.push(url);
+      if (url === "data:connecting") throw Object.assign(new Error("ERR_ABORTED"), { errno: -3 });
+    },
+  };
+  await startDeviceWindow(win, "data:connecting", URL_);
+  assert.deepEqual(steps, ["data:connecting", "show", URL_]);
+});
+
+test("help and Retry meet 4.5:1 contrast in every skin", () => {
+  const { SKIN_CHROME } = require("./skin-overlay.cjs");
+  const luminance = (hex) => {
+    const rgb = hex.length === 4 ? hex.slice(1).split("").map((value) => value + value).join("") : hex.slice(1);
+    const [r, g, b] = rgb.match(/../g).map((value) => parseInt(value, 16) / 255)
+      .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
+  const failures = [];
+  for (const [name, chrome] of Object.entries(SKIN_CHROME)) {
+    const html = decodeURIComponent(deviceUnreachablePage({ host: "home.ts.net", title: "Wink", heading: "Offline", help: "Check the PC", retry: "Retry", backgroundColor: chrome.color, color: chrome.symbolColor }));
+    const help = /<p style="[^"]*color:(#[a-f0-9]+)/i.exec(html)[1];
+    const button = /<button style="[^"]*background:(#[a-f0-9]+);color:(#[a-f0-9]+)/i.exec(html);
+    for (const [part, ratio] of [["help", contrast(help, chrome.color)], ["Retry text", contrast(button[2], button[1])], ["Retry surface", contrast(button[1], chrome.color)]]) {
+      if (ratio < 4.5) failures.push(`${name} ${part}: ${ratio.toFixed(2)}`);
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
 function watched() {
   const webContents = new FakeWebContents();
   const logs = [];

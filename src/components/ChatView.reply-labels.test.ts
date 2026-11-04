@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider, useStore, type Bot, type Message } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
+import * as workerRows from "@/lib/worker-runs";
 
 import { ChatView, stampedReplyComm } from "./ChatView";
 
@@ -86,6 +87,36 @@ async function mount(current: Bot) {
 
 const label = (chip: HTMLButtonElement) => chip.querySelector("span.truncate")?.textContent;
 const chips = (host: HTMLElement) => Array.from(host.querySelectorAll("button")).filter((button) => label(button)?.startsWith("Reply to @"));
+
+describe("ChatView note titles", () => {
+  const note: Message = { id: "note", at: 1, role: "bot", kind: "note", text: "Team report fixture. Export stopped." };
+  const title = (host: HTMLElement) => host.querySelector('[data-mid="note"] button[aria-expanded]')?.textContent;
+
+  it.each([["en", "Bug Report"], ["ko", "버그 리포트"]])("labels a marked team report in %s", async (locale, expected) => {
+    localStorage.setItem("omb-locale", locale);
+    const marked = { ...note, noteType: "team-report" as const };
+    const { host } = await mount(bot([marked]));
+    expect(title(host)).toBe(expected);
+    const toggle = host.querySelector<HTMLButtonElement>('[data-mid="note"] button[aria-expanded]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(host.querySelector("[data-orbit-note]")?.textContent).toBe(note.text);
+  });
+
+  it.each([["en", "Note", "Note from a worker", "Note from BUILD"], ["ko", "메모", "작업자의 메모", "BUILD의 메모"]])("preserves unmarked note titles in %s", async (locale, plain, worker, named) => {
+    vi.spyOn(workerRows, "workerAnchors").mockReturnValue(new Map());
+    localStorage.setItem("omb-locale", locale);
+    const legacy = { ...note, reportIds: ["fixture"] };
+    const { host, render } = await mount(bot([legacy]));
+    expect(title(host)).toBe(plain);
+    await render(bot([{ ...note, text: "An ordinary note." }]));
+    expect(title(host)).toBe(plain);
+    await render(bot([{ ...note, text: "[pane abcdef12] Worker finished." }]));
+    expect(title(host)).toBe(worker);
+    await render(bot([{ ...note, text: "[pane abcdef12] [BUILD] Worker finished." }]));
+    expect(title(host)).toBe(named);
+  });
+});
 
 describe("ChatView peer reply labels", () => {
   it.each(["legacy", "linked"])("labels the first bubble of a saved %s exchange without changing its data", async (format) => {

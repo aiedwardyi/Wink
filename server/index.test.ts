@@ -19,6 +19,7 @@ import { DOCUMENT_MAX_BYTES, IMAGE_MAX_BYTES } from "./attachments.ts";
 import { defaultComputerForNewBot } from "./local-routing.ts";
 import { readDecisions } from "./decision-log.ts";
 import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "./testing/harness-auth.ts";
+import { agentsHeaders } from "./testing/agents-caller.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -796,26 +797,12 @@ describe("harness HTTP API", () => {
       });
       expect(selected.status).toBe(200);
 
-      rmSync(fakeClaudeDump, { force: true });
-      expect((await api("POST", `/api/bots/${chief.id}/messages`, { text: "prepare the team" })).status).toBe(202);
-      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
-      const dump = z.object({
-        mcpConfig: z.object({
-          mcpServers: z.object({
-            agents: z.object({ env: z.object({ OMB_COMMS_TOKEN: z.string() }) }),
-          }),
-        }),
-      }).parse(JSON.parse(readFileSync(fakeClaudeDump, "utf8")));
-      const internalHeaders = {
-        authorization: `Bearer ${dump.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN}`,
-        "content-type": "application/json",
-      };
-      expect((await api("POST", `/api/bots/${chief.id}/interrupt`)).status).toBe(200);
+      const internalHeaders = await agentsHeaders(api, fakeClaudeDump, chief.id, chief.threadId);
 
-      const createOperator = async (fromThreadId: string, name: string, fromBotId = chief.id) => {
+      const createOperator = async (fromThreadId: string, name: string, fromBotId = chief.id, headers = internalHeaders) => {
         const response = await fetch(`${BASE}/api/internal/create-bot`, {
           method: "POST",
-          headers: internalHeaders,
+          headers,
           body: JSON.stringify({
             fromBotId,
             fromThreadId,
@@ -842,11 +829,13 @@ describe("harness HTTP API", () => {
         setup: { bulletin: "", defaultResponder: { kind: "member", botId: chief.id } },
       })).body.group;
       const rootThreadId = channel.threadId;
+      const rootHeaders = await agentsHeaders(api, fakeClaudeDump, chief.id, rootThreadId, channel.id);
+      const rootTask = await createOperator(rootThreadId, "Channel Root Operator", chief.id, rootHeaders);
+      expect(rootTask.status).toBe(201);
       const channelTask = await api("POST", `/api/groups/${channel.id}/tasks`, { title: "Research task" });
       expect(channelTask.status).toBe(201);
-      const rootTask = await createOperator(rootThreadId, "Channel Root Operator");
-      expect(rootTask.status).toBe(201);
-      const nestedTask = await createOperator(channelTask.body.task.threadId, "Channel Task Operator");
+      const nestedHeaders = await agentsHeaders(api, fakeClaudeDump, chief.id, channelTask.body.task.threadId, channel.id);
+      const nestedTask = await createOperator(channelTask.body.task.threadId, "Channel Task Operator", chief.id, nestedHeaders);
       expect(nestedTask.status).toBe(201);
 
       outsiderChannel = (await api("POST", "/api/groups", {
@@ -854,12 +843,16 @@ describe("harness HTTP API", () => {
         memberIds: [outsider.id],
         setup: { bulletin: "", defaultResponder: { kind: "member", botId: outsider.id } },
       })).body.group;
-      const nonChief = await createOperator(outsiderChannel.threadId, "Non-Chief Operator", outsider.id);
+      const outsiderHeaders = await agentsHeaders(api, fakeClaudeDump, outsider.id, outsiderChannel.threadId, outsiderChannel.id);
+      const nonChief = await createOperator(outsiderChannel.threadId, "Non-Chief Operator", outsider.id, outsiderHeaders);
       expect(nonChief).toEqual({
         status: 403,
         body: { error: "only a section's Chief of Staff can create operator bots" },
       });
-      const denied = await createOperator(outsiderChannel.threadId, "Forbidden Operator");
+      expect((await api("PATCH", `/api/groups/${channel.id}`, {
+        memberIds: [outsider.id], defaultResponder: { kind: "member", botId: outsider.id },
+      })).status).toBe(200);
+      const denied = await createOperator(outsiderChannel.threadId, "Forbidden Operator", chief.id, nestedHeaders);
       expect(denied).toEqual({
         status: 403,
         body: { error: "source conversation does not belong to sender" },
@@ -897,21 +890,7 @@ describe("harness HTTP API", () => {
         section: "Personal",
       })).status).toBe(200);
 
-      rmSync(fakeClaudeDump, { force: true });
-      expect((await api("POST", `/api/bots/${chief.id}/messages`, { text: "prepare a two-bot room" })).status).toBe(202);
-      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
-      const dump = z.object({
-        mcpConfig: z.object({
-          mcpServers: z.object({
-            agents: z.object({ env: z.object({ OMB_COMMS_TOKEN: z.string() }) }),
-          }),
-        }),
-      }).parse(JSON.parse(readFileSync(fakeClaudeDump, "utf8")));
-      const internalHeaders = {
-        authorization: `Bearer ${dump.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN}`,
-        "content-type": "application/json",
-      };
-      expect((await api("POST", `/api/bots/${chief.id}/interrupt`)).status).toBe(200);
+      const internalHeaders = await agentsHeaders(api, fakeClaudeDump, chief.id, chief.threadId);
 
       const createChannel = async (body: Record<string, unknown>, fromThreadId = chief.threadId) => {
         const response = await fetch(`${BASE}/api/internal/create-channel`, {
@@ -1000,9 +979,16 @@ describe("harness HTTP API", () => {
       expect(archived.status).toBe(400);
       expect(archived.body.error).toMatch(/unknown channel member/);
 
+      expect((await api("PATCH", `/api/groups/${room.id}`, {
+        defaultResponder: { kind: "member", botId: chief.id },
+      })).status).toBe(200);
+      const roomHeaders = await agentsHeaders(api, fakeClaudeDump, chief.id, room.threadId, room.id);
+      expect((await api("PATCH", `/api/groups/${room.id}`, {
+        memberIds: [peer.id], defaultResponder: { kind: "member", botId: peer.id },
+      })).status).toBe(200);
       const stolen = await fetch(`${BASE}/api/internal/create-channel`, {
         method: "POST",
-        headers: internalHeaders,
+        headers: roomHeaders,
         body: JSON.stringify({
           fromBotId: chief.id,
           fromThreadId: peer.threadId,
@@ -1015,7 +1001,7 @@ describe("harness HTTP API", () => {
 
       const outsider = await fetch(`${BASE}/api/internal/create-channel`, {
         method: "POST",
-        headers: internalHeaders,
+        headers: await agentsHeaders(api, fakeClaudeDump, peer.id, peer.threadId),
         body: JSON.stringify({
           fromBotId: peer.id,
           fromThreadId: peer.threadId,

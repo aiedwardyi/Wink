@@ -7,7 +7,7 @@ import { z } from "zod";
 import { teamSnagSchema } from "../shared/relay-protocol.ts";
 import { ACCOUNT_TIMEOUT_MS } from "./phone-relay/account.ts";
 import { writeFileAtomic } from "./atomic.ts";
-import { sectionKey, type Store } from "./store.ts";
+import { sectionKey, type Message, type Store } from "./store.ts";
 import { teamIdToken, teamOwnerHash, teamRelayOrigin, type TeamTokenSource } from "./team-route.ts";
 
 export const TEAM_SNAG_POLL_MS = 10 * 60_000;
@@ -79,10 +79,10 @@ export function teamSnagNote(snags: ClaimedSnag[], file: string, timeZone?: stri
 export const ownerChief = (store: Store) => store.bots.find((bot) => bot.chiefOfStaff && !sectionKey(bot.section)) ?? store.bots.find((bot) => bot.chiefOfStaff);
 
 /** The default section's Chief, else the first Chief, gets a note that cannot schedule a wake. */
-export function postChiefNote(store: Store, deviceId: string | undefined, text: string, ids?: string[], reportIds?: string[]): boolean {
+export function postChiefNote(store: Store, deviceId: string | undefined, text: string, ids?: string[], reportIds?: string[], noteType?: Message["noteType"]): boolean {
   const chief = ownerChief(store);
   if (!chief) return false;
-  store.appendMessage(chief.threadId, { role: "bot", kind: "note", text, origin: deviceId, quiet: true, ...(ids ? { snagIds: ids } : {}), ...(reportIds ? { reportIds } : {}) });
+  store.appendMessage(chief.threadId, { role: "bot", kind: "note", text, origin: deviceId, quiet: true, ...(ids ? { snagIds: ids } : {}), ...(reportIds ? { reportIds } : {}), ...(noteType ? { noteType } : {}) });
   return true;
 }
 

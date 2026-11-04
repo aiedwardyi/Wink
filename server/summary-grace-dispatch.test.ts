@@ -13,12 +13,13 @@ import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 // Execute the production folds and dispatch without booting the server.
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const messaging = source.slice(source.indexOf("      const canMessage ="), source.indexOf("\n      // @mentions"));
 const preparation = source.slice(source.indexOf("  const folded = currentTurnEpoch"), source.indexOf("\n  const persona = [", source.indexOf("  const folded = currentTurnEpoch")));
 const marker = "const started = await dispatchAdapterTurn(threadId, async () => {";
 const start = source.indexOf(marker) + marker.length;
 const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start)).replace("(base: string)", "(base)").replace("const late: string[]", "const late");
 const delivery = source.slice(source.indexOf("      // a deferred recycle's live session"), source.indexOf("      store.markReactionsDelivered", start));
-const runDispatch = new Function("scope", `with (scope) { return (async () => {${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`);
+const runDispatch = new Function("scope", `with (scope) { return (async () => {${messaging}\n${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -166,6 +167,7 @@ describe("summary grace dispatch", () => {
         opensHostFiles: () => false, privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
+        commsDepth: 0, MAX_COMMS_DEPTH: 1,
         taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false, cfg: {},
         ALWAYS_REPLY_INSTRUCTIONS: "", CORPUS_SEARCH_INSTRUCTIONS: "", keepGoing: { rules: () => "" },
         skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", opts: {}, tagged: [],
