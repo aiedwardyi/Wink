@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, Check } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
@@ -194,10 +194,16 @@ function Who({ account, runs, phone, t }: { account: UsageBoardAccount; runs: Us
   const [open, setOpen] = useState(false);
   const id = useId();
   const names = [...new Set(account.bots.map((bot) => bot.bot))];
+  // Names show whole or not at all: names that would cut count like the phone instead, measured before paint and again on resize.
+  const joined = names.join(", ");
+  const shown = useRef<HTMLSpanElement>(null);
+  const [cutFor, setCutFor] = useState<string | null>(null);
+  useLayoutEffect(() => { if (shown.current && shown.current.scrollWidth > shown.current.clientWidth) setCutFor(joined); });
+  useEffect(() => { const reset = () => setCutFor(null); window.addEventListener("resize", reset); return () => window.removeEventListener("resize", reset); }, []);
   const workers = runs !== "known" || account.workers === null ? t("usage.desk.workersUnknown")
     : account.workers.length ? t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length }) : "";
   const count = workers && <span className="flex shrink-0 items-center gap-1"><Bot size={12} aria-hidden="true" />{workers}</span>;
-  if (phone && names.length) return (
+  if ((phone || cutFor === joined) && names.length) return (
     <>
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-[12px] text-ink-secondary">
         <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id}
@@ -213,7 +219,7 @@ function Who({ account, runs, phone, t }: { account: UsageBoardAccount; runs: Us
   if (!names.length && !workers) return null;
   return (
     <span className="flex min-w-0 items-center gap-2 text-[12px] text-ink-secondary">
-      {names.length > 0 && <span className="min-w-0 truncate">{names.join(", ")}</span>}
+      {names.length > 0 && <span ref={shown} className="min-w-0 truncate">{joined}</span>}
       {count}
     </span>
   );
