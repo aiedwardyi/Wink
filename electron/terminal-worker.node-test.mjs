@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createTerminalHost } from "./terminal-host.mjs";
+import { mailboxGrant } from "./terminal-mailbox.mjs";
 
 const workers = await import("./terminal-worker.mjs").catch(() => null);
 const policy = await import("../server/worker-launch.ts").catch(() => null);
@@ -182,6 +183,43 @@ test("managed command serialization preserves prompt text and expands only pane 
   const worker = { executable: "codex", args: ["task'; echo wrong", "value=\u0000ORBIT_PANE\u0000"] };
   assert.equal(workers.managedWorkerCommand(worker, { ORBIT_PANE: "trusted-pane" }, "win32"), "& 'codex' 'task''; echo wrong' 'value=trusted-pane'");
 });
+
+for (const platform of ["win32", "linux"]) {
+  test(`managed ${platform} commands defer secret placeholders to the pane shell`, () => {
+    const environment = { ORBIT_MSG_AUTH: mailboxGrant("test-token", "pane", "bot", "bot"), ORBIT_MSG_TOKEN: mailboxGrant("test-token", "legacy", "bot", "bot"),
+      ORBIT_PANE: "pane", ORBIT_BOT: "bot", ORBIT_TEACHER: "teacher", ORBIT_URL: "http://127.0.0.1:9" };
+    const args = Object.keys(environment).map((name) => `${name}=\u0000${name}\u0000`);
+    const command = workers.managedWorkerCommand({ executable: "codex", args }, environment, platform);
+    for (const name of ["ORBIT_MSG_AUTH", "ORBIT_MSG_TOKEN"]) {
+      assert.ok(!command.includes(environment[name]));
+      assert.ok(command.includes(platform === "win32" ? `$env:${name}` : `"$${name}"`));
+    }
+    for (const name of ["ORBIT_PANE", "ORBIT_BOT", "ORBIT_TEACHER", "ORBIT_URL"]) assert.ok(command.includes(`${name}=${environment[name]}`));
+    assert.ok(!command.includes("\u0000"));
+  });
+
+  test(`managed ${platform} commands pass real secret values to the launched process`, { skip: platform === "win32" && process.platform !== "win32" }, (t) => {
+    const shell = platform === "win32" ? "powershell.exe" : process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/sh";
+    const environment = { ORBIT_MSG_AUTH: mailboxGrant("test-token", "pane", "bot", "bot"), ORBIT_MSG_TOKEN: mailboxGrant("test-token", "legacy", "bot", "bot"),
+      ORBIT_PANE: "pane", ORBIT_BOT: "bot", ORBIT_TEACHER: "teacher", ORBIT_URL: "http://127.0.0.1:9" };
+    const args = ["shell_environment_policy.set.ORBIT_MSG_AUTH='\u0000ORBIT_MSG_AUTH\u0000'", "\u0000ORBIT_MSG_TOKEN\u0000", "before'\u0000ORBIT_MSG_AUTH\u0000'$`;after",
+      "\u0000ORBIT_MSG_AUTH\u0000/\u0000ORBIT_MSG_TOKEN\u0000", ...["ORBIT_PANE", "ORBIT_BOT", "ORBIT_TEACHER", "ORBIT_URL"].map((name) => `\u0000${name}\u0000`)];
+    const command = workers.managedWorkerCommand({ executable: process.execPath, args: ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", ...args] }, environment, platform);
+    assert.ok(!command.includes(environment.ORBIT_MSG_AUTH));
+    assert.ok(!command.includes(environment.ORBIT_MSG_TOKEN));
+    const script = "$ProgressPreference = 'SilentlyContinue'; $command = [Console]::In.ReadToEnd(); Invoke-Expression $command";
+    let output;
+    try {
+      output = execFileSync(shell, platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")] : [], {
+        input: command, encoding: "utf8", windowsHide: true, timeout: 10_000, env: { ...process.env, ...environment, MSYS2_ARG_CONV_EXCL: "*" },
+      });
+    } catch (error) {
+      if (platform !== "win32" && error.code === "ENOENT") return t.skip("POSIX shell is unavailable");
+      throw error;
+    }
+    assert.deepEqual(JSON.parse(output), args.map((arg) => arg.replace(/\u0000(ORBIT_[A-Z_]+)\u0000/g, (_, name) => environment[name])));
+  });
+}
 
 test("managed Windows commands preserve smart quotes as one literal argument", () => {
   for (const prompt of ["don\u2019t", "x\u2019; calc; \u2019y", "a\u2018b", "a\u201ab", "a\u201bb"]) {
