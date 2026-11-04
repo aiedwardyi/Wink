@@ -17,13 +17,19 @@ const quoteWindows = (value) => `'${value.replace(/['\u2018\u2019\u201a\u201b]/g
 
 export function managedWorkerCommand(worker, environment, platform, binDir) {
   const quote = platform === "win32" ? quoteWindows : (value) => `'${value.replace(/'/g, "'\\''")}'`;
-  let args = worker.args.map((arg) => arg.replace(/\u0000(ORBIT_[A-Z_]+)\u0000/g, (_, name) => environment[name] ?? ""));
+  let args = worker.args.map((arg) => arg.replace(/\u0000(ORBIT_[A-Z_]+)\u0000/g, (placeholder, name) => /^ORBIT_MSG_(?:AUTH|TOKEN)$/.test(name) ? placeholder : environment[name] ?? ""));
   if (worker.workerSettings && binDir) args.push("--settings", path.join(binDir, "claude-worker.json"));
   if (worker.session && binDir && platform === "win32") {
     if (worker.session.engine === "claude" && !worker.workerSettings) args = claudeSessionArgs(args, binDir);
     if (worker.session.engine === "codex") args.push(...codexSessionArgs(binDir, platform));
   }
-  return `${platform === "win32" ? "& " : ""}${[worker.executable, ...args].map(quote).join(" ")}`;
+  const quoted = args.map((arg) => {
+    const parts = arg.split(/\u0000(ORBIT_MSG_(?:AUTH|TOKEN))\u0000/g);
+    if (parts.length === 1) return quote(arg);
+    const values = parts.map((part, index) => index % 2 ? platform === "win32" ? `$env:${part}` : `"$${part}"` : quote(part));
+    return platform === "win32" ? `(${values.join(" + ")})` : values.join("");
+  });
+  return `${platform === "win32" ? "& " : ""}${[quote(worker.executable), ...quoted].join(" ")}`;
 }
 
 export function unroutedWorkerCommand(worker, command, binDir) {

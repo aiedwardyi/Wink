@@ -6,7 +6,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
-import { installOrbitMsg, postPaneNote } from "./terminal-mailbox.mjs";
+import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 
 function fixture(options = {}) {
@@ -1403,6 +1403,30 @@ function stallFixture({ failures = 0, commandEcho = true, shellIntegration = fal
   const settle = () => wait(25);
   const advance = async (ms) => { clock += ms; await settle(); };
   return { ...f, notes, settle, advance };
+}
+
+for (const kind of ["STALLED", "FINISHED", "EXITED", "snag"]) {
+  test(`${kind} tails mask mailbox grants and preserve other screen text`, async (t) => {
+    const snags = [];
+    const f = stallFixture({ shellIntegration: kind === "FINISHED", failures: kind === "snag" ? 99 : 0, snag: (snag) => snags.push(snag) });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "W", command: "codex go", cols: 240 });
+    const grant = mailboxGrant("test-token", pane.sessionId, "bot-1", "bot-1");
+    const legacy = mailboxGrant("test-token", "legacy", "bot-1", "bot-1");
+    const text = `ORBIT_MSG_AUTH='${grant}'\nORBIT_MSG_TOKEN='${legacy}'\n한글  sqlite_home=acct_fixture  forced_login_method=chatgpt\nunchanged 12345678.short`;
+    f.children[0].data(`\x1b[2J\x1b[H${text.replaceAll("\n", "\r\n")}\r\n`);
+    const screen = f.host.readBot("bot-1", { sessionId: pane.sessionId }).screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).join("\n");
+    await f.settle();
+    if (kind === "FINISHED") f.children[0].data(finishedMark(pane));
+    if (kind === "EXITED") f.children[0].exit({ exitCode: 1 });
+    await f.advance(kind === "FINISHED" || kind === "EXITED" ? 10_000 : 121_000);
+    if (kind === "snag") for (let i = 0; i < 4; i++) await f.advance(61_000);
+    const output = kind === "snag" ? snags[0]?.tail.trimEnd() : f.notes[0]?.text.split("Last lines:\n")[1];
+    assert.ok(output);
+    assert.ok(!output.includes(grant.split(".")[1]));
+    assert.ok(!output.includes(legacy.split(".")[1]));
+    assert.equal(output, screen.replace(grant, `${grant.split(".")[0]}.***`).replace(legacy, `${legacy.split(".")[0]}.***`));
+  });
 }
 
 // Recorded from Claude Code 2.1.306 in a fresh folder; No is selected.

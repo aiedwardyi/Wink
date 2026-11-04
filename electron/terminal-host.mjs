@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
+import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
@@ -210,7 +210,7 @@ function usageLimit(screenText, engine, cols = 80) {
 
 // A turn that dies on a usage limit or a menu runs no engine hook, so the screen is the only signal.
 function stallNoteText(screenText, stallMs, cwd, engine, cols) {
-  const lines = screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES);
+  const lines = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES);
   const limit = usageLimit(screenText, engine, cols);
   if (limit) return `LIMIT: ${limit.engine} hit its usage limit (resets ${limit.reset}). Its work so far stays in ${cwd}. ${limit.resumes ? `It resumes by itself at ${limit.resumes}.` : 'Send "continue" after the reset, or move the job to another engine.'}`;
   const tail = lines.join("\n");
@@ -337,12 +337,12 @@ function canSubmitSaveLine(screen, engine) {
 }
 
 function finishedNoteText(screenText) {
-  const tail = screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
+  const tail = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
   return `FINISHED: command ended without a report. terminal_read its pane, then act or tell the user. Last lines:\n${tail}`;
 }
 
 function exitNoteText(screenText, exitCode) {
-  const tail = screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
+  const tail = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
   const text = `EXITED: pane shell ended with code ${exitCode} (0x${(exitCode >>> 0).toString(16).toUpperCase()}) before a report. terminal_read the pane list, then respawn or tell the user.`;
   return tail ? `${text} Last lines:\n${tail}` : text;
 }
@@ -577,7 +577,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const snagPane = (session, event, detail, extra = {}) => {
     try {
-      const tail = session.screen.text().split("\n").slice(-SNAG_TAIL_LINES).join("\n").slice(-20_000);
+      const tail = maskMailboxGrants(session.screen.text()).split("\n").slice(-SNAG_TAIL_LINES).join("\n").slice(-20_000);
       snag({ event, key: session.id, bot: session.teacher, worker: session.engine ?? "", pane: session.id, label: session.label ?? "", detail: detail.slice(0, 300), tail, ...extra });
     } catch {}
   };
