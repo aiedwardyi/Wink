@@ -52,7 +52,93 @@ function listen(handler: (req: IncomingMessage, res: ServerResponse) => void): P
 }
 
 describe("linked files", () => {
-  it("refuses an unlinked path, escapes, a file outside the roots, a disallowed extension, and an unauthenticated request", async () => {
+  it("downloads linked non-media files, including empty files, with the existing auth", async () => {
+    const root = temp("linked-download-");
+    const names = ["file.zip", "notes.md", "notes.txt", "report.docx", "LICENSE", "empty.zip"];
+    for (const name of names) writeFileSync(join(root, name), name === "empty.zip" ? "" : name);
+    const options = {
+      bearerOk: false, remoteKey: "k", threadId: "t1", deviceId: "home",
+      messages: names.map((name) => ({ id: name, text: `[file](${join(root, name)})` })),
+      writerDeviceId: () => null, rootsFor: () => [root],
+    };
+    const server = await listen((req, res) => serveLinkedFile(req, res, options));
+    try {
+      for (const name of names) {
+        const url = `${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(root, name))}`;
+        const res = await fetch(url, { headers: { cookie: "orbit_remote=k" } });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-disposition")).toMatch(/^attachment;/);
+        expect(await res.text()).toBe(name === "empty.zip" ? "" : name);
+        expect((await fetch(url)).status).toBe(401);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not grant file access from a user's link", async () => {
+    const root = temp("linked-user-");
+    const file = join(root, "notes.png");
+    writeFileSync(file, "private");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "user", text: `[notes](${file})` }],
+      writerDeviceId: () => null, rootsFor: () => [root],
+    }));
+    try {
+      expect((await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`)).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves linked HTML and its folder assets without exposing siblings or symlink escapes", async () => {
+    const root = temp("linked-html-");
+    const site = join(root, "site");
+    const outside = join(root, "outside");
+    mkdirSync(join(site, "assets"), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(site, "index.html"), '<link rel="stylesheet" href="style.css"><script src="assets/app.js"></script>');
+    writeFileSync(join(site, "style.css"), "body { color: red; }");
+    writeFileSync(join(site, "assets", "app.js"), "document.title = 'ready';");
+    writeFileSync(join(outside, "secret.txt"), "secret");
+    symlinkSync(outside, join(site, "escape"), "junction");
+    const options = {
+      bearerOk: false, remoteKey: "k", threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", text: `[site](${join(site, "index.html")})` }],
+      writerDeviceId: () => null, rootsFor: () => [root],
+    };
+    const server = await listen((req, res) => serveLinkedFile(req, res, options));
+    const headers = { cookie: "orbit_remote=k" };
+    try {
+      const page = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(site, "index.html"))}`, { headers });
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toContain("text/html");
+      expect(page.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+      expect(await page.text()).toContain("style.css");
+      const css = await fetch(new URL("style.css", page.url), { headers });
+      expect(css.status).toBe(200);
+      expect(css.headers.get("content-type")).toContain("text/css");
+      expect(await css.text()).toContain("color: red");
+      const js = await fetch(new URL("assets/app.js", page.url), { headers });
+      expect(js.status).toBe(200);
+      expect(js.headers.get("content-type")).toContain("javascript");
+      expect((await fetch(new URL("style.css", page.url))).status).toBe(401);
+      for (const asset of ["%2e%2e%2foutside%2fsecret.txt", "%2e%2e%5coutside%5csecret.txt", "%2foutside%2fsecret.txt", "C%3a%5coutside%5csecret.txt", "escape/secret.txt", "assets/../../outside/secret.txt"]) {
+        const denied = await fetch(`${page.url}${asset}`, { headers });
+        expect(denied.status, asset).toBe(404);
+        expect(await denied.text()).not.toContain("secret");
+      }
+      const forged = `${server.url}/api/threads/t1/linked-file/${encodeURIComponent(join(outside, "unlinked.html"))}/secret.txt`;
+      expect((await fetch(forged, { headers })).status).toBe(404);
+      const other = `${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(site, "style.css"))}`;
+      expect((await fetch(other, { headers })).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses an unlinked path, escapes, a file outside the roots, and an unauthenticated request", async () => {
     const root = temp("linked-root-");
     const outside = temp("linked-out-");
     const secret = Buffer.from("secret-bytes");
@@ -95,7 +181,8 @@ describe("linked files", () => {
       expect(outsideRes.status).toBe(404);
       expect(Buffer.from(await outsideRes.arrayBuffer()).includes(secret)).toBe(false);
       const ext = await get(join(root, "notes.md"));
-      expect(ext.status).toBe(404);
+      expect(ext.status).toBe(200);
+      expect(ext.headers.get("content-disposition")).toMatch(/^attachment;/);
       const denied = await listen((req, res) => serveLinkedFile(req, res, { ...options, bearerOk: false }));
       try {
         const unauth = await fetch(`${denied.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(root, "clip.mp4"))}`);
@@ -109,13 +196,13 @@ describe("linked files", () => {
     }
   });
 
-  it("serves a relay phone only on its phone session", async () => {
+  it.each(["mp4", "zip", "html"])("serves a relay phone's %s only on its phone session", async (ext) => {
     const root = temp("linked-relay-");
     const clip = Buffer.from("relay-clip");
-    writeFileSync(join(root, "clip.mp4"), clip);
+    writeFileSync(join(root, `clip.${ext}`), clip);
     const base = {
       threadId: "t1",
-      messages: [{ id: "m1", text: `[clip](${join(root, "clip.mp4")})` }],
+      messages: [{ id: "m1", text: `[clip](${join(root, `clip.${ext}`)})` }],
       deviceId: "this-pc",
       writerDeviceId: () => null,
       rootsFor: () => [root],
@@ -130,7 +217,7 @@ describe("linked files", () => {
     for (const [credentials, status] of cases) {
       const server = await listen((req, res) => serveLinkedFile(req, res, { ...base, ...credentials }));
       try {
-        const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(root, "clip.mp4"))}`, {
+        const res = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(root, `clip.${ext}`))}`, {
           headers: { cookie: "orbit_remote=k; __Host-wink_phone=wkd_x" },
         });
         expect(res.status).toBe(status);

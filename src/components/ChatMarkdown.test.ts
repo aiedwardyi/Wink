@@ -648,6 +648,67 @@ describe("relative file links", () => {
     }
   });
 
+  it.each(["zip", "md", "txt", "docx", "html", "htm"])("opens a linked %s from an authenticated browser without the desktop bridge", async (ext) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const file = `C:/clips/file.${ext}`;
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `[file](${file})`, threadId: "t1" })));
+      const link = host.querySelector("a")!;
+      expect(link).not.toBeNull();
+      expect(link.getAttribute("href")).toBe(`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`);
+      if (ext === "html" || ext === "htm") expect(link.getAttribute("target")).toBe("_blank");
+      else expect(link.hasAttribute("download")).toBe(true);
+      expect(host.textContent).not.toContain("Files open in the desktop app");
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens a remote image in the existing viewer and leaves local desktop links alone", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x", { status: 206 })));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const text = "[picture](C:/clips/picture.png)";
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text, threadId: "t1" })));
+      expect(host.querySelector('[data-phone-media="image"]')).not.toBeNull();
+      await act(async () => host.querySelector("button")!.click());
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      const openFile = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(window, "ogb", { configurable: true, value: { openFile } });
+      await act(async () => root.render(createElement(ChatMarkdown, { key: "local", text, threadId: "t1" })));
+      await act(async () => host.querySelector("button")!.click());
+      expect(openFile).toHaveBeenCalledWith("C:/clips/picture.png", undefined);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      Reflect.deleteProperty(window, "ogb");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([["folder", 404, false], ["empty.zip", 416, true]] as const)("keeps the behavior for %s", async (name, status, download) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status, headers: { "content-range": "bytes */0" } })));
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `[file](C:/clips/${name})`, threadId: "t1" })));
+      expect(Boolean(host.querySelector("a[download]"))).toBe(download);
+      if (!download) {
+        await act(async () => host.querySelector("button")!.click());
+        expect(host.textContent).toContain("Files open in the desktop app");
+      }
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps the file name beside Open on PC", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

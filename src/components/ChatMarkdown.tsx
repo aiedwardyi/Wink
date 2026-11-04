@@ -456,7 +456,7 @@ function PhoneFile({
 }: {
   filePath: string;
   threadId: string;
-  kind: PhoneKind;
+  kind: PhoneKind | null;
   children?: ReactNode;
 }) {
   const { t } = useI18n();
@@ -469,7 +469,7 @@ function PhoneFile({
     fetch(src, { headers: { Range: "bytes=0-0" } })
       .then(async (res) => {
         if (!alive) return;
-        if (res.ok) {
+        if (res.ok || (res.status === 416 && res.headers.get("content-range") === "bytes */0")) {
           setPhase("local");
           return;
         }
@@ -523,13 +523,14 @@ function PhoneFile({
     return <ReadableImage src={src} alt="" data-phone-media="image" className="max-h-96 max-w-full rounded-lg border border-hairline/30" />;
   }
   if (kind === "audio") return <audio src={src} controls data-phone-media="audio" className="max-w-full" />;
-  if (kind === "pdf") {
+  if (kind === "pdf" || !kind) {
     return (
       <a
         href={src}
-        target="_blank"
+        target={kind === "pdf" || /\.html?$/i.test(filePath) ? "_blank" : undefined}
+        download={!kind && !/\.html?$/i.test(filePath) ? true : undefined}
         rel="noreferrer"
-        data-phone-media="pdf"
+        data-phone-media={kind ?? undefined}
         className="break-words text-left text-accent underline decoration-accent/40 hover:decoration-accent"
       >
         {children}
@@ -560,8 +561,7 @@ function LocalFileLink({
   children?: ReactNode;
 }) {
   const streaming = useContext(StreamingContext);
-  const kind = !window.ogb && !streaming && threadId ? phoneMediaKind(filePath) : null;
-  if (kind && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={kind}>{children}</PhoneFile>;
+  if (!window.ogb && !streaming && threadId) return <PhoneFile filePath={filePath} threadId={threadId} kind={phoneMediaKind(filePath)}>{children}</PhoneFile>;
   return <DesktopFileLink filePath={filePath} base={base}>{children}</DesktopFileLink>;
 }
 

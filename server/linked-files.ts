@@ -1,8 +1,7 @@
-// A phone can view a file a bot linked in a chat. The path must be that link,
-// and after realpath it must sit inside that bot's output roots.
+// Linked files stay inside the writing bot's output roots after realpath.
 import { createReadStream, realpathSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, isAbsolute, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { pipeline } from "node:stream";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
@@ -42,6 +41,7 @@ const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 
 export interface LinkedMessage {
   id: string;
+  role?: string;
   text?: string;
   fromBotId?: string;
 }
@@ -175,10 +175,10 @@ function nameForms(filePath: string): string[] {
   return name ? [...new Set([name, encodeURI(name), encodeURIComponent(name)])] : [];
 }
 
-function contentDisposition(name: string): string {
+function contentDisposition(name: string, attachment: boolean): string {
   const fallback = name.replace(/[^\x20-\x7E]/g, "_").replaceAll("\\", "_").replaceAll("\"", "") || "file";
   const encoded = encodeURIComponent(name).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+  return `${attachment ? "attachment" : "inline"}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function samePath(a: string, b: string): boolean {
@@ -220,7 +220,7 @@ function byteRange(header: string | undefined, size: number): { start: number; e
   return { start, end: Math.min(end, size - 1) };
 }
 
-function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, size: number, mime: string): void {
+function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, size: number, mime: string, attachment = false, htmlScope?: string): void {
   const range = byteRange(header(req.headers.range), size);
   if (range === "bad") {
     res.writeHead(416, { "content-range": `bytes */${size}`, "accept-ranges": "bytes" });
@@ -236,9 +236,14 @@ function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, s
     "accept-ranges": "bytes",
     "cache-control": "private",
     "x-content-type-options": "nosniff",
-    "content-disposition": contentDisposition(basename(filePath)),
+    "content-disposition": contentDisposition(basename(filePath), attachment),
+    ...(mime === "text/html; charset=utf-8" ? { "content-security-policy": htmlPolicy(req, htmlScope!) } : {}),
   };
   res.writeHead(status, status === 206 ? { ...shared, "content-range": `bytes ${start}-${end}/${size}` } : shared);
+  if (size === 0) {
+    res.end();
+    return;
+  }
   // An unread 'error' from the file stream is uncaught and kills the utility process.
   pipeline(createReadStream(filePath, { start, end }), res, (error) => {
     if (error) res.destroy();
@@ -251,7 +256,24 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
-  const requested = url.searchParams.get("path") ?? "";
+  const prefix = `/api/threads/${encodeURIComponent(options.threadId)}/linked-file/`;
+  const scoped = url.pathname.startsWith(prefix);
+  let requested = url.searchParams.get("path") ?? "";
+  let asset = "";
+  if (scoped) {
+    try {
+      const parts = (req.url ?? "").split("?")[0]!.slice(prefix.length).split("/");
+      requested = decodeURIComponent(parts.shift() ?? "");
+      asset = parts.map(decodeURIComponent).join("/");
+      if (!/\.html?$/i.test(requested) || asset.split(/[\\/]/).some((part) => part === "..") || /[\\:\0]/.test(asset) || asset.startsWith("/")) {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
+    } catch {
+      sendJson(res, 404, { error: "not found" });
+      return;
+    }
+  }
   // UNC and device paths can block realpath on a network share.
   if (!requested || /^[\\/]{2}/.test(requested) || requested.startsWith("\\\\?\\") || requested.startsWith("\\\\.\\")) {
     sendJson(res, 404, { error: "not found" });
@@ -260,6 +282,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
   const forms = nameForms(requested);
   const hits: { id: string; roots: readonly string[] }[] = [];
   for (const message of options.messages) {
+    if (message.role !== undefined && message.role !== "bot") continue;
     const text = message.text ?? "";
     // Parsing every message of a long chat took seconds; only a message naming the file can link it.
     if (!forms.some((form) => text.includes(form))) continue;
@@ -281,17 +304,41 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     }
   }
   if (!real) {
-    const mime = mediaType(requested);
-    const writer = mime
-      ? hits.map((hit) => options.writerDeviceId(hit.id)).find((id) => id && id !== options.deviceId && DEVICE_ID.test(id))
-      : undefined;
+    const writer = hits.map((hit) => options.writerDeviceId(hit.id)).find((id) => id && id !== options.deviceId && DEVICE_ID.test(id));
     sendJson(res, 404, writer ? { error: "not found", deviceId: writer } : { error: "not found" });
     return;
+  }
+  const roots = hits.flatMap((hit) => hit.roots);
+  if (!insideRoot(real, roots)) {
+    sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  const html = /\.html?$/i.test(requested) && /\.html?$/i.test(real);
+  if (scoped) {
+    let file = false;
+    try { file = statSync(real).isFile(); } catch { /* file disappeared */ }
+    if (!html || !file) {
+      sendJson(res, 404, { error: "not found" });
+      return;
+    }
+    if (asset) {
+      const folder = dirname(real);
+      try {
+        real = realpathSync(join(folder, asset));
+      } catch {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
+      if (!insideRoot(real, [folder]) || !insideRoot(real, roots)) {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
+    }
   }
   let size = 0;
   try {
     const stat = statSync(real);
-    if (!stat.isFile() || stat.size <= 0) {
+    if (!stat.isFile()) {
       sendJson(res, 404, { error: "not found" });
       return;
     }
@@ -300,10 +347,30 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     sendJson(res, 404, { error: "not found" });
     return;
   }
-  const mime = mediaType(real);
-  if (!mime || !mediaType(requested) || !insideRoot(real, hits.flatMap((hit) => hit.roots))) {
-    sendJson(res, 404, { error: "not found" });
+  if (html && !scoped) {
+    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/`, "cache-control": "private, no-store" });
+    res.end();
     return;
   }
-  sendFile(req, res, real, size, mime);
+  const filePath = asset || requested;
+  const mime = mediaType(filePath) ?? (html || asset ? assetType(filePath) : null);
+  sendFile(req, res, real, size, mime ?? "application/octet-stream", mime === null, `${prefix}${encodeURIComponent(requested)}/`);
+}
+
+function htmlPolicy(req: IncomingMessage, scope: string): string {
+  const host = new URL(`http://${header(req.headers.host) ?? "127.0.0.1"}`).host;
+  const sources = `http://${host}${scope} https://${host}${scope}`;
+  // Same-origin keeps asset cookies; the folder policy blocks Wink APIs and workers.
+  return `sandbox allow-scripts allow-same-origin; default-src ${sources}; script-src ${sources} 'unsafe-inline'; style-src ${sources} 'unsafe-inline'; img-src ${sources} data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+}
+
+function assetType(filePath: string): string | null {
+  const types: Record<string, string> = {
+    html: "text/html; charset=utf-8", htm: "text/html; charset=utf-8",
+    css: "text/css; charset=utf-8", js: "text/javascript; charset=utf-8", mjs: "text/javascript; charset=utf-8",
+    svg: "image/svg+xml", ico: "image/x-icon", json: "application/json", wasm: "application/wasm",
+    woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf",
+  };
+  const ext = basename(filePath).split(".").pop()?.toLowerCase() ?? "";
+  return Object.hasOwn(types, ext) ? types[ext]! : null;
 }

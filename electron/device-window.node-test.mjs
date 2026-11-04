@@ -432,7 +432,7 @@ test("a failed or aborted linked file download leaves no partial file", async (t
 test("main process downloads PC linked files instead of opening the browser", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
   const open = openDeviceWindowSource(main);
-  assert.ok(open.includes("deviceLinkedFileName(target, url.origin)"));
+  assert.ok(open.includes("handleDeviceLinkedFile(target, url.origin"));
   assert.ok(main.includes("await saveDeviceLinkedFile(response, filePath)"));
   assert.ok(main.includes('nativeText("packaged.deviceFileFailed")'));
 });
