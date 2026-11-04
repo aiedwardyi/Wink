@@ -118,6 +118,7 @@ export function createWorkerLaunch(deps: {
   available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
   mainAccount?(of: string): AccountContext | undefined | null;
+  nameOf?(id: string, engine: string): string;
 }) {
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
@@ -185,6 +186,6 @@ export function createWorkerLaunch(deps: {
     if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
       environment: policy.env, workerSettings, session,
-      line: mainDown ? [`${command.name} Main is signed out, so this worker uses your default account.`, usage.line].filter(Boolean).join(" ") : usage.line };
+      line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line };
   };
 }
