@@ -18,6 +18,28 @@ describe("mergeBoard", () => {
     expect(mergeBoard(fresh(), fresh({ revision }))).toBeNull();
   });
 
+  it("takes live workers from an equal-revision reply and keeps the shown cursor and history", () => {
+    const shown = fresh();
+    account(shown, "claude").history = { fine: [[100, 1, 1]], coarse: [] };
+    const reply = fresh({ cursor: "c-again", full: false });
+    account(reply, "claude").workers = [];
+    account(reply, "claude").history = { fine: [[200, 9, 9]], coarse: [] };
+    const merged = mergeBoard(shown, reply);
+    expect(merged).not.toBeNull();
+    expect(account(merged!, "claude").workers).toEqual([]);
+    expect(account(merged!, "claude").history.fine).toEqual([[100, 1, 1]]);
+    expect(merged!.cursor).toBe("fixture-42");
+  });
+
+  it("lets a good equal-revision retry replace Workers unknown", () => {
+    const shown = fresh({ runs: "unknown" });
+    for (const engine of shown.engines) for (const each of engine.accounts) each.workers = null;
+    const merged = mergeBoard(shown, fresh());
+    expect(merged).not.toBeNull();
+    expect(merged!.runs).toBe("known");
+    expect(account(merged!, "claude").workers).toEqual(account(fresh(), "claude").workers);
+  });
+
   it("takes the first reply whatever its revision", () => {
     const reply = fresh({ revision: 1, full: false });
     expect(mergeBoard(null, reply)).toBe(reply);
@@ -177,6 +199,42 @@ describe("createUsageBoardClient", () => {
     await flush();
     expect(client.snapshot().status).toBe("error");
     expect(client.snapshot().board!.revision).toBe(42);
+  });
+
+  it("gives up on a read after 10 s and never lets its late reply overwrite a newer one", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = make();
+      client.subscribe(() => {});
+      reads[0]!.resolve(fresh());
+      await vi.advanceTimersByTimeAsync(0);
+      client.frame(43);
+      expect(reads).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(client.snapshot().status).toBe("error");
+      client.frame(44);
+      expect(reads).toHaveLength(3);
+      reads[2]!.resolve(fresh({ revision: 44, cursor: "c-44", full: false }));
+      await vi.advanceTimersByTimeAsync(0);
+      reads[1]!.resolve(fresh({ revision: 43, cursor: "c-43", full: false }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.snapshot()).toMatchObject({ status: "ready", board: { revision: 44, cursor: "c-44" } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a pane change from an equal-revision read", async () => {
+    const client = make();
+    client.subscribe(() => {});
+    reads[0]!.resolve(fresh());
+    await flush();
+    client.invalidate();
+    const reply = fresh({ full: false });
+    account(reply, "claude").workers = [];
+    reads[1]!.resolve(reply);
+    await flush();
+    expect(account(client.snapshot().board!, "claude").workers).toEqual([]);
   });
 
   it("treats a reply that is not a board as a failed read", async () => {

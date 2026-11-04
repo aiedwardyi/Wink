@@ -3,6 +3,7 @@ import type { UsageBoard, UsageBoardEvent, UsageBoardSample } from "./usage-boar
 const FINE_CAP = 288;
 const COARSE_CAP = 168;
 const EVENT_CAP = 64;
+const READ_LIMIT_MS = 10_000;
 
 /** A Main save in flight. The check stays on `from`; `after` is the read count when the POST resolved, null while posting. */
 export type MainPending = { target: string; from: string | null; after: number | null };
@@ -25,9 +26,25 @@ function upsertEvents(kept: UsageBoardEvent[], changed: UsageBoardEvent[]): Usag
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-EVENT_CAP);
 }
 
+/** Workers come from live panes and change without a revision bump: an equal-revision reply updates only them. */
+function liveWorkers(shown: UsageBoard, reply: UsageBoard): UsageBoard | null {
+  let changed = shown.runs !== reply.runs;
+  const engines = shown.engines.map((engine) => {
+    const latest = reply.engines.find((each) => each.engine === engine.engine);
+    return { ...engine, accounts: engine.accounts.map((account) => {
+      const workers = latest?.accounts.find((each) => each.id === account.id)?.workers;
+      if (workers === undefined || JSON.stringify(workers) === JSON.stringify(account.workers)) return account;
+      changed = true;
+      return { ...account, workers };
+    }) };
+  });
+  return changed ? { ...shown, runs: reply.runs, engines } : null;
+}
+
 /** UI-CONTRACT merge rule: null drops the reply. */
 export function mergeBoard(shown: UsageBoard | null, reply: UsageBoard): UsageBoard | null {
-  if (shown && reply.revision <= shown.revision) return null;
+  if (shown && reply.revision === shown.revision) return liveWorkers(shown, reply);
+  if (shown && reply.revision < shown.revision) return null;
   if (!shown || reply.full) return reply;
   return {
     ...reply,
@@ -50,7 +67,7 @@ export function mergeBoard(shown: UsageBoard | null, reply: UsageBoard): UsageBo
 }
 
 export function createUsageBoardClient(
-  read: (cursor: string | null) => Promise<UsageBoard>,
+  read: (cursor: string | null, signal: AbortSignal) => Promise<UsageBoard>,
   saveMain: (accountId: string) => Promise<unknown>,
 ) {
   let state: UsageBoardState = { board: null, status: "loading", pending: {}, failed: new Set() };
@@ -77,15 +94,25 @@ export function createUsageBoardClient(
     inFlight = true;
     wanted = false;
     const ticket = ++started;
-    read(state.board?.cursor ?? null).then((reply) => {
+    const controller = new AbortController();
+    // A stalled read frees the gate after 10 s and counts as failed; whatever it returns later is ignored.
+    let settled = false;
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(limit);
+      inFlight = false;
+      return true;
+    };
+    const next = () => { if (dirty) { dirty = false; load(); } };
+    const limit = setTimeout(() => { if (!settle()) return; controller.abort(); set({ status: "error" }); next(); }, READ_LIMIT_MS);
+    read(state.board?.cursor ?? null, controller.signal).then((reply) => {
+      if (settled) return;
       // Anything that is not a board (an old host's fallback page, a stray body) is a failed read.
       if (reply?.version !== 1 || !Array.isArray(reply.engines)) throw new Error("not a usage board");
       const board = mergeBoard(state.board, reply) ?? state.board!;
       set({ board, status: "ready", pending: settlePending(ticket) });
-    }).catch(() => set({ status: "error" })).finally(() => {
-      inFlight = false;
-      if (dirty) { dirty = false; load(); }
-    });
+    }).catch(() => { if (!settled) set({ status: "error" }); }).finally(() => { if (settle()) next(); });
   };
 
   const onFocus = () => load();
@@ -98,7 +125,9 @@ export function createUsageBoardClient(
         window.addEventListener("focus", onFocus);
         document.addEventListener("visibilitychange", onVisible);
       }
-      if (wanted || !state.board) load();
+      // A read already in flight serves a new subscriber; only a trigger missed while idle asks for another.
+      if (inFlight) dirty ||= wanted;
+      else if (wanted || !state.board) load();
       return () => {
         listeners.delete(listener);
         if (listeners.size > 0) return;
@@ -139,7 +168,7 @@ let connected: Api | null = null;
 export function connectUsageBoard(api: Api) { connected = api; }
 const api: Api = (path, init) => connected ? connected(path, init) : Promise.reject(new Error("usage board not connected"));
 const client = createUsageBoardClient(
-  (cursor) => api(cursor === null ? "/api/usage/board" : `/api/usage/board?cursor=${encodeURIComponent(cursor)}`),
+  (cursor, signal) => api(cursor === null ? "/api/usage/board" : `/api/usage/board?cursor=${encodeURIComponent(cursor)}`, { signal }),
   (accountId) => api(`/api/accounts/${encodeURIComponent(accountId)}/default`, { method: "POST", body: "{}" }),
 );
 

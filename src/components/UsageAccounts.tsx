@@ -10,7 +10,7 @@ const PRESS = "transition-[background-color,transform] duration-100 motion-reduc
 
 /** Passive inspection: picks which account the hero shows, by name only, and never changes Main. */
 export function AccountPicker({ accounts, viewedId, select }: {
-  accounts: { id: string; name: string }[];
+  accounts: { id: string; name: string; main?: boolean }[];
   viewedId: string;
   select: (id: string) => void;
 }) {
@@ -65,10 +65,12 @@ export function AccountPicker({ accounts, viewedId, select }: {
           }
         }}>
         {accounts.map((item) => <button key={item.id} type="button" role="menuitemradio" tabIndex={-1}
+          aria-label={item.main ? `${item.name} ${t("accounts.main")}` : undefined}
           aria-checked={item.id === viewed.id} onClick={() => { select(item.id); close(); }}
           className="flex min-h-9 w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] font-normal text-ink hover:bg-raised/70 [@media(pointer:coarse)]:min-h-11">
           <Check size={16} aria-hidden="true" className={cn("shrink-0", item.id !== viewed.id && "invisible")} />
           <span className="min-w-0 truncate">{item.name}</span>
+          {item.main && <span className="ml-auto shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>}
         </button>)}
       </div>}
     </div>

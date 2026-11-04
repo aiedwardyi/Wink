@@ -93,9 +93,10 @@ const click = async (node: Element | null | undefined) => {
 const tab = (engine: string) => q(`[role="tab"][data-engine="${engine}"]`);
 const picker = () => q('[data-usage-hero] button[aria-haspopup="menu"]');
 const menuItems = () => [...host.querySelectorAll('[role="menuitemradio"]')];
+const menuName = (item: Element) => text(item.querySelector("span"));
 async function pick(name: string) {
   await click(picker());
-  await click(menuItems().find((item) => text(item) === name));
+  await click(menuItems().find((item) => menuName(item) === name));
   await act(async () => { await vi.advanceTimersByTimeAsync(300); });
 }
 
@@ -208,7 +209,7 @@ describe("Usage desk", () => {
     }
     scan("hover, focus and touch");
     await click(picker());
-    expect(menuItems().map(text)).toEqual(["Claude 1", "Claude 2", "Studio"]);
+    expect(menuItems().map(menuName)).toEqual(["Claude 1", "Claude 2", "Studio"]);
     scan("open picker");
     await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     scan("closing picker");
@@ -233,7 +234,8 @@ describe("Usage desk", () => {
     expect(text(row(CLAUDE_2)?.querySelector("[data-account-name]"))).toBe("Claude 2");
     expect(text(row("claude")?.querySelector("[data-account-name]"))).toBe("Claude 1");
     await click(picker());
-    expect(menuItems().map(text)).toEqual(["Studio", "Claude 1", "Claude 2"]);
+    expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 1", "Claude 2"]);
+    expect(menuItems().map(text)).toEqual(["Studio", "Claude 1Main", "Claude 2"]);
     const all = text(host);
     expect(all).not.toContain("Account 1");
     expect(all).not.toContain(CLAUDE_3);
@@ -508,6 +510,9 @@ describe("Usage desk", () => {
     await click(q("button[data-details]"));
     expect(text(q("[data-details-body]"))).toContain("24h");
     expect(text(q("[data-details-body]"))).toContain("82% left");
+    // The daily window keeps no history: no pace line and no chart rather than "No recent data".
+    expect(q("[data-verdict]")).toBeNull();
+    expect(text(q("[data-usage-hero]"))).not.toContain("No history yet");
     await click(tab("muse"));
     expect(heroName()).toBe("Muse");
     expect(text(q("[data-usage-hero]"))).toContain("Last seen 2h ago");

@@ -133,15 +133,17 @@ function localDay(at: number): number {
   return date.getTime();
 }
 
-/** Week quota used today so far against the median of the same local-clock span on 3 to 7 covered earlier days; null without them. */
+/** Week quota used today so far against the median of the same local-clock span on 3 to 7 covered earlier days; null without them.
+ * A coarse point sits at its hour's start but holds that hour's latest reading, so only completed hours compare: from the
+ * hour before midnight through the last completed hour, on every day alike. */
 export function todayVsNormal(account: UsageBoardAccount, now: number): number | null {
   const points = pointsOf(account.history.coarse, 2);
   const midnight = localDay(now);
-  const span = now - midnight;
+  const span = Math.floor((now - midnight) / HOUR) * HOUR;
   if (span < HOUR) return null;
   const used = (from: number) => {
-    const inside = points.filter((point) => point.at >= from && point.at <= from + span);
-    if (!inside.length || inside[0]!.at - from >= HOUR || from + span - inside.at(-1)!.at >= HOUR) return null;
+    const inside = points.filter((point) => point.at >= from - HOUR && point.at < from + span);
+    if (!inside.length || inside[0]!.at >= from || from + span - inside.at(-1)!.at > HOUR) return null;
     let total = 0;
     for (let i = 1; i < inside.length; i += 1) {
       if (inside[i]!.at - inside[i - 1]!.at > 2 * HOUR) return null;
