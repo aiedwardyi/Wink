@@ -273,7 +273,7 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpe
 }
 
 /** Header chip for this chat's listed runs. Opens the worker list. */
-export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined }) {
+export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf, className }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined; className?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [right, setRight] = useState(0);
@@ -381,9 +381,9 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPane
         aria-haspopup="dialog"
         aria-label={t("workers.stripAria", counts)}
         title={t("workers.tooltip")}
-        className="relative flex shrink-0 items-center whitespace-nowrap"
+        className={cn("relative flex shrink-0 items-center whitespace-nowrap", className)}
       >
-        <span data-worker-chip-desktop className="hidden items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-raised md:flex @max-4xl/chathead:!hidden">
+        <span data-worker-chip-desktop className={cn("hidden items-center gap-1.5 rounded-md px-1.5 py-1 md:flex @max-4xl/chathead:!hidden", !className && "hover:bg-raised")}>
           <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
           {first && <span aria-hidden className="text-[13px] text-ink-secondary">{t(listed.length === 1 ? "workers.countOne" : "workers.countMany", { count: listed.length })}</span>}
           {first && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />}
