@@ -25,6 +25,7 @@ import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { readTerminalAppearance } from "./terminal-appearance.mjs";
 import { applyPendingUpdateInstall, consumePendingUpdateInstall, isUpdateInstallPending, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
 import { channelFromCommandLine } from "./update-channel.mjs";
+import { appendUpdateTrace } from "./update-trace.mjs";
 import { completeQuitAfterCleanup, hideWindowsForQuit } from "./app-quit.mjs";
 import { createCloseGuard } from "./close-guard.mjs";
 import { applyStartFresh, requestStartFresh } from "./start-fresh.mjs";
@@ -239,10 +240,13 @@ if (process.platform === "win32") {
 // One instance per user: without this lock a second launch forks a second
 // harness server on a fallback port and splits data dirs in two. The loser
 // exits before any child or window exists; the winner surfaces itself.
+appendUpdateTrace(app, process, "start");
 if (!app.requestSingleInstanceLock()) {
+  appendUpdateTrace(app, process, "lock lost");
   console.log("[desktop] Wink is already running; focusing that window");
   process.exit(0);
 }
+appendUpdateTrace(app, process, "lock won");
 function deliverPackageInstall(win) {
   if (!pendingPackageInstallUrl || !win || win.isDestroyed()) return;
   if (win !== liveMainWindow(mainWindow)) return;

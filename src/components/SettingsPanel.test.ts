@@ -185,10 +185,11 @@ describe("SettingsPanel Korean bot details", () => {
     expect(html).not.toContain(">Memory<");
     expect(html).toContain(">알림<");
     expect(html).toContain("aria-label=\"봇 알림\"");
-    expect(html).toContain(">터미널을 대화와 공유<");
-    expect(html).toContain("aria-label=\"터미널을 대화와 공유\"");
+    expect(html).toContain(">터미널 사용<");
+    expect(html).toContain(">대화만 하는 봇은 꺼 두세요.<");
+    expect(html).toContain("aria-label=\"터미널 사용\"");
     expect(html).not.toContain(">Notifications<");
-    expect(html).not.toContain("Share Terminal with Chat");
+    expect(html).not.toContain("Terminal Access");
     expect(html).not.toContain("Bot Notifications");
     expect(html).not.toContain(">연결 앱<");
     expect(html).not.toContain("Allow this bot to use connected apps");
@@ -258,7 +259,7 @@ describe("SettingsPanel lean startup", () => {
 
 describe("SettingsPanel share terminal switch", () => {
   const terminalButtonTag = (html: string) => {
-    const labelAt = html.indexOf('aria-label="Share Terminal with Chat"');
+    const labelAt = html.indexOf('aria-label="Terminal Access"');
     return html.slice(html.lastIndexOf("<button", labelAt), html.indexOf(">", labelAt));
   };
 
@@ -272,7 +273,7 @@ describe("SettingsPanel share terminal switch", () => {
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(SettingsPanel, { bot })));
-    expect(html).not.toContain("Share Terminal with Chat");
+    expect(html).not.toContain("Terminal Access");
   });
 
   it("stays disabled without a terminal bridge when the flag shows it", async () => {

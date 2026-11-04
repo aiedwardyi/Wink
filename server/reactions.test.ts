@@ -17,7 +17,7 @@ import {
 } from "../shared/reactions.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const indexSource = readFileSync(join(here, "index.ts"), "utf8");
+const indexSource = readFileSync(join(here, "index.ts"), "utf8").replace(/\r\n/g, "\n");
 const internalSource = readFileSync(join(here, "internal-routes.ts"), "utf8");
 const botChatSource = readFileSync(join(here, "bot-chat-routes.ts"), "utf8");
 const repliesSource = readFileSync(join(here, "replies.ts"), "utf8");
@@ -341,8 +341,8 @@ describe("bot self-reactions", () => {
 
   it("only tells a bot it can react when the agents integration is actually mounted", () => {
     expect(indexSource).toContain("reactionToolGuidance");
-    expect(indexSource).toContain('const reactPrompt = integrations.agents ? ` ${reactionToolGuidance()}` : "";');
-    expect(indexSource).toContain("integrations.agents && reactionToolGuidance()");
+    expect(indexSource).toContain('const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";');
+    expect(indexSource).toContain("canMessage && reactionToolGuidance()");
   });
 
   it("reacts to the calling bot's own latest user message, never an arbitrary thread", () => {

@@ -1649,25 +1649,25 @@ it("keeps snapshot labels isolated across panes and bot remounts", async () => {
   expect(await f.names()).toEqual(["one", "two"]);
 });
 
-it("pickInitialPane prefers the last viewed pane, then the newest running worker, then main", () => {
+it("pickInitialPane uses the last viewed pane or Main", () => {
   const panes = [{ id: "a" }, { id: "b" }, { id: "c", exited: true }];
   expect(pickInitialPane(panes, "a")).toBe("a");
   expect(pickInitialPane(panes, "c")).toBe("c");
   expect(pickInitialPane(panes, null)).toBeNull();
-  expect(pickInitialPane(panes, "gone")).toBe("b");
-  expect(pickInitialPane(panes)).toBe("b");
-  expect(pickInitialPane([{ id: "a", exited: true }, { id: "b", exited: true }])).toBe("b");
+  expect(pickInitialPane(panes, "gone")).toBeNull();
+  expect(pickInitialPane(panes)).toBeNull();
+  expect(pickInitialPane([{ id: "a", exited: true }, { id: "b", exited: true }])).toBeNull();
   expect(pickInitialPane([])).toBeNull();
   expect(pickInitialPane([], "gone")).toBeNull();
 });
 
-it("opens on the newest running worker pane when nothing was viewed", async () => {
+it("opens on Main when nothing was viewed", async () => {
   const f = paneFixture();
   f.snapshot.panes[1].exited = true;
   await f.render();
-  expect(shownPane()).toBe("one");
+  expect(shownPane()).toBe("Desk");
   await act(async () => { f.opened({ botId: "bot-1", id: "pane-three", label: "three", generation: 1 }); });
-  expect(shownPane()).toBe("one");
+  expect(shownPane()).toBe("Desk");
 });
 
 it("treats a pane that exits before opening as exited", async () => {
@@ -1675,7 +1675,25 @@ it("treats a pane that exits before opening as exited", async () => {
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.exit({ id: "pane-two", exitCode: 0 }); });
   await f.render();
+  expect((await paneRows()).find((row) => row.nick === "two")?.state).toBe("ended");
+  expect(shownPane()).toBe("Desk");
+});
+
+it("walks chat, Main, a picked worker, and Main after the worker closes", async () => {
+  const f = paneFixture();
+  await f.render({ ...f.props, visible: false });
+  expect(f.open).not.toHaveBeenCalled();
+  await f.render();
+  expect(shownPane()).toBe("Desk");
+  await f.select("one");
+  await f.render({ ...f.props, visible: false });
+  await f.render();
   expect(shownPane()).toBe("one");
+  await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
+  await f.render({ ...f.props, visible: false });
+  await f.render();
+  expect(shownPane()).toBe("Desk");
+  expect(f.open.mock.calls.at(-1)?.[0].sessionId).toBeUndefined();
 });
 
 it("reopens on the last viewed pane, main included, and falls back when it closes", async () => {
@@ -1694,17 +1712,17 @@ it("reopens on the last viewed pane, main included, and falls back when it close
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
   await f.render();
-  expect(shownPane()).toBe("two");
+  expect(shownPane()).toBe("Desk");
 });
 
-it("remembers an auto-picked worker but not an auto-picked main shell", async () => {
+it("stays on Main when workers appear between opens", async () => {
   const f = paneFixture();
   await f.render();
-  expect(shownPane()).toBe("two");
+  expect(shownPane()).toBe("Desk");
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.opened({ botId: "bot-1", id: "pane-three", label: "three", generation: 1 }); });
   await f.render();
-  expect(shownPane()).toBe("two");
+  expect(shownPane()).toBe("Desk");
 
   lastViewedPanes.clear();
   await act(async () => root.unmount());
@@ -1716,7 +1734,50 @@ it("remembers an auto-picked worker but not an auto-picked main shell", async ()
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.opened({ botId: "bot-1", id: "pane-new", label: "new", generation: 1 }); });
   await f.render();
-  expect(shownPane()).toBe("new");
+  expect(shownPane()).toBe("Desk");
+});
+
+it("remembers an ended pane across opens until it closes", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select("one");
+  await act(async () => { f.exit({ id: "pane-one", exitCode: 0 }); });
+  await f.render({ ...f.props, visible: false });
+  await f.render();
+  expect(shownPane()).toBe("one");
+  expect((await paneRows()).find((row) => row.nick === "one")?.state).toBe("ended");
+  await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
+  await f.render({ ...f.props, visible: false });
+  await f.render();
+  expect(shownPane()).toBe("Desk");
+});
+
+it("remembers picks per bot and returns to Main if a pane closed while away", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select("one");
+  const other = { ...f.props, key: "bot-2", bot: { ...f.props.bot, id: "bot-2", name: "Other" } };
+  await act(async () => root.render(createElement(TerminalWorkspace, other)));
+  expect(shownPane()).toBe("Other");
+  await f.select("two");
+  const original = { ...f.props, key: "bot-1" };
+  await act(async () => root.render(createElement(TerminalWorkspace, original)));
+  expect(shownPane()).toBe("one");
+  await act(async () => root.render(createElement(TerminalWorkspace, other)));
+  expect(shownPane()).toBe("two");
+  f.snapshot.panes.splice(0, 1);
+  await act(async () => root.render(createElement(TerminalWorkspace, original)));
+  expect(shownPane()).toBe("Desk");
+});
+
+it("returns to Main after the user closes the picked pane", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select("one");
+  await act(async () => { closePaneButton()!.click(); });
+  await f.render({ ...f.props, visible: false });
+  await f.render();
+  expect(shownPane()).toBe("Desk");
 });
 
 it("counts a notification-focused pane as last viewed", async () => {
