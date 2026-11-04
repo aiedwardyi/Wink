@@ -327,6 +327,28 @@ describe("Antigravity turns (fake CLI)", () => {
     }
   });
 
+  it("keeps the real reply from a recorded agy turn that echoed background-task notices", async () => {
+    const recorded = JSON.parse(
+      readFileSync(new URL("../../test/fixtures/recorded/antigravity/background-task-notice.json", import.meta.url), "utf8"),
+    );
+    const previous = process.env.FAKE_AGY_REPLAY;
+    process.env.FAKE_AGY_REPLAY = JSON.stringify(recorded.reply.lines);
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-recorded-notice", text: "hi" });
+      await recorder.until((event) => event.type === "turn.completed");
+
+      expect(recorder.events.find((event) => event.type === "item.completed" && event.itemType === "assistant_text")).toMatchObject({
+        text: "Both commands have been launched as background tasks. Waiting for notifications.\nFIXTURE-OK\nFIXTURE-OK\n",
+      });
+      expect(recorder.events.some((event) => /SYSTEM_MESSAGE|finished with result/.test(JSON.stringify(event)))).toBe(false);
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_AGY_REPLAY;
+      else process.env.FAKE_AGY_REPLAY = previous;
+    }
+  });
+
   it("does not render internal system notices from streamed or final text", async () => {
     const previous = process.env.FAKE_AGY_SYSTEM_NOTICE;
     process.env.FAKE_AGY_SYSTEM_NOTICE = "1";

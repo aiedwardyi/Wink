@@ -128,6 +128,11 @@ if (resumeFails && argv.includes("--conversation")) {
   });
 }
 
+if (process.env.FAKE_AGY_REPLAY) {
+  for (const line of JSON.parse(process.env.FAKE_AGY_REPLAY)) out(line);
+  process.exit(0);
+}
+
 out({ event: "init", conversation_id: CONV, init: { cwd: process.cwd(), tools: ["run_command", "write_to_file"], permission_mode: "accept-edits" } });
 out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 0, state: "ACTIVE", step_type: "tool", tool_name: "write_to_file", tool_info: { name: "write_to_file", parameters: {} } } });
 out({
