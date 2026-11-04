@@ -177,10 +177,10 @@ export const TOOLS = [
   },
 ] as const;
 
-type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string };
+type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string };
 type SendInput = { sessionId: string; generation: number; text: string };
 type SpawnInput = { label: string; cwd?: string; command?: string };
-type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number } };
+type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number }; account?: { id: string; generation: number } };
 
 type Snapshot = {
   botId?: string;
@@ -201,7 +201,7 @@ type Snapshot = {
   waited?: "hit" | "timeout";
 };
 
-export function terminalSnapshotText(snapshot: Snapshot): string {
+export function terminalSnapshotText(snapshot: Snapshot, nameOf?: (id: string) => string): string {
   if (snapshot.state === "no-terminal") return "This bot has no active Wink terminal session.";
   const lines = [
     `Terminal session: ${snapshot.sessionId ?? "unknown"} (generation ${snapshot.generation ?? "unknown"})`,
@@ -223,7 +223,8 @@ export function terminalSnapshotText(snapshot: Snapshot): string {
     for (const pane of snapshot.panes) {
       const claude = claudeState(pane.screenText);
       const context = pane.context ? ` · context ${pane.context.tokens !== undefined ? `${Math.round(pane.context.tokens / 1000)}k` : `${pane.context.left}% left`}` : "";
-      lines.push(`- ${pane.label || (pane.main ? "main" : "(unlabeled)")}: sessionId ${pane.sessionId} (generation ${pane.generation})${pane.main ? ", main" : ""}${pane.exited ? ", exited" : ""}${claude ? `, Claude: ${claude}` : ""}${context}`);
+      const account = pane.account && nameOf ? ` · on ${nameOf(pane.account.id)}` : "";
+      lines.push(`- ${pane.label || (pane.main ? "main" : "(unlabeled)")}: sessionId ${pane.sessionId} (generation ${pane.generation})${pane.main ? ", main" : ""}${pane.exited ? ", exited" : ""}${claude ? `, Claude: ${claude}` : ""}${context}${account}`);
     }
   }
   return lines.join("\n");
@@ -441,7 +442,7 @@ export async function callTool(
       const snapshot = await sendTerminalText(args, fetchImpl, config, (before, submittedAgo) => {
         if (lineSubmitted(args) && before.sessionId && !sentToMain(before)) void postLaunchNote(fetchImpl, config, before.sessionId, true, submittedAgo);
       });
-      return { content: [{ type: "text", text: terminalSnapshotText(snapshot) }] };
+      return { content: [{ type: "text", text: terminalSnapshotText(snapshot, config.nameOf) }] };
     }
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
     const sessionId = typeof args.sessionId === "string" && args.sessionId ? args.sessionId : undefined;
@@ -450,7 +451,7 @@ export async function callTool(
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
     const timeoutMs = typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs) ? args.timeoutMs : undefined;
     const snapshot = await readTerminalSnapshot(fetchImpl, config, sessionId, waitFor, timeoutMs, true);
-    return { content: [{ type: "text", text: terminalSnapshotText(snapshot) }] };
+    return { content: [{ type: "text", text: terminalSnapshotText(snapshot, config.nameOf) }] };
   } catch (error) {
     return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
   }
