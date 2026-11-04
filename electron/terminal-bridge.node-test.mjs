@@ -7,6 +7,103 @@ import { BOT_PANE_LIMIT, createTerminalHost } from "./terminal-host.mjs";
 import { closeBotPanes } from "../server/terminal-cleanup.ts";
 import { terminalPaneCountsGrant as serverTerminalPaneCountsGrant, terminalSendGrant as serverTerminalSendGrant, updateGrant as serverUpdateGrant } from "../server/terminal-grant.ts";
 
+function accountRunFixture(t) {
+  const children = [];
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({
+    authorize() {}, owner: () => owner, resolveCwd: async () => os.tmpdir(),
+    platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 64 * 1024 ** 3,
+    workerLaunch: async ({ command }) => command === "shell" ? null : ({
+      kind: command === "side" ? "unrouted" : "managed", executable: command === "codex" ? "codex" : "claude", args: [],
+      account: { id: command === "codex" ? "codex.fixture" : "claude.fixture", generation: 2 }, environment: {},
+    }),
+    loadPty: () => ({ spawn: () => {
+      const child = { writes: [], onData(cb) { this.data = cb; }, onExit(cb) { this.exit = cb; }, write(text) { this.writes.push(text); }, resize() {}, kill() {} };
+      children.push(child);
+      return child;
+    } }),
+  });
+  const bridge = createTerminalBridge({ host });
+  t.after(async () => { await bridge.close(); await host.dispose(); });
+  return { host, bridge, children, owner };
+}
+
+test("lists live worker runs with account and bot", async (t) => {
+  const f = accountRunFixture(t);
+  const access = await f.bridge.start();
+  const one = await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+  const two = await f.host.openForBot("bot-2", { label: "checker", command: "codex" });
+  const headers = { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` };
+  const url = `${access.url}/v1/terminal/account-runs`;
+  const response = await fetch(url, { headers });
+  assert.equal(response.status, 200);
+  const runs = [
+    { botId: "bot-1", paneId: one.sessionId, label: "builder", engine: "claude", accountId: "claude.fixture", accountGeneration: 2, state: "starting" },
+    { botId: "bot-2", paneId: two.sessionId, label: "checker", engine: "codex", accountId: "codex.fixture", accountGeneration: 2, state: "starting" },
+  ];
+  assert.deepEqual(await response.json(), { runs });
+  assert.deepEqual(await (await fetch(`${url}?botId=bot-2&engine=codex`, { headers })).json(), { runs: [runs[1]] });
+  assert.deepEqual(await (await fetch(`${url}?engine=claude`, { headers })).json(), { runs: [runs[0]] });
+  assert.deepEqual(await (await fetch(`${url}?botId=absent`, { headers })).json(), { runs: [] });
+  const counts = await fetch(`${access.url}/v1/terminal/account-panes?accountId=claude.fixture`, { headers });
+  assert.deepEqual(await counts.json(), { count: 1, unknown: 0, generations: { 2: 1 } });
+});
+
+test("leaves side-door, user and exited panes out", async (t) => {
+  const f = accountRunFixture(t);
+  const access = await f.bridge.start();
+  await f.host.open({ sender: f.owner }, { botId: "bot-1", cols: 80, rows: 24 });
+  for (const command of ["side", "shell", "claude", "codex"]) await f.host.openForBot("bot-1", { label: command, command });
+  f.children[3].exit({ exitCode: 0 });
+  const pane = f.host.readBot("bot-1").panes.at(-1);
+  f.children[4].data(`\x1b]133;C;${pane.sessionId};${Buffer.alloc(32).toString("base64")}\x07\x1b]133;D;${pane.sessionId};0\x07`);
+  const response = await fetch(`${access.url}/v1/terminal/account-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { runs: [] });
+  for (const row of f.host.readBot("bot-1", { panesOnly: true }).panes.slice(0, 3)) assert.equal(Object.hasOwn(row, "account"), false);
+});
+
+test("refuses an unauthenticated or bad-filter request", async (t) => {
+  let calls = 0;
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, liveAccountRuns() { calls++; return []; } } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  const url = `${access.url}/v1/terminal/account-runs`;
+  for (const token of ["", access.token, terminalReadGrant(access.token, "bot-1"), terminalSendGrant(access.token, "bot-1"), updateGrant(access.token)]) {
+    assert.equal((await fetch(url, { headers: { authorization: `Bearer ${token}` } })).status, 401);
+  }
+  const headers = { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` };
+  for (const query of ["?botId=", "?botId=a.b", `?botId=${"a".repeat(129)}`, "?engine=", "?engine=shell"]) assert.equal((await fetch(`${url}${query}`, { headers })).status, 400);
+  assert.equal((await fetch(url, { method: "POST", headers })).status, 405);
+  assert.equal(calls, 0);
+});
+
+test("reports host errors and malformed run output as unavailable", async (t) => {
+  let result = [];
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, liveAccountRuns() { if (result instanceof Error) throw result; return result; } } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  for (result of [new Error("private host failure"), {}, [{ botId: "bot-1", paneId: "pane", label: null, engine: "claude", accountId: "claude.fixture", accountGeneration: -1, state: "busy" }]]) {
+    const response = await fetch(`${access.url}/v1/terminal/account-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` } });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: "Worker account runs are unavailable" });
+  }
+});
+
+test("rejects reserved account ids in worker run output", async (t) => {
+  let accountId;
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, liveAccountRuns: () => [
+    { botId: "bot-1", paneId: "pane", label: null, engine: "claude", accountId, accountGeneration: 0, state: "busy" },
+  ] } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  for (accountId of ["constructor", "Constructor", "prototype", "__proto__", ".", ".."]) {
+    const response = await fetch(`${access.url}/v1/terminal/account-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` } });
+    assert.equal(response.status, 503, accountId);
+    assert.deepEqual(await response.json(), { error: "Worker account runs are unavailable" });
+  }
+});
+
 test("credential saves require the full bridge bearer, never terminal or updater grants", async (t) => {
   const calls = [];
   const bridge = createTerminalBridge({

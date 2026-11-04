@@ -10,10 +10,14 @@ import { ProviderReload } from "./harness/provider-reload.ts";
 import { EventBus } from "./harness/bus.ts";
 import { makeFakeDriver } from "./testing/fake-driver.ts";
 import type { ProviderSnapshot } from "./contracts.ts";
+import type { MainChange } from "./account-lifecycle.ts";
+import { Store } from "./store.ts";
+import { createUsageRefresh } from "./usage-refresh.ts";
 
 const core = await import("./accounts.ts").catch(() => null);
 const lifecycle = await import("./account-lifecycle.ts").catch(() => null);
 const routes = await import("./account-routes.ts").catch(() => null);
+const runtime = await import("./account-runtime.ts").catch(() => null);
 const registries: ProviderRegistry[] = [];
 const controllers: InstanceType<NonNullable<typeof lifecycle>["AccountLifecycle"]>[] = [];
 let next = 0;
@@ -22,10 +26,11 @@ afterEach(async () => {
   controllers.splice(0).forEach((controller) => controller.dispose());
   await Promise.all(registries.splice(0).map((registry) => registry.disposeAll()));
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
-async function fixture() {
+async function fixture(onMainChanged?: (change: MainChange) => void) {
   expect(core, "account service exists").not.toBeNull();
   expect(lifecycle, "account lifecycle exists").not.toBeNull();
   const dir = join(DATA_DIR, `lifecycle-${++next}`);
@@ -64,12 +69,18 @@ async function fixture() {
   });
   vi.spyOn(registry.logins, "state").mockImplementation(() => state);
   vi.spyOn(registry.logins, "wait").mockImplementation(() => waiting);
-  const controller = new lifecycle!.AccountLifecycle(accounts, registry, {
+  if (onMainChanged) vi.stubGlobal("fetch", vi.fn(async () => Response.json({ count: 0, unknown: 0, generations: {} })));
+  const routed = onMainChanged && runtime!.createAccountRuntime({
+    accounts, registry, providers, store: new Store(() => ({ instanceId: "claude", model: "claudeAgent-1" })), reload: () => providers.reload(configs()),
+    rateLimits: new Map(), saveRateLimits: () => {}, usage: createUsageRefresh(), availability: new Map(), invalidateHolds: () => {}, invalidateWaits: () => {},
+    botActive: () => false, terminal: () => ({ url: "http://127.0.0.1:1", token: "fixture" }), configBusy: () => configBusy, onMainChanged,
+  });
+  const controller = routed || new lifecycle!.AccountLifecycle(accounts, registry, {
     reload: () => providers.reload(configs()),
     referenced: async (id) => references.has(id), invalidate, changed, configBusy: () => configBusy,
   });
   controllers.push(controller);
-  return { dir, accounts, registry, controller, references, invalidate, changed, start, statuses, providers,
+  return { dir, accounts, registry, controller, holdStarting: routed ? routed.holdStarting : undefined, references, invalidate, changed, start, statuses, providers,
     busy: (value: boolean) => { configBusy = value; }, failLogout: () => { logoutFails = true; },
     state: (value: typeof state) => { state = value; }, wait: (value: Promise<void>) => { waiting = value; },
     add: async (of = "claude") => { const result = await controller.add(of); await controller.settled(result.id); return accounts.get(result.id)!; },
@@ -443,6 +454,106 @@ async function request(f: Awaited<ReturnType<typeof fixture>>, method: string, p
   const handled = await routes!.createAccountRoutes(f.controller, f.registry)(req, res, method, path);
   return { handled, status, body: output ? JSON.parse(output) : undefined };
 }
+
+describe("Main changes", () => {
+  const main = (id: string, generation = 0) => ({ id, generation });
+
+  it("reports a committed Main change when the following reload fails", async () => {
+    const hook = vi.fn();
+    const f = await fixture(hook);
+    const first = await f.add();
+    const second = await f.add();
+    await f.controller.useForBots(first.id);
+    hook.mockClear();
+    vi.spyOn(f.providers, "reload").mockRejectedValueOnce(new Error("fixture reload failure"));
+    await expect(f.controller.remove(first.id, second.id)).rejects.toThrow("fixture reload failure");
+    expect(f.accounts.defaultFor("claude")).toBe(second.id);
+    expect(f.accounts.drains[first.id]).toBeUndefined();
+    expect(hook.mock.calls.map(([change]) => [change.from, change.to])).toEqual([
+      [main(first.id, first.generation), main(second.id, second.generation)],
+    ]);
+    await f.controller.resumeDrains();
+    expect(hook).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the Main hook once after a committed Main change", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const hook = vi.fn(() => { throw new Error("fixture hook failure"); });
+    const f = await fixture(hook);
+    const account = await f.add();
+    expect(hook).not.toHaveBeenCalled();
+    await expect(f.controller.useForBots(account.id)).resolves.toEqual({});
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook).toHaveBeenCalledWith({ base: "claude", engine: "claude", from: main("claude"), to: main(account.id, account.generation), seq: expect.any(Number) });
+    expect(f.accounts.defaultFor("claude")).toBe(account.id);
+  });
+
+  it("calls it for return to base and a sign-out destination", async () => {
+    const hook = vi.fn();
+    const f = await fixture(hook);
+    const first = await f.add("codex");
+    const second = await f.add("codex");
+    await f.controller.useForBots(first.id);
+    await f.controller.useForBots("codex");
+    await f.controller.useForBots(first.id);
+    await expect(f.controller.remove(first.id, second.id)).resolves.toEqual({ state: "removed", destinationId: second.id });
+    expect(hook.mock.calls.map(([change]) => [change.engine, change.from, change.to])).toEqual([
+      ["codex", main("codex"), main(first.id, first.generation)],
+      ["codex", main(first.id, first.generation), main("codex")],
+      ["codex", main("codex"), main(first.id, first.generation)],
+      ["codex", main(first.id, first.generation), main(second.id, second.generation)],
+    ]);
+  });
+
+  it("does not call it on a failed or no-op change", async () => {
+    const hook = vi.fn();
+    const f = await fixture(hook);
+    const account = await f.add();
+    await f.controller.useForBots(account.id);
+    expect(hook).toHaveBeenCalledTimes(1);
+    await f.controller.useForBots(account.id);
+    await f.controller.useForBots("codex");
+    await expect(f.controller.useForBots("acct_00000000-0000-4000-8000-000000000000")).rejects.toThrow("Unknown account");
+    f.registry.blockAccount("claude", true);
+    await expect(f.controller.useForBots("claude")).rejects.toThrow("unavailable");
+    f.registry.blockAccount("claude", false);
+    f.busy(true);
+    await expect(f.controller.useForBots("claude")).rejects.toThrow("Provider settings");
+    f.busy(false);
+    await expect(f.controller.remove(account.id)).rejects.toThrow("still used");
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(f.accounts.defaultFor("claude")).toBe(account.id);
+  });
+
+  it("reports A-B-A as three committed changes in order", async () => {
+    const hook = vi.fn();
+    const f = await fixture(hook);
+    const a = await f.add();
+    const b = await f.add();
+    for (const id of [a.id, b.id, a.id]) await f.controller.useForBots(id);
+    expect(hook.mock.calls.map(([change]) => [change.from.id, change.to.id])).toEqual([["claude", a.id], [a.id, b.id], [b.id, a.id]]);
+    const seqs = hook.mock.calls.map(([change]) => change.seq);
+    expect(seqs).toEqual([...seqs].sort((x, y) => x - y));
+    expect(new Set(seqs).size).toBe(3);
+  });
+
+  it("drains instead of removing the old Main while a resolved turn starts", async () => {
+    const hook = vi.fn();
+    const f = await fixture(hook);
+    const account = await f.add();
+    await f.controller.useForBots(account.id);
+    hook.mockClear();
+    const release = f.holdStarting?.(account.id, account.generation);
+    await expect(f.controller.remove(account.id, "claude")).resolves.toEqual({ state: "draining", destinationId: "claude" });
+    expect(f.accounts.get(account.id)).toBeDefined();
+    expect(hook).not.toHaveBeenCalled();
+    release?.();
+    release?.();
+    await f.controller.resumeDrains();
+    expect(f.accounts.get(account.id)).toBeUndefined();
+    expect(hook.mock.calls.map(([change]) => [change.from, change.to])).toEqual([[main(account.id, account.generation), main("claude")]]);
+  });
+});
 
 describe("account HTTP routes", () => {
   it("adds, lists and signs out through thin routes", async () => {

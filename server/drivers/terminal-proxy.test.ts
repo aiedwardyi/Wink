@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +42,38 @@ async function send(fetchImpl: typeof fetch, args: Parameters<typeof callTool>[3
 }
 
 describe("terminal proxy", () => {
+  it("shows each worker pane's account name in terminal_read Panes", async () => {
+    const panes = [
+      { sessionId: "main", generation: 1, label: null, main: true },
+      { sessionId: "one", generation: 2, label: "builder", account: { id: "claude.fixture", generation: 3 }, context: { tokens: 120_000, left: 60 } },
+      { sessionId: "two", generation: 3, label: "checker", account: { id: "codex.fixture", generation: 4 } },
+    ];
+    const fetchImpl = scripted({ sessionId: "main", generation: 1, panes });
+    const nameOf = vi.fn((id: string) => id === "claude.fixture" ? "Claude 2" : "검토");
+    const result = await callTool("terminal_read", fetchImpl, { ...CONFIG, nameOf });
+    expect(result.content[0].text).toContain("- builder: sessionId one (generation 2) · context 120k · on Claude 2");
+    expect(result.content[0].text).toContain("- checker: sessionId two (generation 3) · on 검토");
+    expect(result.content[0].text).toContain("- main: sessionId main (generation 1), main\n");
+    expect(result.content[0].text).not.toContain("Main");
+    expect(nameOf.mock.calls).toEqual([["claude.fixture"], ["codex.fixture"]]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const before = terminalSnapshotText({ sessionId: "main", generation: 1, panes });
+    expect(Buffer.byteLength(result.content[0].text) - Buffer.byteLength(before)).toBe(Buffer.byteLength(" · on Claude 2") + Buffer.byteLength(" · on 검토"));
+  });
+
+  it("leaves rows without an account unchanged", async () => {
+    const snapshot = { sessionId: "main", generation: 1, panes: [
+      { sessionId: "main", generation: 1, label: null, main: true },
+      { sessionId: "one", generation: 2, label: "builder", exited: true },
+    ] };
+    const nameOf = vi.fn(() => "Claude 2");
+    const result = await callTool("terminal_read", scripted(snapshot), { ...CONFIG, nameOf });
+    expect(result.content[0].text).toBe(terminalSnapshotText(snapshot));
+    expect(nameOf).not.toHaveBeenCalled();
+    const captured = { ...snapshot, panes: [{ ...snapshot.panes[1], account: { id: "claude.fixture", generation: 3 } }] };
+    expect((await callTool("terminal_read", scripted(captured), CONFIG)).content[0].text).toBe(terminalSnapshotText(captured));
+  });
+
   it("derives distinct bot-bound read grants", () => {
     expect(terminalReadGrant("bridge-secret", "bot-1")).not.toBe(terminalReadGrant("bridge-secret", "bot-2"));
     expect(() => terminalReadGrant("bridge-secret", "bot/2")).toThrow(/grant/);
@@ -793,6 +826,28 @@ function probeWithIdentity(identity: Record<string, string>): Promise<{ list: an
 }
 
 describe("terminal proxy identity gate", () => {
+  it("shows account suffixes only for ids in the session names map", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ panes: [
+        { sessionId: "unknown", generation: 1, label: "Grok", account: { id: "grok", generation: 0 } },
+        { sessionId: "known", generation: 2, label: "Builder", account: { id: "claude.fixture", generation: 3 } },
+      ] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing fixture port");
+      const { call } = await probeWithIdentity({ OMB_TERMINAL_URL: `http://127.0.0.1:${address.port}`, OMB_TERMINAL_TOKEN: "grant",
+        OMB_BOT_ID: "bot-1", OMB_ACCOUNT_NAMES: JSON.stringify({ "claude.fixture": "Claude 2" }) });
+      const text = call.result.content[0].text;
+      expect(text.split("\n").find((line: string) => line.startsWith("- Grok:"))).toBe("- Grok: sessionId unknown (generation 1)");
+      expect(text).toContain("- Builder: sessionId known (generation 2) · on Claude 2");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it.each([
     ["no identity", {}],
     ["an agents-only identity", { OMB_BOT_ID: "bot-1", OMB_HARNESS_URL: "http://127.0.0.1:9", OMB_COMMS_TOKEN: "comms" }],

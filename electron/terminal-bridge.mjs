@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { z } from "zod";
 
 import { BOT_PANE_LIMIT } from "./terminal-host.mjs";
 import { handleServerErrorReport } from "./error-report-capture.mjs";
@@ -10,6 +11,12 @@ const SEND_GRANT_PREFIX = "orbit-terminal-send-v1";
 const PANE_COUNTS_GRANT_PREFIX = "orbit-terminal-pane-counts-v1";
 const UPDATE_GRANT_PREFIX = "orbit-update-v1";
 const MAX_SEND_BODY = 16 * 1024;
+const accountRunsSchema = z.array(z.object({
+  botId: z.string().regex(BOT_ID_RE), paneId: z.string().min(1).max(128), label: z.string().max(40).nullable(),
+  engine: z.enum(["claude", "codex"]), accountId: z.string().regex(/^[\w.-]{1,128}$/)
+    .refine((value) => !["constructor", "prototype", "__proto__", ".", ".."].includes(value.toLowerCase())),
+  accountGeneration: z.number().int().nonnegative(), state: z.enum(["busy", "idle", "limit", "starting"]),
+}));
 
 export function terminalReadGrant(token, botId) {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Grant inputs cross the Electron/server process boundary.
@@ -166,6 +173,18 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         if (!host.enableWorkerAccounts) return json(res, 503, { error: "Worker account routing is unavailable" });
         host.enableWorkerAccounts();
         return json(res, 200, { enabled: true });
+      }
+      if (parsed.pathname === "/v1/terminal/account-runs") {
+        if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });
+        if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });
+        const botId = parsed.searchParams.get("botId");
+        const engine = parsed.searchParams.get("engine");
+        if (botId !== null && !BOT_ID_RE.test(botId) || engine !== null && !["claude", "codex"].includes(engine)) return json(res, 400, { error: "Invalid worker run filter" });
+        try {
+          const runs = accountRunsSchema.safeParse(host.liveAccountRuns?.({ ...(botId === null ? {} : { botId }), ...(engine === null ? {} : { engine }) }));
+          if (runs.success) return json(res, 200, { runs: runs.data });
+        } catch {}
+        return json(res, 503, { error: "Worker account runs are unavailable" });
       }
       if (parsed.pathname === "/v1/terminal/account-panes") {
         if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });

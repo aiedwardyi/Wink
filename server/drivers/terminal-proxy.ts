@@ -17,6 +17,7 @@ const TOKEN = process.env.OMB_TERMINAL_TOKEN ?? "";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const HARNESS = process.env.OMB_HARNESS_URL?.replace(/\/$/, "") ?? "";
 const COMMS_TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
+const ACCOUNT_NAMES: Record<string, string> = JSON.parse(process.env.OMB_ACCOUNT_NAMES || "{}");
 // agy mounts this proxy machine-wide, so a process without a bot's terminal grant gets no tools.
 const TOOLS_ENABLED = Boolean(HOST && TOKEN && BOT_ID);
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -177,10 +178,10 @@ export const TOOLS = [
   },
 ] as const;
 
-type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string };
+type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string | undefined };
 type SendInput = { sessionId: string; generation: number; text: string };
 type SpawnInput = { label: string; cwd?: string; command?: string };
-type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number } };
+type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number }; account?: { id: string; generation: number } };
 
 type Snapshot = {
   botId?: string;
@@ -201,7 +202,7 @@ type Snapshot = {
   waited?: "hit" | "timeout";
 };
 
-export function terminalSnapshotText(snapshot: Snapshot): string {
+export function terminalSnapshotText(snapshot: Snapshot, nameOf?: (id: string) => string | undefined): string {
   if (snapshot.state === "no-terminal") return "This bot has no active Wink terminal session.";
   const lines = [
     `Terminal session: ${snapshot.sessionId ?? "unknown"} (generation ${snapshot.generation ?? "unknown"})`,
@@ -223,7 +224,9 @@ export function terminalSnapshotText(snapshot: Snapshot): string {
     for (const pane of snapshot.panes) {
       const claude = claudeState(pane.screenText);
       const context = pane.context ? ` · context ${pane.context.tokens !== undefined ? `${Math.round(pane.context.tokens / 1000)}k` : `${pane.context.left}% left`}` : "";
-      lines.push(`- ${pane.label || (pane.main ? "main" : "(unlabeled)")}: sessionId ${pane.sessionId} (generation ${pane.generation})${pane.main ? ", main" : ""}${pane.exited ? ", exited" : ""}${claude ? `, Claude: ${claude}` : ""}${context}`);
+      const name = pane.account && nameOf?.(pane.account.id);
+      const account = name ? ` · on ${name}` : "";
+      lines.push(`- ${pane.label || (pane.main ? "main" : "(unlabeled)")}: sessionId ${pane.sessionId} (generation ${pane.generation})${pane.main ? ", main" : ""}${pane.exited ? ", exited" : ""}${claude ? `, Claude: ${claude}` : ""}${context}${account}`);
     }
   }
   return lines.join("\n");
@@ -441,7 +444,7 @@ export async function callTool(
       const snapshot = await sendTerminalText(args, fetchImpl, config, (before, submittedAgo) => {
         if (lineSubmitted(args) && before.sessionId && !sentToMain(before)) void postLaunchNote(fetchImpl, config, before.sessionId, true, submittedAgo);
       });
-      return { content: [{ type: "text", text: terminalSnapshotText(snapshot) }] };
+      return { content: [{ type: "text", text: terminalSnapshotText(snapshot, config.nameOf) }] };
     }
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
     const sessionId = typeof args.sessionId === "string" && args.sessionId ? args.sessionId : undefined;
@@ -450,7 +453,7 @@ export async function callTool(
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
     const timeoutMs = typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs) ? args.timeoutMs : undefined;
     const snapshot = await readTerminalSnapshot(fetchImpl, config, sessionId, waitFor, timeoutMs, true);
-    return { content: [{ type: "text", text: terminalSnapshotText(snapshot) }] };
+    return { content: [{ type: "text", text: terminalSnapshotText(snapshot, config.nameOf) }] };
   } catch (error) {
     return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
   }
@@ -485,7 +488,7 @@ async function handle(message: Json) {
     if (!TOOLS_ENABLED || typeof params.name !== "string" || !TOOL_NAMES.has(params.name)) return rpcError(id, -32602, `Unknown tool: ${String(params.name ?? "")}`);
     // oxlint-disable-next-line anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion -- Tool arguments are narrowed to a record before validation.
     const args = params.arguments && typeof params.arguments === "object" ? params.arguments as Json : {};
-    ok(id, await callTool(params.name, fetch, {}, args));
+    ok(id, await callTool(params.name, fetch, { nameOf: (account) => Object.hasOwn(ACCOUNT_NAMES, account) ? ACCOUNT_NAMES[account] : undefined }, args));
   } else if (id !== undefined) {
     rpcError(id, -32601, `Method not found: ${method}`);
   }

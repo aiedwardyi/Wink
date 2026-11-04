@@ -820,6 +820,7 @@ describe("KeepGoing server wiring", () => {
       store: { bot: () => ({ modelSelection: { instanceId: "engine" } }) },
       accounts: { snapshot: [], defaultFor: () => undefined }, rateLimitsByInstance, cfg: {}, instanceConfigs: () => ({ engine: config }),
       registry: { get: () => ({ driverKind: "claude" }) }, refreshUsage, scheduleSaveRateLimits,
+      usageBoard: { recordReport() {} },
       KEEP_GOING_USAGE_FRESH_MS, DATA_DIR: dir, z,
     };
     expect(await readUsage(scope)).toEqual(report);

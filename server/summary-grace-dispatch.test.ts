@@ -54,6 +54,7 @@ describe("summary grace dispatch", () => {
       store: { messagesFor: () => [], setActivity: () => {} },
       bot: { id: "bot" }, threadId: "room", dispatchedThreads: new Map(), releaseTurnStart: undefined,
       keepGoing: { turnStarted }, hop, cardContinuation,
+      takeStartingHold: () => () => {},
     });
     expect(turnStarted).toHaveBeenCalledWith("bot", "room", byUser);
   });
@@ -178,7 +179,7 @@ describe("summary grace dispatch", () => {
         transcript: prepared.transcript, contextCompacted: prepared.compacted, taskRecord: undefined, durableTaskRecordText: taskRecordText,
         recovering: false, unsettled: "", recoveryLatestUserText: "next request", latestCompactionId: null, seed,
         summarySkipped: true, summaryGrace, graceInputs, planBeforeSummary, summaryBuild: build, prepareContext,
-        inlineNotes: null, threadSyncV2: null,
+        inlineNotes: null, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) },
         onSummaryWait, logSummaryWait, latencySendId: "send", isSendCancelled: () => false,
         systemSeeds: { set: () => ({}) }, systemSeed: undefined, lastTurnToolRounds: 0, sessionToolRounds: 0,
         pendingInterruptThreads: { started: () => {} }, model: "claude-opus-5-5", effort: undefined,
