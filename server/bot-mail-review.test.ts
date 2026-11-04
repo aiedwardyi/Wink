@@ -3,6 +3,7 @@ import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CommsCallers } from "./comms-caller.ts";
+import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, repairModelContext, repairTarget } from "./context-compaction.ts";
 import { _resetPending, discardDelegations, discardOrphanedDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt, updateReceipt } from "./delegations.ts";
@@ -16,12 +17,13 @@ let store: Store;
 let from: ReturnType<Store["createBot"]>;
 let target: ReturnType<Store["createBot"]>;
 const bus = () => ({ store, broadcast: () => {} });
-const start = (turnId: string) => turnRegistry.start(turnId, { botId: from.id, threadId: from.threadId, owner: "user", depth: 0 });
+const start = (turnId: string) => turnRegistry.start(turnId, { botId: from.id, threadId: from.threadId, owner: "user", depth: 0, rootId: rootForStart(from.threadId, { kind: "human", messageKey: turnId }) });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   rmSync(DATA_DIR, { recursive: true, force: true });
   _resetPending();
+  _resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));
   from = store.createBot();
   target = store.createBot();

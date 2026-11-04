@@ -332,6 +332,16 @@ describe("server notices", () => {
     expect(classifyServerNotice("Auto mode couldn't answer: nope")).toBeNull();
   });
 
+  it("shows both bots-paused notices with tool calls off and never folds them", () => {
+    for (const name of ["Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.", "Bots paused: this request's budget is no longer available. Send a message to keep them going."]) {
+      expect(activityVisibleInChat(running(name), false)).toBe(true);
+      expect(groupActivityRuns([running(name), running(name)], false).map((item) => item.kind)).toEqual(["message", "message"]);
+    }
+    for (const name of ["Delegation to @Atlas denied by user", "Delivered to @Atlas", "Delegated turn completed", "Bots paused"]) {
+      expect(activityVisibleInChat(named(name, name), false), name).toBe(false);
+    }
+  });
+
   it("hides approval notices with the other work steps", () => {
     expect(activityVisibleInChat(named("n", "auto-approved Bash: npm test"), false)).toBe(false);
     expect(activityVisibleInChat(named("n2", "retrying \u2014 attempt 1/5 in 1s \u2014 reset"), false)).toBe(false);
@@ -479,6 +489,8 @@ describe("localizeServerLine", () => {
     ["Gemini is busy. Retrying in 30 sec.", "Gemini가 바쁩니다. 30초 후 다시 시도합니다."],
     ["Gemini is busy. Retrying in 2 min.", "Gemini가 바쁩니다. 2분 후 다시 시도합니다."],
     ["error: Gemini is still busy after 3 tries. Try another model.", "Gemini가 3번 시도한 뒤에도 바쁩니다. 다른 모델을 써 보세요."],
+    ["Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.", "봇 대화 일시 중지: 이 요청의 봇 턴 한도 24개에 도달했어요. 계속하려면 메시지를 보내세요."],
+    ["Bots paused: this request's budget is no longer available. Send a message to keep them going.", "봇 대화 일시 중지: 이 요청의 대화 예산을 더 이상 사용할 수 없어요. 계속하려면 메시지를 보내세요."],
   ];
 
   it.each(samples)("maps %s into Korean", (line, korean) => {
@@ -522,6 +534,15 @@ describe("localizeServerLine", () => {
 
   it("keeps the bot name whole when it holds punctuation", () => {
     expect(localizeServerLine("Delivered to @R2-D2 (v2)", ko)).toBe("@R2-D2 (v2)에게 전달됨");
+  });
+
+  it("keeps the raw English bots-paused notices for a reader without their lines", () => {
+    const known = SERVER_LINES.splice(0, SERVER_LINES.length, ...SERVER_LINES.filter((line) => line.file !== "comms-notice.ts"));
+    try {
+      for (const line of ["Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.", "Bots paused: this request's budget is no longer available. Send a message to keep them going."]) expect(localizeServerLine(line, ko)).toBe(line);
+    } finally {
+      SERVER_LINES.splice(0, SERVER_LINES.length, ...known);
+    }
   });
 
   it("passes unknown lines through", () => {

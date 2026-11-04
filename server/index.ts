@@ -140,7 +140,6 @@ import {
 import { BUSY_RESUME_DELAYS_MS, retryLine } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
-import { clearAskBudget, clearDelegationWakeBudget } from "./comms-budget.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import "./message-db.ts";
@@ -148,7 +147,7 @@ import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
-import { adoptHumanRoot, rootForStart } from "./comms-root.ts";
+import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
@@ -686,7 +685,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -701,6 +700,7 @@ function askBotAndWait(
     start: (onDispatchError) => startTurn(targetBotId, message, {
       commsDepth: depth + 1,
       commsRoot: peer?.commsRoot ?? null,
+      reservation: peer?.reservation,
       unattended: isUnattended(fromBotId),
       transcriptText: peer?.transcriptText,
       ...peerAttribution(peer?.sender, peer?.channel),
@@ -4020,7 +4020,7 @@ const askHold = watchAskHold(store, bus);
 /** How a drained delegation becomes a real turn on the target. Shared by
  * the settle-time drain and the boot-time drain of what a previous process
  * left queued. */
-const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText, root) => {
+const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText, root, reservation) => {
     // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
     // unavailable provider. Unhandled, that rejection is fatal to the
     // harness (Node's default), which in the packaged app kills the server
@@ -4064,6 +4064,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     return startTurn(toBotId, text, {
       commsDepth,
       commsRoot: root ?? null,
+      reservation,
       commsAsk: ask,
       unattended: isUnattended(sourceBotId),
       transcriptText,
@@ -4079,7 +4080,6 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
 
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
-  clearAskBudget(event.threadId);
   peerTurnSource.delete(event.threadId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
   if (event.turnId) {
@@ -4141,8 +4141,9 @@ const paneWake = new PaneWakeScheduler({
     const newest = store.activePath(threadId).findLast(isWakeNote);
     if (newest) store.markPaneNotesSkipped(botId, threadId, newest.id);
   },
-  wake: (botId, threadId) => {
-    startTurn(botId, PANE_WAKE_PROMPT, { threadId, cardContinuation: true, paneNoteWake: true }).then(() => undefined).catch((err) => {
+  wake: (botId, threadId, admission) => {
+    const credit = admission.reservation ? { commsRoot: admission.rootId, reservation: admission.reservation } : {};
+    startTurn(botId, PANE_WAKE_PROMPT, { threadId, cardContinuation: true, paneNoteWake: true, ...credit }).then(() => undefined).catch((err) => {
       if (isBusyRejection(err)) paneWake.noteArrived(botId, threadId);
       else {
         console.warn("pane wake failed:", err instanceof Error ? err.message : String(err));
@@ -4342,6 +4343,8 @@ type StartTurnOptions = {
   limitWaitId?: string;
   commsDepth?: number;
   commsRoot?: string | null;
+  /** A bot-caused start's credit: committed at the accepted start, released before it. */
+  reservation?: Reservation;
   userMessage?: Message;
   /** Clean copy for user transcript when the model prompt carries an internal harness envelope. */
   transcriptText?: string;
@@ -4500,13 +4503,18 @@ const taskResumes = new TaskResumeScheduler({
   },
 });
 
+// Reservations whose dispatch is in flight; the dispatch settles them, not startTurn.
+const dispatchingReservations = new Set<Reservation>();
+
 async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
   if (!tryClaimTurnStart(botId, opts?.threadId ?? store.bot(botId)?.threadId)) {
+    if (opts?.reservation) release(opts.reservation);
     throw busyRejection("the bot is already working - interrupt it first");
   }
   try {
     return await startClaimedTurn(botId, text, opts);
   } finally {
+    if (opts?.reservation && !dispatchingReservations.has(opts.reservation)) release(opts.reservation);
     turnStartClaims.delete(botId);
     // Preparation can fail before a provider turn exists, so no
     // turn.completed event will arrive to wake the next queued send.
@@ -4555,7 +4563,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // (askBotAndWait) never clears a live wait that is not being replaced.
   markChatLatency({ sendId: latencySendId, threadId }, "turn.dispatch");
   broadcast({ kind: "turn.dispatch", threadId, createdAt: new Date().toISOString() });
-  if (turnStartedByUser(opts)) clearDelegationWakeBudget(threadId);
   const commsDepth = opts?.commsDepth ?? 0;
   // a task takes its name from the first thing the user asked it to do —
   // never from a peer's opening line
@@ -5034,6 +5041,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
   });
 
+  const reservation = opts?.reservation;
+  if (reservation) dispatchingReservations.add(reservation);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
       turnSeeds.release(threadId, seed);
@@ -5514,6 +5523,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         cwd,
       });
       });
+      if (reservation) commit(reservation);
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
@@ -5582,7 +5592,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     } finally {
       logSummaryWait();
     }
-  })();
+  })().finally(() => {
+    if (!reservation) return;
+    dispatchingReservations.delete(reservation);
+    release(reservation);
+  });
   return startedTurn(userMessage);
 }
 

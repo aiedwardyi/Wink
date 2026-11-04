@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { clearDelegationWakeBudget } from "./comms-budget.ts";
+import { _resetCommsRoots, commit, reserve, ROOT_TURNS, rootForStart } from "./comms-root.ts";
+import { recordDelegationReceipt } from "./delegation-ledger.ts";
 import { handMail, hasUnreadReplyWake, mailForTurn, mailReplayText, markMailRead, markPaneMailRead, registerReplyWake, settleMail, toolMailResult, unreadMail, claimReplyWake } from "./mail.ts";
 import { PaneWakeScheduler } from "./pane-wake.ts";
 import { Store } from "./store.ts";
@@ -115,16 +116,21 @@ it("keeps the unreturned tail of a clipped tool result unread", () => {
   expect(mailForTurn(store, bot.threadId)[0].text).toContain(text.slice(16000));
 });
 
-it("debounces reply bursts and caps five successive reply wakes at four", async () => {
+it("debounces reply bursts and stops waking when the root's last four credits are spent", async () => {
   vi.useFakeTimers();
-  clearDelegationWakeBudget(bot.threadId);
+  _resetCommsRoots();
+  const root = rootForStart(bot.threadId, { kind: "human", messageKey: "send-1" })!;
+  for (let index = 4; index < ROOT_TURNS; index++) commit((reserve(root, "ask") as { reservation: Parameters<typeof commit>[0] }).reservation);
   const wake = vi.fn(() => {
-    if (!claimReplyWake(store, bot.threadId)) return;
+    const admission = claimReplyWake(store, bot.threadId);
+    if (!admission) return;
+    if (admission.reservation) commit(admission.reservation);
     markMailRead(store, bot.threadId, mailForTurn(store, bot.threadId), "wake");
   });
   const paid = vi.fn();
   const scheduler = new PaneWakeScheduler({ enabled: () => true, busy: () => false, hasNotes: () => unreadMail(store, bot.threadId).length > 0, wake: () => { const count = unreadMail(store, bot.threadId).length; wake(); if (count && !unreadMail(store, bot.threadId).length) paid(); }, warn: () => {} });
   for (let i = 0; i < 5; i++) {
+    recordDelegationReceipt({ id: String(i), sourceThreadId: bot.threadId, toBotId: "peer", toBotName: "Peer", status: "done", root });
     registerReplyWake(reply(`reply ${i}`, String(i)));
     scheduler.noteArrived(bot.id, bot.threadId);
     scheduler.noteArrived(bot.id, bot.threadId);
