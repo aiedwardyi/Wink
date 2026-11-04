@@ -1405,17 +1405,21 @@ function stallFixture({ failures = 0, commandEcho = true, shellIntegration = fal
   return { ...f, notes, settle, advance };
 }
 
-for (const kind of ["STALLED", "FINISHED", "EXITED", "snag"]) {
-  test(`${kind} tails mask mailbox grants and preserve other screen text`, async (t) => {
+for (const [wrap, split] of [["unwrapped", null], ["key", 1], ["secret", 30]]) for (const kind of ["STALLED", "FINISHED", "EXITED", "snag"]) {
+  test(`${kind} tails mask mailbox grants and preserve other screen text (${wrap})`, async (t) => {
     const snags = [];
     const f = stallFixture({ shellIntegration: kind === "FINISHED", failures: kind === "snag" ? 99 : 0, snag: (snag) => snags.push(snag) });
     t.after(() => f.host.dispose());
-    const pane = await f.host.openForBot("bot-1", { label: "W", command: "codex go", cols: 240 });
+    const pane = await f.host.openForBot("bot-1", { label: "W", command: "codex go" });
+    const prefix = "command-line listing: codex -c shell_environment_policy.set.ORBIT_MSG_AUTH='";
+    f.host.resize(f.event, pane.sessionId, split === null ? 240 : prefix.length + split, 30);
     const grant = mailboxGrant("test-token", pane.sessionId, "bot-1", "bot-1");
     const legacy = mailboxGrant("test-token", "legacy", "bot-1", "bot-1");
-    const text = `ORBIT_MSG_AUTH='${grant}'\nORBIT_MSG_TOKEN='${legacy}'\n한글  sqlite_home=acct_fixture  forced_login_method=chatgpt\nunchanged 12345678.short`;
+    const text = `${prefix}${grant}'\nORBIT_MSG_TOKEN='${legacy}'\n한글  sqlite_home=acct_fixture  forced_login_method=chatgpt\nunchanged 12345678.short`;
     f.children[0].data(`\x1b[2J\x1b[H${text.replaceAll("\n", "\r\n")}\r\n`);
     const screen = f.host.readBot("bot-1", { sessionId: pane.sessionId }).screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).join("\n");
+    const wrapped = split === null ? grant : `${grant.slice(0, split)}\n${grant.slice(split)}`;
+    assert.ok(screen.includes(wrapped));
     await f.settle();
     if (kind === "FINISHED") f.children[0].data(finishedMark(pane));
     if (kind === "EXITED") f.children[0].exit({ exitCode: 1 });
@@ -1423,9 +1427,11 @@ for (const kind of ["STALLED", "FINISHED", "EXITED", "snag"]) {
     if (kind === "snag") for (let i = 0; i < 4; i++) await f.advance(61_000);
     const output = kind === "snag" ? snags[0]?.tail.trimEnd() : f.notes[0]?.text.split("Last lines:\n")[1];
     assert.ok(output);
-    assert.ok(!output.includes(grant.split(".")[1]));
+    for (const part of wrapped.slice(wrapped.indexOf(".") + 1).split("\n")) assert.ok(!output.includes(part));
     assert.ok(!output.includes(legacy.split(".")[1]));
-    assert.equal(output, screen.replace(grant, `${grant.split(".")[0]}.***`).replace(legacy, `${legacy.split(".")[0]}.***`));
+    const key = grant.split(".")[0];
+    const masked = split === null ? `${key}.***` : split < key.length ? `${key.slice(0, split)}\n${key.slice(split)}.***` : `${key}.***\n`;
+    assert.equal(output, screen.replace(wrapped, masked).replace(legacy, `${legacy.split(".")[0]}.***`));
   });
 }
 
