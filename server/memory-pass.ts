@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import type { ProviderInstance } from "./contracts.ts";
-import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
+import { addedMemoryLines, MEMORY_SAVE_TOOL } from "./memory-save.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store, StoreChange } from "./store.ts";
 import { MEMORY_MAX_BYTES, MEMORY_MAX_LINES, MEMORY_SEED, memoryFileRaw, readMemoryFile, saveMemoryFile } from "./workspace.ts";
@@ -40,6 +40,7 @@ export interface MemoryPassDeps {
   enabled(botId: string): boolean;
   busy(botId: string, threadId: string): boolean;
   dataDir: string;
+  onWrite?(botId: string): void;
   now?(): number;
 }
 
@@ -50,6 +51,7 @@ export interface MemoryPass {
   onConfigChanged(): void;
   /** Notes turned away because MEMORY.md was full, since the last save. */
   droppedNotes(botId: string): DroppedNotes | undefined;
+  hasPending(botId: string): boolean;
   /** Resolves once no pass is running. */
   idle(): Promise<void>;
   dispose(): void;
@@ -341,6 +343,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       log({ botId, threadId, facts: facts.length, ms, result: "too-large" });
       const last = dropped.get(botId);
       dropped.set(botId, { dropped: (last?.dropped ?? 0) + facts.length, since: last?.since ?? now() });
+      deps.onWrite?.(botId);
       return done(threadId, batch.ids);
     }
     if (saveMemoryFile(botId, text, memory.revision).conflict) {
@@ -351,10 +354,11 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     deps.store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
-      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(facts.map((note) => note.line)) },
+      tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: noteSummary(facts.map((note) => note.line)), lines: addedMemoryLines(raw.trim() ? raw : MEMORY_SEED, text) },
     });
     log({ botId, threadId, lines: batch.lines, facts: facts.length, replaced: facts.filter((note) => note.replaces).length, ms, result: "saved" });
     dropped.delete(botId);
+    deps.onWrite?.(botId);
     done(threadId, batch.ids);
   };
 
@@ -473,6 +477,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
       if (!disposed) stop();
     },
     droppedNotes: (botId) => dropped.get(botId),
+    hasPending: (botId) => [...pending.keys()].some((threadId) => deps.store.botByThread(threadId)?.id === botId),
     async idle() {
       while (running.size) await Promise.all([...running.values()].map((pass) => pass.done));
     },

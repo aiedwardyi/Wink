@@ -3,7 +3,9 @@
 // block in the first-turn prompt.
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import * as atomic from "./atomic.ts";
 
 import {
   ensureWorkspace,
@@ -158,6 +160,18 @@ describe("workspace", () => {
     // a fresh workspace saves against the empty revision
     rmSync(WORKSPACES_DIR, { recursive: true, force: true });
     expect(saveMemoryFile(BOT, "- first\n", memoryRevision("")).conflict).toBe(false);
+  });
+
+  it("atomically saves exact bytes through the same revision fence", () => {
+    writeMemoryFile(BOT, "- before\r\n");
+    const write = vi.spyOn(atomic, "writeFileAtomic");
+    const revision = readMemoryFile(BOT).revision;
+    expect(saveMemoryFile(BOT, "- after\r\n", revision, true).conflict).toBe(false);
+    expect(readFileSync(join(workspaceDir(BOT), "MEMORY.md"), "utf8")).toBe("- after\r\n");
+    expect(saveMemoryFile(BOT, "- stale\n", revision, true).conflict).toBe(true);
+    expect(readMemoryFile(BOT).text).toBe("- after\r\n");
+    expect(write).toHaveBeenCalledExactlyOnceWith(join(workspaceDir(BOT), "MEMORY.md"), "- after\r\n", { mode: 0o600 });
+    write.mockRestore();
   });
 
   it("saveMemoryFile without a base writes as before", () => {

@@ -257,6 +257,8 @@ import {
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
+import { createAppMemoryClean } from "./memory-clean-app.ts";
+import { createMemoryCleanRoutes } from "./memory-clean-routes.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -2188,6 +2190,7 @@ function syncMemory(botId: string): void {
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
     const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger });
+    if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryClean.check(botId);
     // the poll runs for every idle bot, so only changed files refresh the check
     if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
   } catch (error) {
@@ -2720,6 +2723,7 @@ const memoryPass = createMemoryPass({
   store,
   dataDir: DATA_DIR,
   generate: () => noteGenerator(registry.instances(), botAccounts.noteAccount()),
+  onWrite: (botId) => memoryClean.check(botId),
   enabled: (botId) => {
     const bot = store.bot(botId);
     const instance = bot && registry.get(bot.modelSelection.instanceId);
@@ -2727,6 +2731,17 @@ const memoryPass = createMemoryPass({
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
 });
+const memoryClean = createAppMemoryClean({
+  store, dataDir: DATA_DIR, instances: () => registry.instances(),
+  selection: async (botId) => { const bot = store.bot(botId); return bot ? botAccounts.resolve(bot) : null; },
+  available: (id) => registry.accountAvailable(id) && automaticAvailability.get(id) !== false,
+  usage: (id) => rateLimitsByInstance.get(id)?.windows ?? [],
+  busy: () => store.bots.some((bot) => botHasActiveTurn(bot.id)) || liveTurnIdByThread.size > 0 || turnStartClaims.size > 0,
+  pending: (botId) => memoryPass.hasPending(botId), dropped: (botId) => Boolean(memoryPass.droppedNotes(botId)?.dropped),
+  home: (botId) => ({ folder: profileSyncSettings.folder ?? undefined, botSyncId: chatSyncBotId(profileSyncSettings, botId) ?? undefined,
+    device: memorySyncLedger.device ?? "", talkedAt: memorySyncLedger.talked?.[chatSyncBotId(profileSyncSettings, botId) ?? ""] }),
+});
+const memoryCleanRoutes = createMemoryCleanRoutes({ bot: (id) => store.bot(id), clean: memoryClean });
 const projectNotesCheck = createProjectNotesCheck({
   notesPath: (botId) => store.bot(botId)?.projectNotes,
   reportTimes: (botId) => {
@@ -3264,6 +3279,7 @@ bus.subscribe((event: RuntimeEvent) => {
   }
   broadcast({ kind: "runtime", event });
   if (event.type === "turn.started") {
+    memoryClean.turnStarted();
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "first.delta", { turnId: event.turnId });
@@ -3386,11 +3402,12 @@ bus.subscribe((event: RuntimeEvent) => {
         }
         if (turnOwnerId && event.ok) {
           const note = rememberMemoryWrite(turnOwnerId);
+          memoryClean.check(turnOwnerId);
           if (note) {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: note },
+              tool: { name: MEMORY_SAVE_TOOL, ok: true, ...note },
             });
           }
         }
@@ -4435,6 +4452,7 @@ function botHasLiveTurn(botId: string, threadId?: string): boolean {
 
 function tryClaimTurnStart(botId: string, threadId: string | undefined): boolean {
   if (turnStartClaims.has(botId)) return false;
+  memoryClean.turnStarted();
   turnStartClaims.set(botId, threadId);
   return true;
 }
@@ -7817,15 +7835,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // not run yet simply has nothing to show.
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory$/);
     if (m && method === "GET") {
+      memoryClean.touch(m[1]);
       return await botRoutes.getMemory(res, m);
     }
     if (m && method === "PUT") {
+      memoryClean.touch(m[1]);
       return await botRoutes.putMemory(req, res, m);
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/topics\/([^/]+)$/);
     if (m && method === "GET") {
+      memoryClean.touch(m[1]);
       return await botRoutes.memoryTopic(res, m);
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean$/);
+    if (m && method === "GET") return memoryCleanRoutes.get(res, m[1]);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/memory\/clean\/undo$/);
+    if (m && method === "POST") return await memoryCleanRoutes.undo(req, res, m[1]);
 
     // onboarding/ask cards persist their answered/dismissed state
     m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
