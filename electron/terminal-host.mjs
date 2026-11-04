@@ -1554,7 +1554,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       reservedPanes += 1;
       let session;
       let worker;
+      let claimed = false;
       try {
+        if (recovery) {
+          claimed = paneRuns?.claim(recovery.id);
+          if (!claimed) throw new Error("Worker recovery already claimed or unavailable");
+        }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
         if (recovery) launchInput.resume = recovery.session;
         worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
@@ -1572,7 +1577,6 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (disposed) throw new Error("Terminal host is shutting down");
         if (deletedBots.has(botId)) throw new Error("Terminal bot was deleted");
         const key = `${sender.id}:${botId}:pane:${randomUUID()}`;
-        if (recovery && !paneRuns?.claim(recovery.id)) throw new Error("Worker recovery already claimed or unavailable");
         session = await start({ key, event: { sender }, input: { botId, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true, worker });
         if (disposed) {
           await retire(session, true);
@@ -1588,6 +1592,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.spawnedAt = now();
         active.set(key, session.id);
       } finally {
+        if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
         reservedPanes -= 1;
         const left = paneReservations.get(botId) - 1;
         if (left) paneReservations.set(botId, left);

@@ -30,6 +30,7 @@ function fixture(t, rows = [record()]) {
   const launched = [];
   const notes = [];
   const waits = [];
+  const closed = [];
   const host = {
     async openForBot(bot, input, run) {
       assert.equal(bot, run.botId);
@@ -40,11 +41,12 @@ function fixture(t, rows = [record()]) {
       return { sessionId: `new-${run.id}` };
     },
     workerResumeStatus: () => "resumed",
+    async closeForBot(bot, id) { closed.push({ bot, id }); },
   };
   const options = { runs, host, mailbox: async () => ({ token: "fake" }), notePane: async (_mail, scope, text) => notes.push({ scope, text }),
     wait: async (ms) => { waits.push(ms); }, polls: 2, settleMs: 0, retryMs: 0 };
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { file, runs, host, launched, notes, waits, options };
+  return { file, runs, host, launched, notes, waits, closed, options };
 }
 
 for (const engine of ["claude", "codex"]) {
@@ -205,6 +207,125 @@ test("mixed recovery notes keep FRESH guidance confined to failed panes", async 
   assert.doesNotMatch(restarted, /claude/);
 });
 
+for (const status of ["pending", "resume failed", "unexpected menu"]) {
+  test(`${status} closes only its replacement before FRESH guidance`, async (t) => {
+    const rows = [record("claude"), record("codex")];
+    const f = fixture(t, rows);
+    f.host.workerResumeStatus = (id) => id === `new-${rows[0].id}` ? status : "resumed";
+    let finishClose;
+    const closing = new Promise((resolve) => { finishClose = resolve; });
+    f.host.closeForBot = async (bot, id) => { f.closed.push({ bot, id }); await closing; };
+    const recovering = recovery.recoverWorkers(f.options);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.notes.length, 0);
+    assert.deepEqual(f.closed, [{ bot: "bot", id: `new-${rows[0].id}` }]);
+    finishClose();
+    await recovering;
+    assert.match(f.notes[0].text, /FRESH/);
+    assert.match(f.notes[0].text, /^RESUMED: codex/);
+  });
+}
+
+test("a failed replacement close never sends FRESH guidance", async (t) => {
+  const f = fixture(t);
+  f.host.workerResumeStatus = () => "pending";
+  f.host.closeForBot = async () => { throw new Error("close failed"); };
+  await assert.rejects(recovery.recoverWorkers(f.options), /close failed/);
+  assert.equal(f.notes.length, 0);
+});
+
+for (const text of ["The test failed to load configuration. I will fix it now.", "Error resuming the upload; retrying.", "No conversation found in the test fixture."]) {
+  test(`ordinary output does not fail recovery: ${text}`, () => {
+    const session = { exitCode: null, screen: { text: () => text }, workerSession: {} };
+    assert.equal(recovery.workerResumeStatus(session), "pending");
+    session.workerSession.confirmed = "resume";
+    assert.equal(recovery.workerResumeStatus(session), "resumed");
+  });
+}
+
+test("confirmed recovery cannot be downgraded by screen diagnostics or menus", () => {
+  const session = { exitCode: null, screen: { text: () => "No conversation found with session ID: 00000000-0000-4000-8000-000000000001\nSign in to continue" }, workerSession: { confirmed: "resume" } };
+  assert.equal(recovery.workerResumeStatus(session), "resumed");
+});
+
+for (const text of [
+  "No conversation found with session ID: 00000000-0000-4000-8000-000000000001",
+  "Error: No saved session found with ID 00000000-0000-4000-8000-000000000001. Run `codex resume` without an ID to choose from existing sessions.",
+  "Failed to resume session from C:\\scratch\\rollout.jsonl: invalid session",
+]) {
+  test(`CLI resume diagnostic fails an unconfirmed recovery: ${text}`, () => {
+    assert.equal(recovery.workerResumeStatus({ exitCode: null, screen: { text: () => text } }), "resume failed");
+    assert.equal(recovery.workerResumeStatus({ exitCode: null, screen: { text: () => `The fixture printed: ${text}` } }), "pending");
+  });
+}
+
+test("a failed claim release stays claimed in memory and on disk", (t) => {
+  const row = record();
+  const f = fixture(t, [row]);
+  assert.equal(f.runs.claim(row.id), true);
+  const rename = t.mock.method(fs, "renameSync", () => { throw new Error("disk unavailable"); });
+  assert.equal(f.runs.releaseClaim(row.id), false);
+  assert.equal(f.runs.claim(row.id), false);
+  rename.mock.restore();
+  assert.equal(createPaneRuns(f.file).claim(row.id), false);
+  assert.equal(f.runs.releaseClaim(row.id), true);
+  assert.equal(createPaneRuns(f.file).claim(row.id), true);
+});
+
+test("a successful replacement keeps its claim", (t) => {
+  const row = record();
+  const f = fixture(t, [row]);
+  assert.equal(f.runs.claim(row.id), true);
+  f.runs.started({ ...row, id: randomUUID(), session: { ...row.session, recoveredFrom: row.id } });
+  assert.equal(f.runs.releaseClaim(row.id), false);
+  assert.equal(f.runs.claim(row.id), false);
+});
+
+for (const failure of ["launch", "start", "hold"]) {
+  test(`${failure} releases a claimed recovery durably before retry`, async (t) => {
+    const row = record();
+    const f = fixture(t, [row]);
+    const owner = { id: 1, isDestroyed: () => false, send() {} };
+    let launches = 0;
+    const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT,
+      paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 8 * 1024 ** 3,
+      workerLaunch: async () => {
+        launches++;
+        assert.ok(JSON.parse(fs.readFileSync(f.file, "utf8"))[0].recovery?.claimedAt);
+        if (failure === "launch") throw new Error("launch failed");
+        if (failure === "hold") return { kind: "hold", hold: "usage low" };
+        return { kind: "managed", executable: "codex", args: [], environment: {}, account: { id: "codex", generation: 0 } };
+      },
+      loadPty: () => ({ spawn() { throw new Error("start failed"); } }),
+    });
+    t.after(() => host.dispose());
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const opening = host.openForBot("bot", { cwd: ROOT, command: "codex" }, row);
+      if (failure === "hold") assert.deepEqual(await opening, { hold: "usage low" });
+      else await assert.rejects(opening, new RegExp(`${failure} failed`));
+      assert.equal(f.runs.restarted().get("bot")[0].recovery, undefined);
+      assert.equal(createPaneRuns(f.file).restarted().get("bot")[0].recovery, undefined);
+    }
+    assert.equal(launches, 2);
+  });
+}
+
+test("a rejected claim never calls worker launch or releases another claim", async (t) => {
+  const row = record();
+  const f = fixture(t, [row]);
+  assert.equal(f.runs.claim(row.id), true);
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  let launches = 0;
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT,
+    paneRuns: f.runs, platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 8 * 1024 ** 3,
+    workerLaunch: async () => { launches++; throw new Error("must not launch"); },
+  });
+  t.after(() => host.dispose());
+  await assert.rejects(host.openForBot("bot", { cwd: ROOT, command: "codex" }, row), /claimed/);
+  assert.equal(launches, 0);
+  assert.ok(f.runs.restarted().get("bot")[0].recovery);
+});
+
 test("managed recovery preserves teacher and binds a new pane, generation and fresh grant", async (t) => {
   assert.ok(recovery);
   const row = record("claude");
@@ -235,7 +356,7 @@ test("managed recovery preserves teacher and binds a new pane, generation and fr
     session_id: row.session.nativeId, cwd: ROOT, transcript_path: null, source: "resume" }), true);
   assert.equal(host.workerResumeStatus(pane.sessionId), "resumed");
   children[0].data("Error: No conversation found with session ID");
-  assert.equal(host.workerResumeStatus(pane.sessionId), "resume failed");
+  assert.equal(host.workerResumeStatus(pane.sessionId), "resumed");
   await assert.rejects(host.openForBot(row.botId, { cwd: ROOT, command: "claude" }, row), /claimed/);
   assert.equal(children.length, 1);
 });

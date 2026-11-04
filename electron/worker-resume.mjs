@@ -5,10 +5,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function workerResumeStatus(session) {
   if (!session || session.retired || session.exitCode !== null || session.workerFinished) return "resume failed";
+  if (session.workerSession?.confirmed === "resume") return "resumed";
   const screen = session.screen.text();
-  if (/(?:no (?:conversation|session|rollout|thread) found|(?:session|conversation|thread).*(?:not found|does not exist)|failed to (?:resume|load)|error resuming)/i.test(screen)) return "resume failed";
+  if (/^\s*(?:(?:Error: )?No conversation found with session ID: [a-f0-9-]+|(?:Error: )?No saved session found with ID [a-f0-9-]+\. Run `codex resume`[^\r\n]*|(?:[■•] )?Failed to resume session from [^\r\n]+: [^\r\n]+)\s*$/im.test(screen)) return "resume failed";
   if (/(?:select a (?:session|conversation)|resume a (?:session|conversation)|choose (?:a |an )?(?:session|conversation|account)|sign in to|log in to|how do you want to log in|do you trust|trust this folder|allow once|allow for this session)/i.test(screen)) return "unexpected menu";
-  return session.workerSession?.confirmed === "resume" ? "resumed" : "pending";
+  return "pending";
 }
 
 function recoveryNote(panes, results) {
@@ -46,7 +47,10 @@ export async function recoverWorkers({ runs, host, mailbox, notePane, warn = () 
         try {
           const pane = await host.openForBot(run.botId, { label: run.label ?? undefined, cwd: run.cwd, command: run.session.template.executable }, run);
           if (!pane.sessionId) { results.set(run.id, "resume held by usage policy"); break; }
-          pending.push(monitor(pane).then((status) => results.set(run.id, status === "resumed" ? status : status === "unexpected menu" ? status : "resume failed")));
+          pending.push(monitor(pane).then(async (status) => {
+            if (status !== "resumed") await host.closeForBot(run.botId, pane.sessionId);
+            results.set(run.id, status === "resumed" || status === "unexpected menu" ? status : "resume failed");
+          }));
           break;
         } catch (error) {
           const unavailable = /account.*(?:unavailable|signed out|changed)/i.test(error?.message ?? "");

@@ -50,6 +50,15 @@ export function createPaneRuns(file) {
       delete run.recovery;
       return false;
     },
+    releaseClaim(id) {
+      const run = runs.get(id);
+      if (!prior.has(id) || !run?.recovery || run.recovery.replacement) return false;
+      const claim = run.recovery;
+      delete run.recovery;
+      if (save()) return true;
+      run.recovery = claim;
+      return false;
+    },
     started({ id, botId, teacher, label, cwd, spawnedAt, session }) {
       const run = { id, botId, teacher, label: label ?? null, cwd, spawnedAt, state: "running", ...(session ? { session: { ...session } } : {}) };
       const stored = runs.get(id);
