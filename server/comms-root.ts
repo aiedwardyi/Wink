@@ -31,7 +31,7 @@ export function rootForStart(threadId: string, start: RootStart): string | null 
     const now = Date.now();
     for (const [id, touched] of roots) if (now - touched >= MAX_IDLE) roots.delete(id);
     for (const [key, id] of messages) if (!roots.has(id)) messages.delete(key);
-    for (const [thread, id] of threads) if (id && !roots.has(id)) threads.delete(thread);
+    for (const [thread, id] of threads) if (!id || !roots.has(id)) threads.delete(thread);
     rootId = messages.get(start.messageKey) ?? randomUUID();
     messages.set(start.messageKey, rootId);
     roots.set(rootId, now);

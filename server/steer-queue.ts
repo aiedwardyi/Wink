@@ -266,6 +266,7 @@ export function queueRoomParticipation(
   const entry = entryFor(botId, threadId);
   const existing = entry.items.find((item): item is RoomItem => item.kind === "room");
   if (existing) {
+    // the lower hop keeps its root; a tie goes to the newer participation, rootless included
     if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
     existing.hop = Math.min(existing.hop, options.hop ?? 0);
     if (!existing.cardContinuation && options.cardContinuation) {
