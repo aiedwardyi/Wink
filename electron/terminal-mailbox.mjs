@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { WORKER_SESSION_PS1, workerSessionHook } from "./worker-session.mjs";
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const GRANT_PREFIX = "orbit-mailbox-v1";
@@ -460,7 +461,8 @@ function claudeWorkerSettings(dir) {
     statusLine: { type: "command", command: status },
     hooks: {
       Notification: [{ matcher: "permission_prompt", hooks: [{ type: "command", command, timeout: 15 }] }],
-      SessionStart: [{ matcher: "compact", hooks: ["card", "progress"].map((part) => ({ type: "command", command: `${compact} ${part}`, timeout: 30 })) }],
+      SessionStart: [{ matcher: "compact", hooks: ["card", "progress"].map((part) => ({ type: "command", command: `${compact} ${part}`, timeout: 30 })) },
+        { matcher: "startup|resume", hooks: [{ type: "command", command: workerSessionHook(dir), timeout: 15 }] }],
     },
   }, null, 2)}\n`;
 }
@@ -478,6 +480,7 @@ export async function installOrbitMsg(dir, platform = process.platform) {
     ["orbit-clean", ORBIT_CLEAN_SH],
     ["orbit-compact.ps1", ORBIT_COMPACT_PS1.replace(/\r?\n/g, "\r\n")],
     ["orbit-status.ps1", ORBIT_STATUS_PS1.replace(/\r?\n/g, "\r\n")],
+    ["orbit-session.ps1", WORKER_SESSION_PS1.replace(/\r?\n/g, "\r\n")],
     ["claude-worker.json", claudeWorkerSettings(dir)],
   ];
   for (const [name, content] of files) {
