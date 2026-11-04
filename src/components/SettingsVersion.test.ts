@@ -4,9 +4,11 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import type { UpdaterState } from "@/lib/updater";
 
 import { UpdatesRow } from "./SettingsModal";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 applyLocale("en");
 
@@ -51,6 +53,7 @@ describe("settings version label", () => {
     expect(status?.previousElementSibling?.textContent).toBe("Updates");
     expect(status?.parentElement?.nextElementSibling).toBe(host.querySelector("button"));
     expect(host.querySelector("button")!.textContent).toBe("Check for Updates");
+    expect(host.querySelector("button")!.className).toBe(cn(ROW_BUTTON, "text-ink"));
   });
 
   it("renders the button alone when the bridge has no version", async () => {

@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import type { InstanceInfo } from "@/state/store";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ vi.mock("@/state/store", async (original) => ({
   useStore: () => ({ state, dispatch: vi.fn(), refreshInstances }),
 }));
 import { EnginesSettings } from "./EnginesSettings";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -75,30 +77,50 @@ it("keeps main-account sign-out disabled when no other account is ready", async 
   expect(buttons("Sign In")).toHaveLength(1);
 });
 
-it("names connected accounts and shows a long label in full, wrapping after @", async () => {
+it.each([false, true])("keeps a long email, Main and Sign Out on one line with phone %s", async (phone) => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone } as MediaQueryList);
   await render();
-  const label = "personal.account.with.a.very.long.address@example.com";
-  state.instances[1]!.snapshot.account = label;
+  const label = "averyveryverylongname@example-company.com";
+  state.instances[0]!.snapshot.account = label;
   await update();
-  expect(host.textContent).toContain("claude@example.com");
   const identity = [...host.querySelectorAll("span")].find((node) => node.textContent === label)!;
-  expect(identity.classList.contains("truncate")).toBe(false);
-  expect(identity.innerHTML).toBe("personal.account.with.a.very.long.address@<wbr>example.com");
-  expect(buttons("Sign Out")).toHaveLength(2);
+  expect(identity.innerHTML).toBe(label);
+  expect(identity.title).toBe(label);
+  expect([...identity.classList]).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
+  expect(identity.classList.contains("break-words")).toBe(false);
+  const line = identity.parentElement!;
+  expect(line.textContent).toBe(`${label}Main`);
+  expect(line.lastElementChild!.classList).toContain("whitespace-nowrap");
+  expect(line.nextElementSibling!.textContent).toBe("Sign Out");
 });
 
-it.each([1, 2])("puts each of %i accounts and its icon on one row, with Add Account on the first", async (count) => {
+it.each([1, 2])("heads the engine with its icon, name and Add Account above %i account rows", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
-  const marks = group.querySelectorAll('[data-engine-hover]');
-  expect(marks).toHaveLength(count);
-  for (const [i, mark] of [...marks].entries()) {
-    const row = mark.parentElement!.parentElement!;
+  const [header, ...rows] = [...group.children];
+  expect(header!.querySelector("svg")).not.toBeNull();
+  expect(header!.textContent).toBe("ClaudeAdd Account");
+  expect(header!.textContent).not.toContain("@");
+  expect(group.querySelectorAll("svg")).toHaveLength(1);
+  expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
+  expect(rows).toHaveLength(count);
+  for (const [i, row] of rows.entries()) {
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
-    expect(row.textContent?.includes("Add Account")).toBe(i === 0);
+    expect(row.textContent).not.toContain("Add Account");
+    expect(row.textContent).not.toContain("Claude");
   }
-  expect(group.textContent).not.toContain("Claude");
+});
+
+it("draws Sign Out, Add Account and Sign In as the Settings row button, with Sign Out quieter", async () => {
+  await render();
+  state.instances = [...state.instances, engine("account-2", false)];
+  await update();
+  expect(buttons("Sign Out").map((node) => node.className)).toEqual([ROW_BUTTON, ROW_BUTTON]);
+  expect(buttons("Add Account")[0]!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+  expect(buttons("Sign In")[0]!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+  expect(buttons("Sign Out")[0]!.classList.contains("text-ink-secondary")).toBe(true);
+  expect(buttons("Add Account")[0]!.classList.contains("text-ink-secondary")).toBe(false);
 });
 
 it.each(["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent"])("offers only Sign In while %s is signed out", async (driverKind) => {

@@ -65,7 +65,6 @@ export function PlanWindowMeter({
   now,
   compact = false,
   muted = false,
-  dim = false,
   slide = false,
 }: {
   window: RateLimitWindow;
@@ -73,7 +72,6 @@ export function PlanWindowMeter({
   compact?: boolean;
   /** An old reading: theme greys instead of the warning tones. */
   muted?: boolean;
-  dim?: boolean;
   /** Glide the filled cells to a new reading: the cells are painted by pseudo-elements, the real text stays for readers. */
   slide?: boolean;
 }) {
@@ -94,7 +92,7 @@ export function PlanWindowMeter({
       <div role="group" aria-label={label}>
         <div className={cn("flex flex-wrap items-center gap-x-2 text-[12.5px]", muted ? "text-ink-secondary" : "text-ink")}>
           <span>{t(labelKey)}</span>
-          <span aria-hidden="true" className={cn("font-mono tracking-tight", muted ? "text-ink-secondary" : planUsageTone(usedFill).textClass, dim && "opacity-45", slide && SLIDING_CELLS)}
+          <span aria-hidden="true" className={cn("font-mono tracking-tight", muted ? "text-ink-secondary" : planUsageTone(usedFill).textClass, slide && SLIDING_CELLS)}
             style={slide ? { "--fill": `${percent === null ? 0 : segments * 10}%` } as CSSProperties : undefined}>
             {percent === null ? "▱".repeat(10) : "▰".repeat(segments) + "▱".repeat(10 - segments)}
           </span>

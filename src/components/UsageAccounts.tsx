@@ -91,14 +91,16 @@ function AccountPicker({ account, accounts, mainId, label, mark, select }: {
 export function UsageAccounts({ accounts, reload, renderRow }: {
   accounts: UsageAccount[];
   reload: () => Promise<void>;
-  renderRow: (account: UsageAccount, heading?: ReactNode, dim?: boolean) => ReactNode;
+  renderRow: (account: UsageAccount, heading?: ReactNode) => ReactNode;
 }) {
   const { t } = useI18n();
   const phone = useIsPhone();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const columns = useRef<HTMLDivElement>(null);
+  const mainColumn = useRef<HTMLDivElement>(null);
   const live = useRef<HTMLDivElement>(null);
   const focusPicker = useRef(false);
+  const refocus = useRef<string | null>(null);
   const turn = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -126,8 +128,23 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     slide(live.current, dir);
     slide([...columns.current?.querySelectorAll<HTMLElement>("[data-account-page]") ?? []].find((page) => page.dataset.accountPage === from), dir, true);
   }, [currentId]);
+  // A new Main trades columns with the old one: each slides in from the side it left.
+  const shownMain = useRef(main.instanceId);
+  useLayoutEffect(() => {
+    if (shownMain.current === main.instanceId) return;
+    shownMain.current = main.instanceId;
+    if (refocus.current === main.instanceId) {
+      const head = live.current;
+      (head?.querySelector<HTMLElement>("[data-set-main]") ?? head?.querySelector<HTMLElement>('[aria-haspopup="menu"]'))?.focus();
+    }
+    refocus.current = null;
+    if (phone || reducedMotion()) return;
+    for (const [column, dir] of [[mainColumn.current, 1], [live.current, -1]] as const) {
+      column?.animate([{ opacity: 0, transform: `translateX(${dir * 24}px)` }, {}], { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+    }
+  }, [main.instanceId, phone]);
   if (accounts.length === 1) return renderRow(accounts[0]!);
-  const label = (account: UsageAccount) => account.snapshot.account || t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
+  const label = (account: UsageAccount) => t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
   const go = (id: string, focus = false) => {
     turn.current = Math.sign(pages.findIndex((account) => account.instanceId === id) - index);
     focusPicker.current = focus && id !== currentId;
@@ -139,8 +156,9 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     setError("");
     try {
       await api(`/api/accounts/${encodeURIComponent(account.instanceId)}/default`, { method: "POST", body: "{}" });
+      refocus.current = account.instanceId;
       await reload();
-      setSelectedId(null);
+      if (!phone) setSelectedId(main.instanceId);
     } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
     finally { setBusy(false); }
   };
@@ -165,7 +183,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
           ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label} mark={mark} select={(id) => go(id, true)} />
           : <>{mark}{!other && <span className="min-w-0 truncate">{account.displayName}</span>}</>}
         <span className="ml-auto flex shrink-0 items-center gap-2">
-          {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
+          {other ? accountReady(account) && <button type="button" data-set-main="" disabled={busy} onClick={() => void setAsMain(account)}
             className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>
             : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
           <span className="flex w-14 shrink-0 max-md:w-22 [@media(pointer:coarse)]:w-22">{(phone || other) && arrows}</span>
@@ -175,7 +193,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   };
   const column = (account: UsageAccount, other = false) => (
     <div className="min-w-0">
-      {accountReady(account) ? renderRow(account, heading(account, other), other) : <>
+      {accountReady(account) ? renderRow(account, heading(account, other)) : <>
         {heading(account, other)}
         <div className="mt-2 text-[12px] text-ink-secondary">{t("accounts.signedOut")}</div>
       </>}
@@ -184,13 +202,13 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const current = pages[index]!;
   return (
     <div ref={columns} className={phone ? "grid gap-y-4" : "grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2"}>
-      {!phone && <div data-account-column="main">{column(main)}</div>}
+      {!phone && <div key={main.instanceId} ref={mainColumn} data-account-column="main">{column(main)}</div>}
       <div className="grid min-w-0" data-account-column={phone ? "pages" : "other"}>
         {pages.map((account) => account !== current && <div key={account.instanceId} data-account-page={account.instanceId}
           className="col-start-1 row-start-1 min-w-0" style={{ visibility: "hidden" }} inert aria-hidden>
           {column(account, account !== main)}
         </div>)}
-        <div ref={live} className="col-start-1 row-start-1 min-w-0">{column(current, current !== main)}</div>
+        <div key={`live-${main.instanceId}`} ref={live} className="col-start-1 row-start-1 min-w-0">{column(current, current !== main)}</div>
       </div>
       {error && <div role="alert" className="text-[12px] text-danger sm:col-span-2">{error}</div>}
     </div>
