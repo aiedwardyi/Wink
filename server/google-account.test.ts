@@ -218,13 +218,14 @@ describe("google account", () => {
   });
 
   it("takes the Google env before the registry can spawn a prewarmed child", () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     expect(source.indexOf("takeGoogleEnv(process.env)")).toBeGreaterThan(-1);
-    expect(source.indexOf("takeGoogleEnv(process.env)")).toBeLessThan(source.indexOf("await registry.load("));
+    expect(source.indexOf("registry.load(")).toBeGreaterThan(-1);
+    expect(source.indexOf("takeGoogleEnv(process.env)")).toBeLessThan(source.indexOf("registry.load("));
   });
 
   it("does not report signed out before the boot push", async () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     expect(source.includes("new GoogleAccount(googleEnv.client, null, { awaitSession: Boolean(utilityParentPort) })")).toBe(true);
     const google = new GoogleAccount(CLIENT, null, { awaitSession: true, log: () => {} });
     expect(google.status()).toEqual({ state: "pending" });
@@ -240,7 +241,7 @@ describe("google account", () => {
   });
 
   it("starts a standalone server signed out instead of pending forever", async () => {
-    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     expect(source.includes("new GoogleAccount(googleEnv.client, null, { awaitSession: true })")).toBe(false);
     const standalone = new GoogleAccount(CLIENT, null, { awaitSession: Boolean(undefined), log: () => {} });
     expect(standalone.status()).toEqual({ state: "signed-out" });

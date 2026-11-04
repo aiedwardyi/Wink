@@ -4,14 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const boot = readFileSync(join(here, "packaged-boot.ts"), "utf8");
-const index = readFileSync(join(here, "index.ts"), "utf8");
+const boot = readFileSync(join(here, "packaged-boot.ts"), "utf8").replace(/\r\n/g, "\n");
+const index = readFileSync(join(here, "index.ts"), "utf8").replace(/\r\n/g, "\n");
 
 describe("packaged boot listens before importing the fat harness", () => {
   it("starts early listen, posts api-token, then dynamically imports index", () => {
     const listenAt = boot.indexOf("startEarlyListen(");
     const postAt = boot.indexOf("postAppToken(issuePackagedCommsToken())");
-    const importAt = boot.indexOf('await import(new URL("./index.js"');
+    const importAt = boot.indexOf('() => import(new URL("./index.js"');
     expect(listenAt).toBeGreaterThan(-1);
     expect(postAt).toBeGreaterThan(-1);
     expect(importAt).toBeGreaterThan(-1);

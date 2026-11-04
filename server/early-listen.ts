@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { sendStaticFile } from "./compression.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
+import { startupTiming } from "./startup-timing.ts";
 
 export const EARLY_LISTEN_SLOT = Symbol.for("orbit.earlyListen");
 
@@ -168,6 +169,7 @@ export function startEarlyListen(options: { port?: number; staticDir?: string | 
     process.exit(1);
   });
   early.server.listen(port, "127.0.0.1", () => {
+    startupTiming.mark("listen");
     if (port !== 0) {
       console.log(`wink server on http://127.0.0.1:${port}`);
     }

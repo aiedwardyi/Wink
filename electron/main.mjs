@@ -150,6 +150,7 @@ installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
 onUpdaterFailure(errorReports.capture);
 // Startup owns the first window; activation before it only queues targets for that window's load.
 let startupWindowCreated = false;
+let startupWindowMs = 0;
 let unreadCount = 0;
 let unreadOverlayIcon = null;
 
@@ -926,6 +927,8 @@ async function startServerOn(port) {
     OMB_APP_VERSION: app.getVersion(),
     OMB_DOWNLOADS_DIR: app.getPath("downloads"),
     OMB_PACKAGED: "1",
+    OMB_STARTUP_WINDOW_MS: String(startupWindowMs),
+    OMB_STARTUP_FORK_MS: String(Math.round(process.uptime() * 1000)),
     ...(childEnvCredentials.composioApiKey
       ? { COMPOSIO_API_KEY: childEnvCredentials.composioApiKey }
       : {}),
@@ -2018,6 +2021,7 @@ app.whenReady().then(async () => {
   const credentialsReady = loadSecureCredentials();
   const win = createWindow();
   startupWindowCreated = true;
+  startupWindowMs = Math.round(process.uptime() * 1000);
   if (resetFailed) void dialog.showMessageBox(win, { type: "info", message: nativeText("settings.startFresh.error") });
   slog(`window shown packaged=${app.isPackaged} serverReady=${serverReady} uptime=${process.uptime().toFixed(2)}s`);
   startUpdater(win, nativeText);

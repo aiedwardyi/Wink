@@ -3,6 +3,8 @@
 
 import { randomBytes } from "node:crypto";
 import { startEarlyListen } from "./early-listen.ts";
+import { startupTiming } from "./startup-timing.ts";
+import { waitForFirstPage } from "./renderer-ready.ts";
 
 const PORT = Number(process.env.OMB_PORT ?? process.env.OGB_PORT ?? 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -27,11 +29,12 @@ function postAppToken(token: string): void {
   process.send?.(message);
 }
 
-startEarlyListen({ port: PORT, staticDir: STATIC_DIR });
+const early = startEarlyListen({ port: PORT, staticDir: STATIC_DIR });
 // Mint + deliver the app token before fat import so main can pass
 // waitForAppToken once identity (/api/health) is ready — without waiting
 // on the ~1.9MB harness module evaluation. index.js reuses OMB_COMMS_TOKEN.
 postAppToken(issuePackagedCommsToken());
+await startupTiming.track("firstPage", () => waitForFirstPage(early.server));
 // Resolved at runtime so the bundled boot stays small and loads the sibling
 // fat harness after /api/health is already listening.
-await import(new URL("./index.js", import.meta.url).href);
+await startupTiming.track("harness", () => import(new URL("./index.js", import.meta.url).href));
