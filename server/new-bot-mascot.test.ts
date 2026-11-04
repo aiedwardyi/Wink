@@ -10,7 +10,8 @@ import { z } from "zod";
 
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { freePortBlock } from "./testing/ports.ts";
-import { spawnHarness as spawn, harnessFetch as fetch, harnessToken } from "./testing/harness-auth.ts";
+import { spawnHarness as spawn, harnessFetch as fetch } from "./testing/harness-auth.ts";
+import { agentsHeaders } from "./testing/agents-caller.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
@@ -19,6 +20,7 @@ let child: ChildProcess;
 let home: string;
 let port = 0;
 let stderr = "";
+let fakeClaudeDump: string;
 const origin = () => `http://127.0.0.1:${port}`;
 
 const createdBot = z.object({
@@ -48,10 +50,14 @@ const listedBot = async (id: string) => {
 beforeAll(async () => {
   port = await freePortBlock([0, 1]);
   home = mkdtempSync(join(tmpdir(), "omb-new-bot-mascot-"));
+  fakeClaudeDump = join(home, "fake-claude-dump.json");
   mkdirSync(join(home, ".orbit"), { recursive: true });
   writeFileSync(
     join(home, ".orbit", "config.json"),
-    JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
+    JSON.stringify({ instances: {
+      ghost: { driver: "not-a-real-driver", displayName: "Ghost" },
+      claude: { driver: "claudeAgent", displayName: "Fixture Claude", config: { cli: join(SERVER_DIR, "testing", "fake-claude-cli.ts") } },
+    } }),
   );
 
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
@@ -62,6 +68,7 @@ beforeAll(async () => {
       USERPROFILE: home,
       OMB_PORT: String(port),
       OMB_WEBHOOK_PORT: String(port + 1),
+      FAKE_CLAUDE_DUMP: fakeClaudeDump,
     },
     windowsHide: true,
   });
@@ -111,10 +118,9 @@ describe("new bot mascot default", () => {
     const chief = z.object({ bot: createdBot }).parse(chiefRes.body).bot;
     expect((await api("PATCH", `/api/bots/${chief.id}`, { chiefOfStaff: true, section: "Mascot" })).status).toBe(200);
 
-    const token = await harnessToken(origin());
     const created = await fetch(`${origin()}/api/internal/create-bot`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      headers: await agentsHeaders(api, fakeClaudeDump, chief.id, chief.threadId),
       body: JSON.stringify({
         fromBotId: chief.id,
         fromThreadId: chief.threadId,

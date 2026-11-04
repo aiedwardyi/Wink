@@ -23,11 +23,13 @@ function section(from: string, to: string): string {
 }
 
 // Run the production recycle, folds, adapter dispatch and acknowledgements without booting the server.
+const messaging = section("      const canMessage =", "\n      // @mentions");
 const preparation = section("  const hasPriorUserTurn =", "\n  const persona = [");
 const marker = "const started = await dispatchAdapterTurn(threadId, async () => {";
 const dispatch = section(marker, "\n      });\n      bindInterruptedTurn").slice(marker.length);
 const delivery = section("      // a deferred recycle's live session", "\n      store.markReactionsDelivered");
 const javascript = ts.transpileModule(`async function run(scope) { with (scope) {
+  ${messaging}
   ${preparation}
   const started = await (async () => { ${dispatch} })();
   ${delivery}
@@ -97,6 +99,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       paneNoteTurnThreads: new Set(), routineTurnThreads: new Set(),
       persona: "Verify the delegated work.", cwd: ".", projectFolderPrompt: () => "", projectNotesPrompt: () => "",
       computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
+      commsDepth: 0, MAX_COMMS_DEPTH: 1,
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
       ALWAYS_REPLY_INSTRUCTIONS: "", CORPUS_SEARCH_INSTRUCTIONS: "", keepGoing: { rules: () => "" },
       skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", tagged: [],
