@@ -49,7 +49,7 @@ function settleWithin(pending: Promise<unknown>, ms: number): Promise<void> {
 
 type Deps = {
   rateLimits: RateLimitsMap;
-  save: () => void;
+  save: (id: string, report: RateLimitsReport) => void;
   refresh: (instanceId: string, previous: RateLimitsReport | undefined) => Promise<{ report?: RateLimitsReport }>;
   environment: (instanceId: string) => Record<string, string> | undefined;
   nameOf?: (id: string, engine: string) => string;
@@ -64,7 +64,7 @@ export function createSpawnUsage(deps: Deps) {
     const current = deps.rateLimits.get(instanceId);
     if (result.report && (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt))) {
       deps.rateLimits.set(instanceId, result.report);
-      deps.save();
+      deps.save(instanceId, result.report);
     }
   };
   const usage = async (botId: string, label: string, command: string, account?: SpawnAccount, recovery = false): Promise<SpawnUsage> => {

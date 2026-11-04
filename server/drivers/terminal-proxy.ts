@@ -17,6 +17,7 @@ const TOKEN = process.env.OMB_TERMINAL_TOKEN ?? "";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const HARNESS = process.env.OMB_HARNESS_URL?.replace(/\/$/, "") ?? "";
 const COMMS_TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
+const ACCOUNT_NAMES: Record<string, string> = JSON.parse(process.env.OMB_ACCOUNT_NAMES || "{}");
 // agy mounts this proxy machine-wide, so a process without a bot's terminal grant gets no tools.
 const TOOLS_ENABLED = Boolean(HOST && TOKEN && BOT_ID);
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -486,7 +487,7 @@ async function handle(message: Json) {
     if (!TOOLS_ENABLED || typeof params.name !== "string" || !TOOL_NAMES.has(params.name)) return rpcError(id, -32602, `Unknown tool: ${String(params.name ?? "")}`);
     // oxlint-disable-next-line anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion -- Tool arguments are narrowed to a record before validation.
     const args = params.arguments && typeof params.arguments === "object" ? params.arguments as Json : {};
-    ok(id, await callTool(params.name, fetch, {}, args));
+    ok(id, await callTool(params.name, fetch, { nameOf: (account) => ACCOUNT_NAMES[account] ?? "Account (removed)" }, args));
   } else if (id !== undefined) {
     rpcError(id, -32601, `Method not found: ${method}`);
   }

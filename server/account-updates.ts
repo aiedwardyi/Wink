@@ -1,12 +1,12 @@
 import { z } from "zod";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
-import type { RateLimitsMap } from "./rate-limits-store.ts";
+import type { RateLimitsMap, RateLimitsReport } from "./rate-limits-store.ts";
 import type { createUsageRefresh } from "./usage-refresh.ts";
 
 export function createAccountUsage(deps: {
   registry: ProviderRegistry; configs(): InstanceConfigMap; refresh: ReturnType<typeof createUsageRefresh>;
-  rateLimits: RateLimitsMap; save(): void;
+  rateLimits: RateLimitsMap; save(id: string, report: RateLimitsReport): void;
 }) {
   return async (id: string) => {
     const instance = deps.registry.get(id);
@@ -20,7 +20,7 @@ export function createAccountUsage(deps: {
     const current = deps.rateLimits.get(id);
     if (current && Date.parse(current.observedAt) > Date.parse(result.report.observedAt)) return;
     deps.rateLimits.set(id, result.report);
-    deps.save();
+    deps.save(id, result.report);
   };
 }
 

@@ -53,6 +53,7 @@ describe("summary grace dispatch", () => {
       store: { messagesFor: () => [], setActivity: () => {} },
       bot: { id: "bot" }, threadId: "room", dispatchedThreads: new Map(), releaseTurnStart: undefined,
       keepGoing: { turnStarted }, hop, cardContinuation,
+      takeStartingHold: () => () => {},
     });
     expect(turnStarted).toHaveBeenCalledWith("bot", "room", byUser);
   });
