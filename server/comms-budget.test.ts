@@ -141,7 +141,7 @@ function human(key = "send-1") {
   startTurn("turn", rootId);
   return rootId;
 }
-const UNAVAILABLE = "Bots paused: this request's budget is no longer available. Send a message to keep them going.";
+const UNAVAILABLE = "Bots paused: send a message to keep them going.";
 const RESERVED = "This request's remaining bot turns are reserved. Collect pending replies before asking again.";
 const WAITING = "You already have 4 teammate messages waiting. Collect those replies first.";
 const lines = (threadId: string | undefined, name = PAUSED) => threadId ? store.messagesFor(threadId).filter((row) => row.tool?.name === name) : [];

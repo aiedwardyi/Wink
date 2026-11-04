@@ -6,7 +6,7 @@ import { DATA_DIR } from "./config.ts";
 import { Store } from "./store.ts";
 
 const PAUSED = "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.";
-const UNAVAILABLE = "Bots paused: this request's budget is no longer available. Send a message to keep them going.";
+const UNAVAILABLE = "Bots paused: send a message to keep them going.";
 
 let store: Store;
 let bot: ReturnType<Store["createBot"]>;

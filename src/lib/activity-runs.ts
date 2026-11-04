@@ -191,10 +191,10 @@ export const SERVER_LINES: ServerLine[] = [
     needles: ["Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going."],
   },
   {
-    re: /^Bots paused: this request's budget is no longer available\. Send a message to keep them going\.$/,
+    re: /^Bots paused: send a message to keep them going\.$/,
     pick: () => ["chat.comms.unavailable", {}],
     file: "comms-notice.ts",
-    needles: ["Bots paused: this request's budget is no longer available. Send a message to keep them going."],
+    needles: ["Bots paused: send a message to keep them going."],
   },
 ];
 

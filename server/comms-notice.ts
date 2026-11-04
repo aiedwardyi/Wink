@@ -9,7 +9,7 @@ export type NoticeStore = Pick<Store, "appendMessage" | "activePath">;
 
 const NAMES: Record<CommsNotice, string> = {
   paused: "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.",
-  unavailable: "Bots paused: this request's budget is no longer available. Send a message to keep them going.",
+  unavailable: "Bots paused: send a message to keep them going.",
 };
 
 const posted = new Set<string>();

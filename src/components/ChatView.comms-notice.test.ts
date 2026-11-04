@@ -15,7 +15,7 @@ class FakeEventSource {
 
 // the row server/comms-notice.ts appends: no tool.ok, no comm, so it stays out of model context
 const PAUSED = "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.";
-const UNAVAILABLE = "Bots paused: this request's budget is no longer available. Send a message to keep them going.";
+const UNAVAILABLE = "Bots paused: send a message to keep them going.";
 const notice = (id: string, name: string, at: number): Message => ({ id, at, role: "bot", kind: "activity", tool: { name } });
 
 const bot = (messages: Message[]): Bot => ({

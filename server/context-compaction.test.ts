@@ -1619,7 +1619,7 @@ describe("tool line folding", () => {
     postCommsNotice(store, "unavailable", `missing-context-${room}`, ["t1"]);
     expect(notices.map((row) => row.tool?.name)).toEqual([
       "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.",
-      "Bots paused: this request's budget is no longer available. Send a message to keep them going.",
+      "Bots paused: send a message to keep them going.",
     ]);
     const result = await prepareModelContext({
       messages: [message("m1", "check the package"), ...notices, message("m9", "done", { role: "bot" })],
