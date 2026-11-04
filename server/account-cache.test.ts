@@ -25,7 +25,7 @@ describe("account cache generations", () => {
     let other: Promise<unknown> | undefined;
     if (overlap) {
       rpc.mockReset().mockImplementationOnce(() => new Promise((done) => { release = done; })).mockResolvedValue(payload);
-      other = refresh("codex", { instanceId: account.id, account });
+      other = refresh("codex", { instanceId: account.id, account: { ...account, generation: 2 } });
     }
     await refresh("codex", { instanceId: account.id, account });
     expect(busy).toEqual([overlap]);
