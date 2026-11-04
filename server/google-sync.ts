@@ -20,6 +20,7 @@ import { syncHold } from "./sync-hold.ts";
 export const GOOGLE_BINDING_FILE = "google-binding.json";
 export const GOOGLE_MIRROR_DIR = "google-drive";
 export const GOOGLE_TABLE_FILE = "google-drive-table.json";
+export const GOOGLE_KINDS_FILE = "google-drive-kinds.json";
 // Written once the engines republished into the mirror; a ready PC without it (1.0.170) republishes on resume.
 export const GOOGLE_REPUBLISHED_FILE = "google-drive-republished.json";
 // The folder a Move copied from; never a binding or profile-sync.json field, which 1.0.170 reads strictly.
@@ -80,6 +81,7 @@ type Options = {
   activate: (mirrorPath: string, move: boolean) => string;
   /** The engines are still writing what activate republished. */
   republishing?: () => boolean;
+  kindsReady?: () => boolean;
   /** Pulls a chat whose peer head a pass just downloaded. */
   pull?: (threadId: string) => void | Promise<void>;
   openThread?: () => string | null;
@@ -301,7 +303,7 @@ export function createGoogleSync(options: Options) {
         chatFirst = true;
         behind = null;
       }
-      void kick();
+      void run(ms === passMs && !chatFirst && !catching && (options.kindsReady?.() ?? false));
     }, ms);
     timer.unref?.();
   }
@@ -357,7 +359,7 @@ export function createGoogleSync(options: Options) {
     binding = { kind: "ok", binding: ready };
   }
 
-  async function pass(bound: GoogleBinding): Promise<number> {
+  async function pass(bound: GoogleBinding, quiet: boolean): Promise<number> {
     const owner = { issuer: ISSUER, sub: bound.owner.sub } as const;
     let summary: DriveMirrorSummary;
     let ids: DriveOwnIds;
@@ -375,6 +377,7 @@ export function createGoogleSync(options: Options) {
       ids = ownIds();
       summary = await createDriveMirror({
         owner, mirrorPath: bound.mirrorPath, statePath, ownIds: ids, client, now, uploads, hashes, chatFirst,
+        kindsPath: join(dataDir, GOOGLE_KINDS_FILE), allowKindRescan: quiet && bound.phase === "ready" && !busy,
         openThread: chatFirst ? options.openThread?.() : null,
         behind: (paths) => { behind = paths; },
         listed: (files) => {
@@ -423,13 +426,16 @@ export function createGoogleSync(options: Options) {
       return 0;
     }
     const republishing = busy || (options.republishing?.() ?? false);
-    catching = moved > 0 || summary.failed.length > 0 || retry.success || republishing;
+    const maintenance = summary.kindRescan && summary.failed.length === 0 && !retry.success;
+    catching = (!maintenance && moved > 0) || summary.failed.length > 0 || retry.success || republishing;
     if (!catching) total = 0;
     if (retry.success) return retry.data.retryAfterMs;
-    return moved > 0 ? 0 : republishing ? REPUBLISH_MS : passMs;
+    return !maintenance && moved > 0 ? 0 : republishing ? REPUBLISH_MS : passMs;
   }
 
-  function kick(): Promise<void> {
+  const kick = () => run(false);
+
+  function run(quiet: boolean): Promise<void> {
     if (running) return running;
     const bound = runnable();
     if (!bound) {
@@ -443,7 +449,7 @@ export function createGoogleSync(options: Options) {
     running = (async () => {
       let delay = passMs;
       try {
-        delay = await pass(bound);
+        delay = await pass(bound, quiet);
       } catch (error) {
         problem = "error";
         log(`[google-sync] pass failed: ${error instanceof Error ? error.message : String(error)}`);

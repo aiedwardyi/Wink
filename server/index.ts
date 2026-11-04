@@ -2259,6 +2259,7 @@ function botTalkedTo(botId: string): boolean {
   return !!bot && [bot.threadId, ...store.tasks(botId).map((task) => task.threadId)].some((threadId) => store.messagesFor(threadId).some((message) => message.role === "user"));
 }
 
+let googleKindsReady = false;
 const googleSync = createGoogleSync({
   dataDir: DATA_DIR,
   account: googleAccount,
@@ -2289,6 +2290,7 @@ const googleSync = createGoogleSync({
     return profileSyncSettings.workspaceId;
   },
   republishing: () => threadSyncV2?.republishing() ?? false,
+  kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
   openThread: () => threadRoutes.openThread(),
 });
@@ -8505,6 +8507,7 @@ if (early) {
 phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
+startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")
