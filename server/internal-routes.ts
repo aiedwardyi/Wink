@@ -280,7 +280,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const fromBotId = source.botId;
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
-      const depth = Number(body.depth ?? 0) || 0;
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(source.threadId)?.depth ?? 0);
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
       if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
@@ -549,7 +549,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const toBotId = String(body.toBotId ?? "");
       const message = String(body.message ?? "").trim();
       const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
-      const depth = Number(body.depth ?? 0) || 0;
+      const depth = Math.max(Number(body.depth) || 0, turnRegistry.current(source.threadId)?.depth ?? 0);
       if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
       const from = store.bot(fromBotId);
       if (!from) return json(res, 404, { error: "no such bot" });

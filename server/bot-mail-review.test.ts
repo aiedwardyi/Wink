@@ -202,13 +202,13 @@ it.each(["createBot", "createChannel"] as const)("keeps %s available at depth 0"
   expect(output.body().error).toBeUndefined();
 });
 
-it.each(["createBot", "createChannel"] as const)("uses the live peer depth to guard %s", async (method) => {
+it.each(["askBot", "delegateBot", "createBot", "createChannel"] as const)("uses the live peer depth to guard %s", async (method) => {
   from = store.patchBot(from.id, { chiefOfStaff: true })!;
   turnRegistry.start("peer-turn", { botId: from.id, threadId: from.threadId, owner: "peer", depth: 1 });
   const req = new EventEmitter() as IncomingMessage;
   const output = response();
   const pending = routes()[method](req, output.res);
-  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id], depth: 0 }));
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, toBotId: target.id, message: "work", name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id], depth: 0 }));
   req.emit("end");
   await pending;
   expect(output.body().error).toContain("limited to one hop");
