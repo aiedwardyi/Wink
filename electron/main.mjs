@@ -109,7 +109,7 @@ const { createDisplayMediaGuard, invokeDisplayMediaCallback, selectCaptureSource
 );
 const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.cjs");
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
-const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
+const { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile } = require("./linked-file-window.cjs");
 const { setDevicePermissions } = require("./device-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
@@ -1169,10 +1169,10 @@ async function openDeviceWindow(rawHost, rawName) {
   openOrFocus(deviceWindows, url.origin, () => {
     const title = deviceWindowTitle(rawName, url.hostname);
     const name = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 64) : url.hostname;
+    const chrome = skinChrome(readPersistedSkin(app.getPath("userData")));
     const win = new BrowserWindow({
       ...desktopViewerWindowOptions(),
-      // Shown at once: an offline PC never fires ready-to-show.
-      show: true,
+      backgroundColor: chrome.color,
       title,
       icon: APP_ICON,
       webPreferences: {
@@ -1238,10 +1238,12 @@ async function openDeviceWindow(rawHost, rawName) {
         heading: nativeText("packaged.deviceUnreachable", { name }),
         help: nativeText("packaged.deviceUnreachableHelp"),
         retry: nativeText("packaged.deviceRetry"),
+        backgroundColor: chrome.color,
+        color: chrome.symbolColor,
       }),
       log: slog,
     }));
-    void win.loadURL(url.toString()).catch(() => {});
+    void startDeviceWindow(win, deviceConnectingPage({ title, heading: nativeText("packaged.deviceConnecting", { name }), backgroundColor: chrome.color, color: chrome.symbolColor }), url.toString()).catch(() => {});
     return win;
   }, (existing) => deviceLoads.get(existing)?.reloadIfStuck());
   return true;

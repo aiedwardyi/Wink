@@ -220,13 +220,21 @@ contextBridge.exposeInMainWorld("ogb", {
     getChannel: () => ipcRenderer.invoke("update:get-channel"),
     backToStable: () => ipcRenderer.invoke("update:set-channel", "stable"),
     onState: (cb) => {
+      let alive = true;
+      let pushed = false;
+      const handler = (_event, s) => {
+        pushed = true;
+        if (alive) cb(s);
+      };
+      ipcRenderer.on("update:state", handler);
       ipcRenderer
         .invoke("update:get-state")
-        .then((s) => cb(s))
+        .then((s) => { if (alive && !pushed) cb(s); })
         .catch(() => {});
-      const handler = (_event, s) => cb(s);
-      ipcRenderer.on("update:state", handler);
-      return () => ipcRenderer.removeListener("update:state", handler);
+      return () => {
+        alive = false;
+        ipcRenderer.removeListener("update:state", handler);
+      };
     },
   },
 });
