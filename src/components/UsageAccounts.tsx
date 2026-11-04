@@ -60,10 +60,11 @@ function AccountPicker({ account, accounts, mainId, label, mark, select }: {
         <span className="min-w-0 truncate">{account.displayName}</span>
         <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform duration-150 motion-reduce:transition-none", open && "rotate-180")} />
       </button>
-      {presence.mounted && <div ref={menu} id={id} role="menu" aria-label={t("accounts.choose", { account: label(account) })} data-closing={presence.closing || undefined}
+      {presence.mounted && <div ref={menu} id={id} role="menu" data-closing={presence.closing || undefined}
         className={cn(MENU_CLASS, "absolute -left-1.5 top-full mt-1 max-h-72 w-[248px] max-w-[calc(100%+0.375rem)] origin-top-left overflow-y-auto rounded-[3px] [corner-shape:bevel] [@media(pointer:coarse)]:w-[304px]")}
-        onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
+        onBlur={(event) => { if (event.relatedTarget && event.relatedTarget !== trigger.current && !event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
         onKeyDown={(event) => {
+          if (event.key === "Tab") setOpen(false);
           if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
           if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
             event.preventDefault();
@@ -97,6 +98,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const columns = useRef<HTMLDivElement>(null);
   const live = useRef<HTMLDivElement>(null);
+  const focusPicker = useRef(false);
   const turn = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -116,14 +118,19 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     const from = shownId.current;
     turn.current = 0;
     shownId.current = currentId;
+    if (focusPicker.current) {
+      focusPicker.current = false;
+      live.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus();
+    }
     if (!dir || from === currentId || reducedMotion()) return;
     slide(live.current, dir);
     slide([...columns.current?.querySelectorAll<HTMLElement>("[data-account-page]") ?? []].find((page) => page.dataset.accountPage === from), dir, true);
   }, [currentId]);
   if (accounts.length === 1) return renderRow(accounts[0]!);
   const label = (account: UsageAccount) => account.snapshot.account || t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
-  const go = (id: string) => {
+  const go = (id: string, focus = false) => {
     turn.current = Math.sign(pages.findIndex((account) => account.instanceId === id) - index);
+    focusPicker.current = focus && id !== currentId;
     setSelectedId(id);
   };
   const setAsMain = async (account: UsageAccount) => {
@@ -155,7 +162,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     return (
       <div data-account-head="" className="relative flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
         {(phone || other) && pages.length > 1
-          ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label} mark={mark} select={go} />
+          ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label} mark={mark} select={(id) => go(id, true)} />
           : <>{mark}{!other && <span className="min-w-0 truncate">{account.displayName}</span>}</>}
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}

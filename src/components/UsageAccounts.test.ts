@@ -340,6 +340,8 @@ it.each([false, true])("reconciles the viewed account becoming Main on phone=%s"
 it("supports menu arrow keys, Escape, outside dismissal and focus return", async () => {
   await render(4);
   await act(async () => picker().click());
+  expect(host.querySelector('[role="menu"]')!.id).toBe(picker().getAttribute("aria-controls"));
+  expect(host.querySelector('[role="menu"]')!.hasAttribute("aria-label")).toBe(false);
   expect(document.activeElement).toBe(items()[0]);
   await act(async () => items()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
   expect(document.activeElement).toBe(items()[1]);
@@ -351,6 +353,60 @@ it("supports menu arrow keys, Escape, outside dismissal and focus return", async
   await act(async () => picker().click());
   await act(async () => document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
   expect(host.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
+});
+
+it("closes an open menu when its trigger is pressed again", async () => {
+  await render(4);
+  await act(async () => picker().click());
+  await act(async () => {
+    picker().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    picker().focus();
+  });
+  expect(picker().getAttribute("aria-expanded")).toBe("true");
+  await act(async () => picker().click());
+  expect(picker().getAttribute("aria-expanded")).toBe("false");
+  expect(host.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
+});
+
+it("keeps the menu open on blur without a related target", async () => {
+  await render(4);
+  await act(async () => picker().click());
+  await act(async () => items()[0]!.blur());
+  expect(document.activeElement).toBe(document.body);
+  expect(picker().getAttribute("aria-expanded")).toBe("true");
+  await act(async () => document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+  expect(picker().getAttribute("aria-expanded")).toBe("false");
+});
+
+it.each([false, true])("closes on Tab out of the menu with shift=%s", async (shift) => {
+  await render(4);
+  await act(async () => picker().click());
+  const event = new KeyboardEvent("keydown", { key: "Tab", shiftKey: shift, bubbles: true, cancelable: true });
+  await act(async () => items()[0]!.dispatchEvent(event));
+  await act(async () => (shift ? picker() : shown().querySelector<HTMLButtonElement>('[aria-label="Next Account"]')!).focus());
+  expect(event.defaultPrevented).toBe(false);
+  expect(picker().getAttribute("aria-expanded")).toBe("false");
+});
+
+it.each([false, true])("focuses the live trigger after picking a signed-out fallback on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  state.instances[2]!.snapshot.authenticated = false;
+  await rerender();
+  await jump("third");
+  expect(shown().textContent).toContain("Signed out.");
+  expect(document.activeElement).toBe(picker());
+});
+
+it.each([false, true])("focuses the live trigger after picking from a signed-out fallback on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  state.instances[phone ? 0 : 1]!.snapshot.authenticated = false;
+  await rerender();
+  expect(shown().textContent).toContain("Signed out.");
+  await jump("fourth");
+  expect(shown().querySelector('[aria-label="5h: 55% remaining"]')).not.toBeNull();
+  expect(document.activeElement).toBe(picker());
 });
 
 it.each(["en", "ko"] as const)("labels missing emails distinctly in %s and keeps signed-out and draining accounts selectable", async (locale) => {
