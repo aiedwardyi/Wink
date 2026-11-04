@@ -234,18 +234,19 @@ describe("SettingsPanel still owns folder and usage", () => {
     expect(html).not.toContain("All Bots");
   });
 
-  it("keeps a pinned-elsewhere folder path in monospace", async () => {
+  it("reads both folder lines in one font, with each path in ink", async () => {
     const { SettingsPanel } = await import("./SettingsPanel");
     const { I18nProvider } = await import("@/lib/i18n");
     const html = renderToStaticMarkup(
       createElement(
         I18nProvider,
         null,
-        createElement(SettingsPanel, { bot: botWithUsage }),
+        createElement(SettingsPanel, { bot: { ...botWithUsage, rememberedProjectCwd: "/tmp/next" } }),
       ),
     );
-    expect(html).toContain("This task uses");
-    expect(html).toMatch(/<span class="font-mono">\/tmp\/friend<\/span>/);
+    expect(html).toMatch(/This task uses <span class="text-ink">\/tmp\/friend<\/span>\./);
+    expect(html).toMatch(/Next task uses <span class="text-ink">\/tmp\/next<\/span>\./);
+    expect(html).not.toContain("font-mono");
   });
 
   it("presents an empty cwd as an optional private workspace", async () => {
