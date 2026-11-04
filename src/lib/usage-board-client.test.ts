@@ -63,6 +63,30 @@ describe("mergeBoard", () => {
     expect(merged.coarse).toEqual([[100, 50, 50]]);
   });
 
+  it("merges a second instance of one driver into its own group by base", () => {
+    const withTwin = (board: UsageBoard) => {
+      const twin = structuredClone(claude(board));
+      twin.base = "claude-work";
+      twin.mainId = "work-a";
+      twin.events = [];
+      twin.accounts = [{ ...twin.accounts[0]!, id: "work-a", workers: [{ id: "w1" } as never] }];
+      board.engines.push(twin);
+      return board;
+    };
+    const twinOf = (board: UsageBoard) => board.engines.find((engine) => engine.base === "claude-work")!.accounts[0]!;
+    const shown = withTwin(fresh());
+    twinOf(shown).history = { fine: [[100, 1, 1]], coarse: [] };
+    const partial = withTwin(fresh({ revision: 43, full: false, cursor: "c-43" }));
+    twinOf(partial).history = { fine: [[101, 2, 2]], coarse: [] };
+    const merged = mergeBoard(shown, partial)!;
+    expect(twinOf(merged).history.fine).toEqual([[100, 1, 1], [101, 2, 2]]);
+    expect(merged.engines.find((engine) => engine.base === "claude-work")!.events).toEqual([]);
+    const same = withTwin(fresh({ cursor: "c-again", full: false }));
+    twinOf(same).workers = [];
+    expect(mergeBoard(shown, same), "equal-revision worker update").not.toBeNull();
+    expect(twinOf(mergeBoard(shown, same)!).workers).toEqual([]);
+  });
+
   it("upserts events by seq and keeps the newest 64", () => {
     const shown = fresh();
     claude(shown).events = Array.from({ length: 64 }, (_, i) => ({ seq: i + 1, at: i, kind: "limit" as const }));
