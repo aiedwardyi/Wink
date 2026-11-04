@@ -123,6 +123,31 @@ describe("Alt+U", () => {
     expect(keys.map((event) => event.cancelable)).toEqual([true]);
   });
 
+  it("opens all Usage on Alt+U while the terminal covers the chat", async () => {
+    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true, bubbles: true, cancelable: true })); });
+    await settle();
+    expect(document.body.querySelector('.orbit-terminal-overlay[data-open="true"]'), "terminal open").not.toBeNull();
+    await press();
+    expect(quick(), "hidden chat's quick view").toBeNull();
+    expect(settings()).toBe("usage");
+  });
+
+  it("shuts an open quick view when the terminal covers the chat and keeps it shut after", async () => {
+    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await press();
+    expect(quick(), "quick view").not.toBeNull();
+    const backquote = () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", key: "`", ctrlKey: true, bubbles: true, cancelable: true })); });
+    await backquote();
+    await settle();
+    expect(document.body.querySelector('.orbit-terminal-overlay[data-open="true"]'), "terminal open").not.toBeNull();
+    expect(quick(), "view over the terminal").toBeNull();
+    await backquote();
+    await settle();
+    expect(document.body.querySelector('.orbit-terminal-overlay[data-open="true"]'), "terminal shut").toBeNull();
+    expect(quick(), "view back after the terminal").toBeNull();
+  });
+
   it("leaves Settings shut when a view takes Alt+U", async () => {
     await mount(botOn("muse"), [...instancesFor(usageBoardFixture), muse]);
     const take = (event: Event) => event.preventDefault();

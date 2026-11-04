@@ -30,7 +30,7 @@ function upsertEvents(kept: UsageBoardEvent[], changed: UsageBoardEvent[]): Usag
 function liveWorkers(shown: UsageBoard, reply: UsageBoard): UsageBoard | null {
   let changed = shown.runs !== reply.runs;
   const engines = shown.engines.map((engine) => {
-    const latest = reply.engines.find((each) => each.engine === engine.engine);
+    const latest = reply.engines.find((each) => each.base === engine.base);
     return { ...engine, accounts: engine.accounts.map((account) => {
       const workers = latest?.accounts.find((each) => each.id === account.id)?.workers;
       if (workers === undefined || JSON.stringify(workers) === JSON.stringify(account.workers)) return account;
@@ -49,7 +49,7 @@ export function mergeBoard(shown: UsageBoard | null, reply: UsageBoard): UsageBo
   return {
     ...reply,
     engines: reply.engines.map((engine) => {
-      const before = shown.engines.find((each) => each.engine === engine.engine);
+      const before = shown.engines.find((each) => each.base === engine.base);
       if (!before) return engine;
       return {
         ...engine,
