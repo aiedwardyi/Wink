@@ -251,6 +251,22 @@ function codexCapacity({ screenText, cursor }) {
   return /^(?:■)?Selectedmodelisatcapacity\.Pleasetryadifferentmodel\.$/u.test(output);
 }
 
+function cancelClaudeStartup(session) {
+  clearTimeout(session.claudeTrustTimer);
+  session.claudeStartupFrame = null;
+  session.claudeStartupScreen = null;
+}
+
+function claudeOnboardingScreen(screenText) {
+  const lines = screenText.split("\n").map((line) => line.trim().replace(/\s+/gu, " ")).filter(Boolean);
+  const start = lines.findIndex((line) => line === "Let's get started." || line === "Security notes:");
+  if (start < 0 || !lines.slice(0, start).every((line) => /^Welcome to Claude Code v[\d.]+$/u.test(line) || /^[ .*░▓█▄]+$/u.test(line))) return null;
+  const body = lines.slice(start).join("\n");
+  if (/^Let's get started\.\nChoose the text style that looks best with your terminal\nTo change this later, run \/theme\nAuto \(match terminal\)\n[❯>] [✔√] Dark mode\nLight mode\nDark mode \(colorblind-friendly\)\nLight mode \(colorblind-friendly\)\nDark mode \(ANSI colors only\)\nLight mode \(ANSI colors only\)\n╌+\n1 function greet\(\) \{\n2 - console\.log\("Hello, World!"\);\n2 \+ console\.log\("Hello, Claude!"\);\n3 \}\n╌+\nSyntax theme: Monokai Extended \(ctrl\+t to disable\)$/u.test(body)) return "theme";
+  if (body === "Security notes:\n1. Claude can make mistakes.\nYou're responsible for Claude's actions and should always\nreview them, especially when running code.\n2. Due to prompt injection risks, only use it with code you trust\nLearn more: https://code.claude.com/docs/en/security\nPress Enter to continue…") return "notes";
+  return null;
+}
+
 function claudeTrustKeys(screenText) {
   const lines = screenText.split("\n").map((line) => line.trim()).filter(Boolean);
   const text = lines.join(" ");
@@ -364,6 +380,11 @@ function global:prompt {
 // this they would read as typed input.
 function isMouseReport(data) {
   return /^(?:\x1b\[M[\s\S]{3}|\x1b\[<[0-9;]*[mM]|\x1b\[[IO])+$/.test(data);
+}
+
+// DA, DSR/CPR, DECRPM, window, kitty, OSC and DCS replies.
+function isTerminalReply(data) {
+  return /^(?:\x1b\[(?:[?>][0-9;]+c|\??[0-9;]+[nR]|\??\d+;\d+\$y|\d+(?:;\d+)*t|\?\d+u)|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+(?![\s\S])/u.test(data);
 }
 
 function consumeInputEcho(text, pending) {
@@ -894,18 +915,40 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       try {
         session.screen.consume(data);
       } catch {}
-      clearTimeout(session.claudeTrustTimer);
-      if (session.worker && session.exitCode === null && session.botPane && session.claudeTrust && !session.claudeTrustAnswered) {
-        const keys = claudeTrustKeys(session.screen.text());
-        if (keys && (keys === "\r" || !session.claudeTrustMoved)) {
+      cancelClaudeStartup(session);
+      if (session.worker && session.exitCode === null && session.botPane && session.engine === "claude"
+        && (session.claudeOnboarding?.active || (session.claudeTrust && !session.claudeTrustAnswered))) {
+        const startup = session.claudeOnboarding;
+        const frame = session.claudeStartupFrame = {};
+        const screenText = session.screen.text();
+        if (startup && (AGENT_BUSY_RE.test(screenText) || /^\s*❯(?:\s*$|[ \t]+(?![✔√][ \t])\S)/mu.test(screenText) || session.workerSession?.confirmed)) startup.active = false;
+        const onboarding = startup?.active ? claudeOnboardingScreen(screenText) : null;
+        const trustKeys = session.claudeTrust && !session.claudeTrustAnswered ? claudeTrustKeys(screenText) : null;
+        if (onboarding || trustKeys) session.claudeStartupScreen = screenText;
+        const keys = onboarding ? (startup.answered.has(onboarding) ? null : "\r") : trustKeys;
+        if (keys && (onboarding || keys === "\r" || !session.claudeTrustMoved)) {
+          const launchGeneration = session.workerSession?.run.launchGeneration;
+          const userInputAt = session.userInputAt;
+          const commandInput = session.commandInput;
           // Startup can redraw No after the first menu frame.
           session.claudeTrustTimer = setTimeout(() => {
             session.claudeTrustTimer = null;
-            if (session.retired || session.pty !== pty || !session.worker || session.exitCode !== null
-              || !session.claudeTrust || session.claudeTrustAnswered || claudeTrustKeys(session.screen.text()) !== keys) return;
-            if (keys === "\r") session.claudeTrustAnswered = true;
-            else session.claudeTrustMoved = true;
-            typeIntoPane(session, keys);
+            void Promise.resolve().then(() => {
+              if (session.retired || session.pty !== pty || !session.worker || session.exitCode !== null || !session.botPane
+                || active.get(session.key) !== session.id || session.engine !== "claude" || session.claudeOnboarding !== startup
+                || session.claudeStartupFrame !== frame
+                || session.workerSession?.run.launchGeneration !== launchGeneration || session.userInputAt !== userInputAt
+                || session.commandInput !== commandInput || session.screen.text() !== screenText) return;
+              if (onboarding) {
+                if (!startup.active || startup.answered.has(onboarding) || claudeOnboardingScreen(screenText) !== onboarding) return;
+                startup.answered.add(onboarding);
+              } else {
+                if (!session.claudeTrust || session.claudeTrustAnswered || claudeTrustKeys(screenText) !== keys) return;
+                if (keys === "\r") session.claudeTrustAnswered = true;
+                else session.claudeTrustMoved = true;
+              }
+              return pty.write(keys);
+            }).catch((cause) => fail(session, cause));
           }, CLAUDE_TRUST_SETTLE_MS);
           session.claudeTrustTimer.unref?.();
         }
@@ -1098,6 +1141,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const botWrite = (session, raw, worker) => {
     const text = normalizeTerminalText(raw);
+    cancelClaudeStartup(session);
     clearActivityTimer(session);
     const echo = inputEchoText(text);
     const submit = isSubmitInput(text);
@@ -1109,7 +1153,6 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     // only a command the user typed arms their alert
     if (submit) {
-      clearTimeout(session.claudeTrustTimer);
       session.autoNote = null;
       session.autoDelivered = false;
       session.autoReported = false;
@@ -1122,6 +1165,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.engine = launched[1].toLowerCase();
         const args = worker ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
         session.claudeTrust = session.engine === "claude" && args.includes("--dangerously-skip-permissions");
+        session.claudeOnboarding = { active: session.engine === "claude", answered: new Set() };
+        session.claudeStartupScreen = null;
         session.claudeTrustMoved = false;
         session.claudeTrustAnswered = false;
         session.agentSeen = false;
@@ -1280,6 +1325,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (typeof data !== "string" || data.length > 64 * 1024) throw new Error("Invalid terminal input");
       if (session.exitCode !== null) throw new Error("Terminal has exited");
       const mouse = isMouseReport(data);
+      if (!mouse && !isTerminalReply(data)) cancelClaudeStartup(session);
       const echo = mouse ? "" : inputEchoText(data);
       const submit = mouse ? false : isSubmitInput(data);
       // Mouse and focus reports from a TUI are not the user taking over.
