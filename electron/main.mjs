@@ -1408,6 +1408,7 @@ function createWindow() {
     });
   });
   win.on("query-session-end", () => closeGuard.leaveBriefly());
+  win.on("query-session-end", () => errorReports.leaveBriefly());
   win.on("session-end", () => closeGuard.leave());
   win.on("session-end", () => errorReports.stop());
 
