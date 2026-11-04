@@ -16,6 +16,7 @@ export interface DeviceItem {
   host: string;
   current: boolean;
   offline: boolean;
+  checking?: boolean;
   laptop?: boolean;
 }
 
@@ -24,16 +25,22 @@ const DeviceIcon = ({ device, size, className }: { device: DeviceItem; size: num
 
 const DEVICES_CHANGE = "orbit-devices-change";
 
-function useDevices(enabled: boolean) {
+function useDevices(enabled: boolean, watching = false) {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const live = useRef(true);
+  const requested = useRef(0);
+  const applied = useRef(0);
   const load = useCallback(
-    () =>
-      api("/api/devices")
+    () => {
+      const request = ++requested.current;
+      return api("/api/devices")
         .then((body: { devices: DeviceItem[] }) => {
-          if (live.current) setDevices(body.devices);
+          if (!live.current || request <= applied.current) return;
+          applied.current = request;
+          setDevices(body.devices);
         })
-        .catch(() => {}),
+        .catch(() => {});
+    },
     [],
   );
 
@@ -52,6 +59,14 @@ function useDevices(enabled: boolean) {
       window.removeEventListener(DEVICES_CHANGE, load);
     };
   }, [enabled, load]);
+
+  useEffect(() => {
+    if (!enabled || !watching) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [enabled, watching, load]);
 
   return [devices, load] as const;
 }
@@ -77,8 +92,8 @@ export function DeviceSwitcher({
   const dispatch = useStoreDispatch();
   const deviceWindow = window.ogb?.deviceWindow;
   const visible = labeled || Boolean(deviceWindow);
-  const [devices, reload] = useDevices(visible);
   const [open, setOpen] = useState(false);
+  const [devices, reload] = useDevices(visible, open);
   // The drawer is transformed, so a phone menu pinned inside it would clip. Portal it instead.
   const [pinned, setPinned] = useState<CSSProperties>();
   const [renaming, setRenaming] = useState(false);
@@ -157,7 +172,7 @@ export function DeviceSwitcher({
                     className={cn(
                       "flex min-w-0 flex-1 items-center gap-3 py-2 pl-3.5 text-left text-[14px] text-ink hover:bg-raised/70 disabled:hover:bg-transparent",
                       device.current ? "pr-2" : "pr-3.5",
-                      device.offline && !device.current && "opacity-50",
+                      (device.offline || device.checking) && !device.current && "opacity-50",
                     )}
                   >
                     <span className="text-ink-secondary">
@@ -169,6 +184,8 @@ export function DeviceSwitcher({
                         <Check size={14} />
                         {t("chrome.deviceCurrent")}
                       </span>
+                    ) : device.checking ? (
+                      <span className="text-[12px] text-ink-secondary">{t("chrome.deviceChecking")}</span>
                     ) : device.offline ? (
                       <span className="text-[12px] text-ink-secondary">{t("chrome.deviceOffline")}</span>
                     ) : null}

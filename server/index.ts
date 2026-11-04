@@ -290,6 +290,7 @@ import {
   writeDeviceRecord,
 } from "./device-sync.ts";
 import { PhoneAccess } from "./phone-access.ts";
+import { createDevicePresence } from "./device-presence.ts";
 import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awake.ts";
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
@@ -2170,6 +2171,7 @@ function startDevicePresence(): void {
   });
 }
 
+const devicePresence = createDevicePresence();
 const remoteRetry = remoteHostRetry(process.env, PORT, (host) => {
   if (host === REMOTE_HOST) return;
   ({ host: REMOTE_HOST, key: REMOTE_KEY } = initRemoteAccess(process.env, DATA_DIR, console.log, host));
@@ -7475,7 +7477,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
-      const devices = pickerDevices(listed, relay ? phoneAccess.base() : null);
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null);
       return json(res, 200, { devices });
     }
     if (method === "PUT" && path === "/api/devices/name") {

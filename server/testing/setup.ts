@@ -3,7 +3,7 @@
 // reads HOME (POSIX) / USERPROFILE (Windows) at call time, and this file
 // runs before any test module imports server/config.ts.
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
@@ -12,6 +12,8 @@ import { removeTempDir } from "./cleanup.ts";
 const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
 process.env.HOME = home;
 process.env.USERPROFILE = home;
+// Worker threads on Windows keep the real profile in homedir(); refuse to run against it.
+if (homedir() !== home) throw new Error(`test home isolation failed: homedir() is ${homedir()}, expected ${home}`);
 // OMB_DATA_DIR is an intentional production override, but tests must never
 // let it escape the throwaway home they are about to delete.
 delete process.env.OMB_DATA_DIR;
