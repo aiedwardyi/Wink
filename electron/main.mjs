@@ -111,6 +111,7 @@ const { STAGE_PREFIX: APPIMAGE_CUA_STAGE_PREFIX } = require("./cua-linux-bundle.
 const { desktopViewerWindowOptions, sameDesktopViewerOrigin } = require("./desktop-viewer.cjs");
 const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
 const { handleDeviceLinkedFile } = require("./linked-file-window.cjs");
+const { setDevicePermissions } = require("./device-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1192,8 +1193,7 @@ async function openDeviceWindow(rawHost, rawName) {
     }));
     const devices = win.webContents.session;
     const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
-    devices.setPermissionCheckHandler((_webContents, permission) => permission === "clipboard-sanitized-write");
-    devices.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === "clipboard-sanitized-write"));
+    setDevicePermissions(devices);
     // One listener per session: route device-origin 401s and main-frame 403s to their window.
     devices.webRequest.onCompleted({ urls: ["https://*/*"] }, ({ statusCode, webContentsId, resourceType, url: href }) => {
       if (statusCode !== 401 && !(statusCode === 403 && resourceType === "mainFrame")) return;
