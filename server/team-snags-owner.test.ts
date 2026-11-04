@@ -244,7 +244,7 @@ describe("team snag owner", () => {
       expect(hasLocalUndeliveredPaneNote(messages, reply.id, "this-pc")).toBe(false);
       expect(paneNotesSinceLastUserTurn(messages, new Set())).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-      expect(wake).toHaveBeenCalledExactlyOnceWith(chief.id, chief.threadId);
+      expect(wake).toHaveBeenCalledExactlyOnceWith(chief.id, chief.threadId, { rootId: null, reservation: null });
     } finally { vi.useRealTimers(); }
   });
 
