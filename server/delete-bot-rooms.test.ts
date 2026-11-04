@@ -115,7 +115,7 @@ describe("deleteBotFully", () => {
       registry: { get: () => undefined }, store: { groups: [], deleteBot: noop },
       stopScreenPoller: noop, activeVpsThreads: new Map(), routines: { disableForBot: noop }, webhooks: { disableForBot: noop },
       lastReply: new Map(), cancelPeerApprovalsFor: noop, discardDelegations: noop, commsBus: {}, discardDelegationsFrom: noop,
-      computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, limitWaits: { cancel: noop },
+      computerControl: { forget: noop }, paneWake: { forgetBot: noop }, taskResumes: { forgetBot: noop }, accountNotices: { forget: noop }, limitWaits: { cancel: noop },
       perBotLocalVmTarget: () => ({ key: "vm" }), localVmIdles: new Map(),
       EVENTS_DIR: dirs[0], NATIVE_DIR: dirs[1], join, removeRotatingLog,
     };

@@ -92,7 +92,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {},
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
-      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, modelContextWindow: 200_000,
+      opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000,
       taskRecord: undefined, durableTaskRecordText: "", contextCompacted: false,
       providerReload: { started: () => instance }, privateWorkspace: false, opensHostFiles: () => false,
       accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },

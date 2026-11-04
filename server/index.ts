@@ -90,6 +90,8 @@ import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-l
 import { AccountService, isInstanceId } from "./accounts.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
+import { createAccountNames } from "./account-names.ts";
+import { createAccountNotices } from "./account-notice.ts";
 import { createAccountUpdates, createAccountUsage } from "./account-updates.ts";
 import { createAccountRoutes } from "./account-routes.ts";
 import { validateAccountSettings } from "./account-settings.ts";
@@ -98,7 +100,7 @@ import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
-import { enableWorkerAccounts, workerLaunchResponse } from "./worker-panes.ts";
+import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
@@ -422,6 +424,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
 }
 const cfg = startupTiming.measure("config", loadConfig);
 const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
+const accountNames = createAccountNames(DATA_DIR);
 // Before registry.load: a prewarmed engine child would inherit the token.
 const googleEnv = takeGoogleEnv(process.env);
 const crashOrigin = process.env.WINK_CRASH_REPORTS?.trim() || null;
@@ -1722,6 +1725,7 @@ async function deleteBotFully(bot: BotRecord): Promise<void> {
   computerControl.forget(bot.id);
   paneWake.forgetBot(bot.id);
   taskResumes.forgetBot(bot.id);
+  accountNotices.forget(bot.id);
   const target = perBotLocalVmTarget(bot.id);
   localVmIdles.get(target.key)?.cancel();
   localVmIdles.delete(target.key);
@@ -2907,12 +2911,16 @@ const workerLaunch = createWorkerLaunch({
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
+const accountNotices = createAccountNotices({
+  names: accountNames, sync: () => accountNames.sync(accounts.list()), runs: (timeoutMs) => liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs),
+});
 const accountRuntime = createAccountRuntime({
   accounts, registry, providers: providerReload, store, reload: reloadProviders, bots: botAccounts,
   changed: (id) => { void accountUpdates(id); },
   rateLimits: rateLimitsByInstance, saveRateLimits: () => saveRateLimits(rateLimitsByInstance, DATA_DIR), usage: refreshUsage, availability: automaticAvailability,
   invalidateHolds: spawnUsage.invalidate, invalidateWaits: (id) => limitWaits.store.all().filter((row) => row.selection.instanceId === id).forEach((row) => limitWaits.cancel(row.botId, row.id)),
   botActive: (id) => botHasActiveTurn(id) || hasQueuedSends(id), terminal: () => terminalBridgeAccess, configBusy: () => providerConfigBusy,
+  onMainChanged: (change) => accountNotices.mainChanged(change),
 });
 const accountRoutes = createAccountRoutes(accountRuntime, registry);
 const accountUpdates = createAccountUpdates({
@@ -4933,7 +4941,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
-  const turnNotes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
+  const accountNote = accountNotices.forTurn(bot.id);
+  const accountNotes = accountNote.text ? [accountNote.text] : [];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5450,7 +5460,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -5508,6 +5518,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;
       if (started.turnId && systemSeed) systemSeed.turnId = started.turnId;
       markMailRead(store, threadId, mailParts, started.turnId ?? "");
+      accountNote.commit();
       markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
@@ -6366,6 +6377,7 @@ async function runClaimedGroupMemberTurn(
     // Orbit compaction or a pre-compact fat soak.
     keepRoomTurnInstruction = true;
     turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop });
+    const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
         return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6376,7 +6388,9 @@ async function runClaimedGroupMemberTurn(
       pendingInterruptThreads.started(threadId, bot.id, epoch);
       return live.adapter.sendTurn({
         threadId,
-        text,
+        text: accountNote.text ? `${accountNote.text}
+
+${text}` : text,
         system: roomSystem,
         approval: bot.autoApprove ? "auto" : "ask",
         attended: !isUnattended(bot.id),
@@ -6388,6 +6402,7 @@ async function runClaimedGroupMemberTurn(
       .then((started) => {
         bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
         markMailRead(store, threadId, roomMail, started.turnId ?? "");
+        accountNote.commit();
         if (started.turnId && currentTurnEpoch(bot.id) === epoch && !isCancelled?.()) liveTurnIdByThread.set(threadId, started.turnId);
         if (reply.claim(started.turnId)) finish("settled");
       })
