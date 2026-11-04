@@ -178,7 +178,7 @@ export const TOOLS = [
   },
 ] as const;
 
-type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string };
+type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string | undefined };
 type SendInput = { sessionId: string; generation: number; text: string };
 type SpawnInput = { label: string; cwd?: string; command?: string };
 type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number }; account?: { id: string; generation: number } };
@@ -202,7 +202,7 @@ type Snapshot = {
   waited?: "hit" | "timeout";
 };
 
-export function terminalSnapshotText(snapshot: Snapshot, nameOf?: (id: string) => string): string {
+export function terminalSnapshotText(snapshot: Snapshot, nameOf?: (id: string) => string | undefined): string {
   if (snapshot.state === "no-terminal") return "This bot has no active Wink terminal session.";
   const lines = [
     `Terminal session: ${snapshot.sessionId ?? "unknown"} (generation ${snapshot.generation ?? "unknown"})`,
@@ -224,7 +224,8 @@ export function terminalSnapshotText(snapshot: Snapshot, nameOf?: (id: string) =
     for (const pane of snapshot.panes) {
       const claude = claudeState(pane.screenText);
       const context = pane.context ? ` · context ${pane.context.tokens !== undefined ? `${Math.round(pane.context.tokens / 1000)}k` : `${pane.context.left}% left`}` : "";
-      const account = pane.account && nameOf ? ` · on ${nameOf(pane.account.id)}` : "";
+      const name = pane.account && nameOf?.(pane.account.id);
+      const account = name ? ` · on ${name}` : "";
       lines.push(`- ${pane.label || (pane.main ? "main" : "(unlabeled)")}: sessionId ${pane.sessionId} (generation ${pane.generation})${pane.main ? ", main" : ""}${pane.exited ? ", exited" : ""}${claude ? `, Claude: ${claude}` : ""}${context}${account}`);
     }
   }
@@ -487,7 +488,7 @@ async function handle(message: Json) {
     if (!TOOLS_ENABLED || typeof params.name !== "string" || !TOOL_NAMES.has(params.name)) return rpcError(id, -32602, `Unknown tool: ${String(params.name ?? "")}`);
     // oxlint-disable-next-line anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion -- Tool arguments are narrowed to a record before validation.
     const args = params.arguments && typeof params.arguments === "object" ? params.arguments as Json : {};
-    ok(id, await callTool(params.name, fetch, { nameOf: (account) => ACCOUNT_NAMES[account] ?? "Account (removed)" }, args));
+    ok(id, await callTool(params.name, fetch, { nameOf: (account) => Object.hasOwn(ACCOUNT_NAMES, account) ? ACCOUNT_NAMES[account] : undefined }, args));
   } else if (id !== undefined) {
     rpcError(id, -32601, `Method not found: ${method}`);
   }

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -825,6 +826,28 @@ function probeWithIdentity(identity: Record<string, string>): Promise<{ list: an
 }
 
 describe("terminal proxy identity gate", () => {
+  it("shows account suffixes only for ids in the session names map", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ panes: [
+        { sessionId: "unknown", generation: 1, label: "Grok", account: { id: "grok", generation: 0 } },
+        { sessionId: "known", generation: 2, label: "Builder", account: { id: "claude.fixture", generation: 3 } },
+      ] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing fixture port");
+      const { call } = await probeWithIdentity({ OMB_TERMINAL_URL: `http://127.0.0.1:${address.port}`, OMB_TERMINAL_TOKEN: "grant",
+        OMB_BOT_ID: "bot-1", OMB_ACCOUNT_NAMES: JSON.stringify({ "claude.fixture": "Claude 2" }) });
+      const text = call.result.content[0].text;
+      expect(text.split("\n").find((line: string) => line.startsWith("- Grok:"))).toBe("- Grok: sessionId unknown (generation 1)");
+      expect(text).toContain("- Builder: sessionId known (generation 2) · on Claude 2");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it.each([
     ["no identity", {}],
     ["an agents-only identity", { OMB_BOT_ID: "bot-1", OMB_HARNESS_URL: "http://127.0.0.1:9", OMB_COMMS_TOKEN: "comms" }],
