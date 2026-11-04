@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { useI18n } from "@/lib/i18n";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { EngineMark } from "./EngineMark";
 
 export function UsageAccounts({ accounts, reload, renderRow }: {
@@ -11,6 +12,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   renderRow: (account: UsageAccount, heading?: ReactNode, dim?: boolean) => ReactNode;
 }) {
   const { t } = useI18n();
+  const phone = useIsPhone();
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -18,7 +20,8 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const main = accounts.find((account) => account.accountMain)
     ?? accounts.find((account) => account.instanceId === account.accountOf) ?? accounts[0]!;
   const others = accounts.filter((account) => account !== main);
-  const index = Math.min(page, others.length - 1);
+  const pages = phone ? [main, ...others] : others;
+  const index = Math.min(page, pages.length - 1);
   const setAsMain = async (account: UsageAccount) => {
     if (busy) return;
     setBusy(true);
@@ -30,13 +33,13 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
     finally { setBusy(false); }
   };
-  const arrows = others.length > 1 && (
+  const arrows = pages.length > 1 && (
     <span className="flex shrink-0 items-center">
       <button type="button" aria-label={t("accounts.previous")} disabled={index === 0}
         onClick={() => setPage(index - 1)} className="flex size-7 items-center justify-center text-ink-secondary hover:text-ink disabled:opacity-30 [@media(pointer:coarse)]:size-11">
         <ChevronLeft size={15} aria-hidden="true" />
       </button>
-      <button type="button" aria-label={t("accounts.next")} disabled={index === others.length - 1}
+      <button type="button" aria-label={t("accounts.next")} disabled={index === pages.length - 1}
         onClick={() => setPage(index + 1)} className="flex size-7 items-center justify-center text-ink-secondary hover:text-ink disabled:opacity-30 [@media(pointer:coarse)]:size-11">
         <ChevronRight size={15} aria-hidden="true" />
       </button>
@@ -50,7 +53,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
         {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
           className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>
           : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
-        <span className="flex w-14 shrink-0 [@media(pointer:coarse)]:w-22">{other && arrows}</span>
+        <span className="flex w-14 shrink-0 [@media(pointer:coarse)]:w-22">{(phone || other) && arrows}</span>
       </span>
     </div>
   );
@@ -63,12 +66,12 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     </div>
   );
   return (
-    <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
-      <div data-account-column="main">{column(main)}</div>
-      <div className="grid min-w-0" data-account-column="other">
-        {others.map((account, i) => <div key={account.instanceId} className="col-start-1 row-start-1 min-w-0"
+    <div className={phone ? "grid gap-y-4" : "grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2"}>
+      {!phone && <div data-account-column="main">{column(main)}</div>}
+      <div className="grid min-w-0" data-account-column={phone ? "pages" : "other"}>
+        {pages.map((account, i) => <div key={account.instanceId} className="col-start-1 row-start-1 min-w-0"
           style={i === index ? undefined : { visibility: "hidden" }} inert={i !== index} aria-hidden={i !== index || undefined}>
-          {column(account, true)}
+          {column(account, account !== main)}
         </div>)}
       </div>
       {error && <div role="alert" className="text-[12px] text-danger sm:col-span-2">{error}</div>}

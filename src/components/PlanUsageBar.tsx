@@ -87,7 +87,7 @@ export function PlanWindowMeter({
       <div role="group" aria-label={label}>
         <div className={cn("flex flex-wrap items-center gap-x-2 text-[12.5px]", muted ? "text-ink-secondary" : "text-ink")}>
           <span>{t(labelKey)}</span>
-          <span aria-hidden="true" className={cn("font-mono tracking-tight", muted ? "text-ink-secondary" : planUsageTone(usedFill).textClass, dim && "opacity-70")}>
+          <span aria-hidden="true" className={cn("font-mono tracking-tight", muted ? "text-ink-secondary" : planUsageTone(usedFill).textClass, dim && "opacity-45")}>
             {percent === null ? "▱".repeat(10) : "▰".repeat(segments) + "▱".repeat(10 - segments)}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 tabular-nums">
