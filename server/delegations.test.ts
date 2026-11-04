@@ -5,7 +5,7 @@
 // stays out of these — the integration happens in comms.test.ts (the full
 // e2e through the agents proxy + fake ACP CLI).
 import { rmSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { getOrCreateChannel, settleDelegationChip, type CommsBus } from "./comms-visibility.ts";
@@ -877,6 +877,43 @@ describe("busy retries and receipts", () => {
       .messagesFor(group.threadId)
       .find((message) => message.tool?.name.includes("dropped"));
     expect(dropped?.from?.botId).toBe(from.id);
+  });
+
+  it.each(["ask", "delegation"] as const)("releases a queued reservation when its target bot is deleted", async (kind) => {
+    const roots = await import("./comms-root.ts");
+    const asks = await import("./comms-budget.ts");
+    const root = rootForStart(from.threadId, { kind: "human", messageKey: `delete-target-${kind}` })!;
+    for (let index = 0; index < roots.ROOT_TURNS - 1; index++) {
+      const credit = roots.reserve(root, kind);
+      if (!credit.ok) throw new Error("no credit");
+      roots.commit(credit.reservation);
+    }
+    const credit = roots.reserve(root, kind);
+    if (!credit.ok) throw new Error("no credit");
+    const queued = queueDelegation(commsBus, from, { toBotId: target.id, message: "never runs", depth: 0, root }, 1, from.threadId, { kind, reservation: credit.reservation });
+    if (queued.result !== "ok" || !queued.id) throw new Error("not queued");
+    if (kind === "ask") expect(asks.claimOpenAsk(from.threadId, queued.id)).toBe(true);
+    expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "reserved" });
+    const release = vi.spyOn(roots, "release");
+    const releaseAsk = vi.spyOn(asks, "releaseOpenAsk");
+    try {
+      discardDelegationsFrom(commsBus, target.id);
+      store.deleteBot(target.id);
+
+      const next = roots.reserve(root, "ask");
+      expect(next.ok).toBe(true);
+      expect(_pendingCount(from.threadId)).toBe(0);
+      expect(findDelegationReceipt(queued.id)?.state).toBe("failed");
+      discardDelegationsFrom(commsBus, target.id);
+      expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "reserved" });
+      expect(release).toHaveBeenCalledExactlyOnceWith(credit.reservation);
+      expect(releaseAsk).toHaveBeenCalledExactlyOnceWith(from.threadId, queued.id);
+      if (next.ok) roots.commit(next.reservation);
+      expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "exhausted" });
+    } finally {
+      release.mockRestore();
+      releaseAsk.mockRestore();
+    }
   });
 
   it("names the source bot on a room failure after a roster edit drops it", async () => {

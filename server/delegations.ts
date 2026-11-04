@@ -547,6 +547,8 @@ export function discardDelegationsFrom(bus: CommsBus, sourceBotId: string): void
   }
   for (const receipt of receiptSnapshot()) {
     if (receipt.toBotId !== sourceBotId || !receipt.state || terminalMailState(receipt.state)) continue;
+    const item = pendingDelegations.get(receipt.sourceThreadId)?.find((item) => item.id === receipt.id);
+    if (item) dropReservation(item);
     finishDelegatedTurn(bus, { taskId: receipt.id, toBotId: sourceBotId, sourceThreadId: receipt.sourceThreadId, sourceBotId: receipt.source?.botId }, false, "", `error: delegation to ${receipt.toBotId} failed — no such bot`);
     acknowledgeDelegation(receipt.sourceThreadId, receipt.id);
   }
