@@ -6,7 +6,7 @@ import path from "node:path";
 import { postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
-import { managedWorkerCommand } from "./terminal-worker.mjs";
+import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
 import { workerResumeStatus } from "./worker-resume.mjs";
 
@@ -1022,7 +1022,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     }
     const session = {
       id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: paneEnv.TEMP || paneEnv.TMP || os.tmpdir(), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
-      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker), workerFinished: false, workerEnvironment: paneEnv,
+      workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
@@ -1120,7 +1120,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const launched = session.botPane ? WORKER_CLI_RE.exec(text) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
-        const args = worker?.kind === "managed" ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+        const args = worker ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
         session.claudeTrust = session.engine === "claude" && args.includes("--dangerously-skip-permissions");
         session.claudeTrustMoved = false;
         session.claudeTrustAnswered = false;
@@ -1562,9 +1562,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
         if (recovery) launchInput.resume = recovery.session;
-        worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
+        // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
+        else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
+        if (launchInput.unrouted) worker = await Promise.resolve(launchInput).then(workerLaunch).then((launch) => launch?.kind === "unrouted" ? launch : null, () => null);
+        else worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
         if (worker?.kind === "hold") return { hold: worker.hold };
-        if (recovery && worker?.kind !== "managed") throw new Error("Worker resume service is unavailable");
+        if (recovery && worker?.kind !== "managed" && worker?.kind !== "unrouted") throw new Error("Worker resume service is unavailable");
         if (recovery && worker.session) worker.session.recoveredFrom = recovery.id;
         const folder = await resolveFolder({ botId, cwd: input.cwd });
         if (recovery) folder.teacher = recovery.teacher ?? botId;
@@ -1600,9 +1603,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
       if (input.command) {
-        const command = normalizeTerminalText(worker?.kind === "managed" ? managedWorkerCommand(worker, session.workerEnvironment, platform, session.mail?.binDir) : input.command);
+        // A fresh unrouted pane types the bot's own text; every other worker types its rendered argv.
+        const rendered = worker?.kind === "managed" || (recovery && worker?.kind === "unrouted") ? worker : null;
+        const command = normalizeTerminalText(rendered ? managedWorkerCommand(rendered, session.workerEnvironment, platform, session.mail?.binDir)
+          : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, input.command, session.mail?.binDir) : input.command);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
-        await botWrite(session, session.command, worker);
+        await botWrite(session, session.command, rendered);
       }
       return { sessionId: session.id, generation: session.generation, ...(worker?.line ? { line: worker.line } : {}) };
     },

@@ -326,6 +326,45 @@ test("a rejected claim never calls worker launch or releases another claim", asy
   assert.ok(f.runs.restarted().get("bot")[0].recovery);
 });
 
+test("zero-account recovery claims its run and resumes it in the same unrouted pane", async (t) => {
+  assert.ok(recovery);
+  const row = record("claude");
+  row.session.unrouted = true;
+  const f = fixture(t, [row]);
+  const children = [];
+  const inputs = [];
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({ authorize() {}, owner: () => owner, resolveCwd: async () => ROOT, workerAccountsEnabled: false,
+    paneRuns: f.runs, platform: "win32", env: { PATH: "C:/fixture/bin", CLAUDE_CONFIG_DIR: "C:/fixture/claude" }, freeMemory: () => 8 * 1024 ** 3, setPriority() {},
+    mailbox: async () => ({ url: "http://127.0.0.1:9", token: "fresh", binDir: "C:/bin" }),
+    workerLaunch: async (input) => {
+      inputs.push(input);
+      return { kind: "unrouted", executable: "claude", args: ["--model", "fixture", "-r", row.session.nativeId, NUDGE], workerSettings: true, account: { id: "claude", generation: 0 },
+        session: { engine: "claude", nativeId: row.session.nativeId, launchGeneration: randomUUID(), template: row.session.template } };
+    },
+    loadPty: () => ({ spawn(_shell, args, options) {
+      const child = { args, options, writes: [], onData(fn) { this.data = fn; }, onExit(fn) { this.exit = fn; }, write(text) { this.writes.push(text); }, resize() {}, kill() {} };
+      children.push(child);
+      return child;
+    } }),
+  });
+  t.after(() => host.dispose());
+  const pane = await host.openForBot(row.botId, { label: row.label, cwd: ROOT, command: "claude" }, row);
+  assert.equal(inputs[0].resume.unrouted, true);
+  assert.equal(JSON.parse(fs.readFileSync(f.file, "utf8")).find((run) => run.id === row.id).recovery.replacement, pane.sessionId);
+  assert.equal(children[0].args.includes("-NoProfile"), false);
+  assert.equal(children[0].options.env.CLAUDE_CONFIG_DIR, "C:/fixture/claude");
+  assert.equal(children[0].writes[0], `& 'claude' '--model' 'fixture' '-r' '${row.session.nativeId}' '${NUDGE}' '--settings' '${path.join("C:/bin", "claude-worker.json")}'\r`);
+  const env = children[0].options.env;
+  assert.equal(host.captureWorkerSession(`Bearer ${env.ORBIT_SESSION_AUTH}`, { pane: pane.sessionId, launchGeneration: env.ORBIT_SESSION_GENERATION,
+    session_id: row.session.nativeId, cwd: ROOT, transcript_path: null, source: "resume" }), true);
+  assert.equal(host.workerResumeStatus(pane.sessionId), "resumed");
+  const resumed = JSON.parse(fs.readFileSync(f.file, "utf8")).find((run) => run.id === pane.sessionId);
+  assert.deepEqual([resumed.session.unrouted, resumed.session.recoveredFrom, resumed.session.source], [true, row.id, "resume"]);
+  await assert.rejects(host.openForBot(row.botId, { cwd: ROOT, command: "claude" }, row), /claimed/);
+  assert.equal(children.length, 1);
+});
+
 test("managed recovery preserves teacher and binds a new pane, generation and fresh grant", async (t) => {
   assert.ok(recovery);
   const row = record("claude");

@@ -12,7 +12,7 @@ import { createTerminalHost } from "./terminal-host.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { installOrbitMsg } from "./terminal-mailbox.mjs";
 import { managedWorkerCommand } from "./terminal-worker.mjs";
-import { claudeSessionArgs } from "./worker-session.mjs";
+import { claudeSessionArgs, codexSessionArgs, resumeSessionReason } from "./worker-session.mjs";
 
 async function fixture(t, engine = "codex", overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-"));
@@ -31,7 +31,7 @@ async function fixture(t, engine = "codex", overrides = {}) {
       account: { id: "account-3", generation: 3 }, environment: { CODEX_THREAD_ID: "parent", CLAUDE_SESSION_ID: "parent", CLAUDECODE: "1" },
       session: { engine, launchGeneration: randomUUID(), nativeId: engine === "claude" ? randomUUID() : null, model: "fixture", effort: "high" } }),
     loadPty: () => ({ spawn(shell, args, options) {
-      const child = { options, writes: [], onData(fn) { this.data = fn; }, onExit(fn) { this.exit = fn; }, write(text) { this.writes.push(text); }, resize() {}, kill() {} };
+      const child = { shell, args, options, writes: [], onData(fn) { this.data = fn; }, onExit(fn) { this.exit = fn; }, write(text) { this.writes.push(text); }, resize() {}, kill() {} };
       children.push(child);
       return child;
     } }), ...overrides,
@@ -75,6 +75,56 @@ for (const engine of ["claude", "codex"]) {
     assert.equal(f.children[0].options.env.CODEX_THREAD_ID, undefined);
     assert.equal(f.children[0].options.env.CLAUDE_SESSION_ID, undefined);
     assert.equal(f.children[0].options.env.CLAUDECODE, undefined);
+  });
+}
+
+// Shaped like the server's reply to an unrouted request.
+const unroutedLaunch = (engine, calls = []) => async (input) => {
+  calls.push(input);
+  if (!input.unrouted) return null;
+  const nativeId = engine === "claude" ? randomUUID() : null;
+  return { kind: "unrouted", account: { id: engine, generation: 0 }, args: nativeId ? ["--session-id", nativeId] : [], workerSettings: false,
+    session: { engine, launchGeneration: randomUUID(), nativeId, model: "fixture", effort: "high", template: { executable: engine, args: ["--model", "fixture", "task"] } } };
+};
+
+for (const engine of ["claude", "codex"]) {
+  test(`zero-account ${engine} panes record their session without account routing`, async (t) => {
+    const calls = [];
+    const f = await fixture(t, engine, { workerAccountsEnabled: false, workerLaunch: unroutedLaunch(engine, calls) });
+    await f.open();
+    assert.deepEqual(calls.map((input) => input.unrouted), [true]);
+    const pending = f.read()[0].session;
+    assert.deepEqual([pending.unrouted, pending.accountId, pending.accountGeneration], [true, engine, 0]);
+    const hook = f.payload(0, pending.nativeId ?? randomUUID());
+    assert.equal((await f.post(0, hook)).status, 200);
+    const captured = createPaneRuns(f.file).restarted().get("bot")[0];
+    assert.deepEqual(captured.session, { ...pending, nativeId: hook.session_id, transcriptPath: hook.transcript_path, source: "startup" });
+    assert.equal(resumeSessionReason(captured), null);
+    assert.deepEqual(createLegacyPaneRuns(f.file).restarted().get("bot")[0], captured);
+  });
+
+  test(`zero-account ${engine} launches change only the session capture`, async (t) => {
+    let capture = false;
+    const f = await fixture(t, engine, { workerAccountsEnabled: false, workerLaunch: (input) => capture ? unroutedLaunch(engine)(input) : null,
+      env: { PATH: "C:/fixture/bin", CLAUDE_CONFIG_DIR: "C:/fixture/claude", CODEX_HOME: "C:/fixture/codex", OPENAI_API_KEY: "fixture-key", CLAUDECODE: "1" } });
+    const command = `${engine} --model fixture --dangerously-skip-permissions 'task'`;
+    await f.host.openForBot("bot", { command });
+    capture = true;
+    await f.host.openForBot("bot", { command });
+    const [before, after] = f.children.map((child) => {
+      const swap = (value) => value.replaceAll(child.options.env.ORBIT_PANE, "<pane>").replaceAll(child.options.env.ORBIT_MSG_AUTH, "<grant>");
+      const args = child.args.map((arg, index) => swap(child.args[index - 1] === "-EncodedCommand" ? Buffer.from(arg, "base64").toString("utf16le") : arg));
+      return { shell: child.shell, args, cwd: child.options.cwd, typed: child.writes[0],
+        env: Object.fromEntries(Object.entries(child.options.env).map(([key, value]) => [key, swap(value)])) };
+    });
+    const added = ["ORBIT_SESSION_AUTH", "ORBIT_SESSION_GENERATION", "ORBIT_SESSION_URL"];
+    assert.deepEqual(Object.keys(after.env).filter((key) => !(key in before.env)).sort(), added);
+    for (const key of added) delete after.env[key];
+    const flags = engine === "claude" ? claudeSessionArgs(["--session-id", f.read()[1].session.nativeId], f.binDir) : codexSessionArgs(f.binDir, "win32");
+    assert.equal(before.typed, `${command}\r`);
+    assert.equal(after.typed, `${[command, ...flags.map((flag) => `'${flag.replaceAll("'", "''")}'`)].join(" ")}\r`);
+    assert.deepEqual({ ...after, typed: null }, { ...before, typed: null });
+    assert.equal(f.read()[0].session, undefined);
   });
 }
 
