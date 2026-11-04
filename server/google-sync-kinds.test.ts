@@ -614,9 +614,6 @@ describe("Google reader kind recovery", () => {
       await timing.beforeRequest("POST", "/api/bots/send");
       expect(sync.catchingUp(scope.threadId)).toBe(false);
       expect(syncHold.until(scope.threadId)).toBeUndefined();
-      const dispatch = vi.fn();
-      dispatch();
-      expect(dispatch).toHaveBeenCalledOnce();
     } finally { listing.release(); }
     await sync.idle();
     expect(syncHold.until(scope.threadId)).toBeUndefined();
