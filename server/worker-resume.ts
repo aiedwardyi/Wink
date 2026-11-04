@@ -13,6 +13,7 @@ export interface WorkerResume {
   accountId: string;
   accountGeneration: number;
   template: { executable: string; args: string[] };
+  unrouted?: true;
 }
 
 export function baseAccount(id: string, driver: string, environment: NodeJS.ProcessEnv): AccountContext {

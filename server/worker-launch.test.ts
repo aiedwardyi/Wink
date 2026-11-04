@@ -12,6 +12,7 @@ import type { InstanceConfigMap } from "./contracts.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
 import { callTool, workerReportText } from "./drivers/terminal-proxy.ts";
 import { foldContinuationStart } from "./continuation-turn.ts";
+import { RESUME_NUDGE } from "./worker-resume.ts";
 
 const workers = await import("./worker-launch.ts").catch(() => null);
 const captures = await import("./worker-turn.ts").catch(() => null);
@@ -452,6 +453,58 @@ describe("trusted worker accounts", () => {
     expect(unused).not.toHaveBeenCalled();
   });
 
+  it.each(["claude", "codex"] as const)("captures a zero-account %s session and adds only its capture flags", async (engine) => {
+    const unused = vi.fn(() => { throw new Error("unexpected routed work"); });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: Object.assign(unused, { invalidate() {} }) });
+    const report = workerReportText("win32", true);
+    const command = engine === "claude"
+      ? `claude --model fixture --effort high --dangerously-skip-permissions ${report.claude}'task'`
+      : `codex --model fixture -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox ${report.env}${report.notify}'task'`;
+    const launch = await prepare({ botId: "bot", label: "worker", command, environment: { OpenAI_Api_Key: "fixture-key" }, unrouted: true });
+    const parsed = workers!.workerCommand(command);
+    if (parsed.kind !== "managed" || launch?.kind !== "unrouted") throw new Error("Expected an unrouted launch");
+    expect(launch).toMatchObject({ account: { id: engine, generation: 0 }, workerSettings: engine === "claude",
+      session: { engine, model: "fixture", effort: "high", template: { executable: engine, args: parsed.args } } });
+    expect(launch.args).toEqual(engine === "claude" ? ["--session-id", launch.session?.nativeId] : []);
+    expect(unused).not.toHaveBeenCalled();
+  });
+
+  it.each(["claude -- 'task'", "codex -c hooks.SessionStart=[] 'task'", "$env:CODEX_HOME='x'; codex 'task'", "claude --settings 'C:/custom.json' 'task'",
+    "pwsh -Command \"claude task\"", "claude 'task'; rm x", "pnpm test", "grok 'task'", ""])("leaves a zero-account command it cannot capture alone: %s", async (command) => {
+    const unused = vi.fn(() => { throw new Error("unexpected routed work"); });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: unused, bases: unused, available: unused, usage: Object.assign(unused, { invalidate() {} }) });
+    expect(await prepare({ botId: "bot", command, environment: {}, unrouted: true })).toBeNull();
+    expect(unused).not.toHaveBeenCalled();
+  });
+
+  it("leaves unrouted requests to the plain launch once accounts exist", async () => {
+    const f = await fixture();
+    expect(await f.prepare({ ...f.input, unrouted: true })).toBeNull();
+    expect(f.refresh).not.toHaveBeenCalled();
+    expect(f.available).not.toHaveBeenCalled();
+  });
+
+  it.each(["claude", "codex"] as const)("resumes a zero-account %s run unrouted after the base sign-in and usage checks", async (engine) => {
+    const f = await fixture();
+    const account = Object.freeze({ id: engine, of: engine, generation: 0, home: join(DATA_DIR, `base-${engine}`) });
+    const resumeAccount = vi.fn(() => account);
+    const usage = Object.assign(vi.fn(async (): Promise<{ hold?: string; line?: string }> => ({ line: "ready" })), { invalidate() {} });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases, available: f.available, usage, resumeAccount });
+    const nativeId = "00000000-0000-4000-8000-000000000002";
+    const flags = engine === "claude" ? ["--dangerously-skip-permissions", "--settings", join(homedir(), ".orbit", "bin", "claude-worker.json"), "--session-id", nativeId]
+      : ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_provider=custom"];
+    const resume = { engine, nativeId, accountId: engine, accountGeneration: 0, unrouted: true as const, template: { executable: engine, args: ["--model", "original", ...flags, "old task"] } };
+    const launch = await prepare({ ...f.input, command: engine, resume });
+    expect(launch).toMatchObject({ kind: "unrouted", account: { id: engine, generation: 0 }, executable: engine, workerSettings: engine === "claude", line: "ready", session: { nativeId } });
+    expect(launch).not.toHaveProperty("environment");
+    expect(launch?.kind === "unrouted" && launch.args).toEqual(engine === "claude" ? ["--model", "original", "--dangerously-skip-permissions", "-r", nativeId, RESUME_NUDGE]
+      : ["resume", nativeId, "--model", "original", "--dangerously-bypass-approvals-and-sandbox", "-c", "model_provider=custom", RESUME_NUDGE]);
+    expect(usage).toHaveBeenCalledExactlyOnceWith("bot", "worker", engine, undefined, true);
+    expect(resumeAccount).toHaveBeenCalledWith(engine, 0);
+    usage.mockResolvedValueOnce({ hold: "Held: low usage" });
+    expect(await prepare({ ...f.input, command: engine, resume })).toEqual({ kind: "hold", hold: "Held: low usage" });
+  });
+
   it("keeps the no-accounts terminal tool response unchanged using a recorded command", async () => {
     const recorded = JSON.parse(readFileSync(new URL("../test/fixtures/recorded/claude/worker-shell.json", import.meta.url), "utf8"));
     const command = recorded.reply.messages[0].message.content[0].input.command;
@@ -472,6 +525,15 @@ describe("worker service boundary", () => {
     expect((await panes!.workerLaunchResponse(access, "bot-read-grant", input, f.prepare)).status).toBe(401);
     const result = await panes!.workerLaunchResponse(access, access.token, input, f.prepare);
     expect(result).toMatchObject({ status: 200, body: { launch: { account: { id: f.third.id } } } });
+  });
+
+  it("passes zero-account capture and resume flags through the private route", async () => {
+    const access = { url: "http://fixture", token: "private-host" };
+    const prepare = vi.fn(async (_input: unknown) => null);
+    const resume = { engine: "claude", nativeId: "00000000-0000-4000-8000-000000000003", accountId: "claude", accountGeneration: 0, unrouted: true, template: { executable: "claude", args: [] } };
+    await panes!.workerLaunchResponse(access, access.token, { botId: "bot", command: "claude 'task'", environment: {}, unrouted: true }, prepare);
+    await panes!.workerLaunchResponse(access, access.token, { botId: "bot", command: "claude", environment: {}, resume }, prepare);
+    expect(prepare.mock.calls.map(([input]) => input)).toMatchObject([{ unrouted: true }, { resume: { unrouted: true } }]);
   });
 
   it("exposes account pane counts and treats unreachable or unknown hosts conservatively", async () => {

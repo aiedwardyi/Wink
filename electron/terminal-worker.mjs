@@ -13,10 +13,10 @@ export async function resolveWorkerLaunch(access, bridge, input, fetchImpl = fet
   return body.launch;
 }
 
+const quoteWindows = (value) => `'${value.replace(/['\u2018\u2019\u201a\u201b]/g, (mark) => mark + mark)}'`;
+
 export function managedWorkerCommand(worker, environment, platform, binDir) {
-  const quote = platform === "win32"
-    ? (value) => `'${value.replace(/['\u2018\u2019\u201a\u201b]/g, (mark) => mark + mark)}'`
-    : (value) => `'${value.replace(/'/g, "'\\''")}'`;
+  const quote = platform === "win32" ? quoteWindows : (value) => `'${value.replace(/'/g, "'\\''")}'`;
   let args = worker.args.map((arg) => arg.replace(/\u0000(ORBIT_[A-Z_]+)\u0000/g, (_, name) => environment[name] ?? ""));
   if (worker.workerSettings && binDir) args.push("--settings", path.join(binDir, "claude-worker.json"));
   if (worker.session && binDir && platform === "win32") {
@@ -24,4 +24,12 @@ export function managedWorkerCommand(worker, environment, platform, binDir) {
     if (worker.session.engine === "codex") args.push(...codexSessionArgs(binDir, platform));
   }
   return `${platform === "win32" ? "& " : ""}${[worker.executable, ...args].map(quote).join(" ")}`;
+}
+
+export function unroutedWorkerCommand(worker, command, binDir) {
+  if (!binDir) return command;
+  let args = [...worker.args];
+  if (worker.session.engine === "claude" && !worker.workerSettings) args = claudeSessionArgs(args, binDir);
+  if (worker.session.engine === "codex") args.push(...codexSessionArgs(binDir, "win32"));
+  return args.length ? [command.trimEnd(), ...args.map(quoteWindows)].join(" ") : command;
 }

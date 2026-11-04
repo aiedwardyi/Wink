@@ -64,6 +64,7 @@ export function createWorkerSession(worker, pane, cwd, bridgeUrl) {
     cwd, accountId: worker.account.id, accountGeneration: worker.account.generation, model: launch.model, effort: launch.effort, lifecycle: "running" };
   if (launch.template) run.template = launch.template;
   if (launch.recoveredFrom) run.recoveredFrom = launch.recoveredFrom;
+  if (worker.kind === "unrouted") run.unrouted = true;
   return {
     auth,
     env: { ORBIT_SESSION_URL: bridgeUrl ? `${bridgeUrl}/v1/terminal/session` : "", ORBIT_SESSION_AUTH: auth, ORBIT_SESSION_GENERATION: launch.launchGeneration },

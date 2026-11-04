@@ -87,12 +87,39 @@ export function workerCommand(command: string, unmanaged = false) {
   return { kind: "managed" as const, executable, args, environment, ...engine };
 }
 
+function withoutWorkerSettings(args: string[]) {
+  const settings = canonicalAccountHome(join(homedir(), ".orbit", "bin", "claude-worker.json"));
+  let workerSettings = false;
+  const rest = args.filter((arg, index) => {
+    if (index > 0 && args[index - 1] === "--settings" && canonicalAccountHome(arg) === settings) return false;
+    if (arg === "--settings" && args[index + 1] && canonicalAccountHome(args[index + 1]) === settings) { workerSettings = true; return false; }
+    return true;
+  });
+  return { args: rest, workerSettings };
+}
+
+// Without account routing the pane still types the bot's own command, so only the session flags get appended.
+function unroutedLaunch(text: string) {
+  try {
+    const command = workerCommand(text);
+    if (command.kind !== "managed" || command.args.some((arg) => arg === "--" || arg === "--%")) return null;
+    const { args, workerSettings } = command.driver === "claudeAgent" ? withoutWorkerSettings(command.args) : { args: [...command.args], workerSettings: false };
+    if (command.driver === "claudeAgent" && !workerSettings && args.some((arg) => /^--settings(?:=|$)/.test(arg))) return null;
+    const typed = args.length;
+    const session = workerSession(command.executable, args, {}, { executable: command.executable, args: [...command.args] });
+    return session ? { kind: "unrouted" as const, account: { id: command.base, generation: 0 }, args: args.slice(typed), workerSettings, session } : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createWorkerLaunch(deps: {
   enabled(): boolean; resolveWorkerTurn: WorkerTurnResolver; bases(): InstanceConfigMap;
   available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
 }) {
-  return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume }) => {
+  return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
+    if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
     if (!deps.enabled() && !input.resume) return null;
     const resume = input.resume;
     const command = resume ? { ...workerCommand(resume.engine), args: resumeArgs(resume) } : workerCommand(input.command, input.mode === "send");
@@ -113,15 +140,8 @@ export function createWorkerLaunch(deps: {
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
     let workerSettings = false;
-    if (command.driver === "claudeAgent") {
-      const settings = join(homedir(), ".orbit", "bin", "claude-worker.json");
-      args = args.filter((arg, index) => {
-        if (index > 0 && command.args[index - 1] === "--settings" && canonicalAccountHome(arg) === canonicalAccountHome(settings)) return false;
-        if (arg === "--settings" && command.args[index + 1] && canonicalAccountHome(command.args[index + 1]) === canonicalAccountHome(settings)) { workerSettings = true; return false; }
-        return true;
-      });
-    }
-    for (let i = 0; command.driver === "codex" && i < args.length; i++) {
+    if (command.driver === "claudeAgent") ({ args, workerSettings } = withoutWorkerSettings(args));
+    for (let i = 0; command.driver === "codex" && !resume?.unrouted && i < args.length; i++) {
       const value = /^(?:--config|-c)$/.test(args[i]) ? args[++i] : /^(?:--config=|-c=?)(.+)$/.exec(args[i])?.[1];
       const key = value?.split("=", 1)[0].trim();
       if (key && !/^shell_environment_policy\.set\.ORBIT_(?:PANE|BOT|TEACHER|URL|MSG_AUTH)$/.test(key)
@@ -131,6 +151,13 @@ export function createWorkerLaunch(deps: {
     const template = resume?.template ?? { executable: command.executable, args: [...command.args] };
     const session = workerSession(command.executable, args, source, template);
     if (session && resume) session.nativeId = resume.nativeId;
+    if (resume?.unrouted) {
+      const usage = await deps.usage(input.botId, input.label ?? "", resume.engine, undefined, true);
+      if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
+      const current = await deps.resumeAccount?.(resume.accountId, resume.accountGeneration);
+      if (!deps.available(account.id, account.generation) || current?.id !== account.id || current.generation !== account.generation) throw new Error("Worker account changed before launch");
+      return { kind: "unrouted" as const, account: { id: account.id, generation: account.generation }, executable: command.executable, args, workerSettings, session, line: usage.line };
+    }
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
     const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source);
     if (command.driver === "claudeAgent" && !(sameEngine && turn.account && turn.account.generation !== 0)
