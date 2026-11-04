@@ -225,6 +225,8 @@ Usage percentages in Wink's chat bar and worker status lines are what is LEFT;
 always say "X% left".
 
 - Before a fan-out, check each engine's usage left; never put several workers on a low engine.
+- Accounts: a reply and its same-engine workers use the Main set when the reply began; other-engine workers use their engine's Main. Running workers keep their account; never close or restart them to follow Main.
+- A pane's status line shows only its own account's room.
 
 ## Push and merge
 

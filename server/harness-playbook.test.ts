@@ -183,6 +183,16 @@ describe("harness playbook", () => {
     expect(prompt).toContain("- Never stop a worker or others' processes unless the user names it.");
   });
 
+  it("tells bots which account a new worker uses", () => {
+    expect(harnessPlaybookPrompt(true)).toContain("a reply and its same-engine workers use the Main set when the reply began; other-engine workers use their engine's Main.");
+  });
+
+  it("tells bots that running workers keep their account", () => {
+    const prompt = harnessPlaybookPrompt(true);
+    expect(prompt).toContain("Running workers keep their account; never close or restart them to follow Main.");
+    expect(prompt).toContain("- A pane's status line shows only its own account's room.");
+  });
+
   it("keeps unlanded branches in the task record and lands or explains them before done", () => {
     expect(harnessPlaybookPrompt(true).replace(/\s+/g, " ")).toContain(
       "- Name each verified, unlanded change (PR, branch, sha) in the task record. Before a release or calling a task done, list open PRs and unmerged branches; land each or record why it waits.",
@@ -203,7 +213,7 @@ describe("harness playbook", () => {
 
   it("stays within its size budget", () => {
     const prompt = loadHarnessPlaybook(undefined, join("D:", "wt"), "win32").replace(/\r\n/g, "\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(13909);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(14180);
   });
 
   it("fills the worktree path from the configured root", () => {
