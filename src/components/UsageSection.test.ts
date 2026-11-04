@@ -37,7 +37,6 @@ vi.mock("@/state/store", async (importOriginal) => ({
 
 import { UsageSection } from "./UsageSection";
 import { ChatPlanMeters } from "./ChatPlanMeters";
-import { planUsageTone } from "./PlanUsageBar";
 
 async function mounted(run: (host: HTMLDivElement) => Promise<void>) {
   const host = document.createElement("div");
@@ -59,12 +58,6 @@ describe("UsageSection", () => {
     mockApi.mockImplementation(async () => ({}));
     persistPreference("en");
     vi.useRealTimers();
-  });
-
-  it("shares the 75/90 thresholds between text and fill colors", () => {
-    expect(planUsageTone(74)).toEqual({ textClass: "text-accent", fillClass: "bg-accent" });
-    expect(planUsageTone(75)).toEqual({ textClass: "text-warning", fillClass: "bg-warning" });
-    expect(planUsageTone(90)).toEqual({ textClass: "text-danger", fillClass: "bg-danger" });
   });
 
   it("shows the desk and hides the per-bot table", () => {

@@ -404,7 +404,7 @@ describe("chat usage meter, quick view and wait card", () => {
     const labels = [...card!.querySelectorAll("button")].filter((button) => !button.hasAttribute("data-all-usage"))
       .map((button) => `${text(button)} ${button.getAttribute("aria-label") ?? ""}`);
     expect(labels.filter((label) => /\bUse\b|사용(?!량)/.test(label))).toEqual([]);
-    expect(card!.querySelector("[data-use], [data-account-name], [data-tile], [data-account-row], svg[aria-hidden] path")).toBeNull();
+    expect(card!.querySelector("[data-use], [data-account-name], [data-tile], [data-account-row], svg:not(.lucide) path")).toBeNull();
     for (const name of ["Claude 1", "Claude 2", "Studio"]) expect(text(card)).not.toContain(name);
     await click(all);
     expect(store.state.appSettingsOpen).toBe(true);

@@ -51,7 +51,6 @@ const manageMembers = readFileSync(join(here, "../components/ManageMembersPanel.
 const pluginsPanel = readFileSync(join(here, "../components/PluginsPanel.tsx"), "utf8");
 const usageSection = readFileSync(join(here, "../components/UsageSection.tsx"), "utf8");
 const usageDesk = readFileSync(join(here, "../components/UsageDesk.tsx"), "utf8");
-const planUsageBar = readFileSync(join(here, "../components/PlanUsageBar.tsx"), "utf8");
 const usageLib = readFileSync(join(here, "usage.ts"), "utf8");
 const chatPlanMeters = readFileSync(join(here, "../components/ChatPlanMeters.tsx"), "utf8");
 const composer = readFileSync(join(here, "../components/Composer.tsx"), "utf8");
@@ -877,25 +876,18 @@ describe("plan usage", () => {
     expect(usageDesk).toContain('t("usage.desk.noReport")');
     expect(usageDesk).toContain('t("usage.desk.left")');
     expect(usageDesk).toContain('"usage.desk.resetsIn"');
-    expect(planUsageBar).toContain('"usage.limits.session"');
-    expect(planUsageBar).toContain('"usage.limits.weekly"');
-    expect(planUsageBar).toContain('"usage.limits.window"');
-    expect(planUsageBar).toContain('"usage.limits.sessionShort"');
-    expect(planUsageBar).toContain('"usage.limits.weeklyShort"');
-    expect(planUsageBar).toContain('t("usage.limits.percentUsed", { percent })');
     expect(usageLib).toContain('"usage.limits.refreshAgeMinutes"');
     expect(usageLib).toContain('"usage.limits.refreshAgeHours"');
     expect(usageDesk).not.toContain('"usage.limits.unavailable"');
-    expect(planUsageBar).toContain("t(phrase.key, phrase.vars)");
-    expect(planUsageBar).toContain("t(compactReset.key, compactReset.vars)");
-    for (const source of [usageSection, usageDesk]) {
+    for (const source of [usageSection, usageDesk, chatPlanMeters]) {
       expect(source).not.toMatch(/Resets in/);
       expect(source).not.toMatch(/% used/);
       expect(source).not.toMatch(/does not report/);
       expect(source).not.toMatch(/not available at the moment/);
     }
-    expect(planUsageBar).not.toMatch(/Resets in/);
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
+    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name })');
+    expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");
     expect(chatView).toContain("shownEngine?.rateLimits?.windows");

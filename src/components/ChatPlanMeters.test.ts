@@ -16,6 +16,13 @@ function render(windows: RateLimitWindow[] | undefined) {
   return renderToStaticMarkup(createElement(ChatPlanMeters, { windows, now, onOpenUsage: () => {} }));
 }
 
+function line(html: string) {
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  const text = (hook: string) => host.querySelector(`[data-usage-meter] [${hook}]`)?.textContent ?? null;
+  return { first: text("data-meter-first"), second: text("data-meter-second") };
+}
+
 describe("ChatPlanMeters", () => {
   it("hides when the engine has no live plan windows", () => {
     expect(render(undefined)).toBe("");
@@ -25,52 +32,41 @@ describe("ChatPlanMeters", () => {
     ).toBe("");
   });
 
-  it("shows the live 5-hour and weekly windows with remaining percent and a compact reset", () => {
+  it("shows the live 5-hour and weekly windows with remaining percent, the binding one first", () => {
     const html = render([
       { id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 },
       { id: "seven_day", usedPercent: 49, resetsAt: now + 53 * 3_600_000 },
       { id: "seven_day_opus", usedPercent: 75, resetsAt: now + 53 * 3_600_000 },
       { id: "stale", usedPercent: 40, resetsAt: now - 60_000 },
     ]);
-    expect(html).toContain("5h");
-    expect(html).toContain("7d");
-    expect(html).toContain(">90%<");
-    expect(html).toContain(">51%<");
-    expect(html).toContain("1h55m");
-    expect(html).toContain("2d5h");
-    expect(html).not.toContain(">25%<");
-    expect(html).not.toContain(">60%<");
-    expect(html).not.toContain(">10%<");
-    expect(html).not.toMatch(/>Resets in/);
-    expect(html).toContain('title="Resets in');
-    expect(html).not.toContain("% remaining<");
+    expect(line(html)).toEqual({ first: "7d 51%", second: "5h 90%" });
+    expect(html).not.toContain("25%");
+    expect(html).not.toContain("60%");
+    expect(html).not.toContain("10%");
+    expect(html).not.toContain("% remaining");
     expect(html).not.toContain("$");
     expect(html).not.toContain("Fixed");
     expect(html).not.toContain("on-demand");
-    expect(html).toContain("▰▰▰▰▰▰▰▰▰▱");
-    expect(html).toContain("▰▰▰▰▰▱▱▱▱▱");
-    expect(html).toContain("(1h55m)");
-    expect(html).toContain("(2d5h)");
-    expect(html).toContain('aria-label="5h: 90% remaining"');
-    expect(html).toContain('aria-label="7d: 51% remaining"');
-    expect(html).toContain("text-accent");
-    expect(html).not.toContain("bg-app");
-    expect(html).not.toContain("h-1.5");
+    expect(line(render([
+      { id: "seven_day", usedPercent: 49, resetsAt: now + 53 * 3_600_000 },
+      { id: "five_hour", usedPercent: 80, resetsAt: now + 115 * 60_000 },
+    ]))).toEqual({ first: "5h 20%", second: "7d 51%" });
   });
 
-  it("counts down both wire windows without inventing an unknown fill", () => {
+  it("reads both wire windows as percent left without inventing an unknown value", () => {
     const html = render([
       { id: "primary", usedPercent: 80, windowMinutes: 300, resetsAt: now + 106 * 60_000 },
       { id: "secondary", usedPercent: 125, windowMinutes: 10080, resetsAt: now + 86_400_000 },
     ]);
-    expect(html).toContain('aria-label="5h: 20% remaining"');
-    expect(html).toContain('aria-label="7d: 0% remaining"');
-    expect(html).toContain("▰▰▱▱▱▱▱▱▱▱");
-    expect(html).toContain("(1h46m)");
+    expect(line(html)).toEqual({ first: "7d 0%", second: "5h 20%" });
     const unknown = render([{ id: "five_hour", usedPercent: NaN, resetsAt: now + 60_000 }]);
     expect(unknown).not.toContain("100%");
-    expect(unknown).not.toContain("▰");
+    expect(unknown).not.toContain("NaN");
     expect(render([{ id: "five_hour", usedPercent: 80, resetsAt: now - 1 }])).toBe("");
+  });
+
+  it("keeps a weekly-only report and says the session window has no data", () => {
+    expect(line(render([{ id: "seven_day", usedPercent: 71, resetsAt: now + 53 * 3_600_000 }]))).toEqual({ first: "7d 29%", second: "No data" });
   });
 
   it("never renders a token readout", () => {
@@ -78,18 +74,7 @@ describe("ChatPlanMeters", () => {
     const html = render(live);
     expect(html).not.toContain("↑");
     expect(html).not.toContain("↓");
-    expect(html).toContain("grid-cols-1");
-  });
-
-  it("stretches both windows across an even two-column row", () => {
-    const html = render([
-      { id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 },
-      { id: "seven_day", usedPercent: 49, resetsAt: now + 53 * 3_600_000 },
-    ]);
-    expect(html).toContain("grid-cols-2");
-    expect(html).toContain("w-full");
-    expect(html).toContain("5h");
-    expect(html).toContain("7d");
+    expect(line(html)).toEqual({ first: "5h 90%", second: null });
   });
 
   it("dispatches the usage action when the strip is clicked", async () => {
@@ -162,17 +147,20 @@ describe("ChatPlanMeters", () => {
       host.innerHTML = renderToStaticMarkup(createElement(ChatPlanMeters, {
         windows, driverKind, observedAt: new Date(now - ageMs).toISOString(), now, onOpenUsage: () => {},
       }));
+      return host.querySelector("[data-usage-meter]")!;
     };
-    draw("museAgent", 4 * 86_400_000);
+    const stale = draw("museAgent", 4 * 86_400_000);
     expect(host.textContent).toContain("Last seen 4d ago");
-    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-danger')).toBeNull();
-    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-ink-secondary')).not.toBeNull();
-    draw("museAgent", 30 * 60_000);
+    expect(stale.className).toContain("opacity-70");
+    expect(stale.querySelector("[data-meter-first]")?.textContent).toBe("7d 0%");
+    const fresh = draw("museAgent", 30 * 60_000);
     expect(host.textContent).not.toContain("Last seen");
-    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-danger')).not.toBeNull();
-    draw("claudeAgent", 4 * 86_400_000);
+    expect(fresh.className).not.toContain("opacity-70");
+    expect(fresh.querySelector("[data-meter-first]")?.className).toContain("text-danger");
+    const other = draw("claudeAgent", 4 * 86_400_000);
     expect(host.textContent).not.toContain("Last seen");
-    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-danger')).not.toBeNull();
+    expect(other.className).not.toContain("opacity-70");
+    expect(other.querySelector("[data-meter-first]")?.className).toContain("text-danger");
   });
 
   it("describes the strip with a stale Muse reading's age and keeps its name", () => {
