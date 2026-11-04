@@ -168,8 +168,21 @@ describe("worker list shortcut", () => {
     }
   });
 
-  it("prevents the Window mnemonic even when there are no workers", async () => {
-    const { host, press, unmount } = await mount(false, false, false);
+  it.each([false, true])("opens the list to its terminal row at 0 workers with phone=%s", async (phone) => {
+    const { host, press, unmount } = await mount(false, phone, false);
+    try {
+      expect(host.querySelector("[data-worker-strip]")).not.toBeNull();
+      expect((await press()).defaultPrevented).toBe(true);
+      const list = document.body.querySelector("[data-worker-list]")!;
+      expect(list.querySelectorAll("li")).toHaveLength(0);
+      expect(list.lastElementChild?.hasAttribute("data-worker-terminal")).toBe(true);
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("prevents the Window mnemonic in a group with no workers", async () => {
+    const { host, press, unmount } = await mount(true, false, false);
     try {
       expect(host.querySelector("[data-worker-strip]")).toBeNull();
       expect((await press()).defaultPrevented).toBe(true);
@@ -405,7 +418,7 @@ describe("terminal pane shortcuts", () => {
     expect(pane).toContain("e.stopPropagation()");
     expect(pane).toContain("setPaneHotkey({ n })");
     expect(pane).toContain("return;");
-    expect(app).toContain("paneHotkey={paneHotkey}");
+    expect(app).toContain("paneHotkey={botPaneHotkey}");
     expect(app).toContain("terminalOpen, dispatch]);");
   });
 

@@ -15,7 +15,6 @@ import {
   Pin,
   RefreshCw,
   Search,
-  TerminalSquare,
   X,
 } from "lucide-react";
 import {
@@ -1502,19 +1501,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
               <KeepGoingMark state={keepGoing} size={14} />
             </button>
           )}
-          <WorkerChip name={bot.name} runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} />
-          {onOpenTerminal && (
-            <button
-              type="button"
-              onClick={onOpenTerminal}
-              data-chat-terminal=""
-              aria-label={t("terminal.open")}
-              title={`${t("terminal.open")} (${window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}\`)`}
-              className="shrink-0 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-            >
-              <TerminalSquare size={18} />
-            </button>
-          )}
+          <WorkerChip name={bot.name} runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button
             onClick={() => find.toggleFind()}

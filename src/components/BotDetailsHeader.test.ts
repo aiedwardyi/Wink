@@ -57,8 +57,10 @@ describe("QA 17 one Bot-details header entry", () => {
     expect(phoneHeaderName).toContain("phoneHeaderSlots(text, 4 * rem)");
     expect(phoneHeaderName).not.toContain("4.5 * rem");
     expect(phoneHeaderName).not.toContain("aria-label");
-    expect(phoneHeaderName).toContain('querySelector("[data-chat-terminal]")');
-    expect(chatHeader).toContain("data-chat-terminal");
+    expect(phoneHeaderName).not.toContain("data-chat-terminal");
+    expect(chatHeader).not.toContain("data-chat-terminal");
+    expect(chatHeader).not.toContain("TerminalSquare");
+    expect(chatHeader).toContain("onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />");
     expect(chatHeader).toContain('className="min-w-0 flex-1 overflow-hidden max-md:hidden"');
   });
 
