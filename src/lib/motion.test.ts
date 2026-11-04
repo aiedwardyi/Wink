@@ -40,14 +40,17 @@ describe("shared motion tokens", () => {
   it("drives script motion from the same tokens", async () => {
     const motion = await import("./motion");
     const { PRESENCE_EXIT_MS } = await import("./use-presence");
-    const { SWIPE_MOTION_MS, SWIPE_SPRING } = await import("./phone-swipe");
     expect(`${motion.MOTION_FAST_MS}ms`).toBe(token("motion-fast"));
     expect(`${motion.MOTION_LARGE_MS}ms`).toBe(token("motion-large"));
     expect(motion.EASE_STANDARD).toBe(token("ease-standard"));
     expect(motion.EASE_ENTRANCE).toBe(token("ease-entrance"));
     expect(PRESENCE_EXIT_MS).toBe(motion.MOTION_FAST_MS);
-    expect(SWIPE_MOTION_MS).toBe(motion.MOTION_LARGE_MS);
-    expect(SWIPE_SPRING).toBe(motion.EASE_ENTRANCE);
+  });
+
+  it("keeps the swipe follow-through on its own spring, carrying the finger's speed", async () => {
+    const { SWIPE_MOTION_MS, SWIPE_SPRING } = await import("./phone-swipe");
+    expect(SWIPE_MOTION_MS).toBe(260);
+    expect(SWIPE_SPRING).toBe("cubic-bezier(0.22, 1, 0.36, 1)");
   });
 
   it("makes everything instant under reduced motion", () => {
