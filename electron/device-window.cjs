@@ -89,7 +89,7 @@ location.assign("https://"+host+"/remote?key="+key);});`;
 }
 
 /** Shown when the PC can't be reached; Retry reloads its own origin only. */
-function deviceUnreachablePage({ host, title, heading, help, retry }) {
+function deviceUnreachablePage({ host, title, heading, help, retry, backgroundColor = "#070707", color = "#f5f5f5" }) {
   const escape = (value) =>
     String(value)
       .replaceAll("&", "&amp;")
@@ -101,12 +101,23 @@ document.querySelector("button").addEventListener("click",()=>location.assign("h
   return (
     "data:text/html;charset=utf-8," +
     encodeURIComponent(`<!doctype html><html><meta name="color-scheme" content="dark"><title>${escape(title)}</title>
-      <body style="margin:0;display:grid;place-items:center;height:100vh;background:#070707;color:#f5f5f5;font:14px system-ui,sans-serif">
+      <body style="margin:0;display:grid;place-items:center;height:100vh;background:${escape(backgroundColor)};color:${escape(color)};font:14px system-ui,sans-serif">
         <div style="max-width:440px;padding:32px;text-align:center"><h2 style="margin:0 0 ${help ? 10 : 20}px;font-size:18px">${escape(heading)}</h2>${help ? `<p style="margin:0 0 20px;color:#a1a1aa;line-height:1.5;word-break:keep-all">${escape(help)}</p>` : ""}
-        <button style="border:0;border-radius:9px;background:#fff;color:#111;padding:9px 14px;font-weight:600;cursor:pointer">${escape(retry)}</button></div>
-        <script>${script}</script>
+        ${retry ? `<button style="border:0;border-radius:9px;background:#fff;color:#111;padding:9px 14px;font-weight:600;cursor:pointer">${escape(retry)}</button>` : ""}</div>
+        ${retry ? `<script>${script}</script>` : ""}
       </body></html>`)
   );
+}
+
+function deviceConnectingPage({ title, heading, backgroundColor, color }) {
+  return deviceUnreachablePage({ host: "", title, heading, backgroundColor, color });
+}
+
+async function startDeviceWindow(win, loadingPage, url) {
+  await win.loadURL(loadingPage);
+  if (win.isDestroyed()) return;
+  win.show();
+  await win.loadURL(url).catch(() => {});
 }
 
 const LINKED_FILE_RE = /^\/api\/threads\/[\w-]+\/linked-file$/;
@@ -241,4 +252,4 @@ function watchDeviceLoad(webContents, { host, url, failurePage, log, setInterval
   };
 }
 
-module.exports = { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus };
+module.exports = { DEVICE_WINDOW_PARTITION, deviceConnectingPage, startDeviceWindow, deviceLinkPage, deviceLinkedFileName, deviceUnreachablePage, watchDeviceLoad, deviceTailnet, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus };

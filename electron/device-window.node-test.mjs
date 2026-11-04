@@ -60,6 +60,20 @@ class FakeWebContents extends EventEmitter {
 
 const URL_ = "https://home.tail1234.ts.net/";
 
+test("paints the named connecting page before showing or contacting the PC", async () => {
+  const { deviceConnectingPage, startDeviceWindow } = require("./device-window.cjs");
+  const loading = deviceConnectingPage({ title: "Wink - Studio", heading: "Connecting to Studio", backgroundColor: "#22272e", color: "#adbac7" });
+  const html = decodeURIComponent(loading);
+  assert.ok(html.includes("Connecting to Studio"));
+  assert.ok(html.includes("background:#22272e"));
+  const steps = [];
+  const win = { isDestroyed: () => false, show: () => steps.push("show"), loadURL: async (url) => steps.push(url) };
+  await startDeviceWindow(win, loading, URL_);
+  assert.deepEqual(steps, [loading, "show", URL_]);
+  const failure = decodeURIComponent(deviceUnreachablePage({ host: "home.ts.net", title: "Wink", heading: "Offline", retry: "Retry", backgroundColor: "#22272e", color: "#adbac7" }));
+  assert.ok(failure.includes("background:#22272e"));
+});
+
 function watched() {
   const webContents = new FakeWebContents();
   const logs = [];
