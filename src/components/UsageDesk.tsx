@@ -97,7 +97,7 @@ function ResetLine({ slot, window, account, clock }: { slot: "session" | "week";
   </>;
   return (
     <div data-reset={slot} className="usage-num flex min-w-0 flex-wrap items-baseline gap-x-3 text-[12.5px] leading-5 text-ink-secondary">
-      <span className="w-6 shrink-0">{label}</span>
+      <span className="min-w-6 shrink-0 whitespace-nowrap">{label}</span>
       {body}
     </div>
   );
@@ -157,7 +157,7 @@ function Ticker({ board, engineId, select, phone, terminal, clock }: {
   const { t } = clock;
   return (
     <div role="tablist" aria-label={t("usage.desk.engines")} className="grid gap-1 rounded-[3px] [corner-shape:bevel] bg-inset p-1"
-      style={{ gridTemplateColumns: `repeat(${board.engines.length}, minmax(0, 1fr))` }}>
+      style={{ gridTemplateColumns: phone ? `repeat(${board.engines.length}, auto)` : `repeat(${board.engines.length}, minmax(0, 1fr))` }}>
       {board.engines.map((engine) => {
         const main = engine.accounts.find((account) => account.id === engine.mainId) ?? engine.accounts[0];
         const facts = main ? windowFacts(main, t) : null;
@@ -166,13 +166,14 @@ function Ticker({ board, engineId, select, phone, terminal, clock }: {
         const tone = toneOf(facts?.binding, undefined);
         return (
           <button key={engine.engine} type="button" role="tab" data-engine={engine.engine} aria-selected={selected} onClick={() => select(engine.engine)}
-            className={cn("flex min-w-0 flex-col items-start gap-1 rounded-[3px] [corner-shape:bevel] px-2 py-1.5 text-left transition-colors duration-100 motion-reduce:transition-none",
+            className={cn("flex min-w-0 flex-col items-start gap-1 rounded-[3px] [corner-shape:bevel] py-1.5 text-left", phone ? "px-1.5" : "px-2",
+              " transition-colors duration-100 motion-reduce:transition-none",
               selected ? "bg-raised" : "hover:bg-raised-hover")}>
             <span className="max-w-full truncate text-[11.5px] leading-none text-ink-secondary">{engineName(engine.engine)}</span>
             <span className="flex w-full items-end justify-between gap-1">
               <span className="usage-num min-w-0">
-                <span className={cn("block truncate text-[13px] leading-tight", TONE_TEXT[tone])}>{facts?.first}</span>
-                <span className="block truncate text-[11px] leading-tight text-ink-secondary">{facts?.second ?? " "}</span>
+                <span className={cn("block leading-tight", phone ? "whitespace-nowrap text-[12px]" : "truncate text-[13px]", TONE_TEXT[tone])}>{facts?.first}</span>
+                <span className={cn("block leading-tight text-ink-secondary", phone ? "whitespace-nowrap text-[10.5px]" : "truncate text-[11px]")}>{facts?.second ?? " "}</span>
               </span>
               {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
             </span>
@@ -192,7 +193,7 @@ function Who({ account, runs, phone, t }: { account: UsageBoardAccount; runs: Us
   const count = workers && <span className="flex shrink-0 items-center gap-1"><Bot size={12} aria-hidden="true" />{workers}</span>;
   if (phone && names.length) return (
     <>
-      <span className="flex min-w-0 items-center gap-2 text-[12px] text-ink-secondary">
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-[12px] text-ink-secondary">
         <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id}
           onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
           className="shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:min-h-11">
@@ -237,21 +238,30 @@ function AccountRow({ engine, account, board, state, checked, phone, terminal, c
     </button>
   );
   return (
-    <div data-account-row={account.id} className="flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-1.5">
+    <div data-account-row={account.id} className="min-w-0 px-3 py-1.5">
+    <div className="flex min-h-11 min-w-0 items-center gap-2.5">
       <span className="flex w-4 shrink-0 justify-center">
         {checked && <Check data-main-check="" size={15} strokeWidth={2.5} aria-label={t("accounts.main")} className="text-accent" />}
       </span>
       <Tile number={account.number} terminal={terminal} />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span data-account-name="" className="min-w-0 truncate text-[13.5px] leading-tight text-ink">{account.name}</span>
-        <Who account={account} runs={board.runs} phone={phone} t={t} />
+        <span data-account-name="" className={cn("min-w-0 text-[13.5px] leading-tight text-ink", phone ? "line-clamp-2 break-words" : "truncate")}>{account.name}</span>
+        {!phone && <Who account={account} runs={board.runs} phone={phone} t={t} />}
       </span>
       {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
-      <span className="usage-num flex w-[4.5rem] shrink-0 flex-col items-end">
+      {!phone && <span className="usage-num flex w-[4.5rem] shrink-0 flex-col items-end">
         <span className={cn("text-[13px] leading-tight", TONE_TEXT[tone])}>{facts.first}</span>
         {facts.second && <span className="text-[11px] leading-tight text-ink-secondary">{facts.second}</span>}
-      </span>
+      </span>}
       {control}
+    </div>
+    {phone && <div className="flex min-w-0 flex-col gap-0.5 pb-1 pl-[3.25rem]">
+      <span data-account-facts="" className="usage-num flex min-w-0 flex-wrap items-baseline gap-x-2 leading-tight">
+        <span className={cn("text-[13px]", TONE_TEXT[tone])}>{facts.first}</span>
+        {facts.second && <span className="text-[11.5px] text-ink-secondary">{facts.second}</span>}
+      </span>
+      <Who account={account} runs={board.runs} phone={phone} t={t} />
+    </div>}
     </div>
   );
 }

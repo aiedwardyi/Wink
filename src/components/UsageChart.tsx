@@ -95,9 +95,9 @@ export function UsageChart({ series, projection, tone, finish, caption, topLeft,
           {lines.map((line, i) => <div key={i}>{line}</div>)}
         </div>
         <div className="mt-1 flex items-baseline justify-between gap-2 text-[11px]">
+          <span>0%</span>
           <span aria-hidden="true" className="usage-glyphs">{bars}</span>
           <span>{caption}</span>
-          <span>0%</span>
         </div>
       </div>
     );

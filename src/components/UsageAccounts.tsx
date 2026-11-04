@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -23,6 +23,15 @@ export function AccountPicker({ accounts, viewedId, select }: {
   const viewed = accounts.find((account) => account.id === viewedId) ?? accounts[0]!;
   const close = () => { setOpen(false); trigger.current?.focus(); };
   useBackLayer(open, close);
+  useLayoutEffect(() => {
+    // Keep the menu inside the desk: on a phone sheet the coarse width runs past its edge.
+    const element = menu.current;
+    const desk = element?.closest("[data-usage-desk]");
+    if (!element || !desk) return;
+    element.style.maxWidth = "";
+    const room = desk.getBoundingClientRect().right - element.getBoundingClientRect().left;
+    if (room > 0 && room < element.offsetWidth) element.style.maxWidth = `${Math.floor(room)}px`;
+  }, [presence.mounted]);
   useEffect(() => {
     if (!open) return;
     menu.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
