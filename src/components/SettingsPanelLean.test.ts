@@ -637,6 +637,34 @@ describe("SettingsPanel memory autosave", () => {
     expect(topic("prefs.md").parentElement?.textContent).not.toContain("tea");
   });
 
+  it.each([false, true])("ignores stale topic responses and errors (error: %s)", async (fail) => {
+    const serve = vi.mocked(fetch).getMockImplementation()!;
+    const pending: Array<(response: Response) => void> = [];
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (String(url).includes("/memory/topics/")) return new Promise<Response>((resolve) => pending.push(resolve));
+      const response = await serve(url, init);
+      const memory = await response.json();
+      return Response.json({ ...memory, topics: [{ name: "prefs.md", bytes: 3 }, { name: "work.md", bytes: 4 }] });
+    });
+    await render("bot-1");
+    await act(async () => topicsRow(host).click());
+    await act(async () => topic("prefs.md").click());
+    await act(async () => topic("work.md").click());
+    await act(async () => pending[1](Response.json({ name: "work.md", text: "code" })));
+    const stale = () => fail ? Response.json({ error: "old topic failed" }, { status: 500 }) : Response.json({ name: "prefs.md", text: "tea" });
+    await act(async () => pending[0](stale()));
+    expect(topic("work.md").getAttribute("aria-expanded")).toBe("true");
+    expect(topic("work.md").parentElement?.textContent).toContain("code");
+    expect(topic("prefs.md").getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector(".text-danger")).toBeNull();
+    await act(async () => topic("prefs.md").click());
+    await act(async () => topic("work.md").click());
+    await act(async () => pending[2](stale()));
+    expect(topic("work.md").getAttribute("aria-expanded")).toBe("false");
+    expect(topic("prefs.md").getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector(".text-danger")).toBeNull();
+  });
+
   it("brings a topic file into view when it opens", async () => {
     const scrolled: Element[] = [];
     const spy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) {

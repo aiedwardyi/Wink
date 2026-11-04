@@ -225,6 +225,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [topic, setTopic] = useState<{ name: string; text: string } | null>(null);
   const [topicError, setTopicError] = useState<string | null>(null);
+  const topicRequest = useRef(0);
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
@@ -309,15 +310,17 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   };
 
   const openTopic = async (name: string) => {
+    const request = ++topicRequest.current;
     setTopicError(null);
     if (topic?.name === name) {
       setTopic(null);
       return;
     }
     try {
-      setTopic(await api(`/api/bots/${bot.id}/memory/topics/${encodeURIComponent(name)}`));
+      const result: { name: string; text: string } = await api(`/api/bots/${bot.id}/memory/topics/${encodeURIComponent(name)}`);
+      if (request === topicRequest.current) setTopic(result);
     } catch (e) {
-      setTopicError(e instanceof Error ? e.message : String(e));
+      if (request === topicRequest.current) setTopicError(e instanceof Error ? e.message : String(e));
     }
   };
 

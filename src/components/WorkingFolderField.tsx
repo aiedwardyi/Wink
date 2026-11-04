@@ -1,16 +1,18 @@
 import { useI18n } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 
-export function WorkingFolderField({ value, onChange, onSave, disabled }: {
+export function WorkingFolderField({ value, onChange, onSave, disabled, className }: {
   value: string;
   onChange: (value: string) => void;
   onSave: () => void;
   disabled: boolean;
+  className?: string;
 }) {
   const { t } = useI18n();
   return (
     <form className="mt-3 flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
       <input
-        className="w-full min-w-0 rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline"
+        className={cn("w-full min-w-0 rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline", className)}
         aria-label={t("bot.workingFolder")}
         placeholder={t("bot.workingFolderPlaceholder")}
         value={value}

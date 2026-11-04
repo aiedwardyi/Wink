@@ -86,7 +86,7 @@ export function FolderFix({ folder, botId, group, onRetry }: {
               <span className="min-w-0 break-words">{t("chat.folderMissing", { folder })}</span>
             </div>
             {onRetry && target && (
-              editing ? <WorkingFolderField value={draft} onChange={setDraft} onSave={() => void submit()} disabled={busy || !draft.trim()} /> : (
+              editing ? <WorkingFolderField value={draft} onChange={setDraft} onSave={() => void submit()} disabled={busy || !draft.trim()} className="font-mono text-[12.5px]" /> : (
                 <button onClick={() => void choose()} disabled={busy || Boolean(saved)} className="mt-1.5 flex items-center gap-1.5 rounded-full border border-danger/30 px-2.5 py-1 text-[12.5px] hover:bg-danger/15 disabled:opacity-50">
                   <FolderOpen size={12} /> {t("chat.chooseFolder")}
                 </button>
