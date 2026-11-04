@@ -1,5 +1,5 @@
 import { ChevronLeft, FolderOpen, Settings, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, useStore, type Bot } from "@/state/store";
 import { stateForBot } from "@/lib/mascot";
 import { WorkingFolderField } from "./WorkingFolderField";
@@ -24,7 +24,10 @@ import { shortPath } from "@/lib/short-path";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryTask, NotedLines } from "./MemoryGroups";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryHeading, MemoryTask, NotedLines, TopicFiles, type MemoryTopic } from "./MemoryGroups";
+import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsLabel, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
+import { SegmentedRow } from "./Segmented";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
 import { useMemoryClean } from "@/lib/memory-clean";
@@ -41,22 +44,19 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="block">
-      <div className="mb-1.5 text-[13px] text-ink-secondary">{label}</div>
+    <label className={cn(DETAILS_ROW, "block")}>
+      <div className="mb-1.5 text-[14px] font-medium text-ink">{label}</div>
       {children}
     </label>
   );
 }
-
-const inputCls =
-  "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline";
 
 /** Where a bot's shell tools run. Set per bot; each task pins its own copy
  * on its first turn (the server does the pinning — Claude keeps sessions
  * per project folder, so a folder must not move under a live task). The
  * PATCH is made directly rather than through updateBot: the server
  * validates the path and a rejected folder must not stick in local state. */
-/** Keep a complete catalog phrase; wrap one `{name}` slot in JSX (paths stay mono). */
+/** Keep a complete catalog phrase; wrap one `{name}` slot in JSX. */
 function phraseWithNode(phrase: string, name: string, node: ReactNode): ReactNode {
   const token = `{${name}}`;
   const at = phrase.indexOf(token);
@@ -110,32 +110,13 @@ function KeepGoingRow({ bot }: { bot: Bot }) {
   }, [request]);
 
   return (
-    <div ref={rowRef} data-settings-keep-going className="rounded-xl bg-card p-4">
+    <div ref={rowRef} data-settings-keep-going className={DETAILS_ROW}>
       <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[15px] font-medium text-ink">{t("bot.keepGoing")}</div>
-          <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">
-            {paused ? t("bot.keepGoingPaused", { reason: t(KEEP_GOING_PAUSED[paused]) }) : t("bot.keepGoingHelp")}
-          </div>
-        </div>
-        <button
-          role="switch"
-          aria-checked={on}
-          aria-label={t("bot.keepGoing")}
-          disabled={saving}
-          onClick={() => void toggle()}
-          className={cn(
-            "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors disabled:cursor-wait",
-            on ? "bg-accent" : "bg-control",
-          )}
-        >
-          <span
-            className={cn(
-              "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-              on ? "left-[21px]" : "left-[3px]",
-            )}
-          />
-        </button>
+        <DetailsLabel
+          label={t("bot.keepGoing")}
+          hint={paused ? t("bot.keepGoingPaused", { reason: t(KEEP_GOING_PAUSED[paused]) }) : t("bot.keepGoingHelp")}
+        />
+        <DetailsSwitch on={on} label={t("bot.keepGoing")} disabled={saving} className="disabled:cursor-wait" onToggle={() => void toggle()} />
       </div>
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
@@ -178,59 +159,51 @@ function WorkingFolder({ bot }: { bot: Bot }) {
   };
 
   return (
-    <div className="rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">{t("bot.workingFolder")}</div>
-      {canPick ? (
-        <div className="mt-3 flex items-center gap-2">
-          <div className="min-w-0 flex-1 truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={bot.cwd ?? undefined}>
-            {bot.cwd ? shortPath(bot.cwd, home) : <span className="font-sans text-ink-secondary">{t("bot.workingFolderEmpty")}</span>}
-          </div>
-          <button onClick={() => void pick()} disabled={saving} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
-            <FolderOpen size={14} /> {t("bot.workingFolderChoose")}
-          </button>
-          {bot.cwd && (
-            <button onClick={() => void save(null)} disabled={saving} className="shrink-0 rounded-lg px-2 py-2 text-[13px] text-ink-secondary hover:text-ink disabled:opacity-50">
-              {t("bot.workingFolderClear")}
-            </button>
+    <div className={DETAILS_BOX}>
+      <div className={DETAILS_ROW}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[14px] font-medium text-ink">{t("bot.workingFolder")}</div>
+          {canPick && (
+            <div className="flex shrink-0 items-center gap-2">
+              <button onClick={() => void pick()} disabled={saving} className={cn(ROW_BUTTON, "gap-1.5 text-ink")}>
+                <FolderOpen size={13} aria-hidden="true" /> {t("bot.workingFolderChoose")}
+              </button>
+              {bot.cwd && (
+                <button onClick={() => void save(null)} disabled={saving} className={ROW_BUTTON}>
+                  {t("bot.workingFolderClear")}
+                </button>
+              )}
+            </div>
           )}
         </div>
-      ) : (
-        <WorkingFolderField value={draft ?? bot.cwd ?? ""} onChange={setDraft} onSave={() => void save((draft ?? bot.cwd ?? "").trim() || null)} disabled={saving || draft === null} />
-      )}
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-      {pinnedElsewhere && (
-        <div className="mt-2 text-[12px] text-ink-secondary">
-          {pinned
-            ? phraseWithNode(
-                t("bot.workingFolderPinned"),
-                "folder",
-                <span className="font-mono">{shortPath(pinned, home)}</span>,
-              )
-            : t("bot.workingFolderPinnedHome")}
-        </div>
-      )}
-      {bot.rememberedProjectCwd && bot.rememberedProjectCwd !== liveCwd && (
-        <div className="mt-2 text-[12px] text-ink-secondary">
-          {liveCwd
-            ? t("bot.rememberedFolderNextTask", {
-                folder: shortPath(bot.rememberedProjectCwd, home),
-                current: shortPath(liveCwd, home),
-              })
-            : t("bot.rememberedFolderNextTaskHome", {
-                folder: shortPath(bot.rememberedProjectCwd, home),
-              })}
-        </div>
-      )}
+        {canPick ? (
+          <div className="mt-1 truncate text-[13px] text-ink" title={bot.cwd ?? undefined}>
+            {bot.cwd ? shortPath(bot.cwd, home) : <span className="text-ink-secondary">{t("bot.workingFolderEmpty")}</span>}
+          </div>
+        ) : (
+          <WorkingFolderField value={draft ?? bot.cwd ?? ""} onChange={setDraft} onSave={() => void save((draft ?? bot.cwd ?? "").trim() || null)} disabled={saving || draft === null} />
+        )}
+        {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+        {pinnedElsewhere && (
+          <div className="mt-1 break-words text-[12px] leading-relaxed text-ink-secondary">
+            {pinned
+              ? phraseWithNode(t("bot.workingFolderPinned"), "folder", <span className="text-ink">{shortPath(pinned, home)}</span>)
+              : t("bot.workingFolderPinnedHome")}
+          </div>
+        )}
+        {bot.rememberedProjectCwd && bot.rememberedProjectCwd !== liveCwd && (
+          <div className="mt-1 break-words text-[12px] leading-relaxed text-ink-secondary">
+            {phraseWithNode(
+              liveCwd ? t("bot.rememberedFolderNextTask") : t("bot.rememberedFolderNextTaskHome"),
+              "folder",
+              <span className="text-ink">{shortPath(bot.rememberedProjectCwd, home)}</span>,
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
-
-interface MemoryTopic {
-  name: string;
-  bytes: number;
-}
-
-const formatBytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 102.4) / 10} KB`);
 
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
@@ -251,6 +224,8 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const [topics, setTopics] = useState<MemoryTopic[]>([]);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [topic, setTopic] = useState<{ name: string; text: string } | null>(null);
+  const [topicError, setTopicError] = useState<string | null>(null);
+  const topicRequest = useRef(0);
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
@@ -260,13 +235,6 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
     if (conflict) setOpen(true);
   }, [conflict]);
   const fileRow = useRef<HTMLButtonElement>(null);
-  const shownTopic = useRef(topic);
-  // the file view is far shorter than the editor and list it swaps with, so the kept scroll can leave this row above the fold
-  useLayoutEffect(() => {
-    if (shownTopic.current === topic) return;
-    shownTopic.current = topic;
-    fileRow.current?.scrollIntoView({ block: "nearest" });
-  }, [topic]);
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
 
   const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
@@ -342,12 +310,17 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   };
 
   const openTopic = async (name: string) => {
-    void flushMemory(botId);
-    setError(null);
+    const request = ++topicRequest.current;
+    setTopicError(null);
+    if (topic?.name === name) {
+      setTopic(null);
+      return;
+    }
     try {
-      setTopic(await api(`/api/bots/${bot.id}/memory/topics/${encodeURIComponent(name)}`));
+      const result: { name: string; text: string } = await api(`/api/bots/${bot.id}/memory/topics/${encodeURIComponent(name)}`);
+      if (request === topicRequest.current) setTopic(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (request === topicRequest.current) setTopicError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -398,127 +371,76 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   }, []);
 
   return (
-    <div className="relative">
+    <div className="relative flex flex-col gap-3">
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
       {empty && <MemoryEmpty />}
-      <div className="overflow-hidden rounded-xl bg-card">
-        <MemoryGroup>
-          <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} />
-          <div className={cn("flex items-center justify-between gap-4", recentLines(text, bot.messages).length > 0 && "mt-3")}>
-            <div className="min-w-0">
-              <div className="text-[14px] font-medium text-ink">{t("settings.memoryNotes.toggle")}</div>
-              <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("settings.memoryNotes.help")}</div>
-            </div>
-            <button
-              role="switch"
-              aria-checked={autoNotes}
-              aria-label={t("settings.memoryNotes.toggle")}
-              onClick={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
-              className={cn("relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors", autoNotes ? "bg-accent" : "bg-control")}
-            >
-              <span className={cn("absolute top-[3px] size-5 rounded-full bg-white transition-all", autoNotes ? "left-[21px]" : "left-[3px]")} />
-            </button>
+      <MemoryGroup>
+        {recentLines(text, bot.messages).length > 0 && (
+          <div className={DETAILS_ROW}>
+            <MemoryHeading title={t("bot.memoryRecent")} />
+            <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} />
           </div>
-        </MemoryGroup>
-        <MemoryTask bot={bot} />
-        <MemoryFile ref={fileRow} text={text} topics={topics.length} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
-          {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} />}
-          {expanded && (
-            <div className="px-4 pb-4">
-              <div className="mb-3 break-keep text-[12px] leading-relaxed text-ink-secondary">{t("bot.memoryThisBotHelp")}</div>
-                {loading && <div className="text-[13px] text-ink-secondary">Loading…</div>}
-
-                {!loading && topic && (
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-mono text-[12.5px] text-ink">memory/{topic.name}</span>
-                      <button
-                        onClick={() => setTopic(null)}
-                        className="shrink-0 rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
-                      >
-                        Back
+        )}
+        <SwitchRow
+          label={t("settings.memoryNotes.toggle")}
+          hint={t("settings.memoryNotes.help")}
+          on={autoNotes}
+          onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
+        />
+      </MemoryGroup>
+      <MemoryTask bot={bot} />
+      <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
+        {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
+        {expanded && (
+          <div className="animate-fade-in px-4 pb-4 pt-3">
+            {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}
+            {!loading && (
+              <>
+                {conflict && (
+                  <div role="alert" className="mb-3 rounded-lg border border-hairline/60 bg-inset px-3 py-2.5 text-[12px] leading-relaxed text-ink">
+                    <div>{t("bot.memoryConflict")}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button onClick={() => void loadLatest(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
+                        {t("bot.memoryLoadLatest")}
+                      </button>
+                      <button onClick={() => keepMine(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
+                        {t("bot.memoryKeepMine")}
                       </button>
                     </div>
-                    <pre className="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap rounded-lg border border-hairline/40 bg-inset p-3 font-mono text-[12.5px] leading-relaxed text-ink">
-                      {topic.text}
-                    </pre>
                   </div>
                 )}
-
-                {!loading && !topic && (
-                  <div>
-                    <textarea
-                      className={cn(inputCls, "min-h-[160px] resize-y font-mono text-[12.5px] leading-relaxed")}
-                      value={text}
-                      placeholder={t("bot.memoryPlaceholder")}
-                      aria-label={t("bot.memory")}
-                      readOnly={loadFailed}
-                      onChange={(e) => edit(e.target.value)}
-                      onFocus={() => void refresh()}
-                      onBlur={() => void flushMemory(botId)}
-                    />
-                    {conflict && (
-                      <div role="alert" className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
-                        <div>{t("bot.memoryConflict")}</div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <button onClick={() => void loadLatest(conflict)} className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
-                            {t("bot.memoryLoadLatest")}
-                          </button>
-                          <button onClick={() => keepMine(conflict)} className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover">
-                            {t("bot.memoryKeepMine")}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {truncated && (
-                      <div className="mt-2 text-[11.5px] text-ink-secondary">
-                        Only the top loads each turn.
-                      </div>
-                    )}
-                    {topics.length > 0 && (
-                      <div className="mt-3">
-                        <div className="mb-1.5 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
-                          Topic files
-                        </div>
-                        <div className="overflow-hidden rounded-lg border border-hairline/40">
-                          {topics.map((entry) => (
-                            <button
-                              key={entry.name}
-                              onClick={() => void openTopic(entry.name)}
-                              className="flex w-full items-center justify-between gap-2 border-b border-hairline/40 px-3 py-2 text-left last:border-b-0 hover:bg-control/60"
-                            >
-                              <span className="truncate font-mono text-[12.5px] text-ink">{entry.name}</span>
-                              <span className="shrink-0 text-[11.5px] text-ink-secondary">{formatBytes(entry.bytes)}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-            </div>
-          )}
-          {(loadFailed || error) && (
-            <div className="px-4 pb-4">
-                {loadFailed && (
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-danger">
-                    {t("bot.memoryLoadFailed")}
-                    <button
-                      onClick={() => void load()}
-                      className="rounded-md px-2 py-1 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
-                    >
-                      {t("bot.memoryRetry")}
-                    </button>
-                  </div>
-                )}
-                {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-            </div>
-          )}
-        </MemoryFile>
-      </div>
+                <FitTextarea
+                  className={cn(DETAILS_INPUT, "min-h-[160px]")}
+                  value={text}
+                  placeholder={t("bot.memoryPlaceholder")}
+                  aria-label={t("bot.memory")}
+                  readOnly={loadFailed}
+                  onChange={(e) => edit(e.target.value)}
+                  onFocus={() => void refresh()}
+                  onBlur={() => void flushMemory(botId)}
+                />
+                {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
+              </>
+            )}
+          </div>
+        )}
+        {(loadFailed || error) && (
+          <div className="px-4 pb-4">
+            {loadFailed && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-danger">
+                {t("bot.memoryLoadFailed")}
+                <button onClick={() => void load()} className={ROW_BUTTON}>
+                  {t("bot.memoryRetry")}
+                </button>
+              </div>
+            )}
+            {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+          </div>
+        )}
+      </MemoryFile>
+      <TopicFiles topics={topics} shown={topic} error={topicError} onOpen={(name) => void openTopic(name)} />
     </div>
   );
 }
@@ -676,180 +598,116 @@ export function SettingsPanel({
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 pb-5">
-        <div hidden={memoryTab} className="flex flex-col gap-4 pt-4">
-          <div ref={avatarSectionRef} className="rounded-xl bg-card p-3">
-            <div className="flex items-center gap-3">
-              <BotAvatar
-                bot={bot}
-                state={activeState}
-                size={48}
-                motion={mascotMotion?.kind ?? "none"}
-                motionKey={mascotMotion?.nonce ?? 0}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="text-[15px] font-medium text-ink">{t("bot.avatar")}</div>
-              </div>
-              <button
-                type="button"
-                aria-expanded={avatarOpen}
-                onClick={() => setAvatarOpen((open) => !open)}
-                className="rounded-lg bg-control px-3 py-2 text-[12.5px] text-ink hover:bg-raised-hover"
-              >
-                {avatarOpen ? t("bot.avatarDone") : t("bot.avatarCustomize")}
-              </button>
-            </div>
-            {avatarOpen && (
-              <div className="mt-3">
-                <BotProfileAvatarCard
+        <div hidden={memoryTab} className="flex flex-col gap-3 pt-4">
+          <div className={DETAILS_BOX}>
+            <div ref={avatarSectionRef} className={DETAILS_ROW}>
+              <div className="flex items-center gap-3">
+                <BotAvatar
                   bot={bot}
-                  activeState={activeState}
-                  mascotMotion={mascotMotion}
-                  onPatch={patch}
+                  state={activeState}
+                  size={48}
+                  motion={mascotMotion?.kind ?? "none"}
+                  motionKey={mascotMotion?.nonce ?? 0}
                 />
+                <div className="min-w-0 flex-1 text-[14px] font-medium text-ink">{t("bot.avatar")}</div>
+                <button
+                  type="button"
+                  aria-expanded={avatarOpen}
+                  onClick={() => setAvatarOpen((open) => !open)}
+                  className={cn(ROW_BUTTON, "text-ink")}
+                >
+                  {avatarOpen ? t("bot.avatarDone") : t("bot.avatarCustomize")}
+                </button>
               </div>
-            )}
+              {avatarOpen && (
+                <div className="mt-3">
+                  <BotProfileAvatarCard
+                    bot={bot}
+                    activeState={activeState}
+                    mascotMotion={mascotMotion}
+                    onPatch={patch}
+                  />
+                </div>
+              )}
+            </div>
+            <Field label={t("bot.name")}>
+              <input
+                className={DETAILS_INPUT}
+                maxLength={BOT_PROFILE_LIMITS.name}
+                value={bot.name}
+                onChange={(e) => patch({ name: e.target.value })}
+              />
+            </Field>
+            <Field label={t("bot.title")}>
+              <input
+                className={DETAILS_INPUT}
+                maxLength={BOT_PROFILE_LIMITS.title}
+                placeholder={t("bot.titlePlaceholder")}
+                value={bot.title}
+                onChange={(e) => patch({ title: e.target.value })}
+              />
+            </Field>
+            <Field label={t("bot.description")}>
+              <FitTextarea
+                className={cn(DETAILS_INPUT, "min-h-[96px]")}
+                maxLength={BOT_PROFILE_LIMITS.description}
+                placeholder={t("bot.descriptionPlaceholder")}
+                value={bot.description}
+                onChange={(e) => patch({ description: e.target.value })}
+              />
+            </Field>
           </div>
-
-          <Field label={t("bot.name")}>
-            <input
-              className={inputCls}
-              maxLength={BOT_PROFILE_LIMITS.name}
-              value={bot.name}
-              onChange={(e) => patch({ name: e.target.value })}
-            />
-          </Field>
-          <Field label={t("bot.title")}>
-            <input
-              className={inputCls}
-              maxLength={BOT_PROFILE_LIMITS.title}
-              placeholder={t("bot.titlePlaceholder")}
-              value={bot.title}
-              onChange={(e) => patch({ title: e.target.value })}
-            />
-          </Field>
-          <Field label={t("bot.description")}>
-            <textarea
-              className={cn(inputCls, "min-h-[96px] resize-none")}
-              maxLength={BOT_PROFILE_LIMITS.description}
-              placeholder={t("bot.descriptionPlaceholder")}
-              value={bot.description}
-              onChange={(e) => patch({ description: e.target.value })}
-            />
-          </Field>
 
           <WorkingFolder bot={bot} />
 
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div className="text-[15px] font-medium text-ink">{t("bot.approval")}</div>
-            <div role="radiogroup" aria-label={t("bot.approval")} className="flex gap-1 rounded-full bg-inset p-0.5">
-              {([true, false] as const).map((auto) => (
-                <button
-                  key={String(auto)}
-                  type="button"
-                  role="radio"
-                  aria-checked={Boolean(bot.autoApprove) === auto}
-                  onClick={() => {
-                    if (Boolean(bot.autoApprove) === auto) return;
-                    if (auto && bot.computer === "local") setLocalAutoWarning("auto");
-                    else patch({ autoApprove: auto });
-                  }}
-                  className={cn(
-                    "rounded-full px-3 py-1 text-[13px] font-medium",
-                    Boolean(bot.autoApprove) === auto ? "bg-accent text-accent-ink" : "text-ink-secondary hover:text-ink",
-                  )}
-                >
-                  {auto ? t("bot.approvalAuto") : t("bot.approvalAsk")}
-                </button>
-              ))}
+          <div className={DETAILS_BOX}>
+            <div className={DETAILS_ROW}>
+              <SegmentedRow<"auto" | "ask">
+                label={t("bot.approval")}
+                value={bot.autoApprove ? "auto" : "ask"}
+                options={[
+                  { id: "auto", label: t("bot.approvalAuto") },
+                  { id: "ask", label: t("bot.approvalAsk") },
+                ]}
+                onChange={(id) => {
+                  const auto = id === "auto";
+                  if (Boolean(bot.autoApprove) === auto) return;
+                  if (auto && bot.computer === "local") setLocalAutoWarning("auto");
+                  else patch({ autoApprove: auto });
+                }}
+              />
             </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div>
-              <div className="text-[15px] font-medium text-ink">{t("bot.notifications")}</div>
-            </div>
-            <button
-              role="switch"
-              aria-checked={bot.notifications}
-              aria-label={t("bot.notificationsAria")}
-              onClick={() => {
+            <SwitchRow
+              label={t("bot.notifications")}
+              aria={t("bot.notificationsAria")}
+              on={bot.notifications}
+              onToggle={() => {
                 const enabled = !bot.notifications;
                 if (enabled && !window.ogb?.showNotification) void requestNotificationPermission();
                 patch({ notifications: enabled });
               }}
-              className={cn(
-                "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
-                bot.notifications ? "bg-accent" : "bg-control",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-                  bot.notifications ? "left-[21px]" : "left-[3px]",
-                )}
+            />
+            {(!shareTerminalDisabled || showDisabledShareTerminal()) && (
+              <SwitchRow
+                label={t("bot.shareTerminal")}
+                hint={t("bot.shareTerminalHelp")}
+                on={terminalShared}
+                disabled={shareTerminalDisabled}
+                className="disabled:cursor-not-allowed disabled:opacity-40"
+                onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
               />
-            </button>
+            )}
+            <KeepGoingRow bot={bot} />
+            {showBotVoiceAndStartupSettings() && engine?.driverKind === "claudeAgent" && (
+              <SwitchRow
+                label={t("bot.leanStartup")}
+                on={bot.leanStartup !== true}
+                onToggle={() => patch({ leanStartup: !(bot.leanStartup === true) })}
+              />
+            )}
           </div>
 
-          {(!shareTerminalDisabled || showDisabledShareTerminal()) && (
-            <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-              <div>
-                <div className="text-[15px] font-medium text-ink">{t("bot.shareTerminal")}</div>
-              </div>
-              <button
-                role="switch"
-                aria-checked={terminalShared}
-                aria-label={t("bot.shareTerminal")}
-                disabled={shareTerminalDisabled}
-                onClick={() => patch({ shareTerminalWithChat: !terminalShared })}
-                className={cn(
-                  "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-                  terminalShared ? "bg-accent" : "bg-control",
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-                    terminalShared ? "left-[21px]" : "left-[3px]",
-                  )}
-                />
-              </button>
-            </div>
-          )}
-
-          <KeepGoingRow bot={bot} />
-
-          {showBotVoiceAndStartupSettings() && (
-            <>
-          {engine?.driverKind === "claudeAgent" && (
-            <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-              <div>
-                <div className="text-[15px] font-medium text-ink">{t("bot.leanStartup")}</div>
-              </div>
-              <button
-                role="switch"
-                aria-checked={bot.leanStartup !== true}
-                aria-label={t("bot.leanStartup")}
-                onClick={() => patch({ leanStartup: !(bot.leanStartup === true) })}
-                className={cn(
-                  "relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors",
-                  bot.leanStartup !== true ? "bg-accent" : "bg-control",
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-[3px] size-5 rounded-full bg-white transition-all",
-                    bot.leanStartup !== true ? "left-[21px]" : "left-[3px]",
-                  )}
-                />
-              </button>
-            </div>
-          )}
-
-          <VoiceSettings bot={bot} onPatch={patch} />
-            </>
-          )}
-
+          {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
         </div>
         <div hidden={!memoryTab} className="pt-4">
           <MemoryCard key={bot.id} bot={bot} active={memoryTab} />

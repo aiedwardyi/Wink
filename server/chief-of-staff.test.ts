@@ -266,7 +266,7 @@ describe("room turns mount the Chief framing", () => {
 
 describe("1:1 turns mount the agents-tool channel path", () => {
   it("uses the shared peer-agents prompt instead of an inline tool list", () => {
-    const start = index.indexOf("const tagged = integrations.agents");
+    const start = index.indexOf("const tagged = canMessage");
     const slice = index.slice(start, start + 2500);
     expect(slice).toContain("peerAgentsSystemPrompt()");
     expect(slice).not.toContain("the agents tools reach the other bots in your section");

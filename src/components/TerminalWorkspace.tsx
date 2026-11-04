@@ -31,15 +31,14 @@ function samePath(a: string | null | undefined, b: string | null | undefined): b
   return norm(a) === norm(b);
 }
 
-// Per bot, in memory: pane id, or null for the main shell.
+// Per bot, in memory: last picked pane, or null for Main.
 export const lastViewedPanes = new Map<string, string | null>();
 // Live output queues of mounted overlays (read by tests).
 export const terminalLiveQueues: { id: string; data: string; seq: number }[][] = [];
 
 export function pickInitialPane(panes: { id: string; exited?: boolean }[], lastViewedId?: string | null): string | null {
-  if (lastViewedId === null) return null;
   if (lastViewedId !== undefined && panes.some((item) => item.id === lastViewedId)) return lastViewedId;
-  return (panes.filter((item) => !item.exited).at(-1) ?? panes.at(-1))?.id ?? null;
+  return null;
 }
 
 export function folderBasename(cwd: string): string {
@@ -150,6 +149,7 @@ export function TerminalWorkspace({
     const offClosed = bridge.onClosed?.((event) => {
       if (event.botId !== bot.id) return;
       closed.add(event.id);
+      if (lastViewedPanes.get(bot.id) === event.id) lastViewedPanes.set(bot.id, null);
       setPanes((list) => list.filter((item) => item.id !== event.id));
       setPane((current) => current === event.id ? null : current);
     });
@@ -644,14 +644,14 @@ export function TerminalWorkspace({
     }
   }, [paneHotkey]);
 
-  // Each open lands on the last viewed pane, else the newest worker. Waits for the seed.
+  // Each open lands on the last picked pane or Main. Waits for the seed.
   useEffect(() => {
     if (!visible) pickedRef.current = false;
     else if (seeded && !pickedRef.current) {
       pickedRef.current = true;
       const initial = pickInitialPane(panes, lastViewedPanes.get(bot.id));
-      // An auto-picked main shell is not remembered, so the next open still finds a new worker.
-      if (initial) lastViewedPanes.set(bot.id, initial);
+      // A remembered pane may have closed while this bot was unmounted.
+      if (lastViewedPanes.has(bot.id)) lastViewedPanes.set(bot.id, initial);
       setPane(initial);
     }
   }, [visible, seeded, panes, bot.id]);

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Brain, ChevronDown } from "lucide-react";
 import type { AppState, Bot, Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
+import { DETAILS_BOX, DETAILS_ROW, DetailsLabel } from "./BotDetailsRows";
 
 import { memoryLineText, memoryTargetLine, recentLines } from "@/lib/memory-recent";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
@@ -23,19 +24,54 @@ export function notedLines(text: string): Array<{ fact: string; at: Date }> {
     .sort((a, b) => b.at.getTime() - a.at.getTime());
 }
 
-export function MemoryGroup({ title, help, children }: { title?: string; help?: string; children?: ReactNode }) {
+export function MemoryGroup({ children }: { children?: ReactNode }) {
+  return <section className={DETAILS_BOX}>{children}</section>;
+}
+
+export function MemoryHeading({ title, meta }: { title: string; meta?: ReactNode }) {
   return (
-    <section className="border-t border-hairline/40 p-4 first:border-t-0">
-      {title && <div className="text-[14px] font-medium text-ink">{title}</div>}
-      {help && <div className="mt-0.5 break-keep text-[12px] leading-relaxed text-ink-secondary">{help}</div>}
+    <div className="flex items-baseline justify-between gap-3">
+      <div className="text-[14px] font-medium text-ink">{title}</div>
+      {meta && <div className="shrink-0 text-[12px] text-ink-secondary">{meta}</div>}
+    </div>
+  );
+}
+
+/** A group that opens in place; its header sticks while open so the wheel can run through a long file. */
+export function MemoryFold({ title, hint, meta, open, onToggle, ref, children }: {
+  title: string;
+  hint: string;
+  meta?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  ref?: Ref<HTMLButtonElement>;
+  children?: ReactNode;
+}) {
+  const box = useRef<HTMLElement>(null);
+  const wasOpen = useRef(open);
+  // closing from deep in a long file would leave the reader below a section that just shrank
+  useLayoutEffect(() => {
+    if (wasOpen.current && !open) box.current?.scrollIntoView({ block: "nearest" });
+    wasOpen.current = open;
+  }, [open]);
+  return (
+    <section ref={box} className={DETAILS_BOX}>
+      <div className={cn(open && "sticky top-0 z-10 border-b border-hairline/40 bg-card")}>
+        <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none">
+          <div className="min-w-0 flex-1">
+            <DetailsLabel label={title} hint={hint} />
+          </div>
+          {meta && <span className="shrink-0 text-[12px] text-ink-secondary">{meta}</span>}
+          <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
+        </button>
+      </div>
       {children}
     </section>
   );
 }
 
-export function MemoryFile({ text, topics, loading, open, onToggle, ref, children }: {
+export function MemoryFile({ text, loading, open, onToggle, ref, children }: {
   text: string;
-  topics: number;
   loading: boolean;
   open: boolean;
   onToggle: () => void;
@@ -45,21 +81,82 @@ export function MemoryFile({ text, topics, loading, open, onToggle, ref, childre
   const { t } = useI18n();
   const lines = text.split("\n").filter((line) => line.trim()).length;
   return (
-    <section className="border-t border-hairline/40 first:border-t-0">
-      <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3 p-4 text-left hover:bg-control/40">
-        <div className="min-w-0 flex-1">
-          <div className="text-[14px] font-medium text-ink">{t("bot.memoryFile")}</div>
-          {!loading && (lines > 0 || topics > 0) && (
-            <div className="mt-0.5 flex flex-wrap gap-x-2 text-[12px] text-ink-secondary">
-              <span>{t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines })}</span>
-              {topics > 0 && <span>{t(topics === 1 ? "bot.memoryFileTopicsOne" : "bot.memoryFileTopics", { count: topics })}</span>}
-            </div>
-          )}
-        </div>
-        <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-180")} />
-      </button>
+    <MemoryFold
+      ref={ref}
+      title={t("bot.memoryFile")}
+      hint={t("bot.memoryThisBotHelp")}
+      meta={!loading && lines > 0 ? t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines }) : undefined}
+      open={open}
+      onToggle={onToggle}
+    >
       {children}
-    </section>
+    </MemoryFold>
+  );
+}
+
+export interface MemoryTopic {
+  name: string;
+  bytes: number;
+}
+
+const formatBytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 102.4) / 10} KB`);
+
+/** Topic files keep their own list and a file opens under its row, so nothing needs a Back. */
+export function TopicFiles({ topics, shown, error, onOpen }: {
+  topics: MemoryTopic[];
+  shown: { name: string; text: string } | null;
+  error?: string | null;
+  onOpen: (name: string) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const list = useRef<HTMLDivElement>(null);
+  const picked = useRef<string | null>(null);
+  // show the file just opened; closing one above it also moves its row, maybe out of view
+  useLayoutEffect(() => {
+    if (picked.current === null) return;
+    const row = [...(list.current?.querySelectorAll<HTMLElement>("[data-topic]") ?? [])].find((each) => each.dataset.topic === picked.current);
+    picked.current = null;
+    row?.parentElement?.scrollIntoView({ block: "nearest" });
+  }, [shown]);
+  if (!topics.length) return null;
+  return (
+    <MemoryFold
+      title={t("bot.memoryTopics")}
+      hint={t("bot.memoryTopicsHelp")}
+      meta={t(topics.length === 1 ? "bot.memoryFileTopicsOne" : "bot.memoryFileTopics", { count: topics.length })}
+      open={open}
+      onToggle={() => setOpen(!open)}
+    >
+      {open && (
+        <div ref={list} className="animate-fade-in">
+          {topics.map((entry) => {
+            const here = shown?.name === entry.name;
+            return (
+              // the margin keeps a row clear of the sticky header above it
+              <div key={entry.name} className="scroll-mt-20 border-t border-hairline/40 first:border-t-0">
+                <button
+                  type="button"
+                  data-topic={entry.name}
+                  aria-expanded={here}
+                  onClick={() => { picked.current = entry.name; onOpen(entry.name); }}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{entry.name}</span>
+                  <span className="shrink-0 text-[12px] text-ink-secondary">{formatBytes(entry.bytes)}</span>
+                </button>
+                {here && (
+                  <div className="mx-4 mb-3 animate-fade-in whitespace-pre-wrap break-words rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] leading-relaxed text-ink">
+                    {shown.text}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {error && <div className="border-t border-hairline/40 px-4 py-2.5 text-[12px] text-danger">{error}</div>}
+        </div>
+      )}
+    </MemoryFold>
   );
 }
 
@@ -68,10 +165,10 @@ function RecentLine({ line, day, nonce, fresh }: { line: ReturnType<typeof recen
   const [arrived, setArrived] = useState(false);
   useEffect(() => { setArrived(fresh && !reducedMemoryMotion()); }, [fresh]);
   return (
-    <li ref={row} className={`mc-target flex items-baseline justify-between gap-3 text-[13px] text-ink${arrived ? " mc-in" : ""}`} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setArrived(false); }}>
+    <li ref={row} className={`mc-target flex items-baseline justify-between gap-3 text-[13px] leading-relaxed text-ink${arrived ? " mc-in" : ""}`} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setArrived(false); }}>
       {nonce !== undefined && <MemoryCleanTint key={nonce} nonce={nonce} row={row} />}
-      <span className="min-w-0 break-keep break-words">{line.fact}</span>
-      <span className="shrink-0 text-[11.5px] text-ink-secondary">{day.format(line.at)}</span>
+      <span className="line-clamp-2 min-w-0 break-keep break-words" title={line.fact}>{line.fact}</span>
+      <span className="shrink-0 text-[12px] text-ink-secondary">{day.format(line.at)}</span>
     </li>
   );
 }
@@ -95,7 +192,7 @@ export function NotedLines({ text, messages = [], target, botId, active = true }
   if (!lines.length) return null;
   const day = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" });
   return (
-    <ul className="mt-2 flex flex-col gap-1.5">
+    <ul className="mt-2 flex flex-col gap-1">
       {lines.slice(0, shown).map((line) => <RecentLine key={line.line} line={line} day={day} nonce={line.line === targetLine ? target?.nonce : undefined} fresh={fresh.some((saved) => memoryTargetLine(text, saved) === line.line)} />)}
       {lines.length > shown && (
         <li className="text-[12px] text-ink-secondary">{t("bot.memoryMore", { count: lines.length - shown })}</li>
@@ -125,14 +222,17 @@ export function MemoryTask({ bot }: { bot: Bot }) {
   if (!packet) return null;
   const done = packet.plan.filter((step) => step.status === "done").length;
   return (
-    <MemoryGroup title={t("bot.memoryTask")}>
-      <div className="mt-1.5 break-words text-[13px] text-ink">{packet.goal}</div>
-      {packet.plan.length > 0 && (
-        <div className="mt-1 text-[12px] text-ink-secondary">{t("bot.memoryTaskSteps", { done, total: packet.plan.length })}</div>
-      )}
-      {packet.nextAction.trim() && (
-        <div className="mt-0.5 break-words text-[12px] text-ink-secondary">{t("bot.memoryTaskNext", { action: packet.nextAction })}</div>
-      )}
+    <MemoryGroup>
+      <div className={DETAILS_ROW}>
+        <MemoryHeading
+          title={t("bot.memoryTask")}
+          meta={packet.plan.length > 0 ? t("bot.memoryTaskSteps", { done, total: packet.plan.length }) : undefined}
+        />
+        <div className="mt-1 break-words text-[13px] leading-relaxed text-ink">{packet.goal}</div>
+        {packet.nextAction.trim() && (
+          <div className="mt-1 break-words text-[12px] leading-relaxed text-ink-secondary">{t("bot.memoryTaskNext", { action: packet.nextAction })}</div>
+        )}
+      </div>
     </MemoryGroup>
   );
 }
