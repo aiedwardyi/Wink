@@ -118,6 +118,14 @@ describe("createSpawnUsage", () => {
     expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
   });
 
+  it("recovery holds a low window whose reset is unknown", async () => {
+    const { check } = setup(reading(95, 13, NOW - 60_000, null));
+    const account = { id: "codex", generation: 0, name: "Codex" };
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
+  });
+
   it("never holds on a window whose reset has passed or is unknown", async () => {
     expect(await setup(reading(95, 13, NOW - 60_000, NOW - 1)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: weekly 87%." });
     expect(await setup(reading(20, 95, NOW - 60_000, RESET, NOW)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 80% (resets 13:40)." });

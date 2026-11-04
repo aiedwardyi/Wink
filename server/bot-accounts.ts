@@ -97,9 +97,10 @@ export class BotAccounts {
     return this.accounts.setDefault(account.of, id);
   }
 
+  // undefined: no Main configured. null: Main configured but unavailable.
   mainAccount(of: string) {
     const id = this.routedAccount(of);
-    return id && this.available(id) ? this.accounts.get(id) : undefined;
+    return id ? (this.available(id) ? this.accounts.get(id) : null) : undefined;
   }
 
   noteAccount() {

@@ -117,7 +117,7 @@ export function createWorkerLaunch(deps: {
   enabled(): boolean; resolveWorkerTurn: WorkerTurnResolver; bases(): InstanceConfigMap;
   available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
-  mainAccount?(of: string): AccountContext | undefined;
+  mainAccount?(of: string): AccountContext | undefined | null;
 }) {
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
@@ -137,8 +137,8 @@ export function createWorkerLaunch(deps: {
     if (!base || base.enabled === false || base.driver !== command.driver) throw new Error("Worker base account is unavailable");
     const baseEnvironment = { ...process.env, ...base.environment };
     const main = sameEngine ? undefined : deps.mainAccount?.(baseId);
-    const account = sameEngine && turn.account ? turn.account
-      : main && deps.available(main.id, main.generation) ? main : baseAccount(baseId, command.driver, baseEnvironment);
+    if (main === null || (main && !deps.available(main.id, main.generation))) throw new Error(`${command.name} Main is unavailable or signed out. Sign in again in Settings > Connections, or pick another Main`);
+    const account = sameEngine && turn.account ? turn.account : main ?? baseAccount(baseId, command.driver, baseEnvironment);
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
@@ -181,7 +181,8 @@ export function createWorkerLaunch(deps: {
     const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
-    if (!deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
+    const nowMain = sameEngine ? undefined : deps.mainAccount?.(baseId);
+    if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
       environment: policy.env, workerSettings, session, line: usage.line };
   };

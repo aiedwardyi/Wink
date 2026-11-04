@@ -82,7 +82,7 @@ export function createSpawnUsage(deps: Deps) {
       session && `5h ${left(session)}%${suffix}${session.resetsAt === null ? "" : ` (resets ${CLOCK.format(session.resetsAt)})`}`,
       weekly && `weekly ${left(weekly)}%${suffix}`,
     ].filter(Boolean).join(", ");
-    const low = (window: RateLimitWindow | undefined, min: number) => window !== undefined && window.resetsAt !== null && left(window) < min;
+    const low = (window: RateLimitWindow | undefined, min: number) => window !== undefined && (recovery || window.resetsAt !== null) && left(window) < min;
     for (const [key, heldAt] of held) if (at - heldAt.at > REPEAT_MS) held.delete(key);
     const key = JSON.stringify(account ? [botId, label, command, account.id, account.generation] : [botId, label, command]);
     if ((low(session, SESSION_MIN_LEFT) || low(weekly, WEEKLY_MIN_LEFT)) && (recovery || !held.has(key))) {
