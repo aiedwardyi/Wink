@@ -163,7 +163,7 @@ out({
     response: resultError
       ? (process.env.FAKE_AGY_RESULT_RESPONSE ?? "")
       : process.env.FAKE_AGY_SYSTEM_NOTICE === "1"
-        ? systemNotice
+        ? systemNotice + (process.env.FAKE_AGY_AFTER_NOTICE ?? "")
         : process.env.FAKE_AGY_NO_FINAL === "1"
           ? ""
           : cancelledTool

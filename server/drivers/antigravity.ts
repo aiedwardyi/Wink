@@ -54,7 +54,7 @@ const DRIVER_KIND = "antigravityAgent";
 const AGY_STOPPED_NOTE = "The bot stopped before finishing.";
 const AGY_BUSY_RESUME_PROMPT = "continue";
 const AGY_STILL_BUSY = "Gemini is still busy after 3 tries. Try another model.";
-const AGY_SYSTEM_NOTICE = /<SYSTEM_MESSAGE\b/i;
+const AGY_SYSTEM_NOTICE = /The following is a <SYSTEM_MESSAGE>[\s\S]*?<\/SYSTEM_MESSAGE>\s*/gi;
 const AGY_CONTEXT_CANCELLATION = /\bcontext\s+cancel(?:ed|led)\b/i;
 const AGY_ACCOUNT_ERROR =
   /unauthorized|unauthenticated|\bforbidden\b|(?<![\w-])40[13](?![\w-])|not logged in|\bsign[\s-]?in\b|authentication failed|permission_denied|permission denied|has not been used in project|\bapi\b[^.\n]{0,120}\bdisabled\b/i;
@@ -68,8 +68,8 @@ export function isAgyAccountError(text: string): boolean {
   return AGY_ACCOUNT_ERROR.test(text);
 }
 
-function isAntigravitySystemNotice(text: string): boolean {
-  return AGY_SYSTEM_NOTICE.test(text);
+function stripAntigravitySystemNotices(text: string): string {
+  return text.replace(AGY_SYSTEM_NOTICE, "");
 }
 
 function isCancelledTool(payload: { state?: string; tool_info?: { output?: string } | string }): boolean {
@@ -713,8 +713,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       // agy's env. Added after the credential allowlist, which strips *_TOKEN;
       // the node flag would leak into every shell command the agent runs.
       const { ELECTRON_RUN_AS_NODE: _nodeFlag, ...identity } = {
-        ...turn.integrations?.agents?.env,
         ...turn.integrations?.terminal?.env,
+        ...turn.integrations?.agents?.env,
       };
 
       // spawnCli resolves npm .cmd shims / shebang scripts on Windows and
@@ -913,8 +913,8 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
           case "result": {
             promptAccepted = true;
             // agy delivers the assistant text in result.response (not streamed)
-            const response = typeof payload.response === "string" ? payload.response : "";
-            const realResponse = Boolean(response.trim()) && !isAntigravitySystemNotice(response) && !cancelledTool;
+            const response = stripAntigravitySystemNotices(typeof payload.response === "string" ? payload.response : "");
+            const realResponse = Boolean(response.trim()) && !cancelledTool;
             const parsedError = z.string().safeParse(payload.error);
             const agyError = parsedError.success ? parsedError.data : "";
             const agyResultError = payload.status === "ERROR" && agyError.length > 0;
