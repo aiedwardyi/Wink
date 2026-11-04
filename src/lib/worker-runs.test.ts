@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Message } from "@/state/store";
-import { byUrgency, latestPaneRun, listedRuns, listedSessionId, parseWorkerLabel, shownState, workerAnchors, workerProvider, workerRuns } from "./worker-runs";
+import { byUrgency, latestPaneRun, listedRuns, listedSessionId, parseWorkerLabel, rosterChip, shownState, workerAnchors, workerProvider, workerRuns } from "./worker-runs";
 
 const BOT = "61902933-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
 const PANE = "5d09c0d0-2844-43b0-982e-88305df70570";
@@ -417,6 +417,20 @@ describe("byUrgency", () => {
   });
 });
 
+describe("rosterChip", () => {
+  it("keeps exited panes listable as ended and reads liveness from the rest", () => {
+    const runs = workerRuns([launch("a", 1, "WORK | Opus 5.5 | high", "aaaaaaaa-1"), launch("b", 2, "GONE | Opus 5.5 | high", "bbbbbbbb-1")]);
+    const chip = rosterChip(runs, [
+      { sessionId: "aaaaaaaa-1", label: "WORK | Opus 5.5 | high" },
+      { sessionId: "bbbbbbbb-1", label: null, exited: true },
+    ]);
+    expect([...chip.livePanes]).toEqual(["aaaaaaaa-1", "bbbbbbbb-1"]);
+    expect([...chip.endedPanes]).toEqual(["bbbbbbbb-1"]);
+    expect([...chip.paneLabels]).toEqual([["aaaaaaaa-1", "WORK | Opus 5.5 | high"]]);
+    expect(chip.runs.map((shown) => shown.state)).toEqual(["working", "ended"]);
+  });
+});
+
 describe("listedRuns", () => {
   const runs = () => workerRuns([
     launch("a", 1, "WORK | Opus 5.5 | high", "aaaaaaaa-1"),
@@ -431,6 +445,12 @@ describe("listedRuns", () => {
   it("keeps every live pane, including a done one, and drops a closed working pane", () => {
     const listed = listedRuns(runs(), new Set(["bbbbbbbb-1", "cccccccc-1", "dddddddd-1"]));
     expect(listed.map((shown) => shown.run.nick)).toEqual(["WAIT", "SHIP", "COPY"]);
+  });
+
+  it("lists ended panes last as ended, placeholders included", () => {
+    const listed = listedRuns(runs(), new Set(["aaaaaaaa-1", "cccccccc-1", "eeeeeeee-1"]), new Map([["eeeeeeee-1", "CI-WAIT | script"]]), new Set(["cccccccc-1", "eeeeeeee-1"]));
+    expect(listed.map((shown) => [shown.run.nick, shown.state])).toEqual([["WORK", "working"], ["COPY", "ended"], ["CI-WAIT", "ended"]]);
+    expect(listed[2].run.provider).toBe("script");
   });
 
   it("falls back to working and waiting when liveness is unknown", () => {

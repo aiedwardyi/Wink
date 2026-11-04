@@ -1314,10 +1314,44 @@ it("opens Ctrl+clicked http(s) links via openExternal and ignores other schemes"
 });
 
 
-it("keeps full-width pane labels, shows the strip scrollbar, and switches panes on the Alt+digit hotkey", async () => {
+const chip = () => host.querySelector<HTMLButtonElement>("header [data-worker-strip]")!;
+const shownPane = () => host.querySelector("header h1 span")?.textContent?.replace(/^\/ /, "");
+const closePaneButton = () => host.querySelector<HTMLButtonElement>('header button[aria-label="Close pane"]');
+const nickOf = (row: Element) => row.querySelector("span.truncate.font-medium")?.textContent;
+
+async function openList() {
+  if (!host.querySelector("[data-worker-list]")) await act(async () => { chip().click(); });
+  return host.querySelector<HTMLElement>("[data-worker-list]")!;
+}
+
+async function closeList() {
+  if (host.querySelector("[data-worker-list]")) await act(async () => { chip().click(); });
+}
+
+async function paneRows() {
+  const rows = [...(await openList()).querySelectorAll<HTMLButtonElement>("li button")].map((row) => ({
+    nick: nickOf(row), state: row.querySelector("[data-worker-state]")?.getAttribute("data-worker-state"), title: row.title,
+  }));
+  await closeList();
+  return rows;
+}
+
+async function paneRow(nick: string) {
+  return [...(await openList()).querySelectorAll<HTMLButtonElement>("li button")].find((row) => nickOf(row) === nick)!;
+}
+
+async function pickPane(nick: string) {
+  const row = await paneRow(nick);
+  await act(async () => { row.click(); });
+}
+
+async function pickMain() {
+  const row = (await openList()).querySelector<HTMLButtonElement>("[data-worker-terminal]")!;
+  await act(async () => { row.click(); });
+}
+
+it("switches panes on the Alt+digit hotkey and names the watched pane in a one-line header title", async () => {
   const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
-  const scrollIntoView = vi.fn();
-  Element.prototype.scrollIntoView = scrollIntoView;
   const panes = ["worker-one-with-a-long-label", "worker-two-with-a-long-label"].map((label, index) => ({ sessionId: `pane-${index + 1}`, generation: 1, label, cwd: "C:\\work", main: false, exited: false }));
   const readBot = vi.fn(async () => ({ botId: "bot-1", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes }));
   const bot = mountBridge({ appearance: vi.fn(async () => null), open, readBot, write: vi.fn(), resize: vi.fn(async () => {}), onData: () => vi.fn(), onExit: () => vi.fn() });
@@ -1325,33 +1359,17 @@ it("keeps full-width pane labels, shows the strip scrollbar, and switches panes 
   await act(async () => root.render(createElement(TerminalWorkspace, props)));
   await act(async () => { await Promise.resolve(); });
 
-  const tablist = host.querySelector<HTMLElement>('[role="tablist"]');
-  expect(tablist?.className).toContain("overflow-x-auto");
-  expect(tablist?.className).toContain("pb-1");
-  expect(tablist?.className).not.toContain("scrollbar-width:none");
-  expect(tablist?.className).not.toContain("::-webkit-scrollbar]:hidden");
-  const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-  expect(tabs).toHaveLength(3);
-  for (const tab of tabs) {
-    expect(tab.parentElement?.className).toContain("shrink-0");
-    expect(tab.parentElement?.className).not.toMatch(/\bflex-1\b/);
-    expect(tab.parentElement?.className).not.toContain("basis-0");
-    expect(tab.className).toContain("whitespace-nowrap");
-    expect(tab.className).not.toContain("truncate");
-  }
-  expect(tabs.map((tab) => tab.title)).toEqual(["Terminal (Alt+1)", "worker-one-with-a-long-label (Alt+2)", "worker-two-with-a-long-label (Alt+3)"]);
-
+  expect(host.querySelector("header h1")?.className).toContain("truncate");
+  expect((await paneRows()).map((row) => row.title)).toEqual(["worker-one-with-a-long-label (Alt+2)", "worker-two-with-a-long-label (Alt+3)"]);
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 3 } })));
-  expect(tabs[2].getAttribute("aria-selected")).toBe("true");
-  expect(scrollIntoView).toHaveBeenCalledWith({ inline: "nearest", block: "nearest" });
+  expect(shownPane()).toBe("worker-two-with-a-long-label");
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 9 } })));
-  expect(tabs[2].getAttribute("aria-selected")).toBe("true");
+  expect(shownPane()).toBe("worker-two-with-a-long-label");
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 1 } })));
-  expect(tabs[0].getAttribute("aria-selected")).toBe("true");
-  Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  expect(shownPane()).toBe("Desk");
 });
 
-it("puts the pane tabs in their own row directly above the terminal, outside the header", async () => {
+it("renders no pane tab strip and keeps the worker chip in the header", async () => {
   const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
   const panes = ["one", "two"].map((label) => ({ sessionId: `pane-${label}`, generation: 1, label, cwd: "C:\\work", main: false, exited: false }));
   const readBot = vi.fn(async () => ({ botId: "bot-1", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes }));
@@ -1359,13 +1377,14 @@ it("puts the pane tabs in their own row directly above the terminal, outside the
   await act(async () => root.render(createElement(TerminalWorkspace, { bot, visible: true, focusBlocked: false, onClose: vi.fn() })));
   await act(async () => { await Promise.resolve(); });
 
-  const tablist = host.querySelector<HTMLElement>('[role="tablist"]');
-  expect(tablist?.closest("header")).toBeNull();
-  expect(tablist?.parentElement?.tagName).toBe("MAIN");
-  expect(tablist?.nextElementSibling).toBe(host.querySelector("[data-orbit-terminal]"));
+  expect(host.querySelector('[role="tablist"]')).toBeNull();
+  expect(host.querySelector('[role="tab"]')).toBeNull();
+  expect(host.querySelectorAll("[data-worker-strip]")).toHaveLength(1);
+  expect(chip().closest("header")).not.toBeNull();
+  expect(host.querySelector("header")?.nextElementSibling).toBe(host.querySelector("[data-orbit-terminal]"));
 });
 
-it("activates the pane a notification names, once its tab exists, and ignores unknown panes", async () => {
+it("activates the pane a notification names, once it is listed, and ignores unknown panes", async () => {
   const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
   const panes = ["one", "two"].map((label) => ({ sessionId: `pane-${label}`, generation: 1, label, cwd: "C:\\work", main: false, exited: false }));
   const readBot = vi.fn(async () => ({ botId: "bot-1", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes }));
@@ -1373,15 +1392,14 @@ it("activates the pane a notification names, once its tab exists, and ignores un
   const props = { bot, visible: true, focusBlocked: false, onClose: vi.fn() };
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: "pane-two" } })));
   await act(async () => { await Promise.resolve(); });
-  const selected = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map((tab) => tab.getAttribute("aria-selected"));
-  expect(selected()).toEqual(["false", "false", "true"]);
+  expect(shownPane()).toBe("two");
 
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 1 } })));
-  expect(selected()).toEqual(["true", "false", "false"]);
+  expect(shownPane()).toBe("Desk");
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: "pane-gone" } })));
-  expect(selected()).toEqual(["true", "false", "false"]);
+  expect(shownPane()).toBe("Desk");
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: "pane-one" } })));
-  expect(selected()).toEqual(["false", "true", "false"]);
+  expect(shownPane()).toBe("one");
 });
 
 function paneFixture() {
@@ -1404,9 +1422,9 @@ function paneFixture() {
   });
   const props = { bot, visible: true, focusBlocked: false, onClose: vi.fn() };
   const render = (next = props) => act(async () => root.render(createElement(TerminalWorkspace, next)));
-  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-  const select = (index: number) => act(async () => { tabs()[index].click(); });
-  return { props, render, tabs, select, open, readBot, close, write, snapshot,
+  const names = async () => (await paneRows()).map((row) => row.nick);
+  const select = (nick: string | null) => (nick === null ? pickMain() : pickPane(nick));
+  return { props, render, names, select, open, readBot, close, write, snapshot,
     receive: (event: Parameters<typeof receive>[0]) => receive(event),
     exit: (event: Parameters<Parameters<TerminalBridge["onExit"]>[0]>[0]) => { for (const cb of exits) cb(event); },
     closed: (event: Parameters<typeof closed>[0]) => closed(event),
@@ -1417,80 +1435,127 @@ function paneFixture() {
 it.each([
   ["Claude Opus", "claudeAgent"], ["Codex Sol", "codex"], ["Grok 4.7", "grokAgent"],
   ["Muse 1.3", "museAgent"], ["script", "script"], ["Nova 2", null],
-])("starts a %s pane tab with the header worker mark", async (model, provider) => {
+])("shows a %s pane's worker mark on its list row", async (model, provider) => {
   const f = paneFixture();
   const sessionId = f.snapshot.panes[0].sessionId;
   const messages: Message[] = [{ id: "launch", at: 1, role: "bot", kind: "launch", text: `Launched Worker | ${model} | high\nLabel: Worker | ${model} | high\nWorking folder: C:\\work\nSession: ${sessionId}` }];
   await act(async () => root.render(createElement(TerminalWorkspace, { ...f.props, bot: { ...f.props.bot, messages } })));
-  const [main, worker] = f.tabs();
-  const mark = provider === "script" ? createElement(ScrollText, { size: 12, className: "text-ink-secondary", "aria-hidden": true })
-    : provider ? createElement(ProviderMark, { driverKind: provider, size: 12 })
-    : createElement(Bot, { size: 12, className: "text-ink-secondary", "aria-hidden": true });
+  const worker = await paneRow("Worker");
+  const mark = provider === "script" ? createElement(ScrollText, { size: 14, className: "text-ink-secondary", "aria-hidden": true })
+    : provider ? createElement(ProviderMark, { driverKind: provider, size: 14 })
+    : createElement(Bot, { size: 14, className: "text-ink-secondary", "aria-hidden": true });
   expect(worker.innerHTML).toContain(renderToStaticMarkup(mark));
   expect(worker.firstElementChild?.querySelector("svg")).not.toBeNull();
-  expect(worker.textContent).toBe("one");
-  expect(worker.parentElement?.querySelector(".lucide-x")).not.toBeNull();
-  expect(main.textContent).toBe(">_");
-  expect(main.querySelector("svg")).toBeNull();
+  expect(host.querySelector("[data-worker-terminal] .lucide-bot, [data-worker-terminal] .lucide-scroll-text")).toBeNull();
 });
 
 it("starts a pane without a worker run with a plain bot mark", async () => {
   const f = paneFixture();
   await f.render();
-  expect(f.tabs()[1].querySelector(".lucide-bot")).not.toBeNull();
-  expect(f.tabs()[1].querySelector(".lucide-scroll-text")).toBeNull();
+  const row = await paneRow("one");
+  expect(row.querySelector(".lucide-bot")).not.toBeNull();
+  expect(row.querySelector(".lucide-scroll-text")).toBeNull();
 });
 
 it("takes the mark from the pane label when its launch is outside the loaded page", async () => {
   const f = paneFixture();
   f.snapshot.panes[0].label = "one | Codex Sol | high";
   await f.render();
-  expect(f.tabs()[1].innerHTML).toContain(renderToStaticMarkup(createElement(ProviderMark, { driverKind: "codex", size: 12 })));
-  expect(f.tabs()[1].querySelector(".lucide-bot")).toBeNull();
+  const row = await paneRow("one");
+  expect(row.innerHTML).toContain(renderToStaticMarkup(createElement(ProviderMark, { driverKind: "codex", size: 14 })));
+  expect(row.querySelector(".lucide-bot")).toBeNull();
 });
 
-it("switches clicked tabs and sends input only to the selected pane", async () => {
+it("lists a script pane with the script icon and offers Close pane on it", async () => {
+  const f = paneFixture();
+  f.snapshot.panes[1].label = "CI-WAIT | script";
+  await f.render();
+  const row = await paneRow("CI-WAIT");
+  expect(row.querySelector(".lucide-scroll-text")).not.toBeNull();
+  await act(async () => { row.click(); });
+  expect(shownPane()).toBe("CI-WAIT");
+  expect(closePaneButton()).not.toBeNull();
+});
+
+it("switches clicked rows and sends input only to the selected pane", async () => {
   const f = paneFixture();
   await f.render();
-  for (const [index, id] of [[1, "pane-one"], [2, "pane-two"], [0, "main-bot-1"]] as const) {
-    await f.select(index);
-    expect(f.tabs()[index].getAttribute("aria-selected")).toBe("true");
-    expect(f.open).toHaveBeenLastCalledWith(expect.objectContaining({ restart: false, ...(index ? { sessionId: id } : {}) }));
+  for (const [nick, id] of [["one", "pane-one"], ["two", "pane-two"], [null, "main-bot-1"]] as const) {
+    await f.select(nick);
+    expect(shownPane()).toBe(nick ?? "Desk");
+    expect(host.querySelector("[data-worker-list]")).toBeNull();
+    expect(f.open).toHaveBeenLastCalledWith(expect.objectContaining({ restart: false, ...(nick ? { sessionId: id } : {}) }));
     await act(async () => { terminal.__emitData("hello\r"); });
     expect(f.write).toHaveBeenLastCalledWith(id, "hello\r");
   }
 });
 
-it("closes the active and last spawned tabs while ignoring late worker output", async () => {
+it("returns to the main shell from the Open terminal row, which carries the Alt+1 hint", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("two");
+  expect(shownPane()).toBe("two");
+  expect((await openList()).querySelector<HTMLButtonElement>("[data-worker-terminal]")?.title).toBe("Open terminal (Alt+1)");
+  f.open.mockClear();
+  await pickMain();
+  expect(shownPane()).toBe("Desk");
+  expect(f.open.mock.calls.at(-1)?.[0].sessionId).toBeUndefined();
+});
+
+it("closes the watched pane from the header Close pane button while ignoring late worker output", async () => {
+  const f = paneFixture();
+  await f.render();
+  await f.select(null);
+  expect(closePaneButton()).toBeNull();
+  await f.select("one");
+  const button = closePaneButton()!;
+  expect(button.title).toBe("Close pane");
+  expect(button.querySelector(".lucide-square-x")).not.toBeNull();
+  expect(button.querySelector(".lucide-x")).toBeNull();
   await act(async () => { f.receive({ id: "pane-one", data: "working", seq: 1 }); });
   expect(terminal.write).toHaveBeenLastCalledWith("working");
-  await act(async () => { f.tabs()[1].parentElement!.querySelectorAll("button")[1].click(); });
+  await act(async () => { button.click(); });
   expect(f.close).toHaveBeenLastCalledWith("pane-one");
-  expect(f.tabs().map((tab) => tab.textContent)).toEqual([">_", "two"]);
-  expect(f.tabs()[0].getAttribute("aria-selected")).toBe("true");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(shownPane()).toBe("Desk");
+  expect(closePaneButton()).toBeNull();
+  expect(await f.names()).toEqual(["two"]);
   terminal.write.mockClear();
   await act(async () => { f.receive({ id: "pane-one", data: "late", seq: 2 }); });
   expect(terminal.write).not.toHaveBeenCalled();
-  await f.select(1);
-  await act(async () => { f.tabs()[1].parentElement!.querySelectorAll("button")[1].click(); });
+  await f.select("two");
+  await act(async () => { closePaneButton()!.click(); });
   expect(f.close).toHaveBeenLastCalledWith("pane-two");
-  expect(f.tabs()).toHaveLength(0);
+  expect(await f.names()).toEqual([]);
   expect(f.open.mock.calls.at(-1)?.[0].sessionId).toBeUndefined();
+});
+
+it("keeps an exited pane listed as an ended row that still opens until the host closes it", async () => {
+  const f = paneFixture();
+  f.snapshot.panes[0].exited = true;
+  await f.render();
+  expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["two", "working"], ["one", "ended"]]);
+  await act(async () => { f.exit({ id: "pane-two", exitCode: 0 }); });
+  expect((await paneRows()).map(({ nick, state }) => [nick, state])).toEqual([["one", "ended"], ["two", "ended"]]);
+  f.open.mockClear();
+  await f.select("one");
+  expect(shownPane()).toBe("one");
+  expect(f.open).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: "pane-one" }));
+  await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
+  expect(await f.names()).toEqual(["two"]);
+  expect(shownPane()).toBe("Desk");
 });
 
 it("removes host-closed panes and ignores events for other bots", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await act(async () => { f.closed({ botId: "bot-2", id: "pane-one" }); });
-  expect(f.tabs()).toHaveLength(3);
+  expect(await f.names()).toEqual(["one", "two"]);
   await act(async () => { f.closed({ botId: "bot-1", id: "pane-two" }); });
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("true");
+  expect(shownPane()).toBe("one");
   await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
-  expect(f.tabs()).toHaveLength(0);
+  expect(await f.names()).toEqual([]);
   expect(f.open.mock.calls.at(-1)?.[0].sessionId).toBeUndefined();
   expect(f.close).not.toHaveBeenCalled();
 });
@@ -1502,13 +1567,13 @@ it("does not resurrect a host-closed pane from a delayed initial snapshot", asyn
   await f.render();
   await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
   await act(async () => { resolve(f.snapshot); });
-  expect(f.tabs().map((tab) => tab.textContent)).toEqual([">_", "two"]);
+  expect(await f.names()).toEqual(["two"]);
 });
 
 it.each([null, 0])("gates every visible Restart entry point on a spawned pane with exit %s", async (exitCode) => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await f.render({ ...f.props, bot: { ...f.props.bot, cwd: "C:\\other" } });
   if (exitCode !== null) await act(async () => { f.exit({ id: "pane-one", exitCode }); });
   const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")].filter((button) => /^(Open terminal here|New shell)$/.test(button.textContent?.trim() ?? ""));
@@ -1525,8 +1590,8 @@ it.each([null, 0])("gates every visible Restart entry point on a spawned pane wi
 it("has no header Restart button on the own terminal or a worker pane", async () => {
   const f = paneFixture();
   await f.render();
-  for (const index of [0, 1]) {
-    await f.select(index);
+  for (const nick of [null, "one"]) {
+    await f.select(nick);
     expect(host.querySelector("header")!.textContent).not.toContain("Restart");
   }
 });
@@ -1536,7 +1601,7 @@ it.each([false, true])("persists a folder without reattaching a spawned pane whe
   await f.render();
   let resolve!: (snapshot: TerminalSnapshot) => void;
   if (pending) f.open.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
-  await f.select(1);
+  await f.select("one");
   const pickFolder = vi.fn(async () => "C:\\other");
   Object.assign(window.ogb!, { pickFolder });
   vi.mocked(api).mockResolvedValueOnce({ bot: { ...f.props.bot, cwd: "C:\\other" } });
@@ -1552,20 +1617,17 @@ it.each([false, true])("persists a folder without reattaching a spawned pane whe
 it("keeps snapshot labels isolated across panes and bot remounts", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("true");
-  expect(f.tabs()[1].textContent).toBe("one");
-  await f.select(2);
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("false");
-  expect(f.tabs()[2].getAttribute("aria-selected")).toBe("true");
-  expect(f.tabs()[2].textContent).toBe("two");
+  await f.select("one");
+  expect(shownPane()).toBe("one");
+  await f.select("two");
+  expect(shownPane()).toBe("two");
   f.readBot.mockResolvedValueOnce({ ...f.snapshot, botId: "bot-2", panes: [{ ...f.snapshot.panes[0], sessionId: "foreign", label: "other bot" }] });
   await act(async () => root.render(createElement(TerminalWorkspace, { ...f.props, key: "bot-2", bot: { ...f.props.bot, id: "bot-2" } })));
-  expect(f.tabs().map((tab) => tab.textContent)).toEqual([">_", "other bot"]);
+  expect(await f.names()).toEqual(["other bot"]);
   await act(async () => { f.opened({ botId: "bot-1", id: "ignored", label: "wrong bot", generation: 1 }); });
-  expect(f.tabs()).toHaveLength(2);
+  expect(await f.names()).toHaveLength(1);
   await act(async () => root.render(createElement(TerminalWorkspace, { ...f.props, key: "bot-1" })));
-  expect(f.tabs().map((tab) => tab.textContent)).toEqual([">_", "one", "two"]);
+  expect(await f.names()).toEqual(["one", "two"]);
 });
 
 it("pickInitialPane prefers the last viewed pane, then the newest running worker, then main", () => {
@@ -1584,9 +1646,9 @@ it("opens on the newest running worker pane when nothing was viewed", async () =
   const f = paneFixture();
   f.snapshot.panes[1].exited = true;
   await f.render();
-  expect(f.tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true", "false"]);
+  expect(shownPane()).toBe("one");
   await act(async () => { f.opened({ botId: "bot-1", id: "pane-three", label: "three", generation: 1 }); });
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("true");
+  expect(shownPane()).toBe("one");
 });
 
 it("treats a pane that exits before opening as exited", async () => {
@@ -1594,62 +1656,63 @@ it("treats a pane that exits before opening as exited", async () => {
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.exit({ id: "pane-two", exitCode: 0 }); });
   await f.render();
-  expect(f.tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true", "false"]);
+  expect(shownPane()).toBe("one");
 });
 
 it("reopens on the last viewed pane, main included, and falls back when it closes", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await f.render({ ...f.props, visible: false });
   await f.render();
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("true");
-  await f.select(0);
+  expect(shownPane()).toBe("one");
+  await f.select(null);
   await act(async () => root.unmount());
   await act(async () => { root = createRoot(host); });
   await f.render();
-  expect(f.tabs()[0].getAttribute("aria-selected")).toBe("true");
-  await f.select(1);
+  expect(shownPane()).toBe("Desk");
+  await f.select("one");
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.closed({ botId: "bot-1", id: "pane-one" }); });
   await f.render();
-  expect(f.tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+  expect(shownPane()).toBe("two");
 });
 
 it("remembers an auto-picked worker but not an auto-picked main shell", async () => {
   const f = paneFixture();
   await f.render();
-  expect(f.tabs()[2].getAttribute("aria-selected")).toBe("true");
+  expect(shownPane()).toBe("two");
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.opened({ botId: "bot-1", id: "pane-three", label: "three", generation: 1 }); });
   await f.render();
-  expect(f.tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "false", "true", "false"]);
+  expect(shownPane()).toBe("two");
 
   lastViewedPanes.clear();
   await act(async () => root.unmount());
   await act(async () => { root = createRoot(host); });
   f.snapshot.panes.splice(0);
   await f.render();
-  expect(f.tabs()).toHaveLength(0);
+  expect(await f.names()).toEqual([]);
+  expect(shownPane()).toBe("Desk");
   await f.render({ ...f.props, visible: false });
   await act(async () => { f.opened({ botId: "bot-1", id: "pane-new", label: "new", generation: 1 }); });
   await f.render();
-  expect(f.tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+  expect(shownPane()).toBe("new");
 });
 
 it("counts a notification-focused pane as last viewed", async () => {
   const f = paneFixture();
   await f.render({ ...f.props, paneFocus: { sessionId: "pane-one" } } as typeof f.props);
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("true");
+  expect(shownPane()).toBe("one");
   await f.render({ ...f.props, visible: false });
   await f.render();
-  expect(f.tabs()[1].getAttribute("aria-selected")).toBe("true");
+  expect(shownPane()).toBe("one");
 });
 
 it("notifies a typed worker follow-up after writing without waiting for the network", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   vi.mocked(api).mockReturnValue(new Promise(() => {}));
   await act(async () => { terminal.__emitData("follow up"); });
   expect(api).not.toHaveBeenCalled();
@@ -1673,7 +1736,7 @@ it.each([
 ])("does not notify key-only worker input %j", async (...chunks) => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await act(async () => { for (const chunk of chunks) terminal.__emitData(chunk); });
   expect(api).not.toHaveBeenCalled();
 });
@@ -1684,7 +1747,7 @@ it.each([
 ])("notifies edited worker input %j", async (...chunks) => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await act(async () => { for (const chunk of chunks) terminal.__emitData(chunk); });
   expect(api).toHaveBeenCalledExactlyOnceWith("/api/bots/bot-1/terminal/resume", {
     method: "POST", body: resumeBody("pane-one"),
@@ -1694,7 +1757,7 @@ it.each([
 it("notifies Delete after an erased worker line", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await act(async () => {
     terminal.__emitData("ab");
     terminal.__emitData("\x7f\x7f");
@@ -1708,10 +1771,10 @@ it("notifies Delete after an erased worker line", async () => {
 it("does not notify typed input in the main terminal or a failed write", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(0);
+  await f.select(null);
   await act(async () => { terminal.__emitData("main command\r"); });
   expect(api).not.toHaveBeenCalled();
-  await f.select(1);
+  await f.select("one");
   f.write.mockRejectedValueOnce(new Error("pane closed"));
   await act(async () => { terminal.__emitData("follow up\r"); });
   expect(api).not.toHaveBeenCalled();
@@ -1720,12 +1783,12 @@ it("does not notify typed input in the main terminal or a failed write", async (
 it("keeps a partial worker line separate across pane switches", async () => {
   const f = paneFixture();
   await f.render();
-  await f.select(1);
+  await f.select("one");
   await act(async () => { terminal.__emitData("follow up"); });
-  await f.select(2);
+  await f.select("two");
   await act(async () => { terminal.__emitData("\r"); });
   expect(api).not.toHaveBeenCalled();
-  await f.select(1);
+  await f.select("one");
   await act(async () => { terminal.__emitData("\r"); });
   expect(api).toHaveBeenCalledExactlyOnceWith("/api/bots/bot-1/terminal/resume", {
     method: "POST", body: resumeBody("pane-one"),
@@ -1742,7 +1805,7 @@ it("binds the desktop notification to the worker row before the write settles", 
   ];
   const bot = { ...f.props.bot, messages };
   await f.render({ ...f.props, bot });
-  await f.select(1);
+  await f.select("WORKER");
   let finish!: () => void;
   f.write.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
   await act(async () => { terminal.__emitData("follow up\r"); });
@@ -1766,7 +1829,7 @@ it("binds the desktop notification to the active branch when a fork holds a late
   ];
   const bot = { ...f.props.bot, messages, activeLeafId: "settled" };
   await f.render({ ...f.props, bot });
-  await f.select(1);
+  await f.select("WORKER");
   await act(async () => { terminal.__emitData("follow up\r"); });
   expect(api).toHaveBeenCalledExactlyOnceWith("/api/bots/bot-1/terminal/resume", {
     method: "POST", body: resumeBody(sessionId, "settled"),
@@ -2020,17 +2083,20 @@ it("drops a snapshot that settles while hidden and reopens on show", async () =>
   expect(terminal.write.mock.calls.map(([text]) => text)).toEqual(["FRESH"]);
 });
 
-it("shows Alt+N titles only for tabs 1 to 9 with 16 workers", async () => {
-  const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
-  const panes = Array.from({ length: 16 }, (_, index) => ({ sessionId: `pane-${index + 1}`, generation: 1, label: `worker-${index + 1}`, cwd: "C:\\work", main: false, exited: false }));
+it("shows Alt+N row titles only for the terminal row and panes 1 to 8 with 16 workers", async () => {
+  const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
+  const panes = Array.from({ length: 16 }, (_, index) => ({ sessionId: `pane-${index + 1}`, generation: 1, label: `worker-${index + 1}`, cwd: "C:\work", main: false, exited: false }));
   const readBot = vi.fn(async () => ({ botId: "bot-1", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes }));
   const bot = mountBridge({ appearance: vi.fn(async () => null), open, readBot, write: vi.fn(), resize: vi.fn(async () => {}), onData: () => vi.fn(), onExit: () => vi.fn() });
   await act(async () => root.render(createElement(TerminalWorkspace, { bot, visible: true, focusBlocked: false, onClose: vi.fn() })));
   await act(async () => { await Promise.resolve(); });
 
-  const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-  expect(tabs).toHaveLength(17);
-  expect(tabs[8].title.endsWith("(Alt+9)")).toBe(true);
-  expect(tabs[9].title).not.toContain("Alt+");
-  expect(tabs[16].title).not.toContain("Alt+");
+  const list = await openList();
+  expect(list.querySelector<HTMLButtonElement>("[data-worker-terminal]")?.title).toBe("Open terminal (Alt+1)");
+  const rows = [...list.querySelectorAll<HTMLButtonElement>("li button")];
+  expect(rows).toHaveLength(16);
+  expect(rows[0].title).toBe("worker-1 (Alt+2)");
+  expect(rows[7].title).toBe("worker-8 (Alt+9)");
+  expect(rows[8].title).toBe("");
+  expect(rows[15].title).toBe("");
 });

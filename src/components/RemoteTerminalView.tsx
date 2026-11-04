@@ -6,10 +6,10 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
-import { latestPaneRun, parseWorkerLabel, workerProvider, workerRuns } from "@/lib/worker-runs";
+import { latestPaneRun, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { WorkerMark } from "./WorkerRows";
+import { WorkerChip } from "./WorkerRows";
 
 type RemoteTerminalPane = {
   sessionId: string;
@@ -17,6 +17,7 @@ type RemoteTerminalPane = {
   cwd?: string;
   main: boolean;
   exited?: boolean;
+  changedAt?: number;
 };
 
 type RemoteTerminalSnapshot = {
@@ -33,7 +34,7 @@ type RemoteTerminalSnapshot = {
   panes?: RemoteTerminalPane[];
 };
 
-// Stands in for a closed main, so its tab can open it from any device.
+// Stands in for a closed main, so Open terminal can start it from any device.
 const MAIN_TAB = "remote:main";
 const MAIN_CLOSED: RemoteTerminalSnapshot = { state: "no-terminal" };
 
@@ -83,16 +84,11 @@ function runStyle(run: TerminalRun, paint: RunPaint): CSSProperties {
   };
 }
 
-function folderName(cwd: string): string {
-  const trimmed = cwd.replace(/[\\/]+$/, "");
-  return trimmed.split(/[\\/]/).pop() || cwd;
-}
-
 function paneSelection(pane: RemoteTerminalPane): string | null {
   return pane.main && pane.sessionId !== MAIN_TAB ? null : pane.sessionId;
 }
 
-/** Alt+n picks the nth tab in this view's order. Null is the live main pane. Undefined is past the end. */
+/** Alt+n picks the nth pane in this view's order, Main first. Null is the live main pane. Undefined is past the end. */
 export function remotePaneHotkey(panes: RemoteTerminalPane[], n: number): string | null | undefined {
   const pane = panes[n - 1];
   if (!pane) return undefined;
@@ -138,18 +134,18 @@ export function RemoteTerminalView({
 
   const panes = snapshot?.panes ?? [];
   const mainPane = panes.find((pane) => pane.main);
-  const tabs: RemoteTerminalPane[] = !panes.length
+  const order: RemoteTerminalPane[] = !panes.length
     ? panes
     : mainPane
       ? [mainPane, ...panes.filter((pane) => pane !== mainPane)]
       : [{ sessionId: MAIN_TAB, main: true, exited: true }, ...panes];
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
+  const orderRef = useRef(order);
+  orderRef.current = order;
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   const fallbackPane = mainPane ? undefined : panes[0]?.sessionId;
-  // A Main tab picked before Main started follows the live Main pane.
-  const picked = selectedPane === MAIN_TAB && tabs[0]?.sessionId !== MAIN_TAB ? null : selectedPane;
+  // Main picked before Main started follows the live Main pane.
+  const picked = selectedPane === MAIN_TAB && order[0]?.sessionId !== MAIN_TAB ? null : selectedPane;
   const onMainTab = picked === MAIN_TAB;
   const activePaneId = picked ?? mainPane?.sessionId ?? fallbackPane;
 
@@ -202,7 +198,7 @@ export function RemoteTerminalView({
 
   useEffect(() => {
     if (!visibleRef.current || !paneHotkey) return;
-    const next = remotePaneHotkey(tabsRef.current, paneHotkey.n);
+    const next = remotePaneHotkey(orderRef.current, paneHotkey.n);
     if (next !== undefined) setSelectedPane(next);
   }, [paneHotkey]);
 
@@ -232,7 +228,7 @@ export function RemoteTerminalView({
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  // A tab tap selects before its snapshot lands; the old pane's screen and credentials must not stand in.
+  // A pane pick selects before its snapshot lands; the old pane's screen and credentials must not stand in.
   const inSync = !activePaneId || !snapshot?.sessionId || snapshot.sessionId === activePaneId;
   const shown = onMainTab ? MAIN_CLOSED : inSync ? snapshot : null;
   const noTerminal = shown?.state === "no-terminal";
@@ -349,18 +345,30 @@ export function RemoteTerminalView({
   };
   const buttonClass =
     "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50";
-  const paneLabel = (pane: RemoteTerminalPane) => pane.label ?? (pane.main ? t("terminal.main") : pane.cwd ? folderName(pane.cwd) : pane.sessionId);
+  const chip = rosterChip(workers, panes.filter((pane) => !pane.main));
+  const watched = onMainTab ? undefined : panes.find((pane) => pane.sessionId === activePaneId && !pane.main);
+  const watchedName = watched ? parseWorkerLabel(watched.label).nick ?? watched.sessionId.slice(0, 8) : bot.name;
+  const pick = (sessionId: string | null) => {
+    setSelectedPane(sessionId);
+    focusInput(inputRef.current);
+  };
 
   return (
     <main ref={mainRef} className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
-      <header className={`flex shrink-0 items-center gap-2 bg-panel px-2 py-2 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT} ${tabs.length > 1 ? "" : "border-b border-hairline"}`}>
+      <header className={`@container/chathead flex shrink-0 items-center gap-2 border-b border-hairline bg-panel px-2 py-2 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {bot.name}</span></h1>
+          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watchedName}</span></h1>
           <p className="truncate font-mono text-[11px] text-ink-secondary">
             {[shown?.cwd, noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : ""].filter(Boolean).join(" · ")}
           </p>
         </div>
+        <WorkerChip
+          name={bot.name}
+          {...chip}
+          onOpenTerminalPane={pick}
+          onOpenTerminal={() => pick(remotePaneHotkey(order, 1) ?? null)}
+        />
         <button type="button" onClick={() => void refreshNow()} disabled={refreshing} aria-label={t("terminal.refresh")} className={buttonClass}>
           <RotateCcw size={16} className={refreshing ? "animate-spin motion-reduce:animate-none" : undefined} /> <span className="max-sm:sr-only">{t("terminal.refresh")}</span>
         </button>
@@ -371,29 +379,6 @@ export function RemoteTerminalView({
           <X size={18} />
         </button>
       </header>
-      {tabs.length > 1 && (
-        <div role="tablist" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-hairline bg-panel px-3 pb-2 md:px-5 pointer-coarse:[scrollbar-width:none] pointer-coarse:[&::-webkit-scrollbar]:hidden">
-          {tabs.map((pane) => (
-            <button
-              key={pane.sessionId}
-              type="button"
-              role="tab"
-              aria-selected={activePaneId === pane.sessionId}
-              onClick={() => {
-                setSelectedPane(paneSelection(pane));
-                focusInput(inputRef.current);
-              }}
-              title={paneLabel(pane)}
-              className={`flex min-w-[56px] max-w-full shrink-0 items-center justify-center gap-1.5 rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${
-                activePaneId === pane.sessionId ? "border-accent-text text-ink" : "border-hairline text-ink-secondary hover:text-ink"
-              } ${pane.exited ? "opacity-50" : ""}`}
-            >
-              {!pane.main && <WorkerMark provider={latestPaneRun(workers, pane.sessionId)?.provider ?? workerProvider(parseWorkerLabel(pane.label).model)} compact />}
-              <span className="truncate">{paneLabel(pane)}</span>
-            </button>
-          ))}
-        </div>
-      )}
       {(actionError || error) && <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-ink-secondary">{actionError ? `${t("terminal.unavailable")}: ${actionError}` : t("errors.shell")}</p>}
       {noTerminal ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-[13px] text-ink-secondary">

@@ -206,14 +206,25 @@ describe("worker list shortcut", () => {
     }
   });
 
-  it("leaves Alt+W to the open terminal", async () => {
+  it("toggles the terminal's own list, not the chat's, while the terminal is open", async () => {
     const { host, press, unmount } = await mount();
     try {
       expect((await press()).defaultPrevented).toBe(true);
       await press({ code: "Backquote", key: "`", ctrlKey: true, altKey: false });
-      expect(host.querySelector('.orbit-terminal-overlay[data-open="true"]')).not.toBeNull();
+      const overlay = host.querySelector('.orbit-terminal-overlay[data-open="true"]')!;
+      expect(overlay).not.toBeNull();
       expect(document.body.querySelector("[data-worker-list]")).toBeNull();
-      expect((await press()).defaultPrevented).toBe(false);
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(overlay.querySelector("[data-worker-strip]")).not.toBeNull();
+      }, { timeout: 5000 });
+      const event = await press();
+      expect(event.defaultPrevented).toBe(true);
+      expect(event.cancelBubble).toBe(true);
+      expect(document.body.querySelectorAll("[data-worker-list]")).toHaveLength(1);
+      expect(overlay.querySelector("[data-worker-list]")).not.toBeNull();
+      expect(overlay.querySelector("[data-worker-strip]")?.getAttribute("aria-expanded")).toBe("true");
+      await press();
       expect(document.body.querySelector("[data-worker-list]")).toBeNull();
     } finally {
       await unmount();

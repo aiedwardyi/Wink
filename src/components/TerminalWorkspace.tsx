@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
-import { ArrowLeft, ChevronDown, FolderOpen, TerminalSquare, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, SquareX, TerminalSquare, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -8,12 +8,12 @@ import { api, useStore, visibleMessages } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { readTerminalMatch, terminalTheme, TERMINAL_APPEARANCE_EVENT } from "@/lib/terminal-appearance";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
-import { latestPaneRun, parseWorkerLabel, workerProvider, workerRuns } from "@/lib/worker-runs";
+import { latestPaneRun, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { Presence } from "@/lib/use-presence";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { WorkerMark } from "./WorkerRows";
+import { WorkerChip } from "./WorkerRows";
 import "@xterm/xterm/css/xterm.css";
 
 type SessionInfo = { cwd: string; shell: string };
@@ -112,7 +112,6 @@ export function TerminalWorkspace({
     lastViewedPanes.set(bot.id, id);
     setPane(id);
   };
-  const tablistRef = useRef<HTMLDivElement>(null);
   const panesRef = useRef(panes);
   panesRef.current = panes;
 
@@ -655,7 +654,7 @@ export function TerminalWorkspace({
     }
   }, [visible, seeded, panes, bot.id]);
 
-  // Waits for the tab: a cold open seeds panes after mount.
+  // Waits for the pane: a cold open seeds panes after mount.
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
@@ -663,11 +662,6 @@ export function TerminalWorkspace({
     focusedRef.current = paneFocus;
     selectPane(paneFocus.sessionId);
   }, [paneFocus, panes]);
-
-  useEffect(() => {
-    const active = tablistRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-    active?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
-  }, [pane]);
 
   const onTerminalWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (!(event.ctrlKey || event.metaKey) || event.deltaY === 0) return;
@@ -721,17 +715,24 @@ export function TerminalWorkspace({
     if (pane === id) setPane(null);
     void Promise.resolve().then(() => window.ogb?.terminal?.close?.(id)).catch(() => {});
   };
+  const chip = rosterChip(workers, panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited })));
+  const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
+  const hotkeyOf = (sessionId: string | null) => {
+    if (sessionId === null) return 1;
+    const index = panes.findIndex((item) => item.id === sessionId);
+    return index >= 0 && index < 8 ? index + 2 : undefined;
+  };
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-inset text-ink" aria-label={t("terminal.title")}>
-      <header className={`flex min-h-[60px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 py-3 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
+      <header className={`@container/chathead flex min-h-[60px] shrink-0 items-center gap-3 border-b border-hairline bg-panel px-5 py-3 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
         <button type="button" onClick={onClose} className="flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text">
           <ArrowLeft size={15} /> {t("terminal.chat")} <kbd className="text-[10px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>
         </button>
         <span className="h-5 border-l border-hairline" aria-hidden />
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {bot.name}</span></h1>
+          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watched ?? bot.name}</span></h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -751,6 +752,12 @@ export function TerminalWorkspace({
           </div>
         </div>
         {bot.busy && <span className="shrink-0 text-[11px] text-accent-text" role="status">{t("terminal.agentWorking")}</span>}
+        {pane !== null && (
+          <button type="button" onClick={() => closePane(pane)} aria-label={t("terminal.closePane")} title={t("terminal.closePane")} className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text">
+            <SquareX size={16} />
+          </button>
+        )}
+        <WorkerChip name={bot.name} {...chip} onOpenTerminalPane={selectPane} onOpenTerminal={() => selectPane(null)} hotkeyOf={hotkeyOf} />
       </header>
       {showProjectBanner && (
         <div role="status" className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-inset px-5 py-1.5 text-[12px] text-ink">
@@ -783,23 +790,6 @@ export function TerminalWorkspace({
         <div role="alert" className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger/10 px-5 py-3 text-[13px] text-danger">
           <span>{error}</span>
           <button type="button" onClick={() => setGeneration((value) => value + 1)} disabled={replacing} className="shrink-0 underline disabled:opacity-60">{t("terminal.retry")}</button>
-        </div>
-      )}
-      {panes.length > 0 && (
-        <div ref={tablistRef} role="tablist" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-hairline bg-panel px-5 pb-1 pt-1.5">
-          {[{ id: null, label: t("terminal.title") }, ...panes.map((item) => ({ id: item.id, label: item.label || item.id.slice(0, 8) }))].map((tab, index) => (
-            <div key={tab.id ?? "main"} className={`inline-flex shrink-0 items-center rounded-md border font-mono text-[11px] ${pane === tab.id ? "border-accent-text text-ink" : "border-hairline text-ink-secondary hover:text-ink"}`}>
-              <button type="button" role="tab" aria-selected={pane === tab.id} onClick={() => selectPane(tab.id)} aria-label={tab.label} title={index < 9 ? `${tab.label} (Alt+${index + 1})` : tab.label} className="inline-flex items-center gap-1.5 whitespace-nowrap px-1.5 py-0.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text">
-                {tab.id && <WorkerMark provider={latestPaneRun(workers, tab.id)?.provider ?? workerProvider(parseWorkerLabel(tab.label).model)} compact />}
-                {tab.id ? tab.label : ">_"}
-              </button>
-              {tab.id && (
-                <button type="button" onClick={() => closePane(tab.id)} aria-label={t("terminal.close")} className="shrink-0 rounded p-0.5 hover:bg-raised">
-                  <X size={11} />
-                </button>
-              )}
-            </div>
-          ))}
         </div>
       )}
       <div

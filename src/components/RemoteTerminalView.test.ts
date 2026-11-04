@@ -43,6 +43,23 @@ async function renderView(visible = true, messages: Message[] = []) {
 
 const button = (host: HTMLElement, label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const click = (target: Element) => target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+const title = (host: HTMLElement) => host.querySelector("header h1")?.textContent;
+const rows = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("[data-worker-list] li button")];
+const nickOf = (row: Element) => row.querySelector("span.truncate.font-medium")?.textContent;
+const stateOf = (row: Element) => row.querySelector("[data-worker-state]")?.getAttribute("data-worker-state");
+async function openList(host: HTMLElement) {
+  if (!host.querySelector("[data-worker-list]")) await act(async () => click(host.querySelector("header [data-worker-strip]")!));
+  return rows(host);
+}
+async function pickPane(host: HTMLElement, nick: string) {
+  const row = (await openList(host)).find((item) => nickOf(item) === nick);
+  if (!row) throw new Error(`no row ${nick}`);
+  await act(async () => click(row));
+}
+async function pickMain(host: HTMLElement) {
+  await openList(host);
+  await act(async () => click(host.querySelector("[data-worker-terminal]")!));
+}
 const composer = (host: HTMLElement) => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Type a command"]');
 const sends = () => store.api.mock.calls.filter(([path]) => String(path).endsWith("/send"));
 // submittedAgo is elapsed wall time, so only its presence is pinned.
@@ -227,7 +244,7 @@ describe("RemoteTerminalView", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders a tab strip with labels for each pane", async () => {
+  it("lists each worker pane from the header chip instead of a tab strip", async () => {
     store.api.mockResolvedValue({
       screenText: "$ ls",
       cwd: "C:\\main",
@@ -237,36 +254,37 @@ describe("RemoteTerminalView", () => {
       ],
     });
     const { host, root } = await renderView();
-    const tabs = host.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect(tabs).toHaveLength(2);
-    expect(tabs[0].textContent).toBe("Main");
-    expect(tabs[1].textContent).toBe("build");
-    await act(async () => root.unmount());
+    try {
+      expect(host.querySelector('[role="tablist"], [role="tab"]')).toBeNull();
+      expect(host.querySelector("header [data-worker-strip]")).not.toBeNull();
+      expect(title(host)).toBe("Terminal / Ada");
+      expect((await openList(host)).map(nickOf)).toEqual(["worker"]);
+      expect(host.querySelector("[data-worker-list] [data-worker-terminal]")?.textContent).toContain("Open terminal");
+      await pickPane(host, "worker");
+      expect(title(host)).toBe("Terminal / worker");
+      expect(host.querySelector('[role="tablist"], [role="tab"]')).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   it.each([
     ["Claude Opus", "claudeAgent"], ["Codex Sol", "codex"], ["Grok 4.7", "grokAgent"],
     ["Muse 1.3", "museAgent"], ["script", "script"], ["Nova 2", null],
-  ])("starts a %s pane tab with the header worker mark", async (model, provider) => {
+  ])("lists a %s pane row with its worker mark", async (model, provider) => {
     const sessionId = "aaaaaaaa-1111-4222-8333-944455556661";
     const messages: Message[] = [{ id: "launch", at: 1, role: "bot", kind: "launch", text: `Launched Worker | ${model} | high\nLabel: Worker | ${model} | high\nWorking folder: C:\\work\nSession: ${sessionId}` }];
     store.api.mockResolvedValue({ screenText: "$", panes: [{ sessionId: "main", main: true }, { sessionId, label: "Worker", main: false }] });
     const { host, root } = await renderView(true, messages);
     try {
-      const [main, worker] = host.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-      const mark = provider === "script" ? createElement(ScrollText, { size: 12, className: "text-ink-secondary", "aria-hidden": true })
-        : provider ? createElement(ProviderMark, { driverKind: provider, size: 12 })
-        : createElement(Bot, { size: 12, className: "text-ink-secondary", "aria-hidden": true });
+      const [worker, ...rest] = await openList(host);
+      const mark = provider === "script" ? createElement(ScrollText, { size: 14, className: "text-ink-secondary", "aria-hidden": true })
+        : provider ? createElement(ProviderMark, { driverKind: provider, size: 14 })
+        : createElement(Bot, { size: 14, className: "text-ink-secondary", "aria-hidden": true });
+      expect(rest).toHaveLength(0);
       expect(worker.innerHTML).toContain(renderToStaticMarkup(mark));
       expect(worker.firstElementChild?.querySelector("svg")).not.toBeNull();
-      expect(worker.textContent).toBe("Worker");
-      expect(worker.querySelector("span.truncate")).not.toBeNull();
-      expect(worker.className).toContain("min-w-[56px]");
-      expect(host.querySelector('[role="tablist"]')?.className).toContain("overflow-x-auto");
-      expect(host.querySelector('[role="tablist"]')?.className).not.toMatch(/(^| )\[scrollbar-width:none\]/);
-      expect(host.querySelector('[role="tablist"]')?.className).toContain("pointer-coarse:[scrollbar-width:none]");
-      expect(main.textContent).toBe("Main");
-      expect(main.querySelector("svg")).toBeNull();
+      expect(nickOf(worker)).toBe("Worker");
     } finally {
       await act(async () => root.unmount());
     }
@@ -276,7 +294,7 @@ describe("RemoteTerminalView", () => {
     store.api.mockResolvedValue({ screenText: "$", panes: [{ sessionId: "main", main: true }, { sessionId: "worker", main: false }] });
     const { host, root } = await renderView();
     try {
-      const worker = host.querySelectorAll('[role="tab"]')[1];
+      const [worker] = await openList(host);
       expect(worker.querySelector(".lucide-bot")).not.toBeNull();
       expect(worker.querySelector(".lucide-scroll-text")).toBeNull();
     } finally {
@@ -288,25 +306,29 @@ describe("RemoteTerminalView", () => {
     store.api.mockResolvedValue({ screenText: "$", panes: [{ sessionId: "main", main: true }, { sessionId: "worker", label: "Worker | Codex Sol | high", main: false }] });
     const { host, root } = await renderView();
     try {
-      const worker = host.querySelectorAll('[role="tab"]')[1];
-      expect(worker.innerHTML).toContain(renderToStaticMarkup(createElement(ProviderMark, { driverKind: "codex", size: 12 })));
+      const [worker] = await openList(host);
+      expect(worker.innerHTML).toContain(renderToStaticMarkup(createElement(ProviderMark, { driverKind: "codex", size: 14 })));
       expect(worker.querySelector(".lucide-bot")).toBeNull();
     } finally {
       await act(async () => root.unmount());
     }
   });
 
-  it("does not render a tab strip with only a main pane", async () => {
+  it("lists no worker rows with only a main pane", async () => {
     store.api.mockResolvedValue({
       screenText: "$ ls",
       panes: [{ sessionId: "main", label: null, main: true, exited: false }],
     });
     const { host, root } = await renderView();
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(0);
-    await act(async () => root.unmount());
+    try {
+      expect(await openList(host)).toHaveLength(0);
+      expect(host.querySelector("[data-worker-terminal]")).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
-  it("switches the fetched URL and rendered text when a tab is selected", async () => {
+  it("switches the fetched URL, screen and title when a worker row is picked", async () => {
     const panes = [
       { sessionId: "main", label: null, main: true, exited: false },
       { sessionId: "worker", label: "build", main: false, exited: false },
@@ -317,14 +339,15 @@ describe("RemoteTerminalView", () => {
     }));
     const { host, root } = await renderView();
     expect(host.querySelector("pre")?.textContent).toBe("$ ls");
-    const worker = host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1];
-    await act(async () => click(worker));
+    expect(title(host)).toBe("Terminal / Ada");
+    await pickPane(host, "build");
     expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=worker");
     expect(host.querySelector("pre")?.textContent).toBe("$ npm run build");
+    expect(title(host)).toBe("Terminal / build");
     await act(async () => root.unmount());
   });
 
-  it("ignores a previous pane's response after switching tabs", async () => {
+  it("ignores a previous pane's response after switching panes", async () => {
     const panes = [
       { sessionId: "main", main: true },
       { sessionId: "worker", main: false },
@@ -336,17 +359,17 @@ describe("RemoteTerminalView", () => {
     const { host, root } = await renderView();
     try {
       await act(async () => click(button(host, "Refresh")));
-      await act(async () => click(host.querySelectorAll('[role="tab"]')[1]!));
+      await pickPane(host, "worker");
       expect(host.querySelector("pre")?.textContent).toBe("worker");
       await act(async () => resolve({ screenText: "stale main", panes }));
       expect(host.querySelector("pre")?.textContent).toBe("worker");
-      expect(host.querySelectorAll('[role="tab"]')[1]?.getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / worker");
     } finally {
       await act(async () => root.unmount());
     }
   });
 
-  it("drops the old pane's styled screen while a tab tap is fetching", async () => {
+  it("drops the old pane's styled screen while a row tap is fetching", async () => {
     const panes = [
       { sessionId: "main", main: true },
       { sessionId: "worker", main: false },
@@ -357,7 +380,7 @@ describe("RemoteTerminalView", () => {
     const { host, root } = await renderView();
     try {
       expect(host.querySelector("pre")?.textContent).toBe("history\n\nold");
-      await act(async () => click(host.querySelectorAll('[role="tab"]')[1]!));
+      await pickPane(host, "worker");
       expect(host.querySelector("pre")?.textContent).toBe("");
     } finally {
       await act(async () => root.unmount());
@@ -378,12 +401,12 @@ describe("RemoteTerminalView", () => {
     });
     const { host, root } = await renderView();
     try {
-      await act(async () => click(host.querySelectorAll('[role="tab"]')[1]!));
-      await act(async () => click(host.querySelectorAll('[role="tab"]')[2]!));
+      await pickPane(host, "one");
+      await pickPane(host, "two");
       expect(host.querySelector("pre")?.textContent).toBe("two");
       await act(async () => reject(new Error("Unknown terminal")));
       expect(host.querySelector("pre")?.textContent).toBe("two");
-      expect(host.querySelectorAll('[role="tab"]')[2]?.getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / two");
     } finally {
       await act(async () => root.unmount());
     }
@@ -405,19 +428,126 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("dims an exited pane's tab", async () => {
+  it("lists an exited pane as an ended row below live ones", async () => {
     store.api.mockResolvedValue({
       screenText: "$ ls",
       panes: [
         { sessionId: "main", label: null, main: true, exited: false },
         { sessionId: "worker", label: "build", main: false, exited: true },
+        { sessionId: "live", label: "run", main: false, exited: false },
       ],
     });
     const { host, root } = await renderView();
-    const tabs = host.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect(tabs[0].className).not.toContain("opacity-50");
-    expect(tabs[1].className).toContain("opacity-50");
-    await act(async () => root.unmount());
+    try {
+      const listed = await openList(host);
+      expect(listed.map(nickOf)).toEqual(["run", "build"]);
+      expect(listed.map(stateOf)).toEqual(["working", "ended"]);
+      expect(listed[1].querySelector("[data-worker-state]")?.textContent).toContain("Ended");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("opens an ended row's last screen and drops the row once the host closes the pane", async () => {
+    vi.useFakeTimers();
+    const server = {
+      panes: [
+        { sessionId: "main", main: true, exited: false },
+        { sessionId: "done", label: "CAPTION-FIX | Opus 5.5 | max", main: false, exited: true },
+      ],
+    };
+    store.api.mockImplementation(async (path: string) => {
+      const id = new URLSearchParams(path.split("?")[1] ?? "").get("sessionId");
+      if (id && !server.panes.some((pane) => pane.sessionId === id)) throw new Error("Unknown terminal");
+      return id === "done"
+        ? { screenText: "last words", sessionId: "done", generation: 1, exited: true, exitCode: 0, panes: server.panes }
+        : { screenText: "PS>", sessionId: "main", generation: 1, panes: server.panes };
+    });
+    const { host, root } = await renderView();
+    try {
+      const [row] = await openList(host);
+      expect(stateOf(row)).toBe("ended");
+      await pickPane(host, "CAPTION-FIX");
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=done");
+      expect(host.querySelector("pre")?.textContent).toBe("last words");
+      expect(title(host)).toBe("Terminal / CAPTION-FIX");
+      expect(composer(host)).toBeNull();
+      server.panes = [server.panes[0]];
+      await act(async () => vi.advanceTimersByTime(1_000));
+      await act(async () => {});
+      expect(await openList(host)).toHaveLength(0);
+      expect(title(host)).toBe("Terminal / Ada");
+      expect(host.querySelector("pre")?.textContent).toBe("PS>");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("lists a script pane with the script mark", async () => {
+    store.api.mockResolvedValue({
+      screenText: "$",
+      panes: [{ sessionId: "main", main: true }, { sessionId: "ci-wait", label: "CI-WAIT | script", main: false }, { sessionId: "worker", label: "FINAL-QA | Opus 5.5 | max", main: false }],
+    });
+    const { host, root } = await renderView();
+    try {
+      const listed = await openList(host);
+      expect(listed.map(nickOf)).toEqual(["FINAL-QA", "CI-WAIT"]);
+      expect(listed[1].querySelector(".lucide-scroll-text")).not.toBeNull();
+      expect(listed[0].querySelector(".lucide-scroll-text")).toBeNull();
+      await pickPane(host, "CI-WAIT");
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=ci-wait");
+      expect(title(host)).toBe("Terminal / CI-WAIT");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("names a long worker label in a title that truncates instead of wrapping", async () => {
+    const nick = "CAPTION-FIX-EP2-P3-AND-THE-REST-OF-A-VERY-LONG-TASK-NAME";
+    store.api.mockResolvedValue({ screenText: "$", panes: [{ sessionId: "main", main: true }, { sessionId: "worker", label: `${nick} | Sol | max`, main: false }] });
+    const { host, root } = await renderView();
+    try {
+      await pickPane(host, nick);
+      const h1 = host.querySelector("header h1")!;
+      expect(h1.textContent).toBe(`Terminal / ${nick}`);
+      expect(h1.className.split(" ")).toContain("truncate");
+      expect(h1.parentElement?.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1"]));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("returns to a live Main from the Open terminal row", async () => {
+    const panes = [{ sessionId: "main", main: true }, { sessionId: "worker", label: "Worker", main: false }];
+    store.api.mockImplementation(async (path: string) => {
+      const sessionId = path.includes("sessionId=worker") ? "worker" : "main";
+      return { screenText: `$ ${sessionId}`, sessionId, generation: 1, panes };
+    });
+    const { host, root } = await renderView();
+    try {
+      await pickPane(host, "Worker");
+      expect(host.querySelector("pre")?.textContent).toBe("$ worker");
+      await pickMain(host);
+      expect(host.querySelector("[data-worker-list]")).toBeNull();
+      expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal");
+      expect(host.querySelector("pre")?.textContent).toBe("$ main");
+      expect(title(host)).toBe("Terminal / Ada");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("offers no Close pane button on a remote worker pane", async () => {
+    store.api.mockResolvedValue({ screenText: "$", sessionId: "worker", generation: 1, panes: [{ sessionId: "main", main: true }, { sessionId: "worker", label: "Worker", main: false }] });
+    const { host, root } = await renderView();
+    try {
+      await pickPane(host, "Worker");
+      expect(title(host)).toBe("Terminal / Worker");
+      expect(host.querySelector('[aria-label="Close pane"], [title="Close pane"]')).toBeNull();
+      expect([...host.querySelectorAll("header button:not([data-worker-strip])")].map((el) => el.getAttribute("aria-label"))).toEqual(["Refresh", "Copy", "Close terminal"]);
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   it("selects the first pane when the roster has no Main pane", async () => {
@@ -427,8 +557,7 @@ describe("RemoteTerminalView", () => {
     ];
     store.api.mockResolvedValue({ screenText: "$ ls", panes });
     const { host, root } = await renderView();
-    const tabs = host.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(title(host)).toBe("Terminal / one");
     expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal?sessionId=one");
     await act(async () => root.unmount());
   });
@@ -436,7 +565,6 @@ describe("RemoteTerminalView", () => {
   describe("with workers and no main", () => {
     type Pane = { sessionId: string; main: boolean; label?: string };
     const workers: Pane[] = [{ sessionId: "one", label: "one", main: false }, { sessionId: "two", label: "two", main: false }];
-    const tabsOf = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     const openButton = (host: HTMLElement) => [...host.querySelectorAll("button")].find((item) => item.textContent?.includes("Open terminal"))!;
 
     function mainServer(initial: Pane[] = workers, mainLast = false) {
@@ -453,27 +581,26 @@ describe("RemoteTerminalView", () => {
       return server;
     }
 
-    it("lists a dimmed Main tab first, even with one worker", async () => {
+    it("opens the only worker while Main is closed and still offers Main", async () => {
       mainServer([workers[0]]);
       const { host, root } = await renderView();
       try {
-        const tabs = tabsOf(host);
-        expect(tabs.map((tab) => tab.textContent)).toEqual(["Main", "one"]);
-        expect(tabs[0].className).toContain("opacity-50");
-        expect(tabs[1].className).not.toContain("opacity-50");
-        expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / one");
         expect(host.querySelector("pre")?.textContent).toBe("$ one");
+        expect((await openList(host)).map(nickOf)).toEqual(["one"]);
+        expect(host.querySelector("[data-worker-terminal]")).not.toBeNull();
       } finally {
         await act(async () => root.unmount());
       }
     });
 
-    it("shows the open panel with no worker screen or composer when Main is tapped", async () => {
+    it("shows the start screen with no worker screen or composer when Open terminal is picked", async () => {
       mainServer();
       const { host, root } = await renderView();
       try {
-        await act(async () => click(tabsOf(host)[0]));
-        expect(tabsOf(host)[0].getAttribute("aria-selected")).toBe("true");
+        await pickMain(host);
+        expect(title(host)).toBe("Terminal / Ada");
+        expect(host.querySelector("[data-worker-list]")).toBeNull();
         expect(host.textContent).toContain("No active terminal");
         expect(host.querySelector("pre")).toBeNull();
         expect(composer(host)).toBeNull();
@@ -484,17 +611,14 @@ describe("RemoteTerminalView", () => {
       }
     });
 
-    it("starts main from the Main tab and selects it as the live first tab", async () => {
+    it("starts main from the start screen and stays on it", async () => {
       mainServer();
       const { host, root } = await renderView();
       try {
-        await act(async () => click(tabsOf(host)[0]));
+        await pickMain(host);
         await act(async () => click(openButton(host)));
         expect(store.api).toHaveBeenCalledWith("/api/bots/bot-1/terminal/start", { method: "POST" });
-        const tabs = tabsOf(host);
-        expect(tabs.map((tab) => tab.textContent)).toEqual(["Main", "one", "two"]);
-        expect(tabs[0].className).not.toContain("opacity-50");
-        expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / Ada");
         expect(host.querySelector("pre")?.textContent).toBe("PS>");
         expect(composer(host)).not.toBeNull();
       } finally {
@@ -502,63 +626,71 @@ describe("RemoteTerminalView", () => {
       }
     });
 
-    it("returns to a worker tab from Main", async () => {
+    it("returns to a worker row from Main", async () => {
       mainServer();
       const { host, root } = await renderView();
       try {
-        await act(async () => click(tabsOf(host)[0]));
-        await act(async () => click(tabsOf(host)[2]));
+        await pickMain(host);
+        await pickPane(host, "two");
         expect(host.querySelector("pre")?.textContent).toBe("$ two");
+        expect(title(host)).toBe("Terminal / two");
         expect(composer(host)).not.toBeNull();
       } finally {
         await act(async () => root.unmount());
       }
     });
 
-    it("keeps polling for main while the Main tab is open", async () => {
+    it("keeps polling for main while Main is open", async () => {
       vi.useFakeTimers();
       const server = mainServer();
       const { host, root } = await renderView();
       try {
-        await act(async () => click(tabsOf(host)[0]));
+        await pickMain(host);
         server.panes = [{ sessionId: "main", main: true }, ...workers];
         await act(async () => vi.advanceTimersByTime(1_000));
         expect(host.querySelector("pre")?.textContent).toBe("PS>");
-        expect(tabsOf(host)[0].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / Ada");
       } finally {
         await act(async () => root.unmount());
       }
     });
 
-    it("lists a live Main first when the roster has a worker before it", async () => {
+    it("opens a live Main when the roster has a worker before it", async () => {
       mainServer([...workers, { sessionId: "main", main: true }]);
       const { host, root } = await renderView();
       try {
-        expect(tabsOf(host).map((tab) => tab.textContent)).toEqual(["Main", "one", "two"]);
-        expect(tabsOf(host)[0].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / Ada");
+        expect(host.querySelector("pre")?.textContent).toBe("PS>");
       } finally {
         await act(async () => root.unmount());
       }
     });
 
-    it("leaves a main-first roster in order", async () => {
+    it("leaves a main-first roster in order for Alt+n", async () => {
       mainServer([{ sessionId: "main", main: true }, ...workers]);
-      const { host, root } = await renderView();
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const view = (paneHotkey: { n: number } | null) =>
+        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
       try {
-        expect(tabsOf(host).map((tab) => tab.textContent)).toEqual(["Main", "one", "two"]);
+        await act(async () => root.render(view(null)));
+        await act(async () => root.render(view({ n: 2 })));
+        expect(title(host)).toBe("Terminal / one");
+        await act(async () => root.render(view({ n: 3 })));
+        expect(title(host)).toBe("Terminal / two");
       } finally {
         await act(async () => root.unmount());
       }
     });
 
-    it("keeps Main first and selected when the host lists it last after a start", async () => {
+    it("keeps Main open when the host lists it last after a start", async () => {
       mainServer(workers, true);
       const { host, root } = await renderView();
       try {
-        await act(async () => click(tabsOf(host)[0]));
+        await pickMain(host);
         await act(async () => click(openButton(host)));
-        expect(tabsOf(host).map((tab) => tab.textContent)).toEqual(["Main", "one", "two"]);
-        expect(tabsOf(host)[0].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / Ada");
         expect(host.querySelector("pre")?.textContent).toBe("PS>");
       } finally {
         await act(async () => root.unmount());
@@ -574,17 +706,17 @@ describe("RemoteTerminalView", () => {
         createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
       try {
         await act(async () => root.render(view(null)));
-        await act(async () => click(tabsOf(host).find((tab) => tab.textContent === "two")!));
+        await pickPane(host, "two");
         expect(host.querySelector("pre")?.textContent).toBe("$ two");
         await act(async () => root.render(view({ n: 1 })));
-        expect(tabsOf(host)[0].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / Ada");
         expect(host.querySelector("pre")?.textContent).toBe("PS>");
       } finally {
         await act(async () => root.unmount());
       }
     });
 
-    it("counts the Main tab first for Alt+n", async () => {
+    it("counts Main first for Alt+n", async () => {
       mainServer();
       const host = document.createElement("div");
       document.body.append(host);
@@ -593,12 +725,12 @@ describe("RemoteTerminalView", () => {
         createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
       try {
         await act(async () => root.render(view(null)));
-        expect(tabsOf(host)[1].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / one");
         await act(async () => root.render(view({ n: 1 })));
-        expect(tabsOf(host)[0].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / Ada");
         expect(host.textContent).toContain("No active terminal");
         await act(async () => root.render(view({ n: 3 })));
-        expect(tabsOf(host)[2].getAttribute("aria-selected")).toBe("true");
+        expect(title(host)).toBe("Terminal / two");
         expect(host.querySelector("pre")?.textContent).toBe("$ two");
       } finally {
         await act(async () => root.unmount());
@@ -606,15 +738,15 @@ describe("RemoteTerminalView", () => {
     });
   });
 
-  it("drops the Main tab when the last worker closes while it is open", async () => {
+  it("drops the worker rows when the last worker closes while Main is open", async () => {
     vi.useFakeTimers();
     const server = paneServer([{ sessionId: "one", main: false }, { sessionId: "two", main: false }]);
     const { host, root } = await renderView();
     try {
-      await act(async () => click(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[0]));
+      await pickMain(host);
       server.panes = [];
       await act(async () => vi.advanceTimersByTime(1_000));
-      expect(host.querySelectorAll('[role="tab"]')).toHaveLength(0);
+      expect(await openList(host)).toHaveLength(0);
       expect(host.textContent).toContain("No active terminal");
       expect(host.querySelector('[role="alert"]')).toBeNull();
     } finally {
@@ -697,8 +829,7 @@ describe("RemoteTerminalView", () => {
       };
     });
     const { host, root } = await renderView();
-    const worker = host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1];
-    await act(async () => click(worker));
+    await pickPane(host, "build");
     await act(async () => {});
     expect(store.api).toHaveBeenLastCalledWith("/api/bots/bot-1/terminal");
     await act(async () => root.unmount());
@@ -798,7 +929,7 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("focuses the input after picking a pane tab", async () => {
+  it("focuses the input after picking a worker row", async () => {
     pointer(false);
     const panes = [{ sessionId: "main", label: "Main", main: true }, { sessionId: "worker", label: "Worker", main: false }];
     store.api.mockImplementation(async (path: string) => {
@@ -807,13 +938,15 @@ describe("RemoteTerminalView", () => {
     });
     const { host, root } = await renderView();
     try {
-      const worker = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) => el.textContent === "Worker")!;
-      worker().focus();
-      await act(async () => click(worker()));
+      const worker = async () => (await openList(host)).find((el) => nickOf(el) === "Worker")!;
+      const row = await worker();
+      row.focus();
+      await act(async () => click(row));
       expect(host.querySelector("pre")?.textContent).toBe("$ worker");
       expect(document.activeElement).toBe(composer(host));
-      worker().focus();
-      await act(async () => click(worker()));
+      const again = await worker();
+      again.focus();
+      await act(async () => click(again));
       expect(document.activeElement).toBe(composer(host));
     } finally {
       await act(async () => root.unmount());
@@ -996,10 +1129,9 @@ describe("RemoteTerminalView", () => {
     store.api.mockImplementation((path: string) => (path.includes("?sessionId=worker") ? new Promise(() => {}) : Promise.resolve(main)));
     const { host, root } = await renderView();
     try {
-      const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) => el.textContent === name)!;
-      await act(async () => click(tab("Worker")));
+      await pickPane(host, "Worker");
       await act(async () => vi.advanceTimersByTime(3_000));
-      expect(tab("Worker").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Worker");
       expect([...host.querySelectorAll("button")].some((el) => el.textContent === "Enter")).toBe(false);
       expect(host.textContent).not.toContain("main prompt");
       expect(sends()).toHaveLength(0);
@@ -1018,11 +1150,10 @@ describe("RemoteTerminalView", () => {
     );
     const { host, root } = await renderView();
     try {
-      const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) => el.textContent === name)!;
-      await act(async () => click(tab("Worker")));
-      await act(async () => click(tab("Main")));
+      await pickPane(host, "Worker");
+      await pickMain(host);
       await act(async () => resolveWorker({ screenText: "worker prompt", sessionId: "worker", generation: 5, panes }));
-      expect(tab("Main").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Ada");
       expect(host.textContent).not.toContain("worker prompt");
       await act(async () => vi.advanceTimersByTime(1_000));
       const enter = [...host.querySelectorAll<HTMLButtonElement>("button")].find((el) => el.textContent === "Enter")!;
@@ -1065,14 +1196,13 @@ describe("RemoteTerminalView", () => {
       createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
     try {
       await act(async () => root.render(view(null)));
-      const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) => el.textContent === name)!;
-      expect(tab("Main").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Ada");
       await act(async () => root.render(view({ n: 3 })));
-      expect(tab("Other").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Other");
       await act(async () => root.render(view({ n: 1 })));
-      expect(tab("Main").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Ada");
       await act(async () => root.render(view({ n: 9 })));
-      expect(tab("Main").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Ada");
     } finally {
       await act(async () => root.unmount());
     }
@@ -1094,12 +1224,11 @@ describe("RemoteTerminalView", () => {
       createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus }));
     try {
       await act(async () => root.render(view({ sessionId: "worker" })));
-      const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) => el.textContent === name)!;
-      expect(tab("Worker").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Worker");
       await act(async () => root.render(view({ sessionId: "missing" })));
-      expect(tab("Worker").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Worker");
       await act(async () => root.render(view({ sessionId: "main" })));
-      expect(tab("Main").getAttribute("aria-selected")).toBe("true");
+      expect(title(host)).toBe("Terminal / Ada");
       expect(app.slice(app.indexOf("<RemoteTerminalView"), app.indexOf("<RemoteTerminalView") + 240)).toContain("paneFocus={paneFocus}");
     } finally {
       await act(async () => root.unmount());
@@ -1119,11 +1248,10 @@ describe("RemoteTerminalView", () => {
       createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus }));
     try {
       await act(async () => root.render(view({ sessionId: "worker" })));
-      const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) => el.textContent === name);
-      expect(host.querySelector('[role="tablist"]')).toBeNull();
+      expect(title(host)).toBe("Terminal / Ada");
       panes = [...panes, { sessionId: "worker", label: "Worker", main: false }];
       await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Refresh"]')!.click());
-      await vi.waitFor(() => expect(tab("Worker")?.getAttribute("aria-selected")).toBe("true"), { timeout: 2000 });
+      await vi.waitFor(() => expect(title(host)).toBe("Terminal / Worker"), { timeout: 2000 });
     } finally {
       await act(async () => root.unmount());
     }
@@ -1144,7 +1272,7 @@ describe("RemoteTerminalView", () => {
     });
     const { host, root } = await renderView();
     try {
-      await act(async () => click([...host.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === "Worker")!));
+      await pickPane(host, "Worker");
       await act(async () => typeLine(composer(host)!, line));
       await act(async () => click(button(host, "Send")));
       const notifications = store.api.mock.calls.filter(([path]) => path.endsWith("/resume"));
@@ -1169,7 +1297,7 @@ describe("RemoteTerminalView", () => {
     try {
       await act(async () => typeLine(composer(host)!, "main command"));
       await act(async () => click(button(host, "Send")));
-      await act(async () => click([...host.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === "Worker")!));
+      await pickPane(host, "Worker");
       const keys = [...host.querySelectorAll('[role="group"] button')];
       expect(keys).toHaveLength(5);
       for (const key of keys) await act(async () => click(key));
@@ -1194,7 +1322,7 @@ describe("RemoteTerminalView", () => {
     });
     const { host, root, onClose } = await renderView(true, messages);
     try {
-      await act(async () => click([...host.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === "Worker")!));
+      await pickPane(host, "WORKER");
       await act(async () => typeLine(composer(host)!, "follow up"));
       await act(async () => click(button(host, "Send")));
       expect(store.api.mock.calls.filter(([path]) => path.endsWith("/resume"))).toEqual([]);
@@ -1234,7 +1362,7 @@ describe("RemoteTerminalView", () => {
           bot: { id: "bot-1", name: "Ada", messages, activeLeafId: "settled" }, visible: true, onClose,
         }))),
       );
-      await act(async () => click([...host.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === "Worker")!));
+      await pickPane(host, "WORKER");
       await act(async () => typeLine(composer(host)!, "follow up"));
       await act(async () => click(button(host, "Send")));
       expect(store.api.mock.calls.filter(([path]) => path.endsWith("/resume"))).toEqual([["/api/bots/bot-1/terminal/resume", {

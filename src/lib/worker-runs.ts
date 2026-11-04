@@ -90,22 +90,36 @@ function paneRuns<T extends ShownLike>(runs: readonly T[], livePanes: ReadonlySe
   return panes;
 }
 
-/** Live panes in any state; one with no transcript run gets a working placeholder. Unknown liveness keeps today's working and waiting runs. */
-export function listedRuns(runs: readonly ShownLike[], livePanes: ReadonlySet<string> | null, labels?: ReadonlyMap<string, string>): ShownLike[] {
+/** Live panes in any state; one with no transcript run gets a working placeholder. Unknown liveness keeps today's working and waiting runs. Panes in `ended` list as ended. */
+export function listedRuns(runs: readonly ShownLike[], livePanes: ReadonlySet<string> | null, labels?: ReadonlyMap<string, string>, ended?: ReadonlySet<string>): ShownLike[] {
   if (!livePanes) return runs.filter((shown) => shown.state === "working" || shown.state === "waiting").sort(byUrgency);
   const panes = paneRuns(runs, livePanes);
-  const listed = [...panes.values()];
+  const listed: ShownLike[] = [...panes].map(([sessionId, shown]) => (ended?.has(sessionId) ? { ...shown, state: "ended" } : shown));
   const claimed = new Set(panes.keys());
   for (const sessionId of livePanes) {
     if (claimed.has(sessionId)) continue;
     const pane8 = sessionId.slice(0, 8);
     const { nick, model, effort } = parseWorkerLabel(labels?.get(sessionId));
     listed.push({
-      state: "working",
+      state: ended?.has(sessionId) ? "ended" : "working",
       run: { id: `pane:${sessionId}`, nick: nick ?? pane8, model, effort, provider: workerProvider(model), state: "working", at: Number.MAX_SAFE_INTEGER, latest: { at: 0, index: 0 }, pane8, sessionId, folder: null, botId: null, messageIds: [], notes: [] },
     });
   }
   return listed.sort(byUrgency);
+}
+
+type RosterPane = { sessionId: string; label?: string | null; exited?: boolean; changedAt?: number };
+
+/** A terminal view's chip input from its own pane roster: exited panes stay listed so their last screen can still open. */
+export function rosterChip(runs: readonly WorkerRun[], panes: readonly RosterPane[]) {
+  const live = new Set(panes.filter((pane) => !pane.exited).map((pane) => pane.sessionId));
+  const changedAt = new Map(panes.flatMap((pane) => (pane.changedAt ? [[pane.sessionId, pane.changedAt] as const] : [])));
+  return {
+    runs: runs.map((run) => ({ run, state: shownState(run, live, changedAt) })),
+    livePanes: new Set(panes.map((pane) => pane.sessionId)),
+    endedPanes: new Set(panes.filter((pane) => pane.exited).map((pane) => pane.sessionId)),
+    paneLabels: new Map(panes.flatMap((pane) => (pane.label ? [[pane.sessionId, pane.label] as const] : []))),
+  };
 }
 
 export function latestPaneRun(runs: readonly WorkerRun[], sessionId: string): WorkerRun | undefined {

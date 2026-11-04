@@ -105,9 +105,9 @@ describe("the workers menu follows the view", () => {
     const entry = () => menu()?.querySelector<HTMLButtonElement>("li button") ?? null;
     await until(entry);
     await act(async () => entry()!.click());
-    const selected = () => document.querySelector('.orbit-terminal-overlay [role="tab"][aria-selected="true"]');
-    await until(selected);
-    expect(selected()?.textContent).toContain("ONE");
+    const title = () => document.querySelector(".orbit-terminal-overlay h1");
+    await until(() => (title()?.textContent?.includes("ONE") ? title() : null));
+    expect(title()?.textContent).toBe("Terminal / ONE");
     await key({ key: "`", code: "Backquote", ctrlKey: true });
     expect(document.querySelector(".orbit-terminal-overlay")?.getAttribute("data-open")).toBe("false");
     await act(async () => strip()!.click());
@@ -116,7 +116,7 @@ describe("the workers menu follows the view", () => {
     await act(async () => row.click());
     expect(menu()).toBeNull();
     expect(document.querySelector(".orbit-terminal-overlay")?.getAttribute("data-open")).toBe("true");
-    expect(selected()?.textContent).toBe("Main");
+    expect(title()?.textContent).toBe("Terminal / Scout");
   });
 
   it("closes when a hotkey switches to another bot", async () => {
