@@ -101,8 +101,8 @@ self.addEventListener("push", (event) => {
       tag: data.tag,
       renotify: Boolean(data.tag),
       vibrate: [200, 100, 200],
-      icon: data.icon || "/app-icon-192.png?v=2",
-      badge: "/app-icon-192.png?v=2",
+      icon: data.icon || "/app-icon-192.png?v=3",
+      badge: "/app-icon-192.png?v=3",
       data: { url: data.url || "/" },
     }),
   );

@@ -13,8 +13,8 @@ describe("webManifestForUserAgent", () => {
     const result = webManifestForUserAgent(samsungAndroid, manifest);
     expect((result.icons ?? []).every((icon) => !icon.purpose?.split(/\s+/).includes("maskable"))).toBe(true);
     expect((result.icons ?? []).map((icon) => icon.src)).toEqual([
-      "/app-icon-192.png?v=2",
-      "/app-icon-512.png?v=2",
+      "/app-icon-192.png?v=3",
+      "/app-icon-512.png?v=3",
     ]);
   });
 
