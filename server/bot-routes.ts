@@ -479,12 +479,12 @@ export function createBotRoutes(deps: BotRouteDeps) {
       const before = readMemoryFile(m[1]).text;
       const saved = saveMemoryFile(m[1], parsed.data.text, parsed.data.baseRevision);
       if (saved.conflict) return json(res, 409, { error: "conflict", text: saved.text, revision: saved.revision });
+      memoryHealthCheck.refresh(m[1]);
       try {
         deps.recordTypedLines?.(m[1], before, parsed.data.text);
       } catch (error) {
         console.warn("memory editor: could not record typed lines", error);
       }
-      memoryHealthCheck.refresh(m[1]);
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: saved.truncated, revision: saved.revision });
     },
