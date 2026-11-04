@@ -104,6 +104,28 @@ test("rejects reserved account ids in worker run output", async (t) => {
   }
 });
 
+test("strips unknown keys from worker run output", async (t) => {
+  const run = { botId: "bot-1", paneId: "pane", label: null, engine: "claude", accountId: "claude.fixture", accountGeneration: 0, state: "busy" };
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, liveAccountRuns: () => [{ ...run, extra: "private" }] } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  const response = await fetch(`${access.url}/v1/terminal/account-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { runs: [run] });
+});
+
+for (const [name, input] of [["fractional generations", { accountGeneration: 0.5 }], ["41-character labels", { label: "a".repeat(41) }]]) {
+  test(`rejects ${name} in worker run output`, async (t) => {
+    const run = { botId: "bot-1", paneId: "pane", label: null, engine: "claude", accountId: "claude.fixture", accountGeneration: 0, state: "busy", ...input };
+    const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {}, liveAccountRuns: () => [run] } });
+    t.after(() => bridge.close());
+    const access = await bridge.start();
+    const response = await fetch(`${access.url}/v1/terminal/account-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` } });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: "Worker account runs are unavailable" });
+  });
+}
+
 test("credential saves require the full bridge bearer, never terminal or updater grants", async (t) => {
   const calls = [];
   const bridge = createTerminalBridge({
