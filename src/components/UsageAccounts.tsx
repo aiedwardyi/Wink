@@ -8,7 +8,7 @@ import { EngineMark } from "./EngineMark";
 export function UsageAccounts({ accounts, reload, renderRow }: {
   accounts: UsageAccount[];
   reload: () => Promise<void>;
-  renderRow: (account: UsageAccount, heading?: ReactNode) => ReactNode;
+  renderRow: (account: UsageAccount, heading?: ReactNode, dim?: boolean) => ReactNode;
 }) {
   const { t } = useI18n();
   const [page, setPage] = useState(0);
@@ -48,7 +48,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
       {!other && <span className="min-w-0 truncate">{account.displayName}</span>}
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
-          className="text-[12px] font-normal text-ink hover:underline disabled:opacity-50 [@media(pointer:coarse)]:min-h-11">{t("accounts.setAsMain")}</button>
+          className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>
           : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
         <span className="flex w-14 shrink-0 [@media(pointer:coarse)]:w-22">{other && arrows}</span>
       </span>
@@ -56,7 +56,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   );
   const column = (account: UsageAccount, other = false) => (
     <div className="min-w-0">
-      {accountReady(account) ? renderRow(account, heading(account, other)) : <>
+      {accountReady(account) ? renderRow(account, heading(account, other), other) : <>
         {heading(account, other)}
         <div className="mt-2 text-[12px] text-ink-secondary">{t("accounts.signedOut")}</div>
       </>}

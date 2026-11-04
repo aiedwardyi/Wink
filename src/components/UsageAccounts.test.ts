@@ -93,6 +93,13 @@ it("puts icon headings and Main above the matching account's bars without email 
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
 });
 
+it("dims only the non-Main account's bars and shows Set as Main as a button", async () => {
+  await render();
+  expect(main().querySelector('[aria-label="5h: 80% remaining"] span[aria-hidden="true"]')!.classList).not.toContain("opacity-70");
+  expect(other().querySelector('[aria-label="5h: 30% remaining"] span[aria-hidden="true"]')!.classList).toContain("opacity-70");
+  expect(other().querySelector("button:not([aria-label])")?.textContent).toBe("Set as Main");
+});
+
 it("uses the pushed Main flag even when the base account arrives first", async () => {
   await render();
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));

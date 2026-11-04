@@ -95,6 +95,7 @@ function EnginePlanRow({
   limit,
   heading,
   slots,
+  dim,
 }: {
   instance: InstanceInfo;
   now: number;
@@ -102,6 +103,7 @@ function EnginePlanRow({
   limit?: { resetsAt: number | null };
   heading?: ReactNode;
   slots?: RateLimitWindow[];
+  dim?: boolean;
 }) {
   const { t } = useI18n();
   const muse = instance.driverKind === "museAgent";
@@ -160,7 +162,7 @@ function EnginePlanRow({
                     <span className="text-ink-secondary">{t(muse ? "usage.limits.resetPassedCheck" : "usage.limits.resetPassed")}</span>
                   </span>
                 ) : (
-                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} />
+                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} dim={dim} />
                 )}
                 {window.resetsAt === null && <span className="sr-only">{t("usage.limits.resetUnknown")}</span>}
               </div>
@@ -315,7 +317,7 @@ function PlanUsage() {
               key={accounts[0]!.accountOf ?? accounts[0]!.instanceId}
               accounts={accounts}
               reload={reload}
-              renderRow={(instance, heading) => <EnginePlanRow instance={instance} now={now} heading={heading}
+              renderRow={(instance, heading, dim) => <EnginePlanRow instance={instance} now={now} heading={heading} dim={dim}
                 slots={windowSlots(accounts)}
                 error={refreshErrors[instance.instanceId]} limit={limits[instance.instanceId]} />}
             />
