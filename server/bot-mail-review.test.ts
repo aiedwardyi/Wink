@@ -220,6 +220,54 @@ it.each(["createBot", "createChannel"] as const)("refuses %s with an unknown cal
 });
 
 it.each([
+  ["createBot", "direct"], ["createBot", "channel"], ["createBot", "channel task"],
+  ["createChannel", "direct"], ["createChannel", "channel"], ["createChannel", "channel task"],
+] as const)("keeps %s scoped to its depth-0 %s caller", async (method, scope) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  const group = store.createGroup("User channel", [from.id, target.id]);
+  const threadId = scope === "direct" ? from.threadId : scope === "channel" ? group.threadId : store.createGroupTask(group.id, "Research")!.threadId;
+  const turnId = `user-${scope}`;
+  turnRegistry.start(turnId, { botId: from.id, threadId, owner: scope === "direct" ? "user" : "room", depth: 0 });
+  try {
+    const callers = new CommsCallers();
+    const req = new EventEmitter() as IncomingMessage;
+    req.headers = { authorization: `Bearer ${callers.token(from.id, threadId)}` };
+    const output = response();
+    const pending = routes(vi.fn(), (header) => callers.resolve(header))[method](req, output.res);
+    req.emit("data", JSON.stringify({ fromBotId: target.id, fromThreadId: target.threadId,
+      name: "New operator", role: "Researcher", instructions: "Research the question", memberIds: [target.id] }));
+    req.emit("end");
+    await pending;
+    expect(output.body().id).toBeTruthy();
+    expect(output.body().error).toBeUndefined();
+    if (method === "createBot") expect(store.bot(output.body().id)).toMatchObject({ color: "white", mascotStyle: "icon-34" });
+    else expect(output.body().memberIds).toEqual([from.id, target.id]);
+  } finally {
+    turnRegistry.settle(turnId);
+  }
+});
+
+it.each(["createBot", "createChannel"] as const)("refuses %s after its scoped caller loses channel access", async (method) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  const group = store.createGroup("Revoked channel", [from.id, target.id]);
+  const callers = new CommsCallers();
+  const req = new EventEmitter() as IncomingMessage;
+  req.headers = { authorization: `Bearer ${callers.token(from.id, group.threadId)}` };
+  store.patchGroup(group.id, { memberIds: [target.id] });
+  const output = response();
+  const botCount = store.bots.length;
+  const groupCount = store.groups.length;
+  const pending = routes(vi.fn(), (header) => callers.resolve(header))[method](req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId,
+    name: "New operator", role: "Researcher", instructions: "Research the question", memberIds: [target.id] }));
+  req.emit("end");
+  await pending;
+  expect(output.body()).toEqual({ error: "source conversation does not belong to sender" });
+  expect(store.bots).toHaveLength(botCount);
+  expect(store.groups).toHaveLength(groupCount);
+});
+
+it.each([
   ["createBot", false], ["createBot", true], ["createChannel", false], ["createChannel", true],
 ] as const)("binds %s to the peer caller (forged thread: %s)", async (method, forgedThread) => {
   from = store.patchBot(from.id, { chiefOfStaff: true })!;
