@@ -69,6 +69,10 @@ const { mockState, mockApi, claudeInstance, codexInstance, grokInstance, antigra
   };
 });
 
+vi.mock("@/lib/usage-auto-refresh", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/usage-auto-refresh")>()),
+  useAutoRefresh: () => undefined,
+}));
 vi.mock("@/state/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/state/store")>();
   return {

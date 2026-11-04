@@ -16,6 +16,7 @@ import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
 import { TeamSection, type TeamView } from "./TeamSection";
 import { useTeamToday } from "@/lib/team-today";
+import { useAutoRefresh } from "@/lib/usage-auto-refresh";
 import { ModelIndexSection } from "./ModelIndexSection";
 import { SkinPicker } from "./SkinPicker";
 import { GeometryPicker } from "./GeometryPicker";
@@ -392,6 +393,7 @@ export function SettingsModal({
   const { state, dispatch } = useStore();
   const section = resolvedAppSettingsSection(state.appSettingsSection);
   const phone = useIsPhone();
+  useAutoRefresh();
   const page = !phone || state.appSettingsPage;
   const back = useCallback(() => {
     dispatch({ type: "toggleAppSettings", open: phone && page });

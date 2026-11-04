@@ -12,7 +12,7 @@ import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
 import { EngineMark } from "./EngineMark";
 import { UsageAccounts } from "./UsageAccounts";
-import { accountReady, groupAccounts, type UsageAccount } from "@/lib/accounts";
+import { groupAccounts, type UsageAccount } from "@/lib/accounts";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { showUsagePerBotTable } from "@/lib/friends-chrome";
 import { splitFriendsEngines } from "@/lib/engine-rail";
@@ -27,12 +27,12 @@ import {
   museReading,
   readingAge,
   resetCompact,
-  STALE_READING_MS,
   sumUsage,
   usageDetail,
   windowExpired,
   windowKind,
 } from "@/lib/usage";
+import { AUTO_REFRESH_MS, canRefresh, joinRefresh, refreshReady, useAutoRefresh, useRefreshPending } from "@/lib/usage-auto-refresh";
 import { PLAN_WINDOW_SHORT_LABEL_KEY, PlanWindowMeter, useNow } from "./PlanUsageBar";
 import type { RateLimitWindow } from "../../server/contracts.ts";
 
@@ -68,12 +68,8 @@ function windowSlots(accounts: UsageAccount[]): RateLimitWindow[] {
 }
 
 const PLAN_USAGE_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent", "museAgent"]);
-// Subscription engines with a documented usage surface answer a refresh POST.
 // Muse limits arrive only inside a model reply, so it joins the refresh run
 // through a check (one small message) instead.
-const REFRESH_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent"]);
-const canRefresh = (instance: UsageAccount) => REFRESH_DRIVERS.has(instance.driverKind)
-  && instance.canRefreshUsage !== false;
 type RefreshResult = { error?: string; status?: string };
 // The server words these failures in English, without a period.
 function refreshErrorText(error: string, t: Translate): string {
@@ -126,9 +122,8 @@ function EnginePlanRow({
     const phrase = readingAge(observedAt, now);
     return t(phrase.key, phrase.vars);
   };
-  // A reading older than an hour says so under the rows: engines like Muse
-  // only report what their own host observed, so an old reading can look current.
-  const stale = instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) > STALE_READING_MS;
+  // A reading older than the auto-refresh window says so under the rows, so an old reading cannot look current.
+  const stale = instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) > AUTO_REFRESH_MS;
   const rows = (slots ?? windows).map((slot) => ({ slot, window: windows.find((window) =>
     windowSlotId(window, instance.driverKind) === windowSlotId(slot, instance.driverKind)) }));
   return (
@@ -162,7 +157,7 @@ function EnginePlanRow({
                     <span className="text-ink-secondary">{t(muse ? "usage.limits.resetPassedCheck" : "usage.limits.resetPassed")}</span>
                   </span>
                 ) : (
-                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} dim={dim} />
+                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} dim={dim} slide />
                 )}
                 {window.resetsAt === null && <span className="sr-only">{t("usage.limits.resetUnknown")}</span>}
               </div>
@@ -205,6 +200,8 @@ function PlanUsage() {
   const now = useNow();
   const groups = useMemo(() => groupAccounts(state.instances), [state.instances]);
   const mode = useUsageMode();
+  const checking = useRefreshPending().size > 0;
+  useAutoRefresh();
   const [refreshing, setRefreshing] = useState(false);
   const refreshingRef = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -220,14 +217,14 @@ function PlanUsage() {
     [engines],
   );
   const refreshable = useMemo(
-    () => shown.flat().filter((instance) => (instance.snapshot.authenticated !== false && (!instance.accountState || accountReady(instance)))
+    () => shown.flat().filter((instance) => refreshReady(instance)
       && (canRefresh(instance) || instance.driverKind === "museAgent")),
     [shown],
   );
   const [limits, setLimits] = useState<CheckLimits>({});
   const refresh = useCallback(async (instance: InstanceInfo, action: "refresh" | "check" = "refresh"): Promise<RefreshResult> => {
     try {
-      const result = await api(`/api/usage/${action}/${instance.instanceId}`, { method: "POST" });
+      const result = await joinRefresh(instance.instanceId, () => api(`/api/usage/${action}/${instance.instanceId}`, { method: "POST" }));
       if (result.report) dispatch({ type: "rateLimits", instanceId: instance.instanceId, report: result.report });
       const error = result.error ?? (action === "check" && result.status === "no_observation" ? t("usage.limits.checkEmpty") : undefined);
       setRefreshErrors((current) => error ? { ...current, [instance.instanceId]: error } : Object.fromEntries(Object.entries(current).filter(([id]) => id !== instance.instanceId)));
@@ -300,10 +297,10 @@ function PlanUsage() {
               aria-label={t(refreshing ? "usage.limits.refreshing" : "usage.limits.refreshAll")}
               title={t(refreshing ? "usage.limits.refreshing" : "usage.limits.refreshAll")}
               aria-keyshortcuts="Alt+R"
-              aria-busy={refreshing}
+              aria-busy={refreshing || checking}
               className="flex size-8 shrink-0 items-center justify-center rounded-full border border-hairline/40 text-[12px] text-ink-secondary hover:bg-raised/50 hover:text-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
             >
-              <RefreshCw size={15} aria-hidden="true" className={refreshing ? "animate-spin motion-reduce:animate-none" : undefined} />
+              <RefreshCw size={15} aria-hidden="true" className={refreshing || checking ? "animate-spin motion-reduce:animate-none" : undefined} />
             </button>
           </div>
         )}
