@@ -50,13 +50,13 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
           )}
           {dispatch && (
             <button type="button" data-all-usage="" onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "usage" })}
-              className="inline-flex items-center gap-0.5 hover:text-ink [@media(pointer:coarse)]:min-h-11">
+              className="inline-flex items-center gap-0.5 hover:text-ink [@media(pointer:coarse)]:-my-[13px] [@media(pointer:coarse)]:py-[13px]">
               {t("usage.wait.allUsage")}<ChevronRight size={13} aria-hidden="true" />
             </button>
           )}
           {details && (
             <button type="button" data-engine-details="" aria-expanded={open} aria-controls={detailsId} onClick={() => setOpen(!open)}
-              className="inline-flex items-center gap-0.5 hover:text-ink [@media(pointer:coarse)]:min-h-11">
+              className="inline-flex items-center gap-0.5 hover:text-ink [@media(pointer:coarse)]:-my-[13px] [@media(pointer:coarse)]:py-[13px]">
               {t("usage.wait.details")}
               <ChevronRight size={13} aria-hidden="true" className={cn("transition-transform duration-100 motion-reduce:transition-none", open && "rotate-90")} />
             </button>

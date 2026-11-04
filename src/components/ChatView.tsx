@@ -1817,7 +1817,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
         />
         {!terminal && (
           <ChatPlanMeters
-            key={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
+            identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
             instanceId={shownEngine?.instanceId}
             windows={shownEngine?.rateLimits?.windows}
             driverKind={shownEngine?.driverKind}

@@ -36,7 +36,7 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engin
   const selection = shownModelSelection(bot);
   const selectedEngine = engine?.instanceId === selection.instanceId ? engine : state.instances.find((instance) => instance.instanceId === selection.instanceId);
   const model = selectedEngine?.models.options.find((option) => option.id === selection.model)?.label ?? selection.model;
-  const ticker = <TermTicker key={`${bot.id}:${bot.threadId}:${selectedEngine?.accountOf ?? selection.instanceId}`} instance={selectedEngine}
+  const ticker = <TermTicker identity={`${bot.id}:${bot.threadId}:${selectedEngine?.accountOf ?? selection.instanceId}`} instance={selectedEngine}
     instanceId={selection.instanceId} tightest={phone && skin === "multiplexer"} phone={phone} />;
   const phoneModel = termModelLabel(model);
   if (phone) return (
@@ -73,7 +73,7 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engin
 const HOUR = 3_600_000;
 
 /** The quota half of the status line: tile, glyph trace, % left and the reset countdown; the words live in its description. */
-function TermTicker({ instance, instanceId, tightest, phone }: { instance: InstanceInfo | undefined; instanceId: string; tightest: boolean; phone: boolean }) {
+function TermTicker({ identity, instance, instanceId, tightest, phone }: { identity: string; instance: InstanceInfo | undefined; instanceId: string; tightest: boolean; phone: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const board = useUsageBoard();
@@ -85,7 +85,7 @@ function TermTicker({ instance, instanceId, tightest, phone }: { instance: Insta
   const soon = binding?.resetsAt != null && binding.resetsAt > minute && binding.resetsAt - minute < HOUR;
   const now = useVisibleClock(soon);
   const quick = Boolean(target && board.board);
-  const [open, setOpen] = useQuickToggle(quick);
+  const [open, setOpen] = useQuickToggle(quick, identity);
   const button = useRef<HTMLButtonElement>(null);
   const ageId = useId();
   const summaryId = useId();

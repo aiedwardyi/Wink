@@ -351,6 +351,26 @@ describe("chat usage meter, quick view and wait card", () => {
     }
     expect(heights[2]).toBeLessThan(heights[1]!);
     expect(heights[3]).toBe(heights[0]);
+    await vv.resize(400);
+    const footer = quick()!.querySelector("[data-all-usage]")!.parentElement!;
+    expect(footer.contains(quick()!.querySelector("[data-quick-close]")), "a tight view seats Close beside All usage").toBe(true);
+    await vv.resize(844);
+    expect(footer.isConnected && footer.contains(quick()!.querySelector("[data-quick-close]")), "a roomy view keeps Close in its header").toBe(false);
+  });
+
+  it("keeps the board quiet through an equal pane poll", async () => {
+    await mount(makeBot("bot-atlas", "Atlas", "claude"));
+    await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1"] } }));
+    await settle();
+    const before = boardGets().length;
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1"] } }));
+      await settle();
+    }
+    expect(boardGets().length - before, "equal copies").toBe(0);
+    await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1", "ATLAS-2"] } }));
+    await settle();
+    expect(boardGets().length - before, "a new worker").toBe(1);
   });
 
   it("switches bots without a board request", async () => {

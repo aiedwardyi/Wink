@@ -18,26 +18,53 @@ import "./UsageDesk.css";
 
 const HOUR = 3_600_000;
 const GAP = 6;
-const TRANSCRIPT_KEPT = 48;
+const MESSAGE_KEPT = 48;
+/** Below this the 48 px rule yields: Close, All usage and the % left line stay usable. */
+const USABLE = 120;
+/** Phone heights under this drop the header and seat Close beside All usage. */
+const TIGHT = 320;
 
 type Spot = { left: number; bottom: number; width: number; maxHeight: number; dimBottom: number };
 
-/** Phone: at most 60% of the visual viewport, chrome included, and 48 px of the transcript still showing above it. */
+/** Where the view may start: 48 px into the last message showing in the transcript (all of it when shorter). */
+function keptTop(floor: number) {
+  const transcript = document.querySelector("[data-orbit-transcript]");
+  const box = transcript?.getBoundingClientRect();
+  const top = Math.max(box?.top ?? floor, floor);
+  if (!transcript || !box) return top + MESSAGE_KEPT;
+  // Rows are display: contents, so a range measures what they paint.
+  const range = document.createRange();
+  const rows = transcript.querySelectorAll("[data-mid]");
+  for (let i = rows.length - 1; i >= 0; i--) {
+    range.selectNodeContents(rows[i]!);
+    const rect = range.getBoundingClientRect?.();
+    const from = Math.max(rect?.top ?? 0, top);
+    const to = Math.min(rect?.bottom ?? 0, box.bottom);
+    if (to > from) return from + Math.min(MESSAGE_KEPT, to - from);
+    if ((rect?.bottom ?? 0) <= top && (rect?.height ?? 0) > 0) break;
+  }
+  return top + MESSAGE_KEPT;
+}
+
+/** Phone: at most 60% of the visual viewport, chrome included, with the last message still showing above it. */
 function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
-  const rect = anchor.getBoundingClientRect();
+  // Terminal skins seat the view flat on the whole status line, not on the ticker inside it.
+  const seat = (terminal && anchor.closest<HTMLElement>(".term-status")) || anchor;
+  const rect = seat.getBoundingClientRect();
   const gap = terminal ? 0 : GAP;
   const viewport = window.visualViewport;
   const top = viewport?.offsetTop ?? 0;
   const height = viewport?.height ?? window.innerHeight;
   const bottom = window.innerHeight - rect.top + gap;
   if (phone) {
-    const transcript = document.querySelector("[data-orbit-transcript]")?.getBoundingClientRect().top ?? top;
-    const room = rect.top - gap - Math.max(transcript, top) - TRANSCRIPT_KEPT;
-    const width = window.innerWidth - 32;
-    return { left: 16, bottom, width, maxHeight: Math.max(0, Math.floor(Math.min(height * 0.6, room))), dimBottom: window.innerHeight - rect.top };
+    const cap = height * 0.6;
+    const room = rect.top - gap - keptTop(top);
+    const maxHeight = Math.max(0, Math.floor(Math.min(cap, Math.max(room, Math.min(USABLE, cap, rect.top - gap - top)))));
+    const edge = terminal ? 0 : 16;
+    return { left: edge, bottom, width: window.innerWidth - 2 * edge, maxHeight, dimBottom: window.innerHeight - rect.top };
   }
   const width = Math.min(380, window.innerWidth - 24);
-  const left = Math.max(12, Math.min(rect.left - 4, window.innerWidth - width - 12));
+  const left = Math.max(12, Math.min(anchor.getBoundingClientRect().left - 4, window.innerWidth - width - 12));
   return { left, bottom, width, maxHeight: Math.max(0, Math.floor(rect.top - gap - top - 12)), dimBottom: 0 };
 }
 
@@ -110,6 +137,13 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   };
 
   if (!spot) return null;
+  const tight = phone && spot.maxHeight < TIGHT;
+  const closeButton = (
+    <button type="button" data-quick-close="" aria-label={t("usage.chat.close")} onClick={() => close()}
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
+      <X size={15} aria-hidden="true" />
+    </button>
+  );
   return createPortal(
     <>
       {phone && <div aria-hidden="true" className="fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
@@ -117,14 +151,11 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
         className={cn("fixed z-50 flex flex-col overflow-hidden border border-hairline/60 bg-panel shadow-2xl",
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
-        <div className="flex shrink-0 items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
+        {!tight && <div className="flex shrink-0 items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
           <span className="min-w-0 truncate text-[12.5px] text-ink-secondary">{engineName(engine.engine)}</span>
-          <button type="button" data-quick-close="" aria-label={t("usage.chat.close")} onClick={() => close()}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
-            <X size={15} aria-hidden="true" />
-          </button>
-        </div>
-        <div data-quick-scroll="" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3">
+          {closeButton}
+        </div>}
+        <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3")}>
           <Hero key={engine.engine} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />
           {state.failed.has(engine.engine) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
@@ -133,13 +164,16 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
               phone={phone} terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
           </div>}
         </div>
-        <button type="button" data-all-usage="" onClick={allUsage}
-          className="flex shrink-0 items-center justify-between gap-3 border-t border-hairline/50 px-4 text-left text-[13px] text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none"
-          style={{ minHeight: phone ? 48 : 40 }}>
-          <span>{t("usage.chat.allUsage")}</span>
-          {phone ? <ChevronRight size={16} aria-hidden="true" className="-mr-1 text-ink-secondary" />
-            : <kbd className="usage-num rounded-[3px] border border-hairline px-1.5 py-0.5 font-sans text-[10.5px] leading-none text-ink-secondary">Alt U</kbd>}
-        </button>
+        <div className="flex shrink-0 items-center border-t border-hairline/50">
+          <button type="button" data-all-usage="" onClick={allUsage}
+            className="flex min-w-0 flex-1 items-center justify-between gap-3 self-stretch px-4 text-left text-[13px] text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none"
+            style={{ minHeight: phone ? 48 : 40 }}>
+            <span>{t("usage.chat.allUsage")}</span>
+            {phone ? <ChevronRight size={16} aria-hidden="true" className="-mr-1 text-ink-secondary" />
+              : <kbd className="usage-num rounded-[3px] border border-hairline px-1.5 py-0.5 font-sans text-[10.5px] leading-none text-ink-secondary">Alt U</kbd>}
+          </button>
+          {tight && <span className="flex shrink-0 border-l border-hairline/50 px-0.5">{closeButton}</span>}
+        </div>
       </div>
     </>,
     document.body,

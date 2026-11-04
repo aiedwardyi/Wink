@@ -20,6 +20,8 @@ type ChatPlanMetersProps = {
   observedAt?: string;
   /** The chat's shown engine instance; without it the line shows today's values and opens Usage directly. */
   instanceId?: string;
+  /** Bot, task and engine; a change shuts an open quick view before the next identity paints. */
+  identity?: string;
   now?: number;
   onOpenUsage: () => void;
 };
@@ -59,9 +61,16 @@ export function lineFacts(windows: UsageBoardWindow[], coverage: UsageBoardAccou
   return windowFacts({ windows, coverage } as Pick<UsageBoardAccount, "windows" | "coverage"> as UsageBoardAccount, t);
 }
 
-/** Open state for a line's quick view; Alt+U reaches it through App's `orbit:usage-key` event, never a module listener. */
-export function useQuickToggle(quick: boolean) {
-  const [open, setOpen] = useState(false);
+/**
+ * Open state for a line's quick view; Alt+U reaches it through App's `orbit:usage-key` event, never a module listener.
+ * The view is open for one identity: a new bot, task or engine reads as shut on its first render, while the line itself stays
+ * mounted so its board subscription (and the cache behind it) carries over without a read.
+ */
+export function useQuickToggle(quick: boolean, identity: string) {
+  const [openFor, setOpenFor] = useState<string | null>(null);
+  if (openFor !== null && openFor !== identity) setOpenFor(null);
+  const open = openFor === identity;
+  const setOpen = (next: boolean) => setOpenFor(next ? identity : null);
   useEffect(() => {
     if (!quick) return;
     const key = (event: Event) => {
@@ -86,7 +95,7 @@ function TodayMeter({ windows, driverKind, observedAt, now, onOpenUsage }: ChatP
   return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} />;
 }
 
-function BoardMeter({ windows, driverKind, observedAt, instanceId, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
+function BoardMeter({ windows, driverKind, observedAt, instanceId, identity = instanceId, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
   const { state } = useStore();
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
@@ -94,12 +103,12 @@ function BoardMeter({ windows, driverKind, observedAt, instanceId, now, onOpenUs
   if (meterWindows(target, windows, at).length === 0) return null;
   const own = state.instances.find((instance) => instance.instanceId === instanceId);
   const base = state.instances.find((instance) => instance.instanceId === (own?.accountOf ?? instanceId));
-  return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage}
+  return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} identity={identity}
     target={target} board={board} engineLabel={base?.displayName} />;
 }
 
-function MeterLine({ windows, driverKind, observedAt, now, onOpen, target, board, engineLabel }: {
-  windows: RateLimitWindow[] | undefined; driverKind?: string; observedAt?: string; now?: number; onOpen: () => void;
+function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = "", target, board, engineLabel }: {
+  windows: RateLimitWindow[] | undefined; driverKind?: string; observedAt?: string; now?: number; onOpen: () => void; identity?: string;
   target?: MeterTarget | null; board?: ReturnType<typeof useUsageBoard>; engineLabel?: string;
 }) {
   const { t } = useI18n();
@@ -114,7 +123,7 @@ function MeterLine({ windows, driverKind, observedAt, now, onOpen, target, board
   const runsOut = target && facts.binding ? pace(target.account, facts.binding, target.engine.events, clock).verdict.kind === "runsOut" : false;
   const name = target && target.engine.accounts.length > 1 ? target.account.name : target ? engineName(target.engine.engine) : engineLabel;
   const quick = Boolean(target && board?.board);
-  const [open, setOpen] = useQuickToggle(quick);
+  const [open, setOpen] = useQuickToggle(quick, identity);
   const toggle = () => { if (quick) setOpen(!open); else onOpen(); };
   if (shown.length === 0) return null;
   return (
