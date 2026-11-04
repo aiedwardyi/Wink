@@ -35,10 +35,7 @@ export interface DelegationItem {
   toBotId: string;
   message: string;
   reason?: string;
-  /** The source bot's comms depth (0 for a user-initiated turn). The
-   * delegated-to bot runs at `depth + 1`, which equals MAX_COMMS_DEPTH
-   * (= 1) for a user turn — so the peer has no agents integration, and
-   * recursive delegation is structurally impossible. */
+  /** The source depth; the peer runs at depth + 1 and cannot delegate again. */
   depth: number;
 }
 

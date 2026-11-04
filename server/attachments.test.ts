@@ -262,7 +262,7 @@ describe("importLocalImage", () => {
 });
 
 describe("show-image route", () => {
-  const indexSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
+  const indexSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8").replace(/\r\n/g, "\n");
   const internalSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "internal-routes.ts"), "utf8");
   const route = internalSource.slice(internalSource.indexOf("showImage: async ("));
 
@@ -278,8 +278,8 @@ describe("show-image route", () => {
   });
 
   it("tells bots about show_image only when the agents integration is mounted", () => {
-    expect(indexSource).toContain('const showImagePrompt = integrations.agents ? ` ${SHOW_IMAGE_GUIDANCE}` : "";');
-    expect(indexSource).toContain("integrations.agents && SHOW_IMAGE_GUIDANCE");
+    expect(indexSource).toContain('const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";');
+    expect(indexSource).toContain("canMessage && SHOW_IMAGE_GUIDANCE");
   });
 
   it("puts the always-reply, say-once and default-voice rules in every bot's base prompt", () => {

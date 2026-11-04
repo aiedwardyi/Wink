@@ -35,6 +35,7 @@
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
+import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
@@ -45,9 +46,10 @@ const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
 const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
-// agy mounts this proxy machine-wide, so a process without a bot's identity
-// (a turn past the comms depth cap, the user's own agy) gets no tools.
+// Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
+// Routine inspection and delegation waits stay callable without proactive prompt guidance.
+const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines"]);
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 
@@ -200,8 +202,9 @@ const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   {
     name: "list_bots",
-    description:
-      "List the other bots (agents) in your Wink workspace you can message, your own section first, with their section, model and whether they're busy. Call it when you need a teammate's id or availability, not to survey the team before answering.",
+    description: DEPTH > 0
+      ? "Inspect the other bots in your Wink workspace, your own section first, with their section, model and whether they're busy."
+      : "List the other bots (agents) in your Wink workspace you can message, your own section first, with their section, model and whether they're busy. Call it when you need a teammate's id or availability, not to survey the team before answering.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -621,7 +624,8 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
       const about = b.description ? ` (${String(b.description).slice(0, 120)})` : "";
       return `- ${b.name}${role}${about} [id: ${b.id}${b.section ? `, section: ${b.section}` : ""}, model: ${b.model}${b.busy ? ", busy" : ""}]`;
     });
-    return { text: `Other bots you can message with ask_bot:\n${lines.join("\n")}` };
+    const heading = DEPTH > 0 ? "Other bots in your Wink workspace:" : "Other bots you can message with ask_bot:";
+    return { text: `${heading}\n${lines.join("\n")}` };
   }
   if (name === "update_task_state") {
     const supported = ["goal", "plan", "completed_note", "next_action", "blockers", "artifacts", "pause_automatic_wakes"] as const;
@@ -971,7 +975,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-async function handle(msg: Json) {
+export async function handle(msg: Json) {
   const id = msg.id;
   const method = msg.method as string | undefined;
   if (!method) return;
@@ -991,11 +995,12 @@ async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      ok(id, { tools: TOOLS_ENABLED ? TOOLS : [] });
+      ok(id, { tools: TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [] });
       return;
     case "tools/call": {
       const name = params.name as string;
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
+      if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
       try {
         const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json);
         textResult(id, text, isError);
@@ -1009,18 +1014,20 @@ async function handle(msg: Json) {
   }
 }
 
-const rl = readline.createInterface({ input: process.stdin, terminal: false });
-rl.on("line", (line) => {
-  const t = line.trim();
-  if (!t) return;
-  let msg: Json;
-  try {
-    msg = JSON.parse(t) as Json;
-  } catch {
-    return;
-  }
-  void handle(msg).catch((e) => {
-    if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  rl.on("line", (line) => {
+    const t = line.trim();
+    if (!t) return;
+    let msg: Json;
+    try {
+      msg = JSON.parse(t) as Json;
+    } catch {
+      return;
+    }
+    void handle(msg).catch((e) => {
+      if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
+    });
   });
-});
-rl.on("close", () => process.exit(0));
+  rl.on("close", () => process.exit(0));
+}
