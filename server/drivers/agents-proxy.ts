@@ -35,6 +35,7 @@
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
+import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
@@ -971,7 +972,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
-async function handle(msg: Json) {
+export async function handle(msg: Json) {
   const id = msg.id;
   const method = msg.method as string | undefined;
   if (!method) return;
@@ -1010,18 +1011,20 @@ async function handle(msg: Json) {
   }
 }
 
-const rl = readline.createInterface({ input: process.stdin, terminal: false });
-rl.on("line", (line) => {
-  const t = line.trim();
-  if (!t) return;
-  let msg: Json;
-  try {
-    msg = JSON.parse(t) as Json;
-  } catch {
-    return;
-  }
-  void handle(msg).catch((e) => {
-    if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  rl.on("line", (line) => {
+    const t = line.trim();
+    if (!t) return;
+    let msg: Json;
+    try {
+      msg = JSON.parse(t) as Json;
+    } catch {
+      return;
+    }
+    void handle(msg).catch((e) => {
+      if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
+    });
   });
-});
-rl.on("close", () => process.exit(0));
+  rl.on("close", () => process.exit(0));
+}
