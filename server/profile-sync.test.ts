@@ -37,6 +37,7 @@ import {
   writeSyncOperation,
   type ProfileSyncOperation,
 } from "./profile-sync.ts";
+import { readSyncOperations as readLegacySyncOperations } from "./testing/profile-sync-1.0.230.ts";
 
 const roots: string[] = [];
 
@@ -739,6 +740,8 @@ describe("automatic bot sync", () => {
 
   it.each([
     [false, "icon-36"], [true, "icon-36"], [false, "icon-49"], [true, "icon-49"],
+    [false, "icon-50"], [true, "icon-50"], [false, "icon-51"], [true, "icon-51"],
+    [false, "icon-52"], [true, "icon-52"], [false, "icon-53"], [true, "icon-53"],
   ])("isolates extended avatars from older readers (new bot: %s, style: %s)", (fresh, mascotStyle) => {
     const folder = mkdtempSync(join(tmpdir(), "orbit-profile-sync-style-"));
     roots.push(folder);
@@ -764,7 +767,8 @@ describe("automatic bot sync", () => {
     });
     expect(invalidFiles).toEqual([]);
     expect(applySyncOperations(emptyProfileSyncState(), base).bots["g-a-tutor"]).toMatchObject({ name: "Coach", color: "blue" });
-    expect(names.filter((name) => name.endsWith(".style"))).toHaveLength(1);
+    const extension = mascotStyle === "icon-36" || mascotStyle === "icon-49" ? ".style" : ".avatar";
+    expect(names.filter((name) => name.endsWith(extension))).toHaveLength(1);
     const read = readSyncOperations(folder);
     expect(read.invalidFiles).toEqual([]);
     expect(read.operations.filter((op) => op.changes?.mascotStyle === mascotStyle).map((op) => op.changes)).toEqual([{ mascotStyle }]);
@@ -772,6 +776,37 @@ describe("automatic bot sync", () => {
     expect(state.bots["g-a-tutor"]).toMatchObject(tutor.changes);
     expect(state.conflicts).toEqual([]);
     expect(publish(a)).toEqual([]);
+  });
+
+  it.each(Array.from({ length: 18 }, (_, index) => `icon-${36 + index}`))(
+    "keeps a 1.0.230 reader valid when syncing %s", (mascotStyle) => {
+      const folder = mkdtempSync(join(tmpdir(), "orbit-profile-sync-legacy-style-"));
+      roots.push(folder);
+      const a = device("a");
+      a.bots.set("tutor", { name: "Tutor", changes: { name: "Tutor", mascotStyle } });
+      for (const op of publish(a)) writeSyncOperation(folder, op);
+      const legacy = readLegacySyncOperations(folder);
+      expect(legacy.invalidFiles).toEqual([]);
+      const expected = Number(mascotStyle.slice(5)) <= 49 ? mascotStyle : undefined;
+      expect(applySyncOperations(emptyProfileSyncState(), legacy.operations).bots["g-a-tutor"])
+        .toMatchObject({ name: "Tutor" });
+      expect(legacy.operations.find((op) => op.changes?.mascotStyle)?.changes?.mascotStyle).toBe(expected);
+      expect(readdirSync(join(folder, "changes")).some((name) => name.endsWith(expected ? ".style" : ".avatar"))).toBe(true);
+      const read = readSyncOperations(folder);
+      expect(read.invalidFiles).toEqual([]);
+      expect(applySyncOperations(emptyProfileSyncState(), read.operations).bots["g-a-tutor"])
+        .toMatchObject({ name: "Tutor", mascotStyle });
+    },
+  );
+
+  it("confirms the 1.0.230 reader rejects icon-52 in a style file", () => {
+    const folder = mkdtempSync(join(tmpdir(), "orbit-profile-sync-legacy-reject-"));
+    roots.push(folder);
+    const op = operation({ changes: { mascotStyle: "icon-52" } });
+    writeSyncOperation(folder, op);
+    const name = syncOperationFileName(op).replace(/\.[^.]+$/, ".style");
+    writeFileSync(join(folder, "changes", name), serializeSyncOperation(op));
+    expect(readLegacySyncOperations(folder).invalidFiles).toEqual([name]);
   });
 
   it("retries an avatar whose asset lands after its op and keeps the local base until then", () => {
