@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { CommsCallers } from "./comms-caller.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, prepareModelContext, repairModelContext, repairTarget } from "./context-compaction.ts";
 import { _resetPending, discardDelegations, discardOrphanedDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt, updateReceipt } from "./delegations.ts";
@@ -163,11 +164,11 @@ function response() {
   return { res, body: () => JSON.parse(body) };
 }
 
-function routes(askBotAndWait = vi.fn()) {
+function routes(askBotAndWait = vi.fn(), resolveCommsCaller?: Parameters<typeof createInternalRoutes>[0]["resolveCommsCaller"]) {
   return createInternalRoutes({ store, commsBus: bus(), approvalBus: bus(), MAX_COMMS_DEPTH: 1,
     MAX_WORKSPACE_BOTS: 100, checkedMemberIds: (memberIds: string[]) => ({ ok: true, memberIds }),
     connectorThread: (botId: string, threadId: string) => store.conversationForBot(botId, threadId),
-    delegationWatch: new Map(), askBotAndWait,
+    delegationWatch: new Map(), askBotAndWait, resolveCommsCaller,
   } as unknown as Parameters<typeof createInternalRoutes>[0]);
 }
 
@@ -183,7 +184,7 @@ it.each(["askBot", "delegateBot", "createBot", "createChannel"] as const)("refus
   req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, toBotId: target.id, message: "work", depth: 1, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id] }));
   req.emit("end");
   await pending;
-  expect(output.body().error).toContain("limited to one hop");
+  expect(output.body().error).toBe("message chains are limited to one hop");
   expect(askBotAndWait).not.toHaveBeenCalled();
   expect(store.bots).toHaveLength(botCount);
   expect(store.groups).toHaveLength(groupCount);
@@ -192,14 +193,52 @@ it.each(["askBot", "delegateBot", "createBot", "createChannel"] as const)("refus
 it.each(["createBot", "createChannel"] as const)("keeps %s available at depth 0", async (method) => {
   from = store.patchBot(from.id, { chiefOfStaff: true })!;
   start("user-turn");
+  const callers = new CommsCallers();
   const req = new EventEmitter() as IncomingMessage;
+  req.headers = { authorization: `Bearer ${callers.token(from.id, from.threadId)}` };
   const output = response();
-  const pending = routes()[method](req, output.res);
+  const pending = routes(vi.fn(), (header) => callers.resolve(header))[method](req, output.res);
   req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id], depth: 0 }));
   req.emit("end");
   await pending;
   expect(output.body().id).toBeTruthy();
   expect(output.body().error).toBeUndefined();
+});
+
+it.each(["createBot", "createChannel"] as const)("refuses %s with an unknown caller token", async (method) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  const callers = new CommsCallers();
+  const req = new EventEmitter() as IncomingMessage;
+  req.headers = { authorization: "Bearer forged" };
+  const output = response();
+  const pending = routes(vi.fn(), (header) => callers.resolve(header))[method](req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: from.threadId,
+    depth: 0, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id] }));
+  req.emit("end");
+  await pending;
+  expect(output.body()).toEqual({ error: "unknown sender" });
+});
+
+it.each([
+  ["createBot", false], ["createBot", true], ["createChannel", false], ["createChannel", true],
+] as const)("binds %s to the peer caller (forged thread: %s)", async (method, forgedThread) => {
+  from = store.patchBot(from.id, { chiefOfStaff: true })!;
+  const other = store.createTask(from.id, "Other task", false)!;
+  turnRegistry.start("peer-turn", { botId: from.id, threadId: from.threadId, owner: "peer", depth: 1 });
+  const callers = new CommsCallers();
+  const req = new EventEmitter() as IncomingMessage;
+  req.headers = { authorization: `Bearer ${callers.token(from.id, from.threadId)}` };
+  const output = response();
+  const botCount = store.bots.length;
+  const groupCount = store.groups.length;
+  const pending = routes(vi.fn(), (header) => callers.resolve(header))[method](req, output.res);
+  req.emit("data", JSON.stringify({ fromBotId: from.id, fromThreadId: forgedThread ? other.threadId : from.threadId,
+    depth: 0, name: "New peer", role: "Reviewer", instructions: "Review work", memberIds: [target.id] }));
+  req.emit("end");
+  await pending;
+  expect(output.body().error).toContain("limited to one hop");
+  expect(store.bots).toHaveLength(botCount);
+  expect(store.groups).toHaveLength(groupCount);
 });
 
 it.each(["askBot", "delegateBot", "createBot", "createChannel"] as const)("uses the live peer depth to guard %s", async (method) => {

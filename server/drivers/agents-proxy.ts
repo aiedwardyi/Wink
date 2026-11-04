@@ -48,6 +48,7 @@ const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
 const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
 // Machine-wide mounts outside a bot turn have no identity and get no tools.
 const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
+// Routine inspection and delegation waits stay callable without proactive prompt guidance.
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines"]);
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
@@ -201,8 +202,9 @@ const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   {
     name: "list_bots",
-    description:
-      "List the other bots (agents) in your Wink workspace you can message, your own section first, with their section, model and whether they're busy. Call it when you need a teammate's id or availability, not to survey the team before answering.",
+    description: DEPTH > 0
+      ? "Inspect the other bots in your Wink workspace, your own section first, with their section, model and whether they're busy."
+      : "List the other bots (agents) in your Wink workspace you can message, your own section first, with their section, model and whether they're busy. Call it when you need a teammate's id or availability, not to survey the team before answering.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -622,7 +624,8 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
       const about = b.description ? ` (${String(b.description).slice(0, 120)})` : "";
       return `- ${b.name}${role}${about} [id: ${b.id}${b.section ? `, section: ${b.section}` : ""}, model: ${b.model}${b.busy ? ", busy" : ""}]`;
     });
-    return { text: `Other bots you can message with ask_bot:\n${lines.join("\n")}` };
+    const heading = DEPTH > 0 ? "Other bots in your Wink workspace:" : "Other bots you can message with ask_bot:";
+    return { text: `${heading}\n${lines.join("\n")}` };
   }
   if (name === "update_task_state") {
     const supported = ["goal", "plan", "completed_note", "next_action", "blockers", "artifacts", "pause_automatic_wakes"] as const;

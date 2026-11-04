@@ -721,10 +721,10 @@ describe("agents-proxy MCP surface", () => {
   });
 
   it("returns queue refusal guidance to the agent as a tool error", async () => {
-    delegateResponse = { error: "delegation chains are limited to one hop — do this one yourself" };
+    delegateResponse = { error: "message chains are limited to one hop" };
     const res = await callTool("delegate_bot", { bot_id: "bot-helper", message: "take this" });
     expect(res.result.isError).toBe(true);
-    expect(res.result.content[0].text).toContain("do this one yourself");
+    expect(res.result.content[0].text).toContain("limited to one hop");
   });
 
   it("lets a Chief create a bounded specialist through the harness", async () => {

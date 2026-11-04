@@ -66,6 +66,29 @@ it.each([0, 1])("replays recorded agent requests at depth %s", async (depth) => 
   }
 });
 
+it.each([0, 1, 2])("describes the bot roster at depth %s", async (depth) => {
+  vi.stubEnv("OMB_TURN_DEPTH", String(depth));
+  vi.resetModules();
+  const handle = (await import("./agents-proxy.ts")).handle;
+  const list = await rpc(reply.list, handle);
+  const tool = list.result.tools.find((tool: { name: string }) => tool.name === "list_bots");
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    bots: [{ id: "helper", name: "Helper", section: "Work", model: "fake-model", busy: false }],
+  }))));
+  const result = await rpc({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "list_bots", arguments: {} } }, handle);
+  expect(result.result.isError).toBe(false);
+  expect(result.result.content[0].text).toContain("Helper");
+  expect(result.result.content[0].text).toContain("section: Work");
+  if (depth === 0) {
+    expect(tool.description).toContain("you can message");
+    expect(result.result.content[0].text).toContain("message with ask_bot");
+  } else {
+    expect(tool.description).not.toContain("you can message");
+    expect(tool.description).not.toContain("ask_bot");
+    expect(result.result.content[0].text).not.toContain("ask_bot");
+  }
+});
+
 describe("recorded team report MCP requests", () => {
   it("accepts the engine handshake and advertises a flat report tool", async () => {
     const init = await rpc(reply.initialize);
