@@ -88,6 +88,36 @@ describe("createSpawnUsage", () => {
     expect(await check(BOT, LABEL, CODEX)).toHaveProperty("hold");
   });
 
+  it("recovery holds never authorize another recovery or a normal spawn", async () => {
+    const { check } = setup(reading(85, 13));
+    const account = { id: "codex", generation: 0, name: "Codex" };
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
+  });
+
+  it("recovery never uses or consumes a normal spawn override", async () => {
+    const { check } = setup(reading(85, 13));
+    const account = { id: "codex", generation: 0, name: "Codex" };
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("hold");
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
+  });
+
+  it("recovery with sufficient quota preserves a pending normal spawn override", async () => {
+    const { check, rateLimits } = setup(reading(85, 13));
+    const account = { id: "codex", generation: 0, name: "Codex" };
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
+    rateLimits.set("codex", reading(20, 13));
+    expect(await check(BOT, LABEL, CODEX, account, true)).toHaveProperty("line");
+    rateLimits.set("codex", reading(85, 13));
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("line");
+    expect(await check(BOT, LABEL, CODEX, account)).toHaveProperty("hold");
+  });
+
   it("never holds on a window whose reset has passed or is unknown", async () => {
     expect(await setup(reading(95, 13, NOW - 60_000, NOW - 1)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: weekly 87%." });
     expect(await setup(reading(20, 95, NOW - 60_000, RESET, NOW)).check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 80% (resets 13:40)." });

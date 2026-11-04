@@ -148,7 +148,7 @@ export function createWorkerLaunch(deps: {
       if (command.executable === "grok") policy.env.GROK_HOME ??= join(policy.env.HOME, ".grok");
     }
     const captured = Object.freeze({ id: account.id, generation: account.generation, name: command.name });
-    const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured);
+    const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
     if (!deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");

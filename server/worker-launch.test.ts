@@ -76,6 +76,24 @@ describe("trusted worker accounts", () => {
     expect(launch.environment[engine === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"]).toBe(account.home);
   });
 
+  it.each([
+    { engine: "claude", label: "worker" }, { engine: "claude", label: undefined },
+    { engine: "codex", label: "worker" }, { engine: "codex", label: undefined },
+  ] as const)("holds both $engine recoveries with label $label on low quota", async ({ engine, label }) => {
+    const f = await fixture();
+    const account = { ...f.third, of: engine };
+    f.rateLimits.set(account.id, { observedAt: new Date().toISOString(), windows: [
+      { id: "five_hour", usedPercent: 95, resetsAt: Date.now() + 60_000, windowMinutes: 300 },
+    ] });
+    const usage = createSpawnUsage({ rateLimits: f.rateLimits, refresh: f.refresh, save() {}, environment: () => ({}) });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage, resumeAccount: () => account });
+    for (const nativeId of ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]) {
+      expect(await prepare({ ...f.input, label, command: engine, resume: { engine, nativeId, accountId: account.id,
+        accountGeneration: account.generation, template: { executable: engine, args: ["task"] } } })).toMatchObject({ kind: "hold" });
+    }
+  });
+
   it("never resumes an unavailable captured account", async () => {
     const f = await fixture();
     f.available.mockReturnValue(false);
