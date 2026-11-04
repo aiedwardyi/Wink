@@ -4,14 +4,20 @@ import { connectUsageBoard, invalidateUsageBoard, subscribeUsageBoard, usageBoar
 
 connectUsageBoard(api);
 
+/** Workers follow the pane labels; the 15 s pane poll hands over equal copies that must not re-read the board. */
+function panesKey(panes: Record<string, string[]> = {}) {
+  return Object.keys(panes).sort().map((bot) => `${bot}\u0000${panes[bot].join("\u0001")}`).join("\u0002");
+}
+
 /** The cached board at once; reads happen behind it and never gate paint. */
 export function useUsageBoard() {
   const { state } = useStore();
-  const panes = useRef(state.terminalPanes);
+  const key = panesKey(state.terminalPanes);
+  const panes = useRef(key);
   useEffect(() => {
-    if (panes.current === state.terminalPanes) return;
-    panes.current = state.terminalPanes;
+    if (panes.current === key) return;
+    panes.current = key;
     invalidateUsageBoard();
-  }, [state.terminalPanes]);
+  }, [key]);
   return useSyncExternalStore(subscribeUsageBoard, usageBoardState, usageBoardState);
 }
