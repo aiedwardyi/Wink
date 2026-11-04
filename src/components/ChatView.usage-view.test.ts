@@ -358,6 +358,17 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(footer.isConnected && footer.contains(quick()!.querySelector("[data-quick-close]")), "a roomy view keeps Close in its header").toBe(false);
   });
 
+  it("shows the reset of a binding window that keeps no history, with no empty chart fold", async () => {
+    await mount(makeBot("bot-juno", "Juno", "gemini"));
+    await click(meter());
+    const view = quick();
+    expect(view, "quick view").not.toBeNull();
+    const extra = view!.querySelector("[data-reset=\"extra\"]");
+    expect(text(extra), "the daily reset line").toMatch(/Resets in/);
+    expect(view!.querySelector("[data-chart-fold]"), "no fold over an empty chart").toBeNull();
+    expect(view!.querySelector("[data-empty-state]"), "no empty chart message").toBeNull();
+  });
+
   it("keeps the board quiet through an equal pane poll", async () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
     await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1"] } }));
