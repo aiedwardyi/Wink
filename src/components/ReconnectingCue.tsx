@@ -9,14 +9,16 @@ const GRACE_MS = 2_000;
 export function ReconnectingCue() {
   const { t } = useI18n();
   const { state } = useStore();
+  const waiting = state.hasConnected ? !state.connected : !state.hydrated;
   const [shown, setShown] = useState(false);
   useEffect(() => {
     setShown(false);
-    if (state.connected) return;
+    if (!waiting) return;
     const id = window.setTimeout(() => setShown(true), GRACE_MS);
     return () => window.clearTimeout(id);
-  }, [state.connected]);
+  }, [waiting]);
   if (!shown) return null;
+  if (!state.hasConnected) return <div role="status" className="mb-2 px-5 text-center text-[13px] text-ink-secondary">{t("activity.updating")}</div>;
   return (
     <div className="flex w-full justify-center px-5">
       <div role="status" className="mb-2 flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">

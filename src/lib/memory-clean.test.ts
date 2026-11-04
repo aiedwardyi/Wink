@@ -25,6 +25,36 @@ afterEach(async () => {
 });
 
 describe("cleanup summary", () => {
+  it("coalesces same-bot reads across cleanup rows and refetches after settling", async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    vi.stubGlobal("fetch", fetch);
+    await mount();
+    await act(async () => root.render(createElement("div", null, createElement(Probe), createElement(Probe), createElement(Probe))));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => finish(Response.json({ run })));
+    expect(value.run?.runId).toBe("r");
+    await act(async () => root.render(createElement(Probe)));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => finish(Response.json({ run })));
+  });
+
+  it("refreshes after Undo even when an older summary is in flight", async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ run }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce(Response.json({ ok: true, revision: "new", restored: 1, skipped: 0 }))
+      .mockResolvedValueOnce(Response.json({ run: { ...run, undoneAt: 3, undoable: false } }));
+    vi.stubGlobal("fetch", fetch); await mount();
+    await act(async () => root.render(createElement(Probe, { active: false })));
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => value.undo());
+    expect(fetch).toHaveBeenCalledTimes(4);
+    await act(async () => finish(Response.json({ run })));
+    expect(value.run?.undoable).toBe(false);
+    expect(value.run?.undoneAt).toBe(3);
+  });
+
   it("refetches on tab reopen and a tidy append or patch", async () => {
     const fetch = vi.fn(async () => Response.json({ run })); vi.stubGlobal("fetch", fetch);
     await mount(); expect(value.run?.runId).toBe("r");

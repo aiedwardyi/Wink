@@ -108,7 +108,7 @@ describe("first-send hydration", () => {
     expect(reads).toHaveLength(1);
   });
 
-  it("asks for the snapshot once the stream is open, naming the open chat", async () => {
+  it("asks for the remote snapshot before the stream opens, naming the open chat", async () => {
     vi.spyOn(window.location, "protocol", "get").mockReturnValue("https:");
     vi.spyOn(window.location, "hostname", "get").mockReturnValue("phone.example");
     writeSnapshotCache({ bots: [bot("Saved")], groups: [], selectedId: "b1" });
@@ -119,12 +119,12 @@ describe("first-send hydration", () => {
       return Response.json({ bots: [bot("Prefetched")], groups: [], cursor: "stream00:4" });
     }));
     await mount(false);
-    expect(reads).toEqual([]);
+    expect(reads).toEqual([{ streamOpen: false, openChat: "b1" }]);
     await act(async () => {
       FakeEventSource.last.opened = true;
       FakeEventSource.last.onopen?.();
     });
-    expect(reads).toEqual([{ streamOpen: true, openChat: "b1" }]);
+    expect(reads).toEqual([{ streamOpen: false, openChat: "b1" }]);
     await act(async () => FakeEventSource.last.onopen?.());
     expect(reads).toHaveLength(1);
     await emit({ kind: "hello", resumed: false, cursor: "stream00:4" });

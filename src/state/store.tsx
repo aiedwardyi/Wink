@@ -27,12 +27,12 @@ import { loadReplyStyle } from "@/lib/reply-style";
 import { appSettingsNavigation } from "@/lib/settings-chrome";
 import { createBotPatchQueue } from "./bot-patch-queue";
 import { createViewedReplies } from "./viewed-replies";
-import { canPrefetchChat, firstChatPeripherals, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
+import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstChatPeripherals, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
-import { openLiveEvents, snapshotCoversHello } from "@/lib/live-events";
+import { openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
@@ -559,7 +559,7 @@ export function reducer(state: AppState, action: Action): AppState {
           : { ...b, modelSelection: action.selection, pendingModelSelection: null },
       );
     case "connected":
-      return state.connected === action.value ? state : { ...state, connected: action.value };
+      return state.connected === action.value ? state : { ...state, connected: action.value, hasConnected: state.hasConnected || action.value };
     case "error":
       return {
         ...(action.message && state.selectedId
@@ -995,6 +995,7 @@ export const initialState: AppState = {
   provisioning: {},
   focusMessage: null,
   connected: false,
+  hasConnected: false,
   hydrated: false,
   error: null,
   mascotMotion: null,
@@ -1904,9 +1905,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // Other chats come back as a short tail; ChatView pages the rest in when one opens.
     const chatSnapshot = (signal?: AbortSignal) =>
       api(`/api/bots?messages=${MESSAGE_PAGE}`, { signal, headers: { "x-open-chat": stateRef.current.selectedId, ...firstBotsHeader() } });
-    let prefetchedChat: Promise<any> | null = null;
+    const snapshots = createChatSnapshotLoad(() => chatSnapshot(prefetchAbort.signal), () => alive);
     let prefetchStarted = false;
     let snapshotBoundary: string | undefined;
+    let appliedSnapshotCursor: string | undefined;
     type PeripheralKey = "instances" | "config" | "routines";
     type PeripheralPart = {
       key: PeripheralKey;
@@ -1995,15 +1997,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const bumpPeripheralVersion = (...keys: PeripheralKey[]) => {
       for (const key of keys) refreshState(key).version += 1;
     };
-    const loadAll = async (boundary?: string): Promise<boolean> => {
+    const loadAll = async (): Promise<boolean> => {
       const chat = async () => {
-        const prefetch = prefetchedChat;
-        prefetchedChat = null;
-        let snapshot = prefetch ? await prefetch : null;
-        if (!alive || boundary !== snapshotBoundary) return;
-        // No boundary means the no-hello fallback; there is nothing to validate.
-        if (boundary === undefined ? !snapshot : !snapshotCoversHello(snapshot?.cursor, boundary)) snapshot = await chatSnapshot();
-        if (!alive || boundary !== snapshotBoundary || rehydrateRequested) return;
+        const snapshot = await snapshots.load(() => snapshotBoundary);
+        if (!alive || !snapshot) return;
+        rehydrateRequested = false;
+        appliedSnapshotCursor = snapshot.cursor;
         const { bots, groups } = snapshot;
         rawDispatch({
           type: "hydrate",
@@ -2048,8 +2047,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const hydrate = (cursor?: string): Promise<boolean> => {
       snapshotBoundary = cursor;
       if (hydrationPromise) {
-        // A second non-resumable hello means this snapshot may have started
-        // before another connection gap. Run one more after it settles.
+        // The active load validates against this newer boundary before it applies.
         rehydrateRequested = true;
         return hydrationPromise;
       }
@@ -2058,11 +2056,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         let loaded = false;
         do {
           rehydrateRequested = false;
-          loaded = await loadAll(snapshotBoundary);
+          loaded = await loadAll();
         } while (alive && rehydrateRequested);
         if (!alive || !loaded) return false;
         hydrated = true;
-        for (const frame of pendingFrames.splice(0)) handleFrame(frame);
+        for (const frame of pendingFrames.splice(0)) if (chatFrameAfterSnapshot(frame, appliedSnapshotCursor)) handleFrame(frame);
         // Text held behind the snapshot is history now: it lands whole.
         flushDeltas();
         return true;
@@ -2333,8 +2331,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
-        // Remote links share one pipe, so hello must not queue behind the snapshot.
-        if (!prefetchStarted && !hydrated && !hydrationPromise) prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
+        if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
       onError: () => rawDispatch({ type: "connected", value: false }),
@@ -2366,7 +2363,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
     if (canPrefetchChat(window.location)) {
       prefetchStarted = true;
-      prefetchedChat = chatSnapshot(prefetchAbort.signal).catch(() => null);
+      snapshots.prefetch();
     }
     // rAF never fires while hidden, so text streamed meanwhile would miss the
     // restored window's first frame, and a reply waiting on its tail would never settle.
@@ -2494,6 +2491,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("pagehide", save);
     };
   }, []);
+
+  useEffect(() => {
+    if (!state.hydrated) return;
+    const timer = setTimeout(() => saveSnapshotCache(stateRef.current), 1500);
+    return () => clearTimeout(timer);
+  }, [state.hydrated, state.selectedId]);
 
   const flushBotPatches = useCallback(
     (botId: string) => botPatchQueue.flush(botId),
