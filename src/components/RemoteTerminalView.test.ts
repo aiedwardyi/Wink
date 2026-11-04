@@ -290,6 +290,25 @@ describe("RemoteTerminalView", () => {
     }
   });
 
+  it.each([
+    ["Codex Sol", createElement(ProviderMark, { driverKind: "codex", size: 14 })],
+    ["Claude Opus", createElement(ProviderMark, { driverKind: "claudeAgent", size: 14 })],
+    ["script", createElement(ScrollText, { size: 14, className: "text-ink-secondary", "aria-hidden": true })],
+  ])("shows the watched %s pane's mark in the title and none on Main", async (model, mark) => {
+    store.api.mockResolvedValue({ screenText: "$", panes: [{ sessionId: "main", main: true }, { sessionId: "worker", label: `Worker | ${model} | high`, main: false }] });
+    const { host, root } = await renderView();
+    try {
+      expect(host.querySelector("header h1 svg")).toBeNull();
+      await pickPane(host, "Worker");
+      const h1 = host.querySelector("header h1")!;
+      expect(h1.innerHTML).toContain(renderToStaticMarkup(mark));
+      expect(h1.querySelector("[aria-hidden]")).not.toBeNull();
+      expect(title(host)).toBe("Terminal / Worker");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("starts a pane without a worker run with a plain bot mark", async () => {
     store.api.mockResolvedValue({ screenText: "$", panes: [{ sessionId: "main", main: true }, { sessionId: "worker", main: false }] });
     const { host, root } = await renderView();

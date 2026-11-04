@@ -6,10 +6,10 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
-import { latestPaneRun, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
+import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
-import { WorkerChip } from "./WorkerRows";
+import { WorkerChip, WorkerMark } from "./WorkerRows";
 
 type RemoteTerminalPane = {
   sessionId: string;
@@ -358,7 +358,7 @@ export function RemoteTerminalView({
       <header className={`@container/chathead flex shrink-0 items-center gap-2 border-b border-hairline bg-panel px-2 py-2 md:pl-5 ${sidebarOnRight ? DRAWER_HEADER_RIGHT : DRAWER_HEADER_LEFT}`}>
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watchedName}</span></h1>
+          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watched && <WorkerMark compact provider={paneProvider(workers, watched.sessionId, watched.label)} />}{watchedName}</span></h1>
           <p className="truncate font-mono text-[11px] text-ink-secondary">
             {[shown?.cwd, noTerminal ? t("terminal.noSession") : shown?.exited ? t("terminal.exited", { code: shown.exitCode ?? "?" }) : ""].filter(Boolean).join(" · ")}
           </p>

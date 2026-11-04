@@ -126,6 +126,12 @@ export function latestPaneRun(runs: readonly WorkerRun[], sessionId: string): Wo
   return paneRuns(runs.map((run) => ({ run, state: run.state })), new Set([sessionId])).get(sessionId)?.run;
 }
 
+/** The mark a pane's worker row shows: its transcript run's provider, else the label's model. */
+export function paneProvider(runs: readonly WorkerRun[], sessionId: string, label: string | null | undefined): string | null {
+  const run = latestPaneRun(runs, sessionId);
+  return run ? run.provider : workerProvider(parseWorkerLabel(label).model);
+}
+
 /** True when the pane's run is still the one captured before a snapshot await. */
 export function samePaneRun(before: WorkerRun | undefined, after: WorkerRun | undefined): boolean {
   if (!before || !after) return before === after;

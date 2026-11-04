@@ -1466,6 +1466,25 @@ it("takes the mark from the pane label when its launch is outside the loaded pag
   expect(row.querySelector(".lucide-bot")).toBeNull();
 });
 
+it.each([
+  ["Codex Sol", createElement(ProviderMark, { driverKind: "codex", size: 14 })],
+  ["Claude Opus", createElement(ProviderMark, { driverKind: "claudeAgent", size: 14 })],
+  ["script", createElement(ScrollText, { size: 14, className: "text-ink-secondary", "aria-hidden": true })],
+])("shows the watched %s pane's mark in the title and none on Main", async (model, mark) => {
+  const f = paneFixture();
+  f.snapshot.panes[0].label = `one | ${model} | high`;
+  await f.render();
+  await f.select(null);
+  expect(host.querySelector("header h1 svg")).toBeNull();
+  await f.select("one");
+  const h1 = host.querySelector("header h1")!;
+  expect(h1.innerHTML).toContain(renderToStaticMarkup(mark));
+  expect(h1.querySelector("[aria-hidden]")).not.toBeNull();
+  expect(h1.textContent).toBe("Terminal / one");
+  await f.select(null);
+  expect(host.querySelector("header h1 svg")).toBeNull();
+});
+
 it("lists a script pane with the script icon and offers Close pane on it", async () => {
   const f = paneFixture();
   f.snapshot.panes[1].label = "CI-WAIT | script";

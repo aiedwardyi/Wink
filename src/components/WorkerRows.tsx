@@ -37,9 +37,9 @@ export function useWorkerRows(workers: ShownRun[], messages: Message[]) {
 
 export function WorkerMark({ provider, compact = false }: { provider: string | null; compact?: boolean }) {
   // brand marks stay untinted; only the script and unknown-model glyphs take the ink color
-  const size = compact ? 12 : 14;
+  const size = 14;
   return (
-    <span className={compact ? "flex size-3 shrink-0 items-center justify-center" : "flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised"}>
+    <span aria-hidden={compact || undefined} className={compact ? "mr-1.5 inline-flex size-3.5 shrink-0 items-center justify-center align-middle" : "flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised"}>
       {provider === "script" ? <ScrollText size={size} className="text-ink-secondary" aria-hidden /> : provider ? <ProviderMark driverKind={provider} size={size} /> : <Bot size={size} className="text-ink-secondary" aria-hidden />}
     </span>
   );

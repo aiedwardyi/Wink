@@ -8,12 +8,12 @@ import { api, useStore, visibleMessages } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { readTerminalMatch, terminalTheme, TERMINAL_APPEARANCE_EVENT } from "@/lib/terminal-appearance";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
-import { latestPaneRun, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
+import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
 import { Presence } from "@/lib/use-presence";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { WorkerChip } from "./WorkerRows";
+import { WorkerChip, WorkerMark } from "./WorkerRows";
 import "@xterm/xterm/css/xterm.css";
 
 type SessionInfo = { cwd: string; shell: string };
@@ -732,7 +732,7 @@ export function TerminalWorkspace({
         <span className="h-5 border-l border-hairline" aria-hidden />
         <TerminalSquare size={16} className="shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {watched ?? bot.name}</span></h1>
+          <h1 className="truncate text-[13px] font-medium">{t("terminal.title")} <span className="text-ink-secondary">/ {pane !== null && <WorkerMark compact provider={paneProvider(workers, pane, panes.find((item) => item.id === pane)?.label)} />}{watched ?? bot.name}</span></h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-2">
             <button
               type="button"
