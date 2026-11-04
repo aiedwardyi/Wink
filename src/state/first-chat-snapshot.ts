@@ -1,4 +1,5 @@
 import { snapshotCoversHello } from "@/lib/live-events";
+import { streamResetFor } from "@/lib/turn-stage";
 
 /** Peripherals that may ride the first chat snapshot. Engine describe
  * (`instances`) walks PATH and CLI `--version`; keep it off composer paint. */
@@ -40,6 +41,19 @@ export function chatFrameAfterSnapshot(frame: { kind: string; seq?: number }, cu
   if (!cursor || !Number.isSafeInteger(frame.seq) || !SNAPSHOT_FRAME_KINDS.has(frame.kind)) return true;
   // Pending chat frames share the hello generation and may already be in the snapshot.
   return !snapshotCoversHello(cursor, `${cursor.slice(0, cursor.lastIndexOf(":"))}:${frame.seq}`);
+}
+
+export function reconcileCoveredChatFrame(
+  frame: { kind: string; threadId?: string; botId?: string; message?: { role?: string; kind?: string } },
+  clearStream: (threadId: string) => void,
+  clearReasoning: (threadId: string) => void,
+  cancelBotPatch: (botId: string) => void,
+): void {
+  if (frame.kind === "bot.deleted" && frame.botId) cancelBotPatch(frame.botId);
+  if (frame.kind !== "message" || !frame.threadId || !frame.message) return;
+  const reset = streamResetFor(frame.message);
+  if (reset === "stream") clearStream(frame.threadId);
+  else if (reset === "reasoning") clearReasoning(frame.threadId);
 }
 
 export function isFirstChatPeripheral(key: string): boolean {

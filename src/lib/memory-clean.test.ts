@@ -39,7 +39,8 @@ describe("cleanup summary", () => {
     const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
     await act(async () => root.render(createElement(Probe, { messages: [changed] })));
     const reads = replies.length;
-    await act(async () => replies[before - 1](Response.json({ run: null })));
+    await act(async () => replies[before - 1](Response.json({ run: patched ? null : { ...run, runId: "stale" } })));
+    expect(value.run?.runId).toBe(patched ? "r" : undefined);
     if (reads > before) await act(async () => replies[before](Response.json({ run: { ...run, undoneAt: patched ? 3 : null, undoable: !patched } })));
     expect(reads).toBe(before + 1);
     expect(value.run?.runId).toBe("r");
@@ -58,6 +59,24 @@ describe("cleanup summary", () => {
     await act(async () => root.render(createElement(Probe)));
     expect(fetch).toHaveBeenCalledTimes(2);
     await act(async () => finish(Response.json({ run })));
+  });
+
+  it.each([false, true])("coalesces replacement reads across mounted rows (patch %s)", async (patched) => {
+    const replies: Array<(response: Response) => void> = [];
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
+    vi.stubGlobal("fetch", fetch);
+    await mount();
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    const rows = (messages: Message[]) => createElement("div", null, ...[1, 2, 3].map((key) => createElement(Probe, { key, messages })));
+    await act(async () => root.render(rows(patched ? [message] : [])));
+    await act(async () => replies[0](Response.json({ run })));
+    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
+    const before = replies.length;
+    await act(async () => root.render(rows([changed])));
+    const reads = replies.length - before;
+    await act(async () => { for (const reply of replies.slice(before)) reply(Response.json({ run: { ...run, undoable: !patched } })); });
+    expect(reads).toBe(1);
+    expect(value.run?.undoable).toBe(!patched);
   });
 
   it("refreshes after Undo even when an older summary is in flight", async () => {

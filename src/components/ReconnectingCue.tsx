@@ -9,7 +9,7 @@ const GRACE_MS = 2_000;
 export function ReconnectingCue() {
   const { t } = useI18n();
   const { state } = useStore();
-  const waiting = state.hasConnected ? !state.connected : !state.hydrated;
+  const waiting = !state.connected;
   const [shown, setShown] = useState(false);
   const [stale, setStale] = useState(false);
   useEffect(() => {

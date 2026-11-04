@@ -27,7 +27,7 @@ import { loadReplyStyle } from "@/lib/reply-style";
 import { appSettingsNavigation } from "@/lib/settings-chrome";
 import { createBotPatchQueue } from "./bot-patch-queue";
 import { createViewedReplies } from "./viewed-replies";
-import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstChatPeripherals, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
+import { canPrefetchChat, chatFrameAfterSnapshot, createChatSnapshotLoad, firstChatPeripherals, reconcileCoveredChatFrame, scheduleDeferredInstancesLoad } from "./first-chat-snapshot";
 import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
@@ -2062,7 +2062,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!alive || !loaded) return false;
         hydrated = true;
         const covered: any[] = [];
-        for (const frame of pendingFrames.splice(0)) if (chatFrameAfterSnapshot(frame, appliedSnapshot.cursor)) handleFrame(frame); else covered.push(frame);
+        for (const frame of pendingFrames.splice(0)) {
+          if (chatFrameAfterSnapshot(frame, appliedSnapshot.cursor)) handleFrame(frame);
+          else { covered.push(frame); reconcileCoveredChatFrame(frame, clearStream, clearReasoning, botPatchQueue.cancel); }
+        }
         const receipt = viewedReplies.current.coveredPatch({ ...stateRef.current, ...appliedSnapshot }, covered, document.visibilityState === "visible" && document.hasFocus());
         if (receipt) api(receipt.path, { method: "PATCH", body: JSON.stringify(receipt.patch) }).catch(() => {});
         // Text held behind the snapshot is history now: it lands whole.

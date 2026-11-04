@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReconnectingCue } from "@/components/ReconnectingCue";
 import { applyLocale } from "@/lib/i18n";
 import { SNAPSHOT_CACHE_KEY } from "./snapshot-cache";
-import { StoreProvider, useStore, type Bot, type Message } from "./store";
+import { StoreProvider, useStore, useStreaming, type Bot, type Message } from "./store";
 
 class FakeEventSource {
   static last: FakeEventSource;
@@ -20,6 +20,7 @@ class FakeEventSource {
 const message = (id: string): Message => ({ id, at: Number(id.slice(1)), role: "user", kind: "text", text: id });
 const bot = (id = "b1", messages = [message("m1")]): Bot => ({ id, threadId: `t${id}`, name: "Scout", color: "blue", unread: false, messages }) as Bot;
 let store: ReturnType<typeof useStore>;
+let stream: ReturnType<typeof useStreaming>;
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 let requests: Array<(response: Response) => void>;
@@ -37,7 +38,7 @@ async function mount(cached = false) {
     ? new Promise<Response>((resolve) => requests.push(resolve))
     : Promise.resolve(Response.json({ instances: [], routines: [], runs: [] })));
   vi.stubGlobal("fetch", fetchMock);
-  function Probe() { store = useStore(); return createElement(ReconnectingCue); }
+  function Probe() { store = useStore(); stream = useStreaming(); return createElement(ReconnectingCue); }
   host = document.createElement("div"); document.body.append(host);
   root = createRoot(host);
   await act(async () => root.render(createElement(StoreProvider, null, createElement(Probe))));
@@ -55,6 +56,52 @@ afterEach(async () => {
 });
 
 describe("phone cold open", () => {
+  it.each(["text", "activity"] as const)("resets covered %s streams without clearing later deltas or replaying transcript state", async (kind) => {
+    await mount(true);
+    await hello();
+    await emit({ kind: "runtime", seq: 2, event: { type: "content.delta", threadId: "tb1", streamKind: kind === "text" ? "assistant_text" : "reasoning_text", delta: "Old" } }, "s:2");
+    const settled: Message = { ...message("m3"), role: "bot", kind, text: "Fresh snapshot" };
+    await emit({ kind: "message", seq: 3, threadId: "tb1", message: { ...settled, text: "Older frame" } }, "s:3");
+    await emit({ kind: "runtime", seq: 4, event: { type: "content.delta", threadId: "tb1", streamKind: "assistant_text", delta: "New" } }, "s:4");
+    await finish(0, "s:4", [message("m1"), settled]);
+    expect(stream.streaming.tb1).toBe("New");
+    expect(stream.reasoning.tb1).toBeUndefined();
+    expect(store.state.bots[0]!.messages.at(-1)?.text).toBe("Fresh snapshot");
+  });
+
+  it("cancels a covered deletion's profile write before its late response can restore the bot", async () => {
+    await mount(true);
+    await hello();
+    const original = fetchMock.getMockImplementation()! as (url: string, init?: RequestInit) => Promise<Response>;
+    let reply!: (response: Response) => void;
+    let signal!: AbortSignal;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => url === "/api/bots/b1" && init?.method === "PATCH"
+      ? new Promise<Response>((resolve) => { reply = resolve; signal = init.signal as AbortSignal; })
+      : original(url, init));
+    await act(async () => store.dispatch({ type: "updateBot", botId: "b1", patch: { name: "Edited" } }));
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    await emit({ kind: "bot.deleted", seq: 2, botId: "b1" }, "s:2");
+    await act(async () => requests[0]!(Response.json({ bots: [bot("b2")], groups: [], cursor: "s:2" })));
+    expect(store.state.bots.map((row) => row.id)).toEqual(["b2"]);
+    await act(async () => reply(Response.json({ bot: { ...bot(), name: "Edited" } })));
+    expect(store.state.bots.map((row) => row.id)).toEqual(["b2"]);
+    expect(signal.aborted).toBe(true);
+  });
+
+  it.each([ ["en", "Reconnecting"], ["ko", "다시 연결 중"] ] as const)("keeps the disconnected cue after HTTP-only hydration in %s", async (locale, reconnecting) => {
+    applyLocale(locale);
+    await mount(true);
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    await finish(0, "s:1");
+    expect(store.state.hydrated).toBe(true);
+    expect(store.state.connected).toBe(false);
+    expect(host.textContent).toBe(reconnecting);
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(host.textContent).toBe(reconnecting);
+    await act(async () => FakeEventSource.last.onopen?.());
+    expect(host.textContent).toBe("");
+  });
+
   it("starts one remote snapshot before the stream opens", async () => {
     await mount();
     expect(botsCalls()).toHaveLength(1);
@@ -194,4 +241,3 @@ describe("phone cold open", () => {
     expect(settled).toHaveBeenCalledExactlyOnceWith(null, false);
   });
 });
-
