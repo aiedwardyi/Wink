@@ -89,6 +89,20 @@ test("callbacks reject the wrong pane, generation, id, cwd and grant", async (t)
   assert.equal(f.read()[0].session.source, undefined);
 });
 
+test("the ledger persists argv placeholders without fresh pane grants or environment values", async (t) => {
+  const args = ["-c", "shell_environment_policy.set.ORBIT_MSG_AUTH='\u0000ORBIT_MSG_AUTH\u0000'", "task"];
+  const template = { executable: "codex", args };
+  const f = await fixture(t, "codex", { workerLaunch: async () => ({ kind: "managed", executable: "codex", args,
+    account: { id: "codex", generation: 0 }, environment: { PRIVATE_VALUE: "private-environment-value" },
+    session: { engine: "codex", nativeId: null, launchGeneration: randomUUID(), model: null, effort: null, template } }) });
+  await f.open();
+  assert.deepEqual(f.read()[0].session.template, template);
+  const persisted = fs.readFileSync(f.file, "utf8");
+  assert.ok(!persisted.includes(f.children[0].options.env.ORBIT_SESSION_AUTH));
+  assert.doesNotMatch(persisted, /private-environment-value/);
+  assert.ok(!f.children[0].writes[0].includes("\u0000ORBIT_MSG_AUTH\u0000"));
+});
+
 test("two panes in one cwd retain their ids and reject a stale callback after relaunch", async (t) => {
   const f = await fixture(t);
   const first = await f.open();

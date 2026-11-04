@@ -66,7 +66,7 @@ export function createSpawnUsage(deps: Deps) {
       deps.save();
     }
   };
-  const usage = async (botId: string, label: string, command: string, account?: SpawnAccount): Promise<SpawnUsage> => {
+  const usage = async (botId: string, label: string, command: string, account?: SpawnAccount, recovery = false): Promise<SpawnUsage> => {
     const engine = account ? { name: account.name, instanceId: account.id } : spawnEngine(command);
     // Legacy panes do not inherit the instance's account environment.
     if (!engine || (!account && Object.keys(deps.environment(engine.instanceId) ?? {}).some((name) => OTHER_HOME.has(name.toUpperCase())))) return {};
@@ -85,11 +85,11 @@ export function createSpawnUsage(deps: Deps) {
     const low = (window: RateLimitWindow | undefined, min: number) => window !== undefined && window.resetsAt !== null && left(window) < min;
     for (const [key, heldAt] of held) if (at - heldAt.at > REPEAT_MS) held.delete(key);
     const key = JSON.stringify(account ? [botId, label, command, account.id, account.generation] : [botId, label, command]);
-    if ((low(session, SESSION_MIN_LEFT) || low(weekly, WEEKLY_MIN_LEFT)) && !held.has(key)) {
-      held.set(key, { at, instanceId: engine.instanceId });
+    if ((low(session, SESSION_MIN_LEFT) || low(weekly, WEEKLY_MIN_LEFT)) && (recovery || !held.has(key))) {
+      if (!recovery) held.set(key, { at, instanceId: engine.instanceId });
       return { hold: `Held: ${engine.name} ${text(" left")}. Pick another engine, or send the same spawn again within 2 min to launch anyway.` };
     }
-    held.delete(key);
+    if (!recovery) held.delete(key);
     return { line: `${engine.name} usage left: ${text("")}.` };
   };
   return Object.assign(usage, { invalidate: (instanceId: string) => {

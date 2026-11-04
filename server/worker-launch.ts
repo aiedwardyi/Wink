@@ -7,6 +7,7 @@ import type { createSpawnUsage } from "./spawn-usage.ts";
 import type { WorkerTurnResolver } from "./worker-turn.ts";
 import { applyCredentialAllowlist } from "./config.ts";
 import { workerSession } from "./worker-session.ts";
+import { baseAccount, resumeArgs, type WorkerResume } from "./worker-resume.ts";
 
 const ENGINES = new Map([
   ["claude", { driver: "claudeAgent", base: "claude", name: "Claude" }],
@@ -86,25 +87,20 @@ export function workerCommand(command: string, unmanaged = false) {
   return { kind: "managed" as const, executable, args, environment, ...engine };
 }
 
-function baseAccount(id: string, driver: string, environment: NodeJS.ProcessEnv): AccountContext {
-  const selector = driver === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
-  const home = Object.entries(environment).find(([key]) => key.toUpperCase() === selector)?.[1]
-    || join(
-        driver === "codex" ? environment.HOME || environment.USERPROFILE || homedir() : homedir(),
-        driver === "codex" ? ".codex" : ".claude");
-  return Object.freeze({ id, of: id, generation: 0, home });
-}
-
 export function createWorkerLaunch(deps: {
   enabled(): boolean; resolveWorkerTurn: WorkerTurnResolver; bases(): InstanceConfigMap;
   available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
+  resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
 }) {
-  return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send" }) => {
-    if (!deps.enabled()) return null;
-    const command = workerCommand(input.command, input.mode === "send");
+  return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume }) => {
+    if (!deps.enabled() && !input.resume) return null;
+    const resume = input.resume;
+    const command = resume ? { ...workerCommand(resume.engine), args: resumeArgs(resume) } : workerCommand(input.command, input.mode === "send");
     if (command.kind !== "managed") return command;
     if (input.mode === "send") throw new Error("Managed worker launches require a new terminal_spawn pane");
-    const turn = deps.resolveWorkerTurn(input.botId);
+    const resumedAccount = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
+    if (resume && (!resumedAccount || resumedAccount.id !== resume.accountId || resumedAccount.generation !== resume.accountGeneration)) throw new Error("Worker account is unavailable or signed out");
+    const turn = resumedAccount ? { instanceId: resumedAccount.id, driverKind: command.driver, account: resumedAccount } : deps.resolveWorkerTurn(input.botId);
     if (!turn) throw new Error("No captured active turn for this worker launch");
     const bases = deps.bases();
     const sameEngine = turn.driverKind === command.driver;
@@ -132,10 +128,12 @@ export function createWorkerLaunch(deps: {
         && /(?:home|auth|login|provider|profile|^shell_environment_policy(?:\.|$))/i.test(key)) throw new Error("Conflicting worker account selector");
     }
     const source = { ...input.environment, ...base.environment, ...command.environment };
-    const session = workerSession(command.executable, args, source);
+    const template = resume?.template ?? { executable: command.executable, args: [...command.args] };
+    const session = workerSession(command.executable, args, source, template);
+    if (session && resume) session.nativeId = resume.nativeId;
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
     const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source);
-    if (command.driver === "claudeAgent" && !(sameEngine && turn.account)
+    if (command.driver === "claudeAgent" && !(sameEngine && turn.account && turn.account.generation !== 0)
       && !Object.entries(baseEnvironment).some(([key, value]) => key.toUpperCase() === "CLAUDE_CONFIG_DIR" && value)) {
       // Setting the default directory moves Claude's config from ~/.claude.json to ~/.claude/.claude.json.
       delete policy.env.CLAUDE_CONFIG_DIR;
@@ -150,9 +148,10 @@ export function createWorkerLaunch(deps: {
       if (command.executable === "grok") policy.env.GROK_HOME ??= join(policy.env.HOME, ".grok");
     }
     const captured = Object.freeze({ id: account.id, generation: account.generation, name: command.name });
-    const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured);
+    const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
-    if (!deps.available(account.id, account.generation) || deps.resolveWorkerTurn(input.botId) !== turn) throw new Error("Worker account changed before launch");
+    const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
+    if (!deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
       environment: policy.env, workerSettings, session, line: usage.line };
   };

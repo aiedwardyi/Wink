@@ -44,6 +44,74 @@ async function fixture() {
 }
 
 describe("trusted worker accounts", () => {
+  it.each(["claude", "codex"])("persists the %s argv template before grant substitution", async (engine) => {
+    const f = await fixture();
+    const command = engine === "codex" ? 'codex -c "shell_environment_policy.set.ORBIT_MSG_AUTH=\'$env:ORBIT_MSG_AUTH\'" task' : "claude --effort high task";
+    const launch = await f.prepare({ ...f.input, command });
+    const parsed = workers!.workerCommand(command);
+    if (parsed.kind !== "managed") throw new Error("Expected managed command");
+    expect(launch).toMatchObject({ session: { template: { executable: engine, args: parsed.args } } });
+    expect(JSON.stringify(launch?.kind === "managed" && launch.session)).not.toContain("fixture-key");
+  });
+
+  it.each(["claude", "codex"] as const)("resumes %s on its exact captured account without an active teacher turn", async (engine) => {
+    const f = await fixture();
+    f.turns.settled("thread");
+    const account = { ...f.third, of: engine };
+    const resumeAccount = vi.fn(() => account);
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({ line: "ready" })), { invalidate() {} }), resumeAccount });
+    const nativeId = "00000000-0000-4000-8000-000000000001";
+    const flags = engine === "claude" ? ["--dangerously-skip-permissions", "--effort", "high", "--session-id", nativeId] : ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_effort=high"];
+    const launch = await prepare({ ...f.input, command: engine, resume: { engine, nativeId, accountId: account.id, accountGeneration: account.generation,
+      template: { executable: engine, args: ["--model", "original", ...flags, "old task"] } } });
+    expect(launch).toMatchObject({ kind: "managed", account: { id: account.id }, session: { nativeId, model: "original", effort: "high" } });
+    if (launch?.kind !== "managed") throw new Error("Expected managed launch");
+    expect(launch.args).toContain(nativeId);
+    expect(launch.args).toContain(engine === "claude" ? "-r" : "resume");
+    expect(launch.args).not.toContain("--session-id");
+    expect(launch.args).not.toContain("old task");
+    expect(launch.args.at(-1)).not.toBe("old task");
+    expect(launch.args.some((arg) => arg.startsWith("Wink restarted and resumed this conversation."))).toBe(true);
+    expect(launch.environment[engine === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"]).toBe(account.home);
+  });
+
+  it.each([
+    { engine: "claude", label: "worker" }, { engine: "claude", label: undefined },
+    { engine: "codex", label: "worker" }, { engine: "codex", label: undefined },
+  ] as const)("holds both $engine recoveries with label $label on low quota", async ({ engine, label }) => {
+    const f = await fixture();
+    const account = { ...f.third, of: engine };
+    f.rateLimits.set(account.id, { observedAt: new Date().toISOString(), windows: [
+      { id: "five_hour", usedPercent: 95, resetsAt: Date.now() + 60_000, windowMinutes: 300 },
+    ] });
+    const usage = createSpawnUsage({ rateLimits: f.rateLimits, refresh: f.refresh, save() {}, environment: () => ({}) });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage, resumeAccount: () => account });
+    for (const nativeId of ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]) {
+      expect(await prepare({ ...f.input, label, command: engine, resume: { engine, nativeId, accountId: account.id,
+        accountGeneration: account.generation, template: { executable: engine, args: ["task"] } } })).toMatchObject({ kind: "hold" });
+    }
+  });
+
+  it("never resumes an unavailable captured account", async () => {
+    const f = await fixture();
+    f.available.mockReturnValue(false);
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), resumeAccount: () => f.third });
+    await expect(prepare({ ...f.input, resume: { engine: "codex", nativeId: "00000000-0000-4000-8000-000000000001", accountId: f.third.id,
+      accountGeneration: f.third.generation, template: { executable: "codex", args: ["task"] } } })).rejects.toThrow(/account.*unavailable/i);
+  });
+
+  it("rechecks resume admission after usage refresh without falling back", async () => {
+    const f = await fixture();
+    const resumeAccount = vi.fn().mockResolvedValueOnce(f.third).mockResolvedValueOnce(undefined);
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), resumeAccount });
+    await expect(prepare({ ...f.input, resume: { engine: "codex", nativeId: "00000000-0000-4000-8000-000000000001", accountId: f.third.id,
+      accountGeneration: f.third.generation, template: { executable: "codex", args: ["task"] } } })).rejects.toThrow("changed before launch");
+  });
+
   it.each(["claude", "codex"])("records %s launch metadata and clears inherited session ids", async (engine) => {
     const f = await fixture();
     const launch = await f.prepare({ ...f.input, command: `${engine} --model fixture --effort high 'task'`,

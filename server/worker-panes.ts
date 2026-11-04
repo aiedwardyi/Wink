@@ -9,6 +9,8 @@ import type { createWorkerLaunch } from "./worker-launch.ts";
 const inputSchema = z.object({
   botId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/), label: z.string().max(40).optional(),
   command: z.string().max(64 * 1024), environment: z.record(z.string(), z.string()), mode: z.literal("send").optional(),
+  resume: z.object({ engine: z.enum(["claude", "codex"]), nativeId: z.string().uuid(), accountId: z.string().refine(isInstanceId),
+    accountGeneration: z.number().int().nonnegative(), template: z.object({ executable: z.string().max(32), args: z.array(z.string().max(64 * 1024)).max(1024) }) }).optional(),
 });
 const countSchema = z.object({ count: z.number().int().nonnegative(), unknown: z.number().int().nonnegative(), generations: z.record(z.string(), z.number().int().nonnegative()) });
 

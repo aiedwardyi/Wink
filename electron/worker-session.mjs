@@ -60,11 +60,14 @@ export function createWorkerSession(worker, pane, cwd, bridgeUrl) {
   if (!launch || !["claude", "codex"].includes(launch.engine)) return null;
   if (launch.engine === "claude" && !worker.workerSettings && !claudeSettings(worker.args)) return null;
   const auth = randomBytes(24).toString("hex");
+  const run = { pane, launchGeneration: launch.launchGeneration, engine: launch.engine, nativeId: launch.nativeId,
+    cwd, accountId: worker.account.id, accountGeneration: worker.account.generation, model: launch.model, effort: launch.effort, lifecycle: "running" };
+  if (launch.template) run.template = launch.template;
+  if (launch.recoveredFrom) run.recoveredFrom = launch.recoveredFrom;
   return {
     auth,
     env: { ORBIT_SESSION_URL: bridgeUrl ? `${bridgeUrl}/v1/terminal/session` : "", ORBIT_SESSION_AUTH: auth, ORBIT_SESSION_GENERATION: launch.launchGeneration },
-    run: { pane, launchGeneration: launch.launchGeneration, engine: launch.engine, nativeId: launch.nativeId,
-      cwd, accountId: worker.account.id, accountGeneration: worker.account.generation, model: launch.model, effort: launch.effort, lifecycle: "running" },
+    run,
   };
 }
 
@@ -75,7 +78,23 @@ export function captureWorkerSession(sessions, runs, authorization, input) {
   const received = Buffer.from(typeof authorization === "string" ? authorization : "");
   const expected = Buffer.from(`Bearer ${capture.auth}`);
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) return false;
-  return runs.capture(input);
+  if (!runs.capture(input)) return false;
+  capture.confirmed = input.source;
+  return true;
+}
+
+export function resumeSessionReason(run) {
+  const session = run?.session;
+  if (run?.state !== "running" || !["claude", "codex"].includes(session?.engine)) return "unsupported engine";
+  if (session.lifecycle !== "running") return "run ended";
+  if (run.recovery) return "resume interrupted";
+  if (!session.nativeId || !UUID.test(session.nativeId)) return "no id";
+  if (!["startup", "resume"].includes(session.source)) return "no confirmed id";
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Recovery metadata comes from disk.
+  if (typeof session.template?.executable !== "string" || session.template.executable.toLowerCase() !== session.engine || !Array.isArray(session.template.args)
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Ledger argv comes from disk.
+    || !session.template.args.every((arg) => typeof arg === "string")) return "no launch template";
+  return null;
 }
 
 export function capturedSession(run, input) {

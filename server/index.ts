@@ -97,6 +97,7 @@ import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, u
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
+import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
@@ -2900,6 +2901,7 @@ const spawnUsage = createSpawnUsage({
 });
 const workerTurns = createWorkerTurns();
 const workerLaunch = createWorkerLaunch({
+  resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage,
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))

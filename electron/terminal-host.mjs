@@ -8,6 +8,7 @@ import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand } from "./terminal-worker.mjs";
 import { createWorkerSession, captureWorkerSession } from "./worker-session.mjs";
+import { workerResumeStatus } from "./worker-resume.mjs";
 
 const require = createRequire(import.meta.url);
 const OUTPUT_LIMIT = 256 * 1024;
@@ -1418,6 +1419,9 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     captureWorkerSession(authorization, input) {
       return captureWorkerSession(sessions, paneRuns, authorization, input);
     },
+    workerResumeStatus(id) {
+      return workerResumeStatus(sessions.get(id));
+    },
     paneLabels() {
       const labels = {};
       for (const session of sessions.values()) {
@@ -1522,7 +1526,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!match.ambiguous && typeof sessionId === "string" && wasClosedPane(botId, sessionId)) return Promise.resolve({ alreadyClosed: true });
       throw new Error("Unknown terminal");
     },
-    async openForBot(botId, input = {}) {
+    async openForBot(botId, input = {}, recovery = null) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       if (deletedBots.has(botId)) throw new Error("Terminal bot was deleted");
@@ -1550,10 +1554,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       reservedPanes += 1;
       let session;
       let worker;
+      let claimed = false;
       try {
-        worker = workerAccountsEnabled && workerLaunch ? await workerLaunch({ botId, label, command: input.command ?? "", environment: terminalEnvironment(env) }) : null;
+        if (recovery) {
+          claimed = paneRuns?.claim(recovery.id);
+          if (!claimed) throw new Error("Worker recovery already claimed or unavailable");
+        }
+        const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
+        if (recovery) launchInput.resume = recovery.session;
+        worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
         if (worker?.kind === "hold") return { hold: worker.hold };
+        if (recovery && worker?.kind !== "managed") throw new Error("Worker resume service is unavailable");
+        if (recovery && worker.session) worker.session.recoveredFrom = recovery.id;
         const folder = await resolveFolder({ botId, cwd: input.cwd });
+        if (recovery) folder.teacher = recovery.teacher ?? botId;
         if (folder.needsFolder) throw new Error("Terminal folder is unavailable");
         const cwd = folder.cwd;
         // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Validate the API or requested folder before spawning.
@@ -1578,6 +1592,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.spawnedAt = now();
         active.set(key, session.id);
       } finally {
+        if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
         reservedPanes -= 1;
         const left = paneReservations.get(botId) - 1;
         if (left) paneReservations.set(botId, left);

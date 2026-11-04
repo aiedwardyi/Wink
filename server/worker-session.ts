@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
-export function workerSession(engine: string, args: string[], env: NodeJS.ProcessEnv) {
+export function workerSession(engine: string, args: string[], env: NodeJS.ProcessEnv, template?: { executable: string; args: string[] }) {
   engine = engine.toLowerCase();
   if (engine !== "claude" && engine !== "codex") return undefined;
   for (const key of Object.keys(env)) {
@@ -29,5 +29,6 @@ export function workerSession(engine: string, args: string[], env: NodeJS.Proces
     if (/^(?:hooks|"hooks"|'hooks')(?:[.\s=]|$)/.test(value?.trim() ?? "")) throw new Error("Conflicting worker hook configuration");
   }
   if (engine === "codex" && args.includes("--dangerously-bypass-hook-trust")) throw new Error("Conflicting worker hook trust");
-  return { engine, launchGeneration: randomUUID(), nativeId, model: option("--model", "-m"), effort };
+  return { engine, launchGeneration: randomUUID(), nativeId, model: option("--model", "-m"), effort,
+    template };
 }

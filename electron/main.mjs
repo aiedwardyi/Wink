@@ -17,7 +17,8 @@ import { createTerminalHost, trustedTerminalSender } from "./terminal-host.mjs";
 import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
-import { createPaneRuns, notifyRestartedPanes } from "./pane-runs.mjs";
+import { createPaneRuns } from "./pane-runs.mjs";
+import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
@@ -2057,7 +2058,7 @@ app.whenReady().then(async () => {
   if (!app.isPackaged) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
-  void notifyRestartedPanes({ runs: paneRuns, mailbox: paneMailbox, notePane: postPaneNote, warn: slog });
+  void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the
   // exact options the IPC handler uses. A failure surfaces in companionState
