@@ -2014,8 +2014,8 @@ app.whenReady().then(async () => {
   // connecting page does not need keys; the child env does.
   const credentialsReady = loadSecureCredentials();
   const win = createWindow();
-  startupWindowMs = Math.round(process.uptime() * 1000);
   startupWindowCreated = true;
+  startupWindowMs = Math.round(process.uptime() * 1000);
   if (resetFailed) void dialog.showMessageBox(win, { type: "info", message: nativeText("settings.startFresh.error") });
   slog(`window shown packaged=${app.isPackaged} serverReady=${serverReady} uptime=${process.uptime().toFixed(2)}s`);
   startUpdater(win, nativeText);
