@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { capturedSession } from "./worker-session.mjs";
+import { capturedSession, resumeSessionReason } from "./worker-session.mjs";
 
 const RETRY_MS = 15_000;
 const TRIES = 20;
@@ -19,7 +19,7 @@ function readRuns(file) {
 
 /** Each bot's spawned panes, written on every change so a crash still leaves the record. */
 export function createPaneRuns(file) {
-  const runs = new Map(readRuns(file).filter((run) => run?.state === "running").map((run) => [run.id, run]));
+  const runs = new Map(readRuns(file).filter((run) => run?.state === "running" && !run.recovery?.replacement).map((run) => [run.id, run]));
   const prior = new Set(runs.keys());
   const save = () => {
     const temporary = `${file}.${process.pid}.tmp`;
@@ -42,12 +42,22 @@ export function createPaneRuns(file) {
   };
   save();
   return {
+    claim(id) {
+      const run = runs.get(id);
+      if (!prior.has(id) || resumeSessionReason(run)) return false;
+      run.recovery = { claimedAt: Date.now() };
+      if (save()) return true;
+      delete run.recovery;
+      return false;
+    },
     started({ id, botId, teacher, label, cwd, spawnedAt, session }) {
       const run = { id, botId, teacher, label: label ?? null, cwd, spawnedAt, state: "running", ...(session ? { session: { ...session } } : {}) };
       const stored = runs.get(id);
       if (stored?.session && session?.launchGeneration === stored.session.launchGeneration) run.session = { ...stored.session, lifecycle: "running" };
       if (stored && Object.keys(run).every((key) => stored[key] === run[key])) return;
       runs.set(id, run);
+      const original = runs.get(session?.recoveredFrom);
+      if (original?.recovery && prior.has(original.id)) original.recovery.replacement = id;
       save();
     },
     capture(input) {
@@ -107,7 +117,7 @@ export function restartNoteText(panes) {
 }
 
 /** One note per bot, through the pane mailbox so it wakes the bot once. */
-export async function notifyRestartedPanes({ runs, mailbox, notePane, retryMs = RETRY_MS, tries = TRIES, warn = () => {} }) {
+export async function notifyRestartedPanes({ runs, mailbox, notePane, retryMs = RETRY_MS, tries = TRIES, warn = () => {}, noteText = restartNoteText }) {
   const bots = runs.restarted();
   if (!bots.size) return;
   const mail = await Promise.resolve().then(mailbox).catch(() => null);
@@ -116,7 +126,7 @@ export async function notifyRestartedPanes({ runs, mailbox, notePane, retryMs = 
     let reason = "no mailbox";
     for (let attempt = 1; mail && attempt <= tries; attempt++) {
       try {
-        await notePane(mail, scope, restartNoteText(panes));
+        await notePane(mail, scope, noteText(panes));
         return runs.forget(botId);
       } catch (error) {
         reason = error?.message ?? error;
