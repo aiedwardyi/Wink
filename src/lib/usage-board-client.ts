@@ -127,7 +127,7 @@ export function createUsageBoardClient(
       }
       // A read already in flight serves a new subscriber; only a trigger missed while idle asks for another.
       if (inFlight) dirty ||= wanted;
-      else if (wanted || !state.board) load();
+      else if (wanted || !state.board || listeners.size === 1) load();
       return () => {
         listeners.delete(listener);
         if (listeners.size > 0) return;

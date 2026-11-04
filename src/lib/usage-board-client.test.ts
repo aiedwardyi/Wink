@@ -237,6 +237,25 @@ describe("createUsageBoardClient", () => {
     expect(account(client.snapshot().board!, "claude").workers).toEqual([]);
   });
 
+  it.each([0, 4])("revalidates %i workers once when the first subscriber returns", async (count) => {
+    const client = make();
+    const stop = client.subscribe(() => {});
+    reads[0]!.resolve(fresh());
+    await flush();
+    stop();
+    const reply = fresh({ full: false });
+    account(reply, "claude").workers = Array.from({ length: count }, (_, i) => ({ ...account(fresh(), "claude").workers![0]!, paneId: `pane-${i}` }));
+    const cached = client.snapshot().board;
+    client.subscribe(() => {});
+    client.subscribe(() => {});
+    expect(client.snapshot().board).toBe(cached);
+    expect(reads.map((read) => read.cursor)).toEqual([null, "fixture-42"]);
+    reads[1]!.resolve(reply);
+    await flush();
+    expect(account(client.snapshot().board!, "claude").workers).toHaveLength(count);
+    expect(reads).toHaveLength(2);
+  });
+
   it("treats a reply that is not a board as a failed read", async () => {
     const client = make();
     client.subscribe(() => {});

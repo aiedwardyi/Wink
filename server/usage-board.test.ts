@@ -7,6 +7,7 @@ import type { UsageBoard, UsageBoardFrame } from "../src/lib/usage-board.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
+import { codexRateLimitWindows } from "./drivers/rate-limits.ts";
 
 type Deps = Parameters<typeof createUsageBoard>[0];
 type Row = ReturnType<Deps["accounts"]["list"]>[number];
@@ -74,6 +75,21 @@ afterEach(() => {
 });
 
 describe("usage board", () => {
+  it.each([undefined, 1440])("records Codex aliases with primary duration %s", async (windowDurationMins) => {
+    const s = setup();
+    s.setRows([{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }]);
+    s.accept("codex", { observedAt: new Date(now).toISOString(), windows: codexRateLimitWindows({
+      primary: { usedPercent: 24, resetsAt: (now + 60_000) / 1000, windowDurationMins },
+      secondary: { usedPercent: 40, resetsAt: (now + 7 * 86_400_000) / 1000 },
+    }) });
+    await settle();
+    const row = account(await s.board.read(), "codex");
+    expect(row.windows.map((window) => window.kind)).toEqual([windowDurationMins === undefined ? "session" : "other", "week"]);
+    const point = [origin / 60_000, windowDurationMins === undefined ? 24 : null, 40];
+    expect(row.history).toEqual({ fine: [point], coarse: [point] });
+    expect(s.history.snapshot().accounts.codex).toMatchObject({ fine: [point], coarse: [point] });
+  });
+
   it("rejects reserved instance ids consistently with account storage", async () => {
     const s = setup();
     s.setRows([{ ...s.rows()[0], id: "Constructor", of: "Constructor" }]);
