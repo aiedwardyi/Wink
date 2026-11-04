@@ -144,7 +144,7 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     }
   }, [main.instanceId, phone]);
   if (accounts.length === 1) return renderRow(accounts[0]!);
-  const label = (account: UsageAccount) => account.snapshot.account || t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
+  const label = (account: UsageAccount) => t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
   const go = (id: string, focus = false) => {
     turn.current = Math.sign(pages.findIndex((account) => account.instanceId === id) - index);
     focusPicker.current = focus && id !== currentId;
