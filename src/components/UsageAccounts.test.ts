@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
 import type { InstanceInfo } from "@/state/store";
 import type { UsageAccount } from "@/lib/accounts";
@@ -93,6 +93,13 @@ it("puts icon headings and Main above the matching account's bars without email 
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
 });
 
+it("dims only the non-Main account's bars and shows Set as Main as a button", async () => {
+  await render();
+  expect(main().querySelector('[aria-label="5h: 80% remaining"] span[aria-hidden="true"]')!.classList).not.toContain("opacity-45");
+  expect(other().querySelector('[aria-label="5h: 30% remaining"] span[aria-hidden="true"]')!.classList).toContain("opacity-45");
+  expect(other().querySelector("button:not([aria-label])")?.textContent).toBe("Set as Main");
+});
+
 it("uses the pushed Main flag even when the base account arrives first", async () => {
   await render();
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
@@ -119,6 +126,29 @@ it("pages three accounts and keeps hidden pages in the same grid cell", async ()
   expect(host.querySelectorAll('[data-account-column="other"] > div[inert]')).toHaveLength(1);
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Previous Account"]:not([disabled])')!.click());
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
+});
+
+it("pages one account at a time on phone, starting with Main", async () => {
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+  onTestFinished(() => media.mockRestore());
+  await render(3);
+  const shown = () => host.querySelector('[data-account-column="pages"] > div:not([inert])')!;
+  const next = () => shown().querySelector<HTMLButtonElement>('[aria-label="Next Account"]')!;
+  expect(host.querySelector('[data-account-column="main"]')).toBeNull();
+  expect(host.querySelectorAll('[data-account-column="pages"] > div[inert]')).toHaveLength(2);
+  expect(shown().textContent).toContain("ClaudeMain");
+  expect(shown().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
+  expect(shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.disabled).toBe(true);
+  await act(async () => next().click());
+  expect(shown().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
+  expect(shown().textContent).toContain("Set as Main");
+  await act(async () => next().click());
+  expect(shown().querySelector('[aria-label="5h: 5% remaining"]')).not.toBeNull();
+  expect(next().disabled).toBe(true);
+  await act(async () => shown().querySelector<HTMLButtonElement>("button:not([aria-label])")!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/third/default", { method: "POST", body: "{}" });
+  expect(shown().querySelector('[aria-label="5h: 5% remaining"]')).not.toBeNull();
+  expect(shown().textContent).toContain("ClaudeMain");
 });
 
 it("shows the account's email only in the icon's card", async () => {
