@@ -298,7 +298,7 @@ it.each([false, true])("jumps directly to account four without changing Main on 
   await jump("fourth");
   expect(shown().querySelector('[aria-label="5h: 55% remaining"]')).not.toBeNull();
   expect(picker().getAttribute("aria-label")).toContain("fourth@example.com");
-  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(host.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
   expect(document.activeElement).toBe(picker());
   expect(request.mock.calls.some(([path]) => String(path).endsWith("/default"))).toBe(false);
   await act(async () => shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.click());
@@ -346,11 +346,11 @@ it("supports menu arrow keys, Escape, outside dismissal and focus return", async
   await act(async () => items()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
   expect(document.activeElement).toBe(items()[0]);
   await act(async () => items()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(host.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
   expect(document.activeElement).toBe(picker());
   await act(async () => picker().click());
   await act(async () => document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
-  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(host.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
 });
 
 it.each(["en", "ko"] as const)("labels missing emails distinctly in %s and keeps signed-out and draining accounts selectable", async (locale) => {
@@ -383,7 +383,7 @@ it("marks the base Main without a pushed Main flag and preserves long emails", a
   expect(items()[0]!.getAttribute("aria-checked")).toBe("true");
   expect(items()[3]!.textContent).toBe(email);
   await act(async () => items()[3]!.click());
-  expect(picker().textContent).toBe("");
+  expect(picker().textContent).toBe("Claude");
 });
 
 it.each([false, true])("keeps the full picker email in its title and accessible name on phone=%s", async (phone) => {
@@ -394,7 +394,7 @@ it.each([false, true])("keeps the full picker email in its title and accessible 
   await rerender();
   expect(picker().title).toBe(email);
   expect(picker().getAttribute("aria-label")).toBe(`Choose account: ${email}`);
-  expect(picker().textContent).toBe("");
+  expect(picker().textContent).toBe("Claude");
 });
 
 it.each([2, 4])("keeps desktop Main free of email text without a selector for %i accounts", async (count) => {
@@ -429,7 +429,7 @@ it.each([false, true])("separates the icon card from the chevron menu on phone=%
     mark.click();
   });
   expect(document.querySelector('[data-engine-card]:not([data-closing])')?.textContent).toContain(phone ? "claude@example.com" : "second@example.com");
-  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(host.querySelector('[role="menu"]:not([data-closing])')).toBeNull();
   await act(async () => {
     picker().dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
     picker().click();
@@ -438,4 +438,22 @@ it.each([false, true])("separates the icon card from the chevron menu on phone=%
   expect(document.querySelector('[data-engine-card]:not([data-closing])')).toBeNull();
   expect(items().map((node) => node.title)).toEqual((phone ? ["claude@example.com"] : []).concat(["second@example.com", "third@example.com", "fourth@example.com"]));
   for (const item of items()) expect(item.getAttribute("aria-label")).toContain(item.title);
+});
+
+it.each([false, true])("glides the live bars on a switch and slides them unless motion is reduced=%s", async (reduce) => {
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("max-width") || reduce && query.includes("reduce"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+  onTestFinished(() => media.mockRestore());
+  const animate = vi.spyOn(Element.prototype, "animate");
+  onTestFinished(() => animate.mockRestore());
+  await render(4);
+  const cells = () => shown().querySelector<HTMLElement>('[aria-label^="5h:"] span[aria-hidden="true"]')!;
+  const before = cells();
+  await act(async () => shown().querySelector<HTMLButtonElement>('[aria-label="Next Account"]')!.click());
+  expect(shown().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
+  expect(cells()).toBe(before);
+  expect(animate).toHaveBeenCalledTimes(reduce ? 0 : 2);
+  await jump("fourth");
+  expect(shown().querySelector('[aria-label="5h: 55% remaining"]')).not.toBeNull();
+  expect(host.querySelector('[role="menu"]')).toBe(reduce ? null : host.querySelector('[role="menu"][data-closing]'));
+  expect(animate).toHaveBeenCalledTimes(reduce ? 0 : 4);
 });

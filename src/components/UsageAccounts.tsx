@@ -1,17 +1,37 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
+import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
+import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { usePresence } from "@/lib/use-presence";
 import { EngineMark } from "./EngineMark";
+import { MENU_CLASS } from "./MessageMenu";
 
-function AccountPicker({ account, accounts, mainId, label, select }: {
+const PRESS = "transition-[background-color,transform] duration-100 motion-reduce:transition-none";
+
+// Moves only what sits under the head, so the arrows stay put under the finger.
+// The old page fades in place and quickly: sliding both doubles the shared 5h/7d labels.
+function slide(page: Element | null | undefined, dir: number, out = false) {
+  const head = page?.querySelector("[data-account-head]");
+  for (const part of head?.parentElement?.children ?? []) {
+    if (part === head) continue;
+    part.animate(out
+      ? [{ visibility: "visible" }, { visibility: "visible", opacity: 0 }]
+      : [{ opacity: 0, transform: `translateX(${dir * 12}px)` }, {}],
+    { duration: out ? 80 : 160, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+  }
+}
+
+function AccountPicker({ account, accounts, mainId, label, mark, select }: {
   account: UsageAccount;
   accounts: UsageAccount[];
   mainId: string;
   label: (account: UsageAccount) => string;
+  mark: ReactNode;
   select: (id: string) => void;
 }) {
   const { t } = useI18n();
@@ -19,6 +39,7 @@ function AccountPicker({ account, accounts, mainId, label, select }: {
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const presence = usePresence(open);
   const close = () => { setOpen(false); trigger.current?.focus(); };
   useBackLayer(open, close);
   useEffect(() => {
@@ -31,14 +52,16 @@ function AccountPicker({ account, accounts, mainId, label, select }: {
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [open]);
   return (
-    <div className="shrink-0 [@media(pointer:coarse)]:ml-1.5">
+    <div className={cn("-ml-1.5 flex min-w-0 items-center gap-2 rounded-[3px] [corner-shape:bevel] pl-1.5 hover:bg-raised-hover has-[>button:active]:scale-[0.97] has-[>button:active]:bg-raised-hover", PRESS, open && "bg-raised-hover")}>
+      {mark}
       <button ref={trigger} type="button" title={label(account)} aria-label={t("accounts.choose", { account: label(account) })}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
-        className="flex size-7 items-center justify-center hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent max-md:size-11 [@media(pointer:coarse)]:size-11">
-        <ChevronDown size={12} aria-hidden="true" />
+        className="flex h-7 min-w-0 items-center gap-1 pr-1.5 max-md:h-11 [@media(pointer:coarse)]:ml-1.5 [@media(pointer:coarse)]:h-11">
+        <span className="min-w-0 truncate">{account.displayName}</span>
+        <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform duration-150 motion-reduce:transition-none", open && "rotate-180")} />
       </button>
-      {open && <div ref={menu} id={id} role="menu" aria-label={t("accounts.choose", { account: label(account) })}
-        className="absolute inset-x-0 top-full z-40 max-h-72 overflow-y-auto rounded-[3px] [corner-shape:bevel] border border-hairline/40 bg-card py-1 shadow-lg"
+      {presence.mounted && <div ref={menu} id={id} role="menu" aria-label={t("accounts.choose", { account: label(account) })} data-closing={presence.closing || undefined}
+        className={cn(MENU_CLASS, "absolute -left-1.5 top-full mt-1 max-h-72 w-[248px] max-w-[calc(100%+0.375rem)] origin-top-left overflow-y-auto rounded-[3px] [corner-shape:bevel] [@media(pointer:coarse)]:w-[304px]")}
         onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
         onKeyDown={(event) => {
           if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
@@ -54,7 +77,8 @@ function AccountPicker({ account, accounts, mainId, label, select }: {
         {accounts.map((item) => <button key={item.instanceId} type="button" role="menuitemradio" tabIndex={-1} title={label(item)}
           aria-label={`${label(item)}${item.instanceId === mainId ? ` ${t("accounts.main")}` : ""}`}
           aria-checked={item.instanceId === account.instanceId} onClick={() => { select(item.instanceId); close(); }}
-          className="flex min-h-8 w-full items-center gap-2 px-2 py-1 text-left text-[13px] font-normal text-ink hover:bg-raised-hover focus:bg-raised-hover focus:outline-none max-md:min-h-11 [@media(pointer:coarse)]:min-h-11">
+          className="flex min-h-9 w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] font-normal text-ink hover:bg-raised/70 max-md:min-h-11 [@media(pointer:coarse)]:min-h-11">
+          <Check size={16} aria-hidden="true" className={cn("shrink-0", item.instanceId !== account.instanceId && "invisible")} />
           <span className="min-w-0 truncate">{label(item)}</span>
           {item.instanceId === mainId && <span className="ml-auto shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>}
         </button>)}
@@ -72,7 +96,8 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const phone = useIsPhone();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const columns = useRef<HTMLDivElement>(null);
-  const focusSelection = useRef(false);
+  const live = useRef<HTMLDivElement>(null);
+  const turn = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const main = accounts.find((account) => account.accountMain)
@@ -81,15 +106,26 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   const pages = phone ? [main, ...others] : others;
   const index = Math.max(0, pages.findIndex((account) => account.instanceId === selectedId));
   const currentId = pages[index]?.instanceId ?? null;
+  const shownId = useRef(currentId);
   useEffect(() => {
     if (selectedId !== currentId) setSelectedId(currentId);
-    if (focusSelection.current) {
-      columns.current?.querySelector<HTMLButtonElement>('[data-account-column] > div:not([inert]) [aria-haspopup="menu"]')?.focus();
-      focusSelection.current = false;
-    }
   }, [currentId, selectedId]);
+  // The live page keeps its DOM across accounts, so the bars glide to the new values like a refresh.
+  useLayoutEffect(() => {
+    const dir = turn.current;
+    const from = shownId.current;
+    turn.current = 0;
+    shownId.current = currentId;
+    if (!dir || from === currentId || reducedMotion()) return;
+    slide(live.current, dir);
+    slide([...columns.current?.querySelectorAll<HTMLElement>("[data-account-page]") ?? []].find((page) => page.dataset.accountPage === from), dir, true);
+  }, [currentId]);
   if (accounts.length === 1) return renderRow(accounts[0]!);
   const label = (account: UsageAccount) => account.snapshot.account || t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
+  const go = (id: string) => {
+    turn.current = Math.sign(pages.findIndex((account) => account.instanceId === id) - index);
+    setSelectedId(id);
+  };
   const setAsMain = async (account: UsageAccount) => {
     if (busy) return;
     setBusy(true);
@@ -101,32 +137,35 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     } catch (error) { setError(error instanceof Error && error.message || t("engines.didntFinish")); }
     finally { setBusy(false); }
   };
+  const arrow = "flex size-7 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink enabled:hover:bg-raised-hover enabled:active:scale-90 enabled:active:bg-raised-hover disabled:opacity-25 max-md:size-11 [@media(pointer:coarse)]:size-11";
   const arrows = pages.length > 1 && (
     <span className="flex shrink-0 items-center">
       <button type="button" aria-label={t("accounts.previous")} disabled={index === 0}
-        onClick={() => setSelectedId(pages[index - 1]!.instanceId)} className="flex size-7 items-center justify-center text-ink-secondary hover:text-ink disabled:opacity-30 [@media(pointer:coarse)]:size-11">
-        <ChevronLeft size={15} aria-hidden="true" />
+        onClick={() => go(pages[index - 1]!.instanceId)} className={cn(arrow, PRESS)}>
+        <ChevronLeft size={16} aria-hidden="true" />
       </button>
       <button type="button" aria-label={t("accounts.next")} disabled={index === pages.length - 1}
-        onClick={() => setSelectedId(pages[index + 1]!.instanceId)} className="flex size-7 items-center justify-center text-ink-secondary hover:text-ink disabled:opacity-30 [@media(pointer:coarse)]:size-11">
-        <ChevronRight size={15} aria-hidden="true" />
+        onClick={() => go(pages[index + 1]!.instanceId)} className={cn(arrow, PRESS)}>
+        <ChevronRight size={16} aria-hidden="true" />
       </button>
     </span>
   );
-  const heading = (account: UsageAccount, other = false) => (
-    <div className="relative flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
-      <EngineMark instance={account} size={16} tapToShow />
-      {(phone || other) && pages.length > 1 && <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label}
-        select={(id) => { focusSelection.current = id !== currentId; setSelectedId(id); }} />}
-      {!other && <span className="min-w-0 truncate">{account.displayName}</span>}
-      <span className="ml-auto flex shrink-0 items-center gap-2">
-        {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
-          className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>
-          : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
-        <span className="flex w-14 shrink-0 [@media(pointer:coarse)]:w-22">{(phone || other) && arrows}</span>
-      </span>
-    </div>
-  );
+  const heading = (account: UsageAccount, other = false) => {
+    const mark = <EngineMark instance={account} size={16} tapToShow />;
+    return (
+      <div data-account-head="" className="relative flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
+        {(phone || other) && pages.length > 1
+          ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label} mark={mark} select={go} />
+          : <>{mark}{!other && <span className="min-w-0 truncate">{account.displayName}</span>}</>}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
+            className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>
+            : <span className="text-[12px] font-normal text-ink-secondary">{t("accounts.main")}</span>}
+          <span className="flex w-14 shrink-0 max-md:w-22 [@media(pointer:coarse)]:w-22">{(phone || other) && arrows}</span>
+        </span>
+      </div>
+    );
+  };
   const column = (account: UsageAccount, other = false) => (
     <div className="min-w-0">
       {accountReady(account) ? renderRow(account, heading(account, other), other) : <>
@@ -135,14 +174,16 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
       </>}
     </div>
   );
+  const current = pages[index]!;
   return (
     <div ref={columns} className={phone ? "grid gap-y-4" : "grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2"}>
       {!phone && <div data-account-column="main">{column(main)}</div>}
       <div className="grid min-w-0" data-account-column={phone ? "pages" : "other"}>
-        {pages.map((account, i) => <div key={account.instanceId} className="col-start-1 row-start-1 min-w-0"
-          style={i === index ? undefined : { visibility: "hidden" }} inert={i !== index} aria-hidden={i !== index || undefined}>
+        {pages.map((account) => account !== current && <div key={account.instanceId} data-account-page={account.instanceId}
+          className="col-start-1 row-start-1 min-w-0" style={{ visibility: "hidden" }} inert aria-hidden>
           {column(account, account !== main)}
         </div>)}
+        <div ref={live} className="col-start-1 row-start-1 min-w-0">{column(current, current !== main)}</div>
       </div>
       {error && <div role="alert" className="text-[12px] text-danger sm:col-span-2">{error}</div>}
     </div>
