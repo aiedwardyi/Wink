@@ -54,7 +54,7 @@ export type ValidateInput = { file: CleanFile; text: string; list: unknown; type
 export type ValidateResult =
   | { ok: true; text: string; entries: ArchiveEntry[]; counts: { merged: number; replaced: number; moved: number } }
   | { ok: false; errors: Array<{ reason: RejectReason; change?: number }> };
-export type TextCall = (prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<string>;
+export type TextCall = (prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<string | { text: string; tokens?: number }>;
 export type CleanInput = {
   memory: string;
   side?: { file: CleanFile; text: string };

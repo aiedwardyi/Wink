@@ -55,7 +55,7 @@ describe("cleanFiles recall", () => {
   ])("parses the gate's %s reply shape", async (tag, shape) => {
     const engine = calls();
     const reply = engine.propose.getMockImplementation()!;
-    engine.propose.mockImplementation(async (prompt, options) => prompt.startsWith(`[memory-clean:${tag}]`) ? shape(await reply(prompt, options)) : reply(prompt, options));
+    engine.propose.mockImplementation(async (prompt, options) => prompt.startsWith(`[memory-clean:${tag}]`) ? shape(await reply(prompt, options) as string) : reply(prompt, options));
     engine.recall.mockResolvedValue(JSON.stringify(["it is value 0", ...questions().slice(1).map((q) => q.answer)]));
     expect(await cleanFiles({ memory: "- kept\n- old\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: true });
     expect(engine.propose.mock.calls.filter(([prompt]) => prompt.startsWith("[memory-clean:grade]"))).toHaveLength(1);

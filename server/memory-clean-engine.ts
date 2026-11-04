@@ -73,14 +73,17 @@ export async function cleanFiles(input: CleanInput): Promise<CleanResult> {
   let stage: "propose" | "recall" = "propose";
   let tokens = 0;
   let budget = false;
+  const cap = input.side ? 120_000 : 60_000;
   const call = async (fn: TextCall, text: string) => {
     input.signal?.throwIfAborted();
     const estimate = callTokens(text);
-    if (tokens + estimate > (input.side ? 120_000 : 60_000)) { budget = true; throw new Error("budget"); }
-    tokens += estimate;
+    if (tokens + estimate > cap) { budget = true; throw new Error("budget"); }
     const answer = await callMemoryText(fn, text, { timeoutMs: TIMEOUT_MS, signal: input.signal });
     input.signal?.throwIfAborted();
-    return answer;
+    const actual = typeof answer === "string" ? undefined : answer.tokens;
+    tokens += actual !== undefined && Number.isSafeInteger(actual) && actual > 0 ? actual : estimate;
+    if (tokens > cap) { budget = true; throw new Error("budget"); }
+    return typeof answer === "string" ? answer : answer.text;
   };
   try {
     input.signal?.throwIfAborted();

@@ -24,7 +24,11 @@ export function memoryCleanEngine(deps: EngineDeps): MemoryCleanDeps["engine"] {
   };
   const textCall = (instance: ProviderInstance, model: string): TextCall => {
     const summary = summaryInstance(instance, model);
-    return (prompt, opts) => summary.generateText!(prompt, { ...opts, timeoutMs: opts?.timeoutMs ?? 120_000, model, ephemeral: true, lean: true });
+    return async (prompt, opts) => {
+      let tokens: number | undefined;
+      const text = await summary.generateText!(prompt, { ...opts, timeoutMs: opts?.timeoutMs ?? 120_000, model, ephemeral: true, lean: true, onUsage: (used) => { tokens = used; } });
+      return { text, tokens };
+    };
   };
   return async (botId) => {
     const selection = await deps.selection(botId);
