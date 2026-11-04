@@ -3,6 +3,7 @@ import ts from "typescript";
 import { expect, it, vi } from "vitest";
 
 import { createAccountNotices } from "./account-notice.ts";
+import { rootForStart } from "./comms-root.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -29,7 +30,7 @@ const runTurn = compile(`
   const started = await dispatch(turnPrompt);
   ${delivery}
   return { first, rebuilt: turnPrompt };`);
-const room = section(`    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop });`, "\n      .catch((err) => {");
+const room = section(`    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop`, "\n      .catch((err) => {");
 const runRoom = compile(`${room}.catch(() => {});`);
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -81,6 +82,7 @@ it("delivers a pending note on a room-member turn", async () => {
     accountNotices: notices, bot: { id: "atlas", autoApprove: false, leanStartup: false }, threadId: "room-1", hop: 0, text: "Room message", roomSystem: "", cwd: undefined, integrations: {},
     roomMail: [], selection: { instanceId: "claude" }, isCancelled: () => false, epoch: 1, currentTurnEpoch: () => epoch,
     turnRegistry: { prepare: vi.fn() }, workerTurns: { capture: vi.fn() }, pendingInterruptThreads: { started: vi.fn() },
+    rootForStart, rootId: null,
     providerReload: { started: () => ({ adapter: { sendTurn: async (input: { text: string }) => { sent.push(input.text); return { turnId: "room-turn" }; } } }) },
     dispatchAdapterTurn: (_threadId: string, send: () => Promise<unknown>) => Promise.resolve().then(send),
     isUnattended: () => false, memberTurnSelection: () => ({}), bindInterruptedTurn: vi.fn(), markMailRead: vi.fn(),

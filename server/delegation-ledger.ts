@@ -38,6 +38,7 @@ const receiptSchema = z.object({
   id: z.string().min(1), sourceThreadId: z.string(), toBotId: z.string(), toBotName: z.string(),
   status: z.enum(["done", "failed", "denied", "busy_gave_up", "dropped", "error", "queued", "running"]),
   finishedAt: z.number().finite(), result: z.string().optional(),
+  root: z.string().optional(),
   kind: z.enum(["ask", "delegation"]).optional(), deliver: z.enum(["queued", "now"]).optional(),
   state: z.enum(["held", "ready", "approval", "dispatching", "running", "steered", "finishing", "done", "failed", "dropped", "refused", "deferred"]).optional(),
   source: z.object({ botId: z.string(), threadId: z.string(), turnId: z.string() }).optional(),
