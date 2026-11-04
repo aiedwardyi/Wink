@@ -1,5 +1,5 @@
 import { AccountError, type AccountService } from "./accounts.ts";
-import { AccountLifecycle } from "./account-lifecycle.ts";
+import { AccountLifecycle, type MainChange } from "./account-lifecycle.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import type { ProviderReload } from "./harness/provider-reload.ts";
@@ -17,17 +17,21 @@ export function createAccountRuntime(deps: {
   botActive(id: string): boolean; terminal(): TerminalBridgeAccess | null; configBusy(): boolean;
   bots?: BotAccounts;
   changed?(usageId?: string): void;
+  onMainChanged?(change: MainChange): void;
 }) {
   const bots = deps.bots ?? new BotAccounts(deps.accounts, deps.registry, deps.store, {
     captured: (threadId) => deps.providers.current(threadId),
   });
-  return new AccountLifecycle(deps.accounts, deps.registry, {
+  const starting = new Set<{ id: string; generation: number }>();
+  const lifecycle = new AccountLifecycle(deps.accounts, deps.registry, {
     reload: deps.reload,
     changed: deps.changed,
+    onMainChanged: deps.onMainChanged,
     configBusy: deps.configBusy,
     panesBusy: (id) => accountPanesBusy(deps.terminal(), id),
     referenced: async (id, activeOnly) => {
       if (!activeOnly && deps.accounts.defaultFor(deps.accounts.get(id)?.of ?? id) === id) return true;
+      if ([...starting].some((hold) => hold.id === id && hold.generation === (deps.accounts.get(id)?.generation ?? 0))) return true;
       if (deps.providers.inUse(id) || deps.registry.accountBusy(id) || deps.usage.busy(id)) return true;
       for (const bot of deps.store.bots) {
         const selected = bots.references(bot, id);
@@ -51,6 +55,13 @@ export function createAccountRuntime(deps: {
       deps.store.clearAccountSessions(id);
     },
   }, bots);
+  return Object.assign(lifecycle, {
+    holdStarting(accountId: string, generation: number) {
+      const hold = { id: accountId, generation };
+      starting.add(hold);
+      return () => { starting.delete(hold); };
+    },
+  });
 }
 
 export async function accountPanesBusy(terminal: TerminalBridgeAccess | null, id: string): Promise<boolean> {

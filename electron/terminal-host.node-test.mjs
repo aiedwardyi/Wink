@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import test from "node:test";
+import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,6 +30,38 @@ function fixture(options = {}) {
   });
   return { host, event, owner, children, events, input: { botId: "bot-1", cols: 80, rows: 24 } };
 }
+
+describe("captured worker account projections", () => {
+  test("uses captured worker accounts in both account-runs and Panes", async (t) => {
+    let main = { id: "claude.fixture", generation: 3 };
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: main, environment: {} }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+    main = { id: "claude.other", generation: 4 };
+    assert.deepEqual(f.host.readBot("bot-1").panes[0].account, { id: "claude.fixture", generation: 3 });
+    assert.deepEqual(f.host.readBot("bot-1", { panesOnly: true }).panes[0].account, { id: "claude.fixture", generation: 3 });
+    assert.equal(typeof f.host.liveAccountRuns, "function");
+    assert.deepEqual(f.host.liveAccountRuns(), [{ botId: "bot-1", paneId: pane.sessionId, label: "builder", engine: "claude", accountId: "claude.fixture", accountGeneration: 3, state: "starting" }]);
+    await f.host.openForBot("bot-1", { label: "next", command: "claude" });
+    assert.deepEqual(f.host.liveAccountRuns().map((run) => run.accountId), ["claude.fixture", "claude.other"]);
+  });
+
+  test("projects busy, idle and limit states without changing the captured account", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 1 }, environment: {} }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+    assert.equal(typeof f.host.liveAccountRuns, "function");
+    for (const [text, state] of [["✽ Working… (1s · esc to interrupt)", "busy"], ["───\r\n❯", "idle"], ["You've hit your limit · resets 3pm (Asia/Seoul)\r\n❯", "limit"]]) {
+      f.children[0].data(`\x1b[2J\x1b[H${f.children[0].writes[0]}\n${text}`);
+      assert.equal(f.host.liveAccountRuns()[0].state, state);
+      assert.equal(f.host.liveAccountRuns()[0].accountId, "claude.fixture");
+    }
+  });
+});
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1373,6 +1405,248 @@ function trustFixture(t, options = {}) {
   const advance = async (ms) => { t.mock.timers.tick(ms); await Promise.resolve(); };
   return { ...f, settle: () => advance(500), advance };
 }
+
+const CLAUDE_THEME = JSON.parse(fs.readFileSync(new URL("../test/fixtures/recorded/claude/onboarding-theme.json", import.meta.url), "utf8")).reply;
+const CLAUDE_NOTES = JSON.parse(fs.readFileSync(new URL("../test/fixtures/recorded/claude/onboarding-notes.json", import.meta.url), "utf8")).reply;
+const onboardingScreen = (recorded) => "\x1b[2J\x1b[H" + recorded.screen.replaceAll("\n", "\r\n");
+
+for (const [name, recorded] of [["theme", CLAUDE_THEME], ["security notes", CLAUDE_NOTES]]) {
+  test(`answers Claude's ${name} screen once on a worker pane`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+    const child = f.children[0];
+    for (const { data } of recorded.chunks) child.data(data);
+    await f.advance(499);
+    assert.equal(child.writes.length, 1);
+    await f.advance(1);
+    assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", "\r"]);
+    child.data(onboardingScreen(recorded));
+    await f.advance(1_000);
+    assert.equal(child.writes.length, 2);
+  });
+}
+
+test("answers onboarding screens without the bypass flag", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const command = "claude --model opus 'Read card.md'";
+  await f.host.openForBot("bot-1", { command });
+  for (const recorded of [CLAUDE_THEME, CLAUDE_NOTES]) {
+    f.children[0].data(onboardingScreen(recorded));
+    await f.settle();
+  }
+  assert.deepEqual(f.children[0].writes, [command + "\r", "\r", "\r"]);
+});
+
+test("answers theme, notes, then folder trust in order on a fresh account dir", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+  const child = f.children[0];
+  for (const recorded of [CLAUDE_THEME, CLAUDE_NOTES]) {
+    child.data(onboardingScreen(recorded));
+    await f.settle();
+  }
+  child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST);
+  await f.settle();
+  child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST_YES.replaceAll("\n", "\r\n"));
+  await f.settle();
+  assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", "\r", "\r", "\x1b[B", "\r"]);
+});
+
+test("answers onboarding screens on a resumed pane", async (t) => {
+  const nativeId = "00000000-0000-4000-8000-000000000001";
+  const f = trustFixture(t, { commandEcho: false, workerAccountsEnabled: true,
+    paneRuns: { claim: () => true, started() {}, ended() {} },
+    workerLaunch: async () => ({ kind: "managed", executable: "claude", args: ["--resume", nativeId, "--dangerously-skip-permissions"],
+      account: { id: "fixture", generation: 1 }, environment: {},
+      session: { engine: "claude", nativeId, launchGeneration: "fixture-resume" } }),
+  });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: "claude" }, { id: "old-pane", session: { engine: "claude", nativeId } });
+  const child = f.children[0];
+  for (const recorded of [CLAUDE_THEME, CLAUDE_NOTES]) {
+    child.data(onboardingScreen(recorded));
+    assert.equal(f.host.workerResumeStatus(pane.sessionId), "pending");
+    await f.settle();
+  }
+  child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST);
+  assert.equal(f.host.workerResumeStatus(pane.sessionId), "pending");
+  await f.settle();
+  child.data("\x1b[2J\x1b[H" + CLAUDE_FOLDER_TRUST_YES.replaceAll("\n", "\r\n"));
+  assert.equal(f.host.workerResumeStatus(pane.sessionId), "pending");
+  await f.settle();
+  assert.deepEqual(child.writes.slice(1), ["\r", "\r", "\x1b[B", "\r"]);
+});
+
+test("does not answer a stale onboarding timer after redraw or close", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+  const child = f.children[0];
+  child.data(onboardingScreen(CLAUDE_THEME));
+  await f.advance(499);
+  child.data("\x1b[?25l");
+  await f.advance(499);
+  assert.equal(child.writes.length, 1);
+  await f.advance(1);
+  assert.equal(child.writes.length, 2);
+  child.data(onboardingScreen(CLAUDE_NOTES));
+  await f.host.closeBotPanes("bot-1");
+  await f.settle();
+  assert.equal(child.writes.length, 2);
+});
+
+test("does not answer onboarding text after the first working prompt", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  for (const prompt of ["❯ \r\n? for shortcuts", "❯ Read card.md", "✻ Reading card… (3s · esc to interrupt)"]) {
+    await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+    const child = f.children.at(-1);
+    child.data("\x1b[2J\x1b[H" + prompt);
+    for (const recorded of [CLAUDE_THEME, CLAUDE_NOTES]) {
+      child.data(onboardingScreen(recorded));
+      await f.settle();
+    }
+    assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r"]);
+  }
+});
+
+for (const [name, recorded] of [["theme", CLAUDE_THEME], ["notes", CLAUDE_NOTES]]) {
+  test(`waits for the complete onboarding ${name} screen and footer`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+    const child = f.children[0];
+    const text = recorded.screen.trimEnd();
+    for (const invalid of [text.slice(0, text.lastIndexOf("\n")), text.replace("Claude", "Other"), text + "\n> quoted output"]) {
+      child.data(onboardingScreen({ screen: invalid }));
+      await f.settle();
+      assert.equal(child.writes.length, 1);
+    }
+    child.data(onboardingScreen(recorded));
+    await f.settle();
+    assert.equal(child.writes.length, 2);
+  });
+}
+
+for (const action of ["PTY replacement", "launch generation", "same-engine relaunch", "queued redraw", "exit"]) {
+  test(`drops pending onboarding keys on ${action}`, async (t) => {
+    let session;
+    const f = trustFixture(t, { commandEcho: false,
+      paneCleanup: { start() {}, opened(value) { session = value; }, closed() {}, dispose() {} },
+    });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+    const child = f.children[0];
+    child.data(onboardingScreen(CLAUDE_THEME));
+    if (action === "PTY replacement") session.pty = { ...child };
+    if (action === "launch generation") session.workerSession = { run: { launchGeneration: "replacement" } };
+    if (action === "same-engine relaunch") f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: CLAUDE_TRUST_COMMAND + "\r" });
+    if (action === "exit") child.exit({ exitCode: 0 });
+    if (action === "queued redraw") { t.mock.timers.tick(500); child.data("\x1b[?25l"); }
+    await f.advance(action === "queued redraw" ? 499 : 500);
+    assert.equal(child.writes.length, action === "same-engine relaunch" ? 2 : 1);
+  });
+}
+
+for (const [name, text] of [["typed text", "x"], ["arrow key", "\x1b[A"], ["Enter", "\r"]]) {
+  test(`cancels pending onboarding keys on user ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+    const child = f.children[0];
+    child.data(onboardingScreen(CLAUDE_THEME));
+    t.mock.timers.tick(500);
+    f.host.write(f.event, pane.sessionId, text);
+    await Promise.resolve();
+    assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", text]);
+  });
+}
+
+test("keeps a pending onboarding answer through a terminal reply", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+  const child = f.children[0];
+  const da = "\x1b[?1;2c";
+  const version = "\x1bP>|XTerm(390)\x1b\\";
+  child.data(onboardingScreen(CLAUDE_THEME));
+  await f.advance(200);
+  f.host.write(f.event, pane.sessionId, da);
+  await f.advance(100);
+  f.host.write(f.event, pane.sessionId, version);
+  await f.advance(199);
+  assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", da, version]);
+  await f.advance(1);
+  assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", da, version, "\r"]);
+  await f.advance(1_000);
+  assert.equal(child.writes.length, 4);
+});
+
+test("keeps onboarding armed through supported terminal reply shapes", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+  const child = f.children[0];
+  const replies = ["\x1b[?1;2c", "\x1b[>0;276;0c", "\x1b[0n", "\x1b[?0n", "\x1b[12;34R", "\x1b[?12;34R",
+    "\x1b[?2004;1$y", "\x1b[4;640;480t", "\x1b[?1u", "\x1b]10;rgb:0000/0000/0000\x07", "\x1b]11;rgb:ffff/ffff/ffff\x1b\\",
+    "\x1bP>|XTerm(390)\x1b\\", "\x1b[?1;2c\x1b[?1u"];
+  child.data(onboardingScreen(CLAUDE_THEME));
+  await f.advance(200);
+  for (const reply of replies) f.host.write(f.event, pane.sessionId, reply);
+  await f.advance(300);
+  assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", ...replies, "\r"]);
+});
+
+for (const text of ["\x1b[A", "\x1b[?1;2cx", "x\x1b[?1;2c", "\x1b[?1;2c\x1b[A", "\x1b[?1;2c\n", "\x1b]11;rgb:ffff/ffff/ffff", "\x1bP>|XTerm(390)"]) {
+  test(`cancels onboarding for input outside whole terminal replies: ${JSON.stringify(text)}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+    const child = f.children[0];
+    child.data(onboardingScreen(CLAUDE_THEME));
+    await f.advance(200);
+    f.host.write(f.event, pane.sessionId, text);
+    await f.advance(300);
+    assert.deepEqual(child.writes, [CLAUDE_TRUST_COMMAND + "\r", text]);
+  });
+}
+
+test("ignores onboarding text on user panes and non-Claude panes", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.open(f.event, f.input);
+  f.host.write(f.event, pane.id, CLAUDE_TRUST_COMMAND + "\r");
+  await f.host.openForBot("bot-1", { command: "codex" });
+  for (const recorded of [CLAUDE_THEME, CLAUDE_NOTES]) {
+    for (const child of f.children) child.data(onboardingScreen(recorded));
+    await f.settle();
+  }
+  assert.deepEqual(f.children.map((child) => child.writes.length), [1, 1]);
+});
+
+test("ignores onboarding text quoted inside worker output", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: CLAUDE_TRUST_COMMAND });
+  for (const recorded of [CLAUDE_THEME, CLAUDE_NOTES]) {
+    f.children[0].data("\x1b[2J\x1b[HThe fixture contains:\r\n" + recorded.screen.replaceAll("\n", "\r\n") + "\r\nEnd of fixture.");
+    await f.settle();
+  }
+  assert.equal(f.children[0].writes.length, 1);
+});
+
+test("keeps folder trust gated on bypass mode", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const command = "claude --model opus 'Read card.md'";
+  await f.host.openForBot("bot-1", { command });
+  f.children[0].data(CLAUDE_FOLDER_TRUST);
+  await f.settle();
+  assert.deepEqual(f.children[0].writes, [command + "\r"]);
+});
 
 test("Claude folder trust waits for the recorded startup redraw to settle", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: Date.UTC(2026, 9, 24) });
