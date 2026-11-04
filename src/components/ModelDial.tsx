@@ -301,7 +301,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     if (moved) {
       flip(tile.current, "q");
       flip(plane.current, "f");
-    }
+    } else if (shown.current.i !== undefined && shown.current.effort !== effort?.label) flip(tile.current, "q");
     const open = plane.current!.hasAttribute("data-open");
     clearTimeout(bar.current.timer);
     if (moved) {
