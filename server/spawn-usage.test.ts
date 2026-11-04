@@ -59,6 +59,22 @@ describe("spawnEngine", () => {
 });
 
 describe("createSpawnUsage", () => {
+  it("names the account in the spawn usage line and the hold", async () => {
+    const account = { id: "acct-worker", generation: 2, name: "Claude" };
+    const rateLimits: RateLimitsMap = new Map([[account.id, { observedAt: new Date(NOW).toISOString(), windows: [
+      { id: "seven_day", usedPercent: 2, resetsAt: null },
+    ] }]]);
+    let name = "Claude 2";
+    const nameOf = vi.fn(() => name);
+    const check = createSpawnUsage({ rateLimits, save() {}, refresh: async () => ({}), environment: () => ({}), now: () => NOW, nameOf });
+    expect(await check(BOT, LABEL, "claude task", account)).toEqual({ line: "Claude 2 usage left: weekly 98%." });
+    name = "Studio";
+    expect(await check(BOT, LABEL, "claude task", account)).toEqual({ line: "Studio usage left: weekly 98%." });
+    rateLimits.set(account.id, reading(80, 2, NOW));
+    expect(await check(BOT, LABEL, "claude task", account)).toEqual({ hold: `Held: Studio 5h 20% left (resets 13:40), weekly 98% left. ${HOLD_TAIL}` });
+    expect(nameOf).toHaveBeenLastCalledWith(account.id, "Claude");
+  });
+
   it("adds the usage line when both windows have room", async () => {
     const { check, refresh } = setup(reading(38, 13));
     expect(await check(BOT, LABEL, CODEX)).toEqual({ line: "Codex usage left: 5h 62% (resets 13:40), weekly 87%." });

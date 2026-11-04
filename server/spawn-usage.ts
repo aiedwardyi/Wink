@@ -49,9 +49,10 @@ function settleWithin(pending: Promise<unknown>, ms: number): Promise<void> {
 
 type Deps = {
   rateLimits: RateLimitsMap;
-  save: () => void;
+  save: (id: string, report: RateLimitsReport) => void;
   refresh: (instanceId: string, previous: RateLimitsReport | undefined) => Promise<{ report?: RateLimitsReport }>;
   environment: (instanceId: string) => Record<string, string> | undefined;
+  nameOf?: (id: string, engine: string) => string;
   now?: () => number;
 };
 
@@ -63,7 +64,7 @@ export function createSpawnUsage(deps: Deps) {
     const current = deps.rateLimits.get(instanceId);
     if (result.report && (!current || Date.parse(result.report.observedAt) >= Date.parse(current.observedAt))) {
       deps.rateLimits.set(instanceId, result.report);
-      deps.save();
+      deps.save(instanceId, result.report);
     }
   };
   const usage = async (botId: string, label: string, command: string, account?: SpawnAccount, recovery = false): Promise<SpawnUsage> => {
@@ -83,14 +84,15 @@ export function createSpawnUsage(deps: Deps) {
       weekly && `weekly ${left(weekly)}%${suffix}`,
     ].filter(Boolean).join(", ");
     const low = (window: RateLimitWindow | undefined, min: number) => window !== undefined && (recovery || window.resetsAt !== null) && left(window) < min;
+    const name = deps.nameOf?.(engine.instanceId, engine.name) ?? engine.name;
     for (const [key, heldAt] of held) if (at - heldAt.at > REPEAT_MS) held.delete(key);
     const key = JSON.stringify(account ? [botId, label, command, account.id, account.generation] : [botId, label, command]);
     if ((low(session, SESSION_MIN_LEFT) || low(weekly, WEEKLY_MIN_LEFT)) && (recovery || !held.has(key))) {
       if (!recovery) held.set(key, { at, instanceId: engine.instanceId });
-      return { hold: `Held: ${engine.name} ${text(" left")}. Pick another engine, or send the same spawn again within 2 min to launch anyway.` };
+      return { hold: `Held: ${name} ${text(" left")}. Pick another engine, or send the same spawn again within 2 min to launch anyway.` };
     }
     if (!recovery) held.delete(key);
-    return { line: `${engine.name} usage left: ${text("")}.` };
+    return { line: `${name} usage left: ${text("")}.` };
   };
   return Object.assign(usage, { invalidate: (instanceId: string) => {
     for (const [key, hold] of held) if (hold.instanceId === instanceId) held.delete(key);

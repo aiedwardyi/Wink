@@ -225,4 +225,30 @@ describe("account removal references", () => {
     expect(f.holds).toHaveBeenCalledExactlyOnceWith(f.account.id);
     expect(f.waits).toHaveBeenCalledExactlyOnceWith(f.account.id);
   });
+
+  it("keeps an account a resolved turn is starting on until the turn is accepted", async () => {
+    const f = await fixture();
+    const accepted = f.controller.holdStarting?.(f.account.id, f.account.generation);
+    await expect(f.controller.remove(f.account.id)).rejects.toThrow("still used");
+    await f.controller.observe(f.account.id, { state: "available", authenticated: true, accountIdentity: "changed" }, f.account.generation);
+    expect(f.accounts.get(f.account.id)).toEqual({ ...f.account, state: "stopped" });
+    expect(f.logout).not.toHaveBeenCalled();
+    accepted?.();
+    await f.controller.remove(f.account.id);
+    expect(f.accounts.get(f.account.id)).toBeUndefined();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.account.id);
+  });
+
+  it("releases the starting hold on failure and cancel", async () => {
+    const f = await fixture();
+    const failed = f.controller.holdStarting?.(f.account.id, f.account.generation);
+    const cancelled = f.controller.holdStarting?.(f.account.id, f.account.generation);
+    failed?.();
+    failed?.();
+    await expect(f.controller.remove(f.account.id)).rejects.toThrow("still used");
+    cancelled?.();
+    await f.controller.remove(f.account.id);
+    expect(f.accounts.get(f.account.id)).toBeUndefined();
+    expect(f.logout).toHaveBeenCalledExactlyOnceWith(f.account.id);
+  });
 });

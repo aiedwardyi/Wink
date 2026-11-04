@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import test from "node:test";
+import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,6 +30,49 @@ function fixture(options = {}) {
   });
   return { host, event, owner, children, events, input: { botId: "bot-1", cols: 80, rows: 24 } };
 }
+
+describe("captured worker account projections", () => {
+  test("normalizes supported engines and excludes other managed engines from account runs", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async ({ command }) => ({ kind: "managed", executable: command,
+      args: [], account: { id: "claude.fixture", generation: 0 }, environment: {} }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    for (const command of ["grok", "muse", "agy", "Claude", "CODEX"]) await f.host.openForBot("bot-1", { label: command, command });
+    assert.deepEqual(f.host.liveAccountRuns().map((run) => run.engine), ["claude", "codex"]);
+    assert.deepEqual(f.host.liveAccountRuns({ engine: "claude" }).map((run) => run.label), ["Claude"]);
+  });
+
+  test("uses captured worker accounts in both account-runs and Panes", async (t) => {
+    let main = { id: "claude.fixture", generation: 3 };
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: main, environment: {} }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+    main = { id: "claude.other", generation: 4 };
+    assert.deepEqual(f.host.readBot("bot-1").panes[0].account, { id: "claude.fixture", generation: 3 });
+    assert.deepEqual(f.host.readBot("bot-1", { panesOnly: true }).panes[0].account, { id: "claude.fixture", generation: 3 });
+    assert.equal(typeof f.host.liveAccountRuns, "function");
+    assert.deepEqual(f.host.liveAccountRuns(), [{ botId: "bot-1", paneId: pane.sessionId, label: "builder", engine: "claude", accountId: "claude.fixture", accountGeneration: 3, state: "starting" }]);
+    await f.host.openForBot("bot-1", { label: "next", command: "claude" });
+    assert.deepEqual(f.host.liveAccountRuns().map((run) => run.accountId), ["claude.fixture", "claude.other"]);
+  });
+
+  test("projects busy, idle and limit states without changing the captured account", async (t) => {
+    let owner;
+    const f = fixture({ owner: () => owner, workerLaunch: async () => ({ kind: "managed", executable: "claude", args: [], account: { id: "claude.fixture", generation: 1 }, environment: {} }) });
+    owner = f.owner;
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { label: "builder", command: "claude" });
+    assert.equal(typeof f.host.liveAccountRuns, "function");
+    for (const [text, state] of [["✽ Working… (1s · esc to interrupt)", "busy"], ["───\r\n❯", "idle"], ["You've hit your limit · resets 3pm (Asia/Seoul)\r\n❯", "limit"]]) {
+      f.children[0].data(`\x1b[2J\x1b[H${f.children[0].writes[0]}\n${text}`);
+      assert.equal(f.host.liveAccountRuns()[0].state, state);
+      assert.equal(f.host.liveAccountRuns()[0].accountId, "claude.fixture");
+    }
+  });
+});
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
