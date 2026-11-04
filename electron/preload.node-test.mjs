@@ -3,14 +3,34 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 
-function bridge(invoke) {
+function bridge(invoke, events = {}) {
   let api;
   vm.runInNewContext(readFileSync(new URL("./preload.cjs", import.meta.url), "utf8"), {
-    require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } }, ipcRenderer: { on() {}, invoke }, webUtils: {} }),
+    require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } }, ipcRenderer: { on() {}, invoke, ...events }, webUtils: {} }),
     process: { platform: "win32" }, Error,
   });
   return api;
 }
+
+test("updater pushes win over an older subscription snapshot and stop silences late snapshots", async () => {
+  let resolve;
+  let handler;
+  const seen = [];
+  const api = bridge(() => new Promise((done) => { resolve = done; }), {
+    on(_channel, listener) { handler = listener; }, removeListener() {},
+  });
+  const stop = api.updater.onState((state) => seen.push(state.status));
+  handler(null, { status: "available" });
+  resolve({ status: "idle" });
+  await Promise.resolve();
+  assert.deepEqual(seen, ["available"]);
+  stop();
+  const stopAgain = api.updater.onState((state) => seen.push(state.status));
+  stopAgain();
+  resolve({ status: "idle" });
+  await Promise.resolve();
+  assert.deepEqual(seen, ["available"]);
+});
 
 for (const name of ["open", "prestart", "cancelOpen", "write", "acknowledge", "resize", "readBot", "paneLabels", "sendBot", "openBot", "close", "appearance"]) {
   test(`terminal ${name} strips the IPC wrapper`, async () => {

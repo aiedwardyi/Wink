@@ -43,7 +43,7 @@ import {
 } from "@/state/store";
 
 import { InitialsAvatar, profileInitials } from "./Avatar";
-import { useUpdaterState } from "@/lib/updater";
+import { updaterActions, useUpdaterState } from "@/lib/updater";
 import { useSidebarViewportWidth } from "@/lib/sidebar-viewport";
 import { cn } from "@/lib/cn";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -115,13 +115,13 @@ export { compactSidebarModelLabel } from "./SidebarConversations";
 
 export function UpdateButton() {
   const { t } = useI18n();
-  const s = useUpdaterState();
-  const updater = window.ogb?.updater;
+  const s = useUpdaterState(true);
+  const updater = updaterActions();
   const status = s?.status ?? "idle";
   // Main reports download and install status asynchronously.
   const [pending, setPending] = useState(false);
   useEffect(() => setPending(false), [status]);
-  if (!updater || !["available", "downloading", "downloaded", "installing", "error"].includes(status)) return null;
+  if (!s || !["available", "downloading", "downloaded", "installing", "error"].includes(status)) return null;
 
   const working =
     pending || status === "downloading" || status === "installing";

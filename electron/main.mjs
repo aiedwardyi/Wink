@@ -26,6 +26,7 @@ import { readTerminalAppearance } from "./terminal-appearance.mjs";
 import { applyPendingUpdateInstall, consumePendingUpdateInstall, isUpdateInstallPending, onUpdaterFailure, onUpdaterState, registerUpdaterIpc, retargetUpdater, startUpdater, switchUpdateChannel, updaterBridge } from "./updater.mjs";
 import { channelFromCommandLine } from "./update-channel.mjs";
 import { completeQuitAfterCleanup, hideWindowsForQuit } from "./app-quit.mjs";
+import { createUpdateHandoff } from "./update-handoff.mjs";
 import { createCloseGuard } from "./close-guard.mjs";
 import { applyStartFresh, requestStartFresh } from "./start-fresh.mjs";
 import { installMainCrashLogging } from "./crash-log.mjs";
@@ -142,6 +143,7 @@ function deliverNotificationTarget(win, target = pendingNotificationTarget) {
   if (target === pendingNotificationTarget) pendingNotificationTarget = null;
 }
 let mainWindow = null;
+const updateHandoff = createUpdateHandoff({ userData: () => app.getPath("userData"), version: () => app.getVersion(), message: () => nativeText("packaged.updating"), log: slog, packaged: app.isPackaged });
 const ERROR_REPORT_DSN = errorReportDsn(() => require("./error-report-config.json"));
 const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
 registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
@@ -1408,6 +1410,7 @@ function createWindow() {
     return { action: "deny" };
   });
   win.webContents.on("did-finish-load", () => {
+    if (isPackagedAppUrl(win.webContents.getURL(), SERVER_PORT)) updateHandoff.finish();
     deliverPackageInstall(win);
     deliverNotificationTarget(win);
   });
@@ -2130,10 +2133,9 @@ app.on("before-quit", (e) => {
   if (nativeActions.appleSpeech) stopSpeech();
   // Panes stop one at a time below, so the windows go now rather than at the final quit.
   hideWindowsForQuit(BrowserWindow.getAllWindows(), mainWindow, isUpdateInstallPending() ? connectingPageHref(undefined, "packaged.updating") : null);
-  const terminalsStopped = terminalHost.dispose();
-  const cleanup = Promise.race([
+  const cleanup = updateHandoff.run(isUpdateInstallPending(), () => Promise.race([
     Promise.all([
-      terminalsStopped,
+      terminalHost.dispose(),
       // Windows utilityProcess.kill() is TerminateProcess: ask the child to
       // run disposeAll/killCliTree first, then force-kill if it ignores us.
       stopUtilityChild(serverProc, { timeoutMs: CUA_STOP_TIMEOUT_MS })
@@ -2149,7 +2151,7 @@ app.on("before-quit", (e) => {
       stopDesktopCompanion({ remember: false }).catch(() => {}),
     ]),
     new Promise((resolve) => setTimeout(resolve, CUA_STOP_TIMEOUT_MS).unref()),
-  ]);
+  ]));
   cleanup.then(() => {
     try {
       serverProc?.kill();
@@ -2159,7 +2161,7 @@ app.on("before-quit", (e) => {
     completeQuitAfterCleanup({
       pendingUpdateInstall: consumePendingUpdateInstall(),
       quitAndInstall: () => applyPendingUpdateInstall(),
-      quit: () => app.quit(),
+      quit: () => { updateHandoff.cancel(); app.quit(); },
     });
   });
 });

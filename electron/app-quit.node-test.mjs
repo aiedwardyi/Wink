@@ -7,7 +7,7 @@ import { runInNewContext } from "node:vm";
 
 import { callQuitAndInstall, completeQuitAfterCleanup, hideWindowsForQuit } from "./app-quit.mjs";
 
-function quitFixture(pendingUpdateInstall = true) {
+function quitFixture(pendingUpdateInstall = true, handoff = false, installStarted = true) {
   const calls = [];
   const timers = [];
   let releaseDispose;
@@ -26,15 +26,42 @@ function quitFixture(pendingUpdateInstall = true) {
     app, process: { once() {} }, closeGuard: { leave() {} }, keepAwake: { stop() {} }, nativeActions: {},
     errorReports: { stop() {} },
     BrowserWindow: { getAllWindows: () => windows }, mainWindow: windows[0], hideWindowsForQuit,
+    updateHandoff: { cancel: () => calls.push("cancel-progress"), run: async (updating, cleanup) => {
+      if (handoff && updating) calls.push("capture");
+      await cleanup();
+      if (handoff && updating) calls.push("sweep");
+    } },
     isUpdateInstallPending: () => pendingUpdateInstall, connectingPageHref: (_background, key) => key,
     terminalHost: { dispose() { calls.push("dispose"); return disposed; } }, serverProc: null,
     stopUtilityChild: async () => {}, stopCua: async () => {}, terminalBridge: { close: async () => {} }, stopDesktopCompanion: async () => {},
-    consumePendingUpdateInstall: () => pendingUpdateInstall, applyPendingUpdateInstall: () => { calls.push("install"); return true; }, completeQuitAfterCleanup,
+    consumePendingUpdateInstall: () => pendingUpdateInstall, applyPendingUpdateInstall: () => { calls.push("install"); return installStarted; }, completeQuitAfterCleanup,
     setTimeout(callback, ms) { timers.push({ callback, ms }); return { unref() {} }; },
   });
   const quit = () => app.emit("before-quit", { preventDefault() {} });
   return { calls, timers, quit, releaseDispose };
 }
+
+test("update handoff captures before child disposal and sweeps before installer launch", async () => {
+  const f = quitFixture(true, true);
+  f.quit();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(f.calls.indexOf("capture") >= 0);
+  assert.ok(f.calls.indexOf("capture") < f.calls.indexOf("dispose"));
+  assert.equal(f.calls.includes("sweep"), false);
+  f.releaseDispose();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(f.calls.indexOf("sweep") > f.calls.indexOf("dispose"));
+  assert.ok(f.calls.indexOf("sweep") < f.calls.indexOf("install"));
+  assert.equal(f.calls.includes("cancel-progress"), false);
+});
+
+test("main dismisses update progress when the installer does not start", async () => {
+  const f = quitFixture(true, true, false);
+  f.quit();
+  f.releaseDispose();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.calls.slice(-3), ["install", "cancel-progress", "quit"]);
+});
 
 for (const pendingUpdateInstall of [true, false]) {
   test(`main waits for terminal disposal before ${pendingUpdateInstall ? "install" : "quit"}`, async () => {
