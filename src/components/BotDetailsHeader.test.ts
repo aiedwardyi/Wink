@@ -122,6 +122,7 @@ vi.mock("@/state/store", async (importOriginal) => {
       },
       dispatch: () => undefined,
       refreshInstances: async () => undefined,
+      turnOrigin: () => undefined,
     }),
     useStoreDispatch: () => () => undefined,
     useStreaming: () => ({
