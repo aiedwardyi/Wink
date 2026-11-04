@@ -2919,7 +2919,7 @@ export const ko = {
   "usage.desk.windowLeft": "{percent}% 남음",
   "usage.desk.weeklyOnly": "주간만",
   "usage.desk.noData": "데이터 없음",
-  "usage.desk.windowNoData": "{window} 데이터 없음",
+  "usage.desk.windowNoData": "{window} 미확인",
   "usage.desk.notOnPlan": "이 요금제에 없음",
   "usage.desk.resetsIn": "{time} 후 초기화",
   "usage.desk.resetsAt": "{time} 초기화",
