@@ -27,10 +27,11 @@ afterEach(async () => {
 });
 
 describe("cleanup copy", () => {
-  it.each(["en", "ko"] as const)("keeps all parts in %s and sizes only in the tab", async (locale) => {
+  it.each(["en", "ko"] as const)("keeps all parts in %s without sizes", async (locale) => {
     applyLocale(locale);
     await mount(createElement(MemoryCleanRow, { run, onUndo: vi.fn() }));
-    expect(host.textContent).toContain(locale === "en" ? "Tidied Nov 4: 23 to 16 KB, nothing lost" : "11월 4일 정리: 23KB에서 16KB로, 빠진 내용 없음");
+    expect(host.textContent).toContain(locale === "en" ? "Tidied Nov 4, nothing lost" : "11월 4일 정리, 빠진 내용 없음");
+    expect(host.textContent).not.toContain("KB");
     for (const part of locale === "en" ? ["5 merged", "4 replaced by newer", "20 moved to memory-history.md"] : ["5줄 합침", "4줄 최신으로 교체", "20줄 memory-history.md로 이동"]) expect(host.textContent).toContain(part);
     expect(host.querySelector(".whitespace-nowrap")?.textContent).toContain(locale === "en" ? "Undo" : "되돌리기");
     await act(async () => root.render(createElement(MemoryTidyLine, { tidy: { runId: "r" }, run, onUndo: vi.fn() })));
@@ -39,9 +40,8 @@ describe("cleanup copy", () => {
     await act(async () => host.querySelector("button")!.click());
     expect(store.dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { cleanup: true } });
   });
-  it("uses decimals when rounded KB are equal and omits zero parts", async () => {
-    await mount(createElement(MemoryCleanRow, { run: { ...run, beforeBytes: 1160, afterBytes: 1050, merged: 0, replaced: 0 }, onUndo: vi.fn() }));
-    expect(host.textContent).toContain("1.1 to 1.0 KB");
+  it("omits zero-count details", async () => {
+    await mount(createElement(MemoryCleanRow, { run: { ...run, merged: 0, replaced: 0 }, onUndo: vi.fn() }));
     expect(host.textContent).not.toContain("merged");
     expect(host.textContent).not.toContain("replaced");
   });
