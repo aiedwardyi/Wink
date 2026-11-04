@@ -151,6 +151,24 @@ it.each(["routine", "card resume", "keep-going", "pane-note", "limit resume", "c
   expect(rootForStart("peer", { kind: "automatic" })).toBeNull();
 });
 
+it.each(["inherit", "automatic", "snapshot"] as const)("expires idle roots on %s without another human start", (kind) => {
+  const idle = 48 * 60 * 60 * 1_000;
+  let touched = 1_000;
+  const now = vi.spyOn(Date, "now").mockReturnValue(touched);
+  const root = start();
+  const live = () => kind === "snapshot" ? callerSnapshot(from.id, from.threadId)?.rootId
+    : rootForStart(from.threadId, kind === "inherit" ? { kind, rootId: root } : { kind });
+  for (let index = 0; index < 2; index++) {
+    touched += idle - 1;
+    now.mockReturnValue(touched);
+    expect(live()).toBe(root);
+  }
+  now.mockReturnValue(touched + idle);
+  expect(live()).toBeNull();
+  now.mockReturnValue(touched);
+  expect(rootForStart("peer", { kind: "inherit", rootId: root })).toBeNull();
+});
+
 it("drops idle roots on a human start and forgets all roots on restart", () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
   const idle = rootForStart("idle", { kind: "human", messageKey: "old" });

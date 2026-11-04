@@ -20,8 +20,15 @@ const messages = new Map<string, string>();
 const threads = new Map<string, string | null>();
 
 function liveRoot(rootId: string | null | undefined): string | null {
-  if (!rootId || !roots.has(rootId)) return null;
-  roots.set(rootId, Date.now());
+  if (!rootId) return null;
+  const touched = roots.get(rootId);
+  if (touched === undefined) return null;
+  const now = Date.now();
+  if (now - touched >= MAX_IDLE) {
+    roots.delete(rootId);
+    return null;
+  }
+  roots.set(rootId, now);
   return rootId;
 }
 
