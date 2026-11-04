@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
 import type { InstanceInfo } from "@/state/store";
 import type { UsageAccount } from "@/lib/accounts";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
   state: { bots: [{ id: "bot", modelSelection: { instanceId: "claude" }, tasks: [] }], instances: [] as InstanceInfo[] },
@@ -86,18 +87,19 @@ it("puts account headings and Main above the matching account's bars", async () 
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   expect(main().textContent).not.toContain("Set as Main");
   expect(other().textContent).toContain("Set as Main");
-  expect(main().textContent).toContain("ClaudeMain");
-  expect(other().textContent).not.toContain("@example.com");
+  expect(main().textContent).toContain("claude@example.comMain");
+  expect(other().textContent).toContain("second@example.comSet as Main");
   expect(other().textContent).not.toContain("MainSet");
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
   expect(host.querySelector('[aria-label="Next Account"]')).toBeNull();
 });
 
-it("dims only the non-Main account's bars and shows Set as Main as a button", async () => {
+it("shows both accounts' bars at full strength and Set as Main as the row button", async () => {
   await render();
   expect(main().querySelector('[aria-label="5h: 80% remaining"] span[aria-hidden="true"]')!.classList).not.toContain("opacity-45");
-  expect(other().querySelector('[aria-label="5h: 30% remaining"] span[aria-hidden="true"]')!.classList).toContain("opacity-45");
+  expect(other().querySelector('[aria-label="5h: 30% remaining"] span[aria-hidden="true"]')!.classList).not.toContain("opacity-45");
   expect(other().querySelector("button:not([aria-label])")?.textContent).toBe("Set as Main");
+  expect(button("Set as Main").className).toBe(ROW_BUTTON);
 });
 
 it("uses the pushed Main flag even when the base account arrives first", async () => {
@@ -118,6 +120,28 @@ it("Set as Main posts once and moves that account left without confirmation", as
   expect(main().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
 });
 
+it.each([false, true])("trades columns on Set as Main so the old Main shows on the right, focus kept, motion reduced=%s", async (reduce) => {
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: reduce && query.includes("reduce"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+  onTestFinished(() => media.mockRestore());
+  await render(4);
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
+  await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Next Account"]:not([disabled])')!.click());
+  expect(other().textContent).toContain("third@example.com");
+  const pick = () => [...other().querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === "Set as Main");
+  const animate = vi.spyOn(Element.prototype, "animate");
+  onTestFinished(() => animate.mockRestore());
+  await act(async () => pick()!.click());
+  expect(request).toHaveBeenCalledWith("/api/accounts/third/default", { method: "POST", body: "{}" });
+  expect(main().textContent).toContain("third@example.comMain");
+  expect(main().querySelector('[aria-label="5h: 5% remaining"]')).not.toBeNull();
+  expect(other().querySelector('[aria-haspopup="menu"]')?.getAttribute("aria-label")).toBe("Choose account: second@example.com");
+  expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
+  expect(document.activeElement).toBe(pick());
+  const moves = animate.mock.calls.map(([frames]) => (frames as Keyframe[])[0]?.transform);
+  expect(moves).toEqual(reduce ? [] : ["translateX(24px)", "translateX(-24px)"]);
+});
+
 it("pages three accounts and keeps hidden pages in the same grid cell", async () => {
   await render(3);
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
@@ -136,7 +160,7 @@ it("pages one account at a time on phone, starting with Main", async () => {
   const next = () => shown().querySelector<HTMLButtonElement>('[aria-label="Next Account"]')!;
   expect(host.querySelector('[data-account-column="main"]')).toBeNull();
   expect(host.querySelectorAll('[data-account-column="pages"] > div[inert]')).toHaveLength(2);
-  expect(shown().textContent).toContain("ClaudeMain");
+  expect(shown().textContent).toContain("claude@example.comMain");
   expect(shown().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.disabled).toBe(true);
   await act(async () => next().click());
@@ -148,10 +172,11 @@ it("pages one account at a time on phone, starting with Main", async () => {
   await act(async () => shown().querySelector<HTMLButtonElement>("button:not([aria-label])")!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/third/default", { method: "POST", body: "{}" });
   expect(shown().querySelector('[aria-label="5h: 5% remaining"]')).not.toBeNull();
-  expect(shown().textContent).toContain("ClaudeMain");
+  expect(shown().textContent).toContain("third@example.comMain");
+  expect(document.activeElement).toBe(shown().querySelector('[aria-haspopup="menu"]'));
 });
 
-it("shows the account's email only in the icon's card", async () => {
+it("still shows the account's email in the icon's card", async () => {
   await render();
   expect(document.querySelector('[data-engine-card]')).toBeNull();
   const mark = other().querySelector<HTMLElement>('[data-engine-hover]')!;
@@ -160,7 +185,6 @@ it("shows the account's email only in the icon's card", async () => {
     mark.click();
   });
   expect(document.querySelector('[data-engine-card]')?.textContent).toContain("second@example.com");
-  expect(other().textContent).not.toContain("second@example.com");
   await act(async () => {
     mark.dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true }));
     mark.click();
@@ -218,20 +242,22 @@ it("translates account controls into Korean", async () => {
   persistPreference("ko");
   await render(3);
   expect(button("기본으로 설정")).toBeDefined();
-  expect(main().textContent).toContain("Claude기본");
+  expect(main().textContent).toContain("claude@example.com기본");
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
 });
 
-it("keeps Main and Set as Main in the same head action slot with or without paging", async () => {
+it.each([false, true])("gives the email its own line with Main or Set as Main under it on phone=%s", async (phone) => {
+  phoneView(phone);
   for (const count of [2, 3]) {
     await render(count);
-    const pick = button("Set as Main");
-    const tag = [...main().querySelectorAll("span")].find((node) => !node.children.length && node.textContent === "Main")!;
-    expect(tag.parentElement?.className).toBe(pick.parentElement?.className);
-    expect(tag.nextElementSibling).not.toBeNull();
-    expect(pick.nextElementSibling).not.toBeNull();
-    expect(tag.nextElementSibling?.className).toBe(pick.nextElementSibling?.className);
-    expect(pick.nextElementSibling?.querySelectorAll("button")).toHaveLength(count === 3 ? 2 : 0);
+    const heads = [...host.querySelectorAll("[data-account-head]")].filter((head) => !head.closest("[inert]"));
+    expect(heads.map((head) => [...head.children].map((line) => line.textContent))).toEqual(phone
+      ? [["claude@example.com", "Main"]]
+      : [["claude@example.com", "Main"], ["second@example.com", "Set as Main"]]);
+    const pick = [...host.querySelectorAll<HTMLButtonElement>("[data-set-main]")].find((node) => !node.closest("[inert]"));
+    const tag = [...heads[0]!.querySelectorAll("span")].find((node) => !node.children.length && node.textContent === "Main")!;
+    expect(tag.nextElementSibling?.querySelectorAll("button") ?? []).toHaveLength(phone ? 2 : 0);
+    if (!phone) expect(pick!.nextElementSibling?.querySelectorAll("button") ?? []).toHaveLength(count === 3 ? 2 : 0);
   }
 });
 
@@ -439,7 +465,7 @@ it("marks the base Main without a pushed Main flag and preserves long emails", a
   expect(items()[0]!.getAttribute("aria-checked")).toBe("true");
   expect(items()[3]!.textContent).toBe(email);
   await act(async () => items()[3]!.click());
-  expect(picker().textContent).toBe("Claude");
+  expect(picker().textContent).toBe(email);
 });
 
 it.each([false, true])("keeps the full picker email in its title and accessible name on phone=%s", async (phone) => {
@@ -450,27 +476,28 @@ it.each([false, true])("keeps the full picker email in its title and accessible 
   await rerender();
   expect(picker().title).toBe(email);
   expect(picker().getAttribute("aria-label")).toBe(`Choose account: ${email}`);
-  expect(picker().textContent).toBe("Claude");
+  expect(picker().textContent).toBe(email);
 });
 
-it.each([2, 4])("keeps desktop Main free of email text without a selector for %i accounts", async (count) => {
+it.each([2, 4])("names desktop Main by its email, or its number without one, with no selector for %i accounts", async (count) => {
   await render(count);
-  expect(main().textContent).toContain("ClaudeMain");
-  expect(main().textContent).not.toContain("@example.com");
+  expect(main().textContent).toContain("claude@example.comMain");
   expect(main().querySelector('[aria-haspopup="menu"]')).toBeNull();
+  expect(main().querySelector('[title="claude@example.com"]')).not.toBeNull();
   state.instances[0]!.snapshot.account = undefined;
   await rerender();
-  expect(main().textContent).toContain("ClaudeMain");
+  expect(main().textContent).toContain("Account 1Main");
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
   await rerender();
-  expect(main().textContent).toContain("ClaudeMain");
+  expect(main().textContent).toContain("second@example.comMain");
 });
 
-it.each([false, true])("keeps multi-account heads free of email text on phone=%s", async (phone) => {
+it.each([false, true])("names every multi-account head by its email on phone=%s", async (phone) => {
   phoneView(phone);
   for (const count of [2, 4]) {
     await render(count);
-    expect(host.textContent).not.toContain("@example.com");
+    expect(shown().textContent).toContain(phone ? "claude@example.comMain" : "second@example.comSet as Main");
+    if (!phone) expect(main().textContent).toContain("claude@example.comMain");
     expect(shown().querySelector('[data-engine-hover]')).not.toBeNull();
   }
 });

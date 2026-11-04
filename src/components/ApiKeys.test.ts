@@ -20,6 +20,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 import { relativeTimeLabel, SavedKeys } from "./ApiKeys";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 applyLocale("en");
 
@@ -98,6 +99,7 @@ describe("SavedKeys", () => {
     expect(html).toContain("Claude API Key");
     expect(html).toContain("Not used yet");
     expect(html).toContain('aria-label="Remove the Saved Key"');
+    expect(html).toContain(`class="${ROW_BUTTON}">Remove</button>`);
     expect(html).not.toContain("xAI API Key");
     expect(html).not.toContain("Box API Key");
     expect(html).not.toContain("type=\"password\"");

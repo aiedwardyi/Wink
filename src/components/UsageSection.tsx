@@ -53,18 +53,20 @@ function windowSlotId(window: RateLimitWindow, driverKind: string): string {
 }
 
 // Side-by-side accounts get a row for every window any of them reports, so their columns line up.
+// Every engine also lists 5h then 7d, with "–" for one it does not offer, so the rows match across engines.
 function windowSlots(accounts: UsageAccount[]): RateLimitWindow[] {
   const slots = new Map<string, RateLimitWindow>();
   for (const account of accounts) for (const window of account.rateLimits?.windows ?? []) {
     const id = windowSlotId(window, account.driverKind);
     if (!slots.has(id)) slots.set(id, window);
   }
-  if (["claudeAgent", "codex"].includes(accounts[0]!.driverKind)
-    && [...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === "weekly")
-    && ![...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === "session")) {
-    slots.set("five_hour", { id: "five_hour", usedPercent: 0, resetsAt: null });
+  if (slots.size > 0) for (const [id, kind] of [["five_hour", "session"], ["seven_day", "weekly"]] as const) {
+    if (![...slots.values()].some((window) => windowKind(window.id, window.windowMinutes) === kind && !window.id.startsWith("seven_day_"))) {
+      slots.set(id, { id, usedPercent: 0, resetsAt: null });
+    }
   }
-  return [...slots.values()].sort((a, b) => windowRank(a.id, a.windowMinutes) - windowRank(b.id, b.windowMinutes));
+  return [...slots.values()].sort((a, b) => windowRank(a.id, a.windowMinutes) - windowRank(b.id, b.windowMinutes)
+    || Number(a.id.startsWith("seven_day_")) - Number(b.id.startsWith("seven_day_")));
 }
 
 const PLAN_USAGE_DRIVERS = new Set(["claudeAgent", "codex", "grokAgent", "museAgent"]);
@@ -91,7 +93,6 @@ function EnginePlanRow({
   limit,
   heading,
   slots,
-  dim,
 }: {
   instance: InstanceInfo;
   now: number;
@@ -99,7 +100,6 @@ function EnginePlanRow({
   limit?: { resetsAt: number | null };
   heading?: ReactNode;
   slots?: RateLimitWindow[];
-  dim?: boolean;
 }) {
   const { t } = useI18n();
   const muse = instance.driverKind === "museAgent";
@@ -157,7 +157,7 @@ function EnginePlanRow({
                     <span className="text-ink-secondary">{t(muse ? "usage.limits.resetPassedCheck" : "usage.limits.resetPassed")}</span>
                   </span>
                 ) : (
-                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} dim={dim} slide />
+                  <PlanWindowMeter window={window} now={now} compact muted={reading?.stale || limited} slide />
                 )}
                 {window.resetsAt === null && <span className="sr-only">{t("usage.limits.resetUnknown")}</span>}
               </div>
@@ -314,7 +314,7 @@ function PlanUsage() {
               key={accounts[0]!.accountOf ?? accounts[0]!.instanceId}
               accounts={accounts}
               reload={reload}
-              renderRow={(instance, heading, dim) => <EnginePlanRow instance={instance} now={now} heading={heading} dim={dim}
+              renderRow={(instance, heading) => <EnginePlanRow instance={instance} now={now} heading={heading}
                 slots={windowSlots(accounts)}
                 error={refreshErrors[instance.instanceId]} limit={limits[instance.instanceId]} />}
             />

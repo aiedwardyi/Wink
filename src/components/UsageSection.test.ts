@@ -836,6 +836,29 @@ describe("UsageSection friends plan card", () => {
     } finally { mockState.instances = original; }
   });
 
+  it("gives every engine 5h then 7d rows, with – for a window it does not offer", () => {
+    const original = mockState.instances;
+    const pick = (id: string) => original.find((instance) => instance.instanceId === id)!;
+    const report = (windows: NonNullable<InstanceInfo["rateLimits"]>["windows"]) => ({ observedAt: new Date().toISOString(), windows });
+    mockState.instances = [
+      { ...pick("grok"), rateLimits: report([{ id: "seven_day", usedPercent: 30, resetsAt: null }]) },
+      { ...pick("muse"), rateLimits: report([{ id: "five_hour", usedPercent: 40, resetsAt: null }]) },
+      { ...pick("claude"), rateLimits: report([{ id: "seven_day_opus", usedPercent: 50, resetsAt: null }]) },
+      { ...pick("codex"), rateLimits: undefined },
+    ];
+    try {
+      persistPreference("en");
+      setUsageMode("used");
+      const html = renderToStaticMarkup(createElement(I18nProvider, null, createElement(UsageSection)));
+      const columns = [...new DOMParser().parseFromString(html, "text/html").querySelectorAll("div.mt-2.flex.flex-col.items-start")];
+      const rows = (label: string) => [...columns.find((column) => column.querySelector(`[aria-label="${label}"]`))!.children].map((row) => row.textContent);
+      expect(columns).toHaveLength(3);
+      expect(rows("7d: 30% used")).toEqual(["5h–", expect.stringContaining("30%")]);
+      expect(rows("5h: 40% used")).toEqual([expect.stringContaining("40%"), "7d–"]);
+      expect(rows("Opus 7d")).toEqual(["5h–", "7d–", expect.stringContaining("50%")]);
+    } finally { mockState.instances = original; }
+  });
+
   it("shares one left-aligned column across engine rows instead of centering each grid", async () => {
     const host = document.createElement("div");
     document.body.append(host);

@@ -145,7 +145,7 @@ describe("Settings Polish", () => {
     host.remove();
   });
 
-  it.each(["en", "ko"])("caps Name and Language on desktop without capping phone rows in %s", async (locale) => {
+  it.each(["en", "ko"])("caps Name on desktop and keeps Language flush right like every row in %s", async (locale) => {
     const previousLocale = localStorage.getItem("omb-locale");
     localStorage.setItem("omb-locale", locale);
     try {
@@ -157,8 +157,9 @@ describe("Settings Polish", () => {
       mockState.appSettingsSection = "general";
       await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal))));
       const language = host.querySelector('[role="radiogroup"]')!;
-      expect(language.closest(".md\\:max-w-md")).toBeTruthy();
+      expect(language.closest(".md\\:max-w-md")).toBeNull();
       expect(language.className).toContain("w-fit");
+      expect(language.parentElement?.className).toContain("[&>[role=radiogroup]]:ml-auto");
     } finally {
       if (previousLocale === null) localStorage.removeItem("omb-locale");
       else localStorage.setItem("omb-locale", previousLocale);
@@ -171,6 +172,7 @@ describe("Settings Polish", () => {
     const group = host.querySelector(`[role="radiogroup"][aria-label="${label}"]`)!;
     expect(group.className).toContain("w-fit");
     expect(group.parentElement?.className).toContain("flex-wrap");
+    expect(group.parentElement?.className).toContain("[&>[role=radiogroup]]:ml-auto");
     expect(group.querySelector("button")?.className).not.toContain("flex-1");
   });
 

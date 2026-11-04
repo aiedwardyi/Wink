@@ -99,7 +99,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
 
 export function SegmentedRow<T extends string>({ hint, ...props }: SegmentedProps<T> & { hint?: string }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 [&>[role=radiogroup]]:ml-auto">
       <div className={cn("flex-1 break-keep", hint ? "min-w-[min(100%,12rem)]" : "min-w-min")}>
         <div className="text-[14px] font-medium text-ink">{props.label}</div>
         {hint && <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">{hint}</div>}

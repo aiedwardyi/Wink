@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import type { InstanceInfo } from "@/state/store";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ vi.mock("@/state/store", async (original) => ({
   useStore: () => ({ state, dispatch: vi.fn(), refreshInstances }),
 }));
 import { EnginesSettings } from "./EnginesSettings";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -87,7 +89,7 @@ it("names connected accounts and shows a long label in full, wrapping after @", 
   expect(buttons("Sign Out")).toHaveLength(2);
 });
 
-it.each([1, 2])("puts each of %i accounts and its icon on one row, with Add Account on the first", async (count) => {
+it.each([1, 2])("puts each of %i accounts and its icon on one row, with Add Account after the last", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
   const marks = group.querySelectorAll('[data-engine-hover]');
@@ -96,9 +98,21 @@ it.each([1, 2])("puts each of %i accounts and its icon on one row, with Add Acco
     const row = mark.parentElement!.parentElement!;
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
-    expect(row.textContent?.includes("Add Account")).toBe(i === 0);
+    expect(row.textContent).not.toContain("Add Account");
   }
+  expect(group.lastElementChild?.textContent).toBe("Add Account");
   expect(group.textContent).not.toContain("Claude");
+});
+
+it("draws Sign Out, Add Account and Sign In as the Settings row button, with Sign Out quieter", async () => {
+  await render();
+  state.instances = [...state.instances, engine("account-2", false)];
+  await update();
+  expect(buttons("Sign Out").map((node) => node.className)).toEqual([ROW_BUTTON, ROW_BUTTON]);
+  expect(buttons("Add Account")[0]!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+  expect(buttons("Sign In")[0]!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+  expect(buttons("Sign Out")[0]!.classList.contains("text-ink-secondary")).toBe(true);
+  expect(buttons("Add Account")[0]!.classList.contains("text-ink-secondary")).toBe(false);
 });
 
 it.each(["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent"])("offers only Sign In while %s is signed out", async (driverKind) => {

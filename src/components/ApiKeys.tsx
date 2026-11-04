@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
 import {
   CREDENTIAL_BROKER,
   CREDENTIAL_TARGETS,
@@ -10,7 +9,7 @@ import {
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { credentialErrorMessage, saveCredential } from "@/lib/credentials";
 import { useI18n } from "@/lib/i18n";
-import { Section } from "./SettingsPrimitives";
+import { ROW_BUTTON, Section } from "./SettingsPrimitives";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 const BROKERED_CONFIGURED: Record<BrokeredCredentialId, (config: ConfigStatus) => boolean> = {
@@ -72,10 +71,10 @@ export function SavedKeys() {
         const use = uses[id];
         const bot = use && state.bots.find((b) => b.id === use.botId);
         return (
-          <div key={id} className="flex min-h-[44px] items-center gap-2 rounded-lg px-1 hover:bg-raised/50">
+          <div key={id} className="flex min-h-[44px] items-center gap-2">
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] text-ink">{label}</div>
-              <div className="truncate text-[11.5px] text-ink-secondary">
+              <div className="truncate text-[12px] text-ink-secondary">
                 {use
                   ? t("keys.lastUsed", { bot: bot?.name ?? use.botId, time: relativeTimeLabel(use.at, locale) })
                   : t("keys.notUsed")}
@@ -85,10 +84,9 @@ export function SavedKeys() {
               type="button"
               onClick={() => setRemoving({ id, label })}
               aria-label={t("connections.removeKey")}
-              title={t("connections.removeKey")}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-danger"
+              className={ROW_BUTTON}
             >
-              <Trash2 size={14} aria-hidden="true" />
+              {t("keys.remove")}
             </button>
           </div>
         );
