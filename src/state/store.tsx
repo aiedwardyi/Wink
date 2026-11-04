@@ -1082,6 +1082,7 @@ const StoreContext = createContext<{
   flushBotPatches: (botId: string) => Promise<void>;
   /** `passive` re-probes without starting WSL; true allows WSL; default reads the last check. */
   refreshInstances: (mode?: boolean | "passive") => Promise<void>;
+  instancesVersion: { current: number };
 } | null>(null);
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
@@ -1100,6 +1101,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const groupPatchFallback = useRef(new Map<string, Group>());
   const groupPatchLatestSuccess = useRef(new Map<string, Group>());
   const refreshGeneration = useRef(0);
+  const instancesVersion = useRef(0);
   const taskSwitchGeneration = useRef(0);
   const pendingNotificationSwitch = useRef<NotificationTarget | null>(null);
   const pendingTaskResumes = useRef(new Map<string, (error: string | null, pending?: boolean) => void>());
@@ -2316,6 +2318,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "reorderGroups", groupIds: frame.groupIds });
           break;
         case "instances":
+          instancesVersion.current += 1;
           rawDispatch({ type: "instances", instances: frame.instances, preserveRateLimits: true });
           break;
         case "usage.board":
@@ -2408,9 +2411,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // as "Check again" so the user isn't told to restart when a refresh will do.
   const loadInstances = useCallback(async (query: "" | "?refresh=1" | "?rescan=1") => {
     const generation = ++refreshGeneration.current;
+    const version = instancesVersion.current;
     try {
       const { instances } = await api(`/api/instances${query}`);
-      if (generation !== refreshGeneration.current) return;
+      if (generation !== refreshGeneration.current || version !== instancesVersion.current) return;
       rawDispatch({ type: "instances", instances, preserveRateLimits: true });
     } catch {
       /* offline or server down — the existing list stays */
@@ -2515,7 +2519,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances }),
+    () => ({ state, dispatch, flushBotPatches, refreshInstances, instancesVersion }),
     [state, dispatch, flushBotPatches, refreshInstances],
   );
   return (
@@ -2542,9 +2546,10 @@ export function useEngineLoginRefresh(waiting: boolean, onRefresh: (instances: I
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const refreshInstances = async () => {
+      const version = store?.instancesVersion.current;
       try {
         const { instances } = await api("/api/instances");
-        if (!active) return;
+        if (!active || version !== store?.instancesVersion.current) return;
         store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
         refreshRef.current(instances);
       } catch {}

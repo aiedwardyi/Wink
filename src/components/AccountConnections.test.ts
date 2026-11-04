@@ -77,7 +77,7 @@ it("keeps main-account sign-out disabled when no other account is ready", async 
   expect(buttons("Sign In")).toHaveLength(1);
 });
 
-it.each([false, true])("keeps a long email, Main and Sign Out on one line with phone %s", async (phone) => {
+it.each([false, true])("keeps a long email on one line with row disclosure and phone %s", async (phone) => {
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone } as MediaQueryList);
   await render();
   const label = "averyveryverylongname@example-company.com";
@@ -85,25 +85,29 @@ it.each([false, true])("keeps a long email, Main and Sign Out on one line with p
   await update();
   const identity = [...host.querySelectorAll("span")].find((node) => node.textContent === label)!;
   expect(identity.innerHTML).toBe(label);
-  expect(identity.title).toBe(label);
+  expect(identity.title).toBe("");
   expect([...identity.classList]).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
   expect(identity.classList.contains("break-words")).toBe(false);
-  const line = identity.parentElement!;
-  expect(line.textContent).toBe(`${label}Main`);
-  expect(line.lastElementChild!.classList).toContain("whitespace-nowrap");
-  expect(line.nextElementSibling!.textContent).toBe("Sign Out");
+  const disclosure = identity.closest<HTMLButtonElement>("button")!;
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => disclosure.click());
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+  expect(disclosure.closest("[data-connection-account]")!.querySelector("[data-connection-identity-body]")?.textContent).toBe(label);
+  expect(host.textContent).not.toContain("Main");
 });
 
-it.each([1, 2])("heads the engine with its icon, name and Add Account above %i account rows", async (count) => {
+it.each([1, 2])("heads the engine above %i account rows and a separate Add Account row", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
-  const [header, ...rows] = [...group.children];
+  const [header] = [...group.children];
+  const rows = [...group.querySelectorAll("[data-connection-account]")];
   expect(header!.querySelector("svg")).not.toBeNull();
-  expect(header!.textContent).toBe("ClaudeAdd Account");
+  expect(header!.textContent).toBe("Claude");
   expect(header!.textContent).not.toContain("@");
-  expect(group.querySelectorAll("svg")).toHaveLength(1);
+  expect(group.querySelectorAll("svg")).toHaveLength(count + 1);
   expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
   expect(rows).toHaveLength(count);
+  expect(group.lastElementChild!.textContent).toBe("Add Account");
   for (const [i, row] of rows.entries()) {
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
@@ -334,16 +338,18 @@ it("offers recovery for a stopped account whose credentials remain valid", async
 });
 
 
-it.each(["en", "ko"] as const)("shows the Main tag next to its email from pushed rows in %s", async (locale) => {
+it.each(["en", "ko"] as const)("keeps pushed rows without a Main tag or account-list GET in %s", async (locale) => {
   persistPreference(locale);
   await render();
   const tag = locale === "en" ? "Main" : "기본";
-  const mainTag = () => [...host.querySelectorAll("span")].find((span) => span.textContent === tag)!;
-  expect(mainTag().parentElement?.textContent).toContain(`claude@example.com${tag}`);
+  expect(host.textContent).toContain("claude@example.com");
+  expect(host.textContent).not.toContain(tag);
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "account-1" }));
   await update();
-  expect(mainTag().parentElement?.textContent).toContain(`account-1@example.com${tag}`);
+  expect(host.textContent).toContain("account-1@example.com");
+  expect(host.textContent).not.toContain(tag);
+  expect(request).not.toHaveBeenCalledWith("/api/accounts");
 });
 
 it("shows an accepted account as soon as the server pushes its signed-in row", async () => {
