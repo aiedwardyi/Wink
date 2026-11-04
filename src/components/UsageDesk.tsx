@@ -331,7 +331,7 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
         {limited && <div className="mt-1 text-[12px] text-danger">
           {limitReset ? t("usage.limits.checkLimitResets", { time: t(limitReset.key, limitReset.vars) }) : t("usage.limits.checkLimit")}
         </div>}
-        {foldChart && <button type="button" data-chart-fold="" aria-expanded={chartOpen} aria-controls={chartId} onClick={() => setChartOpen(!chartOpen)}
+        {foldChart && paced && <button type="button" data-chart-fold="" aria-expanded={chartOpen} aria-controls={chartId} onClick={() => setChartOpen(!chartOpen)}
           className="mt-2 inline-flex h-7 items-center rounded-[3px] [corner-shape:bevel] px-1.5 text-[12px] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:h-11">
           {t("usage.chat.chart")}
         </button>}
