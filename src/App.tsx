@@ -248,8 +248,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       }
       if (e.altKey && !mod && !e.shiftKey) {
         if (e.code === "KeyW") {
-          if (terminalOpen || nativeViewOverlayOpen || onboardingOpen || e.repeat || e.isComposing) return;
+          if (nativeViewOverlayOpen || onboardingOpen || e.repeat || e.isComposing) return;
           e.preventDefault();
+          e.stopPropagation();
           window.dispatchEvent(new Event("orbit:toggle-worker-menu"));
           return;
         }

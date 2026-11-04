@@ -162,12 +162,12 @@ describe("WorkerChip", () => {
     const base = run(`${nick} | Opus 5.5 | high`);
     return { run: { ...base, id: sessionId, nick, sessionId, at }, state };
   };
-  const mount = async (runs: ShownRun[], opts?: { onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; livePanes?: Set<string> | null; waitForLive?: boolean; locale?: "en" | "ko" }) => {
+  const mount = async (runs: ShownRun[], opts?: { onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; livePanes?: Set<string> | null; endedPanes?: Set<string>; hotkeyOf?: (sessionId: string | null) => number | undefined; waitForLive?: boolean; locale?: "en" | "ko" }) => {
     applyLocale(opts?.locale ?? "en");
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(createElement(WorkerChip, { name: "Ada", runs, livePanes: opts?.livePanes, waitForLive: opts?.waitForLive, onOpenTerminalPane: opts?.onOpenTerminalPane, onOpenTerminal: opts?.onOpenTerminal })));
+    await act(async () => root.render(createElement(WorkerChip, { name: "Ada", runs, livePanes: opts?.livePanes, endedPanes: opts?.endedPanes, hotkeyOf: opts?.hotkeyOf, waitForLive: opts?.waitForLive, onOpenTerminalPane: opts?.onOpenTerminalPane, onOpenTerminal: opts?.onOpenTerminal })));
     return {
       host,
       root,
@@ -319,6 +319,64 @@ describe("WorkerChip", () => {
       await act(async () => entry.click());
       expect(onOpen).toHaveBeenCalledWith("done-1");
       expect(host.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("lists an exited pane last as ended and still opens it", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const onOpen = vi.fn();
+    const { host, chip, unmount } = await mount([shown("DONE", "done", "done-1", 1), shown("WORK", "working", "work-1", 2)], {
+      onOpenTerminalPane: onOpen,
+      livePanes: new Set(["done-1", "work-1", "gone-1"]),
+      endedPanes: new Set(["done-1", "gone-1"]),
+    });
+    try {
+      await act(async () => chip()!.click());
+      const rows = [...host.querySelectorAll("[data-worker-list] li")];
+      expect(rows.map((li) => li.querySelector("[data-worker-state]")?.getAttribute("data-worker-state"))).toEqual(["working", "ended", "ended"]);
+      expect(rows[1].textContent).toBe("DONEOpus 5.5 · High○Ended");
+      expect(rows[2].textContent).toBe("gone-1○Ended");
+      await act(async () => rows[1].querySelector("button")!.click());
+      expect(onOpen).toHaveBeenCalledWith("done-1");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("puts each pane's Alt+n in its desktop row tooltip only", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const keys = new Map<string | null, number>([[null, 1], ["work-1", 2]]);
+    const { host, chip, unmount } = await mount([shown("WORK", "working", "work-1", 1), shown("LATE", "working", "late-1", 2)], {
+      onOpenTerminalPane: vi.fn(),
+      onOpenTerminal: vi.fn(),
+      livePanes: new Set(["work-1", "late-1"]),
+      hotkeyOf: (sessionId) => keys.get(sessionId),
+    });
+    try {
+      await act(async () => chip()!.click());
+      const list = host.querySelector("[data-worker-list]")!;
+      const [work, late] = [...list.querySelectorAll("li button")];
+      expect(work.getAttribute("title")).toBe("WORK (Alt+2)");
+      expect(work.textContent).not.toContain("Alt");
+      expect(late.hasAttribute("title")).toBe(false);
+      expect(list.querySelector("[data-worker-terminal]")?.getAttribute("title")).toBe("Open terminal (Alt+1)");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("leaves the app toggle to the chip outside an inert layer", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const { host, chip, unmount } = await mount([shown("WORK", "working", "work-1", 1)]);
+    try {
+      host.setAttribute("inert", "");
+      await act(async () => { window.dispatchEvent(new Event("orbit:toggle-worker-menu")); });
+      expect(chip()!.getAttribute("aria-expanded")).toBe("false");
+      host.removeAttribute("inert");
+      await act(async () => { window.dispatchEvent(new Event("orbit:toggle-worker-menu")); });
+      expect(chip()!.getAttribute("aria-expanded")).toBe("true");
     } finally {
       await unmount();
     }

@@ -37,9 +37,9 @@ export function useWorkerRows(workers: ShownRun[], messages: Message[]) {
 
 export function WorkerMark({ provider, compact = false }: { provider: string | null; compact?: boolean }) {
   // brand marks stay untinted; only the script and unknown-model glyphs take the ink color
-  const size = compact ? 12 : 14;
+  const size = 14;
   return (
-    <span className={compact ? "flex size-3 shrink-0 items-center justify-center" : "flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised"}>
+    <span aria-hidden={compact || undefined} className={compact ? "mr-1.5 inline-flex size-3.5 shrink-0 items-center justify-center align-middle" : "flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised"}>
       {provider === "script" ? <ScrollText size={size} className="text-ink-secondary" aria-hidden /> : provider ? <ProviderMark driverKind={provider} size={size} /> : <Bot size={size} className="text-ink-secondary" aria-hidden />}
     </span>
   );
@@ -129,7 +129,7 @@ const FOCUSABLE =
 
 const ENTRY_CLASS = "flex w-full items-center gap-2.5 border-b border-hairline/40 py-2.5 text-left text-[13px] last:border-b-0";
 
-function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, nickFirst = false }: { runs: ShownRun[]; livePanes: Set<string> | null; onOpenTerminalPane?: (sessionId: string) => void; onClose: () => void; inset?: boolean; nickFirst?: boolean }) {
+function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, nickFirst = false, hotkeyOf }: { runs: ShownRun[]; livePanes: Set<string> | null; onOpenTerminalPane?: (sessionId: string) => void; onClose: () => void; inset?: boolean; nickFirst?: boolean; hotkeyOf?: (sessionId: string | null) => number | undefined }) {
   const entry = cn(ENTRY_CLASS, inset && "px-3");
   return (
     // The sheet's list spans its padding, so a phone's overlay scrollbar paints there instead of over the status.
@@ -151,10 +151,12 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
             </li>
           );
         }
+        const hotkey = hotkeyOf?.(sessionId);
         return (
           <li key={shown.run.id}>
             <button
               type="button"
+              title={hotkey ? `${shown.run.nick} (Alt+${hotkey})` : undefined}
               onClick={() => {
                 onOpenTerminalPane(sessionId);
                 onClose();
@@ -170,12 +172,13 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
   );
 }
 
-function TerminalEntry({ onOpenTerminal, onClose, inset }: { onOpenTerminal: () => void; onClose: () => void; inset?: boolean }) {
+function TerminalEntry({ onOpenTerminal, onClose, inset, hotkey }: { onOpenTerminal: () => void; onClose: () => void; inset?: boolean; hotkey?: number }) {
   const { t } = useI18n();
   return (
     <button
       type="button"
       data-worker-terminal=""
+      title={hotkey ? `${t("terminal.open")} (Alt+${hotkey})` : undefined}
       onClick={() => {
         onOpenTerminal();
         onClose();
@@ -270,7 +273,7 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpe
 }
 
 /** Header chip for this chat's listed runs. Opens the worker list. */
-export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLive = false, onOpenTerminalPane, onOpenTerminal }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void }) {
+export function WorkerChip({ name, runs, livePanes = null, paneLabels, endedPanes, waitForLive = false, onOpenTerminalPane, onOpenTerminal, hotkeyOf }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; endedPanes?: ReadonlySet<string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; hotkeyOf?: (sessionId: string | null) => number | undefined }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [right, setRight] = useState(0);
@@ -278,7 +281,7 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
-  const listed = livePanes === null && waitForLive ? [] : listedRuns(runs, livePanes, paneLabels);
+  const listed = livePanes === null && waitForLive ? [] : listedRuns(runs, livePanes, paneLabels, endedPanes);
   const shown = listed.length > 0 || Boolean(onOpenTerminal);
   const [phone, setPhone] = useState(isPhone);
   useEffect(() => {
@@ -344,6 +347,8 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
   useEffect(() => {
     if (!shown) return;
     const onToggle = () => {
+      // Chat stays mounted under the terminal, so only the chip that is not inert answers Alt+W.
+      if (rootRef.current?.closest("[inert]")) return;
       if (open && rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus();
       setOpen(!open);
     };
@@ -401,9 +406,9 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
         >
           <h2 id={titleId} className="px-3 py-2 text-[15px] font-semibold text-ink">{t("workers.title", { name })}</h2>
           <div className="max-h-[320px] overflow-y-auto">
-            <WorkerEntries inset nickFirst runs={listed} livePanes={livePanes} onOpenTerminalPane={onOpenTerminalPane} onClose={close} />
+            <WorkerEntries inset nickFirst runs={listed} livePanes={livePanes} onOpenTerminalPane={onOpenTerminalPane} onClose={close} hotkeyOf={hotkeyOf} />
           </div>
-          {onOpenTerminal && <TerminalEntry inset onOpenTerminal={onOpenTerminal} onClose={close} />}
+          {onOpenTerminal && <TerminalEntry inset onOpenTerminal={onOpenTerminal} onClose={close} hotkey={hotkeyOf?.(null)} />}
         </div>
       )}
     </div>
