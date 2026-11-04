@@ -175,6 +175,20 @@ describe("ModelDial", () => {
     expect(effort()).toBe("low");
   });
 
+  it("squashes the logo on each effort step, not at the clamp", async () => {
+    media();
+    await mount();
+    const q = () => document.querySelector<HTMLElement>(".dial-tile")!.dataset.q;
+    const before = q();
+    await key("ArrowRight");
+    expect(q()).not.toBe(before);
+    for (let i = 0; i < 4; i++) await key("ArrowRight");
+    expect(effort()).toBe("max");
+    const clamped = q();
+    await key("ArrowRight");
+    expect(q()).toBe(clamped);
+  });
+
   it("picks with Enter and closes with Esc", async () => {
     media();
     await mount();
