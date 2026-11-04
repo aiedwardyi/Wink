@@ -72,6 +72,15 @@ describe("memory cleanup edges", () => {
     expect(result).toMatchObject({ ok: true });
   });
 
+  it("asks the proposer to let the newer of two conflicting values win", async () => {
+    const input = fixture("- port 8443 (09-02)\n- port 9443 (10-14)\n");
+    const prompts: string[] = [];
+    await cleanFiles({ ...input, propose: async (prompt, opts) => { prompts.push(prompt); return input.propose(prompt, opts); } });
+    expect(prompts[0]).toContain("Newer wins: when two lines give one subject different values");
+    expect(prompts[0]).toContain("replace the older unprotected line with the newer");
+    expect(prompts[0]).toContain("same date means keep both");
+  });
+
   it("keeps a marker-looking archived source inside its whole history block", async () => {
     const second = await cleanFiles(fixture("- kept\n- old\n"));
     if (!second.ok) throw new Error("Fixture failed");
