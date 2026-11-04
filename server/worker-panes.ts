@@ -14,6 +14,34 @@ const inputSchema = z.object({
     unrouted: z.literal(true).optional() }).optional(),
 });
 const countSchema = z.object({ count: z.number().int().nonnegative(), unknown: z.number().int().nonnegative(), generations: z.record(z.string(), z.number().int().nonnegative()) });
+const runsSchema = z.object({ runs: z.array(z.object({
+  botId: z.string().regex(/^[\w-]{1,128}$/), paneId: z.string().min(1).max(128), label: z.string().max(40).nullable(),
+  engine: z.enum(["claude", "codex"]), accountId: z.string().refine(isInstanceId),
+  accountGeneration: z.number().int().nonnegative(), state: z.enum(["busy", "idle", "limit", "starting"]),
+})) });
+
+export type WorkerRun = z.infer<typeof runsSchema>["runs"][number];
+export type WorkerRuns = { known: true; runs: WorkerRun[] } | { known: false; reason: "no-host" | "old-host" | "error" | "timeout" };
+
+export async function liveWorkerRuns(access: TerminalBridgeAccess | null, filter: { botId?: string; engine?: "claude" | "codex" } = {}, timeoutMs = 5_000, fetchImpl: typeof fetch = fetch): Promise<WorkerRuns> {
+  if (!access) return { known: false, reason: "no-host" };
+  const query = new URLSearchParams();
+  if (filter.botId !== undefined) query.set("botId", filter.botId);
+  if (filter.engine !== undefined) query.set("engine", filter.engine);
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await fetchImpl(`${access.url}/v1/terminal/account-runs${query.size ? `?${query}` : ""}`, {
+      headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` }, redirect: "error", signal,
+    });
+    if (response.status === 404) return { known: false, reason: "old-host" };
+    if (!response.ok) return { known: false, reason: "error" };
+    const parsed = runsSchema.safeParse(await response.json());
+    if (parsed.success) return { known: true, runs: parsed.data.runs };
+  } catch {
+    if (signal.aborted) return { known: false, reason: "timeout" };
+  }
+  return { known: false, reason: "error" };
+}
 
 export async function workerLaunchResponse(access: TerminalBridgeAccess | null, token: unknown, input: unknown, prepare: ReturnType<typeof createWorkerLaunch>) {
   if (typeof token !== "string" || !access) return { status: 401, body: { error: "Unauthorized worker launch" } };

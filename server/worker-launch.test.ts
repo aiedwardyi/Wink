@@ -59,6 +59,17 @@ function mainRouting(f: Awaited<ReturnType<typeof fixture>>, resumeAccount?: () 
 }
 
 describe("trusted worker accounts", () => {
+  it("names the PC sign-in in the signed-out Main line", async () => {
+    const f = await fixture();
+    f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    const nameOf = vi.fn(() => "Codex 1");
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), mainAccount: () => null, nameOf });
+    expect(await prepare(f.input)).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0, name: "Codex" },
+      line: "Codex Main is signed out, so this worker uses Codex 1." });
+    expect(nameOf).toHaveBeenCalledWith("codex", "Codex");
+  });
+
   it.each(["claude", "codex"])("persists the %s argv template before grant substitution", async (engine) => {
     const f = await fixture();
     const command = engine === "codex" ? 'codex -c "shell_environment_policy.set.ORBIT_MSG_AUTH=\'$env:ORBIT_MSG_AUTH\'" task' : "claude --effort high task";

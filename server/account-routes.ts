@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { AccountError, isInstanceId } from "./accounts.ts";
 import type { AccountLifecycle } from "./account-lifecycle.ts";
+import { AccountNameError, type AccountNames } from "./account-names.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 
@@ -10,16 +11,38 @@ const signInSchema = z.object({ device: z.boolean().optional() }).strict();
 const addSchema = signInSchema.extend({ of: z.string().refine(isInstanceId) });
 const removalSchema = z.object({ destinationId: z.string().refine(isInstanceId).optional() }).strict();
 const codeSchema = z.object({ generation: z.number().int().positive(), code: z.string().min(1).max(4096).refine((code) => !/[^!-~]/.test(code)) }).strict();
+const nameSchema = z.object({ nickname: z.string().nullable() }).strict();
 
-export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry) {
+export function createAccountRoutes(lifecycle: AccountLifecycle, registry: ProviderRegistry, deps: { names?: AccountNames; onNamesChanged?: () => void } = {}) {
   return async (req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<boolean> => {
     const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
+    const nameRoute = deps.names && /^\/api\/accounts\/([^/]+)\/name$/.exec(path);
     const legacy = /^\/api\/instances\/([^/]+)\/(sign-in|sign-out)$/.exec(path);
     const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1]));
-    if (!route && !managed) return false;
-    const id = route?.[1] ?? legacy?.[1];
+    if (!route && !managed && !nameRoute) return false;
+    const id = nameRoute?.[1] ?? route?.[1] ?? legacy?.[1];
     const action = route?.[2] ?? legacy?.[2];
     try {
+      if (nameRoute) {
+        if (method !== "POST") json(res, 405, { error: "Unsupported account operation" });
+        else {
+          deps.names!.sync(lifecycle.accounts.list());
+          if (!deps.names!.get(id!)) {
+            json(res, 404, { error: "Unknown account", code: "unknown-account" });
+            return true;
+          }
+          const parsed = nameSchema.safeParse(await body(req));
+          if (!parsed.success) {
+            json(res, 400, { error: "Invalid nickname", code: "invalid-character" });
+            return true;
+          }
+          deps.names!.setNickname(id!, parsed.data.nickname);
+          const { number, nickname, name } = deps.names!.get(id!)!;
+          json(res, 200, { id, number, nickname, name });
+          deps.onNamesChanged?.();
+        }
+        return true;
+      }
       if (id && !isInstanceId(id)) throw new AccountError("Invalid account id", 400);
       if (id && action === "sign-in" && method === "GET") {
         const result = legacy ? registry.signIn(id) : lifecycle.signInResult(id) ?? (lifecycle.accounts.list().some((row) => row.id === id) ? { state: registry.logins.state(id), ...registry.logins.capture(id) } : null);
@@ -44,9 +67,13 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         json(res, 200, { destinationId: destination.id });
       } else if (!id && method === "GET") {
         const instances = await registry.describeCached();
-        json(res, 200, { accounts: lifecycle.accounts.list().map((account) => {
+        const accounts = lifecycle.accounts.list();
+        deps.names?.sync(accounts);
+        json(res, 200, { accounts: accounts.map((account) => {
           const instance = instances.find((row) => row.instanceId === account.id);
+          const named = deps.names?.get(account.id);
           return { ...account, ...(!account.error && lifecycle.accounts.isDefault(account.id) ? { default: true } : {}), snapshot: account.error ? { state: "unavailable", reason: account.error } : instance?.snapshot, loginState: instance?.loginState, loginError: instance?.loginError,
+            ...(named ? { number: named.number, nickname: named.nickname, name: named.name } : {}),
             state: account.existing && registry.accountBlocked(account.id) ? "stopped" : account.state,
             models: instance?.models, effortLevels: instance?.capabilities.effortLevels,
             ...(lifecycle.accounts.drains[account.id] ? { drain: lifecycle.accounts.drains[account.id] } : {}),
@@ -70,7 +97,8 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
       } else json(res, 405, { error: "Unsupported account operation" });
     } catch (error) {
       const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500;
-      json(res, status, { error: status < 500 || error instanceof AccountError ? (error as Error).message : "Account operation failed" });
+      if (nameRoute) json(res, status, error instanceof AccountNameError ? { error: error.message, code: error.code } : status === 400 ? { error: "Invalid nickname", code: "invalid-character" } : { error: "Account operation failed" });
+      else json(res, status, { error: status < 500 || error instanceof AccountError ? (error as Error).message : "Account operation failed" });
     }
     return true;
   };
