@@ -410,15 +410,40 @@ describe("trusted worker accounts", () => {
       environment: { CLAUDE_CONFIG_DIR: main.home, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
   });
 
-  it.each(["missing", "signed out", "blocked"])("falls back to the base when the other engine's Main is %s", async (state) => {
+  it("keeps the base when the other engine has no Main", async () => {
     const f = await fixture();
     const m = mainRouting(f);
     f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
-    if (state !== "missing") await f.accounts.setDefault("codex", f.third.id);
-    if (state === "signed out") await f.accounts.stop(f.third.id);
-    if (state === "blocked") m.blocked.add(f.third.id);
     expect(await m.prepare(f.input)).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0 },
       environment: { CODEX_HOME: f.bases.codex.environment!.CODEX_HOME } });
+  });
+
+  it.each(["signed out", "blocked"])("falls back to the base and says so when the other engine's Main is %s", async (state) => {
+    const f = await fixture();
+    const m = mainRouting(f);
+    f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    await f.accounts.setDefault("codex", f.third.id);
+    if (state === "signed out") await f.accounts.stop(f.third.id);
+    if (state === "blocked") m.blocked.add(f.third.id);
+    const launch = await m.prepare(f.input);
+    expect(launch).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0 },
+      environment: { CODEX_HOME: f.bases.codex.environment!.CODEX_HOME } });
+    expect(launch && "line" in launch ? launch.line : "").toMatch(/^Codex Main is signed out, so this worker uses your default account\./);
+  });
+
+  it.each([
+    { from: "claude", to: "codex" }, { from: "codex", to: "claude" },
+  ] as const)("rejects a $to worker when Main changes during usage refresh from a $from turn", async ({ from, to }) => {
+    const f = await fixture();
+    delete f.bases.claude.environment;
+    const ready = async (name: string) => f.accounts.identify((await f.accounts.add(to)).id, name);
+    const first = to === "codex" ? f.third : await ready("first-identity");
+    const second = await ready("second-identity");
+    await f.accounts.setDefault(to, first.id);
+    f.turns.capture("bot", "thread", from === "claude" ? { instanceId: "claude", driverKind: "claudeAgent" } : { instanceId: "codex", driverKind: "codex" });
+    const m = mainRouting(f);
+    f.refresh.mockImplementation(async () => { await f.accounts.setDefault(to, second.id); return {}; });
+    await expect(m.prepare({ ...f.input, command: `${to} 'task'` })).rejects.toThrow("Worker account changed before launch");
   });
 
   it("keeps same-engine workers on the captured turn's account when Main is another account", async () => {
