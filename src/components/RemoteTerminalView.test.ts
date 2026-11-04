@@ -1129,9 +1129,9 @@ describe("RemoteTerminalView", () => {
     }
   });
 
-  it("offers the terminal button without the preload and picks the remote view there", () => {
-    expect(app).toContain("onOpenTerminal={openTerminal}");
-    expect(app).not.toContain("onOpenTerminal={window.ogb?.terminal ? openTerminal : undefined}");
+  it("offers the terminal row without the preload and picks the remote view there", () => {
+    expect(app).toContain("onOpenTerminal={openMainTerminal}");
+    expect(app).not.toContain("onOpenTerminal={window.ogb?.terminal ? openMainTerminal : undefined}");
     expect(app).toMatch(/window\.ogb\?\.terminal \? \(\s*<TerminalWorkspace[\s\S]*?\) : \(\s*<RemoteTerminalView/);
   });
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bot, ChevronRight, ScrollText, X } from "lucide-react";
+import { Bot, ChevronRight, ScrollText, TerminalSquare, X } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -170,7 +170,28 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
   );
 }
 
-function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane }: { title: string; runs: ShownRun[]; livePanes: Set<string> | null; onClose: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+function TerminalEntry({ onOpenTerminal, onClose, inset }: { onOpenTerminal: () => void; onClose: () => void; inset?: boolean }) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      data-worker-terminal=""
+      onClick={() => {
+        onOpenTerminal();
+        onClose();
+      }}
+      className={cn(ENTRY_CLASS, "shrink-0 border-t hover:bg-raised/40", inset && "px-3")}
+    >
+      <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised">
+        <TerminalSquare size={14} aria-hidden className="text-ink-secondary" />
+      </span>
+      <span className="min-w-0 flex-1 truncate font-medium text-ink">{t("terminal.open")}</span>
+      {inset && <kbd className="shrink-0 font-sans text-[12.5px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>}
+    </button>
+  );
+}
+
+function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane, onOpenTerminal }: { title: string; runs: ShownRun[]; livePanes: Set<string> | null; onClose: () => void; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void }) {
   const { t } = useI18n();
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -241,6 +262,7 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane }: { t
           </button>
         </div>
         <WorkerEntries nickFirst runs={runs} livePanes={livePanes} onOpenTerminalPane={onOpenTerminalPane} onClose={onClose} />
+        {onOpenTerminal && <TerminalEntry onOpenTerminal={onOpenTerminal} onClose={onClose} />}
       </div>
     </div>,
     document.body,
@@ -248,7 +270,7 @@ function WorkerList({ title, runs, livePanes, onClose, onOpenTerminalPane }: { t
 }
 
 /** Header chip for this chat's listed runs. Opens the worker list. */
-export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLive = false, onOpenTerminalPane }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void }) {
+export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLive = false, onOpenTerminalPane, onOpenTerminal }: { name: string; runs: ShownRun[]; livePanes?: Set<string> | null; paneLabels?: ReadonlyMap<string, string>; waitForLive?: boolean; onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [right, setRight] = useState(0);
@@ -257,6 +279,7 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
   const buttonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const listed = livePanes === null && waitForLive ? [] : listedRuns(runs, livePanes, paneLabels);
+  const shown = listed.length > 0 || Boolean(onOpenTerminal);
   const [phone, setPhone] = useState(isPhone);
   useEffect(() => {
     const media = window.matchMedia?.(PHONE_QUERY);
@@ -268,8 +291,8 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
     return () => media?.removeEventListener?.("change", flip);
   }, []);
   useEffect(() => {
-    if (listed.length === 0) setOpen(false);
-  }, [listed.length]);
+    if (!shown) setOpen(false);
+  }, [shown]);
   useBackLayer(open && phone, () => setOpen(false));
   useLayoutEffect(() => {
     if (!open || phone || !rootRef.current) return;
@@ -319,22 +342,22 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
     };
   }, [open, phone]);
   useEffect(() => {
-    if (listed.length === 0) return;
+    if (!shown) return;
     const onToggle = () => {
       if (open && rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus();
       setOpen(!open);
     };
     window.addEventListener("orbit:toggle-worker-menu", onToggle);
     return () => window.removeEventListener("orbit:toggle-worker-menu", onToggle);
-  }, [listed.length, open]);
+  }, [shown, open]);
   useEffect(() => {
     if (!open) return;
     const onClose = () => setOpen(false);
     window.addEventListener("orbit:close-worker-menu", onClose);
     return () => window.removeEventListener("orbit:close-worker-menu", onClose);
   }, [open]);
+  if (!shown) return null;
   const first = listed[0];
-  if (!first) return null;
   const counts = {
     working: listed.filter((shown) => shown.state === "working").length,
     waiting: listed.filter((shown) => shown.state === "waiting").length,
@@ -357,17 +380,17 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
       >
         <span data-worker-chip-desktop className="hidden items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-raised md:flex @max-4xl/chathead:!hidden">
           <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
-          <span aria-hidden className="text-[13px] text-ink-secondary">{t(listed.length === 1 ? "workers.countOne" : "workers.countMany", { count: listed.length })}</span>
-          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />
+          {first && <span aria-hidden className="text-[13px] text-ink-secondary">{t(listed.length === 1 ? "workers.countOne" : "workers.countMany", { count: listed.length })}</span>}
+          {first && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />}
         </span>
         <span data-worker-chip-phone className="relative flex items-center gap-1 md:hidden @max-4xl/chathead:!flex">
           <Bot size={15} aria-hidden className="shrink-0 text-ink-secondary" />
           {listed.length >= 2 && <span aria-hidden className="text-[12px] tabular-nums text-ink-secondary">{listed.length}</span>}
-          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />
+          {first && <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", WORKER_STATUS[first.state].dot)} />}
           <span aria-hidden className="absolute left-1/2 top-1/2 size-11 -translate-x-1/2 -translate-y-1/2" />
         </span>
       </button>
-      {open && phone && <WorkerList title={t("workers.title", { name })} runs={listed} livePanes={livePanes} onClose={close} onOpenTerminalPane={onOpenTerminalPane} />}
+      {open && phone && <WorkerList title={t("workers.title", { name })} runs={listed} livePanes={livePanes} onClose={close} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />}
       {open && !phone && (
         <div
           data-worker-list
@@ -380,6 +403,7 @@ export function WorkerChip({ name, runs, livePanes = null, paneLabels, waitForLi
           <div className="max-h-[320px] overflow-y-auto">
             <WorkerEntries inset nickFirst runs={listed} livePanes={livePanes} onOpenTerminalPane={onOpenTerminalPane} onClose={close} />
           </div>
+          {onOpenTerminal && <TerminalEntry inset onOpenTerminal={onOpenTerminal} onClose={close} />}
         </div>
       )}
     </div>

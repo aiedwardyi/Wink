@@ -181,13 +181,6 @@ export function usePhoneHeaderNameFloor(
         }
         if (button.getBoundingClientRect().width + 1 < slot.nameMin) return false;
         if (slot.nameMin >= text - 0.5 && button.scrollWidth > button.clientWidth + 1) return false;
-        const device = cluster.querySelector("[data-device-tag]");
-        const term = header.querySelector("[data-chat-terminal]");
-        if (device instanceof HTMLElement && term instanceof HTMLElement) {
-          const a = device.getBoundingClientRect();
-          const b = term.getBoundingClientRect();
-          if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) return false;
-        }
         const controls = header.lastElementChild !== cluster ? header.lastElementChild : null;
         const edge = chip ?? controls;
         if (edge instanceof HTMLElement) {

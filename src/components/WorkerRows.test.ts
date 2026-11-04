@@ -162,12 +162,12 @@ describe("WorkerChip", () => {
     const base = run(`${nick} | Opus 5.5 | high`);
     return { run: { ...base, id: sessionId, nick, sessionId, at }, state };
   };
-  const mount = async (runs: ShownRun[], opts?: { onOpenTerminalPane?: (sessionId: string) => void; livePanes?: Set<string> | null; waitForLive?: boolean }) => {
-    applyLocale("en");
+  const mount = async (runs: ShownRun[], opts?: { onOpenTerminalPane?: (sessionId: string) => void; onOpenTerminal?: () => void; livePanes?: Set<string> | null; waitForLive?: boolean; locale?: "en" | "ko" }) => {
+    applyLocale(opts?.locale ?? "en");
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(createElement(WorkerChip, { name: "Ada", runs, livePanes: opts?.livePanes, waitForLive: opts?.waitForLive, onOpenTerminalPane: opts?.onOpenTerminalPane })));
+    await act(async () => root.render(createElement(WorkerChip, { name: "Ada", runs, livePanes: opts?.livePanes, waitForLive: opts?.waitForLive, onOpenTerminalPane: opts?.onOpenTerminalPane, onOpenTerminal: opts?.onOpenTerminal })));
     return {
       host,
       root,
@@ -521,6 +521,81 @@ describe("WorkerChip", () => {
       expect(host.querySelector("[data-worker-strip]")).toBeNull();
     } finally {
       await unmount();
+    }
+  });
+
+  it("shows a plain grey bot at 0 workers when the terminal can open", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const { host, unmount } = await mount([], { onOpenTerminal: () => {} });
+    try {
+      for (const form of ["[data-worker-chip-desktop]", "[data-worker-chip-phone]"]) {
+        const chip = host.querySelector(form)!;
+        expect(chip.querySelectorAll(".lucide-bot.text-ink-secondary")).toHaveLength(1);
+        expect(chip.textContent).toBe("");
+        expect(chip.querySelector(".rounded-full")).toBeNull();
+      }
+      expect(host.querySelector("[data-worker-strip]")?.getAttribute("title")).toBe("Workers (Alt+W)");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([false, true])("opens on the app event at 0 workers with phone=%s", async (phone) => {
+    stubMedia({ matches: phone });
+    const { chip, unmount } = await mount([], { onOpenTerminal: () => {} });
+    try {
+      await act(async () => { window.dispatchEvent(new Event("orbit:toggle-worker-menu")); });
+      expect(chip()!.getAttribute("aria-expanded")).toBe("true");
+      const list = document.body.querySelector("[data-worker-list]")!;
+      expect(list.querySelectorAll("li")).toHaveLength(0);
+      expect(list.querySelector("[data-worker-terminal]")?.textContent).toContain("Open terminal");
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("ends the desktop list with a pinned terminal row that names the hotkey", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const onOpen = vi.fn();
+    const onPane = vi.fn();
+    const runs = Array.from({ length: 8 }, (_, i) => shown(`W${i}`, "working", `s${i}`, i));
+    const { host, chip, unmount } = await mount(runs, { onOpenTerminal: onOpen, onOpenTerminalPane: onPane });
+    try {
+      await act(async () => chip()!.click());
+      const list = host.querySelector("[data-worker-list]")!;
+      const row = list.lastElementChild!;
+      expect(row.hasAttribute("data-worker-terminal")).toBe(true);
+      expect(row.querySelector(".lucide-square-terminal, .lucide-terminal-square")).not.toBeNull();
+      expect(row.textContent).toBe("Open terminalCtrl+`");
+      const scroller = [...list.querySelectorAll<HTMLElement>("*")].find((el) => el.className.includes("overflow-y-auto"))!;
+      expect(scroller.contains(row)).toBe(false);
+      await act(async () => (row as HTMLButtonElement).click());
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(onPane).not.toHaveBeenCalled();
+      expect(host.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it.each([["en", "Open terminal"], ["ko", "터미널 열기"]] as const)("ends the %s phone sheet with the terminal row and no hotkey", async (locale, label) => {
+    stubMedia({ matches: true });
+    const onOpen = vi.fn();
+    const { chip, unmount } = await mount([shown("WORK", "working", "work-1", 1)], { onOpenTerminal: onOpen, locale });
+    try {
+      await act(async () => chip()!.click());
+      const sheet = document.body.querySelector("[data-worker-list]")!;
+      const row = sheet.lastElementChild!;
+      expect(row.hasAttribute("data-worker-terminal")).toBe(true);
+      expect(row.textContent).toBe(label);
+      expect(row.className.split(" ")).toContain("shrink-0");
+      expect(sheet.querySelector("ul")!.contains(row)).toBe(false);
+      await act(async () => (row as HTMLButtonElement).click());
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(document.body.querySelector("[data-worker-list]")).toBeNull();
+    } finally {
+      await unmount();
+      applyLocale("en");
     }
   });
 

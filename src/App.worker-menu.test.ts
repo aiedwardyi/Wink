@@ -97,6 +97,28 @@ describe("the workers menu follows the view", () => {
     expect(menu()).toBeNull();
   });
 
+  it("opens the terminal on Main from the list's terminal row", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("/api/bots/b1/terminal")
+      ? Promise.resolve(new Response(JSON.stringify({ panes: [{ sessionId: "b1000000-0000-4000-8000-000000000000", label: "ONE | Opus 5.5 | high" }] }), { headers: { "Content-Type": "application/json" } }))
+      : new Promise<Response>(() => {})));
+    await openMenu();
+    const entry = () => menu()?.querySelector<HTMLButtonElement>("li button") ?? null;
+    await until(entry);
+    await act(async () => entry()!.click());
+    const selected = () => document.querySelector('.orbit-terminal-overlay [role="tab"][aria-selected="true"]');
+    await until(selected);
+    expect(selected()?.textContent).toContain("ONE");
+    await key({ key: "`", code: "Backquote", ctrlKey: true });
+    expect(document.querySelector(".orbit-terminal-overlay")?.getAttribute("data-open")).toBe("false");
+    await act(async () => strip()!.click());
+    const row = menu()!.lastElementChild as HTMLButtonElement;
+    expect(row.hasAttribute("data-worker-terminal")).toBe(true);
+    await act(async () => row.click());
+    expect(menu()).toBeNull();
+    expect(document.querySelector(".orbit-terminal-overlay")?.getAttribute("data-open")).toBe("true");
+    expect(selected()?.textContent).toBe("Main");
+  });
+
   it("closes when a hotkey switches to another bot", async () => {
     await openMenu();
     await key({ key: "2", code: "Digit2", ctrlKey: true });

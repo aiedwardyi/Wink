@@ -118,7 +118,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const [sidebarOverlay, setSidebarOverlay] = useState<string | null>(null);
   const modelPickerIds = useRef(new Set<string>());
   const [terminalViews, setTerminalViews] = useState<Record<string, boolean>>({});
-  const [paneHotkey, setPaneHotkey] = useState<{ n: number } | null>(null);
+  const [paneHotkey, setPaneHotkey] = useState<{ n: number; botId?: string } | null>(null);
   const [paneFocus, setPaneFocus] = useState<{ sessionId: string } | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarOnRight = useSidebarSide() === "right";
@@ -134,6 +134,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     openTerminal();
     setPaneFocus({ sessionId });
   }, [openTerminal]);
+  const openMainTerminal = useCallback(() => {
+    openTerminal();
+    if (botId) setPaneHotkey({ n: 1, botId });
+  }, [botId, openTerminal]);
+  // The Main row's pick belongs to its bot; a bare Alt+digit applies to whichever bot is shown.
+  const botPaneHotkey = paneHotkey?.botId && paneHotkey.botId !== botId ? null : paneHotkey;
   const clearTerminalAttention = (attention: Pick<TerminalAttention, "botId" | "sessionId">) => {
     const key = terminalAttentionKey(attention.botId, attention.sessionId);
     const sessions = pendingTerminalAcknowledgements.current.get(attention.botId);
@@ -638,7 +644,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
             <ChatView
               bot={bot}
               focusComposerBlocked={paletteOpen || terminalOpen}
-              onOpenTerminal={openTerminal}
+              onOpenTerminal={openMainTerminal}
               onOpenTerminalPane={openTerminalPane}
             />
           </div>
@@ -646,9 +652,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
             <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" data-open={terminalOpen} inert={!terminalOpen} aria-hidden={!terminalOpen}>
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (
-                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneHotkey={paneHotkey} paneFocus={paneFocus} onClose={closeTerminal} />
+                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneHotkey={botPaneHotkey} paneFocus={paneFocus} onClose={closeTerminal} />
                 ) : (
-                  <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneHotkey={paneHotkey} paneFocus={paneFocus} onClose={closeTerminal} />
+                  <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneHotkey={botPaneHotkey} paneFocus={paneFocus} onClose={closeTerminal} />
                 )}
               </LazyView>
             </div>
