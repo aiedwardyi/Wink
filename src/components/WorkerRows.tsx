@@ -183,7 +183,7 @@ function TerminalEntry({ onOpenTerminal, onClose, inset }: { onOpenTerminal: () 
       className={cn(ENTRY_CLASS, "shrink-0 border-t hover:bg-raised/40", inset && "px-3")}
     >
       <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline/40 bg-raised">
-        <TerminalSquare size={14} aria-hidden className="text-ink-secondary" />
+        <TerminalSquare size={18} aria-hidden className="text-ink-secondary" />
       </span>
       <span className="min-w-0 flex-1 truncate font-medium text-ink">{t("terminal.open")}</span>
       {inset && <kbd className="shrink-0 font-sans text-[12.5px] text-ink-secondary">{window.ogb?.platform === "darwin" ? "⌘" : "Ctrl+"}`</kbd>}
