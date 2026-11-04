@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from "react";
 import { fetchResponse, responseBody } from "@/lib/api-request";
 import { useI18n } from "@/lib/i18n";
+import { holdReload } from "@/lib/reload-hold";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 
 const ERRORS = {
@@ -46,7 +47,7 @@ export function AccountNameEditor({ id, nickname, onSaved, onClose }: {
     finally { pending.current = false; setBusy(false); }
   };
   return (
-    <form data-account-name-editor="" className="flex min-w-0 flex-col gap-2 py-2" onSubmit={(event) => { event.preventDefault(); void save(); }}
+    <form data-account-name-editor="" className="flex min-w-0 flex-col gap-2 py-2" onSubmit={(event) => { event.preventDefault(); void holdReload(save()); }}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
       <label htmlFor={field}>{t("accounts.name.nickname")}</label>
       <input id={field} autoFocus value={value} onInput={(event) => setValue(event.currentTarget.value)} autoComplete="off" spellCheck={false}

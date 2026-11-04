@@ -22,6 +22,7 @@ let board: UsageBoard;
 let accounts: InstanceInfo[];
 let reply: (() => Promise<Response>) | null;
 let boardReply: (() => Promise<Response>) | null;
+let mutationReply: (() => Promise<Response>) | null;
 let calls: { path: string; init?: RequestInit }[];
 const matchMedia = window.matchMedia;
 const row = () => host.querySelector<HTMLElement>('[data-connection-account="claude"]');
@@ -79,11 +80,13 @@ beforeEach(async () => {
   calls = [];
   reply = null;
   boardReply = null;
+  mutationReply = null;
   vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     const path = String(url);
     calls.push({ path, init });
     if (path.startsWith("/api/usage/board")) return boardReply ? boardReply() : Response.json(structuredClone(board));
     if (path.endsWith("/name")) return reply ? reply() : Response.json({ id: "claude", number: 1, nickname: "Studio", name: "Studio" });
+    if (path === "/api/accounts" && init?.method === "POST" && mutationReply) return mutationReply();
     return new Promise<Response>(() => {});
   }));
   m = { store: await import("@/state/store"), connections: await import("./AccountConnections"), settings: await import("./SettingsModal"),
@@ -129,6 +132,10 @@ it("keeps account identities inside Connections account rows", async () => {
     await click(button(locale === "en" ? "Save" : "저장"));
     scan();
     await click(button(locale === "en" ? "Cancel" : "취소", host.querySelector("[data-account-name-editor]")!));
+    mutationReply = async () => Response.json({ error: `Busy ${canary.address} ${canary.local} ${canary.domain}` }, { status: 409 });
+    await click(button(locale === "en" ? "Add Account" : "계정 추가"));
+    expect(host.querySelector('[role="alert"]'), "Add Account failure").not.toBeNull();
+    scan();
     for (const section of ["usage", "general", "account", "devices", "themes", "team", "models-index", "shortcuts"] as AppSettingsSection[]) {
       await act(async () => store.dispatch({ type: "toggleAppSettings", section, open: true }));
       await settle();
@@ -168,6 +175,42 @@ it("clears a nickname with an empty name", async () => {
   await click(button("Save"));
   expect(calls.find(({ path }) => path.endsWith("/name"))?.init?.body).toBe('{"nickname":null}');
   expect(row()?.textContent).toContain("Claude 1");
+});
+
+it("renames a Codex account through its own route", async () => {
+  accounts = [{ ...accounts[0]!, instanceId: "codex", accountOf: "codex", driverKind: "codex", displayName: "Codex" }];
+  reply = async () => Response.json({ id: "codex", number: 1, nickname: "Studio", name: "Studio" });
+  await mount();
+  await click(button("Name"));
+  await input("Studio");
+  await click(button("Save"));
+  expect(calls.find(({ path }) => path.endsWith("/name"))?.path).toBe("/api/accounts/codex/name");
+  expect(host.querySelector('[data-connection-account="codex"]')?.textContent).toContain("Studio");
+});
+
+it("holds update reload while a name save is pending", async () => {
+  const { reloadHeld } = await import("@/lib/reload-hold");
+  await mount();
+  await click(button("Name"));
+  await input("Studio");
+  let finish!: (response: Response) => void;
+  reply = () => new Promise((resolve) => { finish = resolve; });
+  await click(button("Save"));
+  try { expect(reloadHeld(), "the names mutation holds the update reload").toBe(true); }
+  finally {
+    await act(async () => finish(Response.json({ id: "claude", number: 1, nickname: "Studio", name: "Studio" })));
+    await settle();
+  }
+  expect(reloadHeld()).toBe(false);
+});
+
+it.each([["grok", "grokAgent"], ["gemini", "geminiAgent"], ["muse", "museAgent"]])("offers no Name control for %s even with a board row", async (id, driverKind) => {
+  if (id === "muse") board.engines.push({ engine: "muse", base: id!, mainId: id!, events: [],
+    accounts: [{ ...board.engines[0]!.accounts[0]!, id: id!, nickname: null, name: "Muse" }] });
+  accounts = [{ ...accounts[0]!, instanceId: id!, accountOf: id!, driverKind: driverKind!, displayName: id! }];
+  await mount();
+  expect(host.querySelector("[data-account-number]"), "the board row is present").not.toBeNull();
+  expect(button("Name")).toBeUndefined();
 });
 
 const errors = [

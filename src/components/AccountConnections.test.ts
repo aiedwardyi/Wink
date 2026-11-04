@@ -287,6 +287,19 @@ it.each([false, true])("retries a failed drain with its recorded destination whe
   });
 });
 
+it("drops Sign Out from an open phone menu when the account starts draining", async () => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
+  await render();
+  const row = host.querySelector('[data-connection-account="account-1"]')!;
+  await act(async () => row.querySelector<HTMLButtonElement>("[data-connection-menu]")!.click());
+  expect(buttons("Sign Out")).toHaveLength(1);
+  state.instances[1]!.drain = { destinationId: "claude", phase: "draining" };
+  await update();
+  expect(row.querySelector('[role="status"]')?.textContent).toBe("Signing out…");
+  expect(buttons("Sign Out")).toHaveLength(0);
+  expect(buttons("Retry Sign Out")).toHaveLength(0);
+});
+
 it.each(["en", "ko"] as const)("submits a managed Claude browser code without exposing it in %s", async (locale) => {
   persistPreference(locale);
   await render();

@@ -102,7 +102,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const controls = <>
     {canName && <button ref={nameButton} type="button" disabled={busy} className={ROW_BUTTON}
       onClick={() => { setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
-    {(ready || account.drain) && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
+    {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
   const mark = <ProviderMark driverKind={account.driverKind} size={16} />;
