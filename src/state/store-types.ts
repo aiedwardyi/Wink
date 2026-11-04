@@ -479,6 +479,7 @@ export interface AppState {
    * same message be focused twice in a row */
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean; query?: string } | null;
   connected: boolean;
+  hasConnected: boolean;
   /** true once the first `hydrate` action has landed and state.bots reflects the real snapshot */
   hydrated: boolean;
   error: string | null;

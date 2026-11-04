@@ -25,6 +25,76 @@ afterEach(async () => {
 });
 
 describe("cleanup summary", () => {
+  it.each([false, true])("replaces an in-flight read when a tidy signature changes (patch %s)", async (patched) => {
+    const replies: Array<(response: Response) => void> = [];
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
+    vi.stubGlobal("fetch", fetch);
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    await mount();
+    if (patched) {
+      await act(async () => replies[0](Response.json({ run })));
+      await act(async () => root.render(createElement(Probe, { messages: [message] })));
+    }
+    const before = replies.length;
+    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
+    await act(async () => root.render(createElement(Probe, { messages: [changed] })));
+    const reads = replies.length;
+    await act(async () => replies[before - 1](Response.json({ run: patched ? null : { ...run, runId: "stale" } })));
+    expect(value.run?.runId).toBe(patched ? "r" : undefined);
+    if (reads > before) await act(async () => replies[before](Response.json({ run: { ...run, undoneAt: patched ? 3 : null, undoable: !patched } })));
+    expect(reads).toBe(before + 1);
+    expect(value.run?.runId).toBe("r");
+    expect(value.run?.undoable).toBe(!patched);
+  });
+
+  it("coalesces same-bot reads across cleanup rows and refetches after settling", async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    vi.stubGlobal("fetch", fetch);
+    await mount();
+    await act(async () => root.render(createElement("div", null, createElement(Probe), createElement(Probe), createElement(Probe))));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => finish(Response.json({ run })));
+    expect(value.run?.runId).toBe("r");
+    await act(async () => root.render(createElement(Probe)));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => finish(Response.json({ run })));
+  });
+
+  it.each([false, true])("coalesces replacement reads across mounted rows (patch %s)", async (patched) => {
+    const replies: Array<(response: Response) => void> = [];
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => replies.push(resolve)));
+    vi.stubGlobal("fetch", fetch);
+    await mount();
+    const message: Message = { id: "t", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", tidy: { runId: "r" } } };
+    const rows = (messages: Message[]) => createElement("div", null, ...[1, 2, 3].map((key) => createElement(Probe, { key, messages })));
+    await act(async () => root.render(rows(patched ? [message] : [])));
+    await act(async () => replies[0](Response.json({ run })));
+    const changed = patched ? { ...message, tool: { ...message.tool!, tidy: { runId: "r", undoneAt: 3 } } } : message;
+    const before = replies.length;
+    await act(async () => root.render(rows([changed])));
+    const reads = replies.length - before;
+    await act(async () => { for (const reply of replies.slice(before)) reply(Response.json({ run: { ...run, undoable: !patched } })); });
+    expect(reads).toBe(1);
+    expect(value.run?.undoable).toBe(!patched);
+  });
+
+  it("refreshes after Undo even when an older summary is in flight", async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ run }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce(Response.json({ ok: true, revision: "new", restored: 1, skipped: 0 }))
+      .mockResolvedValueOnce(Response.json({ run: { ...run, undoneAt: 3, undoable: false } }));
+    vi.stubGlobal("fetch", fetch); await mount();
+    await act(async () => root.render(createElement(Probe, { active: false })));
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => value.undo());
+    expect(fetch).toHaveBeenCalledTimes(4);
+    await act(async () => finish(Response.json({ run })));
+    expect(value.run?.undoable).toBe(false);
+    expect(value.run?.undoneAt).toBe(3);
+  });
+
   it("refetches on tab reopen and a tidy append or patch", async () => {
     const fetch = vi.fn(async () => Response.json({ run })); vi.stubGlobal("fetch", fetch);
     await mount(); expect(value.run?.runId).toBe("r");

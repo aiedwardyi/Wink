@@ -21,6 +21,19 @@ export type MemoryCleanUndoResult =
   | { ok: false; error: "no-run" | "not-newest" | "undone" | "busy" };
 
 const listeners = new Map<string, Set<() => void>>();
+const pending = new Map<string, { signature: string; read: Promise<MemoryCleanRun | null> }>();
+
+function readSummary(botId: string, signature: string): Promise<MemoryCleanRun | null> {
+  const current = pending.get(botId);
+  if (current?.signature === signature) return current.read;
+  const read = fetchResponse(`/api/bots/${botId}/memory/clean`).then(async (response) =>
+    response.status === 200 ? ((await response.json()) as MemoryCleanSummary).run : null,
+  ).catch(() => null).finally(() => {
+    if (pending.get(botId)?.read === read) pending.delete(botId);
+  });
+  pending.set(botId, { signature, read });
+  return read;
+}
 
 export function useMemoryClean(botId: string, messages: readonly Message[], active = true) {
   const [run, setRun] = useState<MemoryCleanRun | null>(null);
@@ -29,13 +42,9 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
   const signature = messages.filter((message) => message.tool?.tidy).map((message) => `${message.id}:${message.tool!.tidy!.runId}:${message.tool!.tidy!.undoneAt ?? ""}`).join("|");
   const refresh = useCallback(async () => {
     const request = ++generation.current;
-    let next: MemoryCleanRun | null = null;
-    try {
-      const response = await fetchResponse(`/api/bots/${botId}/memory/clean`);
-      if (response.status === 200) next = ((await response.json()) as MemoryCleanSummary).run;
-    } catch {}
+    const next = await readSummary(botId, signature);
     if (generation.current === request) setRun(next);
-  }, [botId]);
+  }, [botId, signature]);
   useEffect(() => {
     const set = listeners.get(botId) ?? new Set<() => void>();
     const read = () => { void refresh(); };
@@ -52,7 +61,7 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
     const changed = seenSignature.current !== signature;
     seenSignature.current = signature;
     if (active || changed) void refresh();
-  }, [active, signature, refresh]);
+  }, [active, botId, signature, refresh]);
   const undo = async () => {
     if (!run?.undoable || busy.current) return;
     busy.current = true;
@@ -61,7 +70,10 @@ export function useMemoryClean(botId: string, messages: readonly Message[], acti
       const body = await response.json() as MemoryCleanUndoResult;
       if (response.status === 409 && !body.ok && body.error === "busy") return;
       setRun(response.status === 200 && body.ok ? { ...run, undoneAt: Date.now(), undoable: false } : null);
-      if ((response.status === 200 && body.ok) || response.status === 404 || response.status === 409) listeners.get(botId)?.forEach((listener) => listener());
+      if ((response.status === 200 && body.ok) || response.status === 404 || response.status === 409) {
+        pending.delete(botId);
+        listeners.get(botId)?.forEach((listener) => listener());
+      }
     } catch { setRun(null); }
     finally { busy.current = false; }
   };
