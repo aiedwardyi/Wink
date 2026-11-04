@@ -4,6 +4,8 @@ import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createStartupTiming } from "./startup-timing.ts";
+import { foldQueuedSends, isSendCancelled, queueMark, queueSteeredMessage, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
+import { Store } from "./store.ts";
 
 afterEach(() => vi.useRealTimers());
 
@@ -282,7 +284,7 @@ describe("startup timing", () => {
     const source = ts.createSourceFile("index.ts", text, ts.ScriptTarget.Latest, true);
     const turn = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "startTurn")!;
     const start = text.indexOf("async function startClaimedTurn(");
-    const body = text.slice(text.indexOf("{\n", start) + 2, text.indexOf("  const epoch =", start));
+    const body = text.slice(text.indexOf("{\n", start) + 2, text.indexOf("  const bot =", start));
     const startupTiming = createStartupTiming({ write: () => {} });
     let release!: () => void;
     startupTiming.afterPaint("accounts", () => new Promise<void>((resolve) => { release = resolve; }));
@@ -290,7 +292,7 @@ describe("startup timing", () => {
     const claims = new Set<string>();
     const startTurn = runInNewContext(`${ts.transpile(turn.getText(source), { target: ts.ScriptTarget.ES2022 })}
       async function startClaimedTurn(botId, text, opts) { ${body} dispatch(botId, text, opts); } startTurn`, {
-      startupTiming, dispatch, store: { bot: () => ({ threadId: "t1" }) }, turnStartClaims: claims,
+      startupTiming, currentTurnEpoch: () => 0, queueMark, dispatch, store: { bot: () => ({ threadId: "t1" }) }, turnStartClaims: claims,
       tryClaimTurnStart: (id: string) => { if (claims.has(id)) return false; claims.add(id); return true; },
       busyRejection: (message: string) => new Error(message), queueMicrotask() {},
     }) as (botId: string, text: string, opts: object) => Promise<void>;
@@ -304,5 +306,48 @@ describe("startup timing", () => {
     await pending;
     expect(dispatch).toHaveBeenCalledExactlyOnceWith("b1", "queued", opts);
     expect(claims.size).toBe(0);
+  });
+
+  it.each(["stop", "send"])("preserves the turn boundary during account recovery: %s", async (action) => {
+    const text = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const source = ts.createSourceFile("index.ts", text, ts.ScriptTarget.Latest, true);
+    const turn = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "startClaimedTurn") as ts.FunctionDeclaration;
+    const statements = turn.body!.statements;
+    const botIndex = statements.findIndex((node) => node.getText(source).startsWith("const bot ="));
+    const prefix = statements.slice(0, botIndex).map((node) => node.getText(source)).join("\n");
+    const folded = statements.find((node) => node.getText(source).startsWith("const folded ="))!.getText(source);
+    const stopped = statements.find((node) => ts.isIfStatement(node) && node.expression.getText(source) === "currentTurnEpoch(bot.id) !== epoch")!.getText(source);
+    const store = new Store(() => ({ instanceId: "fake", model: "fake" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    const threadId = bot.threadId;
+    let epoch = 0;
+    let release!: () => void;
+    const startupTiming = createStartupTiming({ write: () => {} });
+    startupTiming.afterPaint("accounts", () => new Promise<void>((resolve) => { release = resolve; }));
+    const dispatch = vi.fn();
+    _resetSteerQueue();
+    const pending = runInNewContext(`(async () => { ${ts.transpile(`${prefix}\n${folded}\n${stopped}\ndispatch(folded);`, { target: ts.ScriptTarget.ES2022 })} })()`, {
+      botId: bot.id, bot, threadId, opts: {}, store, startupTiming, queueMark, foldQueuedSends, isSendCancelled,
+      currentTurnEpoch: () => epoch, logSummaryWait() {}, startedTurn() {}, userMessage: {}, dispatch,
+    }) as Promise<void>;
+    try {
+      startupTiming.paint();
+      await Promise.resolve();
+      expect(dispatch).not.toHaveBeenCalled();
+      if (action === "stop") epoch += 1;
+      else queueSteeredMessage(bot.id, threadId, "during recovery");
+      release();
+      await pending;
+      if (action === "stop") expect(dispatch).not.toHaveBeenCalled();
+      else {
+        expect(dispatch).toHaveBeenCalledExactlyOnceWith(["during recovery"]);
+        expect(store.messagesFor(threadId).map((message) => message.text)).toEqual(["during recovery"]);
+        expect(_queuedCount(threadId)).toBe(0);
+      }
+    } finally {
+      release?.();
+      await pending;
+      _resetSteerQueue();
+    }
   });
 });

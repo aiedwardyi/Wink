@@ -4513,10 +4513,10 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 }
 
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
-  await startupTiming.waitFor("accounts").catch(() => {});
   const epoch = currentTurnEpoch(botId);
   // Sends queued before this claim belong to drain, not to this turn's folds.
   const claimMark = queueMark();
+  await startupTiming.waitFor("accounts").catch(() => {});
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (!opts?.limitWaitId && turnStartedByUser(opts)) limitWaits.cancel(botId);
