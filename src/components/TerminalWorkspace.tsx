@@ -103,7 +103,8 @@ export function TerminalWorkspace({
   const [replacing, setReplacing] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
-  const [confirmClose, setConfirmClose] = useState<{ id: string; name: string } | null>(null);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [closeTarget, setCloseTarget] = useState<{ id: string; name: string } | null>(null);
   const [panes, setPanes] = useState<BotPane[]>([]);
   const [pane, setPane] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
@@ -721,7 +722,10 @@ export function TerminalWorkspace({
     const target = panes.find((item) => item.id === id);
     if (!target) return;
     if (target.exited) closePane(id);
-    else setConfirmClose({ id, name: parseWorkerLabel(target.label).nick ?? id.slice(0, 8) });
+    else {
+      setCloseTarget({ id, name: parseWorkerLabel(target.label).nick ?? id.slice(0, 8) });
+      setConfirmClose(true);
+    }
   };
   const chip = rosterChip(workers, panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited })));
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
@@ -839,18 +843,21 @@ export function TerminalWorkspace({
           <span>{t("terminal.lifetime")}</span>
         )}
       </footer>
-      {confirmClose && (
-        <ConfirmDialog
-          title={t("terminal.closePaneConfirmTitle")}
-          body={t("terminal.closePaneConfirmBody", { name: confirmClose.name })}
-          confirmLabel={t("terminal.closePane")}
-          onCancel={() => setConfirmClose(null)}
-          onConfirm={() => {
-            closePane(confirmClose.id);
-            setConfirmClose(null);
-          }}
-        />
-      )}
+      <Presence open={confirmClose}>
+        {(closing) => closeTarget && (
+          <ConfirmDialog
+            closing={closing}
+            title={t("terminal.closePaneConfirmTitle")}
+            body={t("terminal.closePaneConfirmBody", { name: closeTarget.name })}
+            confirmLabel={t("terminal.closePane")}
+            onCancel={() => setConfirmClose(false)}
+            onConfirm={() => {
+              closePane(closeTarget.id);
+              setConfirmClose(false);
+            }}
+          />
+        )}
+      </Presence>
       <Presence open={confirmRestart}>
         {(closing) => (
           <ConfirmDialog

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { applyLocale, detectLocale } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- Header checks do not need the live store.
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -42,6 +43,7 @@ afterEach(async () => {
   delete window.ogb;
   lastViewedPanes.clear();
   applyLocale("en");
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -66,6 +68,11 @@ async function mount(exited = false) {
   await act(async () => { await Promise.resolve(); });
   return {
     close,
+    pickWorker: async () => {
+      await act(async () => host.querySelector<HTMLButtonElement>("header [data-worker-strip]")!.click());
+      const row = [...host.querySelectorAll<HTMLButtonElement>("[data-worker-list] li button")].find((button) => button.querySelector("span.truncate.font-medium")?.textContent === "Sol")!;
+      await act(async () => row.click());
+    },
     exit: async () => act(async () => listeners.forEach((cb) => cb({ id: "worker-1", exitCode: 0 }))),
     main: async () => act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 1 } }))),
   };
@@ -75,31 +82,50 @@ const closeButton = () => host.querySelector<HTMLButtonElement>('header button[a
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"][aria-describedby]');
 const dialogButton = (label: string) => [...dialog()!.querySelectorAll("button")].find((button) => button.textContent === label)!;
 
+async function finishClosing(panel: HTMLElement) {
+  expect(panel.parentElement?.getAttribute("data-closing")).toBe("true");
+  expect(panel.parentElement?.hasAttribute("inert")).toBe(true);
+  expect(panel.hasAttribute("role")).toBe(false);
+  await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS - 1));
+  expect(panel.isConnected).toBe(true);
+  await act(async () => vi.advanceTimersByTime(1));
+  expect(panel.isConnected).toBe(false);
+}
+
 it.each(["en", "ko-KR"])("confirms a running pane, keeps it on Cancel and Escape, then closes it in %s", async (locale) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   applyLocale(detectLocale(locale));
-  const { close } = await mount();
+  const { close, pickWorker } = await mount();
+  await pickWorker();
   await act(async () => closeButton().click());
   expect(close).not.toHaveBeenCalled();
   expect(dialog()?.textContent).toContain(locale === "en" ? "Close this pane?" : "이 창을 닫을까요?");
   expect(dialog()?.textContent).toContain(locale === "en" ? "Sol is still running. Closing stops it." : "Sol 작업이 아직 실행 중이에요. 닫으면 중지돼요.");
   const cancel = locale === "en" ? "Cancel" : "취소";
   expect(document.activeElement).toBe(dialogButton(cancel));
+  const cancelled = dialog()!;
   await act(async () => dialogButton(cancel).click());
   expect(dialog()).toBeNull();
+  await finishClosing(cancelled);
   expect(closeButton()).not.toBeNull();
   expect(close).not.toHaveBeenCalled();
   await act(async () => closeButton().click());
+  const escaped = dialog()!;
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(dialog()).toBeNull();
+  await finishClosing(escaped);
   expect(close).not.toHaveBeenCalled();
   await act(async () => closeButton().click());
+  const confirmed = dialog()!;
   await act(async () => dialogButton(locale === "en" ? "Close pane" : "창 닫기").click());
   expect(close).toHaveBeenCalledExactlyOnceWith("worker-1");
   expect(closeButton()).toBeNull();
+  await finishClosing(confirmed);
 });
 
 it("confirms the original worker if the selected pane changes", async () => {
-  const { close, main } = await mount();
+  const { close, main, pickWorker } = await mount();
+  await pickWorker();
   await act(async () => closeButton().click());
   await main();
   expect(dialog()?.textContent).toContain("Sol is still running.");
@@ -108,7 +134,8 @@ it("confirms the original worker if the selected pane changes", async () => {
 });
 
 it.each(["seed", "event"])("closes an ended pane immediately after %s", async (source) => {
-  const { close, exit } = await mount(source === "seed");
+  const { close, exit, pickWorker } = await mount(source === "seed");
+  await pickWorker();
   if (source === "event") await exit();
   await act(async () => closeButton().click());
   expect(dialog()).toBeNull();
@@ -116,9 +143,12 @@ it.each(["seed", "event"])("closes an ended pane immediately after %s", async (s
 });
 
 it("gives all four header controls the same hover and transition classes", async () => {
-  await mount();
+  const { pickWorker } = await mount();
+  const mainControls = [...host.querySelectorAll<HTMLButtonElement>("header button")];
+  expect(mainControls).toHaveLength(3);
+  await pickWorker();
   const controls = [...host.querySelectorAll<HTMLButtonElement>("header button")];
   expect(controls).toHaveLength(4);
   const treatment = (control: HTMLElement) => [...control.classList].filter((value) => /^(hover:|transition-)/.test(value)).sort();
-  for (const control of controls) expect(treatment(control)).toEqual(["hover:bg-raised", "hover:text-ink", "transition-colors"]);
+  for (const control of [...mainControls, ...controls]) expect(treatment(control)).toEqual(["hover:bg-raised", "hover:text-ink", "transition-colors"]);
 });

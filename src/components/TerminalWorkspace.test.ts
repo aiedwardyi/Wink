@@ -1534,7 +1534,7 @@ it("closes the watched pane from the header Close pane button while ignoring lat
   await act(async () => { f.receive({ id: "pane-one", data: "working", seq: 1 }); });
   expect(terminal.write).toHaveBeenLastCalledWith("working");
   await act(async () => { button.click(); });
-  await act(async () => { document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click(); });
+  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "Close pane")!.click(); });
   expect(f.close).toHaveBeenLastCalledWith("pane-one");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(shownPane()).toBe("Desk");
@@ -1545,7 +1545,7 @@ it("closes the watched pane from the header Close pane button while ignoring lat
   expect(terminal.write).not.toHaveBeenCalled();
   await f.select("two");
   await act(async () => { closePaneButton()!.click(); });
-  await act(async () => { document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click(); });
+  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "Close pane")!.click(); });
   expect(f.close).toHaveBeenLastCalledWith("pane-two");
   expect(await f.names()).toEqual([]);
   expect(f.open.mock.calls.at(-1)?.[0].sessionId).toBeUndefined();
@@ -1777,6 +1777,9 @@ it("returns to Main after the user closes the picked pane", async () => {
   await f.render();
   await f.select("one");
   await act(async () => { closePaneButton()!.click(); });
+  expect(f.close).not.toHaveBeenCalled();
+  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "Close pane")!.click(); });
+  expect(f.close).toHaveBeenCalledExactlyOnceWith("pane-one");
   await f.render({ ...f.props, visible: false });
   await f.render();
   expect(shownPane()).toBe("Desk");
