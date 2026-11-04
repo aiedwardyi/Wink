@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { startupTiming } from "./startup-timing.ts";
 
 export const COLD_OPEN_FILE = join("diag", "cold-open.jsonl");
 export const COLD_OPEN_MAX_BYTES = 8 * 1024;
@@ -52,6 +53,7 @@ const nav = z
 
 export const coldOpenRecordSchema = z
   .object({
+    desktop: z.literal(true).optional(),
     openId: z.string().regex(OPEN_ID).optional(),
     label: z.enum(["notification", "open", "warm"]),
     t0: ms.optional(),
@@ -129,6 +131,9 @@ export async function receiveColdOpen(req: AsyncIterable<Buffer>, dataDir: strin
   }
   const parsed = coldOpenRecordSchema.safeParse(body);
   if (!parsed.success) return { status: 400, error: "invalid cold-open record" };
+  if (parsed.data.desktop && parsed.data.label === "open" && parsed.data.chatPaint !== undefined) {
+    startupTiming.paint({ firstResponse: parsed.data.nav?.responseStart, chatPaint: parsed.data.chatPaint });
+  }
   const path = join(dataDir, COLD_OPEN_FILE);
   mkdirSync(join(dataDir, "diag"), { recursive: true });
   let lines: string[] = [];

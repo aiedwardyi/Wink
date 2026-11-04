@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COLD_OPEN_FILE, COLD_OPEN_KEEP, COLD_OPEN_MAX_BYTES, receiveColdOpen, traceOpenBots, traceOpenSse } from "./cold-open-diag.ts";
+import { startupTiming } from "./startup-timing.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -51,6 +52,16 @@ const lines = (dir: string) => readFileSync(join(dir, COLD_OPEN_FILE), "utf8").s
 const served = { server: { uptimeS: expect.any(Number) }, serverStart: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/) };
 
 describe("cold-open diagnostics", () => {
+  it("releases desktop startup work on hydrated chat paint", async () => {
+    const paint = vi.spyOn(startupTiming, "paint").mockImplementation(() => {});
+    try {
+      expect(await receiveColdOpen(post(JSON.stringify({ ...record, desktop: true, label: "open", nav: { responseStart: 25 } })), freshDir())).toEqual({ status: 200 });
+      expect(paint).toHaveBeenCalledWith({ firstResponse: 25, chatPaint: 2701 });
+    } finally {
+      paint.mockRestore();
+    }
+  });
+
   it("appends one line with the server's receive time", async () => {
     const dir = freshDir();
     expect(await receiveColdOpen(post(JSON.stringify(record)), dir, Date.UTC(2026, 9, 11, 1, 2, 3))).toEqual({ status: 200 });

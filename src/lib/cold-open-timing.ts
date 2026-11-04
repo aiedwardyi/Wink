@@ -46,6 +46,7 @@ export interface ColdOpenSse {
 }
 
 export interface ColdOpenRecord {
+  desktop?: true;
   openId?: string;
   label: ColdOpenLabel;
   t0?: number;
@@ -77,6 +78,7 @@ type Resource = Pick<
 >;
 
 export interface ColdOpenPage {
+  desktop?: boolean;
   href: string;
   timeOrigin: number;
   now: () => number;
@@ -164,6 +166,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
 
   const record = (open: Pending, chatPaint: number | undefined): ColdOpenRecord => {
     const meta = {
+      ...(page.desktop ? { desktop: true as const } : {}),
       displayMode: page.standalone() ? ("standalone" as const) : ("browser" as const),
       visibility: open.visibility,
       build: page.build(),
@@ -286,6 +289,7 @@ let active: ColdOpenTiming | null = null;
 
 function browserPage(): ColdOpenPage {
   return {
+    desktop: Boolean(window.ogb),
     href: window.location.href,
     timeOrigin: performance.timeOrigin,
     now: () => performance.now(),
@@ -307,9 +311,8 @@ function browserPage(): ColdOpenPage {
   };
 }
 
-/** Phone and browser pages only; the desktop app has no tap to time. */
 export function startColdOpenTiming() {
-  if (window.ogb || active) return;
+  if (active) return;
   active = createColdOpenTiming(browserPage());
 }
 

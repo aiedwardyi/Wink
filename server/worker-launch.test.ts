@@ -197,11 +197,12 @@ describe("trusted worker accounts", () => {
   });
 
   it("survives a rejected worker-account startup handshake", async () => {
-    const source = ts.createSourceFile("index.ts", readFileSync(new URL("./index.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
-    const statement = source.statements.find((node) => ts.isIfStatement(node) && node.getText(source).includes("await enableWorkerAccounts"))!;
+    const source = ts.createSourceFile("startup-accounts.ts", readFileSync(new URL("./startup-accounts.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+    const statement = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "restoreStartupAccounts") as ts.FunctionDeclaration;
     const error = vi.fn();
-    await expect(runInNewContext(`(async () => { ${ts.transpile(statement.getText(source), { target: ts.ScriptTarget.ES2022 })} })()`, {
-      accounts: { snapshot: [{}] }, terminalBridgeAccess: null, enableWorkerAccounts: async () => { throw new Error("offline fixture"); }, console: { error },
+    await expect(runInNewContext(`(async () => { ${ts.transpile(statement.body!.getText(source), { target: ts.ScriptTarget.ES2022 })} })()`, {
+      access: null, restore: async () => {}, startupTiming: { track: (_name: string, work: () => Promise<void>) => work() },
+      enableWorkerAccounts: async () => { throw new Error("offline fixture"); }, console: { error },
     })).resolves.toBeUndefined();
     expect(error).toHaveBeenCalledOnce();
   });

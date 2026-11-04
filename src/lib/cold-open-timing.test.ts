@@ -82,6 +82,14 @@ afterEach(() => {
 });
 
 describe("cold-open timing", () => {
+  it("identifies a desktop's first hydrated chat", () => {
+    const fake = fakePage("http://127.0.0.1:8799/");
+    const timing = createColdOpenTiming({ ...fake.page, desktop: true });
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent[0]).toMatchObject({ desktop: true, label: "open", chatPaint: 0 });
+  });
+
   it("records a notification open from the tap to the target chat's paint", () => {
     const fake = fakePage("https://home.example/?bot=b1&thread=t-new&t0=1799999998000");
     const timing = createColdOpenTiming(fake.page);
