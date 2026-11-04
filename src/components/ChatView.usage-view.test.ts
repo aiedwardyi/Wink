@@ -415,7 +415,7 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(text(row), "quick view row").toContain(expected);
     expect(text(row)).not.toMatch(locale === "en" ? /0%s*No data/ : /0%s*데이터 없음/);
     const fact = [...row!.querySelectorAll("span")].find((node) => text(node) === expected);
-    expect(fact?.parentElement?.className, "the facts column keeps each fact on one line").toMatch(/whitespace-nowrap/);
+    expect(fact?.parentElement?.className, "the facts column keeps each fact on one line").toContain("whitespace-nowrap");
   });
 
   it("keeps the board quiet through an equal pane poll", async () => {
