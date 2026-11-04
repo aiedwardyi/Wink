@@ -24,6 +24,11 @@ export function Card({
   );
 }
 
+/** The one empty or waiting state for a settings surface; the text says which. */
+export function EmptyState({ children }: { children: React.ReactNode }) {
+  return <div data-empty-state="" className="py-5 text-center text-[13px] leading-relaxed text-ink-secondary">{children}</div>;
+}
+
 /** A section header + body sharing one surface with its siblings, instead of a nested Card. */
 export function Section({
   title,

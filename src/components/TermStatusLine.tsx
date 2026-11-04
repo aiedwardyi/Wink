@@ -5,7 +5,6 @@ import { shownModelSelection, useStore, type Bot, type InstanceInfo } from "@/st
 import { useI18n } from "@/lib/i18n";
 import { shortPath } from "@/lib/short-path";
 import { museReading, planMeterWindows, resetCompact } from "@/lib/usage";
-import { useUsageMode } from "@/lib/usage-preferences";
 import { termMeter, termModelLabel } from "@/lib/terminal-skin";
 import { PHONE_QUERY } from "@/lib/phone-swipe";
 import { useSkin } from "@/lib/skins";
@@ -19,7 +18,6 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engin
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
-  const mode = useUsageMode();
   const skin = useSkin();
   const [phone, setPhone] = useState(() => window.matchMedia?.(PHONE_STATUS_QUERY).matches ?? false);
   useEffect(() => {
@@ -36,7 +34,7 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd }: { bot: Bot; engin
   const reading = museReading(selectedEngine?.driverKind, selectedEngine?.rateLimits?.observedAt, now);
   const ageId = useId();
   const meters = planMeterWindows(selectedEngine?.rateLimits?.windows, now).map((window) => ({
-    ...termMeter(window, now, mode),
+    ...termMeter(window, now, "remaining"),
     remaining: termMeter(window, now, "remaining").percent,
     reset: resetCompact(window.resetsAt, now),
   }));

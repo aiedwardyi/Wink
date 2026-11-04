@@ -1,0 +1,389 @@
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Bot, Check } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { localeTag, useI18n, type Translate } from "@/lib/i18n";
+import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
+import { reducedMotion } from "@/lib/phone-swipe";
+import { isTerminalSkin, useSkin } from "@/lib/skins";
+import { museReading, resetCompact, windowExpired } from "@/lib/usage";
+import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
+import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
+import { bindingWindow, chartSeries, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
+import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useUsageBoard } from "@/lib/use-usage-board";
+import { useVisibleClock } from "@/lib/use-visible-clock";
+import { useStore } from "@/state/store";
+import { Fold } from "./Fold";
+import { ProviderMark } from "./ProviderIcons";
+import { EmptyState } from "./SettingsPrimitives";
+import { AccountPicker } from "./UsageAccounts";
+import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
+import "./UsageDesk.css";
+
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+const ENGINE_NAME: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" };
+const ENGINE_DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "geminiAgent", muse: "museAgent" };
+const TONE_TEXT: Record<ChartTone, string> = { ok: "text-ink", warn: "text-warning", out: "text-danger" };
+const engineName = (engine: string) => ENGINE_NAME[engine] ?? engine;
+
+type Clock = { t: Translate; locale: string; now: number };
+
+function toneOf(window: UsageBoardWindow | undefined, verdict: Verdict | undefined): ChartTone {
+  if (window && window.usedPercent >= 100) return "out";
+  return verdict?.kind === "runsOut" ? "warn" : "ok";
+}
+
+function sameDay(a: number, b: number) {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+function clockText(at: number, { locale, now }: Clock) {
+  const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(at);
+  return sameDay(at, now) ? time : `${new Intl.DateTimeFormat(locale, { weekday: "short" }).format(at)} ${time}`;
+}
+const fullText = (at: number, locale: string) =>
+  new Intl.DateTimeFormat(locale, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }).format(at);
+
+function countdown(ms: number, t: Translate) {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  const minutes = Math.floor(seconds / 60);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  return days > 0 ? t("usage.desk.countDh", { days, hours }) : t("usage.desk.countHm", { hours, minutes: minutes % 60 });
+}
+
+function shortLabel(window: UsageBoardWindow, t: Translate) {
+  if (window.kind === "session") return t("usage.limits.sessionShort");
+  if (window.windowMinutes === 10080 || (window.kind === "week" && window.windowMinutes === null)) return t("usage.limits.weeklyShort");
+  return durationText(window.windowMinutes, t);
+}
+function durationText(minutes: number | null, t: Translate) {
+  if (minutes === null) return t("usage.limits.window");
+  return minutes >= 2880 && minutes % 1440 === 0 ? t("usage.limits.compactD", { days: minutes / 1440 }) : t("usage.limits.compactH", { hours: Math.round(minutes / 60) });
+}
+
+/** Both tracked windows, binding first: `5h 34%` then `7d 59%`, or what the empty slot truly means. */
+function windowFacts(account: UsageBoardAccount, t: Translate) {
+  const { session, week } = splitWindows(account.windows);
+  const binding = bindingWindow([session, week].filter((window): window is UsageBoardWindow => Boolean(window)))
+    ?? bindingWindow(account.windows);
+  const fact = (window: UsageBoardWindow) => `${shortLabel(window, t)} ${Math.round(leftOf(window))}%`;
+  const other = binding === session ? week : binding === week ? session : undefined;
+  const missing = !session && week ? t(account.coverage === "complete" ? "usage.desk.weeklyOnly" : "usage.desk.noData") : null;
+  return { binding, first: binding ? fact(binding) : t("usage.desk.noData"), second: other ? fact(other) : binding === week ? missing : null };
+}
+
+function Tile({ number, terminal }: { number: number; terminal: boolean }) {
+  return terminal
+    ? <span data-tile="" className="usage-glyphs shrink-0 text-[12px] text-ink-secondary">[{number}]</span>
+    : <span data-tile="" className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border border-hairline bg-raised text-[10.5px] leading-none text-ink">{number}</span>;
+}
+
+function ResetLine({ slot, window, account, clock }: { slot: "session" | "week"; window?: UsageBoardWindow; account: UsageBoardAccount; clock: Clock }) {
+  const { t } = clock;
+  const label = t(slot === "session" ? "usage.limits.sessionShort" : "usage.limits.weeklyShort");
+  let body: ReactNode;
+  if (!window) {
+    const week = splitWindows(account.windows).week;
+    body = account.coverage !== "complete" ? t("usage.desk.noData")
+      : slot === "session" && week ? t("usage.desk.weeklyOnly") : t("usage.desk.notOnPlan");
+  } else if (window.resetsAt === null) body = t("usage.limits.resetUnknown");
+  else if (windowExpired(window.resetsAt, clock.now)) body = t("usage.desk.resetPassed");
+  else body = <>
+    <time dateTime={new Date(window.resetsAt).toISOString()} aria-hidden="true" className="text-ink">{clockText(window.resetsAt, clock)}</time>
+    <span aria-hidden="true">{t("usage.desk.resetsIn", { time: countdown(window.resetsAt - clock.now, t) })}</span>
+    <span className="sr-only">{t("usage.desk.resetsAt", { time: fullText(window.resetsAt, clock.locale) })}</span>
+  </>;
+  return (
+    <div data-reset={slot} className="usage-num flex min-w-0 flex-wrap items-baseline gap-x-3 text-[12.5px] leading-5 text-ink-secondary">
+      <span className="w-6 shrink-0">{label}</span>
+      {body}
+    </div>
+  );
+}
+
+function verdictText(verdict: Verdict, clock: Clock) {
+  const { t } = clock;
+  switch (verdict.kind) {
+    case "out": return verdict.back === null ? t("usage.limits.checkLimit") : t("usage.desk.back", { time: clockText(verdict.back, clock) });
+    case "runsOut": return t("usage.desk.runsOut", { time: clockText(verdict.at, clock) });
+    case "lasts": return t("usage.desk.lasts");
+    case "learning": return t("usage.desk.learning");
+    case "noRecent": return t("usage.desk.noRecent");
+    case "awaiting": return t("usage.desk.awaiting");
+  }
+}
+
+function labelsText(labels: string[], t: Translate) {
+  const sorted = [...labels].sort();
+  const shown = sorted.slice(0, 3).join(", ");
+  return sorted.length > 3 ? t("usage.desk.labelsMore", { labels: shown, count: sorted.length - 3 }) : shown;
+}
+
+/** One grey line per kind, newest only, last 24 h; wording only from the event's own names and labels. */
+function eventLines(engine: UsageBoardEngine, board: UsageBoard, clock: Clock) {
+  const { t } = clock;
+  const name = (id?: string) => engine.accounts.find((account) => account.id === id)?.name;
+  const recent = engine.events.filter((event) => clock.now - event.at <= 24 * HOUR);
+  const newest = (kind: UsageBoardEvent["kind"]) => recent.filter((event) => event.kind === kind).sort((a, b) => b.seq - a.seq)[0];
+  const lines: { kind: string; at: number; text: string }[] = [];
+  const main = newest("main");
+  if (main && name(main.from) && name(main.to)) {
+    const old = engine.accounts.find((account) => account.id === main.from)!;
+    let text = t("usage.desk.eventMain", { engine: engineName(engine.engine), from: old.name, to: name(main.to)! });
+    if (board.runs === "known" && old.workers?.length) text += ` ${t("usage.desk.eventStill", { from: old.name, labels: labelsText(old.workers.map((run) => run.label), t) })}`;
+    lines.push({ kind: "main", at: main.at, text });
+  }
+  const auto = newest("auto");
+  if (auto && name(auto.to) && auto.label) {
+    const ranOut = auto.from && name(auto.from) && engine.events.some((event) => event.kind === "limit" && event.accountId === auto.from && event.seq < auto.seq);
+    const later = engine.events.some((event) => event.kind === "main" && event.seq > auto.seq);
+    const parts = [
+      ranOut ? t("usage.desk.eventRanOut", { from: name(auto.from)! }) : "",
+      t("usage.desk.eventAuto", { label: auto.label, to: name(auto.to)! }),
+      !later && name(engine.mainId) ? t("usage.desk.eventMainStays", { main: name(engine.mainId)! }) : "",
+    ];
+    lines.push({ kind: "auto", at: auto.at, text: parts.filter(Boolean).join(" ") });
+  }
+  const moved = newest("moved");
+  if (moved && name(moved.to) && moved.label) lines.push({ kind: "moved", at: moved.at, text: t("usage.desk.eventMoved", { label: moved.label, to: name(moved.to)! }) });
+  return lines.sort((a, b) => b.at - a.at);
+}
+
+function Ticker({ board, engineId, select, phone, terminal, clock }: {
+  board: UsageBoard; engineId: string; select: (engine: string) => void; phone: boolean; terminal: boolean; clock: Clock;
+}) {
+  const { t } = clock;
+  return (
+    <div role="tablist" aria-label={t("usage.desk.engines")} className="grid gap-1 rounded-[3px] [corner-shape:bevel] bg-inset p-1"
+      style={{ gridTemplateColumns: `repeat(${board.engines.length}, minmax(0, 1fr))` }}>
+      {board.engines.map((engine) => {
+        const main = engine.accounts.find((account) => account.id === engine.mainId) ?? engine.accounts[0];
+        const facts = main ? windowFacts(main, t) : null;
+        const selected = engine.engine === engineId;
+        const series = main && facts?.binding ? chartSeries(main, facts.binding, engine.events, clock.now) : null;
+        const tone = toneOf(facts?.binding, undefined);
+        return (
+          <button key={engine.engine} type="button" role="tab" data-engine={engine.engine} aria-selected={selected} onClick={() => select(engine.engine)}
+            className={cn("flex min-w-0 flex-col items-start gap-1 rounded-[3px] [corner-shape:bevel] px-2 py-1.5 text-left transition-colors duration-100 motion-reduce:transition-none",
+              selected ? "bg-raised" : "hover:bg-raised-hover")}>
+            <span className="max-w-full truncate text-[11.5px] leading-none text-ink-secondary">{engineName(engine.engine)}</span>
+            <span className="flex w-full items-end justify-between gap-1">
+              <span className="usage-num min-w-0">
+                <span className={cn("block truncate text-[13px] leading-tight", TONE_TEXT[tone])}>{facts?.first}</span>
+                <span className="block truncate text-[11px] leading-tight text-ink-secondary">{facts?.second ?? " "}</span>
+              </span>
+              {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Who({ account, runs, phone, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; phone: boolean; t: Translate }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const names = [...new Set(account.bots.map((bot) => bot.bot))];
+  const workers = runs !== "known" || account.workers === null ? t("usage.desk.workersUnknown")
+    : account.workers.length ? t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length }) : "";
+  const count = workers && <span className="flex shrink-0 items-center gap-1"><Bot size={12} aria-hidden="true" />{workers}</span>;
+  if (phone && names.length) return (
+    <>
+      <span className="flex min-w-0 items-center gap-2 text-[12px] text-ink-secondary">
+        <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id}
+          onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
+          className="shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:min-h-11">
+          {t(names.length === 1 ? "usage.desk.botOne" : "usage.desk.bots", { count: names.length })}
+        </button>
+        {count}
+      </span>
+      <Fold open={open} id={id}><span className="block text-[12px] text-ink-secondary">{names.join(", ")}</span></Fold>
+    </>
+  );
+  if (!names.length && !workers) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-2 text-[12px] text-ink-secondary">
+      {names.length > 0 && <span className="min-w-0 truncate">{names.join(", ")}</span>}
+      {count}
+    </span>
+  );
+}
+
+const SIGN_IN_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "accounts.signedOut", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+
+function AccountRow({ engine, account, board, state, checked, phone, terminal, clock, reloadInstances }: {
+  engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
+  phone: boolean; terminal: boolean; clock: Clock; reloadInstances: () => unknown;
+}) {
+  const { t } = clock;
+  const facts = windowFacts(account, t);
+  const tone = toneOf(facts.binding, undefined);
+  const pending = state.pending[engine.engine];
+  const switching = pending?.target === account.id;
+  const series = facts.binding ? chartSeries(account, facts.binding, engine.events, clock.now) : null;
+  let control: ReactNode;
+  if (account.signIn !== "ready") control = <span data-row-status="" className="shrink-0 text-[12px] text-ink-secondary">{t(SIGN_IN_KEY[account.signIn])}</span>;
+  else if (checked) control = <span className="shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>;
+  else control = (
+    <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
+      aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
+      onClick={() => requestMain(engine.engine, account.id, reloadInstances)}
+      className={cn("relative inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2.5 text-[12px] text-ink-secondary transition-colors duration-100 hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11",
+        pending && !switching && "opacity-50")}>
+      {switching ? t("usage.desk.switching") : t("usage.desk.use")}
+    </button>
+  );
+  return (
+    <div data-account-row={account.id} className="flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-1.5">
+      <span className="flex w-4 shrink-0 justify-center">
+        {checked && <Check data-main-check="" size={15} strokeWidth={2.5} aria-label={t("accounts.main")} className="text-accent" />}
+      </span>
+      <Tile number={account.number} terminal={terminal} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span data-account-name="" className="min-w-0 truncate text-[13.5px] leading-tight text-ink">{account.name}</span>
+        <Who account={account} runs={board.runs} phone={phone} t={t} />
+      </span>
+      {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
+      <span className="usage-num flex w-[4.5rem] shrink-0 flex-col items-end">
+        <span className={cn("text-[13px] leading-tight", TONE_TEXT[tone])}>{facts.first}</span>
+        {facts.second && <span className="text-[11px] leading-tight text-ink-secondary">{facts.second}</span>}
+      </span>
+      {control}
+    </div>
+  );
+}
+
+function Hero({ engine, account, accounts, select, terminal, phone, clock, instances }: {
+  engine: UsageBoardEngine; account: UsageBoardAccount; accounts: UsageBoardAccount[]; select: (id: string) => void;
+  terminal: boolean; phone: boolean; clock: Clock; instances: { instanceId: string; capabilities?: { rateLimits?: boolean } }[];
+}) {
+  const { t } = clock;
+  const ref = useRef<HTMLElement>(null);
+  const [details, setDetails] = useState(false);
+  const detailsId = useId();
+  const shown = useRef(account.id);
+  useLayoutEffect(() => {
+    if (shown.current === account.id) return;
+    shown.current = account.id;
+    if (!reducedMotion()) ref.current?.animate?.([{ opacity: 0.55 }, { opacity: 1 }], { duration: MOTION_FAST_MS, easing: EASE_ENTRANCE });
+  }, [account.id]);
+  const { session, week } = splitWindows(account.windows);
+  const facts = windowFacts(account, t);
+  const window = facts.binding;
+  const { verdict, projection } = window ? pace(account, window, engine.events, clock.now) : { verdict: undefined, projection: null };
+  const tone = toneOf(window, verdict);
+  const series = window ? chartSeries(account, window, engine.events, clock.now) : null;
+  const muse = engine.engine === "muse" ? museReading("museAgent", account.observedAt === null ? undefined : new Date(account.observedAt).toISOString(), clock.now) : null;
+  const limited = engine.engine === "muse" && account.windows.find((each) => each.usedPercent >= 100 && !windowExpired(each.resetsAt, clock.now));
+  const limitReset = limited ? resetCompact(limited.resetsAt, clock.now) : null;
+  const vs = week ? todayVsNormal(account, clock.now) : null;
+  const vsText = vs === null ? null : vs >= 1.15 ? t("usage.desk.todayVs", { times: vs >= 2 ? Math.round(vs) : vs.toFixed(1) })
+    : vs <= 0.85 ? t("usage.desk.todayLess") : t("usage.desk.todayNormal");
+  const reports = instances.find((each) => each.instanceId === account.id)?.capabilities?.rateLimits !== false;
+  let empty: string | null = null;
+  if (!reports) empty = t("usage.limits.notReported", { name: account.name });
+  else if (account.signIn !== "ready" && account.observedAt === null) empty = t(SIGN_IN_KEY[account.signIn]);
+  else if (account.observedAt === null) empty = t("usage.desk.noReport");
+  return (
+    <section ref={ref} data-usage-hero="" data-stale={muse?.stale || undefined} aria-label={account.name} className="min-w-0">
+      <div className="flex min-h-7 min-w-0 items-center gap-2">
+        <ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} />
+        {accounts.length > 1 && <Tile number={account.number} terminal={terminal} />}
+        {accounts.length > 1
+          ? <AccountPicker accounts={accounts} viewedId={account.id} select={select} />
+          : <span data-hero-name="" className="min-w-0 truncate text-[13.5px] font-medium text-ink">{account.name}</span>}
+      </div>
+      {empty ? <div className="mt-3"><EmptyState>{empty}</EmptyState></div> : <>
+        <div className="mt-1.5 flex min-w-0 flex-wrap items-end justify-between gap-x-4 gap-y-1">
+          <span className={cn("flex items-baseline gap-1.5", muse?.stale && "opacity-60")}>
+            <span data-hero-left="" className={cn("usage-num text-[38px] font-normal leading-none tracking-tight", TONE_TEXT[tone])}>
+              {window ? `${Math.round(leftOf(window))}%` : "–"}
+            </span>
+            {window && <span className="text-[13px] text-ink-secondary">{t("usage.desk.left")}</span>}
+          </span>
+          {verdict && <span data-verdict="" className={cn("pb-0.5 text-[13px]",
+            verdict.kind === "learning" || verdict.kind === "noRecent" || verdict.kind === "awaiting" ? "text-ink-secondary" : TONE_TEXT[tone])}>
+            {verdictText(verdict, clock)}
+          </span>}
+        </div>
+        <div className="mt-2 flex flex-col">
+          <ResetLine slot="session" window={session} account={account} clock={clock} />
+          <ResetLine slot="week" window={week} account={account} clock={clock} />
+        </div>
+        {muse && <div className={cn("mt-1 text-[12px]", muse.stale ? "text-ink-secondary opacity-70" : "text-ink-secondary")}>{muse.label(t)}</div>}
+        {limited && <div className="mt-1 text-[12px] text-danger">
+          {limitReset ? t("usage.limits.checkLimitResets", { time: t(limitReset.key, limitReset.vars) }) : t("usage.limits.checkLimit")}
+        </div>}
+        <div className="mt-3">
+          {series && series.segments.length > 0
+            ? <UsageChart series={series} projection={projection} tone={tone} terminal={terminal} compact={phone}
+              caption={t("usage.desk.quota")} topLeft={vsText && <span data-today-normal="">{vsText}</span>}
+              finish={window?.resetsAt != null && window.resetsAt > clock.now ? clockText(window.resetsAt, clock) : undefined} />
+            : <EmptyState>{t("usage.desk.noHistory")}</EmptyState>}
+        </div>
+      </>}
+      {account.windows.length > 0 && <>
+        <button type="button" data-details="" aria-expanded={details} aria-controls={detailsId} onClick={() => setDetails(!details)}
+          className="mt-2 inline-flex h-7 items-center rounded-[3px] [corner-shape:bevel] px-1.5 text-[12px] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:h-11">
+          {t("usage.desk.details")}
+        </button>
+        <Fold open={details} id={detailsId}>
+          <div data-details-body="" className="usage-num flex flex-col gap-0.5 px-1.5 pb-1 text-[12px] text-ink-secondary">
+            {account.windows.map((each) => (
+              <span key={each.id} className="flex flex-wrap gap-x-3">
+                <span className="text-ink">{each.id.includes("opus") ? `${t("usage.limits.opusShort")} ${shortLabel(each, t)}` : shortLabel(each, t)}</span>
+                <span>{t("usage.desk.windowLeft", { percent: Math.round(leftOf(each)) })}</span>
+                <span>{each.resetsAt === null ? t("usage.limits.resetUnknown") : windowExpired(each.resetsAt, clock.now)
+                  ? t("usage.desk.resetPassed") : t("usage.desk.resetsAt", { time: clockText(each.resetsAt, clock) })}</span>
+              </span>
+            ))}
+          </div>
+        </Fold>
+      </>}
+    </section>
+  );
+}
+
+/** Settings > Usage: one ticker cell per engine, the viewed account's hero and chart, then every account as a row. */
+export function UsageDesk() {
+  const { t, locale } = useI18n();
+  const { state: store, refreshInstances } = useStore();
+  const state = useUsageBoard();
+  const phone = useIsPhone();
+  const terminal = isTerminalSkin(useSkin());
+  const [engineId, setEngineId] = useState<string | null>(null);
+  const [viewed, setViewed] = useState<Record<string, string>>({});
+  const minute = useVisibleClock();
+  const board = state.board;
+  const engine = board?.engines.find((each) => each.engine === engineId) ?? board?.engines[0];
+  const main = engine?.accounts.find((each) => each.id === engine.mainId) ?? engine?.accounts[0];
+  const account = engine?.accounts.find((each) => each.id === viewed[engine.engine]) ?? main;
+  const soon = account?.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR) ?? false;
+  const now = useVisibleClock(soon);
+  const clock: Clock = { t, locale: localeTag(locale), now };
+  if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
+  if (!engine || !account) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
+  const checked = checkedMain(state, engine.engine);
+  return (
+    <div data-usage-desk="" className="flex min-w-0 flex-col gap-4">
+      <Ticker board={board} engineId={engine.engine} select={setEngineId} phone={phone} terminal={terminal} clock={clock} />
+      {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
+      <Hero key={engine.engine} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}
+        instances={store.instances} select={(id) => setViewed((current) => ({ ...current, [engine.engine]: id }))} />
+      {state.failed.has(engine.engine) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+      {engine.accounts.length > 1 && <div role="group" aria-label={engineName(engine.engine)} className="flex min-w-0 flex-col divide-y divide-hairline/40 overflow-hidden rounded-[3px] [corner-shape:bevel] bg-inset">
+        {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
+          phone={phone} terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
+      </div>}
+      {eventLines(engine, board, clock).map((line) => (
+        <div key={line.kind} data-usage-event={line.kind} className="usage-num -mt-2 flex min-w-0 gap-2 text-[12px] leading-5 text-ink-secondary">
+          <span className="min-w-0">{line.text}</span>
+          <span className="shrink-0">{clockText(line.at, clock)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}

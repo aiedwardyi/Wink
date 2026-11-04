@@ -2,16 +2,14 @@ import "./ProfileFields.test-dom.ts";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
-import { setUsageMode } from "@/lib/usage-preferences";
 import type { RateLimitWindow } from "../../server/contracts.ts";
 
 import { ChatPlanMeters } from "./ChatPlanMeters";
 
 const now = Date.UTC(2026, 8, 4, 12, 0, 0);
-afterEach(() => setUsageMode("remaining"));
 
 function render(windows: RateLimitWindow[] | undefined) {
   applyLocale("en");
@@ -27,8 +25,7 @@ describe("ChatPlanMeters", () => {
     ).toBe("");
   });
 
-  it("shows the live 5-hour and weekly windows with used percent and a compact reset", () => {
-    setUsageMode("used");
+  it("shows the live 5-hour and weekly windows with remaining percent and a compact reset", () => {
     const html = render([
       { id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 },
       { id: "seven_day", usedPercent: 49, resetsAt: now + 53 * 3_600_000 },
@@ -37,32 +34,31 @@ describe("ChatPlanMeters", () => {
     ]);
     expect(html).toContain("5h");
     expect(html).toContain("7d");
-    expect(html).toContain(">10%<");
-    expect(html).toContain(">49%<");
+    expect(html).toContain(">90%<");
+    expect(html).toContain(">51%<");
     expect(html).toContain("1h55m");
     expect(html).toContain("2d5h");
-    expect(html).not.toContain(">75%<");
-    expect(html).not.toContain(">40%<");
-    expect(html).not.toContain(">90%<");
+    expect(html).not.toContain(">25%<");
+    expect(html).not.toContain(">60%<");
+    expect(html).not.toContain(">10%<");
     expect(html).not.toMatch(/>Resets in/);
     expect(html).toContain('title="Resets in');
-    expect(html).not.toContain("% used<");
+    expect(html).not.toContain("% remaining<");
     expect(html).not.toContain("$");
     expect(html).not.toContain("Fixed");
     expect(html).not.toContain("on-demand");
-    expect(html).toContain("▰▱▱▱▱▱▱▱▱▱");
+    expect(html).toContain("▰▰▰▰▰▰▰▰▰▱");
     expect(html).toContain("▰▰▰▰▰▱▱▱▱▱");
     expect(html).toContain("(1h55m)");
     expect(html).toContain("(2d5h)");
-    expect(html).toContain('aria-label="5h: 10% used"');
-    expect(html).toContain('aria-label="7d: 49% used"');
+    expect(html).toContain('aria-label="5h: 90% remaining"');
+    expect(html).toContain('aria-label="7d: 51% remaining"');
     expect(html).toContain("text-accent");
     expect(html).not.toContain("bg-app");
     expect(html).not.toContain("h-1.5");
   });
 
   it("counts down both wire windows without inventing an unknown fill", () => {
-    setUsageMode("remaining");
     const html = render([
       { id: "primary", usedPercent: 80, windowMinutes: 300, resetsAt: now + 106 * 60_000 },
       { id: "secondary", usedPercent: 125, windowMinutes: 10080, resetsAt: now + 86_400_000 },
@@ -157,7 +153,6 @@ describe("ChatPlanMeters", () => {
 
   it("mutes an old Muse reading and says when it was last seen", () => {
     applyLocale("en");
-    setUsageMode("used");
     const windows = [
       { id: "five_hour", usedPercent: 10, resetsAt: now + 115 * 60_000 },
       { id: "seven_day", usedPercent: 100, resetsAt: now + 35 * 3_600_000 },
@@ -170,14 +165,14 @@ describe("ChatPlanMeters", () => {
     };
     draw("museAgent", 4 * 86_400_000);
     expect(host.textContent).toContain("Last seen 4d ago");
-    expect(host.querySelector('[aria-label="7d: 100% used"] .text-danger')).toBeNull();
-    expect(host.querySelector('[aria-label="7d: 100% used"] .text-ink-secondary')).not.toBeNull();
+    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-danger')).toBeNull();
+    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-ink-secondary')).not.toBeNull();
     draw("museAgent", 30 * 60_000);
     expect(host.textContent).not.toContain("Last seen");
-    expect(host.querySelector('[aria-label="7d: 100% used"] .text-danger')).not.toBeNull();
+    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-danger')).not.toBeNull();
     draw("claudeAgent", 4 * 86_400_000);
     expect(host.textContent).not.toContain("Last seen");
-    expect(host.querySelector('[aria-label="7d: 100% used"] .text-danger')).not.toBeNull();
+    expect(host.querySelector('[aria-label="7d: 0% remaining"] .text-danger')).not.toBeNull();
   });
 
   it("describes the strip with a stale Muse reading's age and keeps its name", () => {

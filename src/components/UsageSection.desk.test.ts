@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,7 +64,7 @@ function instancesFor(board: UsageBoard) {
   })));
 }
 
-function setMedia({ phone = false, coarse = phone, reduce = false }) {
+function setMedia({ phone = false, coarse = phone, reduce = false }: { phone?: boolean; coarse?: boolean; reduce?: boolean }) {
   window.matchMedia = ((query: string) => ({
     matches: (phone && query.includes("max-width")) || (coarse && query.includes("pointer: coarse")) || (reduce && query.includes("reduce")),
     media: query,
@@ -95,6 +96,7 @@ const menuItems = () => [...host.querySelectorAll('[role="menuitemradio"]')];
 async function pick(name: string) {
   await click(picker());
   await click(menuItems().find((item) => text(item) === name));
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
 }
 
 async function client() {
@@ -103,7 +105,7 @@ async function client() {
   return await load!() as { usageBoardFrame: (revision: number) => void; usageBoardReconnected: () => void };
 }
 
-async function mount({ phone = false, coarse = phone, locale = "en" as "en" | "ko", reduce = false } = {}) {
+async function mount({ phone = false, coarse = phone, locale = "en", reduce = false }: { phone?: boolean; coarse?: boolean; locale?: "en" | "ko"; reduce?: boolean } = {}) {
   setMedia({ phone, coarse, reduce });
   i18n.persistPreference(locale);
   h.state.instances = instancesFor(server.board);
@@ -118,6 +120,18 @@ async function unmount() {
   await act(async () => root.unmount());
   host.remove();
 }
+// A new page load: no cached board, a fresh client.
+async function reload() {
+  if (host?.isConnected) await unmount();
+  vi.resetModules();
+  i18n = await import("@/lib/i18n");
+  await warm();
+}
+// Load the store and client before a mount, as the running app has them.
+async function warm() {
+  await import("@/state/store");
+  await clientModules["../lib/usage-board-client.ts"]?.();
+}
 async function rerender() {
   const { UsageSection } = await import("./UsageSection");
   await act(async () => root.render(createElement(i18n.I18nProvider, null, createElement(UsageSection))));
@@ -128,6 +142,7 @@ beforeEach(async () => {
   vi.useFakeTimers({ now: usageBoardNow, toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   vi.resetModules();
   i18n = await import("@/lib/i18n");
+  await warm();
   canary = makeIdentityCanary();
   server = { board: fresh(), calls: [], reply: null, post: null };
   h.state.terminalPanes = {};
@@ -390,7 +405,7 @@ describe("Usage desk", () => {
     expect(boardGets()).toHaveLength(7);
     await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60 * MIN / 60); });
     expect(boardGets()).toHaveLength(7);
-    const store = readFileSync(new URL("../state/store.tsx", import.meta.url), "utf8");
+    const store = readFileSync(resolve(process.cwd(), "src/state/store.tsx"), "utf8");
     expect(store).toMatch(/case "usage\.board":\s*usageBoardFrame\(frame\.revision\)/);
     expect(store).toContain("usageBoardReconnected()");
   });
@@ -429,6 +444,7 @@ describe("Usage desk", () => {
       ["missing history", paceBoard({ resetsAt: now + 51 * MIN }, trail(now, 13, 80, 0).map(([m, , w]) => [m, null, w])), "Learning pace"],
     ];
     for (const [name, board, expected] of cases) {
+      await reload();
       server.board = board;
       await mount();
       expect(verdict(), name).toBe(expected);
@@ -459,7 +475,7 @@ describe("Usage desk", () => {
     await mount();
     expect(text(row("claude"))).toContain("Workers unknown");
     expect(text(row("claude"))).not.toMatch(/\b0 workers\b/);
-    await unmount();
+    await reload();
     server.board = fresh();
     await mount();
     expect(text(row("claude"))).toContain("3 workers");
@@ -494,7 +510,7 @@ describe("Usage desk", () => {
     expect(text(q("[data-details-body]"))).toContain("82% left");
     await click(tab("muse"));
     expect(heroName()).toBe("Muse");
-    expect(text(q("[data-usage-hero]"))).toContain("As of 2h ago");
+    expect(text(q("[data-usage-hero]"))).toContain("Last seen 2h ago");
     expect(q("[data-usage-hero]")?.hasAttribute("data-stale")).toBe(true);
     expect(text(q("[data-usage-hero]"))).toContain("Limit reached.");
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);

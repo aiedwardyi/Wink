@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { PHONE_QUERY } from "@/lib/phone-swipe";
-import { setUsageMode } from "@/lib/usage-preferences";
 import { StoreProvider, useStore, type Bot, type InstanceInfo, type Message } from "@/state/store";
 
 import { TermStatusLine } from "./TermStatusLine";
@@ -42,7 +41,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   delete document.documentElement.dataset.skin;
   applyLocale("en");
-  setUsageMode("remaining");
 });
 
 async function render(current = bot, instance = engine, cwd?: string | null, instances = [instance], locale: "en" | "ko" = "en") {
@@ -115,14 +113,9 @@ describe("TermStatusLine", () => {
     ["remaining", 20, 80, "7d", "(5d6h)", 20],
     ["remaining", 80, 80, "5h", "(1h)", 20],
     ["remaining", 100, 120, "5h", "(1h)", 0],
-    ["used", 80, 20, "5h", "(1h)", 80],
-    ["used", 20, 80, "7d", "(5d6h)", 80],
-    ["used", 80, 80, "5h", "(1h)", 80],
-    ["used", 100, 120, "5h", "(1h)", 100],
-  ] as const)("selects the tighter window in %s mode (%i session / %i weekly used -> %s)", async (mode, session, weekly, label, reset, percent) => {
+  ] as const)("selects the tighter window in %s mode (%i session / %i weekly used -> %s)", async (_mode, session, weekly, label, reset, percent) => {
     phoneMedia();
     document.documentElement.dataset.skin = "multiplexer";
-    setUsageMode(mode);
     const host = await render(bot, {
       ...engine,
       rateLimits: { ...engine.rateLimits!, windows: [

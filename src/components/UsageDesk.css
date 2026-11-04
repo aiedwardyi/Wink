@@ -1,0 +1,10 @@
+.usage-glyphs {
+  font-family: var(--font-mono, ui-monospace), "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: pre;
+  font-variant-ligatures: none;
+}
+.usage-num {
+  font-variant-numeric: tabular-nums;
+}

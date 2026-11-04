@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
-import { setUsageMode } from "@/lib/usage-preferences";
 import { StoreProvider, useStore, type Bot, type InstanceInfo } from "@/state/store";
 
 import { ChatView } from "./ChatView";
@@ -71,7 +70,6 @@ let unmount: (() => Promise<void>) | null = null;
 afterEach(async () => {
   await unmount?.();
   unmount = null;
-  setUsageMode("remaining");
   applySkin("precision");
   localStorage.clear();
   vi.unstubAllGlobals();
@@ -81,7 +79,6 @@ afterEach(async () => {
 async function render(bot: Bot, instances: InstanceInfo[]) {
   applyLocale("en");
   applySkin("precision");
-  setUsageMode("remaining");
   vi.spyOn(Date, "now").mockReturnValue(now);
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
   vi.stubGlobal("EventSource", class {

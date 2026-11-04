@@ -3,7 +3,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
-import { useUsageMode } from "@/lib/usage-preferences";
 import type { RateLimitWindow } from "../../server/contracts.ts";
 import {
   resetCompact,
@@ -76,16 +75,15 @@ export function PlanWindowMeter({
   slide?: boolean;
 }) {
   const { t } = useI18n();
-  const mode = useUsageMode();
   const used = windowFillPercent(window, now);
-  const percent = used === null ? null : mode === "remaining" ? Math.max(0, 100 - used) : used;
+  const percent = used === null ? null : Math.max(0, 100 - used);
   const fill = planUsageFill(percent);
   const usedFill = planUsageFill(used);
   const kind = windowKind(window.id, window.windowMinutes);
   const labelKey = (compact ? PLAN_WINDOW_SHORT_LABEL_KEY : PLAN_WINDOW_LABEL_KEY)[kind];
   const phrase = resetPhrase(window.resetsAt, now);
   const compactReset = resetCompact(window.resetsAt, now);
-  const label = `${t(labelKey)}: ${percent === null ? t(phrase.key, phrase.vars) : t(mode === "used" ? "usage.limits.used" : "usage.limits.remaining", { percent })}`;
+  const label = `${t(labelKey)}: ${percent === null ? t(phrase.key, phrase.vars) : t("usage.limits.remaining", { percent })}`;
   if (compact) {
     const segments = Math.round(fill / 10);
     return (

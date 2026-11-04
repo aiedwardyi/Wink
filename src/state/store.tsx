@@ -34,6 +34,7 @@ import { markUnreadReadAt } from "@/lib/unread";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
+import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
 import { isShownMessage } from "@/lib/shown-message";
@@ -2317,6 +2318,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "instances":
           rawDispatch({ type: "instances", instances: frame.instances, preserveRateLimits: true });
           break;
+        case "usage.board":
+          usageBoardFrame(frame.revision);
+          break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
         case "config":
@@ -2338,6 +2342,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
+        usageBoardReconnected();
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
