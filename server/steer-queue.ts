@@ -37,6 +37,7 @@ interface RoomItem {
   messageId: string;
   groupId: string;
   hop: number;
+  rootId?: string;
   cardContinuation?: string;
   onDispatchError?: (message: string) => void;
   instructionId?: string;
@@ -183,6 +184,7 @@ export function clearSendRunning(botId: string): void {
 export interface RoomDrain {
   groupId: string;
   hop: number;
+  rootId?: string;
   cardContinuation?: string;
   onDispatchError?: (message: string) => void;
   instructionId?: string;
@@ -255,6 +257,7 @@ export function queueRoomParticipation(
   options: {
     groupId: string;
     hop?: number;
+    rootId?: string;
     cardContinuation?: string;
     onDispatchError?: (message: string) => void;
     instructionId?: string;
@@ -263,6 +266,8 @@ export function queueRoomParticipation(
   const entry = entryFor(botId, threadId);
   const existing = entry.items.find((item): item is RoomItem => item.kind === "room");
   if (existing) {
+    // the lower hop keeps its root; a tie goes to the newer participation, rootless included
+    if ((options.hop ?? 0) <= existing.hop) existing.rootId = options.rootId;
     existing.hop = Math.min(existing.hop, options.hop ?? 0);
     if (!existing.cardContinuation && options.cardContinuation) {
       existing.cardContinuation = options.cardContinuation;
@@ -277,6 +282,7 @@ export function queueRoomParticipation(
     messageId: id,
     groupId: options.groupId,
     hop: options.hop ?? 0,
+    rootId: options.rootId,
     cardContinuation: options.cardContinuation,
     onDispatchError: options.onDispatchError,
     instructionId: options.instructionId,
@@ -367,6 +373,7 @@ export function drainSteeredMessages(
     const room = roomItems[0];
     if (!room) continue;
     const roomDrain: RoomDrain = { groupId: room.groupId, hop: room.hop };
+    if (room.rootId) roomDrain.rootId = room.rootId;
     if (room.cardContinuation) roomDrain.cardContinuation = room.cardContinuation;
     if (room.onDispatchError) roomDrain.onDispatchError = room.onDispatchError;
     if (room.instructionId) roomDrain.instructionId = room.instructionId;

@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
+import { adoptHumanRoot } from "./comms-root.ts";
 import { LimitWaits } from "./limit-wait.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { _resetSteerQueue } from "./steer-queue.ts";
@@ -35,8 +36,8 @@ function harness(key: "production" | "selection-only") {
     usage: vi.fn(), dispatch: vi.fn(async () => {}),
   });
   const prelude = readFileSync(new URL("./index.ts", import.meta.url), "utf8").split("store.onChange((change) => {")[1]!.split("  switch (change.type) {")[0]!;
-  const onChange = new Function("change", "store", "limitWaits", "console", prelude);
-  store.onChange((change) => onChange(change, store, waits, console));
+  const onChange = new Function("change", "store", "limitWaits", "console", "adoptHumanRoot", prelude);
+  store.onChange((change) => onChange(change, store, waits, console, adoptHumanRoot));
   const steer = vi.fn(async () => true);
   const interruptTurn = vi.fn(async () => {});
   const noop = () => {};

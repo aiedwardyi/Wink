@@ -152,6 +152,7 @@ import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
+import { adoptHumanRoot, rootForStart } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
@@ -692,7 +693,7 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
@@ -706,6 +707,7 @@ function askBotAndWait(
     fold: ownTurnReply(staleTurnEvent).fold,
     start: (onDispatchError) => startTurn(targetBotId, message, {
       commsDepth: depth + 1,
+      commsRoot: peer?.commsRoot ?? null,
       unattended: isUnattended(fromBotId),
       transcriptText: peer?.transcriptText,
       ...peerAttribution(peer?.sender, peer?.channel),
@@ -1859,6 +1861,7 @@ const groupWithThread = (group: GroupRecord) => ({
 store.onChange((change) => {
   try {
     if (change.type === "message" && change.message.role === "user" && !change.message.from && !change.message.origin) {
+      if (!change.imported && change.message.kind === "text" && change.message.steered) adoptHumanRoot(change.threadId, change.message.sendId ?? change.message.id);
       const bot = store.botByThread(change.threadId);
       if (bot) limitWaits.cancel(bot.id, undefined, change.message.steered === true);
     }
@@ -3166,7 +3169,7 @@ bus.subscribe((event: RuntimeEvent) => {
     adopt: (botId, threadId, turnId) => {
       const instance = event.providerInstanceId ? providerReload.started(threadId, event.providerInstanceId) : null;
       if (instance) workerTurns.capture(botId, threadId, instance);
-      turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0 });
+      turnRegistry.start(turnId, { botId, threadId, owner: "user", depth: 0, rootId: rootForStart(threadId, { kind: "automatic" }) });
       store.setActivity(botId, "working", threadId);
       dispatchedThreads.set(botId, threadId);
       liveTurnIdByThread.set(threadId, turnId);
@@ -4069,7 +4072,7 @@ const askHold = watchAskHold(store, bus);
 /** How a drained delegation becomes a real turn on the target. Shared by
  * the settle-time drain and the boot-time drain of what a previous process
  * left queued. */
-const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText) => {
+const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText, root) => {
     // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
     // unavailable provider. Unhandled, that rejection is fatal to the
     // harness (Node's default), which in the packaged app kills the server
@@ -4112,6 +4115,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     };
     return startTurn(toBotId, text, {
       commsDepth,
+      commsRoot: root ?? null,
       commsAsk: ask,
       unattended: isUnattended(sourceBotId),
       transcriptText,
@@ -4390,6 +4394,7 @@ async function finalScreenFrame(botId: string): Promise<Frame | null> {
 type StartTurnOptions = {
   limitWaitId?: string;
   commsDepth?: number;
+  commsRoot?: string | null;
   userMessage?: Message;
   /** Clean copy for user transcript when the model prompt carries an internal harness envelope. */
   transcriptText?: string;
@@ -4535,7 +4540,7 @@ const taskResumes = new TaskResumeScheduler({
       }
       resumePaneWakes(botId);
       let failure: string | undefined;
-      return runGroupMemberTurn(group.id, threadId, botId, 0, new Set(), room.prompt, (message) => { failure = message; }, () => room.operation.cancelled)
+      return runGroupMemberTurn(group.id, threadId, botId, 0, new Set(), room.prompt, (message) => { failure = message; }, () => room.operation.cancelled, undefined, undefined, rootForStart(threadId, { kind: "automatic" }))
         .then(() => { if (failure) throw new Error(failure); });
     }
     if (bot.threadId !== threadId) {
@@ -4675,6 +4680,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
           origin: opts?.automationSource ? profileSyncSettings.deviceId : undefined,
         });
   }
+  let rootId = rootForStart(threadId, turnStartedByUser(opts)
+    ? { kind: "human", messageKey: userMessage.sendId ?? userMessage.id }
+    : opts?.commsRoot !== undefined || commsDepth > 0
+      ? { kind: "inherit", rootId: opts?.commsRoot }
+      : { kind: "automatic" });
   // the running turn's stamp source; an ordinary turn clears a failed peer start's leftover
   if (opts?.peerComm) peerReplyComm.set(threadId, opts.peerComm);
   else peerReplyComm.delete(threadId);
@@ -4965,6 +4975,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? foldQueuedSends(store, bot.id, threadId, claimMark)
     : [];
   if (folded.length) {
+    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
     takeOverPeerTurn(threadId);
@@ -5394,7 +5405,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -5407,6 +5418,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         const foldLate = () => {
           const queued = foldQueuedSends(store, bot.id, threadId, claimMark);
           if (!queued.length) return;
+          for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
@@ -5757,6 +5769,7 @@ routines = new RoutineManager({
         () => routines!.isCancelled(run.id),
         undefined,
         run.cardMessageId ? new Set([run.cardMessageId]) : undefined,
+        rootForStart(source.threadId, { kind: "automatic" }),
       ).then((started) => {
         if (!started) onDispatchError("The routine's room is no longer available");
       }, (error) => onDispatchError(error instanceof Error ? error.message : String(error)));
@@ -5966,11 +5979,13 @@ function queueBusyRoomMember(
   cardContinuation?: string,
   onDispatchError?: (message: string) => void,
   instructionId?: string,
+  rootId?: string | null,
 ): true {
   spoken.add(bot.id);
   queueRoomParticipation(bot.id, threadId, {
     groupId,
     hop,
+    rootId: rootId ?? undefined,
     cardContinuation,
     onDispatchError,
     instructionId,
@@ -5989,7 +6004,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (!roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6022,6 +6037,8 @@ function enqueueDrainedRoomTurn(
       room.onDispatchError,
       () => operation.cancelled,
       operation.instructionId,
+      undefined,
+      room.rootId ?? null,
     );
   });
   const tracked = next.finally(() => finishGroupTurnOperation(room.groupId, operation));
@@ -6082,6 +6099,7 @@ async function runGroupMemberTurn(
   isCancelled?: () => boolean,
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
+  rootId: string | null = null,
 ): Promise<boolean> {
   if (isCancelled?.()) return false;
   const group = store.group(groupId);
@@ -6091,7 +6109,7 @@ async function runGroupMemberTurn(
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread) return false;
   if (botHasActiveTurn(botId, threadId) || !tryClaimTurnStart(botId, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
   }
   let claimHeld = true;
   const releaseTurnStart = () => {
@@ -6113,6 +6131,7 @@ async function runGroupMemberTurn(
       releaseTurnStart,
       instructionId,
       excludeIds,
+      rootId,
     );
   } finally {
     releaseTurnStart();
@@ -6137,6 +6156,7 @@ async function runClaimedGroupMemberTurn(
   releaseTurnStart?: () => void,
   instructionId?: string,
   excludeIds?: ReadonlySet<string>,
+  rootId: string | null = null,
 ): Promise<boolean> {
   const epoch = currentTurnEpoch(botId);
   if (isCancelled?.()) return false;
@@ -6149,7 +6169,7 @@ async function runClaimedGroupMemberTurn(
   spoken.add(botId);
   const userName = cfg.profile?.name?.trim() || "User";
   if (bot.busy) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, instructionId, rootId);
   }
   // Capture before any await. startGroupTurn persists the next instruction
   // on arrival, so a re-read after setup binds this turn to a later message.
@@ -6309,7 +6329,7 @@ async function runClaimedGroupMemberTurn(
   if (!readyBot) return false;
   // the room's own dispatch site: startClaimedTurn's gate never sees it
   if (readyBot.busy || botHasLiveTurn(bot.id, threadId)) {
-    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId);
+    return queueBusyRoomMember(groupId, threadId, bot, hop, spoken, cardContinuation, onDispatchError, dispatchedInstructionId, rootId);
   }
   const messagesAtStart = store.messagesFor(threadId).length;
   store.setActivity(bot.id, "working", threadId);
@@ -6436,7 +6456,7 @@ async function runClaimedGroupMemberTurn(
     // through startClaimedTurn, which recycles the native session after
     // Orbit compaction or a pre-compact fat soak.
     keepRoomTurnInstruction = true;
-    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop });
+    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }) });
     const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
@@ -6521,7 +6541,7 @@ ${text}` : text,
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
       if (spoken.has(next.id)) continue;
-      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId))) {
+      if (!(await runGroupMemberTurn(groupId, threadId, next.id, hop + 1, spoken, undefined, undefined, isCancelled, dispatchedInstructionId, undefined, rootId))) {
         return false;
       }
     }
@@ -6566,6 +6586,7 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
     replyToId: replyTo?.id,
     sendId,
   });
+  const rootId = rootForStart(threadId, { kind: "human", messageKey: message.sendId ?? message.id });
   for (const memberId of group.memberIds) noteTalked(memberId);
   if (!group.dm) store.titleGroupTaskFromFirstMessage(group.id, text, threadId);
 
@@ -6662,6 +6683,8 @@ function startGroupTurn(groupId: string, text: string, replyTo?: Message, sendId
         undefined,
         () => operation.cancelled,
         operation.instructionId,
+        undefined,
+        rootId,
       ))) break;
     }
   });
@@ -6784,6 +6807,9 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
         prompt,
         (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
         () => operation.cancelled,
+        undefined,
+        undefined,
+        rootForStart(entry.threadId, { kind: "automatic" }),
       );
     });
     const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
@@ -6881,6 +6907,9 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
         prompt,
         (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
         () => operation.cancelled,
+        undefined,
+        undefined,
+        rootForStart(entry.threadId, { kind: "automatic" }),
       );
     });
     const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));

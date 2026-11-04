@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as recovery from "./task-recovery-flush.ts";
 import { startQueuedTurn, writeChatError } from "./chat-error.ts";
+import { rootForStart } from "./comms-root.ts";
 import {
   _resetSteerQueue,
   cancelQueuedSends,
@@ -173,6 +174,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const noop = () => {};
   const taskResumes = load("taskResumes", {
     TaskResumeScheduler: recovery.TaskResumeScheduler,
+    rootForStart,
     groupTaskResumes,
     botHasActiveTurn,
     hasQueuedSendBefore,
@@ -541,6 +543,7 @@ describe("routine cancel", () => {
     const cancelled = new Set<string>();
     let isCancelled: (() => boolean) | undefined;
     const startChatTurn = routineOption("startChatTurn", {
+      rootForStart,
       routineSourceOwner: () => ({ bot: { id: "bot-1" }, group: { id: "group-1" }, threadId: "room-1" }),
       botHasActiveTurn: () => false,
       busyRejection: (message: string) => new Error(message),

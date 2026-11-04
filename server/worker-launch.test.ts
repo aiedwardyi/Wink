@@ -200,7 +200,7 @@ describe("trusted worker accounts", () => {
       event: { type: "turn.started", threadId: "thread", turnId: "continued", providerInstanceId: f.third.id }, foldContinuationStart,
       store: { botByThread: () => ({ id: "bot" }), setActivity: noop }, turnStartClaims: new Set(),
       registry: { get: (id: string) => id === f.third.id ? live : null }, providerReload: { started: (_thread: string, id: string) => id === f.third.id ? live : null },
-      workerTurns: f.turns, turnRegistry: { start: noop }, dispatchedThreads: new Map(), liveTurnIdByThread: new Map(),
+      workerTurns: f.turns, turnRegistry: { start: noop }, rootForStart: () => null, dispatchedThreads: new Map(), liveTurnIdByThread: new Map(),
       turnDispatchedAt: new Map(), tickTurnClock: () => 1, turnStartedAtMs: new Map(), watchdog: { watch: noop },
       paneNoteTurnThreads: new Set(), disownedTurnIds: new Set(),
     });
