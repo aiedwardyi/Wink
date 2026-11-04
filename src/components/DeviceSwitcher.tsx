@@ -28,13 +28,19 @@ const DEVICES_CHANGE = "orbit-devices-change";
 function useDevices(enabled: boolean, watching = false) {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const live = useRef(true);
+  const requested = useRef(0);
+  const applied = useRef(0);
   const load = useCallback(
-    () =>
-      api("/api/devices")
+    () => {
+      const request = ++requested.current;
+      return api("/api/devices")
         .then((body: { devices: DeviceItem[] }) => {
-          if (live.current) setDevices(body.devices);
+          if (!live.current || request <= applied.current) return;
+          applied.current = request;
+          setDevices(body.devices);
         })
-        .catch(() => {}),
+        .catch(() => {});
+    },
     [],
   );
 

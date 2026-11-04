@@ -102,8 +102,8 @@ document.querySelector("button").addEventListener("click",()=>location.assign("h
     "data:text/html;charset=utf-8," +
     encodeURIComponent(`<!doctype html><html><meta name="color-scheme" content="dark"><title>${escape(title)}</title>
       <body style="margin:0;display:grid;place-items:center;height:100vh;background:${escape(backgroundColor)};color:${escape(color)};font:14px system-ui,sans-serif">
-        <div style="max-width:440px;padding:32px;text-align:center"><h2 style="margin:0 0 ${help ? 10 : 20}px;font-size:18px">${escape(heading)}</h2>${help ? `<p style="margin:0 0 20px;color:#a1a1aa;line-height:1.5;word-break:keep-all">${escape(help)}</p>` : ""}
-        ${retry ? `<button style="border:0;border-radius:9px;background:#fff;color:#111;padding:9px 14px;font-weight:600;cursor:pointer">${escape(retry)}</button>` : ""}</div>
+        <div style="max-width:440px;padding:32px;text-align:center"><h2 style="margin:0 0 ${help ? 10 : 20}px;font-size:18px">${escape(heading)}</h2>${help ? `<p style="margin:0 0 20px;color:${escape(color)};line-height:1.5;word-break:keep-all">${escape(help)}</p>` : ""}
+        ${retry ? `<button style="border:0;border-radius:9px;background:${escape(color)};color:${escape(backgroundColor)};padding:9px 14px;font-weight:600;cursor:pointer">${escape(retry)}</button>` : ""}</div>
         ${retry ? `<script>${script}</script>` : ""}
       </body></html>`)
   );
@@ -114,7 +114,7 @@ function deviceConnectingPage({ title, heading, backgroundColor, color }) {
 }
 
 async function startDeviceWindow(win, loadingPage, url) {
-  await win.loadURL(loadingPage);
+  await win.loadURL(loadingPage).catch(() => {});
   if (win.isDestroyed()) return;
   win.show();
   await win.loadURL(url).catch(() => {});
