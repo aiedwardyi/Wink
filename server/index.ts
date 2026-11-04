@@ -366,7 +366,7 @@ import { publishUnsyncedPictures, pullSyncedPicture, pruneSyncedPictures } from 
 import { createThreadSyncV2Store } from "./thread-sync-v2-store.ts";
 import { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { ensureSyncV2Identity } from "./thread-sync-v2-engine.ts";
-import { serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
 import { missingStaticResponse } from "./static-fallback.ts";
 import { sendStaticFile, sendText } from "./compression.ts";
 import { isAllowedOrigin, isLoopbackHost, json, readBody } from "./http-helpers.ts";
@@ -7106,7 +7106,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 403, { error: "forbidden: loopback host required" });
       }
       const origin = req.headers.origin;
-      if (origin && !isAllowedOrigin(origin) && !originAllowedByRemote(origin, REMOTE_HOST)) {
+      if (origin && !isAllowedOrigin(origin) && !originAllowedByRemote(origin, REMOTE_HOST) && !(origin === "null" && linkedFileGrant(method, path))) {
         return json(res, 403, { error: "forbidden: cross-origin request" });
       }
     }
@@ -7140,7 +7140,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true, id: message.id });
     }
     if (path.startsWith("/api/") && !(method === "GET" && path === "/api/health") && !credentials.phoneSession &&
-        !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path)) {
+        !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)) {
       return json(res, 401, { error: "unauthorized" });
     }
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.

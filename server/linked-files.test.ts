@@ -1,13 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { serveLinkedFile, type LinkedMessage } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile, type LinkedMessage } from "./linked-files.ts";
 import { requestCredentials } from "./phone-auth.ts";
 import {
   loadThreadSyncLedger,
@@ -49,6 +49,23 @@ function listen(handler: (req: IncomingMessage, res: ServerResponse) => void): P
       });
     });
   });
+}
+
+/** Serves a folder whose HTML files a bot linked, to a signed-in client. */
+async function linkedSite(files: Record<string, string>) {
+  const root = temp("linked-site-");
+  for (const [name, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, name)), { recursive: true });
+    writeFileSync(join(root, name), text);
+  }
+  const links = Object.keys(files).filter((name) => name.endsWith(".html")).map((name) => `[page](${join(root, name)})`);
+  const server = await listen((req, res) => serveLinkedFile(req, res, {
+    bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+    messages: [{ id: "m1", text: links.join(" ") }],
+    writerDeviceId: () => null, rootsFor: () => [root],
+  }));
+  const open = (name: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(root, name))}`);
+  return { root, server, open };
 }
 
 describe("linked files", () => {
@@ -98,9 +115,11 @@ describe("linked files", () => {
     const outside = join(root, "outside");
     mkdirSync(join(site, "assets"), { recursive: true });
     mkdirSync(outside);
-    writeFileSync(join(site, "index.html"), '<link rel="stylesheet" href="style.css"><script src="assets/app.js"></script>');
-    writeFileSync(join(site, "style.css"), "body { color: red; }");
+    writeFileSync(join(site, "index.html"), '<link rel="stylesheet" href="style.css"><script src="assets/app.js"></script><img src="logo.png">');
+    writeFileSync(join(site, "style.css"), "@font-face { font-family: body; src: url(assets/body.woff2); } body { color: red; }");
     writeFileSync(join(site, "assets", "app.js"), "document.title = 'ready';");
+    writeFileSync(join(site, "assets", "body.woff2"), "font-bytes");
+    writeFileSync(join(site, "logo.png"), "png-bytes");
     writeFileSync(join(outside, "secret.txt"), "secret");
     symlinkSync(outside, join(site, "escape"), "junction");
     const options = {
@@ -116,14 +135,18 @@ describe("linked files", () => {
       expect(page.headers.get("content-type")).toContain("text/html");
       expect(page.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
       expect(await page.text()).toContain("style.css");
-      const css = await fetch(new URL("style.css", page.url), { headers });
+      // The sandboxed page sends no cookie, and its fonts and module scripts send Origin: null.
+      const css = await fetch(new URL("style.css", page.url));
       expect(css.status).toBe(200);
       expect(css.headers.get("content-type")).toContain("text/css");
       expect(await css.text()).toContain("color: red");
-      const js = await fetch(new URL("assets/app.js", page.url), { headers });
+      const js = await fetch(new URL("assets/app.js", page.url));
       expect(js.status).toBe(200);
       expect(js.headers.get("content-type")).toContain("javascript");
-      expect((await fetch(new URL("style.css", page.url))).status).toBe(401);
+      const png = await fetch(new URL("logo.png", page.url));
+      expect([png.status, png.headers.get("content-type"), await png.text()]).toEqual([200, "image/png", "png-bytes"]);
+      const font = await fetch(new URL("assets/body.woff2", page.url), { headers: { origin: "null" } });
+      expect([font.status, font.headers.get("access-control-allow-origin"), await font.text()]).toEqual([200, "*", "font-bytes"]);
       for (const asset of ["%2e%2e%2foutside%2fsecret.txt", "%2e%2e%5coutside%5csecret.txt", "%2foutside%2fsecret.txt", "C%3a%5coutside%5csecret.txt", "escape/secret.txt", "assets/../../outside/secret.txt"]) {
         const denied = await fetch(`${page.url}${asset}`, { headers });
         expect(denied.status, asset).toBe(404);
@@ -136,6 +159,85 @@ describe("linked files", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("gives a linked page an opaque origin, away from Wink's storage and session", async () => {
+    const { server, open } = await linkedSite({ "index.html": "<script>localStorage.getItem('omb-drafts')</script>" });
+    try {
+      const policy = (await open("index.html")).headers.get("content-security-policy") ?? "";
+      expect(policy).toMatch(/^sandbox allow-scripts;/);
+      expect(policy).not.toContain("allow-same-origin");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("sandboxes every file beside a linked page, so an svg opened on its own cannot script", async () => {
+    const { server, open } = await linkedSite({
+      "index.html": '<a href="payload.svg">open</a>',
+      "payload.svg": '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/bots")</script></svg>',
+      "style.css": "body {}",
+    });
+    try {
+      const page = await open("index.html");
+      for (const name of ["payload.svg", "style.css"]) {
+        const res = await fetch(new URL(name, page.url));
+        expect(res.status, name).toBe(200);
+        expect(res.headers.get("content-security-policy"), name).toBe("sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:");
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses dotfiles, dot folders and types a page cannot load beside a linked page", async () => {
+    const { server, open } = await linkedSite({
+      "index.html": "<p>page</p>",
+      ".env": "TOKEN=secret",
+      ".git/config": "secret",
+      ".private/keys.json": "secret",
+      "notes.txt": "secret",
+    });
+    try {
+      const page = await open("index.html");
+      for (const name of [".env", ".git/config", ".private/keys.json", "notes.txt"]) {
+        const res = await fetch(new URL(name, page.url));
+        expect(res.status, name).toBe(404);
+        expect(await res.text(), name).not.toContain("secret");
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("opens a page's folder only with that page's unexpired grant", async () => {
+    const { root, server, open } = await linkedSite({ "index.html": "<p>page</p>", "style.css": "body {}", "other/index.html": "<p>other</p>" });
+    const scope = `${server.url}/api/threads/t1/linked-file/${encodeURIComponent(join(root, "index.html"))}/`;
+    try {
+      const grant = (await open("index.html")).url.slice(scope.length, -1);
+      const foreign = (await open("other/index.html")).url.split("/").at(-2)!;
+      const later = `${(Number.parseInt(grant, 36) + 1).toString(36)}${grant.slice(grant.indexOf("."))}`;
+      // The signed-in session alone no longer opens the folder.
+      for (const url of [`${scope}style.css`, `${scope}x/style.css`, `${scope}${foreign}/style.css`, `${scope}${later}/style.css`]) {
+        expect((await fetch(url)).status, url).toBe(404);
+      }
+      expect((await fetch(`${scope}${grant}/style.css`)).status).toBe(200);
+      const asset = new URL(`${scope}${grant}/style.css`).pathname;
+      expect([linkedFileGrant("GET", asset), linkedFileGrant("POST", asset), linkedFileGrant("GET", asset.replace(grant, foreign))]).toEqual([true, false, false]);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 60 * 60_000 + 1);
+      expect((await fetch(`${scope}${grant}/style.css`)).status).toBe(404);
+      expect(linkedFileGrant("GET", asset)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      await server.close();
+    }
+  });
+
+  it("admits a page's grant at the server's Origin and sign-in gates", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(source.includes('!originAllowedByRemote(origin, REMOTE_HOST) && !(origin === "null" && linkedFileGrant(method, path))'), "Origin gate").toBe(true);
+    expect(source.includes("!apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)"), "sign-in gate").toBe(true);
   });
 
   it("refuses an unlinked path, escapes, a file outside the roots, and an unauthenticated request", async () => {
@@ -248,6 +350,7 @@ describe("linked files", () => {
       });
       expect(res.status).toBe(206);
       expect(res.headers.get("content-range")).toBe("bytes 2-5/16");
+      expect([res.headers.get("content-disposition")?.split(";")[0], res.headers.get("content-security-policy")]).toEqual(["inline", null]);
       expect(Buffer.from(await res.arrayBuffer()).equals(clip.subarray(2, 6))).toBe(true);
     } finally {
       await server.close();

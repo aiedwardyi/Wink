@@ -1,6 +1,7 @@
 // Linked files stay inside the writing bot's output roots after realpath.
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, realpathSync, statSync } from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { pipeline } from "node:stream";
 import { fromMarkdown } from "mdast-util-from-markdown";
@@ -38,6 +39,8 @@ function isMediaExt(value: string): value is MediaExt {
 const WINDOWS_PATH = /^[a-zA-Z]:[\\/]/;
 const SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const GRANT_KEY = randomBytes(32);
+const GRANT_MS = 60 * 60_000;
 
 export interface LinkedMessage {
   id: string;
@@ -220,7 +223,7 @@ function byteRange(header: string | undefined, size: number): { start: number; e
   return { start, end: Math.min(end, size - 1) };
 }
 
-function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, size: number, mime: string, attachment = false, htmlScope?: string): void {
+function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, size: number, mime: string, attachment = false, scope?: string): void {
   const range = byteRange(header(req.headers.range), size);
   if (range === "bad") {
     res.writeHead(416, { "content-range": `bytes */${size}`, "accept-ranges": "bytes" });
@@ -230,15 +233,20 @@ function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, s
   const start = range === "all" ? 0 : range.start;
   const end = range === "all" ? size - 1 : range.end;
   const status = range === "all" ? 200 : 206;
-  const shared = {
+  const shared: OutgoingHttpHeaders = {
     "content-type": mime,
     "content-length": String(end - start + 1),
     "accept-ranges": "bytes",
     "cache-control": "private",
     "x-content-type-options": "nosniff",
     "content-disposition": contentDisposition(basename(filePath), attachment),
-    ...(mime === "text/html; charset=utf-8" ? { "content-security-policy": htmlPolicy(req, htmlScope!) } : {}),
   };
+  if (scope && mime === "text/html; charset=utf-8") shared["content-security-policy"] = htmlPolicy(req, scope);
+  else if (scope) {
+    // Fonts and module scripts load in CORS mode from the page's opaque origin.
+    shared["content-security-policy"] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";
+    shared["access-control-allow-origin"] = "*";
+  }
   res.writeHead(status, status === 206 ? { ...shared, "content-range": `bytes ${start}-${end}/${size}` } : shared);
   if (size === 0) {
     res.end();
@@ -250,22 +258,48 @@ function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, s
   });
 }
 
+function grant(threadId: string, filePath: string, expires = Date.now() + GRANT_MS): string {
+  return `${expires.toString(36)}.${createHmac("sha256", GRANT_KEY).update(`${threadId}\n${filePath}\n${expires}`).digest("base64url")}`;
+}
+
+function grantValid(threadId: string, filePath: string, value: string): boolean {
+  const expires = Number.parseInt(value, 36);
+  if (!(expires > Date.now())) return false;
+  const got = Buffer.from(value);
+  const want = Buffer.from(grant(threadId, filePath, expires));
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
+/** `path` must be the parsed pathname the router matches, so `..` cannot carry a grant to another route. */
+export function linkedFileGrant(method: string | undefined, path: string): boolean {
+  const match = /^\/api\/threads\/([\w-]+)\/linked-file\/([^/]+)\/([^/]+)\//.exec(path);
+  if (method !== "GET" || !match) return false;
+  try {
+    return grantValid(match[1]!, decodeURIComponent(match[2]!), match[3]!);
+  } catch {
+    return false;
+  }
+}
+
 export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, options: ServeLinkedFileOptions): void {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (!options.phoneSession && !apiRequestAuthorized(options.bearerOk, header(req.headers.cookie), options.remoteKey, url.pathname)) {
+  const prefix = `/api/threads/${encodeURIComponent(options.threadId)}/linked-file/`;
+  const scoped = url.pathname.startsWith(prefix);
+  if (!scoped && !options.phoneSession && !apiRequestAuthorized(options.bearerOk, header(req.headers.cookie), options.remoteKey, url.pathname)) {
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
-  const prefix = `/api/threads/${encodeURIComponent(options.threadId)}/linked-file/`;
-  const scoped = url.pathname.startsWith(prefix);
   let requested = url.searchParams.get("path") ?? "";
+  let key = "";
   let asset = "";
   if (scoped) {
     try {
       const parts = (req.url ?? "").split("?")[0]!.slice(prefix.length).split("/");
       requested = decodeURIComponent(parts.shift() ?? "");
+      key = parts.shift() ?? "";
       asset = parts.map(decodeURIComponent).join("/");
-      if (!/\.html?$/i.test(requested) || asset.split(/[\\/]/).some((part) => part === "..") || /[\\:\0]/.test(asset) || asset.startsWith("/")) {
+      if (!/\.html?$/i.test(requested) || !grantValid(options.threadId, requested, key) || asset.split(/[\\/]/).some((part) => part.startsWith(".")) ||
+          /[\\:\0]/.test(asset) || asset.startsWith("/") || (asset !== "" && !(mediaType(asset) ?? assetType(asset)))) {
         sendJson(res, 404, { error: "not found" });
         return;
       }
@@ -348,20 +382,20 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   if (html && !scoped) {
-    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/`, "cache-control": "private, no-store" });
+    res.writeHead(302, { location: `${prefix}${encodeURIComponent(requested)}/${grant(options.threadId, requested)}/`, "cache-control": "private, no-store" });
     res.end();
     return;
   }
   const filePath = asset || requested;
   const mime = mediaType(filePath) ?? (html || asset ? assetType(filePath) : null);
-  sendFile(req, res, real, size, mime ?? "application/octet-stream", mime === null, `${prefix}${encodeURIComponent(requested)}/`);
+  sendFile(req, res, real, size, mime ?? "application/octet-stream", mime === null, scoped ? `${prefix}${encodeURIComponent(requested)}/${key}/` : undefined);
 }
 
 function htmlPolicy(req: IncomingMessage, scope: string): string {
   const host = new URL(`http://${header(req.headers.host) ?? "127.0.0.1"}`).host;
   const sources = `http://${host}${scope} https://${host}${scope}`;
-  // Same-origin keeps asset cookies; the folder policy blocks Wink APIs and workers.
-  return `sandbox allow-scripts allow-same-origin; default-src ${sources}; script-src ${sources} 'unsafe-inline'; style-src ${sources} 'unsafe-inline'; img-src ${sources} data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+  // Never allow-same-origin: the page would share Wink's storage and session. Its files ride the grant.
+  return `sandbox allow-scripts; default-src ${sources}; script-src ${sources} 'unsafe-inline'; style-src ${sources} 'unsafe-inline'; img-src ${sources} data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 
 function assetType(filePath: string): string | null {

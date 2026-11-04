@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { PHONE_RELAY_OFF, buildSetupCode, mintInvite } from "../shared/relay-protocol.ts";
 import * as atomic from "./atomic.ts";
-import { serveLinkedFile } from "./linked-files.ts";
+import { linkedFileGrant, serveLinkedFile } from "./linked-files.ts";
 import { PhoneAccess, loadRelayClient, type PhoneAccessOptions } from "./phone-access.ts";
 import { phoneSetCookie, requestCredentials } from "./phone-auth.ts";
 import { PAIRING_TTL_MS, PHONES_FILE, PhoneDevices } from "./phone-devices.ts";
@@ -100,7 +100,8 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
       path.startsWith("/api/") &&
       !(method === "GET" && path === "/api/health") &&
       !credentials.phoneSession &&
-      !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path)
+      !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) &&
+      !linkedFileGrant(method, path)
     ) {
       return send(res, 401, { error: "unauthorized" });
     }
@@ -124,11 +125,11 @@ function app(access: PhoneAccess, reached: string[], linkedRoot: string, staticD
       req.on("close", () => sse.delete(res));
       return;
     }
-    if (method === "GET" && path === "/api/threads/t1/linked-file") {
+    if (method === "GET" && /^\/api\/threads\/t1\/linked-file(?:\/.*)?$/.test(path)) {
       return serveLinkedFile(req, res, {
         ...credentials,
         threadId: "t1",
-        messages: [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")})` }],
+        messages: [{ id: "m1", text: `[clip](${join(linkedRoot, "clip.mp4")}) [page](${join(linkedRoot, "page.html")})` }],
         deviceId: "this-pc",
         writerDeviceId: () => null,
         rootsFor: () => [linkedRoot],
@@ -167,6 +168,8 @@ async function world(options: { config?: Partial<PhoneRelayConfig>; enroll?: (in
   const staticDir = staticFiles();
   const linkedRoot = mkdtempSync(join(tmpdir(), "wink-linked-"));
   writeFileSync(join(linkedRoot, "clip.mp4"), CLIP);
+  writeFileSync(join(linkedRoot, "page.html"), "<p>page</p>");
+  writeFileSync(join(linkedRoot, "body.woff2"), "font-bytes");
   const config: PhoneRelayConfig = { ...r.config, ...options.config };
   const statuses = new StatusLog();
   const clock = new FakeClock();
@@ -705,6 +708,23 @@ describe("relay request gate", () => {
     const old = await viaRelay(w.r, path, { headers: { cookie: `orbit_remote=${REMOTE_KEY}`, authorization: `Bearer ${COMMS}` } });
     expect(old.status).toBe(401);
     expect(old.body).not.toContain(CLIP.toString());
+  });
+
+  it("lets a linked page load its own files with its grant and no phone cookie", async () => {
+    const w = await world();
+    const session = await pairPhone(w);
+    const opened = await viaRelay(w.r, `/api/threads/t1/linked-file?path=${encodeURIComponent(join(w.linkedRoot, "page.html"))}`, { headers: { cookie: session } });
+    expect(opened.status).toBe(302);
+    const scope = String(opened.headers.location);
+    // The sandboxed page sends no cookie, and its fonts send Origin: null.
+    expect(await viaRelay(w.r, scope)).toMatchObject({ status: 200, body: "<p>page</p>" });
+    const font = await viaRelay(w.r, `${scope}body.woff2`, { headers: { origin: "null" } });
+    expect(font).toMatchObject({ status: 200, body: "font-bytes" });
+    expect(font.headers["access-control-allow-origin"]).toBe("*");
+    const forged = scope.replace(/[^/]+\/$/, "x/");
+    expect((await viaRelay(w.r, `${forged}body.woff2`)).status).toBe(401);
+    expect((await viaRelay(w.r, `${forged}body.woff2`, { headers: { origin: "null" } })).status).toBe(403);
+    expect((await viaRelay(w.r, "/api/bots", { headers: { origin: "null", cookie: session } })).status).toBe(403);
   });
 
   it("applies the same rules to an upgrade request", async () => {
