@@ -30,8 +30,10 @@ const stateSchema = z.object({
     cooldownUntil: time.optional(), backoff: z.record(cleanFileSchema, time).optional(),
     attemptedAt: time.optional(), unchangedHash: z.string().optional(),
     sideHashes: z.record(cleanFileSchema, z.string()).optional(), typed: z.array(z.string().regex(/^[0-9a-f]{16}$/)).max(2000).optional(),
+    nothing: z.object({ at: time, bytes: time }).optional(),
   })),
 });
+type RunState = BotCleanState & { nothing?: { at: number; bytes: number } };
 
 function readState(dataDir: string): MemoryCleanState {
   try { return stateSchema.parse(JSON.parse(readFileSync(join(dataDir, STATE_FILE), "utf8"))) as MemoryCleanState; }
@@ -105,8 +107,8 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
   let undoing = false;
   let cursor = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
-  const stateFor = (botId: string) => readState(deps.dataDir).bots[botId] ?? {};
-  const update = (botId: string, apply: (state: BotCleanState) => void) => {
+  const stateFor = (botId: string): RunState => readState(deps.dataDir).bots[botId] ?? {};
+  const update = (botId: string, apply: (state: RunState) => void) => {
     const state = readState(deps.dataDir);
     apply(state.bots[botId] ??= {});
     saveState(deps.dataDir, state);
@@ -150,20 +152,23 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     if (memory === null || (state.backoff?.["MEMORY.md"] ?? 0) > now()) return;
     const historyFile = (/memory\/memory-history(?:-\d+)?\.md/.exec(memory)?.[0] ?? HISTORY_FILE) as CleanFile;
     const history = readFile(join(workspaceDir(botId), historyFile));
-    const side = [...new Set(memory.match(/memory\/[\w][\w .-]*?\.md\b/g) ?? [])].flatMap((file) => {
+    const named = memory.match(/memory\/[\w][\w .-]*?\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/g) ?? [];
+    const side = [...new Set(named.map((name) => name.startsWith("memory/") ? name : `memory/${name}`))].flatMap((file) => {
       if (!isMemoryTopicName(file.slice(7)) || isHistory(file) || /\.conflict-/.test(file) || (state.backoff?.[file as CleanFile] ?? 0) > now()) return [];
       const text = readFile(join(workspaceDir(botId), file));
       return text !== null && Buffer.byteLength(text) >= 48000 && state.sideHashes?.[file as CleanFile] !== hashText(text) ? [{ file: file as CleanFile, text }] : [];
     }).sort((a, b) => Buffer.byteLength(b.text) - Buffer.byteLength(a.text))[0];
     const sourceHash = hashText(JSON.stringify([memory, side?.file, side?.text]));
-    if (state.unchangedHash === sourceHash) return;
+    const bytes = Buffer.byteLength(memory) + Buffer.byteLength(side?.text ?? "");
+    if (state.unchangedHash === sourceHash || state.nothing && bytes < state.nothing.bytes + 2048 && now() - state.nothing.at < 7 * DAY) return;
     const engine = await deps.engine(botId);
     if (!engine || controller.signal.aborted || epoch !== runEpoch || !quiet(botId)) return;
     const localTyped = typedHashes(botId, deps.dataDir);
-    update(botId, (state) => { state.attemptedAt = now(); });
+    update(botId, (state) => { state.attemptedAt = now(); delete state.nothing; });
     const result = await cleanFiles({ memory, side, history, typed: new Set([...localTyped, ...home.typed]), ...engine, now: now(), signal: controller.signal });
     if (!result.ok) {
-      if (result.stage === "nothing" || result.stage === "validate") update(botId, (state) => { state.unchangedHash = sourceHash; });
+      if (result.stage === "nothing") update(botId, (state) => { state.nothing = { at: now(), bytes }; });
+      if (result.stage === "validate") update(botId, (state) => { state.unchangedHash = sourceHash; });
       if (result.stage === "recall") update(botId, (state) => {
         (state.backoff ??= {})["MEMORY.md"] = now() + 14 * DAY;
         if (side) state.backoff[side.file] = now() + 14 * DAY;

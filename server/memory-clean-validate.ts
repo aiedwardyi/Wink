@@ -14,7 +14,7 @@ const changeSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("remind"), id, text: z.string(), reason }).strict(),
 ]);
 const listSchema = z.object({ version: z.literal(1), file: cleanFileSchema, changes: z.array(changeSchema) }).strict();
-export const pointerLine = (line: string) => /\bmemory\/[\w][\w .-]*\.md\b/.test(line);
+export const pointerLine = (line: string) => /\bmemory\/[\w][\w .-]*\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/.test(line);
 export const declinedLine = (line: string) => /\b(declined?|rejected?|ruled out|turned down|chose against)\b|거절|사양|선택하지|하지 않기로/i.test(line);
 
 export function protectedLines(text: string, typed: ReadonlySet<string>, includeDeclined = true): Set<number> {

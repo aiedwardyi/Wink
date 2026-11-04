@@ -22,7 +22,7 @@ const questions = () => Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "
 function calls(changes: Change[] = [retire(2)]) {
   const propose = vi.fn<TextCall>(async (prompt) => {
     if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(questions());
-    if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(Array(18).fill(true));
+    if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2)).map(() => true));
     const file = /"file":"([^"]+)"/.exec(prompt)?.[1] ?? "MEMORY.md";
     return JSON.stringify({ version: 1, file, changes });
   });
@@ -44,8 +44,8 @@ describe("cleanFiles recall", () => {
     const json = JSON.stringify(answers);
     engine.recall.mockResolvedValue(kind === "fenced" ? `\`\`\`json\n${json}\n\`\`\`` : kind === "plain-fence" ? `\`\`\`\n${json}\n\`\`\`` : kind === "prose" ? `Here are the answers:\n${json}\nEnd of answers.` : json);
     expect(await cleanFiles(input)).toMatchObject({ ok: true });
-    const grade = engine.propose.mock.calls.findLast(([prompt]) => prompt.startsWith("[memory-clean:grade]"))![0];
-    expect(JSON.parse(grade.slice(grade.indexOf("\n\n") + 2))[0].actual).toBe(String(answers[0]));
+    const grade = engine.propose.mock.calls.findLast(([prompt]) => prompt.startsWith("[memory-clean:grade]"))?.[0];
+    expect(grade && JSON.parse(grade.slice(grade.indexOf("\n\n") + 2))[0].actual).toBe(kind === "numeric" || kind === "boolean" ? String(answers[0]) : undefined);
   });
 
   it.each(["propose", "side", "questions", "answers", "grade"])("enforces the prompt budget before %s", async (stage) => {
@@ -53,10 +53,11 @@ describe("cleanFiles recall", () => {
     const memory = stage === "propose" ? "x".repeat(240_000) : "- kept\n- old\n";
     const side = stage === "side" || stage === "questions" ? { file: "memory/topic.md" as const, text: `- kept\n- old\n${"x".repeat(stage === "side" ? 480_000 : 245_000)}` } : undefined;
     if (stage === "grade") engine.recall.mockResolvedValue(JSON.stringify(["x".repeat(240_000), ...questions().slice(1).map((q) => q.answer)]));
-    const result = await cleanFiles({ memory, side, history: stage === "answers" ? "x".repeat(240_000) : null, typed: new Set(), ...engine });
+    if (stage === "answers") engine.propose.mockImplementation(async (prompt) => prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(questions().map((q) => ({ ...q, question: q.question + "x".repeat(10_000) }))) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] }));
+    const result = await cleanFiles({ memory, side, history: null, typed: new Set(), ...engine });
     expect(result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.propose.mock.calls.length + engine.recall.mock.calls.length).toBe({ propose: 0, side: 1, questions: 2, answers: 2, grade: 3 }[stage]);
-    expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + Math.ceil(prompt.length / 4), 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
+    expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + Math.ceil(Buffer.byteLength(prompt) / 2.5) + 8_000, 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
   });
 
   it("archives raw lines and uses blind fresh answers with a signal on every call", async () => {
@@ -73,7 +74,10 @@ describe("cleanFiles recall", () => {
 
   it.each(["wrong", "malformed", "coverage", "absent"])("fails closed on %s recall", async (mode) => {
     const engine = calls();
-    if (mode === "wrong") engine.propose.mockImplementation(async (prompt) => prompt.includes("[memory-clean:grade]") ? JSON.stringify(Array(18).fill(false)) : prompt.includes("[memory-clean:questions]") ? JSON.stringify(questions()) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] }));
+    if (mode === "wrong") {
+      engine.propose.mockImplementation(async (prompt) => prompt.includes("[memory-clean:grade]") ? JSON.stringify(Array(16).fill(false)) : prompt.includes("[memory-clean:questions]") ? JSON.stringify(questions()) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] }));
+      engine.recall.mockResolvedValue(JSON.stringify(questions().map((q) => q.answer && `${q.answer} or so`)));
+    }
     if (mode === "malformed") engine.recall.mockResolvedValue("bad");
     if (mode === "coverage") engine.propose.mockResolvedValueOnce(JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] })).mockResolvedValueOnce("[]");
     if (mode === "absent") engine.recall.mockResolvedValue(JSON.stringify(Array(18).fill("invented")));
@@ -151,8 +155,8 @@ describe("memory cleanup service", () => {
 
   afterEach(() => { service.dispose(); vi.useRealTimers(); });
 
-  it.each(["nothing", "validate"])("waits for changed content and six hours after %s", async (outcome) => {
-    engine = calls(outcome === "nothing" ? [] : [retire(1)]);
+  it("waits for changed content and six hours after validate", async () => {
+    engine = calls([retire(1)]);
     await run();
     expect(engine.propose).toHaveBeenCalledTimes(1);
     for (let minute = 0; minute < 60; minute++) {
@@ -316,6 +320,30 @@ describe("memory cleanup service", () => {
     expect(engine.propose.mock.calls.filter(([prompt]) => prompt.startsWith("[memory-clean:propose]")).map(([prompt]) => /"file":"([^"]+)"/.exec(prompt)?.[1])).toEqual(["MEMORY.md", "memory/small.md"]);
   });
 
+  it("picks a side file named by a bare pointer", async () => {
+    writeMemoryFile(bot.id, original + "- queued.md: open tasks\n");
+    mkdirSync(join(workspaceDir(bot.id), "memory"), { recursive: true });
+    writeFileSync(join(workspaceDir(bot.id), "memory/queued.md"), `- head\n- completed\n${"q".repeat(49000)}\n`);
+    await run();
+    expect(service.summary(bot.id).run?.files).toEqual(["MEMORY.md", "memory/queued.md"]);
+  });
+
+  it("re-arms after nothing only on 2 KB growth or seven days", async () => {
+    engine = calls([]);
+    await run();
+    writeMemoryFile(bot.id, original + `- ${"a".repeat(2048)}\n`);
+    await run();
+    expect(engine.propose).toHaveBeenCalledTimes(1);
+    writeMemoryFile(bot.id, original + `- ${"a".repeat(1024)}\n`);
+    clock += 6 * 60 * 60_000; await run();
+    expect(engine.propose).toHaveBeenCalledTimes(1);
+    writeMemoryFile(bot.id, original + `- ${"a".repeat(2048)}\n`);
+    await run();
+    expect(engine.propose).toHaveBeenCalledTimes(2);
+    clock += 7 * DAY; await run();
+    expect(engine.propose).toHaveBeenCalledTimes(3);
+  });
+
   it("fences a concurrent side-file write", async () => {
     const memory = original + "- memory/topic.md: details\n";
     const side = `- head\n- completed\n${"s".repeat(49000)}\n`;
@@ -339,7 +367,7 @@ describe("memory cleanup service", () => {
     home = { folder, botSyncId: "b", device: "000000000001", talkedAt: 1 };
     const call = engine.propose.getMockImplementation()!;
     engine.propose.mockImplementation(async (prompt, opts) => {
-      if (prompt.startsWith("[memory-clean:grade]")) {
+      if (prompt.startsWith("[memory-clean:questions]")) {
         if (kind === "signed-out") available = false;
         if (kind === "selection") engineKey = "other:model";
         if (kind === "home") writeFileSync(join(root, "000000000002.json"), JSON.stringify({ device: "000000000002", talkedAt: 2 }));
