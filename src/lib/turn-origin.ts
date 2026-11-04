@@ -13,6 +13,7 @@ type Event =
   | { type: "dispatch"; turnKey: string; dispatchKey: string; now: number }
   | { type: "started"; turnKey: string; now: number; row?: Message; retry?: boolean }
   | { type: "row"; row: Message; now: number }
+  | { type: "history"; row?: Message }
   | { type: "hydrated"; turnKey: string; row?: Message; now: number }
   | { type: "completed" };
 
@@ -58,8 +59,14 @@ export function nextTurnOrigin(prev: TurnOriginState, event: Event): TurnOriginS
           : fromRow(prev.origin?.turnKey ?? row.id, row, prev.origin?.originMs ?? event.now),
       };
     }
+    case "history": {
+      if (!prev.active || prev.origin?.source !== "observed" || !event.row || event.row.steered) return prev;
+      const origin = fromRow(prev.origin.turnKey, event.row, prev.origin.originMs);
+      if (origin.originMs === prev.origin.originMs && origin.source === prev.origin.source && prev.rowId === event.row.id) return prev;
+      return { ...prev, rowId: event.row.id, origin };
+    }
     case "hydrated":
-      if (prev.active && (!prev.rowId || prev.rowId === event.row?.id)) return prev;
+      if (prev.active && (!event.row || !prev.rowId || prev.rowId === event.row.id)) return prev;
       return { active: true, rowId: event.row?.id, origin: fromRow(event.turnKey, event.row, event.now) };
     case "completed":
       return prev.active ? { ...prev, active: false } : prev;

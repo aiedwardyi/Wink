@@ -59,10 +59,12 @@ const advance = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
 const elapsed = () => host.textContent?.match(/\(\d+s\)/)?.[0];
 const row = (message: Message) => frame({ kind: "message", threadId: "t1", message });
 
-async function mount(messages: Message[] = [], busy = false) {
+async function mount(messages: Message[] = [], busy = false, older?: Promise<{ messages: Message[]; hasMore: boolean }>) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
-    ? Response.json({ bots: [bot(messages, busy), { ...bot([], false), id: "b2", threadId: "t2" }], groups: [], computerControl: {} })
-    : Response.json({}, { status: 404 })));
+    ? Response.json({ bots: [{ ...bot(messages, busy), hasMore: Boolean(older) }, { ...bot([], false), id: "b2", threadId: "t2" }], groups: [], computerControl: {} })
+    : older && String(url).startsWith("/api/threads/t1/messages?")
+      ? Response.json(await older)
+      : Response.json({}, { status: 404 })));
   function Probe() {
     store = useStore();
     const current = store.state.bots.find((candidate) => candidate.id === store.state.selectedId);
@@ -198,6 +200,23 @@ describe("ChatView turn origin", () => {
     expect(elapsed()).toBe("(0s)");
     await advance(1200);
     expect(elapsed()).toBe("(1s)");
+  });
+
+  it("recovers the elapsed origin when prompt paging loads an older user row", async () => {
+    let resolve!: (page: { messages: Message[]; hasMore: boolean }) => void;
+    const older = new Promise<{ messages: Message[]; hasMore: boolean }>((done) => { resolve = done; });
+    const messages: Message[] = Array.from({ length: 200 }, (_, index) => ({
+      id: `tool-${index}`, parentId: index ? `tool-${index - 1}` : "u1", at: 95_000 + index,
+      role: "bot", kind: "activity", tool: { name: "Read", ok: true },
+    }));
+    await mount(messages, true, older);
+    expect(store.turnOrigin("t1")).toBe(100_000);
+    await advance(1200);
+    await act(async () => resolve({ messages: [{ ...user, at: 90_000 }], hasMore: false }));
+    expect(store.state.bots[0].messages[0].id).toBe("u1");
+    expect(store.turnOrigin("t1")).toBe(90_000);
+    await advance(1000);
+    expect(elapsed()).toBe("(12s)");
   });
 
   it("noReply shows no timer", async () => {

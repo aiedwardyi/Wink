@@ -55,6 +55,31 @@ describe("turn origin", () => {
     expect(nextTurnOrigin(state, { type: "hydrated", turnKey: "tail", row, now: 102_000 })).toBe(state);
   });
 
+  it("keeps a row-anchored origin when hydration has no row", () => {
+    const state = nextTurnOrigin(idle, { type: "hydrated", turnKey: "tail", row: user, now: 100_000 });
+    expect(nextTurnOrigin(state, { type: "hydrated", turnKey: "tail", now: 102_000 })).toBe(state);
+  });
+
+  it("keeps the first observation when recovered history has a future timestamp", () => {
+    const observed = nextTurnOrigin(idle, { type: "hydrated", turnKey: "tail", now: 100_000 });
+    const recovered = nextTurnOrigin(observed, { type: "history", row: { ...user, at: 103_000 } });
+    expect(recovered.origin?.originMs).toBe(100_000);
+    expect(nextTurnOrigin(recovered, { type: "history", row: { ...user, at: 103_000 } })).toBe(recovered);
+  });
+
+  it("ignores recovered history for dispatched and completed turns", () => {
+    const live = dispatched();
+    expect(nextTurnOrigin(live, { type: "history", row: user })).toBe(live);
+    const ended = nextTurnOrigin(nextTurnOrigin(idle, { type: "hydrated", turnKey: "tail", now: 100_000 }), { type: "completed" });
+    expect(nextTurnOrigin(ended, { type: "history", row: user })).toBe(ended);
+  });
+
+  it("waits for the first prompt when recovered history only contains a steer", () => {
+    const observed = nextTurnOrigin(idle, { type: "hydrated", turnKey: "tail", now: 100_000 });
+    expect(nextTurnOrigin(observed, { type: "history", row: { ...user, steered: true } })).toBe(observed);
+    expect(nextTurnOrigin(observed, { type: "history", row: user }).origin?.originMs).toBe(90_000);
+  });
+
   it("uses the observed start until a missed-dispatch row arrives", () => {
     const started = nextTurnOrigin(idle, { type: "started", turnKey: "provider-1", now: 100_000 });
     expect(nextTurnOrigin(started, { type: "row", row: user, now: 101_000 }).origin?.originMs).toBe(90_000);

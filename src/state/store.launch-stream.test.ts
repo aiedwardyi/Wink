@@ -28,7 +28,7 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-async function mountOriginStore(messages: Bot["messages"] = [], busy = false, snapshot?: Promise<Response>) {
+async function mountOriginStore(messages: Bot["messages"] = [], busy = false, snapshot?: Promise<Response>, onOrigin?: (origin: ReturnType<typeof useStore>["turnOrigin"]) => void) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -41,6 +41,7 @@ async function mountOriginStore(messages: Bot["messages"] = [], busy = false, sn
     : Response.json({}, { status: 404 })));
   function Probe() {
     store = useStore();
+    onOrigin?.(store.turnOrigin);
     return null;
   }
   const host = document.body.appendChild(document.createElement("div"));
@@ -94,6 +95,33 @@ describe("store turn origins", () => {
     now.mockReturnValue(102_000);
     await act(async () => resolve(Response.json({ bots: [], groups: [], computerControl: {} })));
     expect(store.turnOrigin("t1")).toBe(100_000);
+  });
+
+  it("changes origins four times at turn edges and zero times during 200 steady frames", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { frame = callback; return 1; }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const changes = new Set<ReturnType<typeof useStore>["turnOrigin"]>();
+    await mountOriginStore([], false, undefined, (origin) => changes.add(origin));
+    const initial = changes.size;
+    await emit({ kind: "turn.dispatch", threadId: "t1", createdAt: new Date(100_000).toISOString() });
+    await emit({ kind: "message", threadId: "t1", message: { id: "u1", at: 100_010, role: "user", kind: "text", text: "Preview" } });
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t1", turnId: "turn-1", createdAt: new Date(100_850).toISOString() } });
+    expect(changes.size - initial).toBe(3);
+    const steady = changes.size;
+    for (let index = 0; index < 200; index++) {
+      now.mockReturnValue(101_000 + index * 100);
+      await delta("more ");
+      if (index % 20 === 0) {
+        await emit({ kind: "message", threadId: "t1", message: { id: `tool-${index}`, at: Date.now(), role: "bot", kind: "activity", tool: { name: "Read", ok: true } } });
+        await emit({ kind: "message", threadId: "t1", message: { id: `join-${index}`, at: Date.now(), role: "user", kind: "text", steered: true, text: "And this" } });
+        await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t1", turnId: "turn-1" } });
+      }
+    }
+    expect(changes.size - steady).toBe(0);
+    expect(store.turnOrigin("t1")).toBe(100_000);
+    await emit({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", turnId: "turn-1" } });
+    expect(changes.size - initial).toBe(4);
   });
 });
 

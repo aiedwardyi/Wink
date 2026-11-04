@@ -1340,6 +1340,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // All other actions keep their existing optimistic behavior.
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
+        case "olderMessages": {
+          const next = reducer(stateRef.current, action);
+          if (next === stateRef.current) break;
+          const bot = next.bots.find((candidate) => candidate.threadId === action.threadId);
+          const messages = bot ? visibleMessages(bot) : next.groups.find((group) => group.threadId === action.threadId)?.messages ?? [];
+          updateOrigin({ threadId: action.threadId, event: { type: "history", row: turnOriginRow(messages) } });
+          break;
+        }
         case "markRoutineRunSeen":
           api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);
           break;
