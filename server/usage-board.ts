@@ -59,8 +59,7 @@ export function createUsageBoard(deps: Deps) {
   let previous = new Map<string, number>();
 
   function publish() {
-    if (!listeners.size) return;
-    if (frameTimer) clearTimeout(frameTimer);
+    if (!listeners.size || frameTimer) return;
     frameTimer = setTimeout(() => {
       frameTimer = undefined;
       const frame: UsageBoardFrame = { kind: "usage.board", revision };

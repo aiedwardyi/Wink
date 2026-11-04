@@ -340,6 +340,23 @@ describe("usage board", () => {
     expect(s.runs).toHaveBeenCalledOnce();
   });
 
+  it("keeps sending frames while changes land every second", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const frames: Array<{ at: number; revision: number }> = [];
+    const unsubscribe = s.board.onFrame((frame) => { frames.push({ at: Date.now(), revision: frame.revision }); });
+    let committed = 0;
+    for (let i = 0; i < 10; i++) {
+      committed = s.board.touch();
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(frames.length).toBeGreaterThanOrEqual(4);
+    await vi.advanceTimersByTimeAsync(2_000);
+    for (let i = 1; i < frames.length; i++) expect(frames[i].at - frames[i - 1].at).toBeGreaterThanOrEqual(2_000);
+    expect(frames.at(-1)?.revision).toBe(committed);
+    unsubscribe();
+  });
+
   it("sends at most one frame per 2 s", async () => {
     vi.useFakeTimers();
     const s = setup();
@@ -348,7 +365,7 @@ describe("usage board", () => {
     s.board.touch();
     await vi.advanceTimersByTimeAsync(1_000);
     const committed = s.board.touch();
-    await vi.advanceTimersByTimeAsync(1_999);
+    await vi.advanceTimersByTimeAsync(999);
     expect(frames).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(frames).toEqual([{ kind: "usage.board", revision: committed }]);
@@ -357,6 +374,7 @@ describe("usage board", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frames).toHaveLength(2);
     expect(frames[1].revision).toBeGreaterThan(committed);
+    s.board.touch();
     unsubscribe();
     s.board.touch();
     await vi.advanceTimersByTimeAsync(2_000);
