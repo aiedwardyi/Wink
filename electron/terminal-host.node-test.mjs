@@ -3050,6 +3050,21 @@ for (const [engine, ellipsis] of [["agy", "..."], ["gemini", "…"]]) {
   });
 }
 
+test("an idle Claude pane with a running shell sends no STALLED before Claude's 2-hour shell cap", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  f.children[0].data(claudeIdle("1 shell"));
+  await f.settle();
+  for (const minutes of [31, 30, 60]) {
+    await f.advance(minutes * 60_000);
+    assert.equal(f.notes.length, 0);
+  }
+  await f.advance(5 * 60_000);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: no screen change for 125 min/);
+});
+
 test("a Claude idle shell footer repeats STALLED twice on a 30/60-minute backoff", async (t) => {
   const f = stallFixture({ notePane: (mail, scope, text) => postPaneNote(mail, scope, text, async (url, init) => {
     const body = JSON.parse(init.body);
@@ -3062,20 +3077,20 @@ test("a Claude idle shell footer repeats STALLED twice on a 30/60-minute backoff
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell").replace("Brewed for 21s · done 6:26 PM", "Churned for 3m 5s · done 오전 7:30"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   assert.match(f.notes[0].text, /^STALLED: /);
   await f.advance(61 * 60_000);
   assert.equal(f.notes.length, 2);
-  assert.match(f.notes[1].text, /^STALLED: no screen change for 92 min/);
+  assert.match(f.notes[1].text, /^STALLED: no screen change for 186 min/);
   await f.advance(61 * 60_000);
   assert.equal(f.notes.length, 3);
-  assert.match(f.notes[2].text, /^STALLED: no screen change for 153 min/);
+  assert.match(f.notes[2].text, /^STALLED: no screen change for 247 min/);
   await f.advance(240 * 60_000);
   assert.equal(f.notes.length, 3);
   f.children[0].data(claudeIdle("1 shell").replace("Brewed", "Checked"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 4);
   await f.advance(31 * 60_000);
   assert.equal(f.notes.length, 5);
@@ -3092,7 +3107,7 @@ test("a recorded Claude idle pane with a background shell repeats STALLED", asyn
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(`\x1b[2J\x1b[H${recorded.reply.screen.join("\r\n")}\r\n`);
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   assert.match(f.notes[0].text, /^STALLED: /);
   await f.advance(31 * 60_000);
@@ -3109,7 +3124,7 @@ test("a stall receipt counts as delivered when the mailbox response is lost", as
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   await f.advance(5 * 60_000);
   assert.equal(f.notes.length, 1);
@@ -3123,7 +3138,7 @@ test("a stall receipt leaves the watcher armed and a plain note stops its repeat
   const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   await f.advance(1_000);
   f.host.attendBot("bot-1", pane.sessionId, "stall");
@@ -3141,7 +3156,7 @@ test("STALLED reminders wait 30 minutes and then 60 minutes", async (t) => {
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   for (const [minutes, count] of [[30, 1], [60, 2]]) {
     await f.advance(minutes * 60_000);
@@ -3157,7 +3172,7 @@ test("a report stops pending STALLED repeats", async (t) => {
   const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   f.host.attendBot("bot-1", pane.sessionId, "report");
   await f.advance(240 * 60_000);
@@ -3168,7 +3183,7 @@ const stallThrice = async (f) => {
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  for (const minutes of [31, 31, 61]) await f.advance(minutes * 60_000);
+  for (const minutes of [125, 31, 61]) await f.advance(minutes * 60_000);
   assert.equal(f.notes.length, 3);
 };
 
@@ -3184,7 +3199,7 @@ test("a worker still stuck 10 minutes after its third STALLED note sends one sta
   const { tail, ...rest } = snags[0];
   assert.deepEqual(rest, {
     event: "stalled", key: f.children[0].options.env.ORBIT_PANE, bot: "bot-1", worker: "claude", pane: f.children[0].options.env.ORBIT_PANE, label: "W",
-    detail: "3 STALLED notes, no screen change or report since", minutes: 133, notes: [["stalled", 102], ["stalled", 71], ["stalled", 10]],
+    detail: "3 STALLED notes, no screen change or report since", minutes: 227, notes: [["stalled", 102], ["stalled", 71], ["stalled", 10]],
   });
   assert.match(tail, /bypass permissions on/);
   await f.advance(240 * 60_000);
@@ -3284,7 +3299,7 @@ test("a failed report with no later report sends a note-lost snag after 10 minut
 });
 
 for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
-  test(`a Claude running-shell footer stalls after 30 minutes despite status ticks: ${jobs}`, async (t) => {
+  test(`a Claude running-shell footer stalls after 125 minutes despite status ticks: ${jobs}`, async (t) => {
     const f = stallFixture();
     t.after(() => f.host.dispose());
     await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
@@ -3295,11 +3310,11 @@ for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
     await f.advance(13 * 60_000);
     f.children[0].data(`${claudeIdle(jobs)}  95% context left · 12:16 PM\r\n`);
     await f.settle();
-    await f.advance(15 * 60_000 - 1);
+    await f.advance(110 * 60_000 - 1);
     assert.equal(f.notes.length, 0);
     await f.advance(1);
     assert.equal(f.notes.length, 1);
-    assert.match(f.notes[0].text, /^STALLED: no screen change for 30 min/);
+    assert.match(f.notes[0].text, /^STALLED: no screen change for 125 min/);
     f.children[0].data(`${claudeIdle(jobs)}  94% context left · 12:31 PM\r\n`);
     await f.settle();
     await f.advance(30 * 60_000);
