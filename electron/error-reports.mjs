@@ -138,7 +138,7 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
     }
   };
   const flush = () => pending ??= flushOne().finally(() => { pending = null; });
-  const mark = () => { if (started && enabled()) atomic(marker, 1); };
+  const mark = () => { if (started && enabled()) atomic(marker, { build }); };
   try { enabled(); } catch {}
   return {
     consent, capture, flush, available: () => Boolean(endpoint),
@@ -156,7 +156,8 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
       started = true;
       try {
         if (enabled()) {
-          if (fs.existsSync(marker)) capture({ process: "main", code: "UNCLEAN_EXIT", site: ERROR_SITES.uncleanExit });
+          const previous = read(marker);
+          if (previous === 1 || previous?.build === build) capture({ process: "main", code: "UNCLEAN_EXIT", site: ERROR_SITES.uncleanExit });
           mark();
         }
       } catch {}
