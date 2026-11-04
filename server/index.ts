@@ -2901,7 +2901,7 @@ const spawnUsage = createSpawnUsage({
 });
 const workerTurns = createWorkerTurns();
 const workerLaunch = createWorkerLaunch({
-  resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)),
+  resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage,
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
