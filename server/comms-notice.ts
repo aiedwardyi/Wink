@@ -2,7 +2,7 @@
 // context never replays them (context-compaction admits activity by ok).
 
 import { rootThreadOf } from "./comms-root.ts";
-import type { Store } from "./store.ts";
+import type { Message, Store } from "./store.ts";
 
 export type CommsNotice = "paused" | "unavailable";
 export type NoticeStore = Pick<Store, "appendMessage" | "activePath">;
@@ -12,17 +12,17 @@ const NAMES: Record<CommsNotice, string> = {
   unavailable: "Bots paused: send a message to keep them going.",
 };
 
-const posted = new Set<string>();
+const isHuman = (row: Message) => row.role === "user" && row.kind === "text" && !row.from;
 
+/** Once per request and thread, read from the rows themselves, so nothing is kept per root. */
 export function postCommsNotice(store: NoticeStore, notice: CommsNotice, dedupeKey: string, threadIds: string[]): void {
+  // a pair channel never holds the human's message: the request began at the last one where its root lives
+  const home = rootThreadOf(dedupeKey);
+  const asked = (home && store.activePath(home).findLast(isHuman)?.at) || 0;
   for (const threadId of new Set(threadIds)) {
-    const key = `${dedupeKey}\0${threadId}`;
-    if (posted.has(key)) continue;
-    posted.add(key);
-    // after a restart the set is empty; the row since the user's last message still counts
     const since = store.activePath(threadId);
-    const human = since.findLastIndex((row) => row.role === "user" && row.kind === "text" && !row.from);
-    if (since.slice(human + 1).some((row) => row.kind === "activity" && row.tool?.name === NAMES[notice])) continue;
+    const human = since.findLastIndex(isHuman);
+    if (since.slice(human + 1).some((row) => row.at >= asked && row.kind === "activity" && row.tool?.name === NAMES[notice])) continue;
     store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name: NAMES[notice] } });
   }
 }

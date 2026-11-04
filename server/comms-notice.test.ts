@@ -1,5 +1,5 @@
-import { rmSync } from "node:fs";
-import { beforeEach, expect, it } from "vitest";
+import { readFileSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { postCommsNotice, postRefusalNotice, refusalText } from "./comms-notice.ts";
 import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
@@ -21,6 +21,9 @@ beforeEach(() => {
   bot = store.createBot();
   peer = store.createBot();
   key++;
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 it("gives the bot the three fixed refusal texts", () => {
@@ -72,4 +75,22 @@ it("never writes account identity into a notice", () => {
   postRefusalNotice(store, "missing", undefined, email, bot.threadId);
   for (const threadId of [bot.threadId, peer.threadId]) expect(JSON.stringify(store.messagesFor(threadId))).not.toContain(email);
   expect((["exhausted", "reserved", "missing"] as const).map(refusalText).join(" ")).not.toContain(email);
+});
+
+it("posts a later request's pause in the pair channel after the user continued in their own chat", () => {
+  vi.useFakeTimers({ now: 1_000_000 });
+  const first = rootForStart(bot.threadId, { kind: "human", messageKey: `send-${key}` })!;
+  postRefusalNotice(store, "exhausted", first, "receipt", bot.threadId, peer.threadId);
+  vi.setSystemTime(1_060_000);
+  store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "keep going" });
+  const next = rootForStart(bot.threadId, { kind: "human", messageKey: `send-${key}-2` })!;
+  postRefusalNotice(store, "exhausted", next, "receipt", bot.threadId, peer.threadId);
+  postRefusalNotice(store, "exhausted", next, "receipt", bot.threadId, peer.threadId);
+  expect(lines(bot.threadId)).toHaveLength(2);
+  expect(lines(peer.threadId)).toHaveLength(2);
+});
+
+it("keeps nothing per root in memory, so expired roots leave nothing behind", () => {
+  const source = readFileSync(new URL("./comms-notice.ts", import.meta.url), "utf8");
+  expect(source).not.toMatch(/^const \w+ = new (Set|Map)\b/m);
 });
