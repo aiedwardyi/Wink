@@ -6,7 +6,6 @@ import { useI18n } from "@/lib/i18n";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { EngineMark } from "./EngineMark";
-import { ProviderMark } from "./ProviderIcons";
 
 function AccountPicker({ account, accounts, mainId, label, select }: {
   account: UsageAccount;
@@ -32,13 +31,11 @@ function AccountPicker({ account, accounts, mainId, label, select }: {
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [open]);
   return (
-    <div className="min-w-0 flex-1">
+    <div className="shrink-0 [@media(pointer:coarse)]:ml-1.5">
       <button ref={trigger} type="button" title={label(account)} aria-label={t("accounts.choose", { account: label(account) })}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
-        className="flex min-h-7 w-full items-center gap-2 text-left hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent max-md:min-h-11 [@media(pointer:coarse)]:min-h-11">
-        <ProviderMark driverKind={account.driverKind} size={16} className="shrink-0" />
-        <span className="min-w-0 truncate">{label(account)}</span>
-        <ChevronDown size={12} aria-hidden="true" className="ml-auto shrink-0" />
+        className="flex size-7 items-center justify-center hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent max-md:size-11 [@media(pointer:coarse)]:size-11">
+        <ChevronDown size={12} aria-hidden="true" />
       </button>
       {open && <div ref={menu} id={id} role="menu" aria-label={t("accounts.choose", { account: label(account) })}
         className="absolute inset-x-0 top-full z-40 max-h-72 overflow-y-auto rounded-[3px] [corner-shape:bevel] border border-hairline/40 bg-card py-1 shadow-lg"
@@ -54,10 +51,11 @@ function AccountPicker({ account, accounts, mainId, label, select }: {
             items[next]?.focus();
           }
         }}>
-        {accounts.map((item) => <button key={item.instanceId} type="button" role="menuitemradio" tabIndex={-1}
+        {accounts.map((item) => <button key={item.instanceId} type="button" role="menuitemradio" tabIndex={-1} title={label(item)}
+          aria-label={`${label(item)}${item.instanceId === mainId ? ` ${t("accounts.main")}` : ""}`}
           aria-checked={item.instanceId === account.instanceId} onClick={() => { select(item.instanceId); close(); }}
           className="flex min-h-8 w-full items-center gap-2 px-2 py-1 text-left text-[13px] font-normal text-ink hover:bg-raised-hover focus:bg-raised-hover focus:outline-none max-md:min-h-11 [@media(pointer:coarse)]:min-h-11">
-          <span className="min-w-0 break-words [overflow-wrap:anywhere]">{label(item)}</span>
+          <span className="min-w-0 truncate">{label(item)}</span>
           {item.instanceId === mainId && <span className="ml-auto shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>}
         </button>)}
       </div>}
@@ -117,11 +115,10 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
   );
   const heading = (account: UsageAccount, other = false) => (
     <div className="relative flex min-h-7 items-center gap-2 text-[13px] font-medium text-ink [@media(pointer:coarse)]:min-h-11">
-      {(phone || other) && pages.length > 1 ? <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label}
-        select={(id) => { focusSelection.current = id !== currentId; setSelectedId(id); }} /> : <>
-        <EngineMark instance={account} size={16} tapToShow />
-        {!other && <span title={account.snapshot.account} className="min-w-0 truncate">{account.snapshot.account || account.displayName}</span>}
-      </>}
+      <EngineMark instance={account} size={16} tapToShow />
+      {(phone || other) && pages.length > 1 && <AccountPicker account={account} accounts={pages} mainId={main.instanceId} label={label}
+        select={(id) => { focusSelection.current = id !== currentId; setSelectedId(id); }} />}
+      {!other && <span className="min-w-0 truncate">{account.displayName}</span>}
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {other ? accountReady(account) && <button type="button" disabled={busy} onClick={() => void setAsMain(account)}
           className="relative flex h-7 items-center rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2 text-[12px] font-normal text-ink-secondary hover:bg-raised-hover focus-visible:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-y-2 [@media(pointer:coarse)]:after:inset-x-0">{t("accounts.setAsMain")}</button>

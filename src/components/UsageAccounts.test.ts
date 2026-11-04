@@ -86,7 +86,7 @@ it("puts account headings and Main above the matching account's bars", async () 
   expect(other().querySelector('[aria-label="5h: 30% remaining"]')).not.toBeNull();
   expect(main().textContent).not.toContain("Set as Main");
   expect(other().textContent).toContain("Set as Main");
-  expect(main().textContent).toContain("claude@example.comMain");
+  expect(main().textContent).toContain("ClaudeMain");
   expect(other().textContent).not.toContain("@example.com");
   expect(other().textContent).not.toContain("MainSet");
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
@@ -136,7 +136,7 @@ it("pages one account at a time on phone, starting with Main", async () => {
   const next = () => shown().querySelector<HTMLButtonElement>('[aria-label="Next Account"]')!;
   expect(host.querySelector('[data-account-column="main"]')).toBeNull();
   expect(host.querySelectorAll('[data-account-column="pages"] > div[inert]')).toHaveLength(2);
-  expect(shown().textContent).toContain("claude@example.comMain");
+  expect(shown().textContent).toContain("ClaudeMain");
   expect(shown().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.disabled).toBe(true);
   await act(async () => next().click());
@@ -148,7 +148,7 @@ it("pages one account at a time on phone, starting with Main", async () => {
   await act(async () => shown().querySelector<HTMLButtonElement>("button:not([aria-label])")!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/third/default", { method: "POST", body: "{}" });
   expect(shown().querySelector('[aria-label="5h: 5% remaining"]')).not.toBeNull();
-  expect(shown().textContent).toContain("third@example.comMain");
+  expect(shown().textContent).toContain("ClaudeMain");
 });
 
 it("shows the account's email only in the icon's card", async () => {
@@ -218,7 +218,7 @@ it("translates account controls into Korean", async () => {
   persistPreference("ko");
   await render(3);
   expect(button("기본으로 설정")).toBeDefined();
-  expect(main().textContent).toContain("claude@example.com기본");
+  expect(main().textContent).toContain("Claude기본");
   expect(host.querySelector('[aria-label="다음 계정"]')).not.toBeNull();
 });
 
@@ -297,12 +297,12 @@ it.each([false, true])("jumps directly to account four without changing Main on 
   await render(4);
   await jump("fourth");
   expect(shown().querySelector('[aria-label="5h: 55% remaining"]')).not.toBeNull();
-  expect(picker().textContent).toContain("fourth@example.com");
+  expect(picker().getAttribute("aria-label")).toContain("fourth@example.com");
   expect(host.querySelector('[role="menu"]')).toBeNull();
   expect(document.activeElement).toBe(picker());
   expect(request.mock.calls.some(([path]) => String(path).endsWith("/default"))).toBe(false);
   await act(async () => shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.click());
-  expect(picker().textContent).toContain("third@example.com");
+  expect(picker().getAttribute("aria-label")).toContain("third@example.com");
 });
 
 it.each([false, true])("keeps selection by id across refresh, add, remove and Main changes on phone=%s", async (phone) => {
@@ -311,19 +311,19 @@ it.each([false, true])("keeps selection by id across refresh, add, remove and Ma
   await jump("fourth");
   state.instances = state.instances.map((account) => ({ ...account }));
   await rerender();
-  expect(picker().textContent).toContain("fourth@example.com");
+  expect(picker().getAttribute("aria-label")).toContain("fourth@example.com");
   state.instances = [engine("new", 10), ...state.instances];
   await rerender();
-  expect(picker().textContent).toContain("fourth@example.com");
+  expect(picker().getAttribute("aria-label")).toContain("fourth@example.com");
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
   await rerender();
-  expect(picker().textContent).toContain("fourth@example.com");
+  expect(picker().getAttribute("aria-label")).toContain("fourth@example.com");
   state.instances = state.instances.filter((account) => account.instanceId !== "fourth");
   await rerender();
-  expect(picker().textContent).toContain(phone ? "second@example.com" : "new@example.com");
+  expect(picker().getAttribute("aria-label")).toContain(phone ? "second@example.com" : "new@example.com");
   state.instances = [...state.instances, engine("fourth", 45)];
   await rerender();
-  expect(picker().textContent).toContain(phone ? "second@example.com" : "new@example.com");
+  expect(picker().getAttribute("aria-label")).toContain(phone ? "second@example.com" : "new@example.com");
 });
 
 it.each([false, true])("reconciles the viewed account becoming Main on phone=%s", async (phone) => {
@@ -332,7 +332,7 @@ it.each([false, true])("reconciles the viewed account becoming Main on phone=%s"
   await jump("fourth");
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "fourth" }));
   await rerender();
-  expect(picker().textContent).toContain(phone ? "fourth@example.com" : "claude@example.com");
+  expect(picker().getAttribute("aria-label")).toContain(phone ? "fourth@example.com" : "claude@example.com");
   await act(async () => picker().click());
   expect(items().map((node) => node.textContent)).toEqual((phone ? ["fourth@example.comMain"] : []).concat(["claude@example.com", "second@example.com", "third@example.com"]));
 });
@@ -383,7 +383,7 @@ it("marks the base Main without a pushed Main flag and preserves long emails", a
   expect(items()[0]!.getAttribute("aria-checked")).toBe("true");
   expect(items()[3]!.textContent).toBe(email);
   await act(async () => items()[3]!.click());
-  expect(picker().textContent).toBe(email);
+  expect(picker().textContent).toBe("");
 });
 
 it.each([false, true])("keeps the full picker email in its title and accessible name on phone=%s", async (phone) => {
@@ -394,18 +394,48 @@ it.each([false, true])("keeps the full picker email in its title and accessible 
   await rerender();
   expect(picker().title).toBe(email);
   expect(picker().getAttribute("aria-label")).toBe(`Choose account: ${email}`);
-  expect(picker().textContent).toBe(email);
+  expect(picker().textContent).toBe("");
 });
 
-it.each([2, 4])("names desktop Main by email without a selector for %i accounts", async (count) => {
+it.each([2, 4])("keeps desktop Main free of email text without a selector for %i accounts", async (count) => {
   await render(count);
-  expect(main().textContent).toContain("claude@example.comMain");
-  expect(main().querySelector('[title="claude@example.com"]')).not.toBeNull();
+  expect(main().textContent).toContain("ClaudeMain");
+  expect(main().textContent).not.toContain("@example.com");
   expect(main().querySelector('[aria-haspopup="menu"]')).toBeNull();
   state.instances[0]!.snapshot.account = undefined;
   await rerender();
   expect(main().textContent).toContain("ClaudeMain");
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
   await rerender();
-  expect(main().textContent).toContain("second@example.comMain");
+  expect(main().textContent).toContain("ClaudeMain");
+});
+
+it.each([false, true])("keeps multi-account heads free of email text on phone=%s", async (phone) => {
+  phoneView(phone);
+  for (const count of [2, 4]) {
+    await render(count);
+    expect(host.textContent).not.toContain("@example.com");
+    expect(shown().querySelector('[data-engine-hover]')).not.toBeNull();
+  }
+});
+
+it.each([false, true])("separates the icon card from the chevron menu on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  const mark = shown().querySelector<HTMLElement>('[data-engine-hover]')!;
+  expect(picker().contains(mark)).toBe(false);
+  await act(async () => {
+    mark.dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
+    mark.click();
+  });
+  expect(document.querySelector('[data-engine-card]:not([data-closing])')?.textContent).toContain(phone ? "claude@example.com" : "second@example.com");
+  expect(host.querySelector('[role="menu"]')).toBeNull();
+  await act(async () => {
+    picker().dispatchEvent(new window.PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
+    picker().click();
+  });
+  expect(host.querySelector('[role="menu"]')).not.toBeNull();
+  expect(document.querySelector('[data-engine-card]:not([data-closing])')).toBeNull();
+  expect(items().map((node) => node.title)).toEqual((phone ? ["claude@example.com"] : []).concat(["second@example.com", "third@example.com", "fourth@example.com"]));
+  for (const item of items()) expect(item.getAttribute("aria-label")).toContain(item.title);
 });
