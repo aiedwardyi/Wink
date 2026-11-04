@@ -74,7 +74,7 @@ export function windowFacts(account: UsageBoardAccount, t: Translate) {
   return { binding, first: binding ? fact(binding) : t("usage.desk.noData"), second: other ? fact(other) : binding === week ? missing : null };
 }
 
-function Tile({ number, terminal }: { number: number; terminal: boolean }) {
+export function Tile({ number, terminal }: { number: number; terminal: boolean }) {
   return terminal
     ? <span data-tile="" className="usage-glyphs shrink-0 text-[12px] text-ink-secondary">[{number}]</span>
     : <span data-tile="" className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border border-hairline bg-raised text-[10.5px] leading-none text-ink">{number}</span>;
