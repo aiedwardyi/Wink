@@ -33,7 +33,7 @@ const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("b
 const main = () => host.querySelector('[data-account-column="main"]')!;
 const other = () => host.querySelector('[data-account-column="other"] > div:not([inert])')!;
 async function render(count = 2) {
-  state.instances = [engine("claude"), engine("second", 70), engine("third", 95)].slice(0, count);
+  state.instances = [engine("claude"), engine("second", 70), engine("third", 95), engine("fourth", 45)].slice(0, count);
   await act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
 }
 beforeEach(() => {
@@ -136,7 +136,7 @@ it("pages one account at a time on phone, starting with Main", async () => {
   const next = () => shown().querySelector<HTMLButtonElement>('[aria-label="Next Account"]')!;
   expect(host.querySelector('[data-account-column="main"]')).toBeNull();
   expect(host.querySelectorAll('[data-account-column="pages"] > div[inert]')).toHaveLength(2);
-  expect(shown().textContent).toContain("ClaudeMain");
+  expect(shown().textContent).toContain("claude@example.comMain");
   expect(shown().querySelector('[aria-label="5h: 80% remaining"]')).not.toBeNull();
   expect(shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.disabled).toBe(true);
   await act(async () => next().click());
@@ -148,7 +148,7 @@ it("pages one account at a time on phone, starting with Main", async () => {
   await act(async () => shown().querySelector<HTMLButtonElement>("button:not([aria-label])")!.click());
   expect(request).toHaveBeenCalledWith("/api/accounts/third/default", { method: "POST", body: "{}" });
   expect(shown().querySelector('[aria-label="5h: 5% remaining"]')).not.toBeNull();
-  expect(shown().textContent).toContain("ClaudeMain");
+  expect(shown().textContent).toContain("third@example.comMain");
 });
 
 it("shows the account's email only in the icon's card", async () => {
@@ -264,4 +264,124 @@ it.each([false, true])("uses server refresh eligibility instead of account ids (
   const refresh = host.querySelector<HTMLButtonElement>('[aria-keyshortcuts="Alt+R"]');
   if (refresh) await act(async () => refresh.click());
   expect(request.mock.calls.some(([path]) => path === `/api/usage/refresh/${id}`)).toBe(allowed);
+});
+
+const shown = () => host.querySelector('[data-account-column="pages"] > div:not([inert]), [data-account-column="other"] > div:not([inert])')!;
+const picker = () => shown().querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+const items = () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+const rerender = () => act(async () => root.render(createElement(I18nProvider, null, createElement(UsageSection))));
+function phoneView(phone = true) {
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+  onTestFinished(() => media.mockRestore());
+}
+async function jump(id: string) {
+  await act(async () => picker().click());
+  await act(async () => items().find((node) => node.textContent?.includes(`${id}@example.com`))!.click());
+}
+
+it.each([false, true])("offers pickers only for multiple pages on phone=%s", async (phone) => {
+  phoneView(phone);
+  for (const count of [1, 2, 4]) {
+    await render(count);
+    expect(host.querySelectorAll('[aria-haspopup="menu"]')).toHaveLength(count > (phone ? 1 : 2) ? (phone ? count : count - 1) : 0);
+    if (count > (phone ? 1 : 2)) {
+      await act(async () => picker().click());
+      expect(items().map((node) => node.textContent)).toEqual((phone ? ["claude@example.comMain"] : []).concat(["second@example.com", "third@example.com", "fourth@example.com"].slice(0, count - 1)));
+      await act(async () => items()[0]!.click());
+    }
+  }
+});
+
+it.each([false, true])("jumps directly to account four without changing Main on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  await jump("fourth");
+  expect(shown().querySelector('[aria-label="5h: 55% remaining"]')).not.toBeNull();
+  expect(picker().textContent).toContain("fourth@example.com");
+  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(picker());
+  expect(request.mock.calls.some(([path]) => String(path).endsWith("/default"))).toBe(false);
+  await act(async () => shown().querySelector<HTMLButtonElement>('[aria-label="Previous Account"]')!.click());
+  expect(picker().textContent).toContain("third@example.com");
+});
+
+it.each([false, true])("keeps selection by id across refresh, add, remove and Main changes on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  await jump("fourth");
+  state.instances = state.instances.map((account) => ({ ...account }));
+  await rerender();
+  expect(picker().textContent).toContain("fourth@example.com");
+  state.instances = [engine("new", 10), ...state.instances];
+  await rerender();
+  expect(picker().textContent).toContain("fourth@example.com");
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "second" }));
+  await rerender();
+  expect(picker().textContent).toContain("fourth@example.com");
+  state.instances = state.instances.filter((account) => account.instanceId !== "fourth");
+  await rerender();
+  expect(picker().textContent).toContain(phone ? "second@example.com" : "new@example.com");
+  state.instances = [...state.instances, engine("fourth", 45)];
+  await rerender();
+  expect(picker().textContent).toContain(phone ? "second@example.com" : "new@example.com");
+});
+
+it.each([false, true])("reconciles the viewed account becoming Main on phone=%s", async (phone) => {
+  phoneView(phone);
+  await render(4);
+  await jump("fourth");
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "fourth" }));
+  await rerender();
+  expect(picker().textContent).toContain(phone ? "fourth@example.com" : "claude@example.com");
+  await act(async () => picker().click());
+  expect(items().map((node) => node.textContent)).toEqual((phone ? ["fourth@example.comMain"] : []).concat(["claude@example.com", "second@example.com", "third@example.com"]));
+});
+
+it("supports menu arrow keys, Escape, outside dismissal and focus return", async () => {
+  await render(4);
+  await act(async () => picker().click());
+  expect(document.activeElement).toBe(items()[0]);
+  await act(async () => items()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+  expect(document.activeElement).toBe(items()[1]);
+  await act(async () => items()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+  expect(document.activeElement).toBe(items()[0]);
+  await act(async () => items()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(document.activeElement).toBe(picker());
+  await act(async () => picker().click());
+  await act(async () => document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+  expect(host.querySelector('[role="menu"]')).toBeNull();
+});
+
+it.each(["en", "ko"] as const)("labels missing emails distinctly in %s and keeps signed-out and draining accounts selectable", async (locale) => {
+  phoneView();
+  persistPreference(locale);
+  await render(4);
+  state.instances = state.instances.map((account, i) => ({ ...account, snapshot: { ...account.snapshot, account: undefined, authenticated: i !== 2 } }));
+  state.instances[3]!.drain = { destinationId: "claude", phase: "failed" };
+  await rerender();
+  expect(picker().getAttribute("aria-label")).toBe(locale === "en" ? "Choose account: Account 1" : "계정 선택: 계정 1");
+  await act(async () => picker().click());
+  expect(items().map((node) => node.textContent)).toEqual(locale === "en" ? ["Account 1Main", "Account 2", "Account 3", "Account 4"] : ["계정 1기본", "계정 2", "계정 3", "계정 4"]);
+  await act(async () => items()[2]!.click());
+  expect(shown().textContent).toContain(locale === "en" ? "Signed out." : "로그아웃됨.");
+  await act(async () => picker().click());
+  await act(async () => items()[3]!.click());
+  expect(shown().querySelector('[aria-label*="remaining"]')).toBeNull();
+  expect(shown().textContent).not.toContain(locale === "en" ? "Set as Main" : "기본으로 설정");
+});
+
+it("marks the base Main without a pushed Main flag and preserves long emails", async () => {
+  phoneView();
+  await render(4);
+  const email = `${"long".repeat(20)}@example.com`;
+  state.instances = state.instances.map((account) => ({ ...account, accountMain: undefined }));
+  state.instances[3]!.snapshot.account = email;
+  await rerender();
+  await act(async () => picker().click());
+  expect(items()[0]!.textContent).toBe("claude@example.comMain");
+  expect(items()[0]!.getAttribute("aria-checked")).toBe("true");
+  expect(items()[3]!.textContent).toBe(email);
+  await act(async () => items()[3]!.click());
+  expect(picker().textContent).toBe(email);
 });
