@@ -248,6 +248,17 @@ test("confirmed recovery cannot be downgraded by screen diagnostics or menus", (
   assert.equal(recovery.workerResumeStatus(session), "resumed");
 });
 
+test("does not fail a resume on a screen Wink answers", () => {
+  const text = "Accessing workspace:\nYes, I trust this folder\nEnter to confirm · Esc to cancel";
+  const session = { exitCode: null, worker: true, botPane: true, engine: "claude", screen: { text: () => text }, claudeStartupScreen: text };
+  assert.equal(recovery.workerResumeStatus(session), "pending");
+  session.claudeStartupScreen = null;
+  assert.equal(recovery.workerResumeStatus(session), "unexpected menu");
+  session.claudeStartupScreen = text;
+  session.workerSession = { confirmed: "resume" };
+  assert.equal(recovery.workerResumeStatus(session), "resumed");
+});
+
 for (const text of [
   "No conversation found with session ID: 00000000-0000-4000-8000-000000000001",
   "Error: No saved session found with ID 00000000-0000-4000-8000-000000000001. Run `codex resume` without an ID to choose from existing sessions.",
