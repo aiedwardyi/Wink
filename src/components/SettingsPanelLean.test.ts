@@ -85,6 +85,8 @@ const memoryRow = (host: HTMLElement) =>
 const tab = (host: HTMLElement, label: string) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === label)!;
 const shown = (node: Element | null | undefined) => Boolean(node && !node.closest("[hidden]"));
+const topicsRow = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.startsWith("Topic Files"))!;
 
 describe("SettingsPanel lean startup switch", () => {
   let host: HTMLDivElement;
@@ -273,10 +275,19 @@ describe("SettingsPanel memory and order", () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
     });
     const text = host.textContent ?? "";
-    const order = ["Title", "Description", "Project Folder", "Approval", "Notifications", "Share Terminal with Chat"];
+    const order = ["Title", "Description", "Project Folder", "Approval", "Notifications", "Terminal Access", "Off for chat-only bots."];
     const at = order.map((label) => text.indexOf(label));
     expect(at).not.toContain(-1);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
+  });
+
+  it("uses the Settings switch for every switch in both tabs", async () => {
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
+    });
+    const switches = Array.from(host.querySelectorAll('[role="switch"]'));
+    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Bot Notifications", "Terminal Access", "Agentic Mode", "Auto Notes"]);
+    for (const each of switches) expect(each.className).toContain("h-6 w-11");
   });
 });
 
@@ -386,7 +397,7 @@ describe("SettingsPanel memory groups", () => {
     const empty = Array.from(host.querySelectorAll("div")).find((node) => node.textContent === "Memory fills in as you chat.");
     expect(shown(empty)).toBe(true);
     expect(empty?.querySelector("svg.lucide-brain")).not.toBeNull();
-    expect(memoryRow(host).textContent).toBe("Memory File");
+    expect(memoryRow(host).textContent).toBe("Memory FileLoads at the start of every chat.");
     expect(shown(host.querySelector('button[aria-label="Auto Notes"]'))).toBe(true);
     await act(async () => memoryRow(host).click());
     expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]')?.readOnly).toBe(false);
@@ -403,7 +414,7 @@ describe("SettingsPanel memory groups", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { key: "topics", bot: claudeBot })));
     });
-    expect(host.textContent).toContain("1 topic file");
+    expect(topicsRow(host).textContent).toContain("1 file");
     expect(host.textContent).not.toContain("Memory fills in as you chat.");
   });
 
@@ -478,6 +489,7 @@ describe("SettingsPanel memory autosave", () => {
   const status = () => host.querySelector('[role="status"]')?.textContent ?? "";
   const notice = () => host.querySelector('[role="alert"]')?.firstElementChild?.textContent ?? "";
   const button = (label: string) => Array.from(host.querySelectorAll("button")).find((each) => each.textContent === label)!;
+  const topic = (name: string) => host.querySelector<HTMLButtonElement>(`button[data-topic="${name}"]`)!;
   const stored = (id: string) => JSON.parse(localStorage.getItem(`omb-memory-draft:${id}`) ?? "null");
   const type = async (value: string) => {
     await act(async () => {
@@ -596,13 +608,10 @@ describe("SettingsPanel memory autosave", () => {
     await act(async () => {
       box().dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     });
-    await act(async () => {
-      host.querySelector<HTMLButtonElement>("button[class*='last:border-b-0']")!.click();
-    });
-    expect(host.textContent).toContain("memory/prefs.md");
-    await act(async () => {
-      Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Back")!.click();
-    });
+    await act(async () => topicsRow(host).click());
+    await act(async () => topic("prefs.md").click());
+    expect(topic("prefs.md").parentElement?.textContent).toContain("tea");
+    await act(async () => topic("prefs.md").click());
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));
@@ -614,7 +623,38 @@ describe("SettingsPanel memory autosave", () => {
     expect(puts).toHaveLength(0);
   });
 
-  it("keeps the Memory File row in view when a topic file opens and closes", async () => {
+  it("keeps the editor and the topic list while a topic file is open", async () => {
+    await render("bot-1");
+    await act(async () => topicsRow(host).click());
+    expect(topicsRow(host).getAttribute("aria-expanded")).toBe("true");
+    await act(async () => topic("prefs.md").click());
+    expect(topic("prefs.md").getAttribute("aria-expanded")).toBe("true");
+    expect(topic("prefs.md").parentElement?.textContent).toContain("tea");
+    expect(box().value).toBe("notes for bot-1");
+    expect(Array.from(host.querySelectorAll("button")).map((each) => each.textContent)).not.toContain("Back");
+    await act(async () => topic("prefs.md").click());
+    expect(topic("prefs.md").getAttribute("aria-expanded")).toBe("false");
+    expect(topic("prefs.md").parentElement?.textContent).not.toContain("tea");
+  });
+
+  it("brings a topic file into view when it opens", async () => {
+    const scrolled: Element[] = [];
+    const spy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) {
+      scrolled.push(this);
+    });
+    try {
+      await render("bot-1");
+      await act(async () => topicsRow(host).click());
+      expect(scrolled).toEqual([]);
+      await act(async () => topic("prefs.md").click());
+      expect(scrolled).toEqual([topic("prefs.md").parentElement]);
+      expect(scrolled[0]?.textContent).toContain("tea");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("brings the Memory File back into view when it closes", async () => {
     const scrolled: Element[] = [];
     const spy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) {
       scrolled.push(this);
@@ -622,15 +662,32 @@ describe("SettingsPanel memory autosave", () => {
     try {
       await render("bot-1");
       expect(scrolled).toEqual([]);
-      const file = Array.from(host.querySelectorAll("button")).find((each) => each.textContent?.startsWith("prefs.md"))!;
-      await act(async () => file.click());
-      expect(host.textContent).toContain("memory/prefs.md");
-      expect(scrolled).toEqual([memoryRow(host)]);
-      await act(async () => button("Back").click());
-      expect(box()).not.toBeNull();
-      expect(scrolled).toEqual([memoryRow(host), memoryRow(host)]);
+      await act(async () => memoryRow(host).click());
+      expect(memoryRow(host).getAttribute("aria-expanded")).toBe("false");
+      expect(scrolled).toEqual([memoryRow(host).closest("section")]);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("grows the editor to its text instead of scrolling inside it", async () => {
+    const owner = (name: string) => {
+      let proto: object | null = HTMLTextAreaElement.prototype;
+      while (proto && !Object.getOwnPropertyDescriptor(proto, name)) proto = Object.getPrototypeOf(proto);
+      return proto as HTMLTextAreaElement;
+    };
+    const width = vi.spyOn(owner("clientWidth"), "clientWidth", "get").mockReturnValue(320);
+    const height = vi.spyOn(owner("scrollHeight"), "scrollHeight", "get").mockReturnValue(900);
+    try {
+      await render("bot-1");
+      expect(box().style.height).toBe("900px");
+      expect(box().className).toContain("overflow-hidden");
+      expect(box().className).toContain("resize-none");
+      const description = host.querySelector<HTMLTextAreaElement>("textarea:not([aria-label])")!;
+      expect(description.style.height).toBe("900px");
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
     }
   });
 
