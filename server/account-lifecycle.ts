@@ -10,7 +10,13 @@ type Hooks = {
   changed?(usageId?: string): void;
   configBusy?(): boolean;
   panesBusy?(id: string): Promise<boolean>;
+  onMainChanged?(change: MainChange): void;
 };
+
+type Main = { id: string; generation: number };
+export type MainChange = { base: string; engine: "claude" | "codex"; from: Main; to: Main; seq: number };
+
+let mainSeq = 0;
 
 export class AccountLifecycle {
   private queue: Promise<unknown> = Promise.resolve();
@@ -365,11 +371,32 @@ export class AccountLifecycle {
     this.registry.blockAccount(id, false);
   }
 
+  private mains() {
+    const rows = this.accounts.list();
+    return new Map(rows.filter((row) => row.existing).map((row) => {
+      const id = this.accounts.defaultFor(row.of) ?? row.of;
+      return [row.of, { engine: row.driverKind === "codex" ? "codex" as const : "claude" as const, id, generation: rows.find((entry) => entry.id === id)?.generation ?? 0 }];
+    }));
+  }
+
+  private reportMains(before: ReturnType<AccountLifecycle["mains"]>) {
+    for (const [base, to] of this.mains()) {
+      const from = before.get(base);
+      if (!from || (from.id === to.id && from.generation === to.generation)) continue;
+      try {
+        this.hooks.onMainChanged!({ base, engine: to.engine, from: { id: from.id, generation: from.generation }, to: { id: to.id, generation: to.generation }, seq: ++mainSeq });
+      } catch { console.error("Main change could not be reported"); }
+    }
+  }
+
   private exclusive<T>(run: () => Promise<T>, checkConfig = true): Promise<T> {
     this.mutations += 1;
-    const pending = this.queue.then(() => {
+    const pending = this.queue.then(async () => {
       if (checkConfig && this.hooks.configBusy?.()) throw new AccountError("Provider settings are being updated");
-      return run();
+      const before = this.hooks.onMainChanged && this.mains();
+      const result = await run();
+      if (before) this.reportMains(before);
+      return result;
     }).finally(() => {
       this.mutations -= 1;
       this.hooks.changed?.();
