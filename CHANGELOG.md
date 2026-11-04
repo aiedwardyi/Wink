@@ -2,6 +2,24 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.231] - 2026-11-05
+
+### Added
+- Closing a terminal pane while its worker is running asks first.
+
+### Changed
+- Wink shows your chat sooner after it starts.
+- The phone opens your chat without waiting on the live connection; a first open says Updating, and Reconnecting shows only after a real drop.
+- Bot Details groups its settings in boxes on one edge, with one text size scale and one scroll.
+- Folds, panels and menus open and close smoothly with the same timing, and their arrows point where the panel goes.
+- Team reports in your chat are titled Bug Report.
+
+### Fixed
+- Ctrl+` opens the terminal on Main until you pick a pane.
+- Bots answering another bot keep their safe tools, so replies between bots go through.
+- The terminal header stays steady, and its buttons share one hover style.
+- Error reports no longer count an update install as a crash.
+
 ## [1.0.230] - 2026-11-04
 
 ### Added
@@ -574,6 +592,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.231]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.231
 [1.0.230]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.230
 [1.0.229]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.229
 [1.0.228]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.228
