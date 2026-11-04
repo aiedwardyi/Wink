@@ -1,0 +1,43 @@
+@import "../../src/styles.css";
+@source "../../src";
+
+@font-face { font-family: Geist; src: url("../../public/fonts/Geist-Variable.woff2"); font-weight: 100 900; }
+body { margin: 0; background: var(--color-app); color: var(--color-ink); font-family: var(--font-sans); }
+.today-top { height: 56px; display: flex; align-items: center; gap: 32px; padding: 0 28px; border-bottom: 1px solid var(--color-hairline); font-size: 14px; }
+.today-top b { font-size: 19px; }
+.today-settings { display: flex; width: 860px; max-width: calc(100% - 48px); margin: 62px auto; background: var(--color-panel); border: 1px solid var(--color-hairline); border-radius: var(--radius-xl); min-height: 560px; overflow: hidden; }
+.today-settings nav { width: 190px; flex-shrink: 0; border-right: 1px solid var(--color-hairline); padding: 12px; font-size: 13px; }
+.today-settings nav h2 { font-size: 15px; padding: 6px 8px 14px; }
+.today-settings nav div { padding: 9px 8px; border-radius: var(--radius-lg); color: var(--color-ink-secondary); }
+.today-settings nav .active { background: var(--color-raised); color: var(--color-ink); }
+.today-settings main { flex: 1; min-width: 0; }
+.today-settings main header { display: flex; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--color-hairline); }
+.today-settings main h1 { font-size: 15px; font-weight: 600; }
+.today-usage { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+.today-chat { height: calc(100vh - 56px); display: flex; flex-direction: column; max-width: 1000px; margin: auto; }
+.today-chat header { padding: 20px 32px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--color-hairline); }
+.today-chat header span { color: var(--color-ink-secondary); font-size: 12px; }
+.today-messages { max-width: 720px; width: 100%; padding: 30px; margin: auto; flex: 1; font-size: 14px; }
+.today-messages p { margin-bottom: 28px; line-height: 1.6; }
+.today-messages .user { background: var(--color-bubble-user); padding: 12px 16px; border-radius: var(--radius-xl); margin-left: auto; width: fit-content; }
+.today-composer { max-width: 720px; width: calc(100% - 48px); margin: 0 auto 24px; }
+.today-input { min-height: 100px; background: var(--color-card); border: 1px solid var(--color-hairline); border-radius: var(--radius-xl); padding: 14px 16px; font-size: 14px; color: var(--color-ink-secondary); }
+.today-input div { margin-top: 20px; font-size: 12px; }
+.today-input span { float: right; }
+.today-details { max-width: 700px; margin: 30px auto; padding: 20px; }
+.today-details h1 { font-size: 22px; margin-bottom: 20px; }
+.today-connections { margin-top: 28px; }
+.today-connections section { margin-bottom: 18px; }
+.today-connections h2 { font-size: 14px; font-weight: 500; }
+@media (max-width: 700px) {
+  .today-top { height: 48px; padding: 0 20px; }
+  .today-settings { width: 100%; max-width: 100%; margin: 38px auto; min-height: 560px; border-left: 0; border-right: 0; }
+  .today-settings nav { display: none; }
+  .today-settings main header { padding: 16px 20px; }
+  .today-usage { padding: 16px 20px; }
+  .today-chat { height: calc(100vh - 48px); }
+  .today-chat header { padding: 18px 20px; }
+  .today-messages { padding: 24px 20px; }
+  .today-composer { width: calc(100% - 32px); margin-bottom: 16px; }
+  .today-details { margin-top: 16px; }
+}

@@ -1,0 +1,111 @@
+/* Skin tokens from src/styles.css at ab89c492. */
+:root { --font-geist: "Geist",; }
+[data-skin="github-dimmed"] {
+  --color-app: #22272e;
+  --color-panel: #2d333b;
+  --color-raised: #373e47;
+  --color-raised-hover: #444c56;
+  --color-card: #2d333b;
+  --color-inset: #1c2128;
+  --color-control: #373e47;       /* = raised */
+  --color-hairline: #444c56;
+
+  --color-ink: #cdd9e5;           /* onEmphasis: default fg is shy of AA on raised */
+  --color-ink-secondary: #b0bdca;
+
+  --color-accent: #539bf5;
+  --color-accent-border: #6cb6ff;
+  --color-accent-text: #559df5;
+  --color-focus: #539bf5;
+  --color-accent-ink: #22272e;
+  --color-bubble-user: #373e47;
+
+  --color-success: #58ad5b;
+  --color-danger: #ff7b72;        /* Primer danger lifted for AA on dimmed gray */
+  --color-danger-ink: #22272e;
+  --color-warning: #c69026;
+  --color-scrollbar: #444c56;
+  --color-maus-line: #adbac7;
+
+  --font-sans: var(--font-geist) "Inter", -apple-system, "BlinkMacSystemFont", "SF Pro Text",
+    "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --radius-lg: 4px;
+  --radius-xl: 8px;
+}
+
+[data-skin="code-review"] {
+  color-scheme: light;
+  --color-app: #ffffff;
+  --color-panel: #f6f8fa;
+  --color-raised: #eaeef2;
+  --color-raised-hover: #d8dee4;
+  --color-card: #f6f8fa;
+  --color-inset: #eaeef2;
+  --color-control: #e1e7ed;
+  --color-hairline: #c7cfd8;
+
+  --color-ink: #1f2328;
+  --color-ink-secondary: #59636e;
+
+  --color-accent: #0969da;
+  --color-accent-border: #0969da;
+  --color-accent-text: #0969da;
+  --color-focus: #0969da;
+  --color-accent-ink: #ffffff;
+  --color-bubble-user: #eaeef2;
+
+  --color-success: #1a7f37;
+  --color-danger: #cf222e;
+  --color-danger-ink: #ffffff;
+  --color-warning: #9a6700;
+  --color-scrollbar: #afb8c1;
+  --color-maus-line: #59636e;
+
+  --color-syntax-fg: #1f2328;
+  --color-syntax-comment: #57606a;
+  --color-syntax-keyword: #cf222e;
+  --color-syntax-string: #0a3069;
+  --color-syntax-function: #6e40b5;
+  --color-syntax-constant: #0550ae;
+  --color-syntax-variable: #953800;
+  --color-syntax-tag: #116329;
+  --color-syntax-invalid: #82071e;
+
+  --font-sans: "Segoe UI", -apple-system, BlinkMacSystemFont, "Malgun Gothic",
+    system-ui, sans-serif;
+  --radius-lg: 4px;
+  --radius-xl: 8px;
+}
+
+[data-skin="terminal"] {
+  --color-app: #0a0a0b;
+  --color-panel: #111113;
+  --color-raised: #18181b;
+  --color-raised-hover: #212125;
+  --color-card: #111113;
+  --color-inset: #000000;
+  --color-control: #18181b;
+  --color-hairline: #3a3a40;
+
+  --color-ink: #e4e4e7;
+  --color-ink-secondary: #9195a0;
+
+  --color-accent: #d77757;
+  --color-accent-border: #e08a6c;
+  --color-accent-text: #e3906f;
+  --color-focus: #e3906f;
+  --color-accent-ink: #0a0a0b;
+  --color-bubble-user: #18181b;
+
+  --color-success: #4eba65;
+  --color-danger: #ff6b80;
+  --color-danger-ink: #0a0a0b;
+  --color-warning: #e5c07b;
+  --color-scrollbar: #3a3a40;
+  --color-maus-line: #9195a0;
+
+  --font-sans: "Cascadia Mono", "Cascadia Code", "Consolas", "Malgun Gothic",
+    ui-monospace, monospace;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+}
