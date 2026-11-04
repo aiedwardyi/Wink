@@ -79,7 +79,8 @@ import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isServerLine,
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
-import { MemorySaveChip, MemorySaveRun } from "./MemorySaveChip";
+import { MemoryCleanSave } from "./MemoryTidyLine";
+import { MemorySaveRun } from "./MemorySaveChip";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
 import { ActivityRun, ActivityStep, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
@@ -286,12 +287,12 @@ export function ErrorRow({
 }
 
 /** A tool run: spinner while live, check/cross once settled. */
-const ActivityChip = memo(function ActivityChip({ message, notices }: { message: Message; notices?: LinkedApproval[] }) {
+const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { message: Message; notices?: LinkedApproval[]; bot: Bot }) {
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
   if (!tool) return null;
-  if (tool.name === "memory.save") return <MemorySaveChip summary={tool.spoken ?? ""} at={message.at} />;
+  if (tool.name === "memory.save") return <MemoryCleanSave message={message} bot={bot} />;
   if (message.comm) return <CommChip message={message} comm={message.comm} />;
   if (terminal) return <ActivityStep message={message} notices={notices} />;
   const failed = tool.ok === false;
@@ -316,7 +317,7 @@ const ActivityChip = memo(function ActivityChip({ message, notices }: { message:
       </div>
     </div>
   );
-}, (a, b) => a.message === b.message && sameNotices(a.notices, b.notices));
+}, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
 
 /** bot⇄bot comm chip: opens the channel where the exchange lives. */
 function CommChip({ message, comm }: { message: Message; comm: NonNullable<Message["comm"]> }) {
@@ -716,7 +717,7 @@ const MessagesList = memo(function MessagesList({
                 <MemorySaveRun messages={item.messages} forceOpen={forceOpen}>
                   {item.messages.map((step) => (
                     <div key={step.id} className="contents" data-mid={step.id}>
-                      <ActivityChip message={step} />
+                      <ActivityChip bot={bot} message={step} />
                     </div>
                   ))}
                 </MemorySaveRun>
@@ -791,7 +792,7 @@ const MessagesList = memo(function MessagesList({
                 );
               }
               if (!activityVisibleInChat(m, showActivities) && !found) return null;
-              return <ActivityChip message={m} notices={item.notices} />;
+              return <ActivityChip bot={bot} message={m} notices={item.notices} />;
             }
             case "screen":
               if (m.image) return <ShownImage name={m.image} caption={m.text} />;
@@ -835,7 +836,7 @@ const MessagesList = memo(function MessagesList({
           <div key={key} className="contents" data-mid={m.id} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
-            {replyComm && <ActivityChip message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
+            {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
           </div>
         );

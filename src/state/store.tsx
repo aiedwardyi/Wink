@@ -2,6 +2,7 @@
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
 // pure; everything async lives in the wrapped dispatch + SSE fold.
+import { noteMemoryFrame } from "@/lib/memory-clean-events";
 import { request } from "@/lib/api-request";
 import { createErrorBanner } from "@/lib/error-banner";
 import {
@@ -571,6 +572,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         settingsOpen: open,
+        settingsMemoryTarget: open && action.memory ? { target: action.memory, nonce: (state.settingsMemoryNonce ?? 0) + 1 } : null,
+        settingsMemoryNonce: (state.settingsMemoryNonce ?? 0) + (open && action.memory ? 1 : 0),
         settingsAvatarRequest: !open ? 0 : action.avatar ? (state.settingsAvatarRequest ?? 0) + 1 : 0,
         settingsKeepGoingRequest: !open ? 0 : action.keepGoing ? (state.settingsKeepGoingRequest ?? 0) + 1 : 0,
         inspectorOpen: open ? false : state.inspectorOpen,
@@ -980,6 +983,8 @@ export const initialState: AppState = {
   settingsOpen: false,
   settingsAvatarRequest: 0,
   settingsKeepGoingRequest: 0,
+  settingsMemoryTarget: null,
+  settingsMemoryNonce: 0,
   pluginsOpen: false,
   inspectorOpen: false,
   appSettingsOpen: false,
@@ -2351,6 +2356,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pendingFrames.push(frame);
           return;
         }
+        noteMemoryFrame(frame, stateRef.current);
         handleFrame(frame);
         // A resume replays what this window missed: it lands whole.
         if (frame.replayed) flushDeltas();

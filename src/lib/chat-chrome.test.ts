@@ -42,7 +42,7 @@ describe("failed tool chip", () => {
   it("flickers Saving to memory then the one-line summary", () => {
     const memoryChip = readFileSync(join(components, "MemorySaveChip.tsx"), "utf8");
     expect(chip).toContain("memory.save");
-    expect(chip).toContain("MemorySaveChip");
+    expect(chip).toContain("MemoryCleanSave");
     expect(memoryChip).toContain('t("chat.savingMemory")');
     expect(memoryChip).toContain('t("chat.savedMemory"');
     expect(memoryChip).not.toMatch(/contentEditable/);
@@ -155,7 +155,7 @@ describe("transcript pills on a phone", () => {
     const [pill] = classStrings(memoryChip, PILL).map((value) => new Set(value.split(/\s+/)));
     expect(pill.has("min-w-0")).toBe(true);
     expect(pill.has("max-w-full")).toBe(true);
-    expect(memoryChip).toMatch(/<Check [^>]*className="shrink-0 text-success"/);
+    expect(memoryChip).toMatch(/<Brain [^>]*className="shrink-0"/);
     expect(memoryChip).toMatch(/<Loader2 [^>]*className="shrink-0 animate-spin"/);
     expect(memoryChip).toMatch(/<span className="min-w-0 max-w-\[480px\] truncate">/);
   });

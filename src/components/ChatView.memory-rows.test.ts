@@ -160,3 +160,11 @@ describe("ChatView memory rows", () => {
     }
   });
 });
+
+it("renders each expanded private note as a button", async () => {
+  const view = await mount(thread(...saves));
+  try {
+    await act(async () => fold(view.host).click());
+    for (const save of saves) expect(view.host.querySelector(`[data-mid="${save.id}"] button`)).not.toBeNull();
+  } finally { await view.unmount(); }
+});

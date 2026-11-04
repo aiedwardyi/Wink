@@ -31,3 +31,16 @@ describe("app settings open on General", () => {
     expect(list.appSettingsPage).toBe(false);
   });
 });
+
+describe("memory settings target", () => {
+  it("increments on every tap, including the same open target", () => {
+    const action = { type: "toggleSettings", open: true, memory: { line: "- Seoul" } } as const;
+    const first = reducer(initialState, action);
+    const second = reducer(first, action);
+    expect(first.settingsMemoryTarget?.target).toEqual(action.memory);
+    expect(second.settingsMemoryTarget?.nonce).toBe(first.settingsMemoryTarget!.nonce + 1);
+    const closed = reducer(second, { type: "toggleSettings", open: false });
+    expect(closed.settingsMemoryTarget).toBeNull();
+    expect(reducer(closed, action).settingsMemoryTarget!.nonce).toBeGreaterThan(second.settingsMemoryTarget!.nonce);
+  });
+});

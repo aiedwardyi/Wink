@@ -570,3 +570,12 @@ describe("server handoff lines", () => {
     expect(SERVER_LINES.filter((line) => line.file === "delegations.ts" && line.needles.some((needle) => !reworded.includes(needle))).map((line) => line.re.source)).toEqual(["^Delivered to @(.+)$"]);
   });
 });
+
+describe("memory cleanup boundary", () => {
+  it("never folds a tidy row and splits saves around it", () => {
+    const save = (id: string): Message => ({ id, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true } });
+    const tidy = { ...save("tidy"), tool: { name: "memory.save", ok: true, tidy: { runId: "r" } } };
+    const items = groupActivityRuns([save("a"), save("b"), tidy, save("c"), save("d")], false);
+    expect(items.map((item) => item.kind)).toEqual(["memory", "message", "memory"]);
+  });
+});

@@ -123,7 +123,7 @@ export function RoomToolChip({
   const [expanded, setExpanded] = useState(false);
   const tool = message.tool;
   if (!tool) return null;
-  if (tool.name === "memory.save") return <MemorySaveChip summary={tool.spoken ?? ""} at={message.at} />;
+  if (tool.name === "memory.save") return <MemorySaveChip summary={tool.spoken ?? ""} at={message.at} room />;
   const handleRetry = onRetry
     ? () => {
         if (retried) return;

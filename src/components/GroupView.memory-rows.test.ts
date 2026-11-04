@@ -21,6 +21,8 @@ describe("GroupView memory rows", () => {
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    vi.stubGlobal("EventSource", class { onmessage = null; close() {} });
   });
 
   afterEach(async () => {
@@ -80,6 +82,8 @@ describe("GroupView memory rows", () => {
   it("leaves a lone save as today's row", async () => {
     await mount([say("m1", "ada", 1), saves[0]]);
     expect(folds()).toEqual([]);
+    expect(host.querySelector(".lucide-brain")).not.toBeNull();
+    expect(host.querySelector("[data-mid=\"s1\"] button")).toBeNull();
     expect(host.textContent).toContain("Memory updated: likes short replies");
   });
 
