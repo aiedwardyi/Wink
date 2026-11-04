@@ -1064,16 +1064,16 @@ export async function loadSnapshotBoundary<Key extends string>(
  * the components that read this hook (the chat's streaming tail), while every
  * useStore consumer — sidebar, mascots, pickers, the settled transcript —
  * keeps its render tree untouched during a stream. */
-const EMPTY_STREAM: TurnStreamState = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
-const StreamContext = createContext<TurnStreamState>(EMPTY_STREAM);
+export const EMPTY_STREAM: TurnStreamState = { streaming: {}, reasoning: {}, signal: {}, gen: {}, turn: {} };
+export const StreamContext = createContext<TurnStreamState>(EMPTY_STREAM);
 
 export function useStreaming() {
   return useContext(StreamContext);
 }
 
-const DispatchContext = createContext<React.Dispatch<Action> | null>(null);
+export const DispatchContext = createContext<React.Dispatch<Action> | null>(null);
 
-const StoreContext = createContext<{
+export const StoreContext = createContext<{
   state: AppState;
   dispatch: React.Dispatch<Action>;
   /** Commit any debounced profile edits before an operation reads the bot. */

@@ -26,10 +26,16 @@ export const PLAN_WINDOW_SHORT_LABEL_KEY = {
 
 /** A minute tick so countdowns stay right while the surface is open. */
 export function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
+  const readClock = () => (typeof window !== "undefined" && (window as { __DEMO_NOW__?: number }).__DEMO_NOW__) || Date.now();
+  const [now, setNow] = useState(readClock);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(timer);
+    const sync = () => setNow(readClock());
+    window.addEventListener("wink-demo-now", sync);
+    const timer = setInterval(sync, 60_000);
+    return () => {
+      window.removeEventListener("wink-demo-now", sync);
+      clearInterval(timer);
+    };
   }, []);
   return now;
 }

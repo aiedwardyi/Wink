@@ -19,7 +19,8 @@ const OWNS_TAP = "button, a[href], [role='button'], [role='tab'], [tabindex]:not
 export function engineHoverText(instance: InstanceInfo, t: Translate): string {
   const { snapshot } = instance;
   const signedIn = snapshot.state === "available" && snapshot.authenticated === true;
-  const status = signedIn ? snapshot.account || t("engines.signedIn") : t("engines.notSignedIn");
+  const safeAccount = snapshot.account && !snapshot.account.includes("@") ? snapshot.account : "";
+  const status = signedIn ? safeAccount || t("engines.signedIn") : t("engines.notSignedIn");
   return t("engines.accountLine", { engine: instance.displayName, status });
 }
 

@@ -11,6 +11,7 @@ import { api, useStore, type InstanceInfo } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { Card } from "./SettingsPrimitives";
 import { EngineMark } from "./EngineMark";
+import { TraderUsageDeck } from "./TraderUsageDeck";
 import { UsageAccounts } from "./UsageAccounts";
 import { groupAccounts, type UsageAccount } from "@/lib/accounts";
 import { useI18n, type Translate } from "@/lib/i18n";
@@ -325,7 +326,7 @@ function PlanUsage() {
   );
 }
 
-export function UsageSection() {
+export function UsageSection({ legacy = false }: { legacy?: boolean } = {}) {
   const { t } = useI18n();
   const { state } = useStore();
   const rows = state.bots
@@ -348,7 +349,7 @@ export function UsageSection() {
 
   return (
     <>
-      <PlanUsage />
+      {legacy ? <PlanUsage /> : <TraderUsageDeck />}
       {showUsagePerBotTable() && (
       <Card title="Usage" subtitle="Tokens and cost per bot, added up from every settled turn. Only engines that report a price show one.">
         {rows.length === 0 ? (

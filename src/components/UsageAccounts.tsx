@@ -127,7 +127,8 @@ export function UsageAccounts({ accounts, reload, renderRow }: {
     slide([...columns.current?.querySelectorAll<HTMLElement>("[data-account-page]") ?? []].find((page) => page.dataset.accountPage === from), dir, true);
   }, [currentId]);
   if (accounts.length === 1) return renderRow(accounts[0]!);
-  const label = (account: UsageAccount) => account.snapshot.account || t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
+  const rawAccount = (account: UsageAccount) => account.snapshot.account && !account.snapshot.account.includes("@") ? account.snapshot.account : "";
+  const label = (account: UsageAccount) => rawAccount(account) || t("accounts.numbered", { number: accounts.indexOf(account) + 1 });
   const go = (id: string, focus = false) => {
     turn.current = Math.sign(pages.findIndex((account) => account.instanceId === id) - index);
     focusPicker.current = focus && id !== currentId;
