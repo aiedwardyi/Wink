@@ -81,7 +81,7 @@ export function useQuickToggle(quick: boolean, identity: string) {
     };
     window.addEventListener("orbit:usage-key", key);
     return () => window.removeEventListener("orbit:usage-key", key);
-  }, [quick, open]);
+  }, [quick, open, identity]); // eslint-disable-line react-hooks/exhaustive-deps
   return [open && quick, setOpen] as const;
 }
 

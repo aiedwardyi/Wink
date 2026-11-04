@@ -371,6 +371,13 @@ describe("chat usage meter, quick view and wait card", () => {
     await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1", "ATLAS-2"] } }));
     await settle();
     expect(boardGets().length - before, "a new worker").toBe(1);
+    await unmount();
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true });
+    await settle();
+    const desk = boardGets().length;
+    await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1"] } }));
+    await settle();
+    expect(boardGets().length - desk, "one read for the line and the desk together").toBe(1);
   });
 
   it("switches bots without a board request", async () => {
@@ -387,6 +394,13 @@ describe("chat usage meter, quick view and wait card", () => {
     await settle();
     expect(text(q("[data-meter-name]"))).toBe("Claude 1");
     expect(boardGets().length - before).toBe(0);
+    await show(makeBot("bot-kai", "Kai", "codex"));
+    await settle();
+    const press = new CustomEvent("orbit:usage-key", { cancelable: true });
+    await act(async () => { window.dispatchEvent(press); });
+    await settle();
+    expect(press.defaultPrevented, "Alt+U after a switch reaches the new line").toBe(true);
+    expect(quick(), "Alt+U after a switch opens the new line's view").not.toBeNull();
   });
 
   it("follows the drain destination of a draining Main", async () => {
