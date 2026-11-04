@@ -3462,6 +3462,10 @@ describe("harness HTTP API", () => {
   });
 
   it("lets room members ask and delegate while rejecting non-members", async () => {
+    const configPath = join(home, ".orbit", "config.json");
+    const originalConfig = readFileSync(configPath, "utf8");
+    const finishGate = join(home, "room-caller-finish");
+    const callerCli = join(home, "room-caller.mjs");
     const source = (await api("POST", "/api/bots", {})).body.bot;
     const target = (await api("POST", "/api/bots", {})).body.bot;
     const outsider = (await api("POST", "/api/bots", {})).body.bot;
@@ -3471,9 +3475,31 @@ describe("harness HTTP API", () => {
       setup: { bulletin: "", defaultResponder: { kind: "member", botId: source.id } },
     })).body.group;
     try {
+      writeFileSync(callerCli, `#!/usr/bin/env node
+        import { existsSync } from "node:fs";
+        import { pathToFileURL } from "node:url";
+        const write = process.stdout.write.bind(process.stdout);
+        process.stdout.write = (chunk, ...args) => {
+          if (String(chunk).includes('"type":"result"') && !existsSync(${JSON.stringify(finishGate)})) {
+            const timer = setInterval(() => {
+              if (!existsSync(${JSON.stringify(finishGate)})) return;
+              clearInterval(timer);
+              write(chunk, ...args);
+            }, 10);
+            return true;
+          }
+          return write(chunk, ...args);
+        };
+        process.env.FAKE_CLAUDE_MODE = "happy";
+        await import(pathToFileURL(${JSON.stringify(FAKE_CLAUDE_CLI)}).href);
+      `);
+      const config = JSON.parse(originalConfig);
+      config.instances.roomCaller = { driver: "claudeAgent", config: { cli: callerCli } };
+      writeFileSync(configPath, JSON.stringify(config));
+      expect((await api("PUT", "/api/config", { xai: { key: "" } })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${source.id}`, {
         name: "Room source",
-        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+        modelSelection: { instanceId: "roomCaller", model: "claude-sonnet-5" },
       })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${target.id}`, {
         name: "Room target",
@@ -3526,6 +3552,10 @@ describe("harness HTTP API", () => {
           busy: state.bots.find((bot: { id: string }) => bot.id === source.id)?.busy,
         };
       }, { timeout: 5_000 }).toEqual({ working: false, busy: false });
+
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "open the peer tools" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
 
       const taskUpdate = await fetch(`${BASE}/api/internal/task-state`, {
         method: "POST",
@@ -3596,6 +3626,7 @@ describe("harness HTTP API", () => {
         status: 200,
         body: { status: "queued", sameTurn: true },
       });
+      writeFileSync(finishGate, "");
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "settle the room handoff" })).status).toBe(202);
       await expect.poll(async () => (await internal("GET", delegationPath)).body.status, { timeout: 10_000 }).not.toBe("queued");
       const finished = await internal("GET", `${delegationPath}&wait_ms=10000`);
@@ -3614,6 +3645,8 @@ describe("harness HTTP API", () => {
       await api("DELETE", `/api/bots/${source.id}`);
       await api("DELETE", `/api/bots/${target.id}`);
       await api("DELETE", `/api/bots/${outsider.id}`);
+      writeFileSync(configPath, originalConfig);
+      await api("PUT", "/api/config", { xai: { key: "" } });
     }
   }, 30_000);
 
@@ -4721,6 +4754,10 @@ describe("startTurn presence boundary", () => {
         return state?.busy === false;
       }).toBe(true);
 
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${source.id}/messages`, { text: "open the peer tools" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
+
       const asked = fetch(`${BASE}/api/internal/ask-bot`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -4811,6 +4848,10 @@ describe("startTurn presence boundary", () => {
         );
         return state?.busy === false;
       }).toBe(true);
+
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${source.id}/messages`, { text: "open the peer tools" })).status).toBe(202);
+      await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
 
       expect((await api("POST", `/api/bots/${target.id}/messages`, { text: "keep working" })).status).toBe(202);
       await stream.until((frame) => frame.kind === "turn.dispatch" && frame.threadId === target.threadId);

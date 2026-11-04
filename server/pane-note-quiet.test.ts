@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { describe, expect, it, vi } from "vitest";
 
 const index = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
 
@@ -15,10 +16,27 @@ describe("pane-note quiet finish", () => {
     expect(line).toMatch(/folded\.length\s*===\s*0|!folded\.length/);
   });
 
-  it("alerts when a late send joins at dispatch", () => {
-    const at = index.indexOf("const queued = foldQueuedSends(");
-    expect(at).toBeGreaterThan(0);
-    expect(index.slice(at, at + 500)).toContain("paneNoteTurnThreads.delete(threadId)");
+  it.each(["\n", "\r\n"])("alerts when a late send joins at dispatch with %j endings", (ending) => {
+    const source = ts.createSourceFile("index.ts", index.replace(/\r?\n/g, ending), ts.ScriptTarget.Latest, true);
+    let callback: ts.ArrowFunction | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText(source) === "foldLate" && node.initializer && ts.isArrowFunction(node.initializer)) callback = node.initializer;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(callback).toBeDefined();
+    const script = ts.transpileModule(callback!.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const run = new Function("scope", `with (scope) { return (${script.trim().replace(/;$/, "")})(); }`);
+    const paneNoteTurnThreads = new Set(["thread"]);
+    const late: string[] = [];
+    const foldQueuedSends = vi.fn((): string[] => []);
+    const scope = { store: { activePath: () => [{ id: "human" }] }, bot: { id: "bot" }, threadId: "thread", claimMark: 0, rootId: null, late, foldQueuedSends, adoptHumanRoot: vi.fn(() => "root"), clearUnattended: vi.fn(), resumePaneWakes: vi.fn(), takeOverPeerTurn: vi.fn(), paneNoteTurnThreads };
+    run(scope);
+    expect(paneNoteTurnThreads.has("thread")).toBe(true);
+    foldQueuedSends.mockReturnValue(["late send"]);
+    run(scope);
+    expect(late).toEqual(["late send"]);
+    expect(paneNoteTurnThreads.has("thread")).toBe(false);
   });
 
   it("alerts a continuation adopted after a note, keeps the note turn quiet", () => {
