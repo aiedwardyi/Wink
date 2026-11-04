@@ -89,10 +89,29 @@ describe("recall grading", () => {
     expect(gradeByCode("Eddie", "Eddie Yi")).toBeUndefined();
   });
 
+  it("drops words the question already names from the key", async () => {
+    const { gradeByCode } = await load();
+    const question = "Which version is Tern on?";
+    expect(gradeByCode("Tern 2.3", "2.3", question)).toBe(true);
+    expect(gradeByCode("Tern 2.3", "2.4", question)).not.toBe(true);
+    expect(gradeByCode("Tern 2.3", "Tern", question)).not.toBe(true);
+    expect(gradeByCode(null, "2.3", question)).toBe(false);
+    expect(gradeByCode("Tern, version", "", question)).not.toBe(true);
+    expect(gradeByCode("Tern, version", "on", question)).not.toBe(true);
+  });
+
+  it("passes a key that repeats the question without a grade call", async () => {
+    const key = ["Fact 0: 2.3", ...keys.slice(1)];
+    const engine = calls({ "MEMORY.md": [retire(2)] }, ["2.3", ...keys.slice(1)], key);
+    expect(await cleanFiles(input(engine))).toMatchObject({ ok: true });
+    expect(engine.prompts("grade")).toEqual([]);
+  });
+
   it("passes 18 exact answers without a grade call", async () => {
     const engine = calls({ "MEMORY.md": [retire(2)] });
     expect(await cleanFiles(input(engine))).toMatchObject({ ok: true, recall: { passed: 18 } });
     expect(engine.prompts("grade")).toEqual([]);
+    expect(engine.prompts("answers")[0]).toContain("each just the asked value with no extra detail");
   });
 
   it("sends only an undecided paraphrase to the grade call", async () => {

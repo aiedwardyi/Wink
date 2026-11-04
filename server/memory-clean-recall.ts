@@ -52,8 +52,12 @@ export function afterExcerpt(text: string, ids: number[], entries: ArchiveEntry[
 
 const normalize = (text: string) => text.toLowerCase().replace(/["'`“”‘’()[\]{}]/g, "").replace(/\s+/g, " ").replace(/[\s.,;:!?。]+$/, "").trim();
 
-export function gradeByCode(key: string | null, answer: string | null): boolean | undefined {
+const words = (text: string) => normalize(text).split(" ").map(normalize).filter(Boolean);
+
+export function gradeByCode(key: string | null, answer: string | null, question = ""): boolean | undefined {
   if (key === null) return answer === null;
   if (answer === null) return false;
-  return normalize(key) === normalize(answer) || undefined;
+  const asked = new Set(words(question));
+  const bare = words(key).filter((word) => !asked.has(word)).join(" ");
+  return normalize(key) === normalize(answer) || (!!bare && bare === words(answer).join(" ")) || undefined;
 }

@@ -78,7 +78,10 @@ describe("memory cleanup edges", () => {
     await cleanFiles({ ...input, propose: async (prompt, opts) => { prompts.push(prompt); return input.propose(prompt, opts); } });
     expect(prompts[0]).toContain("Newer wins: when two lines give one subject different values");
     expect(prompts[0]).toContain("replace the older unprotected line with the newer");
-    expect(prompts[0]).toContain("same date means keep both");
+    expect(prompts[0]).toContain("same date with different values means keep both");
+    expect(prompts[0]).toContain("Korean lines count the same as English");
+    expect(prompts[0]).toContain("A new person or owner for the same task is a new value");
+    expect(prompts[0]).toContain("same facts in other words, same date or not: merge them");
   });
 
   it("keeps a marker-looking archived source inside its whole history block", async () => {
