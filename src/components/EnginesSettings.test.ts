@@ -341,7 +341,7 @@ describe("EnginesSettings friends Connections list", () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });
     const { root, row } = await renderList();
     try {
-      expect(row("claude").textContent).toBe("ClaudeSign OutAdd Account");
+      expect(row("claude").textContent).toBe("ClaudeAdd AccountConnectedSign Out");
       expect(row("claude").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -357,7 +357,7 @@ describe("EnginesSettings friends Connections list", () => {
     const { root, row } = await renderList();
     try {
       expect([...row("codex").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Sign In"]);
-      expect(row("codex").textContent).toBe("Signed out.Sign In");
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign In");
       expect(row("codex").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -500,7 +500,7 @@ describe("EnginesSettings friends Connections list", () => {
       });
       vi.setSystemTime(Date.now() + 6000);
       await act(async () => window.dispatchEvent(new Event("focus")));
-      expect(row("codex").textContent).toBe("Signed out.Sign In");
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign In");
       expect(row("codex").querySelector("a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -516,7 +516,7 @@ describe("EnginesSettings friends Connections list", () => {
       expect(html).toContain(name);
     }
     expect(html.match(/>Add Account</g)).toHaveLength(2);
-    expect(html.match(/>Connected</g)).toHaveLength(3);
+    expect(html.match(/>Connected</g)).toHaveLength(5);
     expect(html).not.toContain("Details");
     expect(html).not.toContain("Advanced");
     expect(html).not.toMatch(/<(input|select|code)/);

@@ -4,16 +4,10 @@ import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
-import { EngineMark } from "./EngineMark";
 import { useEngineSignIn } from "./EngineSetup";
+import { ProviderMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 
-// A break chance after "@" lets a long email wrap on a phone instead of being cut off.
-function accountLabel(account: UsageAccount) {
-  const label = account.snapshot.account || account.displayName;
-  const at = label.indexOf("@") + 1;
-  return at ? <>{label.slice(0, at)}<wbr />{label.slice(at)}</> : label;
-}
 const LINE = "flex min-h-9 items-center [@media(pointer:coarse)]:min-h-11";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
 
@@ -84,31 +78,32 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
     }
     finally { setBusy(false); }
   };
-  // Add Account closes the group's list, so it never reads as an action on the first account.
+  // Add Account sits on the engine header, so it never reads as an action on one account.
   const add = accounts.length < 8 && accounts.some(accountReady) && (computerOnly ? <span>{t("engines.signInFromComputer")}</span>
     : <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
       className={STRONG_BUTTON}>{t("accounts.add")}</button>);
   return (
     <div data-engine-row={base} className="min-w-0 py-1.5">
+      <ConnectionRow mark={<ProviderMark driverKind={accounts[0]!.driverKind} size={16} />}
+        label={<span className="min-w-0 truncate text-[13px] text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined} />
       {accounts.map((account) => {
         const drain = account.drain;
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
         const hasDestination = accounts.some((other) => other !== account && accountReady(other));
         const loading = account.snapshot.authenticated === undefined && !account.loginState;
-        const tag = main && <span className="ml-2 inline-block text-[12px] text-ink-secondary">{t("accounts.main")}</span>;
-        const mark = <EngineMark instance={account} size={16} tapToShow />;
-        if (!accountReady(account) && !drain) return <SignInRow key={account.instanceId} instance={account} mark={mark} after={tag} onUpdated={() => void reload()} />;
+        const tag = main && <span className="shrink-0 whitespace-nowrap text-[12px] text-ink-secondary">{t("accounts.main")}</span>;
+        const label = account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName);
+        if (!accountReady(account) && !drain) return <SignInRow key={account.instanceId} instance={account} after={tag} onUpdated={() => void reload()} />;
         return (
-          <ConnectionRow key={account.instanceId} mark={mark}
-            label={<>{accountReady(account) ? <span className="min-w-0 break-words text-[13px] text-ink">{accountLabel(account)}{tag}</span>
-              : !loading && <span>{t("accounts.signedOut")}{tag}</span>}</>}
+          <ConnectionRow key={account.instanceId}
+            label={<>{accountReady(account) ? <span title={label} className="min-w-0 truncate text-[13px] text-ink">{label}</span>
+              : !loading && <span>{t("accounts.signedOut")}</span>}{tag}</>}
             actions={drain && drain.phase !== "failed" ? <span role="status">{t("accounts.removing")}</span>
               : <button type="button" disabled={busy || (main && !hasDestination && !drain)}
                 onClick={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)}
                 className={ROW_BUTTON}>{t(drain ? "accounts.retrySignOut" : "engines.signOut")}</button>} />
         );
       })}
-      {add && <div className={`${LINE} justify-end text-[12px] text-ink-secondary`}>{add}</div>}
       {error && <div role="alert" className="pl-7 text-[12px] text-danger">{error}</div>}
     </div>
   );
