@@ -117,6 +117,7 @@ export function createWorkerLaunch(deps: {
   enabled(): boolean; resolveWorkerTurn: WorkerTurnResolver; bases(): InstanceConfigMap;
   available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
+  mainAccount?(of: string): AccountContext | undefined;
 }) {
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
@@ -135,7 +136,9 @@ export function createWorkerLaunch(deps: {
     const base = Object.hasOwn(bases, baseId) ? bases[baseId] : undefined;
     if (!base || base.enabled === false || base.driver !== command.driver) throw new Error("Worker base account is unavailable");
     const baseEnvironment = { ...process.env, ...base.environment };
-    const account = sameEngine && turn.account ? turn.account : baseAccount(baseId, command.driver, baseEnvironment);
+    const main = sameEngine ? undefined : deps.mainAccount?.(baseId);
+    const account = sameEngine && turn.account ? turn.account
+      : main && deps.available(main.id, main.generation) ? main : baseAccount(baseId, command.driver, baseEnvironment);
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
@@ -160,7 +163,7 @@ export function createWorkerLaunch(deps: {
     }
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
     const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source);
-    if (command.driver === "claudeAgent" && !(sameEngine && turn.account && turn.account.generation !== 0)
+    if (command.driver === "claudeAgent" && account.generation === 0
       && !Object.entries(baseEnvironment).some(([key, value]) => key.toUpperCase() === "CLAUDE_CONFIG_DIR" && value)) {
       // Setting the default directory moves Claude's config from ~/.claude.json to ~/.claude/.claude.json.
       delete policy.env.CLAUDE_CONFIG_DIR;

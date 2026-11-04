@@ -5,11 +5,15 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AccountContext } from "./account-policy.ts";
 import { AccountService } from "./accounts.ts";
+import { BotAccounts } from "./bot-accounts.ts";
 import { DATA_DIR } from "./config.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { RateLimitsMap } from "./rate-limits-store.ts";
+import type { ProviderRegistry } from "./harness/registry.ts";
+import type { Store } from "./store.ts";
 import { callTool, workerReportText } from "./drivers/terminal-proxy.ts";
 import { foldContinuationStart } from "./continuation-turn.ts";
 import { RESUME_NUDGE } from "./worker-resume.ts";
@@ -42,6 +46,16 @@ async function fixture() {
   const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: turns.resolveWorkerTurn, bases: () => bases, available, usage });
   const input = { botId: "bot", label: "worker", command: "codex --model fixture 'task'", environment: { CODEX_HOME: "inherited-wrong", CLAUDE_CONFIG_DIR: "inherited-wrong", OpenAI_Api_Key: "fixture-key", BASH_ENV: "profile" } };
   return { accounts, bases, third, turns, rateLimits, refresh, available, prepare, input };
+}
+
+function mainRouting(f: Awaited<ReturnType<typeof fixture>>, resumeAccount?: () => AccountContext) {
+  const blocked = new Set<string>();
+  const registry = { accountAvailable: (id: string) => !blocked.has(id) } as unknown as ProviderRegistry;
+  const bots = new BotAccounts(f.accounts, registry, {} as Store, { captured: () => null });
+  const usage = createSpawnUsage({ rateLimits: f.rateLimits, refresh: f.refresh, save() {}, environment: () => ({}) });
+  const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+    available: f.available, usage, resumeAccount, mainAccount: (of) => bots.mainAccount(of) });
+  return { blocked, prepare };
 }
 
 describe("trusted worker accounts", () => {
@@ -371,6 +385,61 @@ describe("trusted worker accounts", () => {
     expect(launch.environment).not.toHaveProperty("CODEX_HOME");
     expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
     expect(f.available).toHaveBeenCalledWith("claude", 0);
+  });
+
+  it("routes an other-engine Codex worker to that engine's ready Main and reports its usage", async () => {
+    const f = await fixture();
+    const m = mainRouting(f);
+    await f.accounts.setDefault("codex", f.third.id);
+    f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    const observedAt = new Date().toISOString();
+    f.rateLimits.set("codex", { observedAt, windows: [{ id: "seven_day", usedPercent: 94, resetsAt: null, windowMinutes: 10080 }] });
+    f.rateLimits.set(f.third.id, { observedAt, windows: [{ id: "seven_day", usedPercent: 20, resetsAt: null, windowMinutes: 10080 }] });
+    expect(await m.prepare(f.input)).toMatchObject({ kind: "managed", account: { id: f.third.id, generation: f.third.generation },
+      environment: { CODEX_HOME: f.third.home, CODEX_SQLITE_HOME: join(f.third.home, "state") }, line: "Codex usage left: weekly 80%." });
+    expect(f.available).toHaveBeenCalledWith(f.third.id, f.third.generation);
+  });
+
+  it("routes an other-engine Claude worker to that engine's ready Main", async () => {
+    const f = await fixture();
+    const m = mainRouting(f);
+    delete f.bases.claude.environment;
+    const main = await f.accounts.identify((await f.accounts.add("claude")).id, "claude-main");
+    await f.accounts.setDefault("claude", main.id);
+    expect(await m.prepare({ ...f.input, command: "claude 'task'" })).toMatchObject({ kind: "managed", account: { id: main.id, generation: main.generation },
+      environment: { CLAUDE_CONFIG_DIR: main.home, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+  });
+
+  it.each(["missing", "signed out", "blocked"])("falls back to the base when the other engine's Main is %s", async (state) => {
+    const f = await fixture();
+    const m = mainRouting(f);
+    f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    if (state !== "missing") await f.accounts.setDefault("codex", f.third.id);
+    if (state === "signed out") await f.accounts.stop(f.third.id);
+    if (state === "blocked") m.blocked.add(f.third.id);
+    expect(await m.prepare(f.input)).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0 },
+      environment: { CODEX_HOME: f.bases.codex.environment!.CODEX_HOME } });
+  });
+
+  it("keeps same-engine workers on the captured turn's account when Main is another account", async () => {
+    const f = await fixture();
+    const m = mainRouting(f);
+    const other = await f.accounts.identify(f.accounts.snapshot.find((row) => row.id !== f.third.id)!.id, "other-identity");
+    await f.accounts.setDefault("codex", other.id);
+    expect(await m.prepare(f.input)).toMatchObject({ account: { id: f.third.id, generation: f.third.generation } });
+    f.turns.capture("bot", "thread", { instanceId: "codex", driverKind: "codex" });
+    expect(await m.prepare(f.input)).toMatchObject({ account: { id: "codex", generation: 0 } });
+  });
+
+  it("resumes a worker on its own account when its engine's Main is another account", async () => {
+    const f = await fixture();
+    const base = Object.freeze({ id: "codex", of: "codex", generation: 0, home: f.bases.codex.environment!.CODEX_HOME });
+    const m = mainRouting(f, () => base);
+    await f.accounts.setDefault("codex", f.third.id);
+    f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    expect(await m.prepare({ ...f.input, resume: { engine: "codex", nativeId: "00000000-0000-4000-8000-000000000001", accountId: "codex",
+      accountGeneration: 0, template: { executable: "codex", args: ["task"] } } })).toMatchObject({ kind: "managed", account: { id: "codex", generation: 0 },
+      environment: { CODEX_HOME: base.home } });
   });
 
   it("keeps the existing Codex worker template and trusted pane grant expansion", async () => {

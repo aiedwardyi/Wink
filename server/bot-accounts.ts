@@ -97,6 +97,11 @@ export class BotAccounts {
     return this.accounts.setDefault(account.of, id);
   }
 
+  mainAccount(of: string) {
+    const id = this.routedAccount(of);
+    return id && this.available(id) ? this.accounts.get(id) : undefined;
+  }
+
   noteAccount() {
     const claude = this.registry.instances().find((instance) => instance.driverKind === "claudeAgent" && !instance.account && instance.enabled && instance.generateText);
     const id = claude && this.routedAccount(claude.instanceId);
