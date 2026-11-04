@@ -113,7 +113,7 @@ describe("catalogs", () => {
     expect(ko["accounts.main"]).toBe("기본");
     expect(Object.entries(ko).filter(([, phrase]) => phrase.includes("메인")).map(([key]) => key)).toEqual([]);
     for (const key of ["usage.desk.mainFailed", "usage.desk.eventMain", "usage.desk.eventMainStays"] as const) {
-      expect(en[key], key).toMatch(/Main/);
+      expect(en[key], key).toMatch(/\bMain\b/);
       expect(ko[key], key).toContain("기본");
     }
   });
