@@ -83,7 +83,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   const minute = useVisibleClock();
   const soon = viewed.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR);
   const clock: Clock = { t, locale: localeTag(locale), now: useVisibleClock(soon) };
-  const checked = checkedMain(state, engine.engine);
+  const checked = checkedMain(state, engine.base);
 
   const close = (focus = true) => {
     onClose();
@@ -156,9 +156,9 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
           {closeButton}
         </div>}
         <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3")}>
-          <Hero key={engine.engine} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
+          <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />
-          {state.failed.has(engine.engine) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
           {engine.accounts.length > 1 && <div role="group" aria-label={engineName(engine.engine)} className="-mx-1 flex min-w-0 flex-col divide-y divide-hairline/40 rounded-[3px] [corner-shape:bevel] bg-inset">
             {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               phone={phone} terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}

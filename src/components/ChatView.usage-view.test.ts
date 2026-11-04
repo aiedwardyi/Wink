@@ -369,6 +369,53 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(view!.querySelector("[data-empty-state]"), "no empty chart message").toBeNull();
   });
 
+  it("reaches both groups of one driver from the Settings ticker and in All usage", async () => {
+    const board = fresh();
+    const claude = board.engines[0]!;
+    const twin = structuredClone(claude);
+    twin.base = "claude-work";
+    twin.mainId = "claude-work";
+    twin.events = [];
+    twin.accounts = [{ ...structuredClone(claude.accounts[0]!), id: "claude-work", name: "Claude Work 1", bots: [] }];
+    board.engines.splice(1, 0, twin);
+    server.board = board;
+    const instances = instancesFor(board).map((each) => each.instanceId === "claude-work" ? { ...each, displayName: "Claude work" } : each);
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, instances });
+    const tabs = () => [...document.querySelectorAll<HTMLButtonElement>("[role=\"tab\"]")];
+    expect(tabs()).toHaveLength(board.engines.length);
+    expect(text(tabs()[1]), "the twin tab names its instance").toContain("Claude work");
+    await click(tabs()[1]);
+    expect(tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(board.engines.map((_, i) => String(i === 1)));
+    expect(q("[data-usage-hero]")?.getAttribute("aria-label"), "the twin group in All usage").toBe("Claude Work 1");
+    await click(tabs()[0]);
+    expect(q("[data-usage-hero]")?.getAttribute("aria-label"), "the first group again").toBe("Claude 1");
+  });
+
+  it("counts bots instead of cutting their names to a stub", async () => {
+    const overflow = (node: Element) => node.closest("[data-account-row]") !== null && node.children.length === 0 && /Atlas, Mira/.test(node.textContent ?? "");
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) { return overflow(this) ? 200 : 0; });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: Element) { return overflow(this) ? 40 : 0; });
+    await mount(makeBot("bot-atlas", "Atlas", "claude"));
+    await click(meter());
+    const row = quick()!.querySelector("[data-account-row=\"claude\"]");
+    expect(row, "row").not.toBeNull();
+    expect(text(row), "counts like the phone").toContain("2 bots");
+    expect([...row!.querySelectorAll("*")].some((node) => overflow(node)), "no cut names").toBe(false);
+    await click(row!.querySelector("[data-bot-count]"));
+    expect(text(row), "the count discloses whole names").toContain("Atlas, Mira");
+  });
+
+  it.each(["en", "ko"] as const)("names the window a row has no data for (%s)", async (locale) => {
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, locale });
+    const expected = locale === "en" ? "5h no data" : "5시간 데이터 없음";
+    const settings = q(`[data-usage-section] [data-account-row="${CLAUDE_2}"], [data-account-row="${CLAUDE_2}"]`);
+    expect(text(settings), "Settings row").toContain(expected);
+    await click(meter());
+    const row = quick()!.querySelector(`[data-account-row="${CLAUDE_2}"]`);
+    expect(text(row), "quick view row").toContain(expected);
+    expect(text(row)).not.toMatch(locale === "en" ? /0%s*No data/ : /0%s*데이터 없음/);
+  });
+
   it("keeps the board quiet through an equal pane poll", async () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
     await act(async () => store.dispatch({ type: "setTerminalPanes", panes: { "bot-atlas": ["ATLAS-1"] } }));

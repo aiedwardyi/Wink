@@ -5,7 +5,7 @@ import { shownModelSelection, useStore, type Bot, type InstanceInfo } from "@/st
 import { useI18n } from "@/lib/i18n";
 import { shortPath } from "@/lib/short-path";
 import { museReading } from "@/lib/usage";
-import { chartSeries, leftOf, pace } from "@/lib/usage-pace";
+import { chartSeries, leftOf, pace, splitWindows } from "@/lib/usage-pace";
 import { termModelLabel } from "@/lib/terminal-skin";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
@@ -84,12 +84,16 @@ function TermTicker({ identity, instance, instanceId, tightest, phone }: { ident
   const binding = facts.binding;
   const soon = binding?.resetsAt != null && binding.resetsAt > minute && binding.resetsAt - minute < HOUR;
   const now = useVisibleClock(soon);
-  const quick = Boolean(target && board.board);
+  // Only a ticker that renders may take Alt+U; a hidden one leaves the key to all Usage.
+  const quick = Boolean(binding && target && board.board);
   const [open, setOpen] = useQuickToggle(quick, identity);
   const button = useRef<HTMLButtonElement>(null);
   const ageId = useId();
   const summaryId = useId();
   if (!binding) return null;
+  // A window with no data stays off the line (it never shows a 5h it lacks); "Weekly only" and real windows stay.
+  const { session, week } = splitWindows(windows);
+  const second = !session && week && (target?.account.coverage ?? "unknown") !== "complete" ? null : facts.second;
   const account = target?.account;
   const reading = museReading(instance?.driverKind, account ? account.observedAt === null ? undefined : new Date(account.observedAt).toISOString() : instance?.rateLimits?.observedAt, now);
   const verdict = target ? pace(target.account, binding, target.engine.events, now).verdict : undefined;
@@ -98,12 +102,12 @@ function TermTicker({ identity, instance, instanceId, tightest, phone }: { ident
   const left = Math.round(leftOf(binding));
   const reset = binding.resetsAt !== null && binding.resetsAt > now ? countdown(binding.resetsAt - now, t) : null;
   const summary = [reset ? t("usage.chat.termSummary", { window: shortLabel(binding, t), percent: left, time: reset }) : `${facts.first}. ${t("usage.limits.resetUnknown")}`,
-    !tightest && facts.second].filter(Boolean).join(". ");
+    !tightest && second].filter(Boolean).join(". ");
   const multi = target && target.engine.accounts.length > 1;
   const name = multi ? target.account.name : undefined;
   const activate = () => { if (quick) setOpen(!open); else dispatch({ type: "toggleAppSettings", open: true, section: "usage" }); };
   return (
-    <div data-term-meters={tightest || !facts.second ? 1 : 2}>
+    <div data-term-meters={tightest || !second ? 1 : 2}>
       <button ref={button} type="button" data-term-ticker="" onClick={activate}
         aria-haspopup={quick ? "dialog" : undefined} aria-expanded={quick ? open : undefined}
         aria-label={name ? t("usage.chat.openAria", { name }) : t("usage.limits.openAria")}
@@ -117,7 +121,7 @@ function TermTicker({ identity, instance, instanceId, tightest, phone }: { ident
         </span>
         <span aria-hidden="true" className={tone === "out" ? "text-danger" : tone === "warn" ? "text-warning" : undefined}> {facts.first}</span>
         {reset && <span aria-hidden="true" className="text-ink-secondary"> ↻ {reset}</span>}
-        {!tightest && facts.second && <span aria-hidden="true" className="text-ink-secondary"> │ {facts.second}</span>}
+        {!tightest && second && <span aria-hidden="true" className="text-ink-secondary"> │ {second}</span>}
         <span id={summaryId} className="sr-only">{summary}</span>
       </button>
       {open && target && board.board && (

@@ -198,4 +198,19 @@ describe("terminal status line quota ticker", () => {
     expect(text(ticker)).toContain("34%");
     expect(text(ticker)).not.toContain("59%");
   });
+
+  it("leaves the first Alt+U to all Usage while the ticker is hidden", async () => {
+    const board = structuredClone(usageBoardFixture);
+    for (const engine of board.engines) for (const account of engine.accounts) account.windows = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("/api/usage/board")
+      ? new Response(JSON.stringify(board), { headers: { "content-type": "application/json" } })
+      : new Promise<Response>(() => {})));
+    const instances = instancesFor(board).map((each) => ({ ...each, rateLimits: { observedAt: new Date(usageBoardNow - MIN).toISOString(), windows: [] } }));
+    await mount(botOn("claude"), instances);
+    expect(q("[data-term-status]"), "status line").not.toBeNull();
+    expect(q("[data-term-ticker]"), "hidden ticker").toBeNull();
+    const press = new CustomEvent("orbit:usage-key", { cancelable: true });
+    await act(async () => { window.dispatchEvent(press); });
+    expect(press.defaultPrevented, "the first Alt+U reaches all Usage").toBe(false);
+  });
 });

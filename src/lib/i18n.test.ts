@@ -109,6 +109,21 @@ describe("catalogs", () => {
     expect(ko["settings.phoneNotifications.state.blocked"]).toMatch(/차단.*브라우저 설정.*허용/);
   });
 
+  it("says Main as 기본 in Korean, as the account rows do", () => {
+    expect(ko["accounts.main"]).toBe("기본");
+    expect(Object.entries(ko).filter(([, phrase]) => phrase.includes("메인")).map(([key]) => key)).toEqual([]);
+    for (const key of ["usage.desk.mainFailed", "usage.desk.eventMain", "usage.desk.eventMainStays"] as const) {
+      expect(en[key], key).toMatch(/\bMain\b/);
+      expect(ko[key], key).toContain("기본");
+    }
+  });
+
+  it("drops the retired Alt+R refresh from the shortcuts help in both languages", () => {
+    expect(en["shortcuts.help"]).not.toContain("Alt+R");
+    expect(ko["shortcuts.help"]).not.toContain("Alt+R");
+    expect(en["shortcuts.help"]).toMatch(/shell/);
+  });
+
   it("rejects fixed Korean particles after every catalog interpolation", () => {
     const violations = Object.entries(ko).flatMap(([key, phrase]) =>
       hardcodedKoreanParticles(phrase).map((match) => ({ key, match })),
