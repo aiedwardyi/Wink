@@ -1,2 +1,2 @@
-/** Edward picks the Usage layout from pictures: "A" is today's (Main left, one other account picked with the dropdown and arrows), "B" lists every account as a row. */
-export const USAGE_LAYOUT: "A" | "B" = "A";
+/** Usage layout: "B" lists every account as a row (Edward's pick, style 5); "A" is today's (Main left, one other account picked with the dropdown and arrows), kept behind this switch. */
+export const USAGE_LAYOUT: "A" | "B" = "B";

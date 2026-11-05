@@ -1,5 +1,8 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+import { z } from "zod";
 import { cn } from "@/lib/cn";
+import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
@@ -16,7 +19,7 @@ import { Fold } from "./Fold";
 import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
 import { AccountPicker } from "./UsageAccounts";
-import { AccountBars } from "./UsageBars";
+import { AccountBars, barSlots } from "./UsageBars";
 import { PagedAccounts, type RowSlots } from "./UsagePaged";
 import { USAGE_LAYOUT } from "./usage-layout";
 import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
@@ -189,67 +192,71 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-function Who({ account, runs, control, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; control: ReactNode; t: Translate }) {
+function Head({ account, runs, name, control, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; name?: ReactNode; control: ReactNode; t: Translate }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const names = [...new Set(account.bots.map((bot) => bot.bot))];
   const bots = t(names.length === 1 ? "usage.desk.botOne" : "usage.desk.bots", { count: names.length });
   const workers = runs !== "known" || account.workers === null ? t("usage.desk.workersUnknown")
     : t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length });
-  // Counts on every surface; the bot count opens the names. Main or Use ends this line, so the name above keeps the whole width.
+  // The name, then bots and workers, wrap as one line while the spot stays on the first; the bot count opens the names.
   return (
     <>
-      <div className="flex min-w-0 items-center gap-2">
-        <span data-account-who="" className="flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] leading-5 text-ink-secondary">
-          {names.length > 0
-            ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
-              className="relative shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
-            : <span className="shrink-0">{bots}</span>}
-          <span aria-hidden="true">·</span>
-          <span className="min-w-0 truncate">{workers}</span>
-        </span>
+      <div data-account-head="" className="flex min-h-[26px] min-w-0 items-start gap-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 leading-[26px]">
+          {name ?? <span data-account-name="" className="min-w-0 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{account.name}</span>}
+          <span data-account-who="" className="flex items-baseline gap-1 whitespace-nowrap text-[12px] text-ink-secondary">
+            {names.length > 0
+              ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); afterFold(id, () => setOpen(!open)); }}
+                className="relative rounded-[3px] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
+              : <span>{bots}</span>}
+            <span aria-hidden="true">·</span>
+            <span>{workers}</span>
+          </span>
+        </div>
         {control}
       </div>
-      {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12.5px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
+      {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
     </>
   );
 }
 
-const SIGN_IN_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "accounts.signedOut", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
-/** Main and Use share one box: same width, height and shape; a larger touch target sits outside it on phones. */
-const CONTROL = "relative inline-flex min-h-7 w-[4.5rem] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border px-1 text-center text-[12px] leading-tight [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
+const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+/** Main, Use and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
+const SPOT = "relative inline-flex h-[26px] min-w-14 shrink-0 items-center justify-center whitespace-nowrap border px-2.5 text-[12px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
+const BUTTON = "border-hairline bg-raised text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none";
 
-/** Today's account block: tile and name, then bots and workers with Main or Use, then the bars. */
-export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, name }: {
+/** Style 5 account row: name with bots and workers, its Main, Use or Sign In box, then a meter per reported window. */
+export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
-  terminal: boolean; clock: Clock; reloadInstances: () => unknown;
+  terminal: boolean; clock: Clock; reloadInstances: () => unknown; signIn: () => void;
 } & RowSlots) {
   const { t } = clock;
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
-  let control: ReactNode;
-  if (account.signIn !== "ready") control = <span data-row-status="" className={cn(CONTROL, "border-transparent text-ink-secondary")}>{t(SIGN_IN_KEY[account.signIn])}</span>;
-  else if (checked) control = <span data-main-check="" className={cn(CONTROL, "border-hairline/40 bg-raised text-ink")}>{t("accounts.main")}</span>;
-  else control = (
+  const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
+  let control: ReactNode = null;
+  if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
+  else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-accent/55 bg-accent/10 text-accent-text")}>{t("accounts.main")}</span>;
+  else if (account.signIn === "ready") control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
-      onClick={() => requestMain(engine.base, account.id, reloadInstances)}
-      className={cn(CONTROL, "whitespace-nowrap border-hairline/40 text-ink-secondary transition-colors duration-100 hover:bg-raised-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none",
-        pending && !switching && "opacity-50")}>
+      onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON, pending && !switching && "opacity-50")}>
       {switching ? t("usage.desk.switching") : t("usage.desk.use")}
     </button>
   );
   return (
-    <div data-account-row={account.id} tabIndex={-1} className="min-w-0 rounded-[3px] [corner-shape:bevel] outline-none">
-      <div data-account-head="" className="flex min-h-7 min-w-0 items-center gap-2">
-        <Tile number={account.number} terminal={terminal} />
-        {name ? <span className="flex min-w-0 flex-1">{name}</span>
-          : <span data-account-name="" className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{account.name}</span>}
-      </div>
-      <Who account={account} runs={board.runs} control={control} t={t} />
-      <div className="mt-2"><AccountBars engine={engine.engine} account={account} now={clock.now} t={t} /></div>
+    <div data-account-row={account.id} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
+      <Head account={account} runs={board.runs} name={name} control={control} t={t} />
+      {account.signIn === "ready" ? <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
+        : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
     </div>
   );
+}
+
+/** One engine's accounts in a bordered box with a line between rows. */
+export function AccountGroup({ label, terminal, children }: { label: string; terminal: boolean; children: ReactNode }) {
+  return <div role="group" aria-label={label} className={cn("usage-group mt-2.5 min-w-0 border border-hairline/70 bg-app", terminal ? "rounded-none" : "rounded-lg")}>{children}</div>;
 }
 
 export function Hero({ engine, account, accounts, select, terminal, phone, clock, instances, foldChart = false }: {
@@ -285,7 +292,7 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
   const reports = instances.find((each) => each.instanceId === account.id)?.capabilities?.rateLimits !== false;
   let empty: string | null = null;
   if (!reports) empty = t("usage.limits.notReported", { name: account.name });
-  else if (account.signIn !== "ready" && account.observedAt === null) empty = t(SIGN_IN_KEY[account.signIn]);
+  else if (account.signIn !== "ready" && account.observedAt === null) empty = t(STATE_KEY[account.signIn]);
   else if (account.observedAt === null) empty = t("usage.desk.noReport");
   return (
     <section ref={ref} data-usage-hero="" data-stale={muse?.stale || undefined} aria-label={account.name} className="min-w-0">
@@ -355,27 +362,73 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
 /** Hidden for the bars-first look: the engine strip, hero, chart and event lines stay in code, not rendered. */
 const SHOW_DESK_HERO = false;
 
-function EngineSection({ engine, board, state, stacked, terminal, clock, label, reloadInstances }: {
+const FOLDS_KEY = "openmausbot.usageFolds.v1";
+const Folds = z.record(z.string(), z.boolean());
+/** Folded engines on this device, kept like the sidebar's folded sections: local only, never synced. */
+function loadFolds(): Record<string, boolean> {
+  try {
+    const parsed = Folds.safeParse(JSON.parse(globalThis.localStorage?.getItem(FOLDS_KEY) ?? "{}"));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+function saveFold(base: string, folded: boolean) {
+  try {
+    globalThis.localStorage?.setItem(FOLDS_KEY, JSON.stringify({ ...loadFolds(), [base]: folded }));
+  } catch {
+    // Same localStorage failure mode as the sidebar: the fold still applies this session.
+  }
+}
+
+/** A folded engine in one glance: Main's windows as the meters read them, or its state. */
+function FoldSummary({ engine, account, clock }: { engine: UsageBoardEngine; account: UsageBoardAccount; clock: Clock }) {
+  const { t, now } = clock;
+  const slots = account.signIn === "ready" ? barSlots(engine.engine, account, t) : [];
+  return (
+    <span data-engine-summary="" className="flex min-w-0 flex-1 flex-wrap justify-end gap-x-1 text-right text-[12px] leading-5 tabular-nums text-ink-secondary">
+      {account.signIn !== "ready" ? t(STATE_KEY[account.signIn]) : !slots.length ? t("usage.desk.noUsage") : slots.map(({ key, label, window }, index) => {
+        const left = windowExpired(window.resetsAt, now) ? null : Math.round(leftOf(window));
+        return (
+          <span key={key} className="whitespace-nowrap">
+            {index > 0 && <span aria-hidden="true">· </span>}{label} <span className={cn(left === 0 && "text-danger")}>
+              {left === null ? t("usage.desk.resetPassed") : t("usage.desk.windowLeft", { percent: left })}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function EngineSection({ engine, board, state, stacked, terminal, clock, label, reloadInstances, signIn }: {
   engine: UsageBoardEngine; board: UsageBoard; state: UsageBoardState; stacked: boolean; terminal: boolean; clock: Clock; label: string;
-  reloadInstances: () => unknown;
+  reloadInstances: () => unknown; signIn: () => void;
 }) {
   const { t } = clock;
   const checked = checkedMain(state, engine.base);
+  const [folded, setFolded] = useState(() => loadFolds()[engine.base] ?? !engine.accounts.some((each) => each.signIn === "ready"));
+  const id = useId();
+  const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
-    checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} {...slots} />;
+    checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} {...slots} />;
   const head = (arrows?: ReactNode) => (
-    <div className="flex min-h-9 min-w-0 items-center gap-2">
-      <span data-engine-mark="" className={cn("flex shrink-0", terminal ? "usage-glyphs w-[3ch] text-[12px]" : "w-[18px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
-      <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{label}</span>
-      {arrows}
+    <div className="flex min-h-5 min-w-0 items-start gap-3">
+      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, () => { saveFold(engine.base, !folded); setFolded(!folded); })}
+        className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
+          terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
+        <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+        <span data-engine-name="" className="min-w-0 truncate">{label}</span>
+        <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-[color,transform] duration-150 ease-out group-hover:text-ink motion-reduce:transition-none", folded && "-rotate-90")} />
+      </button>
+      {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
     </div>
   );
+  const group = (content: ReactNode) => <Fold open={!folded} id={id}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
   return (
     <section data-usage-engine={engine.engine} aria-label={label} className="min-w-0">
-      {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} /> : <>
-        {head()}
-        <div role="group" aria-label={label} className={cn("mt-1 grid min-w-0 gap-y-4", !stacked && "grid-cols-2 gap-x-8")}>{engine.accounts.map((each) => row(each))}</div>
-      </>}
+      {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
+        : <>{head()}{group(engine.accounts.map((each) => row(each)))}</>}
       {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
     </section>
   );
@@ -387,10 +440,10 @@ export function engineLabel(board: UsageBoard, engine: UsageBoardEngine, instanc
   return (twin && instances.find((each) => each.instanceId === engine.base)?.displayName) || engineName(engine.engine);
 }
 
-/** Settings > Usage: every engine under its own header, every account as Today's block with its 5h and 7d bars. */
+/** Settings > Usage: every engine under a header that folds, its accounts in one box, each with a meter per reported window. */
 export function UsageDesk() {
   const { t, locale } = useI18n();
-  const { state: store, refreshInstances } = useStore();
+  const { state: store, dispatch, refreshInstances } = useStore();
   const state = useUsageBoard();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
@@ -404,10 +457,11 @@ export function UsageDesk() {
   const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
   const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
   return (
-    <div data-usage-desk="" className="flex min-w-0 flex-col gap-5">
+    <div data-usage-desk="" className="flex min-w-0 flex-col gap-[22px]">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
       {board.engines.filter((each) => each.accounts.length).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
-        terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} reloadInstances={() => refreshInstances()} />)}
+        terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} reloadInstances={() => refreshInstances()}
+        signIn={() => dispatch({ type: "toggleAppSettings", open: true, section: "connections" })} />)}
       {SHOW_DESK_HERO && account && <>
         <Ticker board={board} engineId={engine.base} select={setEngineId} phone={phone} terminal={terminal} clock={clock} instances={store.instances} />
         <Hero key={engine.base} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}

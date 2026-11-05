@@ -3,6 +3,7 @@ import { Ellipsis } from "lucide-react";
 import { api, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
+import { afterFold } from "@/lib/fold-press";
 import { useI18n } from "@/lib/i18n";
 import { isPhone } from "@/lib/phone-swipe";
 import { safeProviderText } from "@/lib/safe-provider-text";
@@ -111,8 +112,9 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const mark = <ProviderMark driverKind={account.driverKind} size={16} />;
   const tile = name && <span data-account-number="" className="shrink-0"><Tile number={name.number} terminal={terminal} /></span>;
   const draining = account.drain && account.drain.phase !== "failed";
+  const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
-    onClick={() => setMenu(!menu)} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
+    onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
   // On a phone the address gets its own line under the tile, running under the more button, so a 30-character email shows whole.
   const stacked = phone && name && !draining;
   return (
@@ -123,12 +125,12 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
           {tile}
           <span className="min-w-0 truncate">{name.name}</span>
         </>} actions={canName ? phone ? <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu}
-          onClick={() => setMenu(!menu)} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
+          onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
       </> : <ConnectionRow mark={mark}
         label={<>
           {!stacked && tile}
           <button type="button" data-connection-identity="" aria-label={t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
-            onClick={() => setExpanded(!expanded)} className={cn("flex min-w-0 flex-1 text-left text-[13px]", stacked ? "flex-col pb-2" : "h-9 items-center gap-2 [@media(pointer:coarse)]:h-11")}>
+            onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("flex min-w-0 flex-1 text-left text-[13px]", stacked ? "flex-col pb-2" : "h-9 items-center gap-2 [@media(pointer:coarse)]:h-11")}>
             {stacked ? <span className="flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11">{tile}<span className="min-w-0 truncate text-ink">{name.name}</span></span>
               : name && <span className="max-w-[40%] shrink truncate text-ink">{name.name}</span>}
             <span className={cn("min-w-0 truncate text-ink-secondary", stacked ? "-mt-1.5" : "flex-1")}>{label}</span>
@@ -140,10 +142,12 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
         </Fold>
       </ConnectionRow>}
       {stacked && <span className="absolute right-0 top-0 flex h-9 items-center [@media(pointer:coarse)]:h-11">{more}</span>}
-      {menu && <div ref={actions} id={`${id}-actions`} className="flex min-w-0 flex-wrap justify-end gap-2 pb-2 pl-6"
-        onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>
-        {controls}
-      </div>}
+      <Fold open={menu} id={`${id}-actions`}>
+        <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pb-2 pl-6"
+          onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>
+          {controls}
+        </div>
+      </Fold>
       {editing && named && <div className="pl-6"><AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null}
         onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} /></div>}
     </div>

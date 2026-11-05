@@ -14,7 +14,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
-import { AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
+import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
 import "./UsageDesk.css";
 
 const HOUR = 3_600_000;
@@ -142,9 +142,9 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
     };
   });
 
-  const allUsage = () => {
+  const settings = (section: "usage" | "connections") => {
     close(false);
-    dispatch({ type: "toggleAppSettings", open: true, section: "usage" });
+    dispatch({ type: "toggleAppSettings", open: true, section });
   };
 
   if (!spot) return null;
@@ -165,21 +165,21 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
         {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
-          <span data-engine-mark="" className={cn("flex shrink-0", terminal ? "usage-glyphs w-[3ch] text-[12px]" : "w-[18px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
-          <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{engineName(engine.engine)}</span>
+          <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+          <span data-engine-name="" className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{engineName(engine.engine)}</span>
           {closeButton}
         </div>}
         <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
           {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
-          <div role="group" aria-label={engineName(engine.engine)} className="grid min-w-0 gap-y-4">
+          <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
             {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
-              terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
-          </div>
+              terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
+          </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">
-          <button type="button" data-all-usage="" onClick={allUsage}
+          <button type="button" data-all-usage="" onClick={() => settings("usage")}
             className="flex min-w-0 flex-1 items-center justify-between gap-3 self-stretch px-4 text-left text-[13px] text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none"
             style={{ minHeight: phone ? 48 : 40 }}>
             <span>{t("usage.chat.allUsage")}</span>

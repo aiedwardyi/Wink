@@ -11,9 +11,9 @@ const ARROW = "relative flex size-7 items-center justify-center rounded-[3px] [c
 export type RowSlots = { name?: ReactNode };
 
 /** Today's layout: Main on the left and one other account on the right, picked with the dropdown or the arrows (phones page through every account, Main first). Picking only views an account; Main changes only with Use. The arrows sit on the engine row, so a phone row keeps room for the name. */
-export function PagedAccounts({ engine, checked, stacked, t, head, row }: {
+export function PagedAccounts({ engine, checked, stacked, t, head, row, group }: {
   engine: UsageBoardEngine; checked: string | null; stacked: boolean; t: Translate;
-  head: (arrows?: ReactNode) => ReactNode; row: (account: UsageBoardAccount, slots?: RowSlots) => ReactElement;
+  head: (arrows?: ReactNode) => ReactNode; row: (account: UsageBoardAccount, slots?: RowSlots) => ReactElement; group: (content: ReactNode) => ReactNode;
 }) {
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0]!;
   const others = engine.accounts.filter((each) => each !== main);
@@ -38,8 +38,7 @@ export function PagedAccounts({ engine, checked, stacked, t, head, row }: {
       if (!part.hasAttribute("data-account-head")) part.animate([{ opacity: 0, transform: `translateX(${dir * 12}px)` }, {}], { duration: 160, easing: EASE_ENTRANCE });
     }
   }, [current?.id]);
-  const grid = cn("mt-1 grid min-w-0 gap-y-4", !stacked && "grid-cols-2 gap-x-8");
-  if (!current) return <>{head()}<div className={grid}>{row(main)}</div></>;
+  if (!current) return <>{head()}{group(row(main))}</>;
   const go = (id: string) => {
     turn.current = Math.sign(pages.findIndex((each) => each.id === id) - index);
     setSelected(id);
@@ -56,15 +55,15 @@ export function PagedAccounts({ engine, checked, stacked, t, head, row }: {
     accounts={pages.map((each) => ({ id: each.id, name: each.name, number: each.number, main: each.id === main.id }))} /> : undefined;
   return (<>
     {head(arrows)}
-    <div className={grid}>
+    {group(<div className={cn("grid min-w-0", !stacked && "grid-cols-2")}>
       {!stacked && <div data-account-column="main" className="min-w-0">{row(main)}</div>}
-      <div data-account-column={stacked ? "pages" : "other"} className="grid min-w-0">
+      <div data-account-column={stacked ? "pages" : "other"} className={cn("grid min-w-0", !stacked && "border-l border-hairline/70")}>
         {pages.map((each) => each !== current && <div key={each.id} className="invisible col-start-1 row-start-1 min-w-0" inert aria-hidden="true">
           {row(each, { name: picker(each) })}
         </div>)}
         {/* One live row for every page: a pick swaps its account but keeps the picker mounted, so focus stays on it. */}
         <div key="live" ref={live} className="col-start-1 row-start-1 min-w-0">{cloneElement(row(current, { name: picker(current) }), { key: "live" })}</div>
       </div>
-    </div>
+    </div>)}
   </>);
 }

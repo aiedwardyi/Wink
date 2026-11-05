@@ -13,9 +13,10 @@ import { botUsage, cachedInput, costCaption, formatTokens, formatUsd, hasFiniteC
 import { useAutoRefresh } from "@/lib/usage-auto-refresh";
 
 // The stale-provider recheck stays; a report it brings back bumps the board revision, and the live frame reads it.
+// Each engine draws its own box, so the desk sits on the page without a card around it.
 function PlanUsage() {
   useAutoRefresh();
-  return <Card band><UsageDesk /></Card>;
+  return <UsageDesk />;
 }
 
 export function UsageSection() {
