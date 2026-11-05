@@ -868,7 +868,7 @@ describe("Usage desk", () => {
       expect(control?.previousElementSibling?.className, "and wrap before they push it").toMatch(/\bmin-w-0\b.*\bflex-1\b.*\bflex-wrap\b/);
       expect(node.querySelector("[data-account-name]")?.className).toMatch(/\bmin-w-0\b/);
       // A's picker button keeps its own one-line name.
-      if (layout === "B") expect(node.querySelector("[data-account-name]")?.className, "a 24-character nickname with no space wraps instead of running under Use").toMatch(/\[overflow-wrap:anywhere\]/);
+      if (layout === "B") expect(node.querySelector("[data-account-name]")?.className, "a 24-character nickname with no space wraps instead of running under Use, and a Korean name wraps between words").toMatch(/\bbreak-keep\b.*\[overflow-wrap:anywhere\]/);
       const names = node.querySelector("button[data-bot-count]");
       if (names) {
         expect(names.getAttribute("aria-expanded")).toBe("false");

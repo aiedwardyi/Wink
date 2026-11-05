@@ -204,7 +204,7 @@ function Head({ account, runs, name, control, t }: { account: UsageBoardAccount;
     <>
       <div data-account-head="" className="flex min-h-[26px] min-w-0 items-start gap-3">
         <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 leading-[26px]">
-          {name ?? <span data-account-name="" className="min-w-0 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{account.name}</span>}
+          {name ?? <span data-account-name="" className="min-w-0 break-keep text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{account.name}</span>}
           <span data-account-who="" className="flex items-baseline gap-1 whitespace-nowrap text-[12px] text-ink-secondary">
             {names.length > 0
               ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); afterFold(id, () => setOpen(!open)); }}
