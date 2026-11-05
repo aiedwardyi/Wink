@@ -2577,9 +2577,11 @@ export function useEngineLoginRefresh(waiting: boolean, onRefresh: (instances: I
       const version = store?.instancesVersion.current;
       try {
         const { instances } = await api("/api/instances");
-        if (!active || version !== store?.instancesVersion.current) return;
-        store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
-        refreshRef.current(instances);
+        // A reply older than a live frame is dropped, but the poll goes on: only it ends a failed or cancelled sign-in.
+        if (active && version === store?.instancesVersion.current) {
+          store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
+          refreshRef.current(instances);
+        }
       } catch {}
       if (active) timer = setTimeout(refreshInstances, 2000);
     };

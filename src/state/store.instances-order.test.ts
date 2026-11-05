@@ -78,7 +78,10 @@ it("ignores an older sign-in poll reply after a newer live frame", async () => {
   await act(async () => finish(Response.json({ instances: [instance(true)] })));
   expect(store.state.instances[0]?.accountMain, "newer Main survives the sign-in poll").toBe(false);
   expect(polled, "a stale sign-in callback is discarded too").not.toHaveBeenCalled();
-  const reads = fetchMock.mock.calls.length;
+  const reads = () => fetchMock.mock.calls.filter(([url]) => url === "/api/instances").length;
+  expect(reads()).toBe(1);
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-  expect(fetchMock.mock.calls).toHaveLength(reads);
+  expect(reads(), "the poll goes on while sign-in waits").toBe(2);
+  await act(async () => finish(Response.json({ instances: [instance(false)] })));
+  expect(polled, "the next current reply reaches the sign-in callback").toHaveBeenCalledOnce();
 });
