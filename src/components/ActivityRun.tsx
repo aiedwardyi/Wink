@@ -3,7 +3,7 @@
 // Collapsed by default. A run stays open once you open it, and search can
 // force it open so a hit is not stuck behind the fold. A failure shows as a
 // quiet cross beside the summary; the row itself never goes red.
-import { memo, useEffect, useState } from "react";
+import { Fragment, memo, useEffect, useState } from "react";
 import { Bot, ChevronDown, Check, FileText, Globe, Loader2, Pencil, Search, SquareTerminal, Wrench, X } from "lucide-react";
 import type { Message } from "@/state/store";
 import { classifyServerNotice, describeRun, isCommsNotice, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
@@ -37,8 +37,14 @@ export function approvalHover(notices: LinkedApproval[] | undefined, t: Translat
   return notices.map((notice) => t(APPROVAL_WORD[notice.label])).join(" · ");
 }
 
+export function CommsNotice({ text }: { text: string }) {
+  return text.split(/(?<=\.) /).map((sentence, index) => (
+    <Fragment key={index}>{index > 0 && " "}<span className="inline-block whitespace-nowrap">{sentence}</span></Fragment>
+  ));
+}
+
 function TermNotice({ text, failed, comms = false }: { text: string; failed: boolean; comms?: boolean }) {
-  return <div className="term-notice" data-term-notice={failed ? "failed" : "ok"} style={comms ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>{text}</div>;
+  return <div className="term-notice" data-term-notice={failed ? "failed" : "ok"} style={comms ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>{comms ? <CommsNotice text={text} /> : text}</div>;
 }
 
 /** One step inside an open run. A running step ticks its elapsed time, then

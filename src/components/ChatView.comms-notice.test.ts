@@ -4,9 +4,10 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
-import { StoreProvider, type Bot, type Message } from "@/state/store";
+import { StoreProvider, type Bot, type Group, type Message } from "@/state/store";
 
 import { ChatView } from "./ChatView";
+import { Transcript } from "./GroupView";
 
 class FakeEventSource {
   onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
@@ -29,7 +30,7 @@ const thread: Message[] = [
   notice("n1", PAUSED, 3),
 ];
 
-async function mount(messages: Message[]) {
+async function mount(messages: Message[], channel = false) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
@@ -42,7 +43,12 @@ async function mount(messages: Message[]) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(createElement(StoreProvider, null, createElement(ChatView, { bot: bot(messages) }))));
+  const group: Group = { id: "channel", threadId: "channel-thread", name: "Channel", memberIds: [], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1, messages };
+  const view = channel ? createElement(Transcript, {
+    group, members: [], messages, transcript: messages, streamingMessage: null, dock: null,
+    onReply: () => undefined, onMessageMenu: () => undefined, workers: [],
+  }) : createElement(ChatView, { bot: bot(messages) });
+  await act(async () => root.render(createElement(StoreProvider, null, view)));
   return { host, unmount: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
@@ -61,6 +67,28 @@ afterEach(() => {
 });
 
 describe("ChatView bots-paused notices", () => {
+  const sentenceCases = ["github-dimmed", "terminal"].flatMap((skin) =>
+    (["en", "ko"] as const).flatMap((locale) =>
+      [false, true].flatMap((channel) => [PAUSED, UNAVAILABLE].map((name) => ({ skin, locale, channel, name }))),
+    ),
+  );
+
+  it.each(sentenceCases)("keeps each notice sentence unbroken ($skin, $locale, channel=$channel, $name)", async ({ skin, locale, channel, name }) => {
+    document.documentElement.dataset.skin = skin;
+    applyLocale(locale);
+    const view = await mount([notice("n1", name, 1)], channel);
+    try {
+      const sentences = [...view.host.querySelectorAll(".inline-block.whitespace-nowrap")].filter((el) => el.textContent?.endsWith("."));
+      expect(sentences.map((el) => el.textContent)).toEqual(locale === "en" ? name.split(/(?<=\.) /) : [
+        name === PAUSED ? "봇 메시지 한도에 도달했어요." : "봇 메시지가 일시 중지됐어요.",
+        "메시지를 보내면 한도가 초기화돼요.",
+      ]);
+      expect(sentences[0]?.parentElement?.textContent).toBe(sentences.map((el) => el.textContent).join(" "));
+    } finally {
+      await view.unmount();
+    }
+  });
+
   const cases = [
     { skin: "github-dimmed", locale: "en", text: PAUSED },
     { skin: "github-dimmed", locale: "ko", text: "봇 메시지 한도에 도달했어요. 메시지를 보내면 한도가 초기화돼요." },

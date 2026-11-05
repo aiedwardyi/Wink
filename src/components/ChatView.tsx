@@ -83,7 +83,7 @@ import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from 
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
-import { ActivityRun, ActivityStep, approvalHover } from "./ActivityRun";
+import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -312,7 +312,7 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
           <Check size={13} className="shrink-0 text-success" />
         )}
         <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"} style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>
-          {localizeServerLine(tool.name, t)}
+          {isCommsNotice(tool.name) ? <CommsNotice text={localizeServerLine(tool.name, t)} /> : localizeServerLine(tool.name, t)}
           {tool.summary && ` ${tool.summary}`}
         </span>
       </div>

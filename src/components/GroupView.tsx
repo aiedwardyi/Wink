@@ -60,7 +60,7 @@ import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
 import { nextBulletin } from "@/lib/room-bulletin";
-import { ActivityRun, ActivityStep, approvalHover } from "./ActivityRun";
+import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
@@ -238,7 +238,7 @@ export function RoomToolChip({
                 ? "min-w-0 max-w-[480px] break-words"
                 : "min-w-0 max-w-[480px] truncate font-mono"}
           >
-            {localizeServerLine(tool.name, t)}
+            {isCommsNotice(tool.name) ? <CommsNotice text={localizeServerLine(tool.name, t)} /> : localizeServerLine(tool.name, t)}
           </span>
         </div>
         {setupAction === "cli" && instance ? (
