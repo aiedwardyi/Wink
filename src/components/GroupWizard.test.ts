@@ -150,6 +150,21 @@ describe("GroupWizard members", () => {
     }
   });
 
+  it("keeps the card inside a short screen: the body scrolls and Create stays in view", async () => {
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => button(host, "+ New bot").click());
+      const card = host.querySelector('[role="dialog"]')!;
+      const scroller = (el: Element) => el.closest(".overflow-y-auto:not(.max-h-64)");
+      expect(card.className).toContain("max-h-full");
+      expect(scroller(nameInputs(host)[0]!)).not.toBeNull();
+      expect(scroller(button(host, "Create"))).toBeNull();
+      expect(scroller(button(host, "Cancel"))).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it.each(["en", "ko"] as const)("creates with a base engine among four Claude and two Codex accounts in %s", async (locale) => {
     applyLocale(locale);
     const bases = [engine("claude", "claudeAgent", "Claude"), engine("codex", "codex", "Codex")];
