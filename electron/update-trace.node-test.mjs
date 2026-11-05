@@ -63,20 +63,37 @@ test("new-module writer still records when server.log is past 1 MB and leaves it
   }
 });
 
-test("new-module writer keeps only the newest 200 records", async (t) => {
+test("new-module writer rotates into at most two bounded files and keeps the newest record", async (t) => {
   const { appendUpdateTrace } = await import("./update-trace.mjs");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const app = { getPath: () => dir, getVersion: () => facts.version, isPackaged: true };
-  for (let pid = 1; pid <= 450; pid++) {
+  for (let pid = 1; pid <= 1000; pid++) {
     appendUpdateTrace(app, { ...facts, pid, uptime: () => facts.uptime }, "start");
-    assert.ok(traceLines(dir).length <= 200);
+    assert.ok(fs.readdirSync(dir).length <= 2);
   }
+  assert.deepEqual(fs.readdirSync(dir).sort(), ["update-trace.1.log", "update-trace.log"]);
+  assert.ok(fs.readdirSync(dir).every((name) => fs.statSync(path.join(dir, name)).size < 32768 + 300));
+  assert.ok(traceLines(dir).length >= 200);
+  assert.match(traceLines(dir).at(-1), /update start pid=1000 /);
+});
+
+test("new-module writer rotation keeps a record another launch appends mid-rotation", async (t) => {
+  const { appendUpdateTrace } = await import("./update-trace.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "update-trace.log");
+  const app = { getPath: () => dir, getVersion: () => facts.version, isPackaged: true };
+  const runtime = { ...facts, uptime: () => facts.uptime };
+  fs.writeFileSync(file, `[2026-11-05T00:00:00.000Z] update start pid=1 ppid=7 version=1.0.230 packaged=1 uptime=0.100 updated=0 forcerun=0 otherArgs=0\n`.repeat(400));
+  let raced = false;
+  const other = () => { if (!raced) { raced = true; fs.appendFileSync(file, "[2026-11-05T00:00:01.000Z] update lock lost pid=999 ppid=7 version=1.0.230 packaged=1 uptime=0.100 updated=0 forcerun=0 otherArgs=0\n"); } };
+  const io = { ...fs, statSync: (target) => { const stat = fs.statSync(target); other(); return stat; }, readFileSync: (target, encoding) => { const text = fs.readFileSync(target, encoding); other(); return text; } };
+  appendUpdateTrace(app, runtime, "lock won", io);
   const lines = traceLines(dir);
-  assert.equal(lines.length, 200);
-  assert.match(lines[0], /update start pid=251 /);
-  assert.match(lines[199], /update start pid=450 /);
-  assert.ok(fs.readdirSync(dir).every((name) => fs.statSync(path.join(dir, name)).size < 200 * 300));
+  assert.ok(raced);
+  assert.equal(lines.filter((line) => line.includes("pid=999")).length, 1);
+  assert.equal(lines.filter((line) => line.includes("update lock won pid=42")).length, 1);
 });
 
 test("new-module writer swallows filesystem and app lookup failures", async () => {
@@ -84,12 +101,12 @@ test("new-module writer swallows filesystem and app lookup failures", async () =
   const app = { getPath: () => "fake logs", getVersion: () => facts.version, isPackaged: true };
   const runtime = { ...facts, uptime: () => facts.uptime };
   for (const code of ["ENOENT", "EACCES", "EBUSY", "ENOSPC"]) {
-    for (const method of ["mkdirSync", "appendFileSync", "readFileSync", "writeFileSync"]) {
+    for (const method of ["mkdirSync", "statSync", "renameSync", "appendFileSync"]) {
       let writes = 0;
-      const io = { mkdirSync() {}, appendFileSync() { writes++; }, readFileSync: () => "line\n".repeat(201), writeFileSync() {} };
+      const io = { mkdirSync() {}, statSync: () => ({ size: 1048576 }), renameSync() {}, appendFileSync() { writes++; } };
       io[method] = () => { throw Object.assign(new Error(code), { code }); };
       assert.doesNotThrow(() => appendUpdateTrace(app, runtime, "start", io));
-      assert.equal(writes, method === "readFileSync" || method === "writeFileSync" ? 1 : 0);
+      assert.equal(writes, method === "statSync" || method === "renameSync" ? 1 : 0);
     }
   }
   assert.doesNotThrow(() => appendUpdateTrace({ getPath() { throw new Error("lookup"); } }, runtime, "start"));

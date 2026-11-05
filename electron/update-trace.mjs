@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const MAX_RECORDS = 200;
+const MAX_BYTES = 32768;
 
 export function formatUpdateTrace(event, { pid, ppid, version, packaged, uptime, argv }) {
   if (!["start", "lock won", "lock lost"].includes(event)) return null;
@@ -22,8 +22,8 @@ export function appendUpdateTrace(app, runtime, event, io = fs) {
     const text = formatUpdateTrace(event, { pid: runtime.pid, ppid: runtime.ppid, version: app.getVersion(), packaged: app.isPackaged, uptime: runtime.uptime(), argv: runtime.argv });
     if (!text) return;
     io.mkdirSync(logs, { recursive: true });
+    // Rotate by rename so a concurrent launch's append is never truncated away.
+    try { if (io.statSync(file).size > MAX_BYTES) io.renameSync(file, path.join(logs, "update-trace.1.log")); } catch {}
     io.appendFileSync(file, `[${new Date().toISOString()}] ${text}\n`, "utf8");
-    const lines = io.readFileSync(file, "utf8").split("\n").filter(Boolean);
-    if (lines.length > MAX_RECORDS) io.writeFileSync(file, `${lines.slice(-MAX_RECORDS).join("\n")}\n`, "utf8");
   } catch {}
 }
