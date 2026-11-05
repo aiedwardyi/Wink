@@ -7,8 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { AccountLifecycle } from "./account-lifecycle.ts";
 import { AccountNameError, createAccountNames, type AccountNames } from "./account-names.ts";
 import { createAccountRoutes } from "./account-routes.ts";
+import { AccountService } from "./accounts.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
+import { createUsageBoard } from "./usage-board.ts";
+import { createUsageHistory } from "./usage-history.ts";
 
 function fixture(withNames = true, store?: AccountNames) {
   const rows = [
@@ -41,6 +44,63 @@ function fixture(withNames = true, store?: AccountNames) {
 }
 
 describe("account names routes", () => {
+  it.each(["claude", "codex"])("keeps saved %s nicknames through board, usage, sign-in and restart refreshes", async (engine) => {
+    const dir = join(DATA_DIR, `name-refresh-${engine}`);
+    const driverKind = engine === "claude" ? "claudeAgent" : "codex";
+    const accounts = new AccountService(dir, () => ({ [engine]: { driver: driverKind } }));
+    const managed = await accounts.add(engine);
+    await accounts.identify(managed.id, "managed-login@example.invalid");
+    let names = createAccountNames(dir);
+    names.sync(accounts.list());
+    const board = createUsageBoard({
+      accounts: { list: () => accounts.list().map((row) => ({ ...row, status: { state: "available", authenticated: true,
+        account: `${row.existing ? "base" : "managed"}-login@example.invalid` } })), defaultFor: (base) => accounts.defaultFor(base), drains: {} },
+      names: { get: (id) => names.get(id) }, rateLimits: new Map(), bots: () => [],
+      history: createUsageHistory(dir, { schedule: () => {} }), runs: async () => ({ known: true, runs: [] }),
+    });
+    const wire = () => createAccountRoutes({ accounts } as unknown as AccountLifecycle,
+      { describeCached: async () => [], accountBlocked: () => false } as unknown as ProviderRegistry,
+      { names, onNamesChanged: () => { board.touch(); } });
+    let routes = wire();
+    const request = async (method: string, id?: string, nickname?: string | null) => {
+      const req = Readable.from(id ? [JSON.stringify({ nickname })] : []) as IncomingMessage;
+      req.headers = { "content-type": "application/json" };
+      let data: any;
+      const res = { writeHead: (status: number) => { expect(status).toBe(200); }, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
+      expect(await routes(req, res, method, id ? `/api/accounts/${id}/name` : "/api/accounts")).toBe(true);
+      return data;
+    };
+    const first = await board.read();
+    for (const [id, nickname] of [[engine, "base-login"], [managed.id, "managed-login"]]) {
+      expect(await request("POST", id, nickname)).toMatchObject({ id, nickname, name: nickname });
+    }
+    const check = async (cursor?: string) => {
+      const value = await board.read(cursor);
+      for (const [id, nickname] of [[engine, "base-login"], [managed.id, "managed-login"]]) {
+        expect(value.engines[0].accounts.find((row) => row.id === id)).toMatchObject({ nickname, name: nickname });
+        expect((await request("GET")).accounts.find((row: { id: string }) => row.id === id)).toMatchObject({ nickname, name: nickname });
+      }
+      expect(JSON.stringify(value)).not.toContain("@example.invalid");
+      return value.cursor;
+    };
+    const cursor = await check(first.cursor);
+    board.recordReport(engine, { observedAt: new Date().toISOString(), windows: [] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await check(cursor);
+    await accounts.identify(managed.id, "refreshed-login@example.invalid", true);
+    names.sync(accounts.list());
+    board.touch();
+    await check();
+    names = createAccountNames(dir);
+    names.sync(accounts.list());
+    routes = wire();
+    await check();
+    await request("POST", engine, "작업실");
+    expect((await board.read()).engines[0].accounts[0]).toMatchObject({ nickname: "작업실", name: "작업실" });
+    await request("POST", engine, null);
+    expect((await board.read()).engines[0].accounts[0]).toMatchObject({ nickname: null, name: `${engine === "claude" ? "Claude" : "Codex"} 1` });
+  });
+
   it("lists number, nickname and name on every account row", async () => {
     const f = fixture();
     const result = await f.request("GET");
