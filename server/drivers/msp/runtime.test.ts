@@ -1,6 +1,7 @@
 // MSP driver contract tests, run against the scripted fake MSP host in
 // server/testing/fake-msp-cli.ts: session/start carries the model, text
 // folds into canonical events, interrupts and crashes settle cleanly.
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
@@ -993,6 +994,8 @@ describe("MSP warm host (recorded transport)", () => {
   let recorder: EventRecorder;
   let account: string | undefined;
   let authed: () => boolean | Promise<boolean>;
+  let accountCalls: number;
+  const labelHash = (label: string) => createHash("sha256").update(label).digest("hex");
   let gate: Gate;
   let answerInterrupt: boolean;
 
@@ -1067,12 +1070,15 @@ describe("MSP warm host (recorded transport)", () => {
       nativeSource: "muse.msp",
       loginNote: "sign in",
       isAuthenticated: () => authed(),
-      account: () => account,
+      account: () => {
+        accountCalls += 1;
+        return account;
+      },
       requireAuthenticationBeforeSpawn: true,
       warmPool: pool,
     } as Parameters<typeof createMspDriver>[0]);
     instance = await Driver.create({
-      instanceId: "recorded-muse", displayName: "Meta Muse", environment: {}, enabled: true,
+      instanceId: "recorded-muse", incarnation: "muse#7", displayName: "Meta Muse", environment: {}, enabled: true,
       config: { cli: "recorded-muse", fullAuto: false, workspace: "<workspace>" },
     });
     recorder = recordEvents(instance.adapter);
@@ -1091,6 +1097,7 @@ describe("MSP warm host (recorded transport)", () => {
   beforeEach(() => {
     peers = [];
     account = "Recorded Name";
+    accountCalls = 0;
     authed = () => true;
     gate = () => {};
     answerInterrupt = true;
@@ -1147,7 +1154,7 @@ describe("MSP warm host (recorded transport)", () => {
     effort: "high",
     cwd: "<workspace>",
     depth: 0,
-    captured: { generation: pool.generation({ engine: "museAgent", instanceId: "recorded-muse" }), incarnation: "planner", identity: "" },
+    captured: { generation: pool.generation({ engine: "museAgent", instanceId: "recorded-muse" }), incarnation: "muse#7", identity: account ? labelHash(account) : "" },
     ...input,
   });
   const smallerPc = () => {
@@ -1466,5 +1473,94 @@ describe("MSP warm host (recorded transport)", () => {
     expect(Date.now() - closedAt).toBeLessThan(2_000);
     await completed(await send({ resumeCursor: cursorOf(first) }));
     expect(peers).toHaveLength(2);
+  });
+  it("cachedCapture returns the probe's label hash and the registry incarnation", async () => {
+    await start();
+    expect(instance.cachedCapture!()).toBeNull();
+    await instance.snapshot();
+    const calls = accountCalls;
+    const captured = instance.cachedCapture!();
+    expect(captured).toEqual({
+      generation: pool.generation({ engine: "museAgent", instanceId: "recorded-muse" }),
+      incarnation: "muse#7",
+      identity: labelHash("Recorded Name"),
+    });
+    instance.cachedCapture!();
+    instance.cachedCapture!();
+    expect(accountCalls).toBe(calls);
+  });
+
+  it("no label gives no cached capture and today's handshake host", async () => {
+    account = undefined;
+    await start();
+    await instance.snapshot();
+    expect(instance.cachedCapture!()).toBeNull();
+    await instance.prepare!();
+    expect(methods(peers[0])).toEqual(["initialize", "initialized"]);
+    const turnId = await send();
+    expect(await completed(turnId)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(stagesOf(turnId)).toEqual(["setup", "prompt-sent", "finishing"]);
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("a barrier, a signed-out snapshot and dispose clear it", async () => {
+    await start();
+    await instance.snapshot();
+    expect(instance.cachedCapture!()).not.toBeNull();
+    pool.barrier({ instanceId: "recorded-muse" }, "test")();
+    expect(instance.cachedCapture!()).toBeNull();
+    await instance.snapshot();
+    expect(instance.cachedCapture!()?.generation).toBe(pool.generation({ engine: "museAgent", instanceId: "recorded-muse" }));
+    authed = () => false;
+    await instance.snapshot();
+    expect(instance.cachedCapture!()).toBeNull();
+    authed = () => true;
+    await instance.snapshot();
+    expect(instance.cachedCapture!()).not.toBeNull();
+    await instance.dispose();
+    expect(instance.cachedCapture!()).toBeNull();
+  });
+
+  it("prepare declines a shape from another incarnation or identity", async () => {
+    await start();
+    await instance.snapshot();
+    const captured = instance.cachedCapture!()!;
+    await instance.prepare!(shapeFor({ captured: { ...captured, incarnation: "muse#6" } }));
+    await instance.prepare!(shapeFor({ captured: { ...captured, identity: labelHash("Other Name") } }));
+    await instance.prepare!(shapeFor({ captured: { ...captured, generation: captured.generation + 1 } }));
+    expect(peers).toHaveLength(0);
+    await instance.prepare!(shapeFor({ captured }));
+    expect(peers).toHaveLength(1);
+    expect(kept()).toBe(1);
+  });
+
+  it("a registry-style invalidate drops the host lease", async () => {
+    await start();
+    const turnId = await send();
+    await completed(turnId);
+    expect(kept()).toBe(1);
+    pool.invalidate({ instanceId: "recorded-muse", incarnation: "muse#6" }, "reload");
+    expect(kept()).toBe(1);
+    pool.invalidate({ instanceId: "recorded-muse", incarnation: "muse#7" }, "reload");
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("the label and its hash reach no log or event", async () => {
+    const logs = (["log", "info", "warn", "error", "debug"] as const).map((level) => vi.spyOn(console, level).mockImplementation(() => {}));
+    account = "Secret Label Name";
+    await start();
+    const snapshot = await instance.snapshot();
+    await instance.prepare!(shapeFor({ resumeCursor: "cursor-1", captured: instance.cachedCapture!()! }));
+    const turnId = await send({ resumeCursor: "cursor-1" });
+    await completed(turnId);
+    await instance.prepare!();
+    const hash = labelHash(account);
+    const seen = JSON.stringify([recorder.events, logs.flatMap((spy) => spy.mock.calls)]);
+    expect(seen).not.toContain(account);
+    expect(seen).not.toContain(hash);
+    expect(JSON.stringify(snapshot)).not.toContain(hash);
   });
 });

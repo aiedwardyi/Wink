@@ -361,7 +361,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         setupError?: unknown;
       }
       type Request = (method: string, params: unknown, timeoutMs: number) => Promise<any>;
-      const incarnation = newId();
+      const incarnation = input.incarnation ?? newId();
       const pool = support.warmPool ?? sharedWarmPool;
       const hosts = new WeakMap<Lease, Host>();
       const preparing = new WeakMap<Lease, Promise<boolean>>();
@@ -371,15 +371,15 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       let prepares = 0;
       let checked = 0;
       const keyFor = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
-      const readIdentity = () => {
-        const label = support.account?.(childEnv());
-        return label ? createHash("sha256").update(label).digest("hex") : "";
+      const hashOf = (label: string | undefined) => (label ? createHash("sha256").update(label).digest("hex") : "");
+      const readIdentity = () => hashOf(support.account?.(childEnv()));
+      const generationNow = () => input.account?.generation ?? pool.generation(keyFor(""));
+      const capture = (id = identity): Captured => ({ generation: generationNow(), incarnation, identity: id });
+      // The last verified sign-in, for cachedCapture only; never feeds the take rule.
+      let lastCapture: Captured | null = null;
+      const remember = (seen: string) => {
+        lastCapture = seen ? capture(seen) : null;
       };
-      const capture = (id = identity): Captured => ({
-        generation: input.account?.generation ?? pool.generation(keyFor("")),
-        incarnation,
-        identity: id,
-      });
       const eligibility = (
         shape: Pick<SendTurnInput, "threadId" | "model" | "cwd" | "integrations">,
         captured: Captured,
@@ -565,9 +565,8 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           host.ttl.unref?.();
         }
       };
-      const prepareSession = async (shape: PrepareTurn) => {
-        const captured = capture();
-        if (shape.captured.generation !== captured.generation || active.has(shape.threadId)) return;
+      const prepareSession = async (shape: PrepareTurn, captured: Captured) => {
+        if (active.has(shape.threadId)) return;
         const lease = pool.reserve(keyFor(shape.threadId), warmFingerprint(eligibility(shape, captured)), captured, "speculative");
         if (typeof lease === "string") return;
         const cwd = shape.cwd ?? config.workspace ?? homedir();
@@ -812,6 +811,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           const sessionId = state.sessionId;
           if (interrupted || recovered || disposed || !sessionId || !turnHost.alive() || !turnHost.identity) return false;
           const seen = readIdentity();
+          remember(seen);
           const now = capture(seen);
           if (seen !== turnHost.identity || now.generation !== captured.generation) return false;
           for (const off of bound.splice(0)) off();
@@ -1428,12 +1428,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             }
             const version = await probe(effectiveCli(), env);
             const authenticated = await support.isAuthenticated(env, config);
-            const ready: ProviderSnapshot = {
-              state: "available",
-              version,
-              authenticated,
-              account: authenticated ? support.account?.(env) : undefined,
-            };
+            const label = authenticated ? support.account?.(env) : undefined;
+            remember(hashOf(label));
+            const ready: ProviderSnapshot = { state: "available", version, authenticated, account: label };
             if (!gated) lastSnapshot = ready;
             return ready;
           }),
@@ -1447,6 +1444,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           const env = childEnv();
           try {
             if (support.requireAuthenticationBeforeSpawn && !(await support.isAuthenticated(env, config))) {
+              lastCapture = null;
               pool.invalidate({ instanceId, incarnation }, "signed out");
               return;
             }
@@ -1457,15 +1455,25 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (disposed) return;
           // Off the Send path: a sign-in change drops every host this instance holds.
           const seen = readIdentity();
+          remember(seen);
           if (seen !== identity) {
             identity = seen;
             pool.invalidate({ instanceId, incarnation }, "identity changed");
           }
           checked = Math.max(checked, round);
-          await (shape && identity ? prepareSession(shape) : prepareHandshake());
+          const fresh = capture();
+          // A shape captured for another sign-in, generation or incarnation is stale.
+          if (shape && (shape.captured.generation !== fresh.generation || shape.captured.identity !== fresh.identity
+            || shape.captured.incarnation !== fresh.incarnation)) return;
+          await (shape && identity ? prepareSession(shape, fresh) : prepareHandshake());
         },
+        cachedCapture: () =>
+          input.enabled && !disposed && lastCapture && lastCapture.identity && lastCapture.generation === generationNow()
+            ? { ...lastCapture }
+            : null,
         dispose: async () => {
           disposed = true;
+          lastCapture = null;
           text?.dispose();
           pool.invalidate({ instanceId, incarnation }, "dispose");
           for (const child of [...children]) {
