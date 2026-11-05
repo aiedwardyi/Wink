@@ -45,13 +45,37 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function touch(type: string, points: Array<[number, number]>) {
+function touch(type: string, points: Array<[number, number]>, time?: number) {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "touches", { value: points.map(([clientX, clientY]) => ({ clientX, clientY })) });
+  if (time !== undefined) Object.defineProperty(event, "timeStamp", { value: time });
   act(() => void host.querySelector("svg")!.dispatchEvent(event));
 }
 
 describe("useChartZoom", () => {
+  it("does not count the last pinch finger lifting as a tap", () => {
+    touch("touchstart", [[100, 100], [200, 100]], 1000);
+    touch("touchmove", [[50, 100], [250, 100]], 1020);
+    touch("touchend", [[250, 100]], 1040);
+    expect(host.querySelector("svg")!.getAttribute("data-scale")).toBe("2");
+    touch("touchend", [], 1060);
+    touch("touchstart", [[250, 100]], 1100);
+    touch("touchend", [], 1120);
+    expect(host.querySelector("svg")!.getAttribute("data-scale")).toBe("2");
+  });
+
+  it("keeps panning with the remaining pinch finger", () => {
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", [[250, 100]]);
+    const dot = host.querySelector<SVGGElement>("[data-mi-point]")!;
+    expect(dot.style.transform).toBe("translate(250px, 100px)");
+    touch("touchmove", [[210, 100]]);
+    touch("touchend", []);
+    expect(dot.style.transform).toBe("translate(210px, 100px)");
+    expect(host.querySelector("svg")!.getAttribute("data-scale")).toBe("2");
+  });
+
   it("coalesces pinch frames without React layout and keeps text and marks at their size", () => {
     const before = renders;
     touch("touchstart", [[100, 100], [200, 100]]);

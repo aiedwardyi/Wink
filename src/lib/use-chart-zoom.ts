@@ -3,7 +3,7 @@ import { FULL_ZOOM, doubleTapZoom, inZoom, panZoom, zoomAt, type ChartSpot, type
 import { PHONE_QUERY, SWIPE_MOTION_MS, SWIPE_SLOP, SWIPE_SPRING, hapticTick, lockAxis, reducedMotion, swipeBlocked, swipeStep, type SwipeAxis } from "./phone-swipe";
 
 type Plot = { left: number; right: number; top: number; bottom: number };
-type Drag = { start: ChartSpot; last: ChartSpot; time: number; velocity: number; axis: SwipeAxis; pan: boolean; blocked: boolean };
+type Drag = { start: ChartSpot; last: ChartSpot; time: number; velocity: number; axis: SwipeAxis; pan: boolean; blocked: boolean; afterPinch?: boolean };
 type Pinch = { zoom: ChartZoom; distance: number; center: ChartSpot };
 
 export function useChartZoom(
@@ -155,14 +155,14 @@ export function useChartZoom(
         settle();
         const remaining = e.touches[0];
         const spot = remaining && point(remaining);
-        drag = spot ? { start: spot, last: spot, time: e.timeStamp, velocity: 0, axis: null, pan: true, blocked: true } : null;
+        drag = spot ? { start: spot, last: spot, time: e.timeStamp, velocity: 0, axis: null, pan: true, blocked: true, afterPinch: true } : null;
         return;
       }
       if (!drag || e.touches.length) return;
       const ended = drag;
       drag = null;
       settle();
-      if (ended.axis === null && distance(ended.start, ended.last) < SWIPE_SLOP) {
+      if (!ended.afterPinch && ended.axis === null && distance(ended.start, ended.last) < SWIPE_SLOP) {
         if (tap && e.timeStamp - tap.time < 300 && distance(tap.point, ended.last) < 24) {
           if (e.cancelable) e.preventDefault();
           suppress.current = true;

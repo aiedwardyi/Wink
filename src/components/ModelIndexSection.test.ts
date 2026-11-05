@@ -715,9 +715,10 @@ describe("full screen chart", () => {
     expect(tab()).toBe(locale === "en" ? "Coding" : "코딩");
   });
 
-  const touch = (type: string, points: Array<[number, number]>) => {
+  const touch = (type: string, points: Array<[number, number]>, time?: number) => {
     const event = new Event(type, { bubbles: true, cancelable: true });
     Object.defineProperty(event, "touches", { value: points.map(([clientX, clientY], identifier) => ({ clientX, clientY, identifier })) });
+    if (time !== undefined) Object.defineProperty(event, "timeStamp", { value: time });
     act(() => svg().dispatchEvent(event));
   };
   const swipe = (from: number, to: number) => {
@@ -858,5 +859,24 @@ describe("full screen chart", () => {
     touch("touchend", []);
     act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x! + 3, clientY: y! })));
     expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+  });
+
+  it("opens a dot tooltip after staggered pinch lifts without resetting zoom", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => {
+      const x = Number(el.style.transform.match(/-?[\d.]+/)?.[0]);
+      return el.style.opacity === "1" && x > 200 && x < 500;
+    })!;
+    const [x, y] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number) as [number, number];
+    touch("touchstart", [[x - 100, y], [x, y]], 1000);
+    touch("touchmove", [[x - 150, y], [x + 50, y]], 1020);
+    touch("touchend", [[x + 50, y]], 1040);
+    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    touch("touchend", [], 1060);
+    touch("touchstart", [[x + 50, y]], 1100);
+    touch("touchend", [], 1120);
+    act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x + 50, clientY: y })));
+    expect({ zoom: svg().getAttribute("data-mi-zoom"), tooltip: Boolean(host.querySelector('[role="tooltip"]')) }).toEqual({ zoom: "2", tooltip: true });
   });
 });
