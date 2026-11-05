@@ -1618,8 +1618,8 @@ describe("tool line folding", () => {
     postCommsNotice(store, "paused", `root-context-${room}`, ["t1"]);
     postCommsNotice(store, "unavailable", `missing-context-${room}`, ["t1"]);
     expect(notices.map((row) => row.tool?.name)).toEqual([
-      "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.",
-      "Bots paused: send a message to keep them going.",
+      "Bot messaging limit reached. Send a message to reset it.",
+      "Bot messaging paused. Send a message to reset it.",
     ]);
     const result = await prepareModelContext({
       messages: [message("m1", "check the package"), ...notices, message("m9", "done", { role: "bot" })],
@@ -1630,7 +1630,7 @@ describe("tool line folding", () => {
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
     expect(result.transcript).toHaveLength(2);
-    expect(JSON.stringify(result.transcript)).not.toContain("Bots paused");
+    expect(JSON.stringify(result.transcript)).not.toContain("Bot messaging");
   });
 
   it("keeps two bots' tool runs apart in a room", async () => {

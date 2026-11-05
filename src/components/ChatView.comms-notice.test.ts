@@ -14,8 +14,8 @@ class FakeEventSource {
 }
 
 // the row server/comms-notice.ts appends: no tool.ok, no comm, so it stays out of model context
-const PAUSED = "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.";
-const UNAVAILABLE = "Bots paused: send a message to keep them going.";
+const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
+const UNAVAILABLE = "Bot messaging paused. Send a message to reset it.";
 const notice = (id: string, name: string, at: number): Message => ({ id, at, role: "bot", kind: "activity", tool: { name } });
 
 const bot = (messages: Message[]): Bot => ({
@@ -63,9 +63,9 @@ afterEach(() => {
 describe("ChatView bots-paused notices", () => {
   const cases = [
     { skin: "github-dimmed", locale: "en", text: PAUSED },
-    { skin: "github-dimmed", locale: "ko", text: "봇 대화 일시 중지: 이 요청의 봇 턴 한도 24개에 도달했어요. 계속하려면 메시지를 보내세요." },
+    { skin: "github-dimmed", locale: "ko", text: "봇 메시지 한도에 도달했어요. 메시지를 보내면 한도가 초기화돼요." },
     { skin: "terminal", locale: "en", text: PAUSED },
-    { skin: "terminal", locale: "ko", text: "봇 대화 일시 중지: 이 요청의 봇 턴 한도 24개에 도달했어요. 계속하려면 메시지를 보내세요." },
+    { skin: "terminal", locale: "ko", text: "봇 메시지 한도에 도달했어요. 메시지를 보내면 한도가 초기화돼요." },
   ] as const;
 
   it.each(cases)("draws the real row as a finished plain line ($skin, $locale)", async ({ skin, locale, text }) => {

@@ -214,7 +214,7 @@ describe("delegated ask-back", () => {
     expect(wake).not.toHaveBeenCalled();
     expect(replyUnwoken).toHaveBeenLastCalledWith(sender.id, "wake budget spent");
     expect(replyUnwoken).toHaveBeenCalledTimes(2);
-    const paused = (threadId: string) => store.messagesFor(threadId).filter((row) => row.tool?.name?.startsWith("Bots paused"));
+    const paused = (threadId: string) => store.messagesFor(threadId).filter((row) => row.tool?.name?.startsWith("Bot messaging"));
     expect(paused(sender.threadId)).toHaveLength(1);
     expect(paused(getOrCreateChannel(store, sender, peer).threadId)).toHaveLength(1);
   });

@@ -16,7 +16,7 @@ import { Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 
 const EXHAUSTED = "This request reached its 24 bot turn limit. Finish with what you have; the user can send a message to continue.";
-const PAUSED = "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.";
+const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
 // The branch point still clears its per-turn ask count on turn.completed; replayed here so both builds see a settled turn.
 const settleTurn = (threadId: string) => (budget as unknown as { clearAskBudget?: (id: string) => void }).clearAskBudget?.(threadId);
 
@@ -141,7 +141,7 @@ function human(key = "send-1") {
   startTurn("turn", rootId);
   return rootId;
 }
-const UNAVAILABLE = "Bots paused: send a message to keep them going.";
+const UNAVAILABLE = "Bot messaging paused. Send a message to reset it.";
 const RESERVED = "This request's remaining bot turns are reserved. Collect pending replies before asking again.";
 const WAITING = "You already have 4 teammate messages waiting. Collect those replies first.";
 const lines = (threadId: string | undefined, name = PAUSED) => threadId ? store.messagesFor(threadId).filter((row) => row.tool?.name === name) : [];
@@ -292,7 +292,7 @@ describe("accounting", () => {
     const askBotAndWait = completingAsk();
     expect((await ask(askBotAndWait)).limit).toBe(RESERVED);
     expect(askBotAndWait).not.toHaveBeenCalled();
-    expect(store.messagesFor(from.threadId).some((row) => row.tool?.name?.startsWith("Bots paused"))).toBe(false);
+    expect(store.messagesFor(from.threadId).some((row) => row.tool?.name?.startsWith("Bot messaging"))).toBe(false);
     roots.release(held);
     expect((await ask(askBotAndWait)).limit).toBeUndefined();
   });
@@ -366,7 +366,7 @@ describe("wake admission", () => {
     expect(newer.reservation).not.toBeNull();
     replyRow("task-old", rootId);
     expect(admitPaneWake(store, from.id, from.threadId)).toBeNull();
-    expect(store.messagesFor(from.threadId).some((row) => row.tool?.name?.startsWith("Bots paused"))).toBe(false);
+    expect(store.messagesFor(from.threadId).some((row) => row.tool?.name?.startsWith("Bot messaging"))).toBe(false);
     roots.commit(newer.reservation!);
     expect(left(rootId)).toBe(0);
   });

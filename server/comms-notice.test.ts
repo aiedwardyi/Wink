@@ -5,14 +5,14 @@ import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
 import { Store } from "./store.ts";
 
-const PAUSED = "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.";
-const UNAVAILABLE = "Bots paused: send a message to keep them going.";
+const PAUSED = "Bot messaging limit reached. Send a message to reset it.";
+const UNAVAILABLE = "Bot messaging paused. Send a message to reset it.";
 
 let store: Store;
 let bot: ReturnType<Store["createBot"]>;
 let peer: ReturnType<Store["createBot"]>;
 let key = 0;
-const lines = (threadId: string) => store.messagesFor(threadId).filter((row) => row.tool?.name?.startsWith("Bots paused"));
+const lines = (threadId: string) => store.messagesFor(threadId).filter((row) => row.tool?.name?.startsWith("Bot messaging"));
 
 beforeEach(() => {
   rmSync(DATA_DIR, { recursive: true, force: true });

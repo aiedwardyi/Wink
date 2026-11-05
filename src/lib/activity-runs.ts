@@ -185,16 +185,16 @@ export const SERVER_LINES: ServerLine[] = [
     needles: ["Delegated turn could not start \u2014 "],
   },
   {
-    re: /^Bots paused: this request reached its 24 bot turn limit\. Send a message to keep them going\.$/,
+    re: /^Bot messaging limit reached\. Send a message to reset it\.$/,
     pick: () => ["chat.comms.paused", {}],
     file: "comms-notice.ts",
-    needles: ["Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going."],
+    needles: ["Bot messaging limit reached. Send a message to reset it."],
   },
   {
-    re: /^Bots paused: send a message to keep them going\.$/,
+    re: /^Bot messaging paused\. Send a message to reset it\.$/,
     pick: () => ["chat.comms.unavailable", {}],
     file: "comms-notice.ts",
-    needles: ["Bots paused: send a message to keep them going."],
+    needles: ["Bot messaging paused. Send a message to reset it."],
   },
 ];
 

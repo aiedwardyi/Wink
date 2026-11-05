@@ -8,8 +8,8 @@ export type CommsNotice = "paused" | "unavailable";
 export type NoticeStore = Pick<Store, "appendMessage" | "activePath">;
 
 const NAMES: Record<CommsNotice, string> = {
-  paused: "Bots paused: this request reached its 24 bot turn limit. Send a message to keep them going.",
-  unavailable: "Bots paused: send a message to keep them going.",
+  paused: "Bot messaging limit reached. Send a message to reset it.",
+  unavailable: "Bot messaging paused. Send a message to reset it.",
 };
 
 const isHuman = (row: Message) => row.role === "user" && row.kind === "text" && !row.from;
