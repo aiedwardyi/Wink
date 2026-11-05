@@ -22,6 +22,7 @@ import { AccountPicker } from "./UsageAccounts";
 import { AccountBars, barSlots } from "./UsageBars";
 import { PagedAccounts, type RowSlots } from "./UsagePaged";
 import { USAGE_LAYOUT } from "./usage-layout";
+import { useCappedAccounts } from "./usage-cap";
 import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
 import "./UsageDesk.css";
 
@@ -367,19 +368,20 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
 const SHOW_DESK_HERO = false;
 
 const FOLDS_KEY = "openmausbot.usageFolds.v1";
+const ACCOUNTS_KEY = "openmausbot.usageAccountsOpen.v1";
 const Folds = z.record(z.string(), z.boolean());
 /** Folded engines on this device, kept like the sidebar's folded sections: local only, never synced. */
-function loadFolds(): Record<string, boolean> {
+function loadFolds(key = FOLDS_KEY): Record<string, boolean> {
   try {
-    const parsed = Folds.safeParse(JSON.parse(globalThis.localStorage?.getItem(FOLDS_KEY) ?? "{}"));
+    const parsed = Folds.safeParse(JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}"));
     return parsed.success ? parsed.data : {};
   } catch {
     return {};
   }
 }
-function saveFold(base: string, folded: boolean) {
+function saveFold(base: string, folded: boolean, key = FOLDS_KEY) {
   try {
-    globalThis.localStorage?.setItem(FOLDS_KEY, JSON.stringify({ ...loadFolds(), [base]: folded }));
+    globalThis.localStorage?.setItem(key, JSON.stringify({ ...loadFolds(key), [base]: folded }));
   } catch {
     // Same localStorage failure mode as the sidebar: the fold still applies this session.
   }
@@ -416,6 +418,8 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
     checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} {...slots} />;
+  const capped = useCappedAccounts({ accounts: engine.accounts, checked, t, row,
+    loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
     <div className="flex min-h-5 min-w-0 items-start gap-3">
       <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, () => { saveFold(engine.base, !folded); setFolded(!folded); })}
@@ -432,7 +436,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   return (
     <section data-usage-engine={engine.engine} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
-        : <>{head()}{group(engine.accounts.map((each) => row(each)))}</>}
+        : <>{head()}{group(capped)}</>}
       {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
     </section>
   );

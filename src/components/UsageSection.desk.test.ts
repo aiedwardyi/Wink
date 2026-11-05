@@ -868,6 +868,11 @@ describe("Usage desk", () => {
     claude.accounts.push(...extra);
     server.board = board;
     await mount({ phone: true, locale: "ko", layout });
+    if (layout === "B") {
+      const more = section("claude")?.querySelector("button[data-accounts-cap]");
+      expect(text(more)).toBe("5개 더 보기");
+      await click(more);
+    }
     const rows = [...section("claude")?.querySelectorAll("[data-account-row]") ?? []];
     expect(rows).toHaveLength(8);
     expect(rows[0]?.parentElement?.className).not.toMatch(/\bgrid-cols-2\b/);
