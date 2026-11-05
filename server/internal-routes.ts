@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
 import { z } from "zod";
@@ -9,6 +10,7 @@ import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
+import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
 import { claimOpenAsk, MAX_OPEN_ASKS, releaseOpenAsk } from "./comms-budget.ts";
 import { postRefusalNotice, refusalText } from "./comms-notice.ts";
@@ -457,6 +459,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       } catch (e) {
         return json(res, (e as { status?: number }).status ?? 400, { error: (e as Error).message });
       }
+      const verdict = checkPicture(from, saved.path);
+      if (!verdict.ok) {
+        unlinkSync(saved.path);
+        return json(res, 403, { error: `picture gate: ${verdict.reason}. Run picture-gate check ${body.path}` });
+      }
       const caption = typeof body.caption === "string" ? body.caption.trim().slice(0, 500) : "";
       const message = store.appendMessage(fromThreadId, {
         role: "bot",
@@ -489,7 +496,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, (e as { status?: number }).status ?? 500, { error: (e as Error).message });
       }
       recordKeyUse(DATA_DIR, "openaiImageApiKey", from.id);
-      if (body.show === false) return json(res, 201, { path: generated.path });
+      if (body.show === false || from.hooks?.pictures) return json(res, 201, { path: generated.path });
       // Generation is slow; the conversation may be gone by now.
       const current = connectorThread(from.id, fromThreadId);
       if (!current) return json(res, 201, { path: generated.path, showError: "the conversation is gone" });

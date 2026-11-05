@@ -9,6 +9,7 @@ import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
+import { botHooksSchema } from "./bot-hooks.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
@@ -348,6 +349,11 @@ export function createBotRoutes(deps: BotRouteDeps) {
       if (body.leanStartup !== undefined) {
         if (typeof body.leanStartup !== "boolean") return json(res, 400, { error: "leanStartup must be true or false" });
         patch.leanStartup = body.leanStartup;
+      }
+      if (body.hooks !== undefined) {
+        const hooks = botHooksSchema.nullable().safeParse(body.hooks);
+        if (!hooks.success) return json(res, 400, { error: hooks.error.issues[0]?.message ?? "invalid hooks" });
+        patch.hooks = hooks.data ?? undefined;
       }
       if (body.memoryNotes !== undefined) {
         if (typeof body.memoryNotes !== "boolean") return json(res, 400, { error: "memoryNotes must be true or false" });
