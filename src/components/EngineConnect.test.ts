@@ -75,6 +75,17 @@ afterEach(async () => {
 });
 
 describe("first engine connection", () => {
+  it("shows each engine once with four Claude and two Codex accounts", async () => {
+    const bases = fleet().map((instance) => ({ ...instance, accountOf: instance.instanceId,
+      snapshot: { state: "available" as const, authenticated: true } }));
+    instances = [...bases.flatMap((base, index) => Array.from({ length: index === 0 ? 3 : index === 1 ? 1 : 0 }, (_, account) => ({
+      ...base, instanceId: `acct_00000000-0000-0000-000${index}-${String(account).padStart(12, "0")}`,
+    }))), ...bases];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    expect([...host.querySelectorAll("[data-engine-connect]")].map((row) => row.getAttribute("data-engine-connect")))
+      .toEqual(["claude", "codex", "antigravity", "grok", "muse"]);
+  });
+
   it("leads with Claude and hides the unchanged commands behind Show Commands", async () => {
     await connect();
     expect(host.textContent).toContain("Your bots run on an engine. Most people start with Claude.");
