@@ -1,5 +1,6 @@
 // Draft rows survive failed creates.
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { api, useStore, type Bot } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
@@ -112,11 +113,11 @@ export function GroupWizard({
     });
   };
 
-  return (
+  return createPortal(
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -129,7 +130,7 @@ export function GroupWizard({
         aria-modal={!closing || undefined}
         aria-labelledby="group-wizard-title"
         tabIndex={-1}
-        className="animate-pop-in w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
+        className="animate-pop-in w-full max-w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
       >
         <div id="group-wizard-title" className="mb-3 text-[15px] font-semibold text-ink">{t("groupWizard.title")}</div>
         <input
@@ -183,7 +184,8 @@ export function GroupWizard({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

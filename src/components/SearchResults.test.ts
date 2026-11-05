@@ -128,6 +128,41 @@ describe("SearchResults", () => {
   });
 });
 
+describe("SearchResults row", () => {
+  it("keeps the bot name its room and lets the task shorten first", async () => {
+    const bot = { id: "wink", name: "Wink", color: "blue" as const, messages: [] };
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [bot], groups: [] });
+      if (path.startsWith("/api/search")) return Response.json({ hits: [{
+        threadId: "wink-thread", messageId: "m1", botId: bot.id, name: bot.name, task: "Quarterly launch readiness and design review", role: "bot", kind: "text", at: 1,
+        snippet: "needle here", matchStart: 0, matchLength: 6, onActivePath: true,
+      }] });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(SearchResults, { query: "needle", onLanded: () => {} }))));
+      await act(async () => FakeEventSource.current!.onmessage?.({
+        data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
+        lastEventId: "",
+      }));
+      await vi.waitFor(() => expect(host.textContent).toContain("needle here"));
+      const [name, task] = host.querySelectorAll("[data-search-results] button .items-baseline > span");
+      expect(name!.textContent).toBe("Wink");
+      expect(task!.textContent).toContain("Quarterly launch readiness");
+      expect(name!.className.split(" ")).toContain("shrink-0");
+      expect(task!.className.split(" ")).not.toContain("shrink-0");
+      expect(task!.className.split(" ")).toContain("truncate");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
 describe("SearchResults in Korean", () => {
   async function mountSearch(search: () => Response) {
     applyLocale("ko");

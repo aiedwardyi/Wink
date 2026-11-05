@@ -66,6 +66,8 @@ function StackedMauses({ members, density }: { members: Bot[]; density: SidebarD
   }
   const shown = members.slice(0, 3);
   const extra = members.length - shown.length;
+  // Three faces at 30 px with this overlap are 66 px wide, past the 48 px slot.
+  const face = members.length === 3 ? 24 : 30;
   return (
     <div
       data-sidebar-group-avatar-slot
@@ -73,7 +75,7 @@ function StackedMauses({ members, density }: { members: Bot[]; density: SidebarD
     >
       <div className="flex items-center -space-x-3">
         {shown.map((b) => (
-          <BotAvatar key={b.id} bot={b} state="happy" size={30} animated={false} />
+          <BotAvatar key={b.id} bot={b} state="happy" size={face} animated={false} />
         ))}
         {extra > 0 && (
           <span
