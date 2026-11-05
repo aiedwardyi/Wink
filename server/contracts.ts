@@ -430,6 +430,8 @@ export interface ModelCatalog {
 export interface DriverCreateInput<Config> {
   account?: import("./account-policy.ts").AccountContext;
   instanceId: InstanceId;
+  /** registry.incarnation(instanceId) for this instance; Captured.incarnation must equal it. Absent outside the registry (tests): the driver mints its own. */
+  incarnation?: string;
   displayName: string | undefined;
   environment: Record<string, string>;
   enabled: boolean;
@@ -468,6 +470,11 @@ export interface ProviderInstance {
   reviewPermission?(prompt: string, signal?: AbortSignal): Promise<string>;
   /** Opt-in handshake/CLI prepare for the focused bot only. Not used at boot. */
   prepare?(turn?: PrepareTurn): Promise<void>;
+  /** The Captured this instance last computed itself (snapshot or capture), only while still current:
+   *  same pool generation, non-empty identity, enabled, not disposed; otherwise null.
+   *  Synchronous and memory only: no file, process or login read. Advisory: prepare, take and the prompt write recheck a fresh capture.
+   *  The identity is an in-memory hash: never log it or put it in a response. */
+  cachedCapture?(): import("./drivers/warm-pool.ts").Captured | null;
   dispose(): Promise<void>;
 }
 

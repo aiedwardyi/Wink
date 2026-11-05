@@ -9,13 +9,20 @@ export type { WarmSession };
 export type WarmKey = { engine: string; instanceId: string; threadId: string };
 /** `identity` is an in-memory hash; never log it. */
 export type Captured = { generation: number; incarnation: string; identity: string };
-export interface WarmChild { session: WarmSession; alive(): boolean; close(reason: string): Promise<void>; rssProbe?(): number }
+export interface WarmChild {
+  session: WarmSession;
+  alive(): boolean;
+  /** Must kill the process tree, not just signal it: closeAll stops waiting after 5 s and a parent exit reaps nothing on Windows. */
+  close(reason: string): Promise<void>;
+  rssProbe?(): number;
+}
 export interface Lease {
   key: WarmKey;
   fingerprint: string;
   captured: Captured;
   signal: AbortSignal;
   attach(child: WarmChild): void;
+  /** Call before the prompt write: a lease still not ready `pendingMs` after reserve is closed, even if taken. */
   ready(): void;
   /** Idempotent. */
   release(reason: string): void;
@@ -32,6 +39,12 @@ type Entry = {
   child?: WarmChild;
   generation: number;
   idleSince: number;
+  since: number;
+  pendingMs: number;
+  /** Prepares sharing a pending lease; each releases once. */
+  holders: number;
+  cursor?: { value: unknown };
+  close(reason: string): void;
 };
 
 export interface WarmPoolOptions {
@@ -52,6 +65,8 @@ const ENGINE_CAP = 2;
 const IDLE_TTL_MS = 10 * 60_000;
 const SWEEP_MS = 60_000;
 const SLEEP_GAP_MS = 150_000;
+const PENDING_TTL_MS = 120_000;
+const CLOSE_BOUND_MS = 5_000;
 
 const defaultTimers = {
   setInterval(fn: () => void, ms: number) {
@@ -104,16 +119,21 @@ export class WarmPool {
     return (this.generations.get("") ?? 0) + (this.generations.get(`e:${key.engine}`) ?? 0) + (this.generations.get(`i:${key.instanceId}`) ?? 0);
   }
 
-  reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind): Lease | "busy" | "denied" {
+  /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready. */
+  reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number } = {}): Lease | "busy" | "denied" {
     if (this.final) return "denied";
     const existing = this.byKey.get(keyOf(key));
     if (existing?.state === "taken") return "busy";
     if (this.held(key)) return "denied";
-    if (existing && this.reusable(existing, fingerprint, captured)) return existing.lease;
+    if (existing && this.reusable(existing, fingerprint, captured)) {
+      if (existing.state === "pending") existing.holders += 1;
+      return existing.lease;
+    }
     if (existing) this.drop(existing, "replaced");
-    if (kind === "speculative" && !this.admits(key.engine)) return "denied";
+    const among = [...this.entries].filter((entry) => entry !== existing);
+    if (kind === "speculative" && !this.admits(key.engine, among)) return "denied";
     if (kind === "speculative" && this.freemem() < this.floor()) return "denied";
-    return this.add(key, fingerprint, captured, kind);
+    return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS);
   }
 
   take(key: WarmKey, fingerprint: string, captured: Captured, resumeCursor: unknown): { hit: Lease } | { pending: Lease } | "busy" | "miss" {
@@ -130,11 +150,13 @@ export class WarmPool {
       return "miss";
     }
     entry.state = "taken";
+    entry.cursor = { value: resumeCursor };
     return entry.ready ? { hit: entry.lease } : { pending: entry.lease };
   }
 
-  /** Returns a taken lease to idle after its turn; a refusal releases it. */
-  offer(lease: Lease): boolean {
+  /** Returns a taken lease to idle after its turn; a refusal releases it; a repeat offer of an idle lease is a no-op.
+   * The driver marks its turn ended before offer; `session` is the child's session after the turn. */
+  offer(lease: Lease, session?: WarmSession): boolean {
     const entry = this.entryOf(lease);
     if (!entry) return false;
     if (entry.state === "idle") return true;
@@ -143,11 +165,14 @@ export class WarmPool {
       && entry.child?.alive() === true && entry.generation === this.generation(lease.key) && !this.held(lease.key)
       && (entry.kind === "handshake" || this.admits(lease.key.engine, others));
     if (!ok) {
-      lease.release("refused");
+      this.drop(entry, "refused");
       return false;
     }
+    if (session) entry.child!.session = session;
     entry.state = "idle";
     entry.idleSince = this.now();
+    entry.holders = 1;
+    entry.cursor = undefined;
     return true;
   }
 
@@ -181,11 +206,20 @@ export class WarmPool {
     };
   }
 
-  async closeAll(reason: string, opts: { final?: boolean } = {}): Promise<void> {
+  /** Waits for tracked closes at most `boundMs` (5 s), so a hung child cannot keep the host alive. */
+  async closeAll(reason: string, opts: { final?: boolean; boundMs?: number } = {}): Promise<void> {
     if (opts.final) this.final = true;
     this.invalidate({}, reason);
     if (opts.final) this.stopSweep();
-    while (this.closing.size) await Promise.allSettled([...this.closing]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<boolean>((done) => {
+      timer = setTimeout(() => done(true), opts.boundMs ?? CLOSE_BOUND_MS);
+      timer.unref?.();
+    });
+    while (this.closing.size) {
+      if (await Promise.race([Promise.allSettled([...this.closing]).then(() => false), expired])) break;
+    }
+    clearTimeout(timer);
   }
 
   stats() {
@@ -203,9 +237,22 @@ export class WarmPool {
     return { reserved: pending + idle + closing, pending, idle, closing, byEngine, ...(measured ? { rssMiB: Math.round(rss / 1024 ** 2) } : {}) };
   }
 
-  private add(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind): Lease {
+  private add(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, pendingMs: number): Lease {
     const controller = new AbortController();
     let entry!: Entry;
+    const close = (reason: string) => {
+      if (entry.state === "closing") return;
+      entry.state = "closing";
+      controller.abort(reason);
+      if (this.byKey.get(keyOf(key)) === entry) this.byKey.delete(keyOf(key));
+      const child = entry.child;
+      if (!child) {
+        this.entries.delete(entry);
+        this.idleCheck();
+        return;
+      }
+      this.closeChild(entry, child, reason);
+    };
     const lease: Lease = {
       key: { ...key },
       fingerprint,
@@ -213,10 +260,11 @@ export class WarmPool {
       signal: controller.signal,
       attach: (child) => {
         if (entry.state === "closing" || (entry.child && entry.child !== child)) {
-          this.track(child.close("released"));
+          this.closeChild({ ...entry, state: "closing", child }, child, "released");
           return;
         }
         entry.child = child;
+        this.recheck(entry);
       },
       ready: () => {
         if (entry.state === "closing" || entry.ready) return;
@@ -225,29 +273,35 @@ export class WarmPool {
           entry.state = "idle";
           entry.idleSince = this.now();
         }
+        this.recheck(entry);
       },
       release: (reason) => {
-        if (entry.state === "closing") return;
-        entry.state = "closing";
-        controller.abort(reason);
-        if (this.byKey.get(keyOf(key)) === entry) this.byKey.delete(keyOf(key));
-        const child = entry.child;
-        if (!child) {
-          this.entries.delete(entry);
-          this.idleCheck();
+        if (entry.state === "pending" && entry.holders > 1) {
+          entry.holders -= 1;
           return;
         }
-        this.track(child.close(reason).finally(() => {
-          this.entries.delete(entry);
-          this.idleCheck();
-        }));
+        close(reason);
       },
     };
-    entry = { lease, kind, state: "pending", ready: false, stale: false, generation: this.generation(key), idleSince: 0 };
+    entry = { lease, kind, state: "pending", ready: false, stale: false, generation: this.generation(key), idleSince: 0, since: this.now(), pendingMs, holders: 1, close };
     this.entries.add(entry);
     this.byKey.set(keyOf(key), entry);
     this.startSweep();
     return lease;
+  }
+
+  /** Counts the child until it exits, including one attached after its lease was released. */
+  private closeChild(entry: Entry, child: WarmChild, reason: string) {
+    this.entries.add(entry);
+    this.track(child.close(reason).finally(() => {
+      this.entries.delete(entry);
+      this.idleCheck();
+    }));
+  }
+
+  /** A pending lease adopted by a turn serves only that turn's cursor. */
+  private recheck(entry: Entry) {
+    if (entry.state === "taken" && entry.cursor && entry.child && !canServeTurn(entry.child.session, entry.cursor.value)) entry.close("session mismatch");
   }
 
   private track(closed: Promise<void>) {
@@ -283,7 +337,7 @@ export class WarmPool {
     return held.length < TOTAL_CAP && held.filter((entry) => entry.lease.key.engine === engine).length < ENGINE_CAP;
   }
 
-  private drop(entry: Entry, reason: string) { entry.lease.release(reason); }
+  private drop(entry: Entry, reason: string) { entry.close(reason); }
 
   private closeIdle(reason: string) {
     for (const entry of [...this.entries]) if (entry.state === "idle") this.drop(entry, reason);
@@ -309,6 +363,7 @@ export class WarmPool {
     this.lastSweep = now;
     for (const entry of [...this.entries]) {
       if (entry.state === "idle" && (now - entry.idleSince >= IDLE_TTL_MS || entry.child?.alive() === false)) this.drop(entry, "idle");
+      else if ((entry.state === "pending" || (entry.state === "taken" && !entry.ready)) && now - entry.since >= entry.pendingMs) this.drop(entry, "pending timeout");
     }
     if (this.smaller() && (this.liveTurns() || [...this.entries].some((entry) => entry.state === "taken"))) {
       for (const entry of [...this.entries]) if (entry.kind === "speculative" && (entry.state === "idle" || entry.state === "pending")) this.drop(entry, "busy");

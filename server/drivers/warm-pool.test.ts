@@ -308,4 +308,111 @@ describe("warm pool", () => {
     expect(pool.take(key("t1"), "fp", captured, "sess-2")).toBe("miss");
     expect(made.close).toHaveBeenCalledTimes(1);
   });
+
+  it("closeAll stops waiting for a child whose close never settles", async () => {
+    const { pool, reserve } = fixture();
+    const hung = child();
+    hung.holdExit();
+    ready(reserve("t1"), hung);
+    const result = await Promise.race([
+      pool.closeAll("exit", { final: true, boundMs: 20 }).then(() => "closed"),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 500)),
+    ]);
+    expect(result).toBe("closed");
+    expect(hung.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("a pending adoption releases a child made for another session", () => {
+    const { pool, reserve } = fixture();
+    const wrong = asLease(reserve("t1"));
+    expect(pool.take(key("t1"), "fp", captured, "sess-B")).toEqual({ pending: wrong });
+    const other = child({ kind: "loaded", id: "sess-A" });
+    wrong.attach(other);
+    wrong.ready();
+    expect(wrong.signal.aborted).toBe(true);
+    expect(other.close).toHaveBeenCalledTimes(1);
+    expect(pool.offer(wrong)).toBe(false);
+
+    const right = asLease(reserve("t2"));
+    expect(pool.take(key("t2"), "fp", captured, "sess-B")).toEqual({ pending: right });
+    ready(right, child({ kind: "loaded", id: "sess-B" }));
+    expect(right.signal.aborted).toBe(false);
+    expect(pool.offer(right)).toBe(true);
+  });
+
+  it("a joiner's release does not abort the owner's prepare", () => {
+    const { reserve } = fixture();
+    const owner = asLease(reserve("t1"));
+    const joiner = asLease(reserve("t1"));
+    expect(joiner).toBe(owner);
+    joiner.release("tab closed");
+    const made = child();
+    owner.attach(made);
+    expect(owner.signal.aborted).toBe(false);
+    expect(made.close).not.toHaveBeenCalled();
+    owner.release("spawn failed");
+    expect(owner.signal.aborted).toBe(true);
+    expect(made.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("a prepare that never becomes ready expires and frees its slot", () => {
+    const small = fixture();
+    small.mem.total = 6 * GiB;
+    small.mem.free = 3 * GiB;
+    const stuck = asLease(small.reserve("t1"));
+    small.pass(60_000);
+    expect(stuck.signal.aborted).toBe(false);
+    small.pass(60_000);
+    expect(stuck.signal.aborted).toBe(true);
+    expect(small.pool.stats().reserved).toBe(0);
+    expect(small.reserve("t2", "museAgent")).not.toBe("denied");
+  });
+
+  it("an adopted prepare that never becomes ready expires", () => {
+    const { pool, reserve, pass } = fixture();
+    const stuck = asLease(reserve("t1"));
+    expect(pool.take(key("t1"), "fp", captured, undefined)).toEqual({ pending: stuck });
+    pass(60_000);
+    expect(stuck.signal.aborted).toBe(false);
+    pass(60_000);
+    expect(stuck.signal.aborted).toBe(true);
+    expect(pool.take(key("t1"), "fp", captured, undefined)).toBe("miss");
+  });
+
+  it("a same-key replace is not denied by its own closing child", () => {
+    const small = fixture();
+    small.mem.total = 6 * GiB;
+    small.mem.free = 3 * GiB;
+    const slow = child();
+    slow.holdExit();
+    ready(small.pool.reserve(key("t1"), "fp-old", captured, "speculative"), slow);
+    expect(typeof small.pool.reserve(key("t1"), "fp-new", captured, "speculative")).toBe("object");
+    expect(small.pool.stats()).toMatchObject({ pending: 1, closing: 1 });
+    slow.exit();
+  });
+
+  it("offer records the child's session after the turn", () => {
+    const { pool, reserve } = fixture();
+    const { lease, child: made } = ready(reserve("t1"));
+    expect(pool.take(key("t1"), "fp", captured, undefined)).toEqual({ hit: lease });
+    expect(pool.offer(lease, { kind: "loaded", id: "sess-1" })).toBe(true);
+    expect(pool.take(key("t1"), "fp", captured, "sess-1")).toEqual({ hit: lease });
+    expect(made.close).not.toHaveBeenCalled();
+  });
+
+  it("a child attached after its lease was released counts until it exits", async () => {
+    const { pool, reserve } = fixture();
+    const first = asLease(reserve("t1"));
+    first.release("stop");
+    const late = child();
+    late.holdExit();
+    first.attach(late);
+    expect(late.close).toHaveBeenCalledTimes(1);
+    expect(pool.stats().closing).toBe(1);
+    asLease(reserve("t2"));
+    expect(reserve("t3")).toBe("denied");
+    late.exit();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(reserve("t3")).not.toBe("denied");
+  });
 });

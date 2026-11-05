@@ -121,6 +121,8 @@ export class ProviderRegistry {
   private readonly warmPool: WarmPool;
   private identityHolds = new Map<InstanceId, { release: () => void; seq: number }>();
   private holdSeq = 0;
+  private incarnations = new Map<InstanceId, string>();
+  private incarnationSeq = 0;
 
   constructor(drivers: readonly AnyProviderDriver[], options: ProviderRegistryOptions = {}) {
     this.driversByKind = new Map(drivers.map((d) => [d.driverKind, d]));
@@ -153,7 +155,7 @@ export class ProviderRegistry {
               reason: `unknown driver "${entry.driver}": kept as configured, unavailable here`,
             },
           },
-        } satisfies { entry: RegistryEntry; rawCli?: string };
+        } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       }
       const rawCli = cliOfRaw(entry.config);
       try {
@@ -161,15 +163,17 @@ export class ProviderRegistry {
         // Override detection is on the RAW config, never the decoded one:
         // decodeConfig fills in the driver default ("claude", "codex", …),
         // so reading `cli` there would flag every instance as overridden.
+        const incarnation = `${instanceId}#${++this.incarnationSeq}`;
         const live = await driver.create({
           instanceId,
+          incarnation,
           displayName: entry.displayName ?? driver.metadata.displayName,
           environment: entry.environment ?? {},
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
         });
-        return { entry: { instanceId, live }, rawCli } satisfies { entry: RegistryEntry; rawCli?: string };
+        return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
         return {
           entry: {
@@ -184,7 +188,7 @@ export class ProviderRegistry {
             },
           },
           rawCli,
-        } satisfies { entry: RegistryEntry; rawCli?: string };
+        } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       }
     }));
     for (const result of loaded) {
@@ -193,6 +197,8 @@ export class ProviderRegistry {
       this.forget(result.entry.instanceId);
       if (result.rawCli) this.cliByInstance.set(result.entry.instanceId, result.rawCli);
       else this.cliByInstance.delete(result.entry.instanceId);
+      this.retire(result.entry.instanceId);
+      if (result.entry.live && result.incarnation) this.incarnations.set(result.entry.instanceId, result.incarnation);
       this.byId.set(result.entry.instanceId, result.entry);
       result.entry.live?.setAccountBlocked?.(this.blockedAccounts.has(result.entry.instanceId));
       const live = result.entry.live;
@@ -353,7 +359,7 @@ export class ProviderRegistry {
     if (!config?.install?.logout) return null;
     if (this.signingOut.has(instanceId)) return false;
     this.signingOut.add(instanceId);
-    this.holdIdentity(instanceId, "sign-out");
+    const since = this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
       await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
@@ -370,7 +376,7 @@ export class ProviderRegistry {
           this.probeVersion += 1;
         }
       }
-      if (success) this.settleIdentity(instanceId);
+      if (success) this.settleIdentity(instanceId, since);
       return success;
     } finally {
       this.signingOut.delete(instanceId);
@@ -390,7 +396,9 @@ export class ProviderRegistry {
       this.probed.set(entry.instanceId, { ...previous, snapshot });
       this.probeVersion += 1;
       if (snapshot.authenticated) {
-        since = this.holdIdentity(entry.instanceId, "sign-in complete");
+        const newer = (this.identityHolds.get(entry.instanceId)?.seq ?? since) > since;
+        const complete = this.holdIdentity(entry.instanceId, "sign-in complete");
+        if (!newer) since = complete;
         this.logins.complete(entry.instanceId);
       }
       this.logins.acknowledge(entry.instanceId, snapshot.authenticated === true);
@@ -406,8 +414,19 @@ export class ProviderRegistry {
     return [...this.byId.values()].flatMap((e) => (e.live ? [e.live] : []));
   }
 
+  /** `Captured.incarnation` for this instance's warm leases; a replacement or removal invalidates the old one's. */
+  incarnation(instanceId: InstanceId): string | undefined { return this.incarnations.get(instanceId); }
+
+  private retire(instanceId: InstanceId) {
+    const incarnation = this.incarnations.get(instanceId);
+    if (incarnation === undefined) return;
+    this.incarnations.delete(instanceId);
+    this.warmPool.invalidate({ instanceId, incarnation }, "reload");
+  }
+
   remove(instanceId: InstanceId): ProviderInstance | null {
     const live = this.get(instanceId);
+    this.retire(instanceId);
     void this.logins.cancel(instanceId);
     this.logins.clear(instanceId);
     this.byId.delete(instanceId);
