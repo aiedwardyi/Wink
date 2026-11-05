@@ -66,6 +66,24 @@ describe("Devices first paint", () => {
     expect(host.querySelector("[data-pc-ready]")).not.toBeNull();
   });
 
+  it("keeps Devices and the PC failure alert visible during the refresh probe", async () => {
+    const openPc = vi.fn().mockResolvedValue(false);
+    const pc = { name: "Laptop", host: "laptop.fixture.invalid" };
+    vi.stubGlobal("ogb", { deviceWindow: { open: openPc } });
+    store.api.mockResolvedValue({ ...body, pcs: [pc] });
+    await open();
+    const button = (text: string) => [...host.querySelectorAll("button")].find((node) => node.textContent === text)!;
+    await act(async () => button("PC").click());
+    store.api.mockReset();
+    store.api.mockImplementation(() => new Promise(() => {}));
+    await act(async () => button("Open Laptop").click());
+    expect(openPc).toHaveBeenCalledExactlyOnceWith(pc.host, pc.name);
+    expect(store.api.mock.calls).toEqual([["/api/remote-link?setup=1"]]);
+    expect(host.querySelector("[data-devices-settings]")).not.toBeNull();
+    expect(host.querySelector("[data-pc-ready]")).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Tailscale is offline. Open it and connect.");
+  });
+
   it("requests the cached answer first and probes immediately after it", async () => {
     delayed();
     await open();

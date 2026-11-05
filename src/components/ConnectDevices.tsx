@@ -236,7 +236,6 @@ export function ConnectDevices() {
               void deviceWindow.open(pc.host, pc.name).then((opened) => {
                 if (!live.current || opened) return;
                 setPcFailed(true);
-                setStatus(null);
                 setRefresh((value) => value + 1);
               }, () => { if (live.current) setPcFailed(true); });
             }} className={`${button} mr-2 mt-2`}>{t("settings.devices.openPc", { name: pc.name })}</button>)}
