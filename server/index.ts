@@ -104,7 +104,7 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { contextWindowFor, holdWorkerNotes, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -155,7 +155,7 @@ import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from 
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
-import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { hasPeerWatch, onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
   clearSendRunning,
@@ -4218,6 +4218,7 @@ function resumePaneWakes(botId: string) {
 const noteSteer = new NoteSteerer({
   enabled: (botId) => store.bot(botId)?.shareTerminalWithChat !== false,
   paused: (botId) => store.bot(botId)?.paneWakePaused === true,
+  holds: hasPeerWatch,
   liveTurn: (botId, threadId) => {
     const bot = store.bot(botId);
     if (!bot?.busy || bot.threadId !== threadId || bot.activeThreadId !== threadId || turnStartClaims.has(botId)) return undefined;
@@ -4719,8 +4720,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
+  // a teammate's turn leaves worker notes pending, for this whole dispatch
+  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
   const modelContextWindow = contextWindowFor(instance.models, model);
   const messagesBeforeSummary = store.activePath(threadId);
+  holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
   let taskRecord = taskPacketForWrite(threadId);
   const selectionChanged = task.lastInstanceId !== undefined && (
@@ -4791,6 +4795,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const summaryWaitMs = await summaryBuild.settle(threadId, instance, 90_000, () => planBeforeSummary.needed, { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
   const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);
+  holdNotes?.(activeMessages);
   // Inline replay carries this turn's notes after the reply marker, so they leave history and claim their room first.
   let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
@@ -5523,6 +5528,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             const messages = store.activePath(threadId);
             const replayedIds = new Set(activeMessages.map((message) => message.id));
             for (const message of messages) if (message.steered && !replayedIds.has(message.id)) skipTranscript.add(message.id);
+            holdNotes?.(messages);
             const refreshedNotes = paneNotesForTurn(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, !replaysNatively, modelContextWindow);
             if (!replaysNatively) inlineNotes = refreshedNotes;
             const compacted = await prepareContext(messages, waitedMs);
@@ -5595,7 +5601,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       markMailRead(store, threadId, mailParts, started.turnId ?? "");
       accountNote.commit();
       markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
-      store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
+      store.markPaneNotesDelivered(bot.id, threadId, holdNotes ? undefined : newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;

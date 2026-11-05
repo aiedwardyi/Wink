@@ -27,6 +27,10 @@ export interface PaneWakeDeps {
 
 const isReportNote = (message: Message) => message.kind === "note" && Boolean(message.reportIds?.length);
 
+/** The user's own message carried the notes before it; a teammate's peer turn held them. */
+export const endsNoteWindow = (message: Message) =>
+  message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !message.steered && !message.from?.botId;
+
 export function isWakeNote(message: Message): boolean {
   return (!message.quiet || isReportNote(message)) && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
 }
@@ -38,7 +42,7 @@ export function paneNoteWaiting(store: Pick<Store, "bot" | "taskByThread" | "act
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId) break;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if (message.kind === "note" && (sharing || isReportNote(message)) && isWakeNote(message) && message.text?.trim()) return true;
   }
   return false;
@@ -53,7 +57,7 @@ export function paneWakeEnabled(store: Store, botId: string, threadId: string): 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === task?.paneNotesDeliveredId || message.id === task?.paneNotesSkippedId) break;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if ((message.kind === "activity" || isReportNote(message)) && isWakeNote(message) && message.text?.trim()) return true;
   }
   return false;
@@ -63,7 +67,7 @@ export function hasLocalUndeliveredPaneNote(messages: Message[], deliveredId: st
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId || message.id === skippedId) break;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if (!message.quiet && isWakeNote(message) && message.text?.trim() && message.origin === deviceId) return true;
   }
   return false;
