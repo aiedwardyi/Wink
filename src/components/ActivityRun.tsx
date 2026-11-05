@@ -3,10 +3,10 @@
 // Collapsed by default. A run stays open once you open it, and search can
 // force it open so a hit is not stuck behind the fold. A failure shows as a
 // quiet cross beside the summary; the row itself never goes red.
-import { memo, useEffect, useState } from "react";
+import { Fragment, memo, useEffect, useState } from "react";
 import { Bot, ChevronDown, Check, FileText, Globe, Loader2, Pencil, Search, SquareTerminal, Wrench, X } from "lucide-react";
 import type { Message } from "@/state/store";
-import { classifyServerNotice, describeRun, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
+import { classifyServerNotice, describeRun, isCommsNotice, describeSearch, localizeServerLine, sameNotices, type LinkedApproval } from "@/lib/activity-runs";
 import { useI18n, type Translate } from "@/lib/i18n";
 import { isTerminalToolSkin, useSkin } from "@/lib/skins";
 import { APPROVAL_WORD, TERM_STEP_WORD, termBlock, termHeaderArgs, termResultLine, termStepAria, termStepState, termUpdatedLine, termVerb } from "@/lib/terminal-skin";
@@ -37,8 +37,14 @@ export function approvalHover(notices: LinkedApproval[] | undefined, t: Translat
   return notices.map((notice) => t(APPROVAL_WORD[notice.label])).join(" · ");
 }
 
-function TermNotice({ text, failed }: { text: string; failed: boolean }) {
-  return <div className="term-notice" data-term-notice={failed ? "failed" : "ok"}>{text}</div>;
+export function CommsNotice({ text }: { text: string }) {
+  return text.split(/(?<=\.) /).map((sentence, index) => (
+    <Fragment key={index}>{index > 0 && " "}<span className="inline-block whitespace-nowrap">{sentence}</span></Fragment>
+  ));
+}
+
+function TermNotice({ text, failed, comms = false }: { text: string; failed: boolean; comms?: boolean }) {
+  return <div className="term-notice" data-term-notice={failed ? "failed" : "ok"} style={comms ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>{comms ? <CommsNotice text={text} /> : text}</div>;
 }
 
 /** One step inside an open run. A running step ticks its elapsed time, then
@@ -47,7 +53,8 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
   const { t } = useI18n();
   const terminal = isTerminalToolSkin(useSkin());
   const tool = message.tool;
-  const running = tool?.ok === undefined;
+  const comms = tool ? isCommsNotice(tool.name) : false;
+  const running = tool?.ok === undefined && !comms;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!running) return;
@@ -55,6 +62,7 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
     return () => clearInterval(timer);
   }, [running]);
   if (!tool) return null;
+  if (terminal && comms) return <TermNotice text={localizeServerLine(tool.name, t)} failed={false} comms />;
   const notice = classifyServerNotice(tool.name);
   if (terminal && notice) {
     if (notice.kind === "approval" && notice.label !== "review" && tool.ok !== false) return null;

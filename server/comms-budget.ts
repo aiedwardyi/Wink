@@ -1,38 +1,26 @@
-// One turn's ask_bot budget, keyed by the asking thread and released when
-// that turn settles.
+// ask_bot's open slots, keyed by the asking thread and the ask's task id.
 //
 // MAX_COMMS_DEPTH stops recursion but not breadth: every peer a bot asks
 // runs a full turn on its own model with a four-minute ceiling, and under a
 // room's "everyone" policy each member can ask every other while they sit
-// idle. create_bot and delegate_bot are both capped at four per turn; this
-// is ask_bot's half of the same rule.
+// idle. The root budget caps the total; this caps how many wait at once,
+// as create_bot and delegate_bot cap theirs at four.
 
-export const MAX_ASKS_PER_TURN = 4;
+export const MAX_OPEN_ASKS = 4;
 
-const asksThisTurn = new Map<string, number>();
-// Automatic wake turns share this budget until the user starts another turn.
-const delegationWakes = new Map<string, number>();
+const openAsks = new Map<string, Set<string>>();
 
-export function claimDelegationWake(sourceThreadId: string): boolean {
-  const used = delegationWakes.get(sourceThreadId) ?? 0;
-  if (used >= MAX_ASKS_PER_TURN) return false;
-  delegationWakes.set(sourceThreadId, used + 1);
+/** Hold a slot from before approval until the ask's terminal result. */
+export function claimOpenAsk(sourceThreadId: string, opId: string): boolean {
+  const open = openAsks.get(sourceThreadId) ?? new Set<string>();
+  if (!open.has(opId) && open.size >= MAX_OPEN_ASKS) return false;
+  open.add(opId);
+  openAsks.set(sourceThreadId, open);
   return true;
 }
 
-export function clearDelegationWakeBudget(sourceThreadId: string): void {
-  delegationWakes.delete(sourceThreadId);
-}
-
-/** Take one of this turn's asks. False once the turn has spent them all. */
-export function claimAsk(sourceThreadId: string): boolean {
-  const used = asksThisTurn.get(sourceThreadId) ?? 0;
-  if (used >= MAX_ASKS_PER_TURN) return false;
-  asksThisTurn.set(sourceThreadId, used + 1);
-  return true;
-}
-
-/** Called on the asking thread's turn.completed, whatever its outcome. */
-export function clearAskBudget(sourceThreadId: string): void {
-  asksThisTurn.delete(sourceThreadId);
+export function releaseOpenAsk(sourceThreadId: string, opId: string): void {
+  const open = openAsks.get(sourceThreadId);
+  if (!open?.delete(opId) || open.size) return;
+  openAsks.delete(sourceThreadId);
 }

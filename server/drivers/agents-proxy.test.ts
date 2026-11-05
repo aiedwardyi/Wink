@@ -695,10 +695,13 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("one hop");
   });
 
-  it("reports a per-turn ask budget as a limit, not as an unreachable peer", async () => {
-    askResponse = { limit: "this turn has already used its 4 teammate messages — use delegate_bot for the rest." };
+  it.each([
+    "You already have 4 teammate messages waiting. Collect those replies first.",
+    "This request reached its 24 bot turn limit. Finish with what you have; the user can send a message to continue.",
+  ])("reports an ask limit as a limit, not as an unreachable peer: %s", async (limit) => {
+    askResponse = { limit };
     const res = await callTool("ask_bot", { bot_id: "bot-helper", message: "ping" });
-    expect(res.result.content[0].text).toContain("already used its 4 teammate messages");
+    expect(res.result.content[0].text).toBe(limit);
     expect(res.result.content[0].text).not.toContain("Couldn't reach that bot");
   });
 

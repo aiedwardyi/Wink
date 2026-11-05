@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { beforeEach, expect, it, vi } from "vitest";
+import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { prepareModelContext } from "./context-compaction.ts";
 import { delegationContext } from "./delegation-context.ts";
 import { loadDelegationReceipts } from "./delegation-ledger.ts";
@@ -17,6 +18,7 @@ const bus = () => ({ store, broadcast: () => {} });
 
 beforeEach(() => {
   _resetPending();
+  _resetCommsRoots();
   store = new Store(() => ({ instanceId: "claude", model: "fake" }));
   bot = store.createBot({ name: "Caller" }, { seedMessages: false });
   peer = store.createBot({ name: "Pokkey" }, { seedMessages: false });
@@ -116,7 +118,8 @@ it("keeps the five newest annotations per tool in a mixed rollup", async () => {
 });
 
 it("carries a busy peer's queued ask without a raw ask chip", async () => {
-  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0 });
+  const rootId = rootForStart(bot.threadId, { kind: "human", messageKey: "continuity-busy" });
+  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0, rootId });
   turnRegistry.started("continuity-busy", bot.threadId);
   store.patchBot(peer.id, { busy: true });
   const req = new IncomingMessage(new Socket());
@@ -136,7 +139,8 @@ it("carries a busy peer's queued ask without a raw ask chip", async () => {
 });
 
 it("keeps a completed synchronous ask out of a later ask's annotation", async () => {
-  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0 });
+  const rootId = rootForStart(bot.threadId, { kind: "human", messageKey: "continuity-sync" });
+  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0, rootId });
   turnRegistry.started("continuity-sync", bot.threadId);
   const calls: Message[] = [];
   for (const replied of [true, false]) {
@@ -183,7 +187,8 @@ it("returns an empty list and rejects a caller outside the source conversation",
 });
 
 it("carries a timed-out ask_bot id before and after its reply settles", async () => {
-  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0 });
+  const rootId = rootForStart(bot.threadId, { kind: "human", messageKey: "continuity-timeout" });
+  turnRegistry.prepare({ botId: bot.id, threadId: bot.threadId, owner: "user", depth: 0, rootId });
   turnRegistry.started("continuity-timeout", bot.threadId);
   const route = routes(async (_target, _text, _depth, _from, task) => ({ text: "Still working", replied: false, taskId: task!.taskId }));
   const req = new IncomingMessage(new Socket());

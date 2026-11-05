@@ -18,6 +18,7 @@ import {
   withoutTurnNotes,
   type SummaryCallRecord,
 } from "./context-compaction.ts";
+import { postCommsNotice } from "./comms-notice.ts";
 import { probeLocalInjects } from "./drivers/local-inject.ts";
 import { PANE_WAKE_PROMPT } from "./pane-wake.ts";
 import type { Message } from "./store.ts";
@@ -1605,6 +1606,31 @@ describe("tool line folding", () => {
       "fix the build",
       "[5 tool calls: Edit 5; failed: Edit 2]",
     ]);
+  });
+
+  it.each([false, true])("leaves both bots-paused notices out of model context (room: %s)", async (room) => {
+    const notices: Message[] = [];
+    const store = { activePath: () => notices, appendMessage: (_threadId: string, row: Omit<Message, "id" | "at">) => {
+      const saved = { ...row, id: `n${notices.length + 2}`, at: notices.length + 2 } as Message;
+      notices.push(saved);
+      return saved;
+    } } as unknown as Parameters<typeof postCommsNotice>[0];
+    postCommsNotice(store, "paused", `root-context-${room}`, ["t1"]);
+    postCommsNotice(store, "unavailable", `missing-context-${room}`, ["t1"]);
+    expect(notices.map((row) => row.tool?.name)).toEqual([
+      "Bot messaging limit reached. Send a message to reset it.",
+      "Bot messaging paused. Send a message to reset it.",
+    ]);
+    const result = await prepareModelContext({
+      messages: [message("m1", "check the package"), ...notices, message("m9", "done", { role: "bot" })],
+      contextWindow: 8_192,
+      taskRecordText: room ? "Room: Release" : "Goal: test",
+      ...(room ? { userName: "Eddie", includeSpeakers: true } : {}),
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.transcript).toHaveLength(2);
+    expect(JSON.stringify(result.transcript)).not.toContain("Bot messaging");
   });
 
   it("keeps two bots' tool runs apart in a room", async () => {
