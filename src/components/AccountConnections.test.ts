@@ -239,6 +239,55 @@ it.each(["en", "ko"] as const)("shows account refusal messages in %s", async (lo
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in is already in progress");
 });
 
+it.each((["complete", "failed", "cancelled", "removed"] as const).flatMap((outcome) =>
+  (["en", "ko"] as const).map((locale) => ({ outcome, locale }))))("clears the $locale sign-in warning when it is $outcome", async ({ outcome, locale }) => {
+  persistPreference(locale);
+  for (const message of ["Sign-in is already in progress", "Another sign-in for this engine is still running"]) {
+    await render(3);
+    state.instances = [...state.instances, { ...engine("new", false), accountState: "pending", loginState: "pending" }];
+    await update();
+    request.mockRejectedValueOnce(new Error(message));
+    await act(async () => buttons(locale === "en" ? "Add Account" : "계정 추가")[0]!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    state.instances = state.instances.map((account) => ({ ...account }));
+    await update();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    state.instances = outcome === "removed" ? state.instances.filter((account) => account.instanceId !== "new")
+      : state.instances.map((account) => account.instanceId !== "new" ? account
+        : { ...engine("new", outcome === "complete"), accountState: outcome === "complete" ? "ready" : "pending", loginState: outcome });
+    await update();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    if (outcome === "complete") expect(host.textContent).toContain("new@example.com");
+  }
+});
+
+it("clears a late refusal for the settled sign-in even if another sign-in starts", async () => {
+  await render(1);
+  state.instances = [...state.instances, { ...engine("new", false), accountState: "pending", loginState: "pending" }];
+  await update();
+  let reject!: (error: Error) => void;
+  request.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+  await act(async () => buttons("Add Account")[0]!.click());
+  state.instances = [state.instances[0]!, { ...engine("new"), loginState: "pending" },
+    { ...engine("other", false), accountState: "pending", loginState: "pending" }];
+  await update();
+  await act(async () => reject(new Error("Another sign-in for this engine is still running")));
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(host.textContent).toContain("new@example.com");
+});
+
+it("keeps a real error when the pending sign-in finishes", async () => {
+  await render(1);
+  state.instances = [...state.instances, { ...engine("new", false), accountState: "pending", loginState: "pending" }];
+  await update();
+  request.mockRejectedValueOnce(new Error("Sign-in failed"));
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in failed");
+  state.instances = [state.instances[0]!, { ...engine("new", false), loginState: "failed" }];
+  await update();
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in failed");
+});
+
 it("signs out the main account with zero bots through the destination path", async () => {
   const bots = state.bots.splice(0);
   try {

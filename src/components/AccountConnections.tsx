@@ -158,21 +158,28 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const { t } = useI18n();
   const { board } = useUsageBoard();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
+  useEffect(() => {
+    if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
+      && !accountReady(account) && (account.loginState === "pending" || !account.loginState && account.accountState === "pending"))) setError(null);
+  }, [accounts, error]);
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
       await api(path, { method: "POST", body: JSON.stringify(body) });
       await reload();
     } catch (error) {
-      setError(error instanceof Error && error.message === "No ready account can take over this profile"
-        ? t("accounts.noDestination") : safeProviderText(error instanceof Error ? error.message : "", accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"));
+      const message = error instanceof Error ? error.message : "";
+      const signInIds = ["Sign-in is already in progress", "Another sign-in for this engine is still running"].includes(message)
+        ? accounts.filter((account) => !accountReady(account) && (account.loginState === "pending" || !account.loginState && account.accountState === "pending")).map((account) => account.instanceId) : [];
+      setError({ message: message === "No ready account can take over this profile"
+        ? t("accounts.noDestination") : safeProviderText(message, accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"), signInIds });
     }
     finally { setBusy(false); }
   };
@@ -195,7 +202,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
             reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
         );
       })}
-      {error && <div role="alert" className="pl-7 text-[12px] text-danger">{error}</div>}
+      {error && <div role="alert" className="pl-7 text-[12px] text-danger">{error.message}</div>}
     </div>
   );
 }
