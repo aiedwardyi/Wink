@@ -28,6 +28,103 @@ afterEach(async () => {
   localStorage.clear();
 });
 
+async function mountOriginStore(messages: Bot["messages"] = [], busy = false, snapshot?: Promise<Response>, onOrigin?: (origin: ReturnType<typeof useStore>["turnOrigin"]) => void) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const bot = {
+    id: "b1", threadId: "t1", name: "Bot", busy, unread: false,
+    modelSelection: { instanceId: "inst", model: "m" }, messages,
+  } as Bot;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url) === "/api/bots?messages=200"
+    ? snapshot ? (await snapshot).clone() : Response.json({ bots: [bot], groups: [], computerControl: {} })
+    : Response.json({}, { status: 404 })));
+  function Probe() {
+    store = useStore();
+    onOrigin?.(store.turnOrigin);
+    return null;
+  }
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(host);
+  unmount = async () => {
+    await act(async () => root.unmount());
+    host.remove();
+  };
+  await act(async () => root.render(createElement(StoreProvider, null, createElement(Probe))));
+  await emit({ kind: "hello", resumed: false, cursor: "c1" });
+}
+
+describe("store turn origins", () => {
+  it("keeps dispatch origin through joins and starts the drained turn anew", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    await mountOriginStore();
+    await emit({ kind: "turn.dispatch", threadId: "t1", createdAt: new Date(103_000).toISOString() });
+    expect(store.turnOrigin("t1")).toBe(100_000);
+    now.mockReturnValue(100_900);
+    await emit({ kind: "message", threadId: "t1", message: { id: "u1", at: 103_001, role: "user", kind: "text", text: "Preview" } });
+    await emit({ kind: "message", threadId: "t1", message: { id: "join", at: 103_900, role: "user", kind: "text", steered: true, queueId: "q1" } });
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t1", turnId: "turn-1", createdAt: new Date(103_850).toISOString() } });
+    now.mockReturnValue(101_800);
+    await emit({ kind: "message", threadId: "t1", message: { id: "steer", at: 104_800, role: "user", kind: "text", steered: true } });
+    expect(store.turnOrigin("t1")).toBe(100_000);
+    await emit({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", turnId: "turn-1" } });
+    now.mockReturnValue(110_000);
+    await emit({ kind: "turn.dispatch", threadId: "t1", createdAt: new Date(113_000).toISOString() });
+    await emit({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", turnId: "turn-1" } });
+    expect(store.turnOrigin("t1")).toBe(110_000);
+  });
+
+  it("hydrates the first user row and preserves it through snapshot reconnect", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    await mountOriginStore([
+      { id: "u1", at: 90_000, role: "user", kind: "text", text: "Preview" },
+      { id: "join", at: 99_000, role: "user", kind: "text", steered: true, text: "And the phone" },
+    ], true);
+    expect(store.turnOrigin("t1")).toBe(90_000);
+    now.mockReturnValue(103_000);
+    await emit({ kind: "hello", resumed: false, cursor: "c2" });
+    expect(store.turnOrigin("t1")).toBe(90_000);
+  });
+
+  it("uses dispatch receipt time when hydration delays frame application", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    let resolve!: (response: Response) => void;
+    const snapshot = new Promise<Response>((done) => { resolve = done; });
+    await mountOriginStore([], false, snapshot);
+    await emit({ kind: "turn.dispatch", threadId: "t1", createdAt: new Date(100_000).toISOString() });
+    now.mockReturnValue(102_000);
+    await act(async () => resolve(Response.json({ bots: [], groups: [], computerControl: {} })));
+    expect(store.turnOrigin("t1")).toBe(100_000);
+  });
+
+  it("changes origins four times at turn edges and zero times during 200 steady frames", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { frame = callback; return 1; }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const changes = new Set<ReturnType<typeof useStore>["turnOrigin"]>();
+    await mountOriginStore([], false, undefined, (origin) => changes.add(origin));
+    const initial = changes.size;
+    await emit({ kind: "turn.dispatch", threadId: "t1", createdAt: new Date(100_000).toISOString() });
+    await emit({ kind: "message", threadId: "t1", message: { id: "u1", at: 100_010, role: "user", kind: "text", text: "Preview" } });
+    await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t1", turnId: "turn-1", createdAt: new Date(100_850).toISOString() } });
+    expect(changes.size - initial).toBe(3);
+    const steady = changes.size;
+    for (let index = 0; index < 200; index++) {
+      now.mockReturnValue(101_000 + index * 100);
+      await delta("more ");
+      if (index % 20 === 0) {
+        await emit({ kind: "message", threadId: "t1", message: { id: `tool-${index}`, at: Date.now(), role: "bot", kind: "activity", tool: { name: "Read", ok: true } } });
+        await emit({ kind: "message", threadId: "t1", message: { id: `join-${index}`, at: Date.now(), role: "user", kind: "text", steered: true, text: "And this" } });
+        await emit({ kind: "runtime", event: { type: "turn.started", threadId: "t1", turnId: "turn-1" } });
+      }
+    }
+    expect(changes.size - steady).toBe(0);
+    expect(store.turnOrigin("t1")).toBe(100_000);
+    await emit({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", turnId: "turn-1" } });
+    expect(changes.size - initial).toBe(4);
+  });
+});
+
 async function emit(value: object) {
   await act(async () => FakeEventSource.last.onmessage!({ data: JSON.stringify(value), lastEventId: "" }));
 }

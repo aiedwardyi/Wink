@@ -900,7 +900,7 @@ export function PinnedBanner({
 
 export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch, turnOrigin } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const sidebarOnRight = useSidebarSide() === "right";
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -916,6 +916,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   }, []);
 
   const stream = useStreaming();
+  const since = turnOrigin(bot.threadId);
   const provisioning = state.provisioning[bot.id];
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
   const engine = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
@@ -1212,7 +1213,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
     slot: dockSlot,
     live: dockLive,
     label: activityLabel,
-    since: noReply ? undefined : lastUserMessage?.at,
+    since: noReply ? undefined : since,
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     onSwitch: noReply && !modelSwitch.active ? modelSwitch.open : undefined,
@@ -1226,7 +1227,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
         trackPointer={false}
       />
     ),
-  } : null, [dockSlot, dockLive, activityLabel, lastUserMessage?.at, bot, toolInFlight, noReply, modelSwitch.active, modelSwitch.open]);
+  } : null, [dockSlot, dockLive, activityLabel, since, bot, toolInFlight, noReply, modelSwitch.active, modelSwitch.open]);
 
   // regenerate = fork the last user message with the same text — reuses the
   // existing branch machinery, so the old answer stays reachable via ‹ ›
@@ -1751,7 +1752,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
-            since={noReply ? undefined : lastUserMessage?.at}
+            since={noReply ? undefined : since}
           />
           {queued.map((m, index) => (
             <div key={m.id} className="contents" data-mid={m.id}>
