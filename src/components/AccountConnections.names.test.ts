@@ -281,3 +281,23 @@ it.each([false, true])("opens a long identity inside its row by keyboard and tou
   });
   expect(row()?.querySelector("[data-connection-identity-body]")?.textContent).toContain(canary.address);
 });
+
+it.each([false, true])("gives the address its own line under the name on a phone (phone=%s)", async (phone) => {
+  await mount({ phone });
+  const line = row()!.firstElementChild!;
+  const identity = line.querySelector<HTMLElement>("[data-connection-identity]")!;
+  const [head, address] = [...identity.children];
+  expect(address?.textContent).toBe(canary.address);
+  if (!phone) {
+    expect(identity.querySelector("[data-account-number]"), "tile beside the identity").toBeNull();
+    expect(head?.textContent).toBe("Claude 1");
+    expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
+    return;
+  }
+  expect(head?.querySelector("[data-account-number]")?.textContent).toBe("1");
+  expect(head?.lastElementChild?.textContent).toBe("Claude 1");
+  const more = row()!.querySelector<HTMLElement>("[data-connection-menu]")!;
+  expect(line.contains(more), "the address runs under the more button").toBe(false);
+  expect(more.querySelector("svg"), "an icon, not a text glyph").not.toBeNull();
+  expect(more.textContent).toBe("");
+});

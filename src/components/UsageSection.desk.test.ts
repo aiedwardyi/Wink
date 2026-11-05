@@ -23,7 +23,10 @@ const clientModules = import.meta.glob("../lib/usage-board-client.ts");
 const MIN = 60_000;
 const CLAUDE_2 = "acct_00000000-0000-4000-8000-000000000002";
 const CLAUDE_3 = "acct_00000000-0000-4000-8000-000000000003";
+const CLAUDE_4 = "acct_00000000-0000-4000-8000-000000000004";
 const CODEX_2 = "acct_00000000-0000-4000-8000-000000000012";
+const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
+const GLYPHS = /[\u2580-\u25FF]/u;
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
 function deferred<T>(): Deferred<T> {
@@ -83,7 +86,7 @@ const useButton = (id: string) => row(id)?.querySelector<HTMLButtonElement>("but
 const checkRow = (engine = "claude") => section(engine)?.querySelector("[data-main-check]")?.closest("[data-account-row]")?.getAttribute("data-account-row") ?? null;
 const boardGets = () => server.calls.filter((call) => call.startsWith("GET /api/usage/board"));
 const mainPosts = () => server.calls.filter((call) => call.startsWith("POST /api/accounts/"));
-const heroName = (engine = "claude") => text(section(engine)?.querySelector("[data-hero-name]"));
+const heroName = (engine = "claude") => text(picker(engine)?.querySelector("[data-hero-name]"));
 const left = (id: string, slot = "session") => text(row(id)?.querySelector(`[data-window="${slot}"] [data-left]`));
 const who = (id: string) => [...row(id)?.querySelector("[data-account-who]")?.children ?? []].map((node) => text(node)).join(" ");
 const slots = (id: string) => [...row(id)?.querySelector("[data-account-bars]")?.children ?? []].map((node) => node.getAttribute("aria-label")?.split(":")[0]);
@@ -93,7 +96,38 @@ const click = async (node: Element | null | undefined) => {
   expect(node, "control to click").toBeTruthy();
   await act(async () => { (node as HTMLElement).click(); await vi.advanceTimersByTimeAsync(0); });
 };
-const picker = (engine = "claude") => section(engine)?.querySelector('button[aria-haspopup="menu"]') ?? null;
+const live = (node: Element) => !node.closest("[aria-hidden]");
+const visible = (engine = "claude") => [...section(engine)?.querySelectorAll("[data-account-row]") ?? []].filter(live).map((node) => node.getAttribute("data-account-row") ?? "");
+const viewed = (engine = "claude") => visible(engine).at(-1) ?? null;
+const column = (name: string, engine = "claude") => section(engine)?.querySelector(`[data-account-column="${name}"]`) ?? null;
+const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button") ?? []];
+const picker = (engine = "claude") => [...section(engine)?.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]') ?? []].find(live) ?? null;
+const said = (root: Element) => [root.textContent ?? "", ...[...root.querySelectorAll("*")].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
+function unused(board: UsageBoard, ...ids: string[]) {
+  for (const id of ids) {
+    const account = accountOf(board, id);
+    account.windows = [{ ...UNUSED }, ...account.windows.filter((window) => window.kind !== "session")];
+  }
+  return board;
+}
+function cellsOn(root: Element | null | undefined) {
+  const bars = [...root?.querySelectorAll("[data-account-bars]") ?? []];
+  expect(bars.length, "bars").toBeGreaterThan(0);
+  return bars.flatMap((node) => {
+    expect(node.textContent).not.toMatch(GLYPHS);
+    return [...node.children].map((group) => {
+      const label = group.getAttribute("aria-label") ?? "";
+      const boxes = group.querySelectorAll("[data-cells]");
+      expect(boxes, label).toHaveLength(1);
+      const on = Number(boxes[0]!.getAttribute("data-cells"));
+      expect([...boxes[0]!.children].map((cell) => cell.getAttribute("data-cell")), label).toEqual(Array.from({ length: 10 }, (_, i) => (i < on ? "on" : "off")));
+      expect(boxes[0]!.textContent, label).toBe("");
+      const left = group.querySelector("[data-left]");
+      expect(on, label).toBe(left ? Math.round(parseInt(text(left), 10) / 10) : 0);
+      return on;
+    });
+  });
+}
 const menuItems = () => [...host.querySelectorAll('[role="menuitemradio"]')];
 const menuName = (item: Element) => text(item.querySelector("span:not([data-tile])"));
 async function pick(name: string) {
@@ -112,10 +146,11 @@ async function client() {
   };
 }
 
-async function mount({ phone = false, coarse = phone, locale = "en", reduce = false }: { phone?: boolean; coarse?: boolean; locale?: "en" | "ko"; reduce?: boolean } = {}) {
+async function mount({ phone = false, coarse = phone, locale = "en", reduce = false, layout }: { phone?: boolean; coarse?: boolean; locale?: "en" | "ko"; reduce?: boolean; layout?: "A" | "B" } = {}) {
   setMedia({ phone, coarse, reduce });
   i18n.persistPreference(locale);
   h.state.instances = instancesFor(server.board);
+  if (layout) vi.doMock("./usage-layout", () => ({ USAGE_LAYOUT: layout }));
   const { UsageSection } = await import("./UsageSection");
   host = document.createElement("div");
   document.body.append(host);
@@ -170,6 +205,7 @@ beforeEach(async () => {
 afterEach(async () => {
   if (host?.isConnected) await unmount();
   document.body.replaceChildren();
+  vi.doUnmock("./usage-layout");
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -216,7 +252,7 @@ describe("Usage desk", () => {
     }
     scan("hover, focus and touch");
     await click(picker());
-    expect(menuItems().map(menuName)).toEqual(["Claude 1", "Claude 2", "Studio"]);
+    expect(menuItems().map(menuName)).toEqual(phone ? ["Claude 1", "Claude 2", "Studio"] : ["Claude 2", "Studio"]);
     scan("open picker");
     await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     scan("closing picker");
@@ -244,10 +280,12 @@ describe("Usage desk", () => {
     expect(text(row(CLAUDE_3)?.querySelector("[data-tile]"))).toBe("3");
     expect(text(row(CLAUDE_2)?.querySelector("[data-account-name]"))).toBe("Claude 2");
     expect(text(row("claude")?.querySelector("[data-account-name]"))).toBe("Claude 1");
-    expect([...section("claude")?.querySelectorAll("[data-account-row]") ?? []].map((node) => node.getAttribute("data-account-row"))).toEqual([CLAUDE_3, "claude", CLAUDE_2]);
+    expect(visible()).toEqual(["claude", CLAUDE_3]);
+    expect(text(column("main")?.querySelector("[data-account-head]"))).toBe("1Claude 1");
+    expect(text(column("main")?.querySelector("[data-main-check]"))).toBe("Main");
     await click(picker());
-    expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 1", "Claude 2"]);
-    expect(menuItems().map(text)).toEqual(["3Studio", "1Claude 1Main", "2Claude 2"]);
+    expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 2"]);
+    expect(menuItems().map(text)).toEqual(["3Studio", "2Claude 2"]);
     const all = text(host);
     expect(all).not.toContain("Account 1");
     expect(all).not.toContain(CLAUDE_3);
@@ -259,6 +297,7 @@ describe("Usage desk", () => {
     server.post = () => post.promise;
     await mount();
     expect(checkRow()).toBe("claude");
+    await pick("Studio");
     await click(useButton(CLAUDE_3));
     expect(text(row(CLAUDE_3))).toContain("Switching...");
     expect(checkRow()).toBe("claude");
@@ -291,11 +330,12 @@ describe("Usage desk", () => {
   it("sends one Main request per engine while one is pending", async () => {
     server.post = () => new Promise(() => {});
     await mount();
+    await pick("Studio");
     await click(useButton(CLAUDE_3));
     await click(useButton(CLAUDE_3));
+    await pick("Claude 2");
     await click(useButton(CLAUDE_2));
     expect(mainPosts()).toEqual([`POST /api/accounts/${encodeURIComponent(CLAUDE_3)}/default`]);
-    await pick("Claude 2");
     expect(heroName()).toBe("Claude 2");
     expect(mainPosts()).toHaveLength(1);
     expect(section("codex")?.contains(useButton(CODEX_2) ?? null)).toBe(true);
@@ -307,6 +347,7 @@ describe("Usage desk", () => {
   it.each(["500 Internal Server Error", "409 Conflict"])("keeps Main and shows a safe error when the save fails (%s)", async (status) => {
     server.post = async () => { throw new Error(`${status}: ${canary.address} raw provider text`); };
     await mount();
+    await pick("Studio");
     await click(useButton(CLAUDE_3));
     const alert = q('[role="alert"]');
     expect(text(alert)).toBe(i18n.translate("en", "usage.desk.mainFailed" as never));
@@ -322,6 +363,7 @@ describe("Usage desk", () => {
     const post = deferred<unknown>();
     server.post = () => post.promise;
     await mount({ phone, locale });
+    await pick("Studio");
     await click(useButton(CLAUDE_3));
     await pick("Claude 2");
     expect(heroName()).toBe("Claude 2");
@@ -331,7 +373,7 @@ describe("Usage desk", () => {
     server.board = confirmed;
     await act(async () => { post.resolve({}); await vi.advanceTimersByTimeAsync(0); });
     expect(checkRow()).toBe(CLAUDE_3);
-    expect(heroName()).toBe("Claude 2");
+    expect(heroName()).toBe(phone ? "Claude 2" : "Claude 1");
     expect(left(CLAUDE_2, "week")).toBe("0%");
   });
 
@@ -393,7 +435,8 @@ describe("Usage desk", () => {
     await act(async () => { usageBoardFrame(44); await vi.advanceTimersByTimeAsync(0); });
     expect(boardGets().at(-1)).toBe("GET /api/usage/board?cursor=fixture-43");
     expect(row(CLAUDE_3)).toBeNull();
-    expect(heroName()).toBe("Claude 1");
+    expect(visible()).toEqual(["claude", CLAUDE_2]);
+    expect(picker()).toBeNull();
   });
 
   it("refetches only on a higher frame, focus, reconnect or pane change", async () => {
@@ -545,9 +588,10 @@ describe("Usage desk", () => {
   });
 
   it.each([
-    [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
-  ] as const)("shows Today's bars, 5h then 7d, for every account (phone=%s, %s)", async (phone, locale) => {
-    await mount({ phone, locale });
+    [false, "en", "A"], [true, "en", "A"], [false, "ko", "A"], [true, "ko", "A"],
+    [false, "en", "B"], [true, "en", "B"], [false, "ko", "B"], [true, "ko", "B"],
+  ] as const)("shows Today's bars, 5h then 7d, for every account (phone=%s, %s, layout %s)", async (phone, locale, layout) => {
+    await mount({ phone, locale, layout });
     const say = (key: Parameters<typeof i18n.translate>[1], vars?: Record<string, number>) => i18n.translate(locale, key, vars);
     const [h5, d7, noData] = [say("usage.limits.sessionShort"), say("usage.limits.weeklyShort"), say("usage.desk.noData")];
     const accounts = usageBoardFixture.engines.flatMap((engine) => engine.accounts.map((account) => ({ engine: engine.engine, account })));
@@ -664,9 +708,13 @@ describe("Usage desk", () => {
     const animated = vi.spyOn(Element.prototype, "animate");
     await pick("Studio");
     expect(heroName()).toBe("Studio");
-    expect(scrolled.mock.contexts.at(-1)).toBe(row(CLAUDE_3));
-    expect(scrolled).toHaveBeenLastCalledWith({ block: "nearest", behavior: "smooth" });
-    expect(animated.mock.contexts).toContain(row(CLAUDE_3));
+    expect(viewed()).toBe(CLAUDE_3);
+    expect(scrolled).not.toHaveBeenCalled();
+    const moved = [...row(CLAUDE_3)?.children ?? []].filter((part) => !part.hasAttribute("data-account-head"));
+    expect(moved.length).toBeGreaterThan(0);
+    expect(animated.mock.contexts).toHaveLength(moved.length);
+    expect(animated.mock.contexts.every((node, i) => node === moved[i])).toBe(true);
+    expect(animated.mock.calls.map(([frames]) => (frames as Keyframe[])[0]?.transform)).toEqual(moved.map(() => "translateX(12px)"));
     expect(left(CLAUDE_3)).toBe("40%");
     expect(mainPosts()).toEqual([]);
     expect(checkRow()).toBe("claude");
@@ -731,11 +779,10 @@ describe("Usage desk", () => {
     expect(heroName()).toBe("Studio");
     expect(left(CLAUDE_3)).toBe("40%");
     expect(left("claude")).toBe("34%");
-    expect(scrolled.mock.contexts.at(-1)).toBe(row(CLAUDE_3));
-    expect(scrolled).toHaveBeenLastCalledWith({ block: "nearest", behavior: "auto" });
-    await pick("Claude 1");
-    expect(scrolled.mock.contexts.at(-1)).toBe(row("claude"));
-    expect(animated.mock.contexts.filter((node) => node instanceof Element && node.hasAttribute("data-account-row"))).toEqual([]);
+    await pick("Claude 2");
+    expect(viewed()).toBe(CLAUDE_2);
+    expect(scrolled).not.toHaveBeenCalled();
+    expect(animated).not.toHaveBeenCalled();
     const update = fresh();
     update.revision = 43;
     accountOf(update, "claude").windows[0]!.usedPercent = 70;
@@ -771,7 +818,7 @@ describe("Usage desk", () => {
     await act(async () => shortcutsRoot.unmount());
   });
 
-  it("fits Usage at 390 with eight accounts and long ko names", async () => {
+  it.each(["A", "B"] as const)("fits Usage at 390 with eight accounts and long ko names (layout %s)", async (layout) => {
     const board = fresh();
     const claude = engineOf(board, "claude");
     const extra = Array.from({ length: 5 }, (_, i): UsageBoardAccount => ({
@@ -783,7 +830,7 @@ describe("Usage desk", () => {
     }));
     claude.accounts.push(...extra);
     server.board = board;
-    await mount({ phone: true, locale: "ko" });
+    await mount({ phone: true, locale: "ko", layout });
     const rows = [...section("claude")?.querySelectorAll("[data-account-row]") ?? []];
     expect(rows).toHaveLength(8);
     expect(rows[0]?.parentElement?.className).not.toMatch(/\bgrid-cols-2\b/);
@@ -791,6 +838,8 @@ describe("Usage desk", () => {
       const control = node.querySelector("button[data-use], [data-main-check]");
       expect(control?.className).toContain("w-[4.5rem]");
       expect(control?.className).toMatch(/\[@media\(pointer:coarse\)\]:after:-inset-y-2/);
+      expect(node.querySelector("[data-account-head] button[data-use], [data-account-head] [data-main-check]"), "the name keeps its whole line").toBeNull();
+      expect(control?.previousElementSibling?.hasAttribute("data-account-who"), "Main or Use ends the bots line").toBe(true);
       expect(node.querySelector("[data-account-name]")?.className).toMatch(/\bmin-w-0\b.*\btruncate\b/);
       const names = node.querySelector("button[data-bot-count]");
       if (names) {
@@ -801,8 +850,165 @@ describe("Usage desk", () => {
       }
     }
     for (const fact of host.querySelectorAll("[data-reset]")) expect(fact.className).not.toMatch(/\btruncate\b/);
-    expect(q('[data-window="session"]')?.getAttribute("aria-label")).toMatch(/후 초기화$/);
-    expect(text(q('[data-reset="session"]'))).toBe("(40분)");
+    expect(row("claude")?.querySelector('[data-window="session"]')?.getAttribute("aria-label")).toMatch(/후 초기화$/);
+    expect(text(row("claude")?.querySelector('[data-reset="session"]'))).toBe("(40분)");
     expect(q("[data-usage-desk]")?.className).toMatch(/min-w-0/);
+    expect(visible()).toEqual(layout === "A" ? ["claude"] : rows.map((node) => node.getAttribute("data-account-row")));
+  });
+
+  it.each([
+    [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
+  ] as const)("shows Main on the left and one other account on the right, or one row from Main on a phone (phone=%s, %s)", async (phone, locale) => {
+    await mount({ phone, locale });
+    const engines = ["claude", "codex", "grok", "gemini"];
+    expect(engines.map((engine) => visible(engine))).toEqual(phone
+      ? [["claude"], ["codex"], ["grok"], ["gemini"]]
+      : [["claude", CLAUDE_2], ["codex", CODEX_2], ["grok"], ["gemini"]]);
+    expect(engines.map((engine) => [arrows(engine).length, picker(engine) !== null])).toEqual(phone
+      ? [[2, true], [2, true], [0, false], [0, false]]
+      : [[2, true], [0, false], [0, false], [0, false]]);
+    for (const engine of engines) {
+      const grid = section(engine)?.children[1];
+      expect(grid?.classList.contains("grid-cols-2"), engine).toBe(!phone);
+      expect([...grid?.children ?? []].map((node) => node.getAttribute("data-account-column")), engine)
+        .toEqual(phone ? ["pages"] : engine === "claude" || engine === "codex" ? ["main", "other"] : [null]);
+    }
+    expect(column("main", "claude")?.firstElementChild?.getAttribute("data-account-row") ?? null).toBe(phone ? null : "claude");
+    const parts = (engine: string) => {
+      const pages = column(phone ? "pages" : "other", engine);
+      if (pages) expect(pages.classList.contains("grid"), engine).toBe(true);
+      return [...pages?.children ?? []].map((part) => {
+        const hidden = part.getAttribute("aria-hidden") === "true";
+        expect([part.classList.contains("col-start-1"), part.classList.contains("row-start-1"), part.classList.contains("invisible"), part.hasAttribute("inert")], engine)
+          .toEqual([true, true, hidden, hidden]);
+        return `${hidden ? "hidden" : "shown"} ${part.querySelector("[data-account-row]")?.getAttribute("data-account-row")}`;
+      });
+    };
+    expect(parts("claude")).toEqual(phone ? [`hidden ${CLAUDE_2}`, `hidden ${CLAUDE_3}`, "shown claude"] : [`hidden ${CLAUDE_3}`, `shown ${CLAUDE_2}`]);
+    expect(parts("codex")).toEqual(phone ? [`hidden ${CODEX_2}`, "shown codex"] : [`shown ${CODEX_2}`]);
+    expect(parts("grok")).toEqual(phone ? ["shown grok"] : []);
+  });
+
+  it.each([
+    [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
+  ] as const)("pages to the ends with the arrows, jumps with the list and asks for Main only on Use (phone=%s, %s)", async (phone, locale) => {
+    const claude = engineOf(server.board, "claude");
+    claude.accounts.push({ ...structuredClone(claude.accounts[1]!), id: CLAUDE_4, number: 4, name: "Claude 4" });
+    server.post = () => new Promise(() => {});
+    await mount({ phone, locale });
+    const say = (key: Parameters<typeof i18n.translate>[1]) => i18n.translate(locale, key);
+    const pages = phone ? ["claude", CLAUDE_2, CLAUDE_3, CLAUDE_4] : [CLAUDE_2, CLAUDE_3, CLAUDE_4];
+    const ends = () => arrows().map((button) => button.disabled);
+    const walk = async (side: 0 | 1, presses: number) => {
+      const seen: (string | null)[] = [];
+      for (let press = 0; press < presses; press += 1) {
+        await click(arrows()[side]);
+        seen.push(viewed());
+      }
+      return seen;
+    };
+    expect(arrows().map((button) => button.getAttribute("aria-label"))).toEqual([say("accounts.previous"), say("accounts.next")]);
+    expect(viewed()).toBe(pages[0]);
+    expect(ends()).toEqual([true, false]);
+    expect(await walk(0, 1)).toEqual([pages[0]]);
+    expect(await walk(1, pages.length)).toEqual([...pages.slice(1), pages.at(-1)]);
+    expect(ends()).toEqual([false, true]);
+    expect(await walk(0, pages.length)).toEqual([...pages.slice(0, -1).reverse(), pages[0]]);
+    expect(ends()).toEqual([true, false]);
+    await click(picker());
+    expect(menuItems().map(text)).toEqual([...phone ? [`1Claude 1${say("accounts.main")}`] : [], "2Claude 2", "3Studio", "4Claude 4"]);
+    await click(menuItems().at(-1));
+    expect(viewed()).toBe(CLAUDE_4);
+    expect(heroName()).toBe("Claude 4");
+    expect(document.activeElement).toBe(picker());
+    expect(ends()).toEqual([false, true]);
+    await pick(phone ? "Claude 1" : "Claude 2");
+    expect(viewed()).toBe(pages[0]);
+    expect(ends()).toEqual([true, false]);
+    expect(mainPosts()).toEqual([]);
+    expect(checkRow()).toBe("claude");
+    await pick("Studio");
+    await click(useButton(CLAUDE_3));
+    expect(mainPosts()).toEqual([`POST /api/accounts/${encodeURIComponent(CLAUDE_3)}/default`]);
+  });
+
+  it.each([false, true])("keeps each engine's pick to itself (phone=%s)", async (phone) => {
+    await mount({ phone });
+    const codex = section("codex")?.innerHTML;
+    await pick("Studio");
+    expect(viewed()).toBe(CLAUDE_3);
+    expect(section("codex")?.innerHTML).toBe(codex);
+    expect(viewed("codex")).toBe(phone ? "codex" : CODEX_2);
+    if (phone) {
+      const claude = section("claude")?.innerHTML;
+      await click(arrows("codex")[1]);
+      expect(viewed("codex")).toBe(CODEX_2);
+      expect(section("claude")?.innerHTML).toBe(claude);
+    }
+    expect(viewed()).toBe(CLAUDE_3);
+    expect(mainPosts()).toEqual([]);
+  });
+
+  it.each([
+    ["A", false], ["A", true], ["B", false], ["B", true],
+  ] as const)("names every shown row beside its tile, Codex 2 too (layout %s, phone=%s)", async (layout, phone) => {
+    await mount({ phone, layout });
+    const named = () => [...host.querySelectorAll("[data-account-row]")].filter(live).map((node) => {
+      const id = node.getAttribute("data-account-row") ?? "";
+      const tiles = node.querySelectorAll("[data-tile]");
+      expect(tiles, id).toHaveLength(1);
+      const next = tiles[0]?.nextElementSibling;
+      const name = next?.matches("[data-account-name]") ? next : next?.querySelector("[data-account-name]");
+      expect(text(name), id).not.toBe("");
+      return `${text(tiles[0])} ${text(name)}`;
+    });
+    expect(named()).toEqual(layout === "B" ? ["1 Claude 1", "2 Claude 2", "3 Studio", "1 Codex 1", "2 Codex 2", "1 Grok", "1 Gemini"]
+      : phone ? ["1 Claude 1", "1 Codex 1", "1 Grok", "1 Gemini"] : ["1 Claude 1", "2 Claude 2", "1 Codex 1", "2 Codex 2", "1 Grok", "1 Gemini"]);
+    if (layout === "A" && phone) {
+      await click(arrows("codex")[1]);
+      expect(named()).toEqual(["1 Claude 1", "2 Codex 2", "1 Grok", "1 Gemini"]);
+    }
+    expect(visible("codex")).toContain(CODEX_2);
+    expect(text(row(CODEX_2)?.querySelector("[data-account-name]"))).toBe("Codex 2");
+    if (layout === "A") expect(column(phone ? "pages" : "other", "codex")?.contains(row(CODEX_2))).toBe(true);
+    else expect(host.querySelector("[aria-hidden] [data-account-row], [data-account-column]")).toBeNull();
+  });
+
+  it.each([
+    ["A", false, "en"], ["A", true, "en"], ["A", false, "ko"], ["A", true, "ko"],
+    ["B", false, "en"], ["B", true, "en"], ["B", false, "ko"], ["B", true, "ko"],
+  ] as const)("reads an unused window the same on Main and other accounts, with no title or not-reported words (layout %s, phone=%s, %s)", async (layout, phone, locale) => {
+    server.board = unused(fresh(), "claude", CLAUDE_2);
+    await mount({ phone, locale, layout });
+    const say = (key: Parameters<typeof i18n.translate>[1], vars?: Record<string, number>) => i18n.translate(locale, key, vars);
+    const label = `${say("usage.limits.sessionShort")}: ${say("usage.desk.windowLeft", { percent: 100 })}`;
+    const bars = ["claude", CLAUDE_2].map((id) => row(id)?.querySelector('[data-window="session"]'));
+    expect(bars.map((node) => node?.getAttribute("aria-label"))).toEqual([label, label]);
+    expect(bars.map((node) => text(node?.querySelector("[data-left]")))).toEqual(["100%", "100%"]);
+    expect(bars.map((node) => node?.querySelector("[data-reset]") ?? null)).toEqual([null, null]);
+    expect(bars[1]?.outerHTML).toBe(bars[0]?.outerHTML);
+    expect(host.querySelectorAll("[data-account-bars][title], [data-account-bars] [title]")).toHaveLength(0);
+    expect(said(host)).not.toContain(say("usage.limits.resetUnknown"));
+    expect(said(host)).not.toMatch(/not reported|보고되지/);
+  });
+
+  it.each([
+    ["A", false], ["A", true], ["B", false], ["B", true],
+  ] as const)("draws every bar as ten boxes, filled ones first, with no glyphs (layout %s, phone=%s)", async (layout, phone) => {
+    server.board = unused(fresh(), "grok");
+    await mount({ phone, layout });
+    const on = cellsOn(host);
+    expect(on).toHaveLength(13);
+    expect([Math.min(...on), Math.max(...on)]).toEqual([0, 10]);
+    expect(said(host)).not.toMatch(GLYPHS);
+  });
+
+  it.each([false, true])("labels the account arrows in Korean (phone=%s)", async (phone) => {
+    await mount({ phone, locale: "ko" });
+    expect(["claude", "codex", "grok", "gemini"].map((engine) => arrows(engine).map((button) => button.getAttribute("aria-label"))))
+      .toEqual([["이전 계정", "다음 계정"], phone ? ["이전 계정", "다음 계정"] : [], [], []]);
+    expect(arrows().map((button) => text(button))).toEqual(["", ""]);
+    expect(picker()?.getAttribute("aria-label")).toBe(`계정 선택: ${phone ? "Claude 1" : "Claude 2"}`);
+    expect(said(host)).not.toMatch(/Previous Account|Next Account|Choose account/);
   });
 });

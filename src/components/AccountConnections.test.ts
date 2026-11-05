@@ -96,18 +96,18 @@ it.each([false, true])("keeps a long email on one line with row disclosure and p
   expect(host.textContent).not.toContain("Main");
 });
 
-it.each([1, 2])("heads the engine above %i account rows and a separate Add Account row", async (count) => {
+it.each([1, 2])("heads the engine above %i account rows, with Add Account only on the engine header row", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
   const [header] = [...group.children];
   const rows = [...group.querySelectorAll("[data-connection-account]")];
   expect(header!.querySelector("svg")).not.toBeNull();
-  expect(header!.textContent).toBe("Claude");
+  expect(header!.textContent).toBe("ClaudeAdd Account");
   expect(header!.textContent).not.toContain("@");
   expect(group.querySelectorAll("svg")).toHaveLength(count + 1);
   expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
   expect(rows).toHaveLength(count);
-  expect(group.lastElementChild!.textContent).toBe("Add Account");
+  expect(group.lastElementChild!.hasAttribute("data-connection-account")).toBe(true);
   for (const [i, row] of rows.entries()) {
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
@@ -339,6 +339,29 @@ it("keeps computer-only guidance for Claude account creation on a phone", async 
   expect(buttons("Add Account")).toHaveLength(0);
   expect(host.textContent).toContain("Sign in on a computer");
   expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
+});
+
+it("puts computer-only guidance under the engine name, never beside it, and keeps action words on one line", async () => {
+  await render(2);
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  await update();
+  const header = host.querySelector('[data-engine-row="claude"]')!.firstElementChild!;
+  const [line, under] = [...header.children];
+  expect(line!.textContent).toBe("Claude");
+  expect(under!.textContent).toBe("Sign in on a computer");
+  expect(under!.className).toContain("pl-6");
+  for (const slot of host.querySelectorAll("[data-connection-account] .justify-end")) expect(slot.classList.contains("whitespace-nowrap")).toBe(true);
+});
+
+it("shows an opened identity on single lines, never broken mid-address", async () => {
+  await render(1);
+  const disclosure = host.querySelector<HTMLButtonElement>("[data-connection-identity]")!;
+  await act(async () => disclosure.click());
+  const body = host.querySelector("[data-connection-identity-body]")!;
+  expect(body.className).not.toMatch(/break-all|break-words|wrap-anywhere|wrap-break-word/);
+  expect(body.textContent).toContain("claude@example.com");
+  for (const line of body.children) expect(line.classList.contains("truncate")).toBe(true);
 });
 
 it("offers recovery for a stopped account whose credentials remain valid", async () => {

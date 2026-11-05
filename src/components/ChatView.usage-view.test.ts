@@ -59,6 +59,33 @@ const poke = async (node: Element) => act(async () => {
 });
 const whoLine = (row: Element) => [...row.querySelector("[data-account-who]")?.children ?? []].map((node) => text(node)).join(" ");
 const HIDDEN = '[data-usage-hero], [data-hero-left], [data-verdict], [data-projection], [data-usage-chart], [data-trace], [data-chart-fold], [data-today-normal], [data-details], [role="tablist"], [role="tab"], [data-usage-event]';
+const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
+const GLYPHS = /[\u2580-\u25FF]/u;
+const said = (root: Element | null | undefined) => [root?.textContent ?? "", ...[...root?.querySelectorAll("*") ?? []].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
+function unused(board: UsageBoard, ...ids: string[]) {
+  for (const account of board.engines.flatMap((engine) => engine.accounts)) {
+    if (ids.includes(account.id)) account.windows = [{ ...UNUSED }, ...account.windows.filter((window) => window.kind !== "session")];
+  }
+  return board;
+}
+function cellsOn(root: Element | null | undefined) {
+  const bars = [...root?.querySelectorAll("[data-account-bars]") ?? []];
+  expect(bars.length, "bars").toBeGreaterThan(0);
+  return bars.flatMap((node) => {
+    expect(node.textContent).not.toMatch(GLYPHS);
+    return [...node.children].map((group) => {
+      const label = group.getAttribute("aria-label") ?? "";
+      const boxes = group.querySelectorAll("[data-cells]");
+      expect(boxes, label).toHaveLength(1);
+      const on = Number(boxes[0]!.getAttribute("data-cells"));
+      expect([...boxes[0]!.children].map((cell) => cell.getAttribute("data-cell")), label).toEqual(Array.from({ length: 10 }, (_, i) => (i < on ? "on" : "off")));
+      expect(boxes[0]!.textContent, label).toBe("");
+      const left = group.querySelector("[data-left]");
+      expect(on, label).toBe(left ? Math.round(parseInt(text(left), 10) / 10) : 0);
+      return on;
+    });
+  });
+}
 
 function setMedia(phone: boolean) {
   window.matchMedia = ((query: string) => ({
@@ -420,6 +447,48 @@ describe("chat usage meter, quick view and wait card", () => {
     }
     expect(empties).toHaveLength(2);
     expect(empties[1]).toBe(empties[0]);
+  });
+
+  it.each([
+    [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
+  ] as const)("reads an unused window the same on every quick view account, with no title or not-reported words (phone=%s, %s)", async (phone, locale) => {
+    seatMeter(viewport(phone ? 390 : 1280, phone ? 844 : 800));
+    const say = (key: Parameters<Mods["i18n"]["translate"]>[1], vars?: Record<string, number>) => m.i18n.translate(locale, key, vars);
+    const label = `${say("usage.limits.sessionShort")}: ${say("usage.desk.windowLeft", { percent: 100 })}`;
+    server.board = unused(fresh(), "claude", CLAUDE_2, "grok");
+    const bars: [string, string | null, string][] = [];
+    for (const engine of server.board.engines) {
+      await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone, locale });
+      await click(meter());
+      const view = quick();
+      expect(view, `${engine.engine} quick view`).not.toBeNull();
+      for (const bar of view?.querySelectorAll('[data-window="session"]') ?? []) {
+        const id = bar.closest("[data-account-row]")?.getAttribute("data-account-row") ?? "";
+        if (["claude", CLAUDE_2, "grok"].includes(id)) bars.push([id, bar.getAttribute("aria-label"), bar.outerHTML]);
+      }
+      expect(view?.querySelectorAll("[data-account-bars][title], [data-account-bars] [title]"), engine.engine).toHaveLength(0);
+      expect(said(view), engine.engine).not.toContain(say("usage.limits.resetUnknown"));
+      expect(said(view), engine.engine).not.toMatch(/not reported|보고되지/);
+      await unmount();
+    }
+    expect(bars.map(([id, aria]) => `${id} ${aria}`)).toEqual(["claude", CLAUDE_2, "grok"].map((id) => `${id} ${label}`));
+    expect(new Set(bars.map(([, , html]) => html)).size).toBe(1);
+  });
+
+  it.each([false, true])("draws every quick view bar as ten boxes, filled ones first, with no glyphs (phone=%s)", async (phone) => {
+    seatMeter(viewport(phone ? 390 : 1280, phone ? 844 : 800));
+    server.board = unused(fresh(), "grok");
+    const on: number[] = [];
+    for (const engine of server.board.engines) {
+      await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone });
+      await click(meter());
+      expect(quick(), `${engine.engine} quick view`).not.toBeNull();
+      on.push(...cellsOn(quick()));
+      expect(said(quick()), engine.engine).not.toMatch(GLYPHS);
+      await unmount();
+    }
+    expect(on).toHaveLength(13);
+    expect([Math.min(...on), Math.max(...on)]).toEqual([0, 10]);
   });
 
   it("shows the reset of a binding window that keeps no history, with no empty chart fold", async () => {

@@ -2,8 +2,9 @@
 // The engine header's account picker: passive inspection by name and number, keyed by id. The old paged account columns are now the desk's rows.
 import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { AccountPicker } from "./UsageAccounts";
 
 const accounts = [
@@ -104,6 +105,45 @@ it("closes an open menu when its trigger is pressed again", async () => {
   await act(async () => picker().click());
   expect(picker().getAttribute("aria-expanded")).toBe("false");
   expect(openMenu()).toBeNull();
+});
+
+it.each([false, true])("closes once on a second full press of its trigger and scales only while no menu is mounted (reduced motion=%s)", async (reduce) => {
+  vi.useFakeTimers();
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: reduce && query.includes("reduce"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
+  onTestFinished(() => media.mockRestore());
+  await render();
+  const box = picker().parentElement!;
+  const scales = () => box.classList.contains("has-[>button:active]:scale-[0.97]");
+  expect(scales()).toBe(true);
+  await act(async () => picker().click());
+  expect(picker().getAttribute("aria-expanded")).toBe("true");
+  expect(scales()).toBe(false);
+  const flips: (string | null)[] = [];
+  const watch = new MutationObserver((records) => flips.push(...records.map((record) => record.oldValue)));
+  watch.observe(picker(), { attributeFilter: ["aria-expanded"], attributeOldValue: true });
+  const seen: string[] = [];
+  for (const press of [
+    () => picker().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })),
+    () => picker().dispatchEvent(new MouseEvent("mousedown", { bubbles: true })),
+    () => picker().focus(),
+    () => picker().dispatchEvent(new PointerEvent("pointerup", { bubbles: true })),
+    () => picker().dispatchEvent(new MouseEvent("mouseup", { bubbles: true })),
+    () => picker().click(),
+  ]) {
+    await act(async () => { press(); });
+    seen.push(`${picker().getAttribute("aria-expanded")}:${scales()}`);
+  }
+  expect(seen).toEqual(["true:false", "true:false", "true:false", "true:false", "true:false", `false:${reduce}`]);
+  expect(openMenu()).toBeNull();
+  expect(host.querySelector('[role="menu"]') === null).toBe(reduce);
+  await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS); });
+  expect(host.querySelector('[role="menu"]')).toBeNull();
+  expect(scales()).toBe(true);
+  flips.push(...watch.takeRecords().map((record) => record.oldValue));
+  watch.disconnect();
+  expect(flips).toEqual(["true"]);
+  expect(picker().getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(picker());
 });
 
 it("keeps the menu open on blur without a related target", async () => {

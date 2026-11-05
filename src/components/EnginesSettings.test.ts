@@ -341,7 +341,7 @@ describe("EnginesSettings friends Connections list", () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });
     const { root, row } = await renderList();
     try {
-      expect(row("claude").textContent).toBe("ClaudeConnectedSign OutAdd Account");
+      expect(row("claude").textContent).toBe("ClaudeAdd AccountConnectedSign Out");
       expect(row("claude").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
