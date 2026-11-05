@@ -879,4 +879,55 @@ describe("full screen chart", () => {
     act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x + 50, clientY: y })));
     expect({ zoom: svg().getAttribute("data-mi-zoom"), tooltip: Boolean(host.querySelector('[role="tooltip"]')) }).toEqual({ zoom: "2", tooltip: true });
   });
+
+  describe("desktop wheel zoom", () => {
+    const wheel = (deltaY: number, [clientX, clientY]: [number, number], time: number) => {
+      // happy-dom's WheelEvent drops clientX.
+      const event = new MouseEvent("wheel", { bubbles: true, cancelable: true, clientX, clientY });
+      for (const [key, value] of Object.entries({ deltaX: 0, deltaY, deltaMode: 0, timeStamp: time })) Object.defineProperty(event, key, { value });
+      act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(event));
+      return event;
+    };
+    const mouse = (target: EventTarget, type: string, [clientX, clientY]: [number, number]) =>
+      act(() => void target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, button: 0 })));
+    const zoomed = () => Number(svg().getAttribute("data-mi-zoom"));
+    const spot = (dot: SVGGElement) => dot.style.transform.match(/-?[\d.]+/g)!.map(Number) as [number, number];
+
+    it("zooms on the wheel, hides the tooltip, pans, and resets on double-click and index change", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await rebuild(false, { width: 780, height: 330 });
+      expect(button("Full Screen")).toBeNull();
+      const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+      const [x, y] = spot(dot);
+      act(() => dot.querySelector<SVGElement>("[aria-label]")!.focus());
+      expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+      expect(wheel(-300, [x, y], 1000).defaultPrevented).toBe(true);
+      expect(host.querySelector('[role="tooltip"]')).toBeNull();
+      act(() => vi.advanceTimersByTime(200));
+      expect(zoomed()).toBeGreaterThan(1);
+      expect(spot(dot)[0]).toBeCloseTo(x);
+      expect(spot(dot)[1]).toBeCloseTo(y);
+      expect([...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].some((el) => el.style.opacity === "0")).toBe(true);
+      mouse(svg().querySelector("rect[fill=transparent]")!, "mousedown", [x, y]);
+      mouse(window, "mousemove", [x + 40, y]);
+      mouse(window, "mouseup", [x + 40, y]);
+      expect(spot(dot)[0]).toBeCloseTo(x + 40);
+      // SAFETY: phone and motion checks only read .matches.
+      vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("reduce") }) as MediaQueryList);
+      mouse(svg(), "dblclick", [x, y]);
+      expect(zoomed()).toBe(1);
+      expect(svg().querySelector("style")?.textContent).toContain("transform 0s");
+      wheel(-300, [x, y], 2000);
+      act(() => vi.advanceTimersByTime(200));
+      expect(zoomed()).toBeGreaterThan(1);
+      pick("Benchmark", "Coding");
+      expect(zoomed()).toBe(1);
+    });
+
+    it("leaves the phone chart to the page scroll", async () => {
+      await rebuild(true, { width: 366, height: 330 });
+      expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
+      expect(svg().getAttribute("data-mi-zoom")).toBeNull();
+    });
+  });
 });

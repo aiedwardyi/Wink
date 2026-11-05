@@ -5,10 +5,15 @@ import { PHONE_QUERY, SWIPE_MOTION_MS, SWIPE_SLOP, SWIPE_SPRING, hapticTick, loc
 type Plot = { left: number; right: number; top: number; bottom: number };
 type Drag = { start: ChartSpot; last: ChartSpot; time: number; velocity: number; axis: SwipeAxis; pan: boolean; blocked: boolean; afterPinch?: boolean };
 type Pinch = { zoom: ChartZoom; distance: number; center: ChartSpot };
+type ZoomInput = "touch" | "mouse";
+
+// A wheel that started on the page keeps scrolling it while the chart passes under the cursor.
+const WHEEL_LATCH_MS = 400;
+const WHEEL_SETTLE_MS = 150;
 
 export function useChartZoom(
   ref: RefObject<SVGSVGElement | null>,
-  enabled: boolean,
+  input: ZoomInput | undefined,
   index: string,
   plot: Plot,
   swipe: (step: -1 | 1) => boolean,
@@ -17,20 +22,20 @@ export function useChartZoom(
   const [zoom, setZoom] = useState(FULL_ZOOM);
   const [motion, setMotion] = useState<string>();
   const current = useRef(FULL_ZOOM);
-  const latest = useRef({ plot, swipe, hide, zoom: enabled ? zoom : undefined });
+  const latest = useRef({ plot, swipe, hide, zoom: input ? zoom : undefined });
   const suppress = useRef(false);
-  useLayoutEffect(() => { latest.current = { plot, swipe, hide, zoom: enabled ? zoom : undefined }; });
+  useLayoutEffect(() => { latest.current = { plot, swipe, hide, zoom: input ? zoom : undefined }; });
 
   useLayoutEffect(() => {
     current.current = FULL_ZOOM;
     setZoom(FULL_ZOOM);
     setMotion(undefined);
     suppress.current = false;
-  }, [enabled, index]);
+  }, [input, index]);
 
   useEffect(() => {
     const el = ref.current;
-    if (!enabled || !el) return;
+    if (!input || !el) return;
     // SAFETY: hapticTick only reads matchMedia/navigator; full-screen phones can exceed the width breakpoint.
     const phoneWindow = {
       matchMedia: (query: string) => query === PHONE_QUERY ? { matches: true } : window.matchMedia(query),
@@ -39,17 +44,20 @@ export function useChartZoom(
     let drag: Drag | null = null;
     let pinch: Pinch | null = null;
     let tap: { point: ChartSpot; time: number } | null = null;
+    let wheel: { page: boolean; time: number } | null = null;
+    let wheelTimer: ReturnType<typeof setTimeout> | undefined;
+    let wheelBox: DOMRect | undefined;
+    let grab: ChartSpot | null = null;
     let frame = 0;
     let origin = current.current;
     let moving = false;
     let dots: SVGGElement[] = [];
     let labels: SVGTextElement[] = [];
     let lines: SVGGElement[] = [];
-    const point = (touch: Touch): ChartSpot => ({ x: touch.clientX, y: touch.clientY });
+    const point = (at: { clientX: number; clientY: number }): ChartSpot => ({ x: at.clientX, y: at.clientY });
     const center = (a: ChartSpot, b: ChartSpot): ChartSpot => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
     const distance = (a: ChartSpot, b: ChartSpot) => Math.hypot(a.x - b.x, a.y - b.y);
-    const anchor = (spot: ChartSpot): ChartSpot => {
-      const box = el.getBoundingClientRect();
+    const anchor = (spot: ChartSpot, box = el.getBoundingClientRect()): ChartSpot => {
       const { left, right, top, bottom } = latest.current.plot;
       return { x: (spot.x - box.left - left) / (right - left), y: (spot.y - box.top - top) / (bottom - top) };
     };
@@ -71,8 +79,15 @@ export function useChartZoom(
         dot.style.transform = `translate(${left + (x - next.x) * next.scale * (right - left)}px, ${top + (y - next.y) * next.scale * (bottom - top)}px)`;
         dot.style.opacity = inZoom(next, { x, y }) ? "1" : "0";
       }
-      for (const label of labels) label.style.transform = `translate(${Number(label.dataset.miX) * scale + dx}px, ${Number(label.dataset.miY) * scale + dy}px)`;
-      for (const line of lines) line.setAttribute("transform", `matrix(${scale} 0 0 ${scale} ${dx} ${dy})`);
+      // With an anchor (data-mi-ax/ay) a label and its leader move with the dot they name instead of scaling their offset from it.
+      for (const label of labels) {
+        const x = Number(label.dataset.miX), y = Number(label.dataset.miY);
+        label.style.transform = `translate(${x + Number(label.dataset.miAx ?? x) * (scale - 1) + dx}px, ${y + Number(label.dataset.miAy ?? y) * (scale - 1) + dy}px)`;
+      }
+      for (const line of lines) {
+        const { miAx, miAy } = line.dataset;
+        line.setAttribute("transform", miAx ? `translate(${Number(miAx) * (scale - 1) + dx} ${Number(miAy) * (scale - 1) + dy})` : `matrix(${scale} 0 0 ${scale} ${dx} ${dy})`);
+      }
     };
     const settle = () => {
       if (!moving) return;
@@ -81,6 +96,7 @@ export function useChartZoom(
         paint();
       }
       moving = false;
+      wheelBox = undefined;
       for (const line of lines) line.removeAttribute("transform");
       el.removeAttribute("data-mi-gesture");
       setMotion("0s");
@@ -179,18 +195,72 @@ export function useChartZoom(
       if (step && latest.current.swipe(step)) hapticTick(phoneWindow);
     };
     const onCancel = () => { settle(); drag = null; pinch = null; tap = null; suppress.current = true; };
+    const onPageWheel = (e: WheelEvent) => {
+      if (!el.contains(e.target as Node)) wheel = { page: true, time: e.timeStamp };
+    };
+    const onWheel = (e: WheelEvent) => {
+      const latched = wheel && e.timeStamp - wheel.time < WHEEL_LATCH_MS ? wheel.page : false;
+      // Chromium scrolls a wheel that began off the chart before dispatching it, uncancelable, with the chart now under the cursor.
+      const page = latched || !e.cancelable || (!e.ctrlKey && (Math.abs(e.deltaX) > Math.abs(e.deltaY) || (e.deltaY > 0 && current.current.scale === 1)));
+      wheel = { page, time: e.timeStamp };
+      if (page) return;
+      e.preventDefault();
+      const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 800 : 1);
+      // Measured once per gesture: a read after each paint would force a second style pass every frame.
+      wheelBox ??= el.getBoundingClientRect();
+      update(zoomAt(current.current, current.current.scale * 2 ** (-dy * (e.ctrlKey ? 0.01 : 0.003)), anchor(point(e), wheelBox)));
+      clearTimeout(wheelTimer);
+      wheelTimer = setTimeout(settle, WHEEL_SETTLE_MS);
+    };
+    const onGrab = (e: MouseEvent) => {
+      if (e.button !== 0 || current.current.scale === 1) return;
+      e.preventDefault();
+      grab = point(e);
+      suppress.current = true;
+      el.setAttribute("data-mi-drag", "");
+      window.addEventListener("mousemove", onPan);
+      window.addEventListener("mouseup", onDrop);
+    };
+    const onPan = (e: MouseEvent) => {
+      if (!grab) return;
+      const spot = point(e);
+      update(panZoom(current.current, delta(spot, grab)));
+      grab = spot;
+    };
+    const onDrop = () => {
+      grab = null;
+      window.removeEventListener("mousemove", onPan);
+      window.removeEventListener("mouseup", onDrop);
+      el.removeAttribute("data-mi-drag");
+      suppress.current = false;
+      settle();
+    };
+    const onReset = () => {
+      if (current.current.scale === 1) return;
+      clearTimeout(wheelTimer);
+      settle();
+      update(FULL_ZOOM, true);
+    };
     const onClick = (e: MouseEvent) => {
       if (!suppress.current) return;
       e.preventDefault();
       e.stopImmediatePropagation();
     };
-    el.addEventListener("touchstart", onStart, { passive: true });
-    el.addEventListener("touchmove", onMove, { passive: false });
-    el.addEventListener("touchend", onEnd, { passive: false });
-    el.addEventListener("touchcancel", onCancel);
-    el.addEventListener("click", onClick, true);
+    if (input === "touch") {
+      el.addEventListener("touchstart", onStart, { passive: true });
+      el.addEventListener("touchmove", onMove, { passive: false });
+      el.addEventListener("touchend", onEnd, { passive: false });
+      el.addEventListener("touchcancel", onCancel);
+      el.addEventListener("click", onClick, true);
+    } else {
+      window.addEventListener("wheel", onPageWheel, { capture: true, passive: true });
+      el.addEventListener("wheel", onWheel, { passive: false });
+      el.addEventListener("mousedown", onGrab);
+      el.addEventListener("dblclick", onReset);
+    }
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      clearTimeout(wheelTimer);
       const { plot: { left, right, top, bottom }, zoom = FULL_ZOOM } = latest.current;
       if (latest.current.zoom) el.setAttribute("data-mi-zoom", String(zoom.scale));
       else el.removeAttribute("data-mi-zoom");
@@ -202,13 +272,20 @@ export function useChartZoom(
       for (const label of labels) label.style.transform = `translate(${Number(label.dataset.miX)}px, ${Number(label.dataset.miY)}px)`;
       for (const line of lines) line.removeAttribute("transform");
       el.removeAttribute("data-mi-gesture");
+      el.removeAttribute("data-mi-drag");
       el.removeEventListener("touchstart", onStart);
       el.removeEventListener("touchmove", onMove);
       el.removeEventListener("touchend", onEnd);
       el.removeEventListener("touchcancel", onCancel);
       el.removeEventListener("click", onClick, true);
+      window.removeEventListener("wheel", onPageWheel, true);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("mousedown", onGrab);
+      el.removeEventListener("dblclick", onReset);
+      window.removeEventListener("mousemove", onPan);
+      window.removeEventListener("mouseup", onDrop);
     };
-  }, [ref, enabled, index]);
+  }, [ref, input, index]);
 
   const css = `
     ${motion ? `
@@ -218,6 +295,7 @@ export function useChartZoom(
     ` : ""}
     [data-mi-gesture] [data-mi-move], [data-mi-gesture] [data-mi-line] { transition: none; }
     [data-mi-live-lines] path { vector-effect: non-scaling-stroke; }
+    ${input === "mouse" ? `[data-mi-zoom]:not([data-mi-zoom="1"]) > rect { cursor: grab; } [data-mi-zoom][data-mi-drag] > rect { cursor: grabbing; }` : ""}
   `;
-  return { zoom: enabled ? zoom : FULL_ZOOM, css, suppress };
+  return { zoom: input ? zoom : FULL_ZOOM, css, suppress };
 }
