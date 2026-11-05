@@ -616,6 +616,90 @@ test("handles an old marker without a version", async (t) => {
   assert.equal(f.queue().records.length, 1);
 });
 
+const sessionWiring = () => source("./main.mjs").split("\n").filter((line) => /win\.on\("(query-)?session-end"/.test(line)).join("\n");
+const markerOf = (f) => path.join(f.dir, "error-report-active");
+
+test("does not report after query-session-end when the session ends", async (t) => {
+  const f = await fixture(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  const win = new EventEmitter();
+  runInNewContext(sessionWiring(), { win, closeGuard: { leaveBriefly() {}, leave() {} }, errorReports: f.reporter });
+  win.emit("query-session-end");
+  assert.equal(fs.existsSync(markerOf(f)), false);
+  win.emit("session-end");
+  t.mock.timers.tick(30000);
+  assert.equal(fs.existsSync(markerOf(f)), false);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 0);
+});
+
+test("re-arms the marker when a queried session does not end", async (t) => {
+  const f = await fixture(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  const win = new EventEmitter();
+  runInNewContext(sessionWiring(), { win, closeGuard: { leaveBriefly() {}, leave() {} }, errorReports: f.reporter });
+  win.emit("query-session-end");
+  assert.equal(fs.existsSync(markerOf(f)), false);
+  t.mock.timers.tick(30000);
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerOf(f), "utf8")), { build: f.config.build });
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+});
+
+test("does not report a same-build marker refreshed just before the OS booted", async (t) => {
+  const f = await fixture(t);
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.advance(3600000);
+  t.mock.timers.tick(30000);
+  f.advance(60000);
+  const boot = f.config.now();
+  f.config.bootTime = () => boot;
+  f.advance(60000);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 0);
+  assert.equal(fs.existsSync(path.join(f.dir, "error-report-queue.json")), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerOf(f), "utf8")), { build: f.config.build });
+});
+
+test("still reports a same-build marker with no reboot since", async (t) => {
+  const f = await fixture(t);
+  const boot = f.config.now() - 3600000;
+  f.config.bootTime = () => boot;
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.advance(60000);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+});
+
+test("still reports a same-build marker refreshed long before the OS booted", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.advance(3600000);
+  const boot = f.config.now();
+  f.config.bootTime = () => boot;
+  f.advance(60000);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+});
+
 test("graceful shutdown preserves a pending report for retry after restart", async (t) => {
   const f = await fixture(t);
   f.reporter.setConsent(true);

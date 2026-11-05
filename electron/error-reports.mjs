@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { randomBytes } from "node:crypto";
 import { ERROR_SITES, makeErrorReport, validErrorReport } from "../shared/error-report.mjs";
 import { errorReportEndpoint, postErrorReport } from "./error-report-transport.mjs";
@@ -7,6 +8,11 @@ import { errorReportEndpoint, postErrorReport } from "./error-report-transport.m
 const DAY = 86400000;
 const TTL = 7 * DAY;
 const MAX_BYTES = 200 * 1024;
+const REFRESH_MS = 5 * 60000;
+// A marker this fresh at boot means the OS ended Wink without session messages.
+const RESTART_WINDOW_MS = 3 * REFRESH_MS;
+// Matches close-guard.mjs: Windows has no event for a cancelled session end.
+const SESSION_END_WAIT_MS = 30_000;
 
 function atomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -40,7 +46,7 @@ export function crashReportsEnv(dsn) {
   return endpoint ? { WINK_CRASH_REPORTS: endpoint.origin, WINK_CRASH_PROJECT: endpoint.pathname.split("/")[2] } : {};
 }
 
-export function createErrorReports({ userData, dsn, build, platform, arch, now = Date.now, uptime = process.uptime }) {
+export function createErrorReports({ userData, dsn, build, platform, arch, now = Date.now, uptime = process.uptime, bootTime = () => Date.now() - os.uptime() * 1000 }) {
   const pref = path.join(userData, "error-report-consent.json");
   const queue = path.join(userData, "error-report-queue.json");
   // Opt-out purges reports, but must not reset the daily upload limit.
@@ -51,6 +57,8 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
   let records = Array.isArray(state.records) ? state.records : [];
   state = { ...state, ...read(budget) };
   let timer;
+  let lapse;
+  let refreshed = 0;
   let active;
   let pending;
   let started = false;
@@ -138,7 +146,26 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
     }
   };
   const flush = () => pending ??= flushOne().finally(() => { pending = null; });
-  const mark = () => { if (started && enabled()) atomic(marker, { build }); };
+  // The marker's mtime is its last refresh; the content stays `{ build }`.
+  const touch = () => {
+    refreshed = now();
+    const at = new Date(refreshed);
+    fs.utimesSync(marker, at, at);
+  };
+  const mark = () => {
+    if (!started || !enabled()) return;
+    atomic(marker, { build });
+    touch();
+  };
+  const restarted = () => {
+    try {
+      const last = fs.statSync(marker).mtimeMs;
+      const boot = bootTime();
+      return last <= boot && boot - last <= RESTART_WINDOW_MS;
+    } catch {
+      return false;
+    }
+  };
   try { enabled(); } catch {}
   return {
     consent, capture, flush, available: () => Boolean(endpoint),
@@ -157,17 +184,28 @@ export function createErrorReports({ userData, dsn, build, platform, arch, now =
       try {
         if (enabled()) {
           const previous = read(marker);
-          if (previous === 1 || previous?.build === build) capture({ process: "main", code: "UNCLEAN_EXIT", site: ERROR_SITES.uncleanExit });
+          if ((previous === 1 || previous?.build === build) && !restarted()) capture({ process: "main", code: "UNCLEAN_EXIT", site: ERROR_SITES.uncleanExit });
           mark();
         }
       } catch {}
-      timer = setInterval(() => void flush(), 30000);
+      timer = setInterval(() => {
+        try { if (now() - refreshed >= REFRESH_MS) touch(); } catch {}
+        void flush();
+      }, 30000);
       timer.unref();
+    },
+    leaveBriefly() {
+      if (stopped) return;
+      clearTimeout(lapse);
+      try { fs.rmSync(marker, { force: true }); } catch {}
+      lapse = setTimeout(() => { try { mark(); } catch {} }, SESSION_END_WAIT_MS);
+      lapse.unref?.();
     },
     stop() {
       try { if (dirty && enabled()) { trim(); save(); } } catch {}
       stopped = true;
       clearInterval(timer);
+      clearTimeout(lapse);
       active?.abort();
       try { fs.rmSync(marker, { force: true }); } catch {}
     },
