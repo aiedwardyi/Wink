@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fake = { readers: null, fit: null, cdps: [], events: [], fail: null, prep: null, hover: null, extraPlan: null, cameras: [], opened: false, commandError: null };
+const fake = { readers: null, fit: null, cdps: [], events: [], fail: null, prep: null, hover: null, extraPlan: null, cameras: [], opened: false, commandError: null, skipContrast: false };
 
 import { runVerify } from "./verify-run.mjs";
 import { VERIFY_BAR_MS, VERIFY_BARS, VERIFY_FINALIZE_BAR } from "./verify-protocol.mjs";
@@ -40,7 +40,7 @@ function input() {
       } else if (expression.startsWith("lv.text(")) {
         if (!reading) { reading = true; await fake.readers?.(); }
         value = { ...block, ok: true, chars: 12, lines: 1 };
-      } else if (expression.startsWith("lv.contrast(")) value = { ratio: 21, need: 4.5, ok: true };
+      } else if (expression.startsWith("lv.contrast(")) value = fake.skipContrast ? { skip: true } : { ratio: 21, need: 4.5, ok: true };
       else if (expression === "lv.fit()") {
         await fake.fit?.();
         value = { width: 392, scrollWidth: 392, innerWidth: 392, docHeight: 800, over: [], taps: [] };
@@ -68,7 +68,7 @@ function input() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000_000);
-  Object.assign(fake, { readers: null, fit: null, fail: null, events: [], cdps: [], prep: null, hover: null, extraPlan: null, cameras: [], opened: false, commandError: null });
+  Object.assign(fake, { readers: null, fit: null, fail: null, events: [], cdps: [], prep: null, hover: null, extraPlan: null, cameras: [], opened: false, commandError: null, skipContrast: false });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -206,5 +206,24 @@ describe("verify runner", () => {
     expect(fake.cameras.some(c => !c.state.suspended)).toBe(true);
     expect(args.pages.desktop.debugger.listenerCount("message")).toBe(0);
     expect(args.pages.desktop.listenerCount("did-finish-load")).toBe(0);
+  });
+
+  it("maps page targets into the emulated view while preserving wall coordinates", async () => {
+    fake.prep = { btns: [{ path: "button", name: "Open", w: 44, h: 44, tabIndex: 0, pin: true, box: { x: 20, y: 40, w: 44, h: 44 } }] };
+    const run = runVerify(input());
+    await vi.advanceTimersByTimeAsync(30_000);
+    await run.done;
+    const point = fake.events.find(e => e.kind === "point" && e.inp.type === "move");
+    expect(point.inp).toMatchObject({ x: 42, y: 62 });
+    expect(fake.cdps[0].send).toHaveBeenCalledWith("Input.dispatchMouseEvent", { type: "mouseMoved", x: 42 * 0.65, y: 62 * 0.65 });
+  });
+
+  it("retains skipped contrast coverage as notRun without turning it into a pass", async () => {
+    fake.skipContrast = true;
+    const run = runVerify(input());
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await run.done;
+    expect(result.errorCode).toBeUndefined();
+    expect(result.counts).toEqual({ planned: 5, completed: 4, passed: 3, failed: 0, blocked: 1, notRun: 1 });
   });
 });

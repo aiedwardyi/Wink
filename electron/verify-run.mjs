@@ -14,7 +14,7 @@ const bytes = value => Buffer.byteLength(J(value));
 const plain = (value, n) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, n);
 
 export function runVerify(input) {
-  const started = Date.now(), adapters = {}, pages = {}, disposers = [], timers = new Set();
+  const started = Date.now(), adapters = {}, pages = {}, scales = {}, disposers = [], timers = new Set();
   const monotonic = performance.now(), now = () => started + performance.now() - monotonic;
   const ledger = new Map(), observations = [];
   let seq = 0, eventBytes = 0, planBytes = 2, score = null, clock = null, loaded = false, stopped = false, sealed = false;
@@ -83,6 +83,7 @@ export function runVerify(input) {
     const scale = input.scale(tile);
     if (!Number.isFinite(scale) || scale <= 0) throw fail("isolation-failed");
     await adapters[tile].send("Emulation.setDeviceMetricsOverride", { width: g.cssW, height: g.cssH, deviceScaleFactor: g.dpr, mobile: g.mobile, scale });
+    scales[tile] = scale;
   }
   async function camera(tile) {
     if (!adapters[tile] || stopped) return;
@@ -182,7 +183,8 @@ export function runVerify(input) {
     publish({ kind: "point", inp, scrollY: y });
     const x = inp.x ?? 200, py = inp.doc && !inp.pin ? inp.y - y : (inp.y ?? 200);
     if (!Number.isFinite(x) || !Number.isFinite(py)) throw fail("page-failed");
-    const params = { type, x, y: py };
+    // Input targets the scaled view; wall points retain page CSS pixels.
+    const params = { type, x: x * scales.desktop, y: py * scales.desktop };
     if (type !== "mouseMoved") Object.assign(params, { button: "left", clickCount: 1 });
     await adapters.desktop.send("Input.dispatchMouseEvent", params);
   }
@@ -201,11 +203,11 @@ export function runVerify(input) {
     try {
       await aimed(inp, "mouseMoved", generation);
       for (let pass = 0; pass < 2; pass++) {
-        const left = inp.to - await cdp.ev(SCROLL), n = Math.ceil(Math.abs(left) / 240);
+        const left = inp.to - await cdp.ev(SCROLL), n = Math.ceil(Math.abs(left) * Math.max(1, scales.desktop) / 240);
         if (Math.abs(left) < 40) break;
         for (let i = 0; i < n; i++) {
           current(generation);
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 200, y: 200, deltaX: 0, deltaY: left / n });
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 200 * scales.desktop, y: 200 * scales.desktop, deltaX: 0, deltaY: left / n * scales.desktop });
           await sleep(20);
         }
         await sleep(120);

@@ -69,7 +69,7 @@ describe("verify checks", () => {
       if (method === "DOMDebugger.getEventListeners") throw new Error("lost page");
       return {};
     });
-    const P = await world({ send, ev: async () => true }, "desktop");
+    const P = await world({ send, ev: async () => true, on: () => () => {} }, "desktop");
     await expect(P.listeners("button")).rejects.toThrow("lost page");
     expect(send).toHaveBeenCalledWith("DOM.getDocument", { depth: 0 });
     expect(send).toHaveBeenCalledWith("Runtime.releaseObject", { objectId: "owned" });
@@ -83,9 +83,32 @@ describe("verify checks", () => {
       if (method === "DOMDebugger.getEventListeners") return { listeners: [{ type: "click", handler: { objectId: "handler" }, originalHandler: { objectId: "original" } }] };
       return {};
     });
-    const P = await world({ send, ev: async () => true }, "desktop");
+    const P = await world({ send, ev: async () => true, on: () => () => {} }, "desktop");
     expect(await P.listeners("button")).toEqual(["click"]);
     expect(send.mock.calls.filter(([m]) => m === "Runtime.releaseObject").map(([, p]) => p.objectId)).toEqual(["node", "handler", "original"]);
+  });
+
+  it("shares one bounded document root across parallel readers and refreshes after navigation", async () => {
+    let document = 0;
+    const handlers = new Map();
+    const send = vi.fn(async (method, params) => {
+      if (method === "DOM.getDocument") return { root: { nodeId: ++document * 10 } };
+      if (method === "DOM.querySelector") {
+        if (params.nodeId !== document * 10) throw new Error("stale document root");
+        return { nodeId: params.nodeId + 1 };
+      }
+      if (method === "CSS.getPlatformFontsForNode") {
+        if (params.nodeId !== document * 10 + 1) throw new Error("stale node id");
+        return { fonts: [{ familyName: "Recorded" }] };
+      }
+      return {};
+    });
+    const P = await world({ send, ev: async () => true, on: (event, callback) => handlers.set(event, callback) }, "desktop");
+    expect(await Promise.all([P.fonts("p"), P.fonts("h1")])).toEqual([[{ familyName: "Recorded" }], [{ familyName: "Recorded" }]]);
+    expect(send.mock.calls.filter(([m]) => m === "DOM.getDocument")).toHaveLength(1);
+    handlers.get("DOM.documentUpdated")();
+    expect(await P.fonts("p")).toEqual([{ familyName: "Recorded" }]);
+    expect(send.mock.calls.filter(([m]) => m === "DOM.getDocument")).toHaveLength(2);
   });
 
   it("finishes every first-stop job after the admission budget expires", async () => {
@@ -165,6 +188,16 @@ describe("verify CDP lifetime", () => {
     expect(send.mock.calls.filter(([m]) => m === "Runtime.evaluate").map(([, p]) => p.contextId)).toEqual([10, 11, 12]);
     expect(send.mock.calls.filter(([m]) => m === "Page.createIsolatedWorld").every(([, p]) => p.worldName === "lv")).toBe(true);
     cdp.close();
+  });
+
+  it("contains synchronous cleanup failures without losing the primary reply", async () => {
+    const send = vi.fn(method => {
+      if (method === "Runtime.releaseObject") throw new Error("detached during cleanup");
+      return Promise.resolve({ result: { objectId: "remote" } });
+    });
+    const cdp = attach(target(send));
+    try { await expect(cdp.send("Runtime.evaluate", {}, { timeoutMs: 5 })).resolves.toEqual({ result: { objectId: "remote" } }); }
+    finally { cdp.close(); }
   });
 });
 

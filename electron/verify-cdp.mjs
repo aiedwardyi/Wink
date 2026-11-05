@@ -32,7 +32,7 @@ export function attach(webContents) {
   function release(result, late = false) {
     const ids = new Set([result?.result?.objectId, result?.exceptionDetails?.exception?.objectId, late && result?.object?.objectId].filter(Boolean));
     for (const objectId of ids) {
-      if (!closed) Promise.resolve(debuggerApi.sendCommand("Runtime.releaseObject", { objectId })).catch(() => {});
+      if (!closed) send("Runtime.releaseObject", { objectId }).catch(() => {});
     }
   }
   function send(method, params = {}, { timeoutMs = 4000 } = {}) {

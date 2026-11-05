@@ -11,8 +11,17 @@ const BUDGET_MS = 4500;
 export async function world(cdp, tile) {
   await cdp.send("DOM.enable");
   await cdp.send("CSS.enable");
+  let document = null;
+  for (const event of ["DOM.documentUpdated", "Runtime.executionContextsCleared"]) cdp.on(event, () => { document = null; });
+  cdp.on("Page.frameNavigated", event => { if (!event.frame?.parentId) document = null; });
   const node = async path => {
-    const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+    // Re-fetching the document invalidates node IDs in parallel readers.
+    if (!document) {
+      const pending = cdp.send("DOM.getDocument", { depth: 0 });
+      document = pending;
+      pending.catch(() => { if (document === pending) document = null; });
+    }
+    const { root } = await document;
     return (await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: path })).nodeId;
   };
   const fonts = async path => (await cdp.send("CSS.getPlatformFontsForNode", { nodeId: await node(path) })).fonts;
