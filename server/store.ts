@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } 
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import type { BotHooks } from "./bot-hooks.ts";
 import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
@@ -500,6 +501,7 @@ export interface BotRecord {
   pendingModelSelection?: ModelSelection;
   /** Skip user skills, plugins and plugin MCP servers at startup. Off unless on. */
   leanStartup?: boolean;
+  hooks?: BotHooks;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
   /** which computer the bot acts on: its cloud box, Local VM, this machine
