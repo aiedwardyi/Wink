@@ -1,18 +1,21 @@
 // MSP driver contract tests, run against the scripted fake MSP host in
 // server/testing/fake-msp-cli.ts: session/start carries the model, text
 // folds into canonical events, interrupts and crashes settle cleanly.
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs } from "../../config.ts";
-import type { ProviderInstance } from "../../contracts.ts";
+import type { PrepareTurn, ProviderInstance, SendTurnInput } from "../../contracts.ts";
 import { toWslPath } from "../../env-path.ts";
 import * as procs from "../../procs.ts";
 import { createTempDirs, removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
+import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { MspMuseAgentDriver } from "./muse.ts";
 import { createMspDriver, mspMcpServers, translateMspServerForWsl } from "./runtime.ts";
 
@@ -222,7 +225,9 @@ describe("MSP turns (fake host)", () => {
     await instance.adapter.sendTurn({ threadId: "t-tool-filter", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => "itemType" in e && e.itemType === "tool")).toEqual([]);
-    expect(recorder.events.filter((e) => e.type === "content.delta").map((e) => e.delta)).toEqual(["hello from fake msp"]);
+    const deltas = recorder.events.filter((e) => e.type === "content.delta");
+    expect(deltas.filter((e) => e.streamKind === "assistant_text").map((e) => e.delta)).toEqual(["hello from fake msp"]);
+    expect(recorder.events).not.toContainEqual(expect.objectContaining({ type: "item.completed", text: expect.stringContaining("thinking") }));
   });
 
   it("folds stable usage/changed notifications into account windows", async () => {
@@ -818,7 +823,7 @@ describe("MSP prewarm (fake host)", () => {
   let scratch: string;
   let rpcDump: string;
 
-  const create = async (warmIdleMs?: number, isAuthenticated: () => boolean | Promise<boolean> = () => true) => {
+  const create = async (isAuthenticated: () => boolean | Promise<boolean> = () => true) => {
     const Driver = createMspDriver({
       driverKind: "museAgent",
       displayName: "MSP Prewarm",
@@ -828,7 +833,6 @@ describe("MSP prewarm (fake host)", () => {
       loginNote: "sign in",
       isAuthenticated,
       requireAuthenticationBeforeSpawn: true,
-      warmIdleMs,
     });
     instance = await Driver.create({
       instanceId: "msp-prewarm",
@@ -861,6 +865,7 @@ describe("MSP prewarm (fake host)", () => {
   afterEach(async () => {
     delete process.env.FAKE_MSP_RPC_DUMP;
     delete process.env.FAKE_MSP_INIT_DELAY_MS;
+    vi.useRealTimers();
     await instance?.dispose();
     vi.restoreAllMocks();
     await removeTempDir(scratch);
@@ -898,7 +903,7 @@ describe("MSP prewarm (fake host)", () => {
         ok: true,
         stopReason: "cancelled",
       });
-      expect(recorder.events.map((e) => e.type)).toEqual(["turn.started", "turn.completed"]);
+      expect(recorder.events.map((e) => e.type)).toEqual(["turn.started", "turn.stage", "turn.completed"]);
     } finally {
       recorder.stop();
     }
@@ -911,7 +916,7 @@ describe("MSP prewarm (fake host)", () => {
   it("drops a Stop during the auth check without spawning", async () => {
     let authed!: (ok: boolean) => void;
     const spawn = vi.spyOn(procs, "spawnCli");
-    await create(undefined, () => new Promise<boolean>((resolve) => (authed = resolve)));
+    await create(() => new Promise<boolean>((resolve) => (authed = resolve)));
     const recorder = recordEvents(instance.adapter);
     try {
       const sent = instance.adapter.sendTurn({ threadId: "t-auth-stop", text: "hi" });
@@ -930,10 +935,13 @@ describe("MSP prewarm (fake host)", () => {
   });
 
   it("kills an unclaimed prewarmed host after the idle TTL and cold-spawns the next turn", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const spawn = vi.spyOn(procs, "spawnCli");
-    await create(300);
+    await create();
     await instance.prepare!();
     const child = spawn.mock.results[0].value as ReturnType<typeof procs.spawnCli>;
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.useRealTimers();
     await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
 
     expect(await runTurn("t-expired")).toMatchObject({ ok: true });
@@ -957,5 +965,506 @@ describe("MSP prewarm (fake host)", () => {
     expect(versionProbes()).toHaveLength(1);
     await instance.prepare!();
     expect(versionProbes()).toHaveLength(1);
+  });
+});
+
+describe("MSP warm host (recorded transport)", () => {
+  const fixture = JSON.parse(readFileSync("test/fixtures/recorded/muse/two-turns-one-host.json", "utf8"));
+  type Message = { id?: number | string; method?: string; params?: any; result?: any; error?: any };
+  const wire = fixture.reply.wire as Array<{ at: number; dir: "in" | "out"; msg: Message }>;
+  const blocks = new Map<string, Array<{ request: Message; replies: Message[] }>>();
+  wire.forEach((entry, index) => {
+    if (entry.dir !== "out" || !entry.msg.method) return;
+    const replies: Message[] = [];
+    for (const next of wire.slice(index + 1)) {
+      if (next.dir === "out") break;
+      replies.push(next.msg);
+    }
+    blocks.set(entry.msg.method, [...(blocks.get(entry.msg.method) ?? []), { request: entry.msg, replies }]);
+  });
+  const recordedSession: string = blocks.get("session/start")![0].replies.find((m) => m.id !== undefined)!.result.session.sessionId;
+  const MODEL = fixture.stamp.model as string;
+
+  /** Runs before each recorded reply is written; may edit it, hold it, or return false to drop it. */
+  type Gate = (method: string, message: Message, peer: number, nth: number) => Promise<void | false> | void | false;
+  let peers: ReturnType<typeof makePeer>[];
+  let pool: WarmPool;
+  let instance: ProviderInstance;
+  let recorder: EventRecorder;
+  let account: string | undefined;
+  let authed: () => boolean | Promise<boolean>;
+  let gate: Gate;
+  let answerInterrupt: boolean;
+
+  function makePeer(index: number) {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null as number | null,
+      signalCode: null as string | null, killed: false, pid: index + 910_000,
+    });
+    const requests: Message[] = [];
+    const responses: Message[] = [];
+    const counts = new Map<string, number>();
+    const end = (code: number) => {
+      if (child.exitCode !== null) return;
+      child.exitCode = code;
+      child.stdout.end();
+      child.emit("exit", code);
+      child.emit("close", code);
+    };
+    const write = (message: Message) => {
+      if (child.exitCode === null) child.stdout.write(`${JSON.stringify(message)}\n`);
+    };
+    const replay = async (request: Message) => {
+      const method = request.method!;
+      const n = counts.get(method) ?? 0;
+      counts.set(method, n + 1);
+      // The recording has no resume: a resume answers like the recorded start, on the asked-for id.
+      const recorded = blocks.get(method === "session/resume" ? "session/start" : method);
+      if (!recorded) {
+        if (request.id !== undefined) write({ id: request.id, error: fixture.reply.unknownMethod });
+        return;
+      }
+      const block = recorded[n % recorded.length];
+      const session = request.params?.sessionId ?? recordedSession;
+      let text = JSON.stringify(block.replies).split(recordedSession).join(session);
+      if (block.request.params?.commandId && request.params?.commandId) {
+        text = text.split(block.request.params.commandId).join(request.params.commandId);
+      }
+      for (const reply of JSON.parse(text) as Message[]) {
+        if (reply.id !== undefined) reply.id = request.id;
+        if ((await gate(method, reply, index, n + 1)) === false) continue;
+        await Promise.resolve();
+        write(reply);
+      }
+    };
+    const stdin = new Writable({ write(chunk, _encoding, done) {
+      for (const line of String(chunk).split("\n").filter(Boolean)) {
+        const message: Message = JSON.parse(line);
+        if (!message.method) {
+          responses.push(message);
+          continue;
+        }
+        requests.push(message);
+        // The recording has no interrupt: answer it the way muse serve does.
+        if (message.method === "turn/interrupt") {
+          if (answerInterrupt) write({ jsonrpc: "2.0", method: "turn/completed", params: { ...message.params, terminal: "cancelled" } } as Message);
+          continue;
+        }
+        void replay(message);
+      }
+      done();
+    } });
+    stdin.on("finish", () => setTimeout(() => end(0), fixture.reply.exit.stdinCloseMs));
+    return { child: Object.assign(child, { stdin }), requests, responses, write, end };
+  }
+
+  const start = async () => {
+    const Driver = createMspDriver({
+      driverKind: "museAgent",
+      displayName: "Meta Muse",
+      models: { default: "muse-spark-1.3", options: [] },
+      defaultCli: "recorded-muse",
+      nativeSource: "muse.msp",
+      loginNote: "sign in",
+      isAuthenticated: () => authed(),
+      account: () => account,
+      requireAuthenticationBeforeSpawn: true,
+      warmPool: pool,
+    } as Parameters<typeof createMspDriver>[0]);
+    instance = await Driver.create({
+      instanceId: "recorded-muse", displayName: "Meta Muse", environment: {}, enabled: true,
+      config: { cli: "recorded-muse", fullAuto: false, workspace: "<workspace>" },
+    });
+    recorder = recordEvents(instance.adapter);
+  };
+  const send = async (input: Partial<SendTurnInput> = {}) => {
+    const { turnId } = await instance.adapter.sendTurn({
+      threadId: "recorded-thread", text: "Reply only OK.", model: MODEL, effort: "medium", cwd: "<workspace>", ...input,
+    });
+    return turnId;
+  };
+  const completed = (turnId: string) => recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+  const cursorOf = (turnId: string) =>
+    (recorder.events.find((e) => e.type === "session.started" && e.turnId === turnId) as { sessionId: string }).sessionId;
+  const methods = (peer: { requests: Message[] }) => peer.requests.map((m) => m.method);
+
+  beforeEach(() => {
+    peers = [];
+    account = "Recorded Name";
+    authed = () => true;
+    gate = () => {};
+    answerInterrupt = true;
+    pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    vi.spyOn(procs, "execCli").mockImplementation((_cli, _args, _options, callback) => callback(null, fixture.stamp.cliVersion));
+    vi.spyOn(procs, "spawnCli").mockImplementation(() => {
+      const peer = makePeer(peers.length);
+      peers.push(peer);
+      return peer.child as unknown as ReturnType<typeof procs.spawnCli>;
+    });
+    vi.spyOn(procs, "killCliTree").mockImplementation((child) => {
+      const peer = peers.find((p) => p.child === (child as unknown));
+      if (peer) {
+        peer.child.killed = true;
+        peer.end(0);
+      }
+    });
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    recorder?.stop();
+    await instance?.dispose();
+    await pool.closeAll("test complete", { final: true });
+    for (const peer of peers) peer.end(0);
+    vi.restoreAllMocks();
+  });
+
+  it("two completed turns use one host and skip the second initialize and resume", async () => {
+    await start();
+    const first = await send();
+    expect(await completed(first)).toMatchObject({ ok: true, stopReason: null });
+    const second = await send({ resumeCursor: cursorOf(first), effort: "low", text: "Reply only OK again." });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((m) => m === "initialize")).toHaveLength(1);
+    expect(methods(peers[0])).not.toContain("session/resume");
+    expect(peers[0].requests.filter((m) => m.method === "turn/start").map((m) => m.params.reasoningEffort)).toEqual(["medium", "low"]);
+  });
+  const kept = () => pool.stats().idle;
+  const exited = (peer: { child: { exitCode: number | null } }) => peer.child.exitCode !== null;
+  const stagesOf = (turnId: string) =>
+    recorder.events.filter((e) => e.type === "turn.stage" && e.turnId === turnId).map((e) => (e as { stage: string }).stage);
+  const indexOf = (match: (e: (typeof recorder.events)[number]) => boolean) => recorder.events.findIndex(match);
+  const answers = (turnId: string) =>
+    recorder.events.filter((e) => e.type === "item.completed" && e.turnId === turnId && e.itemType === "assistant_text");
+  const hold = () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    return { held, release };
+  };
+  const shapeFor = (input: Partial<PrepareTurn> = {}): PrepareTurn => ({
+    threadId: "recorded-thread",
+    model: MODEL,
+    effort: "high",
+    cwd: "<workspace>",
+    depth: 0,
+    captured: { generation: pool.generation({ engine: "museAgent", instanceId: "recorded-muse" }), incarnation: "planner", identity: "" },
+    ...input,
+  });
+  const smallerPc = () => {
+    vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 ** 3);
+  };
+  const turnStarts = (peer: { requests: Message[] }) => peer.requests.filter((m) => m.method === "turn/start");
+  /** Prepares a session for `cursor` whose resume reply is held until released. */
+  const pendingPrepare = async (cursor: string) => {
+    const gateOpen = hold();
+    gate = (method, _reply, peer) => (peer === 0 && method === "session/resume" ? gateOpen.held : undefined);
+    void instance.prepare!(shapeFor({ resumeCursor: cursor }));
+    await vi.waitFor(() => expect(peers[0] && methods(peers[0])).toContain("session/resume"));
+    return gateOpen;
+  };
+
+  it("never ends the turn at foregroundCompleted; background items land before turn.completed", async () => {
+    const background = hold();
+    gate = (method, reply) => (method === "turn/start" && reply.method === "usage/changed" ? background.held : undefined);
+    await start();
+    const turnId = await send();
+    await recorder.until((e) => e.type === "turn.stage" && e.stage === "finishing");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(recorder.events.some((e) => e.type === "turn.completed")).toBe(false);
+    expect(instance.adapter.hasSession("recorded-thread")).toBe(true);
+    background.release();
+    expect(await completed(turnId)).toMatchObject({ ok: true, stopReason: null });
+    const finishing = indexOf((e) => e.type === "turn.stage" && e.stage === "finishing");
+    const usage = indexOf((e) => e.type === "account.rate-limits.updated");
+    expect(usage).toBeGreaterThan(finishing);
+    expect(usage).toBeLessThan(indexOf((e) => e.type === "turn.completed"));
+  });
+
+  it("emits finishing at foregroundCompleted, after the answer text", async () => {
+    await start();
+    const turnId = await send();
+    await completed(turnId);
+    const answer = indexOf((e) => e.type === "item.completed" && e.itemType === "assistant_text" && e.text === "OK");
+    const finishing = indexOf((e) => e.type === "turn.stage" && e.stage === "finishing");
+    expect(answer).toBeGreaterThan(-1);
+    expect(finishing).toBeGreaterThan(answer);
+    expect(finishing).toBeLessThan(indexOf((e) => e.type === "turn.completed"));
+  });
+
+  it("warm loaded session retains poisoned-history recovery", async () => {
+    let starts = 0;
+    gate = (method, reply, _peer, nth) => {
+      if (method === "session/start" && reply.id !== undefined) starts += 1;
+      if (method === "session/start" && starts === 2 && reply.result?.session) reply.result.session.sessionId = "fresh-session";
+      if (method === "turn/start" && nth === 2 && reply.method === "turn/completed") {
+        reply.params.terminal = "failed";
+        reply.params.error = { message: "provider-private history is incompatible with the active route" };
+      }
+    };
+    await start();
+    const first = await send();
+    await completed(first);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((m) => m === "session/start")).toHaveLength(2);
+    expect(turnStarts(peers[0]).at(-1)!.params.sessionId).toBe("fresh-session");
+    expect(recorder.events.filter((e) => e.type === "session.started" && e.turnId === second).map((e) => (e as { sessionId: string }).sessionId))
+      .toEqual([cursorOf(first), "fresh-session"]);
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    expect(kept()).toBe(0);
+  });
+
+  it("replayed old turn/started cannot capture a new turn", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    const old = turnStarts(peers[0])[0].params.commandId;
+    const session = cursorOf(first);
+    gate = (method, reply, peer, nth) => {
+      if (method !== "turn/start" || nth !== 2 || reply.id === undefined) return;
+      peers[peer].write({ jsonrpc: "2.0", method: "turn/started", params: { sessionId: session, turnId: old } } as Message);
+      peers[peer].write({ jsonrpc: "2.0", method: "turn/completed", params: { sessionId: session, turnId: old, terminal: "cancelled" } } as Message);
+    };
+    const second = await send({ resumeCursor: session });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(answers(second).map((e) => (e as { text: string }).text)).toEqual(["OK"]);
+  });
+
+  it("foreground completion before ack belongs to the correct turn", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    let ack: Message | undefined;
+    let foreground = false;
+    gate = (method, reply, peer, nth) => {
+      if (method !== "turn/start" || nth !== 2) return;
+      if (reply.id !== undefined) {
+        ack = reply;
+        return false;
+      }
+      if (foreground && ack) {
+        peers[peer].write(ack);
+        ack = undefined;
+      }
+      if (reply.method === "turn/foregroundCompleted") foreground = true;
+    };
+    const second = await send({ resumeCursor: cursorOf(first) });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(stagesOf(first)).toEqual(["setup", "prompt-sent", "finishing"]);
+    expect(stagesOf(second)).toEqual(["prompt-sent", "finishing"]);
+    expect(answers(second)).toHaveLength(1);
+  });
+
+  it("retained host has one handler set", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    const exitListeners = peers[0].child.listenerCount("exit");
+    const dataListeners = peers[0].child.stdout.listenerCount("data");
+    const turns = [first];
+    for (const effort of ["low", "medium"] as const) {
+      const turnId = await send({ resumeCursor: cursorOf(first), effort });
+      await completed(turnId);
+      turns.push(turnId);
+    }
+    expect(peers).toHaveLength(1);
+    expect(peers[0].child.listenerCount("exit")).toBe(exitListeners);
+    expect(peers[0].child.stdout.listenerCount("data")).toBe(dataListeners);
+    for (const turnId of turns) {
+      expect(answers(turnId)).toHaveLength(1);
+      expect(recorder.events.filter((e) => e.type === "content.delta" && e.turnId === turnId)).toHaveLength(1);
+      expect(stagesOf(turnId).filter((stage) => stage === "finishing")).toHaveLength(1);
+    }
+  });
+
+  it("a delayed request or notification between turns reaches no turn", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    await start();
+    const first = await send();
+    await completed(first);
+    const before = recorder.events.length;
+    const session = cursorOf(first);
+    peers[0].write({ jsonrpc: "2.0", method: "item/started", params: { sessionId: session, item: { itemId: "late", kind: "agentMessage", turnId: "late-turn" } } } as Message);
+    peers[0].write({ jsonrpc: "2.0", method: "item/delta", params: { sessionId: session, itemId: "late", field: "text", delta: "late text" } } as Message);
+    peers[0].write({
+      jsonrpc: "2.0", id: 9001, method: "approval/request",
+      params: { sessionId: session, turnId: "late-turn", approvalId: "late-approval", availableChoices: [{ choiceId: "yes", decision: "approved" }] },
+    } as Message);
+    await vi.waitFor(() => expect(peers[0].responses.some((m) => m.id === 9001)).toBe(true));
+    expect(peers[0].responses.find((m) => m.id === 9001)!.error.code).toBe(-32601);
+    expect(debug).toHaveBeenCalledWith(expect.stringContaining("idle host dropped item/delta"));
+    expect(recorder.events).toHaveLength(before);
+    const second = await send({ resumeCursor: session });
+    await completed(second);
+    expect(recorder.events.some((e) => e.type === "content.delta" && e.delta === "late text")).toBe(false);
+    expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+  });
+
+  it("an effort change keeps the warm session; a model or folder change drops it", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    await completed(await send({ resumeCursor: cursorOf(first), effort: "low" }));
+    expect(peers).toHaveLength(1);
+    const model = await send({ resumeCursor: cursorOf(first), model: "muse-spark-1.3" });
+    await completed(model);
+    expect(peers).toHaveLength(2);
+    expect(exited(peers[0])).toBe(true);
+    await completed(await send({ resumeCursor: cursorOf(model), model: "muse-spark-1.3", cwd: "<workspace>/other" }));
+    expect(peers).toHaveLength(3);
+    expect(exited(peers[1])).toBe(true);
+    expect(kept()).toBe(1);
+  });
+
+  it("prepare and sendTurn build the same fingerprint for the same shape", async () => {
+    await start();
+    await instance.prepare!(shapeFor({ resumeCursor: "cursor-1", effort: "high" }));
+    expect(kept()).toBe(1);
+    const turnId = await send({ resumeCursor: "cursor-1", effort: "low" });
+    expect(await completed(turnId)).toMatchObject({ ok: true, stopReason: null });
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((m) => m === "initialize" || m === "session/resume")).toEqual(["initialize", "session/resume"]);
+    expect(stagesOf(turnId)).toEqual(["prompt-sent", "finishing"]);
+  });
+
+  it("a pending prepare never makes the turn later than cold", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const slow = 10_000;
+    gate = (method, _reply, peer) =>
+      peer === 0 && method === "initialize" ? new Promise<void>((resolve) => setTimeout(resolve, slow)) : undefined;
+    const flushUntil = async (done: () => boolean) => {
+      for (let i = 0; i < 500 && !done(); i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(done()).toBe(true);
+    };
+    await start();
+    void instance.prepare!(shapeFor());
+    await flushUntil(() => peers.length === 1);
+    const sentAt = Date.now();
+    const sent = send();
+    await flushUntil(() => recorder.events.some((e) => e.type === "turn.stage" && e.stage === "prompt-sent"));
+    expect(Date.now() - sentAt).toBeLessThan(slow);
+    expect(peers).toHaveLength(2);
+    expect(turnStarts(peers[1])).toHaveLength(1);
+    expect(turnStarts(peers[0])).toHaveLength(0);
+    vi.useRealTimers();
+    expect(await completed(await sent)).toMatchObject({ ok: true, stopReason: null });
+    expect(exited(peers[0])).toBe(true);
+  });
+
+  it("an identity change seen at focus drops the host", async () => {
+    await start();
+    const first = await send();
+    await completed(first);
+    expect(kept()).toBe(1);
+    account = "Other Name";
+    await instance.prepare!();
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    const second = await send({ resumeCursor: cursorOf(first) });
+    await completed(second);
+    expect(turnStarts(peers[0])).toHaveLength(1);
+    expect(methods(peers.at(-1)!)).toContain("session/resume");
+  });
+
+  it("sign-out during adoption keeps nothing", async () => {
+    smallerPc();
+    await start();
+    const prepared = await pendingPrepare("cursor-1");
+    const sent = send({ resumeCursor: "cursor-1" });
+    await recorder.until((e) => e.type === "turn.stage" && e.stage === "setup");
+    account = undefined;
+    authed = () => false;
+    await instance.prepare!();
+    await completed(await sent);
+    prepared.release();
+    expect(exited(peers[0])).toBe(true);
+    await expect.poll(() => peers.every(exited)).toBe(true);
+    await expect.poll(() => pool.stats().reserved).toBe(0);
+  });
+
+  it("Stop during adopted setup keeps nothing", async () => {
+    smallerPc();
+    await start();
+    const prepared = await pendingPrepare("cursor-1");
+    const sent = send({ resumeCursor: "cursor-1" });
+    await recorder.until((e) => e.type === "turn.stage" && e.stage === "setup");
+    await instance.adapter.interruptTurn("recorded-thread");
+    expect(await completed(await sent)).toMatchObject({ ok: true, stopReason: "cancelled" });
+    prepared.release();
+    expect(peers).toHaveLength(1);
+    expect(turnStarts(peers[0])).toHaveLength(0);
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    await expect.poll(() => pool.stats().reserved).toBe(0);
+  });
+
+  it("Stop during Finishing up interrupts and keeps nothing", async () => {
+    const background = hold();
+    gate = (method, reply) =>
+      method === "turn/start" && reply.method === "item/completed" && reply.params.item.kind === "reminderChild" ? background.held : undefined;
+    await start();
+    const turnId = await send();
+    await recorder.until((e) => e.type === "turn.stage" && e.stage === "finishing");
+    await instance.adapter.interruptTurn("recorded-thread");
+    expect(await completed(turnId)).toMatchObject({ ok: true, stopReason: "cancelled" });
+    background.release();
+    expect(methods(peers[0])).toContain("turn/interrupt");
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("Stop during usage/read keeps nothing", async () => {
+    const usage = hold();
+    gate = (method) => (method === "usage/read" ? usage.held : undefined);
+    // The host already completed natively: it sends no second completion.
+    answerInterrupt = false;
+    await start();
+    const turnId = await send();
+    await vi.waitFor(() => expect(methods(peers[0])).toContain("usage/read"));
+    await instance.adapter.interruptTurn("recorded-thread");
+    usage.release();
+    expect(await completed(turnId)).toMatchObject({ ok: true, stopReason: null });
+    await expect.poll(() => exited(peers[0])).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("forwards reasoning deltas as reasoning_text", async () => {
+    gate = (method, reply, peer) => {
+      if (method !== "turn/start" || reply.method !== "item/started" || reply.params.item.kind !== "agentMessage") return;
+      const turnId = reply.params.item.turnId;
+      peers[peer].write({ jsonrpc: "2.0", method: "item/started", params: { item: { itemId: "reason-1", kind: "reasoning", turnId } } } as Message);
+      peers[peer].write({ jsonrpc: "2.0", method: "item/delta", params: { itemId: "reason-1", field: "summary.0", delta: "Weighing it" } } as Message);
+    };
+    await start();
+    const turnId = await send();
+    await completed(turnId);
+    expect(recorder.events.filter((e) => e.type === "content.delta").map((e) => [e.streamKind, e.delta]))
+      .toEqual([["reasoning_text", "Weighing it"], ["assistant_text", "OK"]]);
+    expect(answers(turnId).map((e) => (e as { text: string }).text)).toEqual(["OK"]);
+  });
+
+  it("emits setup then prompt-sent on a cold turn and only prompt-sent on a warm turn", async () => {
+    await start();
+    const cold = await send();
+    await completed(cold);
+    const warm = await send({ resumeCursor: cursorOf(cold) });
+    await completed(warm);
+    expect(stagesOf(cold)).toEqual(["setup", "prompt-sent", "finishing"]);
+    expect(stagesOf(warm)).toEqual(["prompt-sent", "finishing"]);
+    const started = indexOf((e) => e.type === "turn.started" && e.turnId === cold);
+    expect(recorder.events[started + 1]).toMatchObject({ type: "turn.stage", stage: "setup" });
+  });
+
+  it("an idle warm host exits on stdin close", async () => {
+    expect(fixture.reply.exit.stdinCloseMs).toBeLessThan(2_000);
+    await start();
+    const first = await send();
+    await completed(first);
+    expect(kept()).toBe(1);
+    const closedAt = Date.now();
+    peers[0].child.stdin.end();
+    await expect.poll(() => pool.stats().reserved, { timeout: 2_000 }).toBe(0);
+    expect(Date.now() - closedAt).toBeLessThan(2_000);
+    await completed(await send({ resumeCursor: cursorOf(first) }));
+    expect(peers).toHaveLength(2);
   });
 });

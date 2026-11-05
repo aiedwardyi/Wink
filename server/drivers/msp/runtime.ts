@@ -4,13 +4,15 @@
 // spawn, initialize, session start/resume, one text turn, interrupt,
 // approvals + userInput answers. Effort/model switching and account usage
 // windows build on the same channel. Never extend acp/core.ts.
-import { homedir } from "node:os";
+import { createHash } from "node:crypto";
+import os, { homedir } from "node:os";
 
 import type {
   DriverCreateInput,
   EffortLevel,
   EngineInstall,
   ModelCatalog,
+  PrepareTurn,
   ProviderDriver,
   ProviderErrorCode,
   ProviderInstance,
@@ -29,14 +31,18 @@ import { SPAWNED_PROXIES } from "../../proxy-paths.ts";
 import { isWslCommand, withWslProbeReason, wslBlockedReason, wslProbeAllowed } from "../../wsl-gate.ts";
 import { startTurnTimer } from "../../turn-timing.ts";
 import type { CliText, CliTextContext } from "../cli-text.ts";
+import { warmFingerprint, warmToolsKey, type WarmEligibilityInput } from "../acp/warm-eligibility.ts";
 import { finishNative } from "../native.ts";
 import { museUsageReport } from "../rate-limits.ts";
+import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmChild, type WarmPool } from "../warm-pool.ts";
 import { createMspChannel, uuidv7, type MspChannel } from "./protocol.ts";
 
 const INIT_TIMEOUT = 20_000;
 const SESSION_TIMEOUT = 30_000;
 const INTERRUPT_GRACE_MS = 5_000;
 const ASK_TIMEOUT_MS = 15 * 60_000;
+const HANDSHAKE_IDLE_MS = 60_000;
+const HANDSHAKE = "__handshake__";
 
 const DENY_TIMEOUT_NOTE =
   "Wink: nobody answered this permission request in time. Skip this action and finish what you can without it.";
@@ -74,8 +80,8 @@ export interface MspSupport {
   /** win32 only: wrapper + resolver shared with the ACP muse driver. */
   wslProbeWrapper?: (cli: string) => string | null;
   wslResolveCli?: (cli: string, probeEnv: NodeJS.ProcessEnv) => Promise<string | null>;
-  /** Idle TTL for a prewarmed host (default 60s). Tests may shorten. */
-  warmIdleMs?: number;
+  /** Tests inject their own; idle session hosts follow its TTL. */
+  warmPool?: WarmPool;
   /** One-shot text for summaries, outside any MSP session. */
   text?(ctx: CliTextContext): CliText;
 }
@@ -122,8 +128,10 @@ type Ask = ApprovalAsk | UserInputAsk;
 type ItemKinds = Map<string, string>;
 
 const textStreamFor = (kinds: ItemKinds, itemId: string, field: unknown) => {
-  if (field !== undefined && field !== null && field !== "text") return null;
   const kind = kinds.get(itemId);
+  // Reasoning streams its summary parts as "summary.<n>".
+  if (kind === "reasoning" && /^summary\.\d+$/.test(String(field))) return "reasoning_text" as const;
+  if (field !== undefined && field !== null && field !== "text") return null;
   if (kind === "reasoning") return "reasoning_text" as const;
   // agentMessage streams here; unknown kinds stream generically (SS4.10)
   // except tool calls, whose output is fetched via item/readOutput, not text.
@@ -328,77 +336,253 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       const active = new Map<string, Turn>();
       const children = new Set<ReturnType<typeof spawnCli>>();
 
-      // At most one idle initialized host per instance, claimed by the next
-      // turn. MSP names the workspace per session, so the spawn cwd is free.
-      interface Warm {
+      // Idle hosts live in the warm pool. A session host keeps its session
+      // across turns only while its sign-in is still the CLI's current one;
+      // an unverified sign-in gets the initialize-only handshake host.
+      interface Host extends WarmChild {
         child: ReturnType<typeof spawnCli>;
         channel: MspChannel;
-        cli: string;
-        ready: Promise<boolean>;
-        timer?: ReturnType<typeof setTimeout>;
-        offExit?: () => void;
+        initialized: boolean;
+        sessionId: string | null;
+        model: string | null;
+        resumedOk: boolean;
+        fellBack: boolean;
+        /** Sign-in hash at spawn, in memory only; never log it. */
+        identity: string;
+        lease?: Lease;
+        /** The running turn's handlers, or the idle drop listener. */
+        unbind: Array<() => void>;
+        inUse: boolean;
+        /** Set while a turn adopts it: closing its old lease must not kill it. */
+        detached: boolean;
+        exited: boolean;
+        closed?: Promise<void>;
+        ttl?: ReturnType<typeof setTimeout>;
+        setupError?: unknown;
       }
-      let warm: Warm | null = null;
-      let preparing: Promise<void> | null = null;
+      type Request = (method: string, params: unknown, timeoutMs: number) => Promise<any>;
+      const incarnation = newId();
+      const pool = support.warmPool ?? sharedWarmPool;
+      const hosts = new WeakMap<Lease, Host>();
+      const preparing = new WeakMap<Lease, Promise<boolean>>();
       let disposed = false;
-      const warmIdleMs = support.warmIdleMs ?? 60_000;
-      const discardWarm = (entry: Warm | null = warm) => {
-        if (!entry) return;
-        if (warm === entry) warm = null;
-        clearTimeout(entry.timer);
-        entry.offExit?.();
-        entry.channel.detach();
-        try {
-          killCliTree(entry.child);
-        } catch {
-          // already gone
-        }
-        children.delete(entry.child);
+      let identity = "";
+      // A take needs a sign-in check newer than the last prepare.
+      let prepares = 0;
+      let checked = 0;
+      const keyFor = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
+      const readIdentity = () => {
+        const label = support.account?.(childEnv());
+        return label ? createHash("sha256").update(label).digest("hex") : "";
       };
-      const runPrepare = async () => {
-        if (disposed || warm) return;
-        const env = childEnv();
-        try {
-          if (support.requireAuthenticationBeforeSpawn && !(await support.isAuthenticated(env, config))) return;
-          if (!(await ensureCli(env))) return;
-        } catch {
-          return;
-        }
-        if (disposed || warm) return;
-        const cli = effectiveCli();
-        let child: ReturnType<typeof spawnCli>;
-        try {
-          child = spawnCli(cli, ["serve"], { cwd: config.workspace ?? homedir(), env, stdio: ["pipe", "pipe", "pipe"] });
-        } catch {
-          return;
-        }
+      const capture = (id = identity): Captured => ({
+        generation: input.account?.generation ?? pool.generation(keyFor("")),
+        incarnation,
+        identity: id,
+      });
+      const eligibility = (
+        shape: Pick<SendTurnInput, "threadId" | "model" | "cwd" | "integrations">,
+        captured: Captured,
+      ): WarmEligibilityInput => {
+        const cwd = shape.cwd ?? config.workspace ?? homedir();
+        return {
+          threadId: shape.threadId,
+          cwd,
+          sessionCwd: isWslCli() ? toWslPath(cwd) : cwd,
+          model: shape.model,
+          // Effort travels per turn in turn/start.
+          effort: undefined,
+          fullAuto: config.fullAuto,
+          identity: captured.identity,
+          cli: effectiveCli(),
+          argsKey: "serve",
+          toolsKey: warmToolsKey(shape.integrations),
+          generation: captured.generation,
+        };
+      };
+      const handshakeFingerprint = () => JSON.stringify(["handshake", effectiveCli()]);
+      const sessionConfigFor = (integrations: SendTurnInput["integrations"]) => {
+        // Session MCP rides in the `config` extension object, never at the
+        // top level: SessionStartParams has no `mcpServers` member, and the
+        // decoder ignores unknown keys instead of rejecting them: a top-level
+        // mount is silently dropped and every tool simply never appears.
+        const mcpServers = mspMcpServers(integrations, { wsl: isWslCli() });
+        return mcpServers ? { config: { mcpServers } } : {};
+      };
+
+      const closeHost = (host: Host): Promise<void> => {
+        if (host.detached) return Promise.resolve();
+        host.closed ??= (() => {
+          clearTimeout(host.ttl);
+          for (const off of host.unbind.splice(0)) off();
+          host.channel.detach();
+          try {
+            killCliTree(host.child);
+          } catch {
+            // already gone
+          }
+          children.delete(host.child);
+          return host.exited ? Promise.resolve() : new Promise<void>((resolve) => host.child.once("exit", () => resolve()));
+        })();
+        return host.closed;
+      };
+      const spawnHost = (cwd: string, env: Record<string, string | undefined>): Host => {
+        const child = spawnCli(effectiveCli(), ["serve"], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
         children.add(child);
-        const channel = createMspChannel(child);
-        const entry: Warm = { child, channel, cli, ready: initializeHost(channel).then(() => true, () => false) };
-        entry.offExit = channel.onExit(() => discardWarm(entry));
-        entry.timer = setTimeout(() => discardWarm(entry), warmIdleMs);
-        entry.timer.unref?.();
-        warm = entry;
-        if (!(await entry.ready) && warm === entry) discardWarm(entry);
+        const host: Host = {
+          child,
+          channel: createMspChannel(child),
+          initialized: false,
+          session: { kind: "argv" },
+          sessionId: null,
+          model: null,
+          resumedOk: false,
+          fellBack: false,
+          identity: readIdentity(),
+          unbind: [],
+          inUse: false,
+          detached: false,
+          exited: false,
+          alive: () =>
+            !host.exited && child.exitCode === null && child.signalCode === null
+            && !child.stdin?.destroyed && !child.stdout?.destroyed,
+          close: () => closeHost(host),
+        };
+        child.once("exit", () => {
+          host.exited = true;
+          // A running turn settles its own exit.
+          if (!host.inUse) host.lease?.release("exit");
+        });
+        return host;
       };
-      const takeWarm = async (): Promise<Warm | null> => {
-        const entry = warm;
-        if (!entry) return null;
-        warm = null;
-        clearTimeout(entry.timer);
-        entry.offExit?.();
-        if (
-          (await entry.ready)
-          && !disposed
-          && entry.cli === effectiveCli()
-          && entry.child.exitCode === null
-          && entry.child.signalCode === null
-        ) {
-          return entry;
+      const attachLease = (host: Host, lease: Lease) => {
+        host.lease = lease;
+        hosts.set(lease, host);
+        lease.attach(host);
+      };
+      const idle = (host: Host) => {
+        host.inUse = false;
+        host.unbind.push(host.channel.onNotification((method) => console.debug(`${DRIVER_KIND}: idle host dropped ${method}`)));
+      };
+      /** Resume or start, then setModel: the one session setup prepare and turns share. */
+      const openSession = async (
+        host: Host,
+        request: Request,
+        shape: Pick<SendTurnInput, "resumeCursor" | "model">,
+        sessionRoot: string,
+        sessionConfig: object,
+      ) => {
+        const model = shape.model;
+        const opened = (result: any) => {
+          host.sessionId = typeof result?.session?.sessionId === "string" ? result.session.sessionId : null;
+          host.model = typeof result?.session?.modelId === "string" ? result.session.modelId : null;
+          if (!host.sessionId) throw new Error("session/start returned no sessionId");
+        };
+        if (typeof shape.resumeCursor === "string") {
+          try {
+            const resumed: any = await request(
+              "session/resume",
+              { commandId: uuidv7(), sessionId: shape.resumeCursor, ...sessionConfig },
+              SESSION_TIMEOUT,
+            );
+            host.sessionId = typeof resumed?.session?.sessionId === "string" ? resumed.session.sessionId : shape.resumeCursor;
+            host.model = typeof resumed?.session?.modelId === "string" ? resumed.session.modelId : null;
+            host.resumedOk = true;
+          } catch {
+            // --no-session-log hosts reject resume (-32601): start fresh
+            // and replay the fallback text instead of the transcript.
+            opened(await request("session/start", { commandId: uuidv7(), workspaceRoot: sessionRoot, ...sessionConfig }, SESSION_TIMEOUT));
+            host.fellBack = true;
+          }
+        } else {
+          opened(await request(
+            "session/start",
+            { commandId: uuidv7(), workspaceRoot: sessionRoot, ...(model ? { modelId: model } : {}), ...sessionConfig },
+            SESSION_TIMEOUT,
+          ));
         }
-        discardWarm(entry);
-        return null;
+        if (model && model !== host.model) {
+          // Mid-session switch (cursor.ts configureSession is the ACP
+          // twin): unlike cursor there is no argv pin to fall back on,
+          // so a rejected switch fails the turn instead of silently
+          // running the wrong model.
+          try {
+            await request("session/setModel", { commandId: uuidv7(), sessionId: host.sessionId, model: { modelId: model } }, SESSION_TIMEOUT);
+          } catch (err) {
+            throw new Error(
+              `Muse rejected model "${model}" via session/setModel: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          host.model = model;
+        }
       };
+      /** One prepare per lease; a same-key prepare joins it and releases once if it fails. */
+      const prepareLease = async (lease: Lease, cwd: string, setup?: (host: Host, request: Request) => Promise<void>) => {
+        const joined = preparing.get(lease);
+        if (joined) {
+          if (!(await joined)) lease.release("prepare failed");
+          return;
+        }
+        if (hosts.has(lease)) return;
+        const run = (async () => {
+          let host: Host;
+          try {
+            host = spawnHost(cwd, childEnv());
+          } catch {
+            lease.release("spawn failed");
+            return false;
+          }
+          attachLease(host, lease);
+          const request: Request = (method, params, timeoutMs) =>
+            lease.signal.aborted || disposed
+              ? Promise.reject(new Error("prepare aborted"))
+              : host.channel.request(method, params, timeoutMs);
+          try {
+            await initializeHost(host.channel);
+            host.initialized = true;
+            await setup?.(host, request);
+            if (lease.signal.aborted) return false;
+            lease.ready();
+            if (!host.inUse) idle(host);
+            return !lease.signal.aborted;
+          } catch {
+            lease.release("prepare failed");
+            return false;
+          }
+        })();
+        preparing.set(lease, run);
+        await run.finally(() => preparing.delete(lease));
+      };
+      const prepareHandshake = async () => {
+        const lease = pool.reserve(keyFor(HANDSHAKE), handshakeFingerprint(), capture(""), "handshake");
+        if (typeof lease === "string") return;
+        await prepareLease(lease, config.workspace ?? homedir());
+        const host = hosts.get(lease);
+        if (host && !host.inUse && !host.ttl && !lease.signal.aborted) {
+          host.ttl = setTimeout(() => {
+            if (!host.inUse) lease.release("idle");
+          }, HANDSHAKE_IDLE_MS);
+          host.ttl.unref?.();
+        }
+      };
+      const prepareSession = async (shape: PrepareTurn) => {
+        const captured = capture();
+        if (shape.captured.generation !== captured.generation || active.has(shape.threadId)) return;
+        const lease = pool.reserve(keyFor(shape.threadId), warmFingerprint(eligibility(shape, captured)), captured, "speculative");
+        if (typeof lease === "string") return;
+        const cwd = shape.cwd ?? config.workspace ?? homedir();
+        await prepareLease(lease, cwd, async (host, request) => {
+          await openSession(host, request, shape, isWslCli() ? toWslPath(cwd) : cwd, sessionConfigFor(shape.integrations));
+          // A fresh session cannot serve the asked-for cursor.
+          if (host.fellBack) throw new Error("resume fell back to a fresh session");
+          host.session = typeof shape.resumeCursor === "string" ? { kind: "loaded", id: host.sessionId! } : { kind: "fresh" };
+          // Off the Send path: a method-not-found reply proves the host reads stdin.
+          await request("orbit/ping", {}, 1_000).catch((err: unknown) => {
+            if ((err as { code?: unknown })?.code !== -32601) throw err;
+          });
+        });
+      };
+      const smallerPc = () => os.totalmem() < 8 * 1024 ** 3 || os.cpus().length <= 4;
 
       const emit = (event: RuntimeEvent) => {
         finishNative(event);
@@ -429,13 +613,16 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const cwd = turn.cwd ?? config.workspace ?? homedir();
         const env = childEnv();
         const asks = new Map<string, Ask>();
-        // Stop can land before the real interrupt is installed below; a warm
-        // host claimed mid-handshake dies at once so takeWarm returns null.
+        // Stop can land before the real interrupt is installed below; a
+        // claimed or racing host dies at once and keeps nothing.
         let cancelled = false;
-        let claimed: Warm | null = null;
+        let claimed: Lease | null = null;
+        let racer: Host | null = null;
+        let raced = false;
         const earlyInterrupt = () => {
           cancelled = true;
-          if (claimed) discardWarm(claimed);
+          claimed?.release("stopped");
+          if (racer) void closeHost(racer);
         };
         active.set(threadId, { turnId, interrupt: earlyInterrupt, asks });
         try {
@@ -467,22 +654,105 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           throw err;
         }
 
-        claimed = cancelled ? null : warm;
-        const warmed = cancelled ? null : await takeWarm();
-        claimed = null;
+        // Behind the wsl wrapper the host is a Linux process: Windows
+        // paths never resolve there. Hoisted: poison recovery reuses it.
+        const sessionRoot = isWslCli() ? toWslPath(cwd) : cwd;
+        const sessionConfig = sessionConfigFor(turn.integrations);
+        const captured = capture();
+        const own = !cancelled && identity && checked === prepares
+          ? pool.take(keyFor(threadId), warmFingerprint(eligibility(turn, captured)), captured, turn.resumeCursor)
+          : "miss";
+        if (own === "busy") {
+          active.delete(threadId);
+          throw new Error("a turn is already running on this thread");
+        }
+        const taken = cancelled ? "miss" : own !== "miss" ? own : pool.take(keyFor(HANDSHAKE), handshakeFingerprint(), capture(""), undefined);
+        claimed = typeof taken === "object" ? ("hit" in taken ? taken.hit : taken.pending) : null;
+        let host: Host | null = typeof taken === "object" && "hit" in taken ? (hosts.get(taken.hit) ?? null) : null;
+        if (host && !host.alive()) {
+          claimed!.release("dead");
+          claimed = null;
+          host = null;
+        }
+        if (host) {
+          clearTimeout(host.ttl);
+          for (const off of host.unbind.splice(0)) off();
+          host.inUse = true;
+        }
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        if (!host?.sessionId) emit({ ...base(threadId, turnId), type: "turn.stage", stage: "setup" });
+        if (claimed && !host && !cancelled) {
+          const pending = claimed;
+          const adopt = (preparing.get(pending) ?? Promise.resolve(false)).then((ok) => {
+            const prepared = ok && !pending.signal.aborted ? hosts.get(pending) : undefined;
+            if (prepared) {
+              clearTimeout(prepared.ttl);
+              for (const off of prepared.unbind.splice(0)) off();
+              prepared.inUse = true;
+            }
+            return prepared ?? null;
+          });
+          if (pending.key.threadId === HANDSHAKE || smallerPc()) host = await adopt;
+          else {
+            // Adopt or race: a slow prepare never makes the turn later than cold.
+            racer = spawnHost(cwd, env);
+            racer.inUse = true;
+            const cold = racer;
+            const coldReady = (async () => {
+              await initializeHost(cold.channel);
+              cold.initialized = true;
+              await openSession(cold, (method, params, timeoutMs) => cold.channel.request(method, params, timeoutMs), turn, sessionRoot, sessionConfig);
+              return cold;
+            })().catch((err: unknown) => {
+              cold.setupError = err;
+              return null;
+            });
+            host = await new Promise<Host | null>((resolve) => {
+              let left = 2;
+              const done = (winner: Host | null) => {
+                if (winner) resolve(winner);
+                else if (--left === 0) resolve(null);
+              };
+              void adopt.then(done);
+              void coldReady.then(done);
+            }) ?? cold;
+            raced = host === cold;
+            if (raced) pending.release("lost the race");
+            else void closeHost(cold);
+            racer = null;
+          }
+          if (!host) {
+            pending.release("prepare failed");
+            claimed = null;
+          }
+        }
         if (cancelled) {
-          emit({ ...base(threadId, turnId), type: "turn.started" });
+          if (host) void closeHost(host);
+          claimed?.release("stopped");
           active.delete(threadId);
           turnTimer.mark("turnDone");
     turnTimer.finish();
     emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled" });
           return { turnId };
         }
-        const child = warmed?.child ?? spawnCli(effectiveCli(), ["serve"], { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
-        children.add(child);
+        const reused = !!host && !raced;
+        const turnHost = host ?? spawnHost(cwd, env);
+        turnHost.inUse = true;
+        // The turn owns its lease and offers it back; an adopted handshake
+        // lease is released without killing the host it hands over.
+        let lease = turnHost.lease === claimed && claimed ? claimed : undefined;
+        if (lease?.key.threadId === HANDSHAKE) {
+          turnHost.detached = true;
+          lease.release("adopted");
+          turnHost.detached = false;
+          turnHost.lease = undefined;
+          lease = undefined;
+        }
+        claimed = null;
+        const warmSession = reused && !!turnHost.sessionId;
         turnTimer.mark("spawnOrReuse");
-        turnTimer.setMeta({ reusedHandshake: !!warmed });
-        const channel = warmed?.channel ?? createMspChannel(child);
+        turnTimer.setMeta({ reusedHandshake: reused && !warmSession, reusedSession: warmSession });
+        const channel = turnHost.channel;
         const state = {
           settled: false,
           mspTurnId: null as string | null,
@@ -494,32 +764,21 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const buffers = new Map<string, string>();
         let latestUsageObservedAt: string | null = null;
         let completionPending = false;
-        // Completions seen before the turn/start ack named our turn.
-        const heldCompletions: Record<string, any>[] = [];
+        // Tagged events seen before the turn/start ack names our turn, in order.
+        const held: Array<[string, unknown]> = [];
+        let expectedCommand: string | null = null;
+        let promptSent = false;
+        let finishing = false;
+        let interrupted = false;
         let interruptTimer: ReturnType<typeof setTimeout> | null = null;
         let pendingText = "";
-        // Behind the wsl wrapper the host is a Linux process: Windows
-        // paths never resolve there. Hoisted: poison recovery reuses it.
-        const sessionRoot = isWslCli() ? toWslPath(cwd) : cwd;
-        // Poisoned-resume retry state (one retry max): resumedOk flips only
-        // when session/resume succeeds; recovered flips on the single retry.
-        let resumedOk = false;
+        // Poisoned-resume retry state (one retry max): recovered flips on the single retry.
         let recovered = false;
-        // Session MCP rides in the `config` extension object, never at the
-        // top level: SessionStartParams has no `mcpServers` member, and the
-        // decoder ignores unknown keys instead of rejecting them: a top-level
-        // mount is silently dropped and every tool simply never appears.
-        const mcpServers = mspMcpServers(turn.integrations, { wsl: isWslCli() });
-        const sessionConfig = mcpServers ? { config: { mcpServers } } : {};
+        const bound: Array<() => void> = [];
 
         const stop = () => {
-          channel.detach();
-          try {
-            killCliTree(child);
-          } catch {
-            // already gone
-          }
-          children.delete(child);
+          lease?.release("turn ended");
+          void closeHost(turnHost);
         };
         function flushText() {
           if (!pendingText) return;
@@ -537,24 +796,59 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           if (interruptTimer) clearTimeout(interruptTimer);
           for (const ask of [...asks.values()]) ask.finish("deny", "system");
           // The entry drops BEFORE turn.completed: the queue drain on that
-          // event must see a free thread (adapter contract).
+          // event must see a free thread (adapter contract), and the kept
+          // host must already be ready for the turn it sends.
           active.delete(threadId);
+          const kept = ok && stopReason === null && retain();
           flushText();
           for (const itemId of openTools) completeTool(itemId, false);
           turnTimer.mark("turnDone");
     turnTimer.finish();
     emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason });
-          stop();
+          if (!kept) stop();
+        };
+        /** Hands the host back with its session after a clean native completion. */
+        const retain = (): boolean => {
+          const sessionId = state.sessionId;
+          if (interrupted || recovered || disposed || !sessionId || !turnHost.alive() || !turnHost.identity) return false;
+          const seen = readIdentity();
+          const now = capture(seen);
+          if (seen !== turnHost.identity || now.generation !== captured.generation) return false;
+          for (const off of bound.splice(0)) off();
+          channel.onServerRequest(null);
+          Object.assign(turnHost, { session: { kind: "loaded", id: sessionId }, sessionId, model: state.model, resumedOk: true, fellBack: false });
+          identity = seen;
+          checked = prepares;
+          if (lease) {
+            if (!pool.offer(lease, turnHost.session)) return false;
+          } else {
+            const reserve = () => pool.reserve(keyFor(threadId), warmFingerprint(eligibility(turn, now)), now, "speculative");
+            let fresh = reserve();
+            // Another host already idles under this key: this one replaces it.
+            if (typeof fresh === "object" && (hosts.has(fresh) || preparing.has(fresh))) {
+              fresh.release("replaced");
+              fresh = reserve();
+            }
+            if (typeof fresh !== "object" || hosts.has(fresh) || preparing.has(fresh)) return false;
+            attachLease(turnHost, fresh);
+            fresh.ready();
+            if (fresh.signal.aborted) return false;
+            lease = fresh;
+          }
+          idle(turnHost);
+          return true;
         };
         const fail = (message: string, signIn = false, stopReason: string | null = "rpc_error") => {
           emit({ ...base(threadId, turnId), type: "runtime.error", message, signIn: signIn || undefined });
           settle(false, stopReason);
         };
         const startTurnOn = async (targetSessionId: string, fullText: string) => {
-          const ack: any = await channel.request(
+          const commandId = uuidv7();
+          expectedCommand = commandId;
+          const request = channel.request(
             "turn/start",
             {
-              commandId: uuidv7(),
+              commandId,
               sessionId: targetSessionId,
               input: [{ type: "text", text: fullText }],
               // Levels travel verbatim (max stays max, never ultra); none
@@ -563,15 +857,16 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
             },
             SESSION_TIMEOUT,
           );
+          if (!promptSent) {
+            promptSent = true;
+            emit({ ...base(threadId, turnId), type: "turn.stage", stage: "prompt-sent" });
+          }
+          const ack: any = await request;
           if (ack?.status !== "accepted" || ack?.disposition !== "started") {
             throw new Error(`turn/start not started (status ${ack?.status}, disposition ${ack?.disposition})`);
           }
-          state.mspTurnId = typeof ack?.turnId === "string" ? ack.turnId : null;
-          // No id in the ack: adopt the held completion, as before.
-          for (const p of heldCompletions.splice(0)) {
-            state.mspTurnId ??= p.turnId;
-            onNotification("turn/completed", p);
-          }
+          state.mspTurnId = typeof ack?.turnId === "string" ? ack.turnId : commandId;
+          for (const [method, params] of held.splice(0)) onNotification(method, params);
         };
         // A resumed session whose provider-private history the active route
         // cannot replay poisons the turn (and its Retry, which resumes the
@@ -579,7 +874,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         // and false on any throw, so callers fail exactly as before.
         const recoverIncompatible = async (message: string): Promise<boolean> => {
           try {
-            if (recovered || !resumedOk) return false;
+            if (recovered || !turnHost.resumedOk) return false;
             if (!INCOMPATIBLE_HISTORY.test(message)) return false;
             if (typeof turn.resumeCursor !== "string") return false;
             recovered = true;
@@ -611,8 +906,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           }
         };
         const onDelta = (streamKind: "assistant_text" | "reasoning_text", delta: string) => {
-          if (streamKind !== "assistant_text" || !delta) return;
-          pendingText += delta;
+          if (!delta) return;
+          // Reasoning only feeds the Thinking label, never the answer text.
+          if (streamKind === "assistant_text") pendingText += delta;
           emit({ ...base(threadId, turnId), type: "content.delta", streamKind, delta });
         };
         const emitUsage = (payload: unknown) => {
@@ -843,7 +1139,17 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           });
         };
 
+        // A retained host serves many turns: events tagged for another turn
+        // (a replayed or late one) never reach this one. Untagged events
+        // cannot be told apart and still do.
+        const tagOf = (p: any): string | undefined =>
+          typeof p?.turnId === "string" ? p.turnId : (typeof p?.item?.turnId === "string" ? p.item.turnId : undefined);
         channel.onServerRequest((id, method, params) => {
+          const tag = tagOf(params);
+          if (state.mspTurnId !== null && tag !== undefined && tag !== state.mspTurnId) {
+            channel.respond(id, {});
+            return {};
+          }
           // The receipt acks presentation only; the decision travels as a
           // command (SS5.3.3). Answer it before opening the card.
           if (method === "approval/request") {
@@ -861,6 +1167,14 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         const onNotification = (method: string, params: any) => {
           if (state.settled) return;
           const p = (params ?? {}) as Record<string, any>;
+          const tag = tagOf(p);
+          if (state.mspTurnId === null) {
+            // Ack-before-id race: hold in order until the ack names our turn.
+            if (held.length || (tag !== undefined && tag !== expectedCommand)) {
+              held.push([method, params]);
+              return;
+            }
+          } else if (tag !== undefined && tag !== state.mspTurnId) return;
           switch (method) {
             case "approval/requested":
               openApproval(p);
@@ -935,26 +1249,17 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
               emitUsage(p);
               break;
             }
-            case "turn/started": {
-              // Hosts may stream turn/started before the turn/start response
-              // continuation assigns the returned id. Capture it here so a
-              // same-chunk turn/completed notification is not dropped.
-              if (typeof p.turnId === "string" && !state.mspTurnId) state.mspTurnId = p.turnId;
+            case "turn/foregroundCompleted": {
+              // The answer is done; Muse keeps running background items
+              // until turn/completed, which alone ends the turn.
+              flushText();
+              if (!finishing) {
+                finishing = true;
+                emit({ ...base(threadId, turnId), type: "turn.stage", stage: "finishing" });
+              }
               break;
             }
             case "turn/completed": {
-              // The turn/start ack resolves on a microtask, so a host that
-              // writes the ack and this notification into one stdout chunk
-              // lands here with mspTurnId still unset. Hold it for the ack
-              // rather than adopt it: a resumed session first replays the
-              // cancelled completion of a turn a killed host left open.
-              if (typeof p.turnId === "string") {
-                if (state.mspTurnId === null) {
-                  heldCompletions.push(p);
-                  break;
-                }
-                if (p.turnId !== state.mspTurnId) break;
-              }
               const terminal = p.terminal as string | undefined;
               if (terminal === "completed") {
                 if (!completionPending) {
@@ -989,14 +1294,16 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
               break;
           }
         };
-        channel.onNotification(onNotification);
-        channel.onExit(() => {
+        // Bound before this turn's first write; retain() unbinds them.
+        bound.push(channel.onNotification(onNotification));
+        bound.push(channel.onExit(() => {
           if (!state.settled && !completionPending) fail(`${DRIVER_KIND} exited before the turn completed`, false, "exit_before_result");
-        });
+        }));
 
         active.set(threadId, {
           turnId,
           interrupt: () => {
+            interrupted = true;
             // No session yet (init in flight): nothing to interrupt, stop
             // like the ACP core does pre-prompt.
             if (!state.sessionId) {
@@ -1017,82 +1324,28 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           },
           asks,
         });
-        emit({ ...base(threadId, turnId), type: "turn.started" });
 
         void (async () => {
           try {
-            if (!warmed) await initializeHost(channel);
-            const model = turn.model;
-            let sessionId: string | null = null;
-            let sessionModel: string | null = null;
-            let promptText = turn.text;
-            if (typeof turn.resumeCursor === "string") {
-              try {
-                const resumed: any = await channel.request(
-                  "session/resume",
-                  { commandId: uuidv7(), sessionId: turn.resumeCursor, ...sessionConfig },
-                  SESSION_TIMEOUT,
-                );
-                sessionId = typeof resumed?.session?.sessionId === "string"
-                  ? resumed.session.sessionId
-                  : turn.resumeCursor;
-                sessionModel = typeof resumed?.session?.modelId === "string" ? resumed.session.modelId : null;
-                resumedOk = true;
-              } catch {
-                // --no-session-log hosts reject resume (-32601): start fresh
-                // and replay the fallback text instead of the transcript.
-                const started: any = await channel.request(
-                  "session/start",
-                  { commandId: uuidv7(), workspaceRoot: sessionRoot, ...sessionConfig },
-                  SESSION_TIMEOUT,
-                );
-                sessionId = typeof started?.session?.sessionId === "string" ? started.session.sessionId : null;
-                if (!sessionId) throw new Error("session/start returned no sessionId");
-                sessionModel = typeof started?.session?.modelId === "string" ? started.session.modelId : null;
-                promptText = turn.resumeFallback?.text ?? turn.text;
-              }
-            } else {
-              const started: any = await channel.request(
-                "session/start",
-                {
-                  commandId: uuidv7(),
-                  workspaceRoot: sessionRoot,
-                  ...(model ? { modelId: model } : {}),
-                  ...sessionConfig,
-                },
-                SESSION_TIMEOUT,
-              );
-              sessionId = typeof started?.session?.sessionId === "string" ? started.session.sessionId : null;
-              sessionModel = typeof started?.session?.modelId === "string" ? started.session.modelId : null;
-              if (!sessionId) throw new Error("session/start returned no sessionId");
+            if (turnHost.setupError) throw turnHost.setupError;
+            if (!turnHost.initialized) {
+              await initializeHost(channel);
+              turnHost.initialized = true;
             }
+            if (!turnHost.sessionId) {
+              await openSession(turnHost, (method, params, timeoutMs) => channel.request(method, params, timeoutMs), turn, sessionRoot, sessionConfig);
+            }
+            const sessionId = turnHost.sessionId!;
             state.sessionId = sessionId;
-            state.model = sessionModel;
-            if (model && model !== state.model) {
-              // Mid-session switch (cursor.ts configureSession is the ACP
-              // twin): unlike cursor there is no argv pin to fall back on,
-              // so a rejected switch fails the turn instead of silently
-              // running the wrong model.
-              try {
-                await channel.request(
-                  "session/setModel",
-                  { commandId: uuidv7(), sessionId, model: { modelId: model } },
-                  SESSION_TIMEOUT,
-                );
-              } catch (err) {
-                throw new Error(
-                  `Muse rejected model "${model}" via session/setModel: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              }
-              state.model = model;
-            }
-            emit({ ...base(threadId, turnId), type: "session.started", sessionId, model: state.model ?? model ?? null });
+            state.model = turnHost.model;
+            const promptText = turnHost.fellBack ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
+            emit({ ...base(threadId, turnId), type: "session.started", sessionId, model: state.model ?? turn.model ?? null });
             turnTimer.mark("cliReady");
             const text = turn.system ? `${turn.system}\n\n${promptText}` : promptText;
-            if (!sessionId) throw new Error("session/start returned no sessionId");
             await startTurnOn(sessionId, text);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            state.sessionId ??= turnHost.sessionId;
             // Poisoned resume (turn/start rejected): one fresh-session retry
             // before failing exactly as before.
             if (!state.settled && !(await recoverIncompatible(message))) fail(message);
@@ -1187,17 +1440,34 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         generateText: text?.generateText,
         textModel: text?.textModel,
         textTimeoutMs: text?.textTimeoutMs,
-        prepare: async () => {
+        prepare: async (shape?: PrepareTurn) => {
           if (!input.enabled || disposed) return;
-          preparing ??= runPrepare().finally(() => {
-            preparing = null;
-          });
-          await preparing;
+          if (shape && (active.has(shape.threadId) || (shape.integrations?.localComputer?.scope === "local-computer" && config.fullAuto))) return;
+          const round = ++prepares;
+          const env = childEnv();
+          try {
+            if (support.requireAuthenticationBeforeSpawn && !(await support.isAuthenticated(env, config))) {
+              pool.invalidate({ instanceId, incarnation }, "signed out");
+              return;
+            }
+            if (!(await ensureCli(env))) return;
+          } catch {
+            return;
+          }
+          if (disposed) return;
+          // Off the Send path: a sign-in change drops every host this instance holds.
+          const seen = readIdentity();
+          if (seen !== identity) {
+            identity = seen;
+            pool.invalidate({ instanceId, incarnation }, "identity changed");
+          }
+          checked = Math.max(checked, round);
+          await (shape && identity ? prepareSession(shape) : prepareHandshake());
         },
         dispose: async () => {
           disposed = true;
           text?.dispose();
-          discardWarm();
+          pool.invalidate({ instanceId, incarnation }, "dispose");
           for (const child of [...children]) {
             try {
               killCliTree(child);
