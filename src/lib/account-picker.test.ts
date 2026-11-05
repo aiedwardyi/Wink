@@ -9,9 +9,46 @@ import { ProviderRegistry } from "../../server/harness/registry.ts";
 import type { Store } from "../../server/store.ts";
 import { makeFakeDriver } from "../../server/testing/fake-driver.ts";
 import { pickerRows } from "./cross-model-picker";
+import { newBotPayload, suggestEngine, wizardEngineOptions } from "./group-wizard";
 
 const registries: ProviderRegistry[] = [];
 afterEach(async () => { await Promise.all(registries.splice(0).map((registry) => registry.disposeAll())); });
+
+it("creates wizard bots with base ids accepted by checkSelection after four Claude and two Codex accounts", async () => {
+  const dir = join(DATA_DIR, "wizard-accounts");
+  mkdirSync(dir, { recursive: true });
+  const bases = { claude: { driver: "claudeAgent" }, codex: { driver: "codex" } };
+  const accounts = new AccountService(dir, () => bases);
+  for (const [of, count] of [["claude", 3], ["codex", 1]] as const) {
+    for (let index = 0; index < count; index++) {
+      const added = await accounts.add(of);
+      await accounts.identify(added.id, `identity-${of}-${index}`);
+      await accounts.setDefault(of, added.id);
+    }
+  }
+  const drivers = (["claudeAgent", "codex"] as const).map((kind) => {
+    const fake = makeFakeDriver({ kind }).driver;
+    const create = fake.create;
+    fake.create = async (input) => ({ ...await create(input), account: input.account,
+      snapshot: async () => ({ state: "available", authenticated: Boolean(input.account) }),
+    });
+    return fake;
+  });
+  const registry = new ProviderRegistry(drivers);
+  registries.push(registry);
+  await registry.load(instanceConfigs({ instances: bases }, accounts.snapshot));
+  const bots = new BotAccounts(accounts, registry, {} as Store, { captured: () => null });
+  const instances = bots.pickerInstances(bots.accountInstances(await registry.describeCached()));
+  expect(instances.filter((instance) => instance.accountOf === "claude")).toHaveLength(4);
+  expect(instances.filter((instance) => instance.accountOf === "codex")).toHaveLength(2);
+  expect(wizardEngineOptions(instances, null).map((instance) => instance.instanceId)).toEqual(["claude", "codex"]);
+  for (const kind of ["claudeAgent", "codex"]) {
+    const pick = suggestEngine(instances, [kind])!;
+    const payload = newBotPayload("Research", { instanceId: pick.instance.instanceId, model: pick.instance.models.default });
+    expect(payload.modelSelection.instanceId).toBe(kind === "codex" ? "codex" : "claude");
+    expect(bots.checkSelection(payload.modelSelection)).toEqual(payload.modelSelection);
+  }
+});
 
 it.each([1, 2])("keeps Claude and Codex base picker rows after server transforms with %i account(s) per engine", async (count) => {
   const dir = join(DATA_DIR, `picker-${count}`);
