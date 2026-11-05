@@ -1,4 +1,5 @@
 import type { Bot, BotAnnouncement } from "./store";
+import { setDescriptionSaveStatus } from "./description-save-status";
 
 /** Every field written through the desktop's broad bot PATCH boundary. */
 export type BotUpdatePatch = Partial<
@@ -115,6 +116,7 @@ export function createBotPatchQueue(options: BotPatchQueueOptions): BotPatchQueu
       if (disposed || entry.cancelled) return;
       entry.fallback = bot;
       options.onAuthoritative(bot, stateOverlay(entry.pending));
+      setDescriptionSaveStatus(entry.botId, patch, "saved", entry.pending);
     } catch (caught) {
       if (!disposed && !entry.cancelled) {
         // A rejected patch is no longer optimistic. Re-read before rolling back
@@ -133,6 +135,7 @@ export function createBotPatchQueue(options: BotPatchQueueOptions): BotPatchQueu
         if (disposed || entry.cancelled) return;
         if (bot) options.onAuthoritative(bot, stateOverlay(entry.pending));
         options.onError(caught instanceof Error ? caught : new Error(String(caught)));
+        setDescriptionSaveStatus(entry.botId, patch, "idle", entry.pending);
       }
     } finally {
       entry.controller = null;
@@ -170,6 +173,7 @@ export function createBotPatchQueue(options: BotPatchQueueOptions): BotPatchQueu
       entries.set(botId, entry);
       entry.pending = { ...entry.pending, ...patch };
       schedule(entry);
+      setDescriptionSaveStatus(botId, patch, "saving");
     },
 
     flush(botId) {
@@ -197,6 +201,7 @@ export function createBotPatchQueue(options: BotPatchQueueOptions): BotPatchQueu
       if (entry.timer !== null) clearTimeout(entry.timer);
       entry.controller?.abort();
       entries.delete(botId);
+      setDescriptionSaveStatus(botId, { ...entry.inFlight, ...entry.pending }, "idle");
       for (const resolve of entry.idleWaiters.splice(0)) resolve();
     },
 
@@ -210,6 +215,7 @@ export function createBotPatchQueue(options: BotPatchQueueOptions): BotPatchQueu
         entry.cancelled = true;
         if (entry.timer !== null) clearTimeout(entry.timer);
         entry.controller?.abort();
+        setDescriptionSaveStatus(entry.botId, { ...entry.inFlight, ...entry.pending }, "idle");
         for (const resolve of entry.idleWaiters.splice(0)) resolve();
       }
       entries.clear();
