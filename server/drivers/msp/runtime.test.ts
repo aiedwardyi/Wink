@@ -1206,6 +1206,8 @@ describe("MSP warm host (recorded transport)", () => {
   });
 
   it("a pending guess with no handshake still races cold", async () => {
+    vi.spyOn(os, "cpus").mockReturnValue(Array.from({ length: 16 }, () => ({} as os.CpuInfo)));
+    vi.spyOn(os, "totalmem").mockReturnValue(32 * 1024 ** 3);
     await start();
     const ready = hold();
     gate = (method, _reply, peer) => peer === 0 && method === "initialize" ? ready.held : undefined;

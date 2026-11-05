@@ -102,6 +102,30 @@ describe("warm pool", () => {
     expect(pool.reserve(key("other", "museAgent"), "fp", captured, "speculative", { focus: true })).toBe("denied");
   });
 
+  it.each([undefined, 128 * MiB])("a denied retain at capacity keeps guesses with RSS %s", (rss) => {
+    const { pool, mem } = fixture();
+    const guesses = ["t1", "t2"].map((id) => ready(
+      pool.reserve(key(id), "fp", captured, "speculative", { focus: true }), child({ kind: "fresh" }, rss),
+    ));
+    mem.free = 4 * GiB;
+    expect(pool.reserve(key("retained"), "fp", captured, "speculative")).toBe("denied");
+    for (const [index, guess] of guesses.entries()) {
+      expect(guess.child.close).not.toHaveBeenCalled();
+      expect(guess.lease.signal.aborted).toBe(false);
+      expect(pool.take(key(`t${index + 1}`), "fp", captured, undefined)).toEqual({ hit: guess.lease });
+    }
+  });
+
+  it("a retain drops guesses after capacity and memory checks both pass", () => {
+    const { pool, mem } = fixture();
+    const guesses = ["t1", "t2"].map((id) => ready(
+      pool.reserve(key(id), "fp", captured, "speculative", { focus: true }), child({ kind: "fresh" }, 512 * MiB),
+    ));
+    mem.free = 4 * GiB;
+    expect(typeof pool.reserve(key("retained"), "fp", captured, "speculative")).toBe("object");
+    for (const guess of guesses) expect(guess.child.close).toHaveBeenCalledWith("yield");
+  });
+
   it.each([false, true])("memory pressure evicts guesses first (pending %s)", (pending) => {
     const { pool, reserve, mem, pass } = fixture();
     const kept = ready(reserve("kept"), child({ kind: "fresh" }, 2 * GiB));

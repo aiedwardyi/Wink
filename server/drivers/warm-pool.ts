@@ -134,11 +134,10 @@ export class WarmPool {
     if (existing && opts.focus && !existing.focus) return "busy";
     if (existing) this.drop(existing, "replaced");
     const among = [...this.entries].filter((entry) => entry !== existing);
+    const short = kind === "speculative" && this.freemem() < this.floor();
+    if (short && (opts.focus || this.freemem() + this.guessRss(among) < this.floor())) return "denied";
     if (kind === "speculative" && !this.admitsOver(key.engine, among, opts.focus === true)) return "denied";
-    if (kind === "speculative" && this.freemem() < this.floor()) {
-      if (opts.focus || this.freemem() + this.guessRss(among) < this.floor()) return "denied";
-      this.dropGuesses(among);
-    }
+    if (short) this.dropGuesses(among);
     return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS, opts.focus === true);
   }
 
