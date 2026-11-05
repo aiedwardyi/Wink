@@ -36,6 +36,7 @@ import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
+import { SaveStatus } from "./SaveStatus";
 
 // One Bot Details is up at a time. A bot switch mounts the next panel (keyed by
 // bot) while the last is still up, and must not replay the slide-in.
@@ -43,14 +44,21 @@ let panelsUp = 0;
 
 function Field({
   label,
+  status,
   children,
 }: {
   label: string;
+  status?: ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <label className={cn(DETAILS_ROW, "block")}>
-      <div className="mb-1.5 text-[14px] font-medium text-ink">{label}</div>
+    <label className={cn(DETAILS_ROW, "block")} onClick={(event) => {
+      if (event.target === event.currentTarget) event.preventDefault();
+    }}>
+      <div className={cn("mb-1.5 text-[14px] font-medium text-ink", status && "sticky top-0 z-10 bg-card")}>
+        {label}
+        {status}
+      </div>
       {children}
     </label>
   );
@@ -659,8 +667,9 @@ export function SettingsPanel({
                 onChange={(e) => patch({ title: e.target.value })}
               />
             </Field>
-            <Field label={t("bot.description")}>
+            <Field label={t("bot.description")} status={<SaveStatus botId={bot.id} />}>
               <FitTextarea
+                aria-label={t("bot.description")}
                 className={cn(DETAILS_INPUT, "min-h-[96px]")}
                 maxLength={BOT_PROFILE_LIMITS.description}
                 placeholder={t("bot.descriptionPlaceholder")}
