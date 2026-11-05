@@ -638,7 +638,7 @@ describe("full screen chart", () => {
     await act(async () => root.render(createElement(I18nProvider, null, createElement(ModelIndexSection))));
   };
   const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  const svg = () => host.querySelector("svg[role=img]")!;
+  const svg = () => host.querySelector<SVGSVGElement>("svg[role=img]")!;
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -682,5 +682,117 @@ describe("full screen chart", () => {
       if (original) Object.defineProperty(HTMLElement.prototype, "requestFullscreen", original);
       else Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
     }
+  });
+
+  it.each(["en", "ko"] as const)("keeps full-screen tabs and the coding choice in %s", async (locale) => {
+    vi.stubGlobal("localStorage", { getItem: () => locale });
+    applyLocale(locale);
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button(locale === "en" ? "Full Screen" : "전체 화면")!.click());
+    const full = svg().closest("[data-mi-full]")!;
+    const tabs = full?.querySelector('[role="radiogroup"]');
+    expect(tabs).toBeTruthy();
+    act(() => [...tabs!.querySelectorAll<HTMLButtonElement>("button")][1]!.click());
+    expect(full.textContent).toContain("Terminal-Bench");
+    expect(full.textContent).toContain("FrontierCode");
+    act(() => full.querySelector<HTMLButtonElement>('button[aria-label]')!.click());
+    expect(tab()).toBe(locale === "en" ? "Coding" : "코딩");
+  });
+
+  const touch = (type: string, points: Array<[number, number]>) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", { value: points.map(([clientX, clientY], identifier) => ({ clientX, clientY, identifier })) });
+    act(() => svg().dispatchEvent(event));
+  };
+  const swipe = (from: number, to: number) => {
+    touch("touchstart", [[from, 150]]);
+    touch("touchmove", [[to, 150]]);
+    touch("touchend", []);
+  };
+
+  it("swipes between indexes without wrapping or taking a vertical drag", async () => {
+    const vibrate = vi.fn();
+    Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    // SAFETY: phone and motion checks only read .matches.
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: false } as MediaQueryList);
+    swipe(100, 450);
+    expect(tab()).toBe("Intelligence");
+    swipe(450, 100);
+    expect(tab()).toBe("Coding");
+    swipe(100, 450);
+    expect(tab()).toBe("Intelligence");
+    touch("touchstart", [[100, 100]]);
+    touch("touchmove", [[140, 200]]);
+    touch("touchend", []);
+    expect(tab()).toBe("Intelligence");
+    MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "cost").forEach((entry) => { entry.cost = entry.score; });
+    pick("Benchmark", "Cost");
+    swipe(450, 100);
+    expect(tab()).toBe("Cost");
+    expect(vibrate).toHaveBeenCalledTimes(2);
+    Reflect.deleteProperty(window.navigator, "vibrate");
+  });
+
+  it("pans while zoomed and resets on index change and close", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(Number(svg().getAttribute("data-mi-zoom"))).toBeGreaterThan(1);
+    expect([...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].some((dot) => dot.style.opacity === "0")).toBe(true);
+    swipe(450, 100);
+    expect(tab()).toBe("Intelligence");
+    pick("Benchmark", "Coding");
+    expect(svg().getAttribute("data-mi-zoom")).toBe("1");
+    act(() => button("Exit Full Screen")!.click());
+    expect(svg().getAttribute("data-mi-zoom")).toBeNull();
+    expect(svg().style.touchAction).not.toBe("none");
+  });
+
+  it("ignores cancelled and edge swipes", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    touch("touchstart", [[450, 150]]);
+    touch("touchmove", [[100, 150]]);
+    touch("touchcancel", []);
+    expect(tab()).toBe("Intelligence");
+    swipe(10, 450);
+    expect(tab()).toBe("Intelligence");
+  });
+
+  it("opens a dot tooltip on tap and hides it on empty chart or zoom", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+    const [clientX, clientY] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number);
+    const hit = svg().querySelector('rect[fill="transparent"]')!;
+    const tap = (x: number, y: number) => act(() => void hit.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
+    tap(clientX!, clientY!);
+    expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+    tap(400, 10);
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    tap(clientX!, clientY!);
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+  });
+
+  it("double-taps 2x and back with reduced motion instant", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    // SAFETY: phone and motion checks only read .matches.
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+    const tap = () => { touch("touchstart", [[250, 150]]); touch("touchend", []); };
+    tap();
+    tap();
+    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    expect(svg().querySelector("style")?.textContent).toContain("transform 0s");
+    tap();
+    tap();
+    expect(svg().getAttribute("data-mi-zoom")).toBe("1");
   });
 });
