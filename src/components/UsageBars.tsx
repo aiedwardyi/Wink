@@ -71,7 +71,7 @@ export function WindowBar({ slot, now, t }: { slot: Slot; now: number; t: Transl
       </span>
       <span aria-hidden="true" data-reset={slot.key} className="min-w-0 text-[12px] tabular-nums text-ink-secondary">
         {left === null ? t("usage.desk.resetPassed") : <>
-          {left === 0 && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span> · </>}
+          {left === 0 && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>{reset && " · "}</>}
           {reset && <span className="whitespace-nowrap">{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span>}
         </>}
       </span>

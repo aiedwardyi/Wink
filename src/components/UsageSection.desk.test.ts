@@ -1158,6 +1158,12 @@ describe("Usage desk", () => {
     expect(tones(low)).toEqual(["bg-danger", ...Array(9).fill("bg-ink/12")]);
   });
 
+  it.each(["en", "ko"] as const)("ends a used-up window with no reset time at Limit reached, with no dot after it (%s)", async (locale) => {
+    accountOf(server.board, CLAUDE_2).windows.find((each) => each.usedPercent >= 100)!.resetsAt = null;
+    await mount({ locale });
+    expect(text(row(CLAUDE_2)?.querySelector('[data-window="week"] [data-reset="week"]'))).toBe(locale === "en" ? "Limit reached" : "한도 도달");
+  });
+
   it.each(["en", "ko"] as const)("says No usage yet, the same on every engine, for an account with no windows (%s)", async (locale) => {
     await mount({ locale });
     const words = locale === "en" ? "No usage yet" : "아직 사용량 없음";
