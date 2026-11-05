@@ -319,6 +319,13 @@ html:lang(ko) {
   overflow-wrap: break-word;
 }
 
+/* Message text too, since Korean can show in an English UI. */
+[data-orbit-message-content],
+[data-peer-body] {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
 /* ── Midnight ──────────────────────────────────────────────────────────────
    The upstream palette, pixel-sampled from the real Grok app. Repeated here
    (rather than relying on the `@theme` defaults) so that a `[data-skin]`

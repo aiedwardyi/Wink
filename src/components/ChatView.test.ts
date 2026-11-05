@@ -1145,7 +1145,7 @@ describe("message bubbles", () => {
       await act(async () => root.render(createElement(StoreProvider, null, page)));
       const boxes = Array.from(host.querySelectorAll("[data-orbit-message-content]"));
       expect(boxes).toHaveLength(2);
-      for (const box of boxes) expect(box.className).toMatch(/break-words|\[overflow-wrap:break-word\]/);
+      for (const box of boxes) expect(box.className).toContain("break-words");
     } finally {
       await act(async () => root.unmount());
       host.remove();

@@ -1,22 +1,41 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { PeerMessageBody } from "./PeerMessage";
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(join(here, "../styles.css"), "utf8");
-const bubble = readFileSync(join(here, "ChatBubble.tsx"), "utf8");
+const rule = (selector: RegExp) => selector.exec(css)?.[1] ?? "";
 
 describe("Korean words stay whole", () => {
   it("the base stylesheet keeps Korean words whole and still breaks long unbroken text", () => {
-    const rule = /html:lang\(ko\)\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(rule).toMatch(/word-break:\s*keep-all/);
-    expect(rule).toMatch(/overflow-wrap:\s*break-word/);
+    const base = rule(/html:lang\(ko\)\s*\{([^}]*)\}/);
+    expect(base).toMatch(/word-break:\s*keep-all/);
+    expect(base).toMatch(/overflow-wrap:\s*break-word/);
   });
 
-  it("bubble text keeps words whole even when the UI is English", () => {
-    const content = /data-orbit-message-content\s*\n\s*className=\{cn\(\s*"([^"]*)"/.exec(bubble)?.[1] ?? "";
-    expect(content).toContain("[overflow-wrap:break-word]");
-    expect(content).toContain("break-keep");
+  it("message text keeps them whole in every bubble, whatever the UI language", () => {
+    const shared = rule(/^\[data-orbit-message-content\],\s*\[data-peer-body\]\s*\{([^}]*)\}/m);
+    expect(shared).toMatch(/word-break:\s*keep-all/);
+    expect(shared).toMatch(/overflow-wrap:\s*break-word/);
+  });
+
+  it("a sent or received bot message carries the attribute the shared rule styles", async () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(PeerMessageBody, { text: "공유하겠습니다" })));
+      expect(host.querySelector("[data-peer-body]")?.textContent).toBe("공유하겠습니다");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   });
 });
