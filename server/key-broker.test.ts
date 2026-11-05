@@ -1,10 +1,21 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import * as fs from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CredentialConfig } from "../shared/credential-request.ts";
 import { callApi, callApiRequestSchema, CALL_API_TEXT_CHARS, loadKeyUses, missingKeyMessage, recordKeyUse } from "./key-broker.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    realpathSync: vi.fn(actual.realpathSync),
+    statSync: vi.fn(actual.statSync),
+    readFileSync: vi.fn(actual.readFileSync),
+  };
+});
 
 const KEY = "xai-secretKEY1234567890";
 let root: string;
@@ -29,6 +40,126 @@ const keys: CredentialConfig = {
 const reply = (body: string, init: ResponseInit = { status: 200 }) => vi.fn<typeof fetch>(async () => new Response(body, init));
 
 describe("call_api", () => {
+  it("sends multipart bytes and fields with a boundary and keeps the key in its header", async () => {
+    const path = join(root, "speech.m4a");
+    const bytes = Buffer.from([0, 1, 255, 13, 10]);
+    writeFileSync(path, bytes);
+    const fetchMock = reply(`echo ${KEY}`);
+    const result = await callApi(request({ method: "POST", headers: { "Content-Type": "application/json" }, form: {
+      fields: { model: "asr", language: "한국어" }, files: [{ field: "audio", path }],
+    } }), keys, [root], fetchMock);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(init!.body).toBeInstanceOf(FormData);
+    expect((init!.headers as Headers).has("content-type")).toBe(false);
+    const wire = new Request(url, init);
+    expect(wire.headers.get("content-type")).toMatch(/^multipart\/form-data; boundary=.+/);
+    expect(wire.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+    expect(Buffer.from(await wire.clone().arrayBuffer()).includes(KEY)).toBe(false);
+    const form = await wire.formData();
+    expect([...form.keys()]).toEqual(["model", "language", "audio"]);
+    expect(form.get("language")).toBe("한국어");
+    expect(form.get("model")).toBe("asr");
+    const file = form.get("audio") as File;
+    expect(file.name).toBe("speech.m4a");
+    expect(file.type).toBe("audio/mp4");
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(bytes);
+    expect(result).toEqual({ status: 200, text: "HTTP 200\necho [key]" });
+  });
+
+  it.each([
+    ["mp3", "audio/mpeg"], ["wav", "audio/wav"], ["webm", "audio/webm"],
+    ["png", "image/png"], ["JPG", "image/jpeg"], ["jpeg", "image/jpeg"], ["webp", "image/webp"],
+    ["pdf", "application/pdf"], ["custom", "application/octet-stream"],
+  ])("infers the multipart type for .%s", async (ext, type) => {
+    const path = join(root, `upload.${ext}`);
+    writeFileSync(path, "bytes");
+    const fetchMock = reply("");
+    await callApi(request({ method: "POST", form: { files: [{ field: "file", path }] } }), keys, [root], fetchMock);
+    const file = (fetchMock.mock.calls[0]![1]!.body as FormData).get("file") as File;
+    expect(file.type).toBe(type);
+    expect(file.name).toBe(`upload.${ext}`);
+  });
+
+  it("uses caller multipart metadata and accepts text-only and empty forms", async () => {
+    const path = join(root, "upload.bin");
+    writeFileSync(path, "bytes");
+    const fetchMock = reply("");
+    for (const form of [{ files: [{ field: "file", path, filename: "renamed.txt", content_type: "text/plain" }] }, { fields: { q: "x" } }, {}]) {
+      await callApi(request({ method: "POST", form }), keys, [root], fetchMock);
+    }
+    const first = fetchMock.mock.calls[0]![1]!.body as FormData;
+    expect(first.get("file")).toMatchObject({ name: "renamed.txt", type: "text/plain" });
+    expect((fetchMock.mock.calls[1]![1]!.body as FormData).get("q")).toBe("x");
+    expect([...(fetchMock.mock.calls[2]![1]!.body as FormData).keys()]).toEqual([]);
+  });
+
+  it.each([
+    ["outside", 403], ["missing", 404], ["relative", 400],
+  ])("refuses a multipart %s path", async (kind, status) => {
+    const path = kind === "outside" ? join(root, "outside.wav") : kind === "missing" ? join(root, "missing.wav") : "relative.wav";
+    if (kind === "outside") writeFileSync(path, "bytes");
+    const fetchMock = reply("");
+    await expect(callApi(request({ method: "POST", form: { files: [{ field: "file", path }] } }), keys,
+      kind === "outside" ? [join(root, "allowed")] : [root], fetchMock)).rejects.toMatchObject({ status });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["\\\\server\\share\\file.wav", "//server/share/file.wav", "\\\\?\\C:\\file.wav", "\\\\.\\pipe\\file"])("refuses multipart network/device path %s before fs access", async (path) => {
+    vi.mocked(fs.realpathSync).mockClear();
+    vi.mocked(fs.statSync).mockClear();
+    vi.mocked(fs.readFileSync).mockClear();
+    const fetchMock = reply("");
+    await expect(callApi(request({ method: "POST", form: { files: [{ field: "file", path }] } }), keys, [root], fetchMock))
+      .rejects.toMatchObject({ status: 403 });
+    expect(fs.realpathSync).not.toHaveBeenCalled();
+    expect(fs.statSync).not.toHaveBeenCalled();
+    expect(fs.readFileSync).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["file", "request", "count"])("caps multipart %s uploads with 413", async (kind) => {
+    const path = join(root, "large.bin");
+    writeFileSync(path, "x");
+    truncateSync(path, 25 * 1024 * 1024 + (kind === "file" ? 1 : 0));
+    const files = Array.from({ length: kind === "count" ? 9 : kind === "request" ? 3 : 1 }, () => ({ field: "file", path }));
+    const fetchMock = reply("");
+    await expect(callApi(request({ method: "POST", form: { files } }), keys, [root], fetchMock))
+      .rejects.toMatchObject({ status: 413, message: expect.stringContaining("exceeds") });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts multipart limits of 25 MB per file, 50 MB total, and eight files", async () => {
+    const path = join(root, "limit.bin");
+    writeFileSync(path, "x");
+    truncateSync(path, 25 * 1024 * 1024);
+    const empty = join(root, "empty.bin");
+    writeFileSync(empty, "");
+    const files = Array.from({ length: 8 }, (_, i) => ({ field: `file${i}`, path: i < 2 ? path : empty }));
+    const fetchMock = reply("");
+    await callApi(request({ method: "POST", form: { files } }), keys, [root], fetchMock);
+    const form = fetchMock.mock.calls[0]![1]!.body as FormData;
+    expect([...form.keys()]).toHaveLength(8);
+    expect((form.get("file0") as File).size).toBe(25 * 1024 * 1024);
+    expect((form.get("file1") as File).size).toBe(25 * 1024 * 1024);
+    expect((form.get("file7") as File).size).toBe(0);
+  });
+
+  it.each(["text", {}, null])("rejects multipart with body %j in the schema and broker", async (body) => {
+    expect(callApiRequestSchema.safeParse({ ...request({ body }), form: {} }).success).toBe(false);
+    const fetchMock = reply("");
+    await expect(callApi({ ...request({ body }), form: {} } as ReturnType<typeof request>, keys, [root], fetchMock))
+      .rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["raw text", { q: 1 }])("preserves the existing body %j without a form", async (body) => {
+    const fetchMock = reply("");
+    await callApi(request({ method: "POST", body }), keys, [root], fetchMock);
+    const init = fetchMock.mock.calls[0]![1]!;
+    expect(init.body).toBe(typeof body === "string" ? body : JSON.stringify(body));
+    expect((init.headers as Headers).get("content-type")).toBe(typeof body === "string" ? null : "application/json");
+  });
+
   it("injects the key into that service's header and returns status and body", async () => {
     const fetchMock = reply(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
     const result = await callApi(request({ method: "POST", body: { q: 1 } }), keys, [root], fetchMock);
