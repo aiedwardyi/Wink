@@ -35,6 +35,7 @@ import { markUnreadReadAt } from "@/lib/unread";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
+import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
 import { isShownMessage } from "@/lib/shown-message";
@@ -1082,6 +1083,7 @@ const StoreContext = createContext<{
   flushBotPatches: (botId: string) => Promise<void>;
   /** `passive` re-probes without starting WSL; true allows WSL; default reads the last check. */
   refreshInstances: (mode?: boolean | "passive") => Promise<void>;
+  instancesVersion: { current: number };
   turnOrigin: (threadId: string) => number | undefined;
 } | null>(null);
 
@@ -1101,6 +1103,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const groupPatchFallback = useRef(new Map<string, Group>());
   const groupPatchLatestSuccess = useRef(new Map<string, Group>());
   const refreshGeneration = useRef(0);
+  const instancesVersion = useRef(0);
   const taskSwitchGeneration = useRef(0);
   const pendingNotificationSwitch = useRef<NotificationTarget | null>(null);
   const pendingTaskResumes = useRef(new Map<string, (error: string | null, pending?: boolean) => void>());
@@ -2342,7 +2345,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "reorderGroups", groupIds: frame.groupIds });
           break;
         case "instances":
+          instancesVersion.current += 1;
           rawDispatch({ type: "instances", instances: frame.instances, preserveRateLimits: true });
+          break;
+        case "usage.board":
+          usageBoardFrame(frame.revision);
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
@@ -2365,6 +2372,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
+        usageBoardReconnected();
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
@@ -2431,9 +2439,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // as "Check again" so the user isn't told to restart when a refresh will do.
   const loadInstances = useCallback(async (query: "" | "?refresh=1" | "?rescan=1") => {
     const generation = ++refreshGeneration.current;
+    const version = instancesVersion.current;
     try {
       const { instances } = await api(`/api/instances${query}`);
-      if (generation !== refreshGeneration.current) return;
+      if (generation !== refreshGeneration.current || version !== instancesVersion.current) return;
       rawDispatch({ type: "instances", instances, preserveRateLimits: true });
     } catch {
       /* offline or server down — the existing list stays */
@@ -2538,7 +2547,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances, turnOrigin }),
+    () => ({ state, dispatch, flushBotPatches, refreshInstances, instancesVersion, turnOrigin }),
     [state, dispatch, flushBotPatches, refreshInstances, turnOrigin],
   );
   return (
@@ -2565,11 +2574,14 @@ export function useEngineLoginRefresh(waiting: boolean, onRefresh: (instances: I
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const refreshInstances = async () => {
+      const version = store?.instancesVersion.current;
       try {
         const { instances } = await api("/api/instances");
-        if (!active) return;
-        store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
-        refreshRef.current(instances);
+        // A reply older than a live frame is dropped, but the poll goes on: only it ends a failed or cancelled sign-in.
+        if (active && version === store?.instancesVersion.current) {
+          store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
+          refreshRef.current(instances);
+        }
       } catch {}
       if (active) timer = setTimeout(refreshInstances, 2000);
     };

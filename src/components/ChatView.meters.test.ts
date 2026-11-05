@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { applySkin } from "@/lib/skins";
-import { setUsageMode } from "@/lib/usage-preferences";
 import { StoreProvider, useStore, type Bot, type InstanceInfo } from "@/state/store";
 
 import { ChatView } from "./ChatView";
@@ -71,7 +70,6 @@ let unmount: (() => Promise<void>) | null = null;
 afterEach(async () => {
   await unmount?.();
   unmount = null;
-  setUsageMode("remaining");
   applySkin("precision");
   localStorage.clear();
   vi.unstubAllGlobals();
@@ -81,7 +79,6 @@ afterEach(async () => {
 async function render(bot: Bot, instances: InstanceInfo[]) {
   applyLocale("en");
   applySkin("precision");
-  setUsageMode("remaining");
   vi.spyOn(Date, "now").mockReturnValue(now);
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
   vi.stubGlobal("EventSource", class {
@@ -110,7 +107,12 @@ async function render(bot: Bot, instances: InstanceInfo[]) {
   return { host, dispatch: store!.dispatch };
 }
 
-const meter = (host: HTMLElement, label: string) => host.querySelector(`[aria-label="${label}"]`);
+function meter(host: HTMLElement) {
+  const line = host.querySelector("[data-usage-meter]");
+  if (!line) return null;
+  const text = (hook: string) => line.querySelector(`[${hook}]`)?.textContent ?? null;
+  return { first: text("data-meter-first"), second: text("data-meter-second") };
+}
 
 describe("ChatView plan meters follow the shown pick", () => {
   it("hides ChatPlanMeters when a busy bot's pending pick reports no windows", async () => {
@@ -118,8 +120,8 @@ describe("ChatView plan meters follow the shown pick", () => {
       { ...busy, pendingModelSelection: { instanceId: "gemini", model: "gemini-flash", effort: "high" } },
       [claude, gemini],
     );
-    expect(meter(host, "5h: 29% remaining")).toBeNull();
-    expect(host.querySelector('button[aria-label="Open Usage Settings"]')).toBeNull();
+    expect(meter(host)).toBeNull();
+    expect(host.textContent).not.toContain("29%");
   });
 
   it("shows the pending instance's windows in ChatPlanMeters", async () => {
@@ -127,15 +129,13 @@ describe("ChatView plan meters follow the shown pick", () => {
       { ...busy, pendingModelSelection: { instanceId: "muse", model: "muse-model", effort: "high" } },
       [claude, muse],
     );
-    expect(meter(host, "5h: 90% remaining")).not.toBeNull();
-    expect(meter(host, "7d: 60% remaining")).not.toBeNull();
-    expect(meter(host, "5h: 29% remaining")).toBeNull();
+    expect(meter(host)).toEqual({ first: "7d 60%", second: "5h 90%" });
     expect(host.textContent).toContain("Last seen 4d ago");
   });
 
-  it("shows the running engine's bars in ChatPlanMeters when nothing is pending", async () => {
+  it("shows the running engine's windows in ChatPlanMeters when nothing is pending", async () => {
     const { host } = await render(busy, [claude, gemini]);
-    expect(meter(host, "5h: 29% remaining")).not.toBeNull();
+    expect(meter(host)).toEqual({ first: "5h 29%", second: null });
     expect(host.textContent).not.toContain("Last seen");
   });
 
@@ -152,20 +152,17 @@ describe("ChatView plan meters follow the shown pick", () => {
       },
     };
     const { host, dispatch } = await render(busy, [base, second]);
-    expect(meter(host, "5h: 29% remaining")).not.toBeNull();
+    expect(meter(host)).toEqual({ first: "5h 29%", second: null });
     await act(async () => dispatch({ type: "instances", instances: [
       { ...base, accountMain: false }, { ...second, accountMain: true },
     ] }));
-    expect(meter(host, "5h: 88% remaining")).not.toBeNull();
-    expect(meter(host, "7d: 66% remaining")).not.toBeNull();
-    expect(meter(host, "5h: 29% remaining")).toBeNull();
+    expect(meter(host)).toEqual({ first: "7d 66%", second: "5h 88%" });
     await act(async () => dispatch({ type: "rateLimits", instanceId: "second", report: {
       observedAt: new Date(now).toISOString(),
       windows: [{ id: "five_hour", usedPercent: 20, resetsAt: now + 7_200_000 }],
     } }));
-    expect(meter(host, "5h: 80% remaining")).not.toBeNull();
+    expect(meter(host)).toEqual({ first: "5h 80%", second: null });
     await act(async () => dispatch({ type: "instances", instances: [base, second] }));
-    expect(meter(host, "5h: 29% remaining")).not.toBeNull();
-    expect(meter(host, "5h: 80% remaining")).toBeNull();
+    expect(meter(host)).toEqual({ first: "5h 29%", second: null });
   });
 });

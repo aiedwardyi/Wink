@@ -1,0 +1,53 @@
+.usage-glyphs {
+  font-family: var(--font-mono, ui-monospace), "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: pre;
+  font-variant-ligatures: none;
+}
+.usage-num {
+  font-variant-numeric: tabular-nums;
+}
+/* Style 5 (Edward's pick): label, ten-box meter, % left, reset. Under 486px of group width the reset goes under the meter and % left sits on the right edge. */
+.usage-group {
+  container: usage-group / inline-size;
+}
+.usage-group [data-account-row] {
+  padding: 12px 16px 14px;
+}
+.usage-meter {
+  display: grid;
+  grid-template-columns: var(--usage-label-width, 2em) 190px 6.2em minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: center;
+}
+/* Korean labels run to "24시간" (Gemini's day), even in a wide font. */
+.usage-meter:lang(ko) {
+  grid-template-columns: var(--usage-label-width, 3.4em) 190px 6.2em minmax(0, 1fr);
+}
+.usage-meter[data-model-window] {
+  --usage-label-width: max-content;
+}
+@container usage-group (width < 486px) {
+  .usage-group [data-account-row] {
+    padding-inline: 14px;
+  }
+  .usage-meter {
+    grid-template-columns: var(--usage-label-width, 2em) minmax(0, 1fr) 6.2em;
+    column-gap: 10px;
+  }
+  .usage-meter:lang(ko) {
+    grid-template-columns: var(--usage-label-width, 3.4em) minmax(0, 1fr) 6.2em;
+  }
+  .usage-meter > [data-left] {
+    text-align: right;
+  }
+  .usage-meter > [data-reset] {
+    grid-column: 2 / 4;
+    margin-top: 1px;
+  }
+}
+/* Layout A: each column sizes its own meters. */
+.usage-group [data-account-column] {
+  container: usage-group / inline-size;
+}

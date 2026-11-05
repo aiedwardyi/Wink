@@ -37,6 +37,10 @@ const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
   if (window.windowMinutes === 300 || window.id === "five_hour") return "session";
   if (window.windowMinutes === 10080 || window.id === "seven_day" || window.id.startsWith("seven_day_")) return "week";
+  if (window.windowMinutes === undefined) {
+    if (window.id === "primary") return "session";
+    if (window.id === "secondary") return "week";
+  }
   return "other";
 }
 
