@@ -53,6 +53,30 @@ function touch(type: string, points: Array<[number, number]>, time?: number) {
 }
 
 describe("useChartZoom", () => {
+  it.each(["pinch", "pan"])("restores a dot when %s ends before its final frame", (gesture) => {
+    const dot = host.querySelectorAll<SVGGElement>("[data-mi-point]")[1]!;
+    if (gesture === "pan") {
+      touch("touchstart", [[300, 100], [500, 100]]);
+      touch("touchmove", [[200, 100], [600, 100]]);
+      touch("touchend", []);
+    }
+    expect(dot.style.opacity).toBe("1");
+    const rendered = dot.style.transform;
+    if (gesture === "pinch") {
+      touch("touchstart", [[100, 100], [300, 100]]);
+      touch("touchmove", [[0, 100], [400, 100]]);
+    } else {
+      touch("touchstart", [[200, 100]]);
+      touch("touchmove", [[600, 100]]);
+    }
+    act(() => frames.at(-1)!(16));
+    expect(dot.style.opacity).toBe("0");
+    touch("touchmove", gesture === "pinch" ? [[100, 100], [300, 100]] : [[200, 100]]);
+    expect(dot.style.opacity).toBe("0");
+    touch("touchend", []);
+    expect({ opacity: dot.style.opacity, transform: dot.style.transform }).toEqual({ opacity: "1", transform: rendered });
+  });
+
   it("does not count the last pinch finger lifting as a tap", () => {
     touch("touchstart", [[100, 100], [200, 100]], 1000);
     touch("touchmove", [[50, 100], [250, 100]], 1020);

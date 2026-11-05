@@ -76,8 +76,10 @@ export function useChartZoom(
     };
     const settle = () => {
       if (!moving) return;
-      if (frame) cancelAnimationFrame(frame);
-      frame = 0;
+      if (frame) {
+        cancelAnimationFrame(frame);
+        paint();
+      }
       moving = false;
       for (const line of lines) line.removeAttribute("transform");
       el.removeAttribute("data-mi-gesture");
