@@ -30,8 +30,12 @@ export const PICKER_MODEL_IDS: readonly string[] = [
   ...GEMINI_VERSIONS.map((version) => `gemini-${version}-flash`),
 ];
 
+export function baseInstances(instances: InstanceInfo[]): InstanceInfo[] {
+  return instances.filter((instance) => !instance.accountOf || instance.accountOf === instance.instanceId);
+}
+
 export function pickerInstances(instances: InstanceInfo[]): InstanceInfo[] {
-  return instances.filter((instance) => !instance.accountOf || instance.accountOf === instance.instanceId)
+  return baseInstances(instances)
     .map((instance) => instance.pickerSnapshot ? { ...instance, snapshot: instance.pickerSnapshot, models: instance.pickerModels ?? instance.models } : instance);
 }
 

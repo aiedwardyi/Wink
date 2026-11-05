@@ -75,6 +75,53 @@ afterEach(async () => {
 });
 
 describe("first engine connection", () => {
+  it.each(["en", "ko"] as const)("keeps installed CLI sign-in when Main is signed out in %s", async (locale) => {
+    persistPreference(locale);
+    const base = { ...instances[0]!, accountOf: "claude", accountState: "ready" as const,
+      snapshot: { state: "available" as const, authenticated: false, version: "1.0" },
+      pickerSnapshot: { state: "unavailable" as const } };
+    const main = { ...base, instanceId: "acct_00000000-0000-0000-0000-000000000000", accountMain: true };
+    instances = [main, base, ...instances.slice(1)];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="claude"]')!;
+    const label = locale === "en" ? "Sign in to Claude" : "Claude에 로그인";
+    expect(row.querySelector("button")?.textContent).toBe(label);
+    expect(row.hasAttribute("data-onboarding-ready")).toBe(false);
+    expect(host.querySelectorAll("[data-engine-connect]")).toHaveLength(5);
+    await click(locale === "en" ? "Show Commands" : "명령어 보기");
+    const setup = host.querySelector("[data-engine-connect-commands]")!.firstElementChild!;
+    expect(setup.textContent).toContain(label);
+    expect(setup.querySelector("code")?.textContent).toBe("claude login");
+    expect(setup.textContent).not.toContain(locale === "en" ? "Install Claude" : "Claude 설치");
+    await click(label, row);
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/instances/claude/sign-in",
+      expect.objectContaining({ method: "POST", body: '{"device":false}' }));
+    expect(window.ogb!.openEngineInstall).not.toHaveBeenCalled();
+    expect(base.snapshot).toEqual({ state: "available", authenticated: false, version: "1.0" });
+  });
+
+  it.each([false, true])("uses Main readiness without losing CLI installation (base signed in: %s)", async (authenticated) => {
+    const base = { ...instances[0]!, snapshot: { state: "available" as const, authenticated },
+      pickerSnapshot: { state: authenticated ? "unavailable" as const : "available" as const, authenticated: !authenticated } };
+    await render(createElement(EngineConnect, { instances: [base], onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="claude"]')!;
+    expect(row.querySelector("button")?.textContent).toBe(authenticated ? "Sign in to Claude" : "Claude is ready");
+    expect(row.hasAttribute("data-onboarding-ready")).toBe(!authenticated);
+    await click("Show Commands");
+    if (authenticated) expect(host.querySelector("code")?.textContent).toBe("claude login");
+    expect(base.snapshot.authenticated).toBe(authenticated);
+  });
+
+  it("keeps a missing CLI installable even when Main's picker is ready", async () => {
+    const base = { ...instances[0]!, pickerSnapshot: { state: "available" as const, authenticated: true } };
+    await render(createElement(EngineConnect, { instances: [base], onRefresh: refreshInstances }));
+    const row = host.querySelector('[data-engine-connect="claude"]')!;
+    expect(row.querySelector("button")?.textContent).toBe("Install Claude");
+    expect(row.hasAttribute("data-onboarding-ready")).toBe(false);
+    await click("Install Claude", row);
+    expect(window.ogb!.openEngineInstall).toHaveBeenCalledExactlyOnceWith("claude");
+  });
+
   it("shows each engine once with four Claude and two Codex accounts", async () => {
     const bases = fleet().map((instance) => ({ ...instance, accountOf: instance.instanceId,
       snapshot: { state: "available" as const, authenticated: true } }));

@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { Check, Download, Loader2 } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { firstLaunchConnectInstances } from "@/lib/engine-rail";
-import { pickerInstances } from "@/lib/cross-model-picker";
+import { baseInstances } from "@/lib/cross-model-picker";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
 import { EngineSetup, EngineSignIn, installCommandFor, openEngineInstallOrCopy } from "./EngineSetup";
@@ -25,7 +25,9 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const { attempts, begin, fail } = useEngineInstall(instances, onRefresh, recheckOnFocus);
-  const engines = firstLaunchConnectInstances(pickerInstances(instances)).sort((a, b) => ORDER.indexOf(a.driverKind) - ORDER.indexOf(b.driverKind));
+  const engines = firstLaunchConnectInstances(baseInstances(instances)).map((instance) => instance.pickerSnapshot
+    ? { ...instance, snapshot: { ...instance.snapshot, authenticated: instance.pickerSnapshot.state === "available" && instance.pickerSnapshot.authenticated !== false } }
+    : instance).sort((a, b) => ORDER.indexOf(a.driverKind) - ORDER.indexOf(b.driverKind));
   const hasInstalled = engines.some((instance) => instance.snapshot.state === "available");
   const primary = engines.filter((instance) => hasInstalled ? instance.snapshot.state === "available" : instance.driverKind === "claudeAgent");
   const others = engines.filter((instance) => !primary.includes(instance));
