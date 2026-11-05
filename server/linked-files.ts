@@ -1,8 +1,8 @@
-// Linked files stay inside the writing bot's output roots after realpath.
+// Linked media may leave the bot's output roots, excluding private and system folders.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, realpathSync, statSync } from "node:fs";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative } from "node:path";
 import { pipeline } from "node:stream";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
@@ -204,6 +204,23 @@ function insideRoot(real: string, roots: readonly string[]): boolean {
   });
 }
 
+function outsideMedia(real: string): boolean {
+  if (!mediaType(real) || /^[\\/]{2}/.test(real)) return false;
+  const normalized = real.replaceAll("\\", "/").toLowerCase();
+  if (normalized.split("/").some((part) => part.startsWith(".") || part === "appdata")) return false;
+  const system = [
+    process.env.WINDIR, process.env.SystemRoot, process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.ProgramData,
+    ...["Windows", "Program Files", "Program Files (x86)", "ProgramData"].map((folder) => join(parse(real).root, folder)),
+  ];
+  return !system.some((root) => {
+    if (!root) return false;
+    let canonical = root;
+    try { canonical = realpathSync(root); } catch { /* folder may not exist */ }
+    const prefix = canonical.replaceAll("\\", "/").toLowerCase().replace(/\/+$/, "");
+    return normalized === prefix || normalized.startsWith(`${prefix}/`);
+  });
+}
+
 function byteRange(header: string | undefined, size: number): { start: number; end: number } | "all" | "bad" {
   if (!header) return "all";
   const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
@@ -343,7 +360,8 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   const roots = hits.flatMap((hit) => hit.roots);
-  if (!insideRoot(real, roots)) {
+  const inRoot = insideRoot(real, roots);
+  if (!inRoot && !outsideMedia(real)) {
     let file = false;
     try { file = statSync(real).isFile(); } catch { /* file disappeared */ }
     sendJson(res, 404, file ? { error: "not found", reason: "outside" } : { error: "not found" });
@@ -389,7 +407,7 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
     return;
   }
   const filePath = asset || requested;
-  const mime = mediaType(filePath) ?? (html || asset ? assetType(filePath) : null);
+  const mime = (inRoot ? mediaType(filePath) : mediaType(real)) ?? (html || asset ? assetType(filePath) : null);
   sendFile(req, res, real, size, mime ?? "application/octet-stream", mime === null, scoped ? `${prefix}${encodeURIComponent(requested)}/${key}/` : undefined);
 }
 
