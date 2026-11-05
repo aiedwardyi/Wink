@@ -40,6 +40,7 @@ export async function shootPicture(page, file, dir, options = {}) {
     await page.addStyleTag({ content: `* { font-family: "${options.font}" !important; }` });
   }
   await page.evaluate(() => document.fonts.ready);
+  await page.waitForFunction(() => [...document.images].every((image) => image.complete));
   const observed = await page.evaluate(() => {
     const text = document.body.innerText;
     const emails = text.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) ?? [];
@@ -71,9 +72,8 @@ export async function capturePicture(flags, name, dir, playwright) {
         const page = await context.newPage();
         await page.goto(url.href);
         await page.locator("textarea[data-orbit-composer]").first().waitFor();
-        await page.waitForTimeout(700);
         const file = join(dir, "shots", `${name}-${width === undefined ? "desktop" : `phone-${width}`}.png`);
-        await shootPicture(page, file, dir, { ...flags, font: width === undefined ? undefined : flags.font });
+        await shootPicture(page, file, dir, flags);
         files.push(file);
       } finally {
         await context.close();
