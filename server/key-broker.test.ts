@@ -68,7 +68,7 @@ describe("call_api", () => {
 
   it.each([
     ["mp3", "audio/mpeg"], ["wav", "audio/wav"], ["webm", "audio/webm"],
-    ["png", "image/png"], ["JPG", "image/jpeg"], ["webp", "image/webp"],
+    ["png", "image/png"], ["JPG", "image/jpeg"], ["jpeg", "image/jpeg"], ["webp", "image/webp"],
     ["pdf", "application/pdf"], ["custom", "application/octet-stream"],
   ])("infers the multipart type for .%s", async (ext, type) => {
     const path = join(root, `upload.${ext}`);

@@ -26,7 +26,7 @@ const BINARY_TYPE = /^(image\/|audio\/|application\/pdf$|application\/octet-stre
 const EXTENSIONS: Record<string, string> = { "audio/mpeg": "mp3", "image/jpeg": "jpg", "application/octet-stream": "bin" };
 const UPLOAD_TYPES: Record<string, string> = {
   ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".webm": "audio/webm",
-  ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".pdf": "application/pdf",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".pdf": "application/pdf",
 };
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -73,7 +73,7 @@ function multipartBody(form: NonNullable<CallApiRequest["form"]>, roots: readonl
     total += bytes.byteLength;
     if (total > MAX_UPLOAD_BYTES) throw fail(413, "upload exceeds 50 MB");
     const type = file.content_type ?? UPLOAD_TYPES[extname(file.path).toLowerCase()] ?? "application/octet-stream";
-    body.append(file.field, new Blob([new Uint8Array(bytes)], { type }), file.filename ?? basename(file.path));
+    body.append(file.field, new Blob([bytes], { type }), file.filename ?? basename(file.path));
   }
   return body;
 }
