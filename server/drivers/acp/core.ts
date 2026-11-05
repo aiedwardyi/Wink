@@ -421,10 +421,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const systemHeld = systemLedger();
       const billingStops = new Set<() => void>();
       const pool = support.warmPool ?? sharedWarmPool;
-      const incarnation = newId();
+      const incarnation = input.incarnation ?? newId();
       const keyFor = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
-      const capture = (): Captured => ({
-        generation: input.account?.generation ?? pool.generation(keyFor("")),
+      let lastCapture: Captured | null = null;
+      const generationNow = () => input.account?.generation ?? pool.generation(keyFor(""));
+      const capture = (): Captured => (lastCapture = {
+        generation: generationNow(),
         incarnation,
         identity: support.warmSessionIdentity?.(childEnv()) ?? "",
       });
@@ -652,7 +654,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         if (shape?.integrations?.localComputer?.scope === "local-computer" && config.fullAuto) return Promise.resolve();
         const captured = capture();
         if (shape && (!captured.identity || shape.captured.generation !== captured.generation
-          || shape.captured.identity !== captured.identity)) return Promise.resolve();
+          || shape.captured.identity !== captured.identity
+          || shape.captured.incarnation !== captured.incarnation)) return Promise.resolve();
         const turn: SendTurnInput = { ...(shape ?? { threadId: "__prewarm__" }), text: "" };
         const ctx = context(turn, captured);
         const fingerprint = warmFingerprint(ctx.eligibility);
@@ -807,6 +810,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (cold) release(cold, "turn cancelled");
           if (entry && entry !== cold) release(entry, "turn cancelled");
         };
+        let borrowedSignal: AbortSignal | undefined;
+        const onBorrowedAbort = () => {
+          const current = capture();
+          if (epoch !== pool.generation(keyFor(threadId)) || current.generation !== captured.generation
+            || current.identity !== captured.identity) cancel();
+        };
+        const unlisten = () => borrowedSignal?.removeEventListener("abort", onBorrowedAbort);
         active.set(threadId, { stop: cancel, steer: async () => ({ taken: false }), interrupt: cancel, turnId, asks: new Map() });
         let started = false;
         let reused = false;
@@ -824,11 +834,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           emit({ ...base(threadId, turnId), type: "turn.started" });
           started = true;
           check();
-          if (borrowed) borrowed.signal.addEventListener("abort", () => {
-            const current = capture();
-            if (epoch !== pool.generation(keyFor(threadId)) || current.generation !== captured.generation
-              || current.identity !== captured.identity) cancel();
-          }, { once: true });
+          borrowedSignal = borrowed?.signal;
+          borrowedSignal?.addEventListener("abort", onBorrowedAbort, { once: true });
           if (typeof take === "string" || "pending" in take || !entries.get(take.hit)?.sessionId) {
             emit({ ...base(threadId, turnId), type: "turn.stage", stage: "setup" });
           }
@@ -877,6 +884,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           handshakeReuse = !reused && !!entry.init;
           check(entry);
         } catch (error) {
+          unlisten();
           const cancelled = disposed || controller.signal.aborted || epoch !== pool.generation(keyFor(threadId))
             || capture().identity !== captured.identity;
           cancel();
@@ -986,6 +994,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           connection.onError = () => release(entry, "transport error");
           entry.onPromptWrite = undefined;
           const finish = () => {
+            unlisten();
             billingStops.delete(stop);
             borrowedHandshakes.delete(threadId);
             const current = capture();
@@ -995,6 +1004,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               && current.identity === captured.identity;
             if (keep && sessionId) {
               entry.sessionId = sessionId;
+              entry.resumeFailed = false;
               entry.model = selectedModel;
               entry.session = { kind: "loaded", id: sessionId };
               // A legacy handshake moves to the real thread's key after billing.
@@ -1417,6 +1427,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (!probed && gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
           if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
           const authenticated = await support.isAuthenticated(env, config);
+          lastCapture = authenticated ? capture() : null;
           const ready: ProviderSnapshot = { state: "available", version: probed.version, authenticated, account: authenticated ? support.account?.(env) : undefined };
           if (!gated) lastSnapshot = ready;
           return ready;
@@ -1488,6 +1499,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         textModel: text?.textModel,
         textTimeoutMs: text?.textTimeoutMs,
         prepare,
+        cachedCapture: () => (input.enabled && !disposed && lastCapture && lastCapture.identity
+          && lastCapture.generation === generationNow()) ? { ...lastCapture } : null,
         dispose: async () => {
           disposed = true;
           text?.dispose();
