@@ -41,3 +41,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Multiplexer paints the bar in the accent, so the spark takes the bar's ink like every other fact on it. */
+[data-skin="multiplexer"] .term-status [data-glyphs] > * {
+  color: inherit !important;
+}

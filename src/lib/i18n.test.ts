@@ -50,7 +50,7 @@ const searchResults = readFileSync(join(here, "../components/SearchResults.tsx")
 const manageMembers = readFileSync(join(here, "../components/ManageMembersPanel.tsx"), "utf8");
 const pluginsPanel = readFileSync(join(here, "../components/PluginsPanel.tsx"), "utf8");
 const usageSection = readFileSync(join(here, "../components/UsageSection.tsx"), "utf8");
-const planUsageBar = readFileSync(join(here, "../components/PlanUsageBar.tsx"), "utf8");
+const usageDesk = readFileSync(join(here, "../components/UsageDesk.tsx"), "utf8");
 const usageLib = readFileSync(join(here, "usage.ts"), "utf8");
 const chatPlanMeters = readFileSync(join(here, "../components/ChatPlanMeters.tsx"), "utf8");
 const composer = readFileSync(join(here, "../components/Composer.tsx"), "utf8");
@@ -107,6 +107,21 @@ describe("catalogs", () => {
   it("explains blocked notification recovery in both languages", () => {
     expect(en["settings.phoneNotifications.state.blocked"]).toMatch(/blocked.*browser settings/i);
     expect(ko["settings.phoneNotifications.state.blocked"]).toMatch(/차단.*브라우저 설정.*허용/);
+  });
+
+  it("says Main as 기본 in Korean, as the account rows do", () => {
+    expect(ko["accounts.main"]).toBe("기본");
+    expect(Object.entries(ko).filter(([, phrase]) => phrase.includes("메인")).map(([key]) => key)).toEqual([]);
+    for (const key of ["usage.desk.mainFailed", "usage.desk.eventMain", "usage.desk.eventMainStays"] as const) {
+      expect(en[key], key).toMatch(/\bMain\b/);
+      expect(ko[key], key).toContain("기본");
+    }
+  });
+
+  it("drops the retired Alt+R refresh from the shortcuts help in both languages", () => {
+    expect(en["shortcuts.help"]).not.toContain("Alt+R");
+    expect(ko["shortcuts.help"]).not.toContain("Alt+R");
+    expect(en["shortcuts.help"]).toMatch(/shell/);
   });
 
   it("rejects fixed Korean particles after every catalog interpolation", () => {
@@ -720,8 +735,6 @@ describe("first-run core path leftovers", () => {
     expect(en["engines.models"]).toBe("Models");
     expect(ko["engines.models"]).toBe("모델");
     expect(en["usage.limits.notReported"]).toBe("{name} does not report a usage limit.");
-    expect(en["usage.limits.pending"]).toBe("Appears after your next {name} message.");
-    expect(en["usage.limits.pending"]).not.toBe(en["usage.limits.notReported"]);
     expect(Object.hasOwn(en, "usage.limits.unavailable")).toBe(false);
     expect(en["connections.connected"]).toBe("Connected");
     expect(ko["connections.connected"]).toBe("연결됨");
@@ -845,19 +858,12 @@ describe("plan usage", () => {
       "usage.limits.resetsInOneMinute",
       "usage.limits.resetUnknown",
       "usage.limits.resetPassed",
-      "usage.limits.pending",
       "usage.limits.notReported",
     ] as const) {
       expect(ko[key]).not.toMatch(/Resets|window|report|used|Weekly/i);
     }
-    expect(ko["usage.limits.pending"]).toContain("{name}");
     expect(ko["usage.limits.notReported"]).toContain("{name}");
-    expect(ko["usage.limits.pending"]).not.toBe(ko["usage.limits.notReported"]);
-    expect(ko["usage.limits.pending"]).not.toMatch(/not available|at the moment/i);
     expect(ko["usage.limits.notReported"]).not.toMatch(/not available|at the moment/i);
-    expect(translate("en", "usage.limits.pending", { name: "Claude" })).toBe(
-      "Appears after your next Claude message.",
-    );
     expect(translate("en", "usage.limits.notReported", { name: "Grok" })).toBe(
       "Grok does not report a usage limit.",
     );
@@ -878,33 +884,25 @@ describe("plan usage", () => {
     expect(translate("ko", "usage.limits.refreshAgeHours", { hours: 2 })).toBe("2시간");
     expect(translate("en", "usage.limits.refreshAgeDays", { days: 2 })).toBe("2d");
     expect(translate("ko", "usage.limits.refreshAgeDays", { days: 2 })).toBe("2일");
-    expect(translate("en", "usage.limits.cachedAsOf", { age: "5m" })).toBe("Cached, as of 5m ago.");
-    expect(translate("ko", "usage.limits.cachedAsOf", { age: "5분" })).toBe("캐시된 값, 5분 전 기준입니다.");
   });
 
   it("wires those phrases into the Usage settings surface instead of hardcoded English", () => {
     expect(usageSection).not.toContain('t("usage.limits.title")');
-    expect(usageSection).toContain('t("usage.limits.empty")');
-    expect(planUsageBar).toContain('"usage.limits.session"');
-    expect(planUsageBar).toContain('"usage.limits.weekly"');
-    expect(planUsageBar).toContain('"usage.limits.window"');
-    expect(planUsageBar).toContain('"usage.limits.sessionShort"');
-    expect(planUsageBar).toContain('"usage.limits.weeklyShort"');
-    expect(planUsageBar).toContain('t("usage.limits.percentUsed", { percent })');
-    expect(usageSection).toContain('"usage.limits.pending"');
-    expect(usageSection).toContain('"usage.limits.notReported"');
+    expect(usageDesk).toContain('t("usage.desk.noReport")');
+    expect(usageDesk).toContain('t("usage.desk.left")');
+    expect(usageDesk).toContain('"usage.desk.resetsIn"');
     expect(usageLib).toContain('"usage.limits.refreshAgeMinutes"');
     expect(usageLib).toContain('"usage.limits.refreshAgeHours"');
-    expect(usageSection).toContain('"usage.limits.cachedAsOf"');
-    expect(usageSection).not.toContain('"usage.limits.unavailable"');
-    expect(planUsageBar).toContain("t(phrase.key, phrase.vars)");
-    expect(planUsageBar).toContain("t(compactReset.key, compactReset.vars)");
-    expect(usageSection).not.toMatch(/Resets in/);
-    expect(planUsageBar).not.toMatch(/Resets in/);
-    expect(usageSection).not.toMatch(/% used/);
-    expect(usageSection).not.toMatch(/does not report/);
-    expect(usageSection).not.toMatch(/not available at the moment/);
+    expect(usageDesk).not.toContain('"usage.limits.unavailable"');
+    for (const source of [usageSection, usageDesk, chatPlanMeters]) {
+      expect(source).not.toMatch(/Resets in/);
+      expect(source).not.toMatch(/% used/);
+      expect(source).not.toMatch(/does not report/);
+      expect(source).not.toMatch(/not available at the moment/);
+    }
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
+    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name })');
+    expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");
     expect(chatView).toContain("shownEngine?.rateLimits?.windows");

@@ -22,7 +22,7 @@ import {
   type FailedComposerSend,
   type PersistedRoomHold,
 } from "@/lib/drafts";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import {
   appendPastedText,
@@ -919,8 +919,8 @@ export function Composer({
                 )}
               >
                 {peer.bot ? (
-                  <MausAvatar
-                    color={peer.bot.color}
+                  <BotAvatar
+                    bot={peer.bot}
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
                     size={24}
                   />

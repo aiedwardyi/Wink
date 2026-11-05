@@ -33,7 +33,7 @@ const rows = [
   { id: "acct_studio", of: "claude", driverKind: "claudeAgent", generation: 3, existing: false, state: "ready" as const },
 ];
 const report = (usedPercent: number, observedAt = "2026-11-05T10:00:00.000Z") => ({
-  windows: [{ id: "five_hour", usedPercent, resetsAt: Date.parse("2026-11-05T15:00:00.000Z"), windowMinutes: 300 }], observedAt,
+  windows: [{ id: "five_hour", usedPercent, resetsAt: Date.parse(observedAt) + 300 * 60_000, windowMinutes: 300 }], observedAt,
 });
 
 async function wired(main = "claude") {
@@ -164,8 +164,8 @@ it("holds a starting turn's account until it is accepted", async () => {
   const take = turn.indexOf("    const releaseStarting = takeStartingHold(bot.id);");
   expect(take).toBeGreaterThan(turn.indexOf("  void (async () => {"));
   expect(take).toBeLessThan(turn.indexOf("await ", turn.indexOf("  void (async () => {")));
-  expect(section("    } finally {\n      releaseStarting();", "\n  })();", turn)).toBeTruthy();
-  expect(section("async function startTurn(", "\n}\n")).toContain("  } finally {\n    takeStartingHold(botId)();");
+  expect(section("    } finally {\n      releaseStarting();", "\n  })()", turn)).toBeTruthy();
+  expect(section("  } finally {", "\n    turnStartClaims.delete(botId);", section("async function startTurn(", "\n}\n"))).toContain("takeStartingHold(botId)();");
   const roomTurn = section("async function runClaimedGroupMemberTurn(", "\n}\n");
   expect(roomTurn.indexOf("  startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId")).toBeGreaterThan(roomTurn.indexOf("  const instance = selectedInstance &&"));
   expect(roomTurn.indexOf("  const releaseStarting = takeStartingHold(bot.id);\n  releaseTurnStart?.();")).toBeGreaterThan(0);

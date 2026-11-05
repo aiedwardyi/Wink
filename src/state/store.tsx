@@ -24,6 +24,7 @@ import { speaker } from "@/lib/tts";
 import { preferredStartupSelectionId } from "@/lib/sidebar-order";
 import { loadSidebarOrder } from "@/lib/sidebar-preferences";
 import { loadReplyStyle } from "@/lib/reply-style";
+import { nextTurnOrigins, turnOriginRow } from "@/lib/turn-origin";
 import { appSettingsNavigation } from "@/lib/settings-chrome";
 import { createBotPatchQueue } from "./bot-patch-queue";
 import { createViewedReplies } from "./viewed-replies";
@@ -34,6 +35,7 @@ import { markUnreadReadAt } from "@/lib/unread";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
 import { openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
+import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
 import { hapticTick } from "@/lib/phone-swipe";
 import { isShownMessage } from "@/lib/shown-message";
@@ -1081,6 +1083,8 @@ const StoreContext = createContext<{
   flushBotPatches: (botId: string) => Promise<void>;
   /** `passive` re-probes without starting WSL; true allows WSL; default reads the last check. */
   refreshInstances: (mode?: boolean | "passive") => Promise<void>;
+  instancesVersion: { current: number };
+  turnOrigin: (threadId: string) => number | undefined;
 } | null>(null);
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
@@ -1099,6 +1103,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const groupPatchFallback = useRef(new Map<string, Group>());
   const groupPatchLatestSuccess = useRef(new Map<string, Group>());
   const refreshGeneration = useRef(0);
+  const instancesVersion = useRef(0);
   const taskSwitchGeneration = useRef(0);
   const pendingNotificationSwitch = useRef<NotificationTarget | null>(null);
   const pendingTaskResumes = useRef(new Map<string, (error: string | null, pending?: boolean) => void>());
@@ -1169,6 +1174,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
   const streamTails = useRef<Record<string, string>>({});
   const liveTurns = useRef<Record<string, string>>({});
+  const [origins, updateOrigin] = useReducer(nextTurnOrigins, {});
+  const turnOrigin = useCallback((threadId: string) => origins[threadId]?.origin?.originMs, [origins]);
   const lastMessageIdFor = (threadId: string): string => {
     if (streamTails.current[threadId]) return streamTails.current[threadId];
     const bot = stateRef.current.bots.find((candidate) => candidate.threadId === threadId);
@@ -1336,6 +1343,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // All other actions keep their existing optimistic behavior.
       if (action.type !== "cancelQueued") rawDispatch(action);
       switch (action.type) {
+        case "olderMessages": {
+          const next = reducer(stateRef.current, action);
+          if (next === stateRef.current) break;
+          const bot = next.bots.find((candidate) => candidate.threadId === action.threadId);
+          const messages = bot ? visibleMessages(bot) : next.groups.find((group) => group.threadId === action.threadId)?.messages ?? [];
+          updateOrigin({ threadId: action.threadId, event: { type: "history", row: turnOriginRow(messages) } });
+          break;
+        }
         case "markRoutineRunSeen":
           api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);
           break;
@@ -2015,16 +2030,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // dispatched turn would otherwise read Preparing for the whole wait.
         // workingThreadId is the thread startTurn actually claimed.
         for (const bot of bots) {
-          const last = visibleMessages({
+          const messages = visibleMessages({
             messages: bot.messages ?? [],
             activeLeafId: bot.activeLeafId,
-          }).at(-1)?.id;
+          });
+          const last = messages.at(-1)?.id;
           noteStreamTail(bot.threadId, last);
           const threadId = hydrationTurnThread(bot, groups ?? []);
-          if (threadId) markTurnSignal(threadId, "hydrated");
+          if (threadId) {
+            markTurnSignal(threadId, "hydrated");
+            updateOrigin({ threadId, event: { type: "hydrated", turnKey: last ?? threadId, row: threadId === bot.threadId ? turnOriginRow(messages) : undefined, now: Date.now() } });
+          } else updateOrigin({ threadId: bot.threadId, event: { type: "completed" } });
         }
         for (const group of groups ?? []) {
           noteStreamTail(group.threadId, group.messages?.at(-1)?.id);
+          updateOrigin({ threadId: group.threadId, event: group.busyBotId
+            ? { type: "hydrated", turnKey: group.messages?.at(-1)?.id ?? group.threadId, row: turnOriginRow(group.messages ?? []), now: Date.now() }
+            : { type: "completed" } });
         }
       };
       const peripherals = firstChatPeripherals(peripheralParts).map((part) => ({
@@ -2045,6 +2067,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const pendingFrames: any[] = [];
     let snapshotBoundaries = 0;
     let handleFrame: (frame: any) => void;
+    const receivedAt = new WeakMap<object, number>();
     const hydrate = (cursor?: string): Promise<boolean> => {
       snapshotBoundary = cursor;
       if (hydrationPromise) {
@@ -2083,6 +2106,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // server replays what we missed when it can, and re-downloading every
     // transcript on a reconnect it already covered is pure waste.
     handleFrame = (frame) => {
+      const now = receivedAt.get(frame) ?? Date.now();
       const frameThread: string | undefined = frame.threadId ?? frame.event?.threadId ?? frame.bot?.threadId ?? frame.group?.threadId;
       const held = frameThread === undefined ? undefined : settling.current.get(frameThread);
       if (held) {
@@ -2110,6 +2134,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "turn.dispatch":
           if (frame.threadId) {
             liveTurns.current = liveTurnIdAfterDispatch(liveTurns.current, frame.threadId, frame.createdAt);
+            updateOrigin({ threadId: frame.threadId, event: { type: "dispatch", turnKey: liveTurns.current[frame.threadId], dispatchKey: frame.createdAt ?? liveTurns.current[frame.threadId], now } });
             clearStream(frame.threadId, "dispatched");
           }
           break;
@@ -2118,6 +2143,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           viewedReplies.current.note(stateRef.current, frame.threadId, frame.message, document.visibilityState === "visible" && document.hasFocus());
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           noteStreamTail(frame.threadId, frame.message?.id);
+          if (frame.message) updateOrigin({ threadId: frame.threadId, event: { type: "row", row: frame.message, now } });
           if (launchFrom !== undefined && frame.message?.id) retargetStream(frame.threadId, launchFrom, frame.message.id);
           // the sidebar's one-shot arrival glow; per-chat, store state untouched
           const arrivalId = arrivalChatForFrame(frame, stateRef.current);
@@ -2269,12 +2295,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           } else if (event.type === "turn.completed") {
             if (!isCurrentTurnCompletion(liveTurns.current, event.threadId, event.turnId)) break;
             liveTurns.current = liveTurnIdAfter(liveTurns.current, event.threadId, event);
+            updateOrigin({ threadId: event.threadId, event: { type: "completed" } });
             // flush any buffered tail before clearing so no tokens are lost
             flushDeltas();
             clearStream(event.threadId, "completed", event.ok !== false);
           } else if (event.type === "turn.started" || event.type === "turn.retrying") {
             if (!isReplacementTurnStart(liveTurns.current, event.threadId, event.turnId, event.createdAt)) break;
             liveTurns.current = liveTurnIdAfter(liveTurns.current, event.threadId, event);
+            const owner = stateRef.current.bots.find((bot) => bot.threadId === event.threadId);
+            const messages = owner ? visibleMessages(owner) : stateRef.current.groups.find((group) => group.threadId === event.threadId)?.messages ?? [];
+            updateOrigin({ threadId: event.threadId, event: { type: "started", turnKey: liveTurns.current[event.threadId] ?? event.threadId, row: turnOriginRow(messages), retry: event.type === "turn.retrying", now } });
             markTurnSignal(event.threadId, event.type === "turn.started" ? "started" : "retrying");
           } else if (
             event.type === "account.rate-limits.updated" &&
@@ -2315,7 +2345,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "reorderGroups", groupIds: frame.groupIds });
           break;
         case "instances":
+          instancesVersion.current += 1;
           rawDispatch({ type: "instances", instances: frame.instances, preserveRateLimits: true });
+          break;
+        case "usage.board":
+          usageBoardFrame(frame.revision);
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
@@ -2338,6 +2372,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
+        usageBoardReconnected();
         if (!prefetchStarted && !hydrated && !hydrationPromise) snapshots.prefetch();
         prefetchStarted = true;
       },
@@ -2358,6 +2393,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return hydrate(cursor);
       },
       onFrame: (frame) => {
+        receivedAt.set(frame, Date.now());
         if (!hydrated) {
           pendingFrames.push(frame);
           return;
@@ -2403,9 +2439,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // as "Check again" so the user isn't told to restart when a refresh will do.
   const loadInstances = useCallback(async (query: "" | "?refresh=1" | "?rescan=1") => {
     const generation = ++refreshGeneration.current;
+    const version = instancesVersion.current;
     try {
       const { instances } = await api(`/api/instances${query}`);
-      if (generation !== refreshGeneration.current) return;
+      if (generation !== refreshGeneration.current || version !== instancesVersion.current) return;
       rawDispatch({ type: "instances", instances, preserveRateLimits: true });
     } catch {
       /* offline or server down — the existing list stays */
@@ -2510,8 +2547,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [botPatchQueue],
   );
   const value = useMemo(
-    () => ({ state, dispatch, flushBotPatches, refreshInstances }),
-    [state, dispatch, flushBotPatches, refreshInstances],
+    () => ({ state, dispatch, flushBotPatches, refreshInstances, instancesVersion, turnOrigin }),
+    [state, dispatch, flushBotPatches, refreshInstances, turnOrigin],
   );
   return (
     <StoreContext.Provider value={value}>
@@ -2537,11 +2574,14 @@ export function useEngineLoginRefresh(waiting: boolean, onRefresh: (instances: I
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const refreshInstances = async () => {
+      const version = store?.instancesVersion.current;
       try {
         const { instances } = await api("/api/instances");
-        if (!active) return;
-        store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
-        refreshRef.current(instances);
+        // A reply older than a live frame is dropped, but the poll goes on: only it ends a failed or cancelled sign-in.
+        if (active && version === store?.instancesVersion.current) {
+          store?.dispatch({ type: "instances", instances, preserveRateLimits: true });
+          refreshRef.current(instances);
+        }
       } catch {}
       if (active) timer = setTimeout(refreshInstances, 2000);
     };

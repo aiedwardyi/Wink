@@ -490,7 +490,7 @@ describe("SettingsPanel memory autosave", () => {
     }
   };
   const box = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]')!;
-  const status = () => host.querySelector('[role="status"]')?.textContent ?? "";
+  const status = () => box().closest(".relative.flex.flex-col.gap-3")?.querySelector('[role="status"]')?.textContent ?? "";
   const notice = () => host.querySelector('[role="alert"]')?.firstElementChild?.textContent ?? "";
   const button = (label: string) => Array.from(host.querySelectorAll("button")).find((each) => each.textContent === label)!;
   const topic = (name: string) => host.querySelector<HTMLButtonElement>(`button[data-topic="${name}"]`)!;
@@ -716,7 +716,7 @@ describe("SettingsPanel memory autosave", () => {
       expect(box().style.height).toBe("900px");
       expect(box().className).toContain("overflow-hidden");
       expect(box().className).toContain("resize-none");
-      const description = host.querySelector<HTMLTextAreaElement>("textarea:not([aria-label])")!;
+      const description = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
       expect(description.style.height).toBe("900px");
     } finally {
       width.mockRestore();

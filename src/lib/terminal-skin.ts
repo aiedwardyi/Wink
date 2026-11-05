@@ -4,7 +4,7 @@ import type { RateLimitWindow } from "../../server/contracts.ts";
 import type { ToolDetail } from "../../shared/tool-detail";
 import type { MessageKey } from "./i18n-catalog";
 import type { Translate } from "./i18n";
-import type { UsageMode } from "./usage-preferences";
+type UsageMode = "used" | "remaining";
 import { windowFillPercent, windowKind, type WindowKind } from "./usage";
 
 export { termVerb } from "../../shared/tool-verb";

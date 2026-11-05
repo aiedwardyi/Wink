@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import type { InstanceInfo } from "@/state/store";
 
 const { mockInstances, refreshInstances, dispatch } = vi.hoisted(() => {
@@ -47,6 +48,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 
 import { EngineRow, EnginesSettings, isEngineConnected } from "./EnginesSettings";
 import { EngineSetup } from "./EngineSetup";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 applyLocale("en");
 
@@ -339,7 +341,7 @@ describe("EnginesSettings friends Connections list", () => {
     const restore = stage("claude", { cli: OTHER, install: { logout: ["auth", "logout"], signInCommand: "claude auth login", docsUrl: "https://example.com/claude" } });
     const { root, row } = await renderList();
     try {
-      expect(row("claude").textContent).toBe("ClaudeAdd AccountSign Out");
+      expect(row("claude").textContent).toBe("ClaudeAdd AccountConnectedSign Out");
       expect(row("claude").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -355,7 +357,7 @@ describe("EnginesSettings friends Connections list", () => {
     const { root, row } = await renderList();
     try {
       expect([...row("codex").querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Sign In"]);
-      expect(row("codex").textContent).toBe("Signed out.Sign In");
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign In");
       expect(row("codex").querySelector("input, select, code, a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -384,6 +386,26 @@ describe("EnginesSettings friends Connections list", () => {
       expect(row("grok").querySelector("button")?.textContent).toBe("Install");
     } finally {
       await act(async () => root.unmount());
+      restore();
+      window.ogb = previous;
+    }
+  });
+
+  it("draws More Engines, Install and an engine's Sign Out as the Settings row button", async () => {
+    const previous = window.ogb;
+    Object.assign(window, { ogb: { platform: "win32", openInstallTerminal: vi.fn(async () => true) } });
+    const restore = stage("grok", { snapshot: { state: "unavailable" }, install: { command: { win32: "install-grok", linux: "install-grok", darwin: "install-grok" } } });
+    const restoreMuse = stage("muse", { install: { logout: ["logout"] } });
+    const { host, root, row } = await renderList();
+    try {
+      const more = [...host.querySelectorAll("button")].find((button) => button.textContent === "More Engines")!;
+      expect(more.className).toBe(cn(ROW_BUTTON, "mt-3 self-start"));
+      expect(row("muse").querySelector("button")!.className).toBe(ROW_BUTTON);
+      await act(async () => more.click());
+      expect(row("grok").querySelector("button")!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+    } finally {
+      await act(async () => root.unmount());
+      restoreMuse();
       restore();
       window.ogb = previous;
     }
@@ -478,7 +500,7 @@ describe("EnginesSettings friends Connections list", () => {
       });
       vi.setSystemTime(Date.now() + 6000);
       await act(async () => window.dispatchEvent(new Event("focus")));
-      expect(row("codex").textContent).toBe("Signed out.Sign In");
+      expect(row("codex").textContent).toBe("CodexSigned out.Sign In");
       expect(row("codex").querySelector("a")).toBeNull();
     } finally {
       await act(async () => root.unmount());
@@ -494,7 +516,7 @@ describe("EnginesSettings friends Connections list", () => {
       expect(html).toContain(name);
     }
     expect(html.match(/>Add Account</g)).toHaveLength(2);
-    expect(html.match(/>Connected</g)).toHaveLength(3);
+    expect(html.match(/>Connected</g)).toHaveLength(5);
     expect(html).not.toContain("Details");
     expect(html).not.toContain("Advanced");
     expect(html).not.toMatch(/<(input|select|code)/);

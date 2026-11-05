@@ -1240,7 +1240,8 @@ describe("error row Retry", () => {
     try {
       await act(async () => root.render(createElement(StoreProvider, null, createElement(Harness))));
       expect(host.textContent).toContain("Usage limit reached");
-      expect(host.textContent).toContain("Plan spent");
+      expect(host.querySelector("[data-engine-details]")).toBeNull();
+      expect(host.querySelector("[data-engine-details-body]")?.textContent).toBe("Plan spent");
       expect(host.textContent).toContain("Try again after it resets.");
       expect(host.textContent).not.toContain("send Continue after it resets");
       expect(host.textContent).not.toContain("Resumes at");

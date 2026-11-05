@@ -51,9 +51,9 @@ describe("engineHoverText", () => {
   const t: Translate = (key, vars) => translate("en", key, vars);
   const ko: Translate = (key, vars) => translate("ko", key, vars);
 
-  it("names the engine and its account", () => {
-    expect(engineHoverText(instance(), t)).toBe("Claude · me@example.com");
-    expect(engineHoverText(instance(), ko)).toBe("Claude · me@example.com");
+  it("names the engine and sign-in status without its email", () => {
+    expect(engineHoverText(instance(), t)).toBe("Claude · Signed in");
+    expect(engineHoverText(instance(), ko)).toBe("Claude · 로그인됨");
   });
 
   it("says signed in when no account is recorded", () => {
@@ -76,7 +76,7 @@ describe("EngineMark", () => {
     await wait(100);
     expect(card()).toBeNull();
     await wait(400);
-    expect(card()?.textContent).toBe("Claude · me@example.com");
+    expect(card()?.textContent).toBe("Claude · Signed in");
     expect(card()?.getAttribute("role")).toBe("tooltip");
     await pointer("pointerout", "mouse", trigger(), { relatedTarget: host });
     expect(card()).toBeNull();
@@ -124,7 +124,7 @@ describe("EngineMark", () => {
     expect(card()).toBeNull();
     await pointer("pointerdown", "touch", plain);
     await wait(600);
-    expect(card()?.textContent).toBe("Claude · me@example.com");
+    expect(card()?.textContent).toBe("Claude · Signed in");
     await pointer("pointerdown", "touch", host);
     expect(card()).toBeNull();
   });
@@ -135,16 +135,16 @@ describe("EngineMark", () => {
     expect(name?.closest("[data-engine-hover]")).toBe(trigger());
     await pointer("pointerover", "mouse", name!);
     await wait(500);
-    expect(card()?.textContent).toBe("Claude · me@example.com");
+    expect(card()?.textContent).toBe("Claude · Signed in");
     const mark = trigger().querySelector("svg")!;
     await pointer("pointerout", "mouse", name!, { relatedTarget: mark });
     await pointer("pointerover", "mouse", mark, { relatedTarget: name });
-    expect(card()?.textContent).toBe("Claude · me@example.com");
+    expect(card()?.textContent).toBe("Claude · Signed in");
     await pointer("pointerout", "mouse", mark, { relatedTarget: host });
     expect(card()).toBeNull();
     await pointer("pointerdown", "touch", name!);
     await wait(600);
-    expect(card()?.textContent).toBe("Claude · me@example.com");
+    expect(card()?.textContent).toBe("Claude · Signed in");
   });
 
   it("keeps a name inside it read as text, with the account line on the mark", async () => {
@@ -152,11 +152,11 @@ describe("EngineMark", () => {
     const name = host.querySelector("[data-name]");
     expect(name?.closest("[data-engine-hover]")).toBe(trigger());
     expect(name?.closest("[role='img']")).toBeNull();
-    expect(trigger().querySelector("[role='img']")?.getAttribute("aria-label")).toBe("Claude · me@example.com");
+    expect(trigger().querySelector("[role='img']")?.getAttribute("aria-label")).toBe("Claude · Signed in");
     expect(trigger().getAttribute("tabindex")).toBe("0");
     const matches = vi.spyOn(trigger(), "matches").mockImplementation((selector: string) => selector === ":focus-visible");
     await act(async () => trigger().focus());
-    expect(card()?.textContent).toBe("Claude · me@example.com");
+    expect(card()?.textContent).toBe("Claude · Signed in");
     matches.mockRestore();
   });
 });
