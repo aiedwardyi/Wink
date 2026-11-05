@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { DATA_DIR } from "./config.ts";
+import { stopSearchCache } from "./search-cache.ts";
 import { publishSearchDirt, searchDirty, searchSource } from "./search-gate.ts";
 import { activityHaystack } from "./search-text.ts";
 import type { Message } from "./store.ts";
@@ -68,6 +69,7 @@ function db(): DatabaseSync {
   try {
     handle?.close();
   } catch {}
+  void stopSearchCache();
   handle = open();
   handlePath = DB_FILE();
   searchSource(handle);
@@ -415,4 +417,5 @@ export function closeMessageDb(): void {
   handle = null;
   handlePath = null;
   searchSource(null);
+  void stopSearchCache();
 }

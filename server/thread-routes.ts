@@ -10,6 +10,7 @@ import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { searchHaystack, searchMessages, searchSnippet } from "./message-db.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
+import { startSearchCache } from "./search-cache.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { readThreadEvents } from "./thread-events.ts";
 import type { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
@@ -145,6 +146,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       };
       const needle = q.trim().toLowerCase();
       const found = searchMessages(q, limit + 1, threadId, { before, chips });
+      setImmediate(startSearchCache, deps.dataDir);
       const hits = found.slice(0, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
