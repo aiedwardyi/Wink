@@ -12,11 +12,12 @@
 // truth (the JSON file is left behind as a one-time backup).
 import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 
 import { DATA_DIR } from "./config.ts";
 import { stopSearchCache } from "./search-cache.ts";
 import { publishSearchDirt, searchDirty, searchSource } from "./search-gate.ts";
+import { querySearchCache } from "./search-query.ts";
 import { activityHaystack } from "./search-text.ts";
 import type { Message } from "./store.ts";
 import { redactToolMessage } from "./tool-detail.ts";
@@ -386,27 +387,29 @@ export function searchMessages(
     tool_json: string | null;
     from_name: string | null;
   };
-  const hits: SearchHit[] = [];
   const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : [])];
-  const rows = ordered.iterate(...args);
-  for (const { row: rowid } of rows) {
-    // SAFETY: This SELECT list is thread_id, id, at, role, kind, text, tool_json, from_name.
-    const row = fetch.get(rowid) as Row;
-    const haystack = row.kind === "activity" ? activityHaystack(row.tool_json, row.text, chips) : (row.text ?? "");
-    if (row.kind === "activity" && !haystack.toLowerCase().includes(needle)) continue;
-    const hit: SearchHit = {
-      threadId: row.thread_id,
-      messageId: row.id,
-      at: row.at,
-      role: row.role,
-      kind: row.kind,
-      ...searchSnippet(haystack, needle),
-    };
-    if (row.from_name) hit.from = row.from_name;
-    hits.push(hit);
-    if (hits.length >= limit) break;
-  }
-  return hits;
+  const collect = (rows: Iterable<Record<string, SQLOutputValue>>): SearchHit[] => {
+    const hits: SearchHit[] = [];
+    for (const { row: rowid } of rows) {
+      // SAFETY: This SELECT list is thread_id, id, at, role, kind, text, tool_json, from_name.
+      const row = fetch.get(rowid) as Row;
+      const haystack = row.kind === "activity" ? activityHaystack(row.tool_json, row.text, chips) : (row.text ?? "");
+      if (row.kind === "activity" && !haystack.toLowerCase().includes(needle)) continue;
+      const hit: SearchHit = {
+        threadId: row.thread_id,
+        messageId: row.id,
+        at: row.at,
+        role: row.role,
+        kind: row.kind,
+        ...searchSnippet(haystack, needle),
+      };
+      if (row.from_name) hit.from = row.from_name;
+      hits.push(hit);
+      if (hits.length >= limit) break;
+    }
+    return hits;
+  };
+  return querySearchCache(db(), DATA_DIR, needle, limit, ordered, args, collect) ?? collect(ordered.iterate(...args));
 }
 
 /** Test/shutdown hook — closes the handle so a wiped DATA_DIR starts clean. */
