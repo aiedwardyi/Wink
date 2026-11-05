@@ -505,9 +505,9 @@ function PhoneFile({
 
   if (phase === "outside") {
     return (
-      <span title={filePath} data-file-unavailable="outside" className="break-words">
-        {children}
-        <span className="ml-1.5 text-[12px] text-ink-secondary">{t("chat.fileLink.remoteOutsideFolder")}</span>
+      <span title={filePath} data-file-unavailable="outside" className="block">
+        <span className="text-accent underline decoration-accent/40 [overflow-wrap:anywhere]">{children}</span>
+        <span className="block break-keep [overflow-wrap:normal]">{t("chat.fileLink.remoteOutsideFolder")}</span>
       </span>
     );
   }

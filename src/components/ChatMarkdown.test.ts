@@ -632,6 +632,9 @@ describe("relative file links", () => {
       await act(async () => root.render(createElement(ChatMarkdown, { text: `[donecheck-demo.mp4](<${file}>)`, threadId: "t1" })));
       expect(host.textContent).toContain(message);
       expect(host.textContent).toContain("donecheck-demo.mp4");
+      const refusal = host.querySelector('[data-file-unavailable="outside"]')!;
+      expect(refusal.firstElementChild?.textContent).toBe("donecheck-demo.mp4");
+      expect(refusal.lastElementChild?.textContent).toBe(message);
       expect(host.querySelector("button, a, video")).toBeNull();
       expect(fetchFile).toHaveBeenCalledTimes(1);
       expect(fetchFile).toHaveBeenCalledWith(`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`, { headers: { Range: "bytes=0-0" } });
