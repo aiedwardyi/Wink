@@ -302,13 +302,18 @@ it.each([false, true])("gives the address its own line under the name on a phone
   expect(more.textContent).toBe("");
 });
 
-it("keeps one menu, on the name row, for a signed-out named account on a phone", async () => {
-  accounts[0]!.snapshot = { state: "available", authenticated: false };
+it.each([
+  ["signed-out", "Sign In", {}],
+  ["still signing in", "Cancel", { loginState: "pending", loginCapture: { url: "https://example.com/device" } }],
+] as const)("keeps one menu, on the name row, for a %s named account on a phone", async (_state, action, signIn) => {
+  Object.assign(accounts[0]!, { snapshot: { state: "available", authenticated: false }, ...signIn });
   await mount({ phone: true });
   const menus = row()!.querySelectorAll<HTMLElement>("[data-connection-menu]");
-  expect(menus, "no second menu floating over Sign In").toHaveLength(1);
+  expect(menus, `no second menu floating over ${action}`).toHaveLength(1);
   expect(menus[0]!.closest(".absolute"), "the menu is not an overlay").toBeNull();
   let line = menus[0]!.parentElement;
   while (line && line !== row() && !line.textContent?.includes("Claude 1")) line = line.parentElement;
   expect(line, "it sits on the name row, not on the account as a whole").not.toBe(row());
+  expect(button(action, row()), `${action} shows`).toBeTruthy();
+  expect(line!.contains(button(action, row())!), `${action} sits on its own row, clear of the menu`).toBe(false);
 });
