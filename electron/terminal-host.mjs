@@ -272,12 +272,13 @@ function claudeOnboardingScreen(screenText) {
 function folderTrustKeys(screenText, engine) {
   const lines = screenText.split("\n").map((line) => line.trim()).filter(Boolean);
   if (engine === "agy") {
-    const question = lines.indexOf("Do you trust the contents of this project?");
-    const [permission, yes, no, footer] = lines.slice(question + 1);
-    if (lines[0] !== "Accessing workspace:" || question < 2
+    const footer = lines.findLastIndex((line) => line === "↑/↓ Navigate · enter Confirm");
+    if (footer < 5 || !lines.slice(footer + 1).every((line) => line.startsWith("◆ ") || line.startsWith("▰"))) return null;
+    const title = lines.lastIndexOf("Accessing workspace:", footer - 5);
+    const [question, permission, yes, no] = lines.slice(footer - 4, footer);
+    if (title < 0 || question !== "Do you trust the contents of this project?"
       || permission !== "Antigravity CLI requires permission to read, edit, and execute files here."
-      || yes !== "> Yes, I trust this folder" || no !== "No, exit"
-      || footer !== "↑/↓ Navigate · enter Confirm") return null;
+      || yes !== "> Yes, I trust this folder" || no !== "No, exit") return null;
     return "\r";
   }
   if (engine !== "claude") return null;

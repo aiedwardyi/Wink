@@ -1,0 +1,50 @@
+{
+  "version": "1.5.0",
+  "shell": "C:/Program Files/PowerShell/7/pwsh.exe",
+  "useConptyDll": false,
+  "command": "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; & 'agy' '--model' 'gemini-3.8-flash-low' '--dangerously-skip-permissions'",
+  "cols": 120,
+  "rows": 30,
+  "redraw": [
+    {
+      "t": 95,
+      "data": "\u001b[?9001h\u001b[?1004h"
+    },
+    {
+      "t": 394,
+      "data": "\u001b[?25l\u001b[2J\u001b[m\u001b[H\u001b]0;C:\\Program Files\\PowerShell\\7\\pwsh.exe\u0007\u001b[?25h\u001b]133;D;agy-trust-f1;1\u0007"
+    },
+    {
+      "t": 403,
+      "data": "PS C:\\Users\\mredw\\AppData\\Local\\Temp\\wink-AGY-TRUST\\f1-shell-yKP03c> "
+    },
+    {
+      "t": 471,
+      "data": "\u001b[?25l"
+    },
+    {
+      "t": 482,
+      "data": "\u001b[92m$env:AGY_CLI_DISABLE_AUTO_UPDATE\u001b[90m=\u001b[36m'true'\u001b[37m; & \u001b[36m'agy' '--model' 'gemini-3.8-flash-low' '--dangerously-skip-permiss\u001b[?25h"
+    },
+    {
+      "t": 498,
+      "data": "\u001b[?25l\u001b[m\u001b[92m\u001b[1;70H$env:AGY_CLI_DISABLE_AUTO_UPDATE\u001b[90m=\u001b[36m'true'\u001b[37m; & \u001b[36m'agy' '--model' 'gemini-3.8-flash-low' '--dangerously-skip-permissions'\r\n\u001b[?25h"
+    },
+    {
+      "t": 503,
+      "data": "\u001b[m\u001b]133;C;agy-trust-f1;xrB4MRiGq1XPDRSnWQLp/5727J/p5kUM85csfAPkEJA=\u0007"
+    },
+    {
+      "t": 790,
+      "data": "\u001b]7501;?\u0007"
+    },
+    {
+      "t": 792,
+      "data": "\u001b[?2004h\u001b[>4;2m\u001b[>1u\u001b[?u"
+    },
+    {
+      "t": 805,
+      "data": "Accessing workspace:\u001b[K\r\n\u001b[K\r\nC:\\Users\\mredw\\AppData\\Local\\Temp\\wink-AGY-TRUST\\f1-shell-yKP03c\u001b[K\r\n\u001b[K\r\nDo you trust the contents of this project?\u001b[K\r\n\u001b[K\r\nAntigravity CLI requires permission to read, edit, and execute files here.\u001b[K\r\n\u001b[K\r\n> Yes, I trust this folder\u001b[K\r\n  No, exit\u001b[K\r\n\u001b[K\r\n  ↑/↓ Navigate · enter Confirm\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[?25l\u001b[120C"
+    }
+  ]
+}
