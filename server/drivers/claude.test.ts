@@ -1940,7 +1940,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       { type: "result", subtype: "success", is_error: true, result: text, api_error_status: status, stop_reason: null, terminal_reason: "api_error", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } },
     ];
     const replay = async (threadId: string, messages: unknown[]) => {
-      const fixture = join(scratch, "api-error.json");
+      const fixture = join(scratch, `api-error-${threadId}.json`);
       writeFileSync(fixture, JSON.stringify(messages));
       process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
       await create(undefined, { FAKE_CLAUDE_STDIN_LOG: join(scratch, "stdin.log") });
