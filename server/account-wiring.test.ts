@@ -33,7 +33,7 @@ const rows = [
   { id: "acct_studio", of: "claude", driverKind: "claudeAgent", generation: 3, existing: false, state: "ready" as const },
 ];
 const report = (usedPercent: number, observedAt = "2026-11-05T10:00:00.000Z") => ({
-  windows: [{ id: "five_hour", usedPercent, resetsAt: Date.parse("2026-11-05T15:00:00.000Z"), windowMinutes: 300 }], observedAt,
+  windows: [{ id: "five_hour", usedPercent, resetsAt: Date.parse(observedAt) + 300 * 60_000, windowMinutes: 300 }], observedAt,
 });
 
 async function wired(main = "claude") {
