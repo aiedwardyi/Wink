@@ -25,6 +25,37 @@ const engine = (
 });
 
 describe("wizard engine suggestion", () => {
+  const bases = [engine("claude", "claudeAgent"), engine("codex", "codex")];
+  const copies = bases.flatMap((base, index) => Array.from({ length: index ? 1 : 3 }, (_, account) => ({
+    ...base,
+    instanceId: `acct_00000000-0000-0000-000${index}-${String(account).padStart(12, "0")}`,
+    accountOf: base.instanceId,
+    accountState: "ready" as const,
+  })));
+  const accounts = [...copies, ...bases.map((base) => ({ ...base, accountOf: base.instanceId }))];
+
+  it("lists each base engine once with four Claude and two Codex accounts", () => {
+    expect(wizardEngineOptions(accounts, null).map((i) => i.instanceId)).toEqual(["claude", "codex"]);
+  });
+
+  it("never restores an account copy as the current option", () => {
+    expect(wizardEngineOptions(accounts, copies[0]!).map((i) => i.instanceId)).toEqual(["claude", "codex"]);
+  });
+
+  it.each([["claudeAgent"], ["codex"], ["missing"]])("never suggests an account copy for %s", (kind) => {
+    expect(suggestEngine(accounts, [kind])?.instance.instanceId).toBe(kind === "codex" ? "codex" : "claude");
+  });
+
+  it("uses Main's availability and model catalog on the base engine", () => {
+    const base = { ...bases[0]!, snapshot: { state: "available" as const, authenticated: false },
+      pickerSnapshot: { state: "available" as const, authenticated: true },
+      pickerModels: { default: "main-model", options: [{ id: "main-model", label: "Main" }] } };
+    const pick = suggestEngine([copies[0]!, base], ["claudeAgent"]);
+    expect(pick?.instance.instanceId).toBe("claude");
+    expect(pick?.instance.models).toEqual(base.pickerModels);
+    expect(wizardEngineOptions([base], null)[0]?.models).toEqual(base.pickerModels);
+  });
+
   it.each(RETIRED_KINDS)("never prefers a connected retired %s engine", (kind) => {
     const instances = [engine("old-1", kind), engine("codex-1", "codex")];
     expect(suggestEngine(instances, [kind])).toEqual({ instance: instances[1], substituted: true });
