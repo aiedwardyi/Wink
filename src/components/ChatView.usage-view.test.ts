@@ -13,6 +13,8 @@ import type { UsageWaitView } from "../../server/limit-wait-store";
 const MIN = 60_000;
 const CLAUDE_2 = "acct_00000000-0000-4000-8000-000000000002";
 const CLAUDE_3 = "acct_00000000-0000-4000-8000-000000000003";
+const CODEX_2 = "acct_00000000-0000-4000-8000-000000000012";
+const BOX = ["h-[26px]", "min-w-14", "shrink-0", "border", "px-2.5", "text-[12px]", "rounded-md"];
 const DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "antigravityAgent", muse: "museAgent" };
 const ENGINE: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" };
 
@@ -61,6 +63,7 @@ const whoLine = (row: Element) => [...row.querySelector("[data-account-who]")?.c
 const HIDDEN = '[data-usage-hero], [data-hero-left], [data-verdict], [data-projection], [data-usage-chart], [data-trace], [data-chart-fold], [data-today-normal], [data-details], [role="tablist"], [role="tab"], [data-usage-event]';
 const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
 const GLYPHS = /[\u2580-\u25FF]/u;
+const boxOf = (node: Element | null | undefined) => BOX.filter((name) => node?.classList.contains(name));
 const said = (root: Element | null | undefined) => [root?.textContent ?? "", ...[...root?.querySelectorAll("*") ?? []].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
 function unused(board: UsageBoard, ...ids: string[]) {
   for (const account of board.engines.flatMap((engine) => engine.accounts)) {
@@ -408,7 +411,9 @@ describe("chat usage meter, quick view and wait card", () => {
     seatMeter(viewport(phone ? 390 : 1280, phone ? 844 : 800));
     const say = (key: Parameters<Mods["i18n"]["translate"]>[1], vars?: Record<string, number>) => m.i18n.translate(locale, key, vars);
     const [h5, d7, noData] = [say("usage.limits.sessionShort"), say("usage.limits.weeklyShort"), say("usage.desk.noData")];
-    const empties: string[] = [];
+    const reported: Record<string, string[]> = {
+      claude: [h5, d7], [CLAUDE_2]: [d7], [CLAUDE_3]: [h5, d7], codex: [d7], [CODEX_2]: [h5, d7], gemini: [say("usage.limits.compactH", { hours: 24 })],
+    };
     for (const engine of server.board.engines.filter((each) => each.accounts.some((account) => account.windows.length > 0))) {
       await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone, locale });
       await click(meter());
@@ -416,37 +421,34 @@ describe("chat usage meter, quick view and wait card", () => {
       expect(view, `${engine.engine} quick view`).not.toBeNull();
       const rows = [...view?.querySelectorAll("[data-account-row]") ?? []];
       expect(rows.map((node) => node.getAttribute("data-account-row")), engine.engine).toEqual(engine.accounts.map((account) => account.id));
+      const group = view?.querySelector('[role="group"].usage-group');
+      expect(group?.getAttribute("aria-label"), engine.engine).toBe(ENGINE[engine.engine]);
+      expect(rows.every((node) => node.parentElement === group), `${engine.engine} rows in one group`).toBe(true);
       for (const node of rows) {
         const name = text(node.querySelector("[data-account-name]"));
         const bars = node.querySelector("[data-account-bars]");
         expect(bars, `${name} bars`).toBeTruthy();
         expect([...bars?.children ?? []].map((bar) => bar.getAttribute("aria-label")?.split(":")[0]), name)
-          .toEqual(engine.engine === "gemini" ? [say("usage.limits.compactH", { hours: 24 })] : [h5, d7]);
+          .toEqual(reported[node.getAttribute("data-account-row") ?? ""]);
         if (locale === "en") expect(whoLine(node), name).toMatch(/^\d+ bots? · /);
         const control = node.querySelector("[data-main-check], button[data-use]");
-        expect(control?.className, name).toContain("w-[4.5rem]");
-        expect(control?.className, name).toMatch(/(^|\s)min-h-7(\s|$)/);
+        expect(boxOf(control), name).toEqual(BOX);
         expect(node.querySelector("svg.lucide-check"), name).toBeNull();
       }
-      for (const empty of view?.querySelectorAll("[data-window-empty]") ?? []) {
-        expect(empty.getAttribute("aria-label")).toBe(`${h5}: ${noData}`);
-        expect(text(empty)).toContain(noData);
-        empties.push(empty.outerHTML);
-      }
+      expect(view?.querySelector("[data-window-empty]"), engine.engine).toBeNull();
+      expect(text(view)).not.toContain(noData);
       if (engine.engine === "claude") {
         const week = view?.querySelector(`[data-account-row="${CLAUDE_2}"] [data-window="week"]`);
         expect(week?.querySelector("[data-cells]")?.getAttribute("data-cells")).toBe("0");
-        expect(week?.querySelector("[data-cells]")?.className).toMatch(/\btext-danger\b/);
-        expect(text(week?.querySelector("[data-left]"))).toBe("0%");
-        expect(text(week?.querySelector('[data-reset="week"]'))).toBe(locale === "en" ? "(5d2h)" : "(5일 2시간)");
+        expect(week?.querySelector("[data-left]")?.className).toMatch(/\btext-danger\b/);
+        expect(text(week?.querySelector("[data-left]"))).toBe(say("usage.desk.windowLeft", { percent: 0 }));
+        expect(text(week?.querySelector('[data-reset="week"]'))).toBe(locale === "en" ? "Limit reached · resets in 5d 2h" : "한도 도달 · 5일 2시간 후 초기화");
       }
       expect(view?.querySelector(HIDDEN), `${engine.engine} hero or chart`).toBeNull();
       expect(text(view)).not.toContain(say("usage.desk.quota"));
       expect(text(view?.querySelector("[data-all-usage]"))).toContain(say("usage.chat.allUsage"));
       await unmount();
     }
-    expect(empties).toHaveLength(2);
-    expect(empties[1]).toBe(empties[0]);
   });
 
   it.each([
@@ -487,7 +489,7 @@ describe("chat usage meter, quick view and wait card", () => {
       expect(said(quick()), engine.engine).not.toMatch(GLYPHS);
       await unmount();
     }
-    expect(on).toHaveLength(13);
+    expect(on).toHaveLength(10);
     expect([Math.min(...on), Math.max(...on)]).toEqual([0, 10]);
   });
 
@@ -497,7 +499,7 @@ describe("chat usage meter, quick view and wait card", () => {
     const view = quick();
     expect(view, "quick view").not.toBeNull();
     expect(view!.querySelector("[data-window=\"daily\"]")?.getAttribute("aria-label"), "the daily bar").toMatch(/Resets in/);
-    expect(text(view!.querySelector("[data-reset=\"daily\"]")), "the daily reset").toBe("(9h)");
+    expect(text(view!.querySelector("[data-reset=\"daily\"]")), "the daily reset").toBe("resets in 9h");
     expect(view!.querySelector("[data-chart-fold]"), "no fold over an empty chart").toBeNull();
     expect(view!.querySelector("[data-empty-state]"), "no empty chart message").toBeNull();
   });
@@ -538,18 +540,36 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(text(row), "the count discloses whole names").toContain("Atlas, Mira");
   });
 
-  it.each(["en", "ko"] as const)("names the window a row has no data for (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("says No usage yet for an account with no windows, the same in Settings and the quick view (%s)", async (locale) => {
+    server.board.engines[0]!.accounts[1]!.windows = [];
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, locale });
-    const expected = locale === "en" ? "5h: No data" : "5시간: 데이터 없음";
+    const expected = locale === "en" ? "No usage yet" : "아직 사용량 없음";
     const settings = q(`[data-usage-desk]:not([data-usage-quick]) [data-account-row="${CLAUDE_2}"] [data-window-empty]`);
-    expect(settings?.getAttribute("aria-label"), "Settings row").toBe(expected);
-    expect(text(settings)).toContain(locale === "en" ? "No data" : "데이터 없음");
+    expect(text(settings), "Settings row").toBe(expected);
     await click(meter());
     const row = quick()!.querySelector(`[data-account-row="${CLAUDE_2}"]`);
     const empty = row?.querySelector("[data-window-empty]");
-    expect(empty?.getAttribute("aria-label"), "quick view row").toBe(expected);
-    expect(text(row)).not.toMatch(locale === "en" ? /0%\s*No data/ : /0%\s*데이터 없음/);
+    expect(text(empty), "quick view row").toBe(expected);
+    expect(row?.querySelector("[data-window]"), "no meter").toBeNull();
     expect(empty?.outerHTML, "one empty state on both surfaces").toBe(settings?.outerHTML);
+  });
+
+  it.each(["en", "ko"] as const)("offers Sign In for a signed-out account in the quick view, closes it and opens Connections (%s)", async (locale) => {
+    server.board.engines[0]!.accounts[2]!.signIn = "signed-out";
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale });
+    await click(meter());
+    const row = quick()!.querySelector(`[data-account-row="${CLAUDE_3}"]`);
+    const signIn = row?.querySelector("button[data-sign-in]") ?? null;
+    expect(text(signIn)).toBe(locale === "en" ? "Sign In" : "로그인");
+    expect(row?.querySelector("[data-account-head]")?.lastElementChild, "Sign In ends the head line").toBe(signIn);
+    expect(boxOf(signIn)).toEqual(BOX);
+    expect(text(row?.querySelector("[data-row-status]"))).toBe(locale === "en" ? "Not signed in" : "로그인되지 않음");
+    expect(row?.querySelector("[data-window], button[data-use], [data-main-check]")).toBeNull();
+    await click(signIn);
+    expect(quick(), "the quick view closes").toBeNull();
+    expect(store.state.appSettingsOpen).toBe(true);
+    expect(store.state.appSettingsSection).toBe("connections");
+    expect(mainPosts()).toEqual([]);
   });
 
   it("keeps the board quiet through an equal pane poll", async () => {
