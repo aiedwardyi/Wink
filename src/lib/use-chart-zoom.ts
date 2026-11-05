@@ -198,6 +198,10 @@ export function useChartZoom(
     const onPageWheel = (e: WheelEvent) => {
       if (!el.contains(e.target as Node)) wheel = { page: true, time: e.timeStamp };
     };
+    const endWheel = () => {
+      settle();
+      if (!grab) suppress.current = false;
+    };
     const onWheel = (e: WheelEvent) => {
       const latched = wheel && e.timeStamp - wheel.time < WHEEL_LATCH_MS ? wheel.page : false;
       // Chromium scrolls a wheel that began off the chart before dispatching it, uncancelable, with the chart now under the cursor.
@@ -209,8 +213,9 @@ export function useChartZoom(
       // Measured once per gesture: a read after each paint would force a second style pass every frame.
       wheelBox ??= el.getBoundingClientRect();
       update(zoomAt(current.current, current.current.scale * 2 ** (-dy * (e.ctrlKey ? 0.01 : 0.003)), anchor(point(e), wheelBox)));
+      suppress.current = true;
       clearTimeout(wheelTimer);
-      wheelTimer = setTimeout(settle, WHEEL_SETTLE_MS);
+      wheelTimer = setTimeout(endWheel, WHEEL_SETTLE_MS);
     };
     const onGrab = (e: MouseEvent) => {
       if (e.button !== 0 || current.current.scale === 1) return;
@@ -238,7 +243,7 @@ export function useChartZoom(
     const onReset = () => {
       if (current.current.scale === 1) return;
       clearTimeout(wheelTimer);
-      settle();
+      endWheel();
       update(FULL_ZOOM, true);
     };
     const onClick = (e: MouseEvent) => {

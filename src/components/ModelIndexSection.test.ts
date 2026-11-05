@@ -924,6 +924,43 @@ describe("full screen chart", () => {
       expect(zoomed()).toBe(1);
     });
 
+    describe("hover while the wheel zooms", () => {
+      const hit = () => svg().querySelector<SVGRectElement>("rect[fill=transparent]")!;
+      const tooltip = () => host.querySelector('[role="tooltip"]');
+      const hover = (target: EventTarget, [clientX, clientY]: [number, number]) => mouse(target, "mousemove", [clientX, clientY]);
+      let dot: SVGGElement;
+      let old: [number, number];
+
+      beforeEach(async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await rebuild(false, { width: 780, height: 330 });
+        // happy-dom has no layout, so give the hit rect the box it has in a browser.
+        hit().getBoundingClientRect = () => ({ left: Number(hit().getAttribute("x")), top: Number(hit().getAttribute("y")) }) as DOMRect;
+        dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+        old = spot(dot);
+        wheel(-300, [old[0] + 20, old[1]], 1000);
+        act(() => vi.advanceTimersByTime(40));
+      });
+
+      it("opens no tooltip for a dot's old spot, then follows it to the new spot", () => {
+        hover(hit(), old);
+        expect(tooltip()).toBeNull();
+        act(() => vi.advanceTimersByTime(200));
+        expect(spot(dot)[0]).not.toBeCloseTo(old[0]);
+        hover(hit(), spot(dot));
+        expect(tooltip()).not.toBeNull();
+      });
+
+      it("keeps hover off through a drag that outlasts the wheel", () => {
+        mouse(hit(), "mousedown", old);
+        act(() => vi.advanceTimersByTime(200));
+        hover(window, old);
+        hover(hit(), old);
+        expect(tooltip()).toBeNull();
+        mouse(window, "mouseup", old);
+      });
+    });
+
     it("leaves the phone chart to the page scroll", async () => {
       await rebuild(true, { width: 366, height: 330 });
       expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
