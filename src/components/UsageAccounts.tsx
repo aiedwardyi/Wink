@@ -32,7 +32,7 @@ export function AccountPicker({ accounts, viewedId, select }: {
     const desk = element?.closest("[data-usage-desk]");
     if (!element || !desk) return;
     element.style.maxWidth = "";
-    const room = element.getBoundingClientRect().right - desk.getBoundingClientRect().left;
+    const room = desk.getBoundingClientRect().right - element.getBoundingClientRect().left;
     if (room > 0 && room < element.offsetWidth) element.style.maxWidth = `${Math.floor(room)}px`;
   }, [presence.mounted]);
   useEffect(() => {
@@ -45,15 +45,17 @@ export function AccountPicker({ accounts, viewedId, select }: {
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [open]);
   return (
-    <div className={cn("relative flex min-w-0 shrink-0 items-center rounded-[3px] [corner-shape:bevel] pl-1.5 hover:bg-raised-hover has-[>button:active]:scale-[0.97] has-[>button:active]:bg-raised-hover", PRESS, open && "bg-raised-hover")}>
+    // The menu sits inside: a press that scaled it too read as a double flicker before the close.
+    <div className={cn("relative -ml-1.5 flex min-w-0 items-center rounded-[3px] [corner-shape:bevel] pl-1.5 hover:bg-raised-hover has-[>button:active]:bg-raised-hover", PRESS,
+      !presence.mounted && "has-[>button:active]:scale-[0.97]", open && "bg-raised-hover")}>
       <button ref={trigger} type="button" aria-label={t("accounts.choose", { account: viewed.name })}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
-        className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 text-[12px] text-ink-secondary [@media(pointer:coarse)]:h-11">
-        <span data-hero-name="" className="min-w-0 truncate">{viewed.name}</span>
+        className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 text-[13px] font-medium text-ink [@media(pointer:coarse)]:h-11">
+        <span data-account-name="" data-hero-name="" className="min-w-0 truncate">{viewed.name}</span>
         <ChevronDown size={12} aria-hidden="true" className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
       </button>
       {presence.mounted && <div ref={menu} id={id} role="menu" data-closing={presence.closing || undefined}
-        className={cn(MENU_CLASS, "absolute right-0 top-full z-10 mt-1 max-h-72 w-[248px] origin-top-right overflow-y-auto rounded-[3px] [corner-shape:bevel] [@media(pointer:coarse)]:w-[304px]")}
+        className={cn(MENU_CLASS, "absolute -left-1.5 top-full z-10 mt-1 max-h-72 w-[248px] origin-top-left overflow-y-auto rounded-[3px] [corner-shape:bevel] [@media(pointer:coarse)]:w-[304px]")}
         onBlur={(event) => { if (event.relatedTarget && event.relatedTarget !== trigger.current && !event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}
         onKeyDown={(event) => {
           if (event.key === "Tab") setOpen(false);

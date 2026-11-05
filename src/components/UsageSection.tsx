@@ -15,7 +15,7 @@ import { useAutoRefresh } from "@/lib/usage-auto-refresh";
 // The stale-provider recheck stays; a report it brings back bumps the board revision, and the live frame reads it.
 function PlanUsage() {
   useAutoRefresh();
-  return <Card><UsageDesk /></Card>;
+  return <Card band><UsageDesk /></Card>;
 }
 
 export function UsageSection() {

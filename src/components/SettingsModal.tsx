@@ -651,7 +651,7 @@ export function SettingsModal({
             )}
 
             {section === "connections" && (
-              <Card>
+              <Card band>
                 <div className="flex flex-col gap-4">
                   <EnginesSettings />
                   <SavedKeys />

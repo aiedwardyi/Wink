@@ -17,6 +17,8 @@ import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
 import { AccountPicker } from "./UsageAccounts";
 import { AccountBars } from "./UsageBars";
+import { PagedAccounts, type RowSlots } from "./UsagePaged";
+import { USAGE_LAYOUT } from "./usage-layout";
 import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
 import "./UsageDesk.css";
 
@@ -187,24 +189,27 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-function Who({ account, runs, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; t: Translate }) {
+function Who({ account, runs, control, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; control: ReactNode; t: Translate }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const names = [...new Set(account.bots.map((bot) => bot.bot))];
   const bots = t(names.length === 1 ? "usage.desk.botOne" : "usage.desk.bots", { count: names.length });
   const workers = runs !== "known" || account.workers === null ? t("usage.desk.workersUnknown")
     : t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length });
-  // Counts on every surface; the bot count opens the names.
+  // Counts on every surface; the bot count opens the names. Main or Use ends this line, so the name above keeps the whole width.
   return (
     <>
-      <span data-account-who="" className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-5 text-ink-secondary">
-        {names.length > 0
-          ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
-            className="relative shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-x-1 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
-          : <span className="shrink-0">{bots}</span>}
-        <span aria-hidden="true">·</span>
-        <span className="min-w-0 truncate">{workers}</span>
-      </span>
+      <div className="flex min-w-0 items-center gap-2">
+        <span data-account-who="" className="flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] leading-5 text-ink-secondary">
+          {names.length > 0
+            ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
+              className="relative shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
+            : <span className="shrink-0">{bots}</span>}
+          <span aria-hidden="true">·</span>
+          <span className="min-w-0 truncate">{workers}</span>
+        </span>
+        {control}
+      </div>
       {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12.5px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
     </>
   );
@@ -214,11 +219,11 @@ const SIGN_IN_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "accou
 /** Main and Use share one box: same width, height and shape; a larger touch target sits outside it on phones. */
 const CONTROL = "relative inline-flex min-h-7 w-[4.5rem] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border px-1 text-center text-[12px] leading-tight [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 
-/** Today's account block: tile, name and Main or Use, then bots and workers, then the bars. */
-export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances }: {
+/** Today's account block: tile and name, then bots and workers with Main or Use, then the bars. */
+export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, name }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
   terminal: boolean; clock: Clock; reloadInstances: () => unknown;
-}) {
+} & RowSlots) {
   const { t } = clock;
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
@@ -236,12 +241,12 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   );
   return (
     <div data-account-row={account.id} tabIndex={-1} className="min-w-0 rounded-[3px] [corner-shape:bevel] outline-none">
-      <div className="flex min-h-7 min-w-0 items-center gap-2">
+      <div data-account-head="" className="flex min-h-7 min-w-0 items-center gap-2">
         <Tile number={account.number} terminal={terminal} />
-        <span data-account-name="" className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{account.name}</span>
-        {control}
+        {name ? <span className="flex min-w-0 flex-1">{name}</span>
+          : <span data-account-name="" className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{account.name}</span>}
       </div>
-      <Who account={account} runs={board.runs} t={t} />
+      <Who account={account} runs={board.runs} control={control} t={t} />
       <div className="mt-2"><AccountBars engine={engine.engine} account={account} now={clock.now} t={t} /></div>
     </div>
   );
@@ -356,29 +361,21 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
 }) {
   const { t } = clock;
   const checked = checkedMain(state, engine.base);
-  const main = engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0]!;
-  const [viewed, setViewed] = useState(main.id);
-  const rows = useRef<HTMLDivElement>(null);
-  // The picker only finds an account: it brings its block into view and never changes Main.
-  const show = (id: string) => {
-    setViewed(id);
-    const row = [...rows.current?.querySelectorAll<HTMLElement>("[data-account-row]") ?? []].find((each) => each.dataset.accountRow === id);
-    row?.scrollIntoView?.({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
-    row?.focus({ preventScroll: true });
-    if (!reducedMotion()) row?.animate?.([{ backgroundColor: "var(--color-raised-hover)" }, { backgroundColor: "transparent" }], { duration: 700, easing: EASE_ENTRANCE });
-  };
+  const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
+    checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} {...slots} />;
+  const head = (arrows?: ReactNode) => (
+    <div className="flex min-h-9 min-w-0 items-center gap-2">
+      <span data-engine-mark="" className={cn("flex shrink-0", terminal ? "usage-glyphs w-[3ch] text-[12px]" : "w-[18px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+      <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{label}</span>
+      {arrows}
+    </div>
+  );
   return (
     <section data-usage-engine={engine.engine} aria-label={label} className="min-w-0">
-      <div className="flex min-h-9 min-w-0 items-center gap-2">
-        <span data-engine-mark="" className={cn("flex shrink-0", terminal ? "usage-glyphs w-[3ch] text-[12px]" : "w-[18px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
-        <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{label}</span>
-        {engine.accounts.length > 1 && <AccountPicker viewedId={viewed} select={show}
-          accounts={engine.accounts.map((each) => ({ id: each.id, name: each.name, number: each.number, main: each.id === checked }))} />}
-      </div>
-      <div ref={rows} role="group" aria-label={label} className={cn("mt-1 grid min-w-0 gap-y-4", !stacked && "grid-cols-2 gap-x-8")}>
-        {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
-          terminal={terminal} clock={clock} reloadInstances={reloadInstances} />)}
-      </div>
+      {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} /> : <>
+        {head()}
+        <div role="group" aria-label={label} className={cn("mt-1 grid min-w-0 gap-y-4", !stacked && "grid-cols-2 gap-x-8")}>{engine.accounts.map((each) => row(each))}</div>
+      </>}
       {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
     </section>
   );

@@ -1,5 +1,4 @@
 // Today's bar: ten cells filled by % left, toned by % used, then the % and the time to reset.
-import type { CSSProperties } from "react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { resetCompact, resetPhrase, windowExpired } from "@/lib/usage";
@@ -7,15 +6,14 @@ import type { UsageBoardAccount, UsageBoardWindow } from "@/lib/usage-board";
 import { leftOf, splitWindows } from "@/lib/usage-pace";
 
 const CELLS = 10;
-const SLIDING_CELLS = "relative inline-block [-webkit-text-fill-color:transparent] before:absolute before:left-0 before:top-0 before:content-['▱▱▱▱▱▱▱▱▱▱'] before:[-webkit-text-fill-color:currentColor] "
-  + "after:absolute after:left-0 after:top-0 after:w-(--fill) after:overflow-hidden after:whitespace-nowrap after:content-['▰▰▰▰▰▰▰▰▰▰'] after:[-webkit-text-fill-color:currentColor] "
-  + "after:transition-[width] after:duration-300 after:ease-out motion-reduce:after:transition-none";
 /** Engines that report a 5h and a 7d window; the rest show their own windows (Gemini its daily one). */
 const SESSION_WEEK = new Set(["claude", "codex", "grok"]);
-/** Today's line: label, cells, then the % and the reset. Fixed label and % widths (the % fits "100%") keep every column on one edge. */
+/** Today's line: label, cells, then the % and the reset. The label and the numbers keep fixed widths (they fit "100%" and the longest reset), so a narrow row shrinks only the cells and every column stays on one edge. */
 const LINE = "flex min-w-0 items-center gap-2 text-[12.5px] leading-5";
 const LABEL = "min-w-6 shrink-0 whitespace-nowrap [&:lang(ko)]:min-w-10";
-const NUMS = "flex items-center gap-1.5 whitespace-nowrap tabular-nums";
+const NUMS = "flex min-w-[8em] shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums [&:lang(ko)]:min-w-[9.4em]";
+/** CSS boxes, never text glyphs: those draw slanted and bleed past each cell on Android. */
+const BAR = "flex h-[7px] min-w-16 max-w-[118px] flex-1 gap-[2px]";
 
 export function barTone(usedPercent: number) {
   return usedPercent >= 90 ? "text-danger" : usedPercent >= 75 ? "text-warning" : "text-accent";
@@ -48,12 +46,12 @@ export function barSlots(engine: string, account: Pick<UsageBoardAccount, "windo
   return [{ key: daily ? "daily" : "window", label: daily ? t("usage.limits.compactH", { hours: 24 }) : t("usage.limits.window") }];
 }
 
-function Cells({ left, tone, slide = true }: { left: number | null; tone: string; slide?: boolean }) {
+function Cells({ left, tone, animate = true }: { left: number | null; tone: string; animate?: boolean }) {
   const filled = left === null ? 0 : Math.round(left / CELLS);
   return (
-    <span aria-hidden="true" data-cells={filled} className={cn("shrink-0 font-mono tracking-tight", tone, slide && SLIDING_CELLS)}
-      style={slide ? { "--fill": `${filled * CELLS}%` } as CSSProperties : undefined}>
-      {"▰".repeat(filled) + "▱".repeat(CELLS - filled)}
+    <span aria-hidden="true" data-cells={filled} className={cn(BAR, tone)}>
+      {Array.from({ length: CELLS }, (_, index) => <span key={index} data-cell={index < filled ? "on" : "off"}
+        className={cn("min-w-0 flex-1 border border-current", index < filled && "bg-current", animate && "transition-colors duration-300 ease-out motion-reduce:transition-none")} />)}
     </span>
   );
 }
@@ -63,7 +61,7 @@ export function NoWindow({ label, text }: { label: string; text: string }) {
   return (
     <div role="group" aria-label={`${label}: ${text}`} data-window-empty="" className={cn(LINE, "text-ink-secondary")}>
       <span aria-hidden="true" className={LABEL}>{label}</span>
-      <Cells left={null} tone="text-ink-secondary" slide={false} />
+      <Cells left={null} tone="text-ink-secondary" animate={false} />
       <span aria-hidden="true" className={NUMS}>{text}</span>
     </div>
   );
@@ -75,15 +73,16 @@ export function WindowBar({ slot, now, muted = false, t }: { slot: Slot; now: nu
   if (windowExpired(window.resetsAt, now)) return <NoWindow label={label} text={t("usage.desk.resetPassed")} />;
   const left = Math.round(leftOf(window));
   const reset = resetCompact(window.resetsAt, now);
-  const phrase = resetPhrase(window.resetsAt, now);
+  // A window not started yet has no reset: it reads the same on every account, with no "not reported" words.
+  const phrase = reset && resetPhrase(window.resetsAt, now);
   return (
-    <div role="group" data-window={slot.key} aria-label={`${label}: ${t("usage.desk.windowLeft", { percent: left })}, ${t(phrase.key, phrase.vars)}`}
+    <div role="group" data-window={slot.key} aria-label={`${label}: ${t("usage.desk.windowLeft", { percent: left })}${phrase ? `, ${t(phrase.key, phrase.vars)}` : ""}`}
       className={cn(LINE, muted ? "text-ink-secondary" : "text-ink")}>
       <span aria-hidden="true" className={LABEL}>{label}</span>
       <Cells left={left} tone={muted ? "text-ink-secondary" : barTone(window.usedPercent)} />
       <span aria-hidden="true" className={NUMS}>
         <span data-left="" className="min-w-[2.65em] [&:lang(ko)]:min-w-[2.45em]">{left}%</span>
-        {reset && <span data-reset={slot.key} title={t(phrase.key, phrase.vars)} className="text-ink-secondary">({t(reset.key, reset.vars)})</span>}
+        {reset && <span data-reset={slot.key} className="text-ink-secondary">({t(reset.key, reset.vars)})</span>}
       </span>
     </div>
   );
@@ -93,7 +92,7 @@ export function AccountBars({ engine, account, now, muted, t }: {
   engine: string; account: Pick<UsageBoardAccount, "windows">; now: number; muted?: boolean; t: Translate;
 }) {
   return (
-    <div data-account-bars="" className="flex min-w-0 flex-col items-start gap-1.5">
+    <div data-account-bars="" className="flex min-w-0 flex-col gap-1.5">
       {barSlots(engine, account, t).map((slot) => <WindowBar key={slot.key} slot={slot} now={now} muted={muted} t={t} />)}
     </div>
   );
