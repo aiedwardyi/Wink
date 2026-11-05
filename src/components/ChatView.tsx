@@ -311,7 +311,7 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
         ) : (
           <Check size={13} className="shrink-0 text-success" />
         )}
-        <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"} style={isCommsNotice(tool.name) ? { textWrap: "balance" } : undefined}>
+        <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"} style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>
           {localizeServerLine(tool.name, t)}
           {tool.summary && ` ${tool.summary}`}
         </span>

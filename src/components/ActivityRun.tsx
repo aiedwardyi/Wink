@@ -37,8 +37,8 @@ export function approvalHover(notices: LinkedApproval[] | undefined, t: Translat
   return notices.map((notice) => t(APPROVAL_WORD[notice.label])).join(" · ");
 }
 
-function TermNotice({ text, failed }: { text: string; failed: boolean }) {
-  return <div className="term-notice" data-term-notice={failed ? "failed" : "ok"}>{text}</div>;
+function TermNotice({ text, failed, comms = false }: { text: string; failed: boolean; comms?: boolean }) {
+  return <div className="term-notice" data-term-notice={failed ? "failed" : "ok"} style={comms ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>{text}</div>;
 }
 
 /** One step inside an open run. A running step ticks its elapsed time, then
@@ -56,7 +56,7 @@ export const ActivityStep = memo(function ActivityStep({ message, notices }: { m
     return () => clearInterval(timer);
   }, [running]);
   if (!tool) return null;
-  if (terminal && comms) return <TermNotice text={localizeServerLine(tool.name, t)} failed={false} />;
+  if (terminal && comms) return <TermNotice text={localizeServerLine(tool.name, t)} failed={false} comms />;
   const notice = classifyServerNotice(tool.name);
   if (terminal && notice) {
     if (notice.kind === "approval" && notice.label !== "review" && tool.ok !== false) return null;

@@ -231,7 +231,7 @@ export function RoomToolChip({
           )}
         >
           <span
-            style={isCommsNotice(tool.name) ? { textWrap: "balance" } : undefined}
+            style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}
             className={tool.ok === false && expanded
               ? cn("min-w-0 max-w-full break-words whitespace-pre-wrap", !status && "font-mono")
               : status
