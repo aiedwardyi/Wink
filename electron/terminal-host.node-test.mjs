@@ -1679,6 +1679,144 @@ test("ignores onboarding text quoted inside worker output", async (t) => {
   assert.equal(f.children[0].writes.length, 1);
 });
 
+const AGY_TRUST = JSON.parse(fs.readFileSync(new URL("./terminal-host.agy-trust-shell.fixture.json", import.meta.url), "utf8"));
+const AGY_TRUST_SIGNIN = JSON.parse(fs.readFileSync(new URL("./terminal-host.agy-trust.fixture.json", import.meta.url), "utf8"));
+const AGY_TRUST_COMMAND = "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; agy --model gemini-3.8-flash-low --dangerously-skip-permissions";
+const AGY_TRUST_MENU = "\x1b[2J\x1b[H" + AGY_TRUST.redraw.at(-1).data;
+const AGY_TRUST_BLOCK = AGY_TRUST_MENU.slice(0, AGY_TRUST_MENU.indexOf("enter Confirm") + "enter Confirm".length);
+const AGY_TRUST_NO = AGY_TRUST_MENU.replace("> Yes, I trust this folder", "  Yes, I trust this folder").replace("  No, exit", "> No, exit");
+
+for (const [name, recorded] of [["below a PowerShell prompt", AGY_TRUST], ["after signing in", AGY_TRUST_SIGNIN]]) {
+  test(`Antigravity folder trust answers the recorded menu once ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+    const child = f.children[0];
+    let elapsed = 0;
+    for (const entry of recorded.redraw) {
+      await f.advance(entry.t - elapsed);
+      elapsed = entry.t;
+      child.data(entry.data);
+      assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r"]);
+    }
+    await f.advance(499);
+    assert.equal(child.writes.length, 1);
+    await f.advance(1);
+    assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+    child.data(AGY_TRUST_MENU);
+    await f.advance(1_000);
+    assert.equal(child.writes.length, 2);
+  });
+}
+
+for (const [name, command, menu] of [
+  ["no bypass flag", AGY_TRUST_COMMAND.replace(" --dangerously-skip-permissions", ""), AGY_TRUST_MENU],
+  ["quoted bypass text", "agy -i '--dangerously-skip-permissions'", AGY_TRUST_MENU],
+  ["another engine", "gemini --dangerously-skip-permissions", AGY_TRUST_MENU],
+  ["Claude pane", CLAUDE_TRUST_COMMAND, AGY_TRUST_MENU],
+  ["No selected", AGY_TRUST_COMMAND, AGY_TRUST_NO],
+  ["no selection", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("> Yes,", "  Yes,")],
+  ["wrong workspace title", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("Accessing workspace:", "Workspace contents:")],
+  ["wrong title", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("Do you trust the contents of this project?", "Allow this action?")],
+  ["wrong permission", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("Antigravity CLI", "Another CLI")],
+  ["wrong footer", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("enter Confirm", "enter Delete")],
+  ["earlier menu followed by output", AGY_TRUST_COMMAND, AGY_TRUST_BLOCK + "\r\nOther output follows."],
+  ["output after status lines", AGY_TRUST_COMMAND, AGY_TRUST_BLOCK + "\r\n◆ Gemini 3.8 Flash │ flash\r\nOther output follows."],
+  ["later No selection", AGY_TRUST_COMMAND, AGY_TRUST_BLOCK + "\r\n" + AGY_TRUST_BLOCK.replace("\x1b[2J\x1b[H", "").replace("> Yes, I trust this folder", "  Yes, I trust this folder").replace("  No, exit", "> No, exit")],
+]) {
+  test(`Antigravity folder trust ignores ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command });
+    f.children[0].data(menu);
+    await f.advance(1_000);
+    assert.deepEqual(f.children[0].writes, [command + "\r"]);
+  });
+}
+
+for (const [name, menu] of [
+  ["no status lines", AGY_TRUST_BLOCK],
+  ["model status", AGY_TRUST_BLOCK + "\r\n◆ Gemini 3.8 Flash │ flash"],
+  ["model and usage status", AGY_TRUST_BLOCK + "\r\n◆ Gemini 3.8 Flash │ flash\r\n▰▰▰▰▰ 98% │ ↑15.9k ↓4.8k"],
+  ["wrapped path", AGY_TRUST_BLOCK.replace("Do you trust", "another\\path\\segment\r\nand\\one\\more\r\nDo you trust")],
+  ["no path lines", AGY_TRUST_BLOCK.replace(/C:\\[^\r\n]+\r\n/u, "")],
+  ["later Yes selection", AGY_TRUST_BLOCK.replace("> Yes, I trust this folder", "  Yes, I trust this folder").replace("  No, exit", "> No, exit") + "\r\n" + AGY_TRUST_BLOCK.replace("\x1b[2J\x1b[H", "")],
+]) {
+  test(`Antigravity folder trust accepts the last menu with ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+    f.children[0].data(menu.replace("\x1b[2J\x1b[H", "\x1b[2J\x1b[HPS C:\\repo> agy\r\n"));
+    await f.settle();
+    assert.deepEqual(f.children[0].writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+  });
+}
+
+test("Antigravity folder trust never confirms a transient Yes selection", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  child.data(AGY_TRUST_MENU);
+  await f.advance(499);
+  child.data(AGY_TRUST_NO);
+  await f.advance(1_000);
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r"]);
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+});
+
+test("Antigravity folder trust waits for a split redraw to finish", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  const split = AGY_TRUST_MENU.indexOf("  No, exit");
+  child.data(AGY_TRUST_MENU.slice(0, split));
+  await f.settle();
+  assert.equal(child.writes.length, 1);
+  child.data(AGY_TRUST_MENU.slice(split));
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+});
+
+for (const action of ["busy", "output", "exit", "close", "relaunch", "input"]) {
+  test(`Antigravity folder trust drops pending Enter on ${action}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+    const child = f.children[0];
+    child.data(AGY_TRUST_MENU);
+    if (action === "busy") child.data("\x1b[2J\x1b[H  ⣽  Reading file...\r\n");
+    if (action === "output") child.data("\r\nOther output follows.");
+    if (action === "exit") child.exit({ exitCode: 0 });
+    if (action === "close") await f.host.closeBotPanes("bot-1");
+    if (action === "relaunch") f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "codex\r" });
+    if (action === "input") f.host.write(f.event, pane.sessionId, "\x1b[B");
+    await f.advance(1_000);
+    const extra = action === "relaunch" ? ["codex\r"] : action === "input" ? ["\x1b[B"] : [];
+    assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", ...extra]);
+  });
+}
+
+test("Antigravity folder trust stops scanning once agy is working and re-arms on relaunch", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  await f.advance(2_000);
+  child.data("\x1b[2J\x1b[H  ⣽  Reading file...\r\n");
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r"]);
+  child.data("\x1b[2J\x1b[HPS C:\\repo> ");
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: AGY_TRUST_COMMAND + "\r" });
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", AGY_TRUST_COMMAND + "\r", "\r"]);
+});
+
 test("keeps folder trust gated on bypass mode", async (t) => {
   const f = trustFixture(t, { commandEcho: false });
   t.after(() => f.host.dispose());

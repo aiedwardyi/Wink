@@ -269,8 +269,19 @@ function claudeOnboardingScreen(screenText) {
   return null;
 }
 
-function claudeTrustKeys(screenText) {
+function folderTrustKeys(screenText, engine) {
   const lines = screenText.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (engine === "agy") {
+    const footer = lines.findLastIndex((line) => line === "↑/↓ Navigate · enter Confirm");
+    if (footer < 5 || !lines.slice(footer + 1).every((line) => line.startsWith("◆ ") || line.startsWith("▰"))) return null;
+    const title = lines.lastIndexOf("Accessing workspace:", footer - 5);
+    const [question, permission, yes, no] = lines.slice(footer - 4, footer);
+    if (title < 0 || question !== "Do you trust the contents of this project?"
+      || permission !== "Antigravity CLI requires permission to read, edit, and execute files here."
+      || yes !== "> Yes, I trust this folder" || no !== "No, exit") return null;
+    return "\r";
+  }
+  if (engine !== "claude") return null;
   const text = lines.join(" ");
   if (!lines.includes("Accessing workspace:")
     || !text.includes("Quick safety check: Is this a project you created or one you trust?")
@@ -933,14 +944,15 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.screen.consume(data);
       } catch {}
       cancelClaudeStartup(session);
-      if (session.worker && session.exitCode === null && session.botPane && session.engine === "claude"
+      if (session.worker && session.exitCode === null && session.botPane
         && (session.claudeOnboarding?.active || (session.claudeTrust && !session.claudeTrustAnswered))) {
+        const engine = session.engine;
         const startup = session.claudeOnboarding;
         const frame = session.claudeStartupFrame = {};
         const screenText = session.screen.text();
         if (startup && (AGENT_BUSY_RE.test(screenText) || /^\s*❯(?:\s*$|[ \t]+(?![✔√][ \t])\S)/mu.test(screenText) || session.workerSession?.confirmed)) startup.active = false;
         const onboarding = startup?.active ? claudeOnboardingScreen(screenText) : null;
-        const trustKeys = session.claudeTrust && !session.claudeTrustAnswered ? claudeTrustKeys(screenText) : null;
+        const trustKeys = session.claudeTrust && !session.claudeTrustAnswered ? folderTrustKeys(screenText, engine) : null;
         if (onboarding || trustKeys) session.claudeStartupScreen = screenText;
         const keys = onboarding ? (startup.answered.has(onboarding) ? null : "\r") : trustKeys;
         if (keys && (onboarding || keys === "\r" || !session.claudeTrustMoved)) {
@@ -952,7 +964,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
             session.claudeTrustTimer = null;
             void Promise.resolve().then(() => {
               if (session.retired || session.pty !== pty || !session.worker || session.exitCode !== null || !session.botPane
-                || active.get(session.key) !== session.id || session.engine !== "claude" || session.claudeOnboarding !== startup
+                || active.get(session.key) !== session.id || session.engine !== engine || session.claudeOnboarding !== startup
                 || session.claudeStartupFrame !== frame
                 || session.workerSession?.run.launchGeneration !== launchGeneration || session.userInputAt !== userInputAt
                 || session.commandInput !== commandInput || session.screen.text() !== screenText) return;
@@ -960,7 +972,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
                 if (!startup.active || startup.answered.has(onboarding) || claudeOnboardingScreen(screenText) !== onboarding) return;
                 startup.answered.add(onboarding);
               } else {
-                if (!session.claudeTrust || session.claudeTrustAnswered || claudeTrustKeys(screenText) !== keys) return;
+                if (!session.claudeTrust || session.claudeTrustAnswered || folderTrustKeys(screenText, engine) !== keys) return;
                 if (keys === "\r") session.claudeTrustAnswered = true;
                 else session.claudeTrustMoved = true;
               }
@@ -984,7 +996,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         const busy = AGENT_BUSY_RE.test(session.screen.text());
         if (busy) {
           // Past the trust menu, so stop scanning every chunk for it.
-          session.claudeTrustAnswered = true;
+          if (session.engine !== "agy" || !/^[ \t]*[\u2800-\u28ff]\s+Signing in\.\.\.[ \t]*$/mu.test(session.screen.text())) session.claudeTrustAnswered = true;
           session.autoNote = null;
           const resumed = session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt
             && (!session.agentBusy || now() - session.reportAt >= REPORT_WRAP_MS);
@@ -1181,7 +1193,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (launched) {
         session.engine = launched[1].toLowerCase();
         const args = worker ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-        session.claudeTrust = session.engine === "claude" && args.includes("--dangerously-skip-permissions");
+        session.claudeTrust = (session.engine === "claude" || session.engine === "agy") && args.includes("--dangerously-skip-permissions");
         session.claudeOnboarding = { active: session.engine === "claude", answered: new Set() };
         session.claudeStartupScreen = null;
         session.claudeTrustMoved = false;
