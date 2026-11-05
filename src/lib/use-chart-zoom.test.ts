@@ -3,6 +3,7 @@ import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { inZoom } from "./chart-zoom";
 import { useChartZoom } from "./use-chart-zoom";
 
 let host: HTMLDivElement;
@@ -14,12 +15,16 @@ function Chart({ index = "a", enabled = true }: { index?: string; enabled?: bool
   renders++;
   const ref = useRef<SVGSVGElement>(null);
   const { zoom } = useChartZoom(ref, enabled, index, { left: 0, right: 400, top: 0, bottom: 200 }, () => true, () => undefined);
-  return createElement("svg", { ref, "data-scale": zoom.scale },
+  return createElement("svg", { ref, "data-scale": zoom.scale, "data-mi-zoom": enabled ? zoom.scale : undefined },
     createElement("g", {
       "data-mi-point": "", "data-mi-x": 0.5, "data-mi-y": 0.5,
-      style: { transform: `translate(${(0.5 - zoom.x) * zoom.scale * 400}px, ${(0.5 - zoom.y) * zoom.scale * 200}px)` },
+      style: { transform: `translate(${(0.5 - zoom.x) * zoom.scale * 400}px, ${(0.5 - zoom.y) * zoom.scale * 200}px)`, opacity: 1 },
     }, createElement("circle", { r: 6 })),
-    createElement("text", { "data-mi-label": "", "data-mi-x": 200, "data-mi-y": 100, style: { fontSize: 10.5 } }, "Model"),
+    createElement("g", {
+      "data-mi-point": "", "data-mi-x": 0.9, "data-mi-y": 0.5,
+      style: { transform: `translate(${(0.9 - zoom.x) * zoom.scale * 400}px, ${(0.5 - zoom.y) * zoom.scale * 200}px)`, opacity: inZoom(zoom, { x: 0.9, y: 0.5 }) ? 1 : 0 },
+    }),
+    createElement("text", { "data-mi-label": "", "data-mi-x": 200, "data-mi-y": 100, style: { fontSize: 10.5, transform: "translate(200px, 100px)" } }, "Model"),
     createElement("g", { "data-mi-live-lines": "" }),
   );
 }
@@ -100,5 +105,28 @@ describe("useChartZoom", () => {
     expect(line.getAttribute("transform")).toContain("matrix(2");
     await act(async () => root.render(createElement(Chart, change === "close" ? { enabled: false } : { index: "b" })));
     expect({ gesture: svg.hasAttribute("data-mi-gesture"), transform: line.getAttribute("transform") }).toEqual({ gesture: false, transform: null });
+  });
+
+  it.each([
+    { change: "close", scale: 1 }, { change: "index", scale: 1 },
+    { change: "close", scale: 2 }, { change: "index", scale: 2 },
+  ])("restores painted dots and labels on $change from $scale x", async ({ change, scale }) => {
+    const dots = [...host.querySelectorAll<SVGGElement>("[data-mi-point]")];
+    const label = host.querySelector<SVGTextElement>("[data-mi-label]")!;
+    const styles = () => [...dots.map((dot) => [dot.style.transform, dot.style.opacity]), label.style.transform];
+    const rendered = styles();
+    if (scale === 2) {
+      touch("touchstart", [[100, 100], [200, 100]]);
+      touch("touchmove", [[50, 100], [250, 100]]);
+      touch("touchend", []);
+    }
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    act(() => frames.at(-1)!(16));
+    expect(dots[1]!.style.opacity).toBe("0");
+    expect(label.style.transform).not.toBe(rendered.at(-1));
+    await act(async () => root.render(createElement(Chart, change === "close" ? { enabled: false } : { index: "b" })));
+    expect(styles()).toEqual(rendered);
+    expect(host.querySelector("svg")!.getAttribute("data-mi-zoom")).toBe(change === "close" ? null : "1");
   });
 });

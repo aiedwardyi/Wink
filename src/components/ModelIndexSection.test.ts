@@ -1,9 +1,10 @@
 import "./ProfileFields.test-dom.ts";
-import { act, createElement } from "react";
+import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, applyLocale, localeTag } from "@/lib/i18n";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { MODEL_INDEX_ENTRIES, MODEL_INDEX_SOURCES } from "../../shared/model-index-data.ts";
 
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -621,7 +622,20 @@ describe("score vs cost axis", () => {
 });
 
 describe("full screen chart", () => {
-  const rebuild = async (phone: boolean, size: { width: number; height: number }) => {
+  const innerWidth = window.innerWidth;
+  const back = vi.fn();
+  function SettingsChart() {
+    const ref = useRef<HTMLDivElement>(null);
+    useSettingsSwipe(ref, true, "models-index", back);
+    return createElement("div", { ref },
+      createElement("div", { "data-settings-underlay": "" }),
+      createElement("div", { "data-settings-page": "models-index" },
+        createElement("p", { "data-outside-chart": "" }, "Model Index"),
+        createElement(ModelIndexSection),
+      ),
+    );
+  }
+  const rebuild = async (phone: boolean, size: { width: number; height: number }, settings = false) => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -635,11 +649,13 @@ describe("full screen chart", () => {
     await act(async () => root.unmount());
     host.innerHTML = "";
     root = createRoot(host);
-    await act(async () => root.render(createElement(I18nProvider, null, createElement(ModelIndexSection))));
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(settings ? SettingsChart : ModelIndexSection))));
   };
   const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   const svg = () => host.querySelector<SVGSVGElement>("svg[role=img]")!;
   afterEach(() => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: innerWidth });
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -709,6 +725,38 @@ describe("full screen chart", () => {
     touch("touchmove", [[to, 150]]);
     touch("touchend", []);
   };
+
+  it.each(["pan", "index"])("keeps a fallback chart %s off Settings back at 390 px", async (gesture) => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    back.mockReset();
+    await rebuild(true, { width: 366, height: 330 }, true);
+    expect(document.fullscreenElement).toBeFalsy();
+    act(() => button("Full Screen")!.click());
+    if (gesture === "pan") {
+      touch("touchstart", [[100, 150], [200, 150]]);
+      touch("touchmove", [[50, 150], [250, 150]]);
+      touch("touchend", []);
+      expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    } else pick("Benchmark", "Coding");
+    touch("touchstart", [[60, 150]]);
+    touch("touchmove", [[320, 150]]);
+    expect(host.querySelector<HTMLElement>("[data-settings-page]")!.style.transform).toBe("");
+    touch("touchend", []);
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(back).not.toHaveBeenCalled();
+    expect(tab()).toBe("Intelligence");
+    if (gesture === "pan") expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    act(() => button("Exit Full Screen")!.click());
+    const outside = host.querySelector("[data-outside-chart]")!;
+    for (const [type, x] of [["touchstart", 60], ["touchmove", 320], ["touchend", 320]] as const) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: 150 }] });
+      act(() => void outside.dispatchEvent(event));
+    }
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(back).toHaveBeenCalledOnce();
+  });
 
   it("swipes between indexes without wrapping or taking a vertical drag", async () => {
     const vibrate = vi.fn();

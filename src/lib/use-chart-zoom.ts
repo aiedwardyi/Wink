@@ -17,9 +17,9 @@ export function useChartZoom(
   const [zoom, setZoom] = useState(FULL_ZOOM);
   const [motion, setMotion] = useState<string>();
   const current = useRef(FULL_ZOOM);
-  const latest = useRef({ plot, swipe, hide });
+  const latest = useRef({ plot, swipe, hide, zoom: enabled ? zoom : undefined });
   const suppress = useRef(false);
-  useLayoutEffect(() => { latest.current = { plot, swipe, hide }; });
+  useLayoutEffect(() => { latest.current = { plot, swipe, hide, zoom: enabled ? zoom : undefined }; });
 
   useLayoutEffect(() => {
     current.current = FULL_ZOOM;
@@ -189,6 +189,15 @@ export function useChartZoom(
     el.addEventListener("click", onClick, true);
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      const { plot: { left, right, top, bottom }, zoom = FULL_ZOOM } = latest.current;
+      if (latest.current.zoom) el.setAttribute("data-mi-zoom", String(zoom.scale));
+      else el.removeAttribute("data-mi-zoom");
+      for (const dot of dots) {
+        const x = Number(dot.dataset.miX), y = Number(dot.dataset.miY);
+        dot.style.transform = `translate(${left + (x - zoom.x) * zoom.scale * (right - left)}px, ${top + (y - zoom.y) * zoom.scale * (bottom - top)}px)`;
+        dot.style.opacity = inZoom(zoom, { x, y }) ? "1" : "0";
+      }
+      for (const label of labels) label.style.transform = `translate(${Number(label.dataset.miX)}px, ${Number(label.dataset.miY)}px)`;
       for (const line of lines) line.removeAttribute("transform");
       el.removeAttribute("data-mi-gesture");
       el.removeEventListener("touchstart", onStart);
