@@ -1335,28 +1335,44 @@ describe("MSP warm host (recorded transport)", () => {
     expect(stagesOf(turnId)).toEqual(["prompt-sent", "finishing"]);
   });
 
-  it("a pending prepare never makes the turn later than cold", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const slow = 10_000;
-    gate = (method, _reply, peer) =>
-      peer === 0 && method === "initialize" ? new Promise<void>((resolve) => setTimeout(resolve, slow)) : undefined;
-    const flushUntil = async (done: () => boolean) => {
-      for (let i = 0; i < 500 && !done(); i++) await new Promise((resolve) => setImmediate(resolve));
-      expect(done()).toBe(true);
-    };
+  it.each([0, 1])("a pending prepare never makes the turn later than cold (winner %i)", async (winner) => {
+    vi.spyOn(os, "cpus").mockReturnValue(Array.from({ length: 16 }, () => ({} as os.CpuInfo)));
+    vi.spyOn(os, "totalmem").mockReturnValue(32 * 1024 ** 3);
+    const ready = [hold(), hold()];
+    gate = (method, _reply, peer) => method === "initialize" ? ready[peer].held : undefined;
     await start();
-    void instance.prepare!(shapeFor());
-    await flushUntil(() => peers.length === 1);
-    const sentAt = Date.now();
+    const preparing = instance.prepare!(shapeFor());
+    await vi.waitFor(() => expect(peers).toHaveLength(1));
     const sent = send();
-    await flushUntil(() => recorder.events.some((e) => e.type === "turn.stage" && e.stage === "prompt-sent"));
-    expect(Date.now() - sentAt).toBeLessThan(slow);
+    await vi.waitFor(() => expect(peers).toHaveLength(2));
+    expect(peers.flatMap(turnStarts)).toHaveLength(0);
+    ready[winner].release();
+    await recorder.until((e) => e.type === "turn.stage" && e.stage === "prompt-sent");
+    expect(turnStarts(peers[winner])).toHaveLength(1);
+    expect(turnStarts(peers[1 - winner])).toHaveLength(0);
+    expect(exited(peers[1 - winner])).toBe(true);
+    ready[1 - winner].release();
+    await preparing;
+    expect(await completed(await sent)).toMatchObject({ ok: true, stopReason: null });
+  });
+
+  it.each([false, true])("an identity change before Send drops the host (prepared %s)", async (prepared) => {
+    await start();
+    let cursor = "cursor-1";
+    if (prepared) await instance.prepare!(shapeFor({ resumeCursor: cursor }));
+    else {
+      const first = await send();
+      await completed(first);
+      cursor = cursorOf(first);
+    }
+    account = "Other Name";
+    const second = await send({ resumeCursor: cursor });
+    expect(await completed(second)).toMatchObject({ ok: true, stopReason: null });
+    expect(exited(peers[0])).toBe(true);
+    expect(turnStarts(peers[0])).toHaveLength(prepared ? 0 : 1);
     expect(peers).toHaveLength(2);
     expect(turnStarts(peers[1])).toHaveLength(1);
-    expect(turnStarts(peers[0])).toHaveLength(0);
-    vi.useRealTimers();
-    expect(await completed(await sent)).toMatchObject({ ok: true, stopReason: null });
-    expect(exited(peers[0])).toBe(true);
+    expect(instance.cachedCapture?.()?.identity).toBe(labelHash(account));
   });
 
   it("an identity change seen at focus drops the host", async () => {

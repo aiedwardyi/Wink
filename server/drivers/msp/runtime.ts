@@ -648,6 +648,12 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
     emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "unavailable" });
             return { turnId };
           }
+          const seen = readIdentity();
+          remember(seen);
+          if (seen !== identity) {
+            identity = seen;
+            pool.invalidate({ instanceId, incarnation }, "identity changed");
+          }
         } catch (err) {
           active.delete(threadId);
           throw err;
@@ -1147,6 +1153,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
         channel.onServerRequest((id, method, params) => {
           const tag = tagOf(params);
           if (state.mspTurnId !== null && tag !== undefined && tag !== state.mspTurnId) {
+            // Ack stale presentation requests without surfacing an RPC error on the reused host.
             channel.respond(id, {});
             return {};
           }
