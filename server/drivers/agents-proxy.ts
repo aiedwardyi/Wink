@@ -419,7 +419,7 @@ const TOOLS = [
   {
     name: "call_api",
     description:
-      "Call a service's HTTPS API with the user's saved key for it. You never see the key; Wink adds it. Only that service's own hosts are allowed. Binary responses are saved to a file and the path is returned. A key saved with the custom form is custom:<host> and only works on that exact host.",
+      "Call a service's HTTPS API with the user's saved key for it. You never see the key; Wink adds it. Only that service's own hosts are allowed. Binary responses are saved to a file and the path is returned. A key saved with the custom form is custom:<host> and only works on that exact host. For file uploads (multipart), pass form with fields and files (absolute paths inside your working folder).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -429,6 +429,27 @@ const TOOLS = [
         url: { type: "string", description: "Full https URL on that service's API host." },
         headers: { type: "object", additionalProperties: { type: "string" }, description: "Extra headers. Never an auth header." },
         body: { description: "Request body: a JSON value (sent as JSON) or a string." },
+        form: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            fields: { type: "object", additionalProperties: { type: "string" } },
+            files: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  field: { type: "string" },
+                  path: { type: "string" },
+                  filename: { type: "string" },
+                  content_type: { type: "string" },
+                },
+                required: ["field", "path"],
+              },
+            },
+          },
+        },
       },
       required: ["credential_id", "method", "url"],
     },
@@ -854,6 +875,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
     };
     if (args.headers !== undefined) body.headers = args.headers;
     if (args.body !== undefined) body.body = args.body;
+    if (args.form !== undefined) body.form = args.form;
     try {
       const r = await api("/api/internal/call-api", { method: "POST", body: JSON.stringify(body) });
       if (typeof r.path === "string") {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
 import { z } from "zod";
@@ -9,12 +10,15 @@ import type { AskReply } from "./ask-bot.ts";
 import type { watchAskHold } from "./ask-hold.ts";
 import { askUserRequestSchema, postAskUser } from "./ask-user.ts";
 import { importLocalImage, saveImage, type SavedAttachment } from "./attachments.ts";
+import { checkPicture } from "./bot-hooks.ts";
 import { peerMessagePrompt } from "./chief-of-staff.ts";
-import { claimAsk, MAX_ASKS_PER_TURN } from "./comms-budget.ts";
-import { callerSnapshot } from "./comms-root.ts";
+import { claimOpenAsk, MAX_OPEN_ASKS, releaseOpenAsk } from "./comms-budget.ts";
+import { postRefusalNotice, refusalText } from "./comms-notice.ts";
+import { callerSnapshot, release, reserve, type Reservation } from "./comms-root.ts";
 import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visibility.ts";
 import * as composio from "./composio.ts";
 import type { ComputerControl } from "./computer-control.ts";
+import { newId } from "./contracts.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import { appendDecision } from "./decision-log.ts";
 import { acceptPeerTask, drainWaitingOn, finishDelegatedTurn, pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult, type drainDelegations } from "./delegations.ts";
@@ -42,7 +46,7 @@ type InternalRouteDeps = {
   MAX_COMMS_DEPTH: number;
   MAX_WORKSPACE_BOTS: number;
   computerControl: ComputerControl;
-  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null }) => Promise<AskReply>;
+  askBotAndWait: (targetBotId: string, message: string, depth: number, fromBotId?: string, peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation }) => Promise<AskReply>;
   runDelegatedTurn?: Parameters<typeof drainDelegations>[3];
   resolveCommsCaller?: (header: string | string[] | undefined) => { botId: string; threadId: string } | undefined;
   checkedMemberIds: (value: unknown) => { ok: true; memberIds: string[] } | { ok: false; error: string };
@@ -302,18 +306,30 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
       if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
-      // Depth stops recursion, not breadth. The claim happens before the
+      // Depth stops recursion, not breadth. Both claims happen before the
       // approval card so a turn cannot open unbounded cards either.
-      if (!claimAsk(fromThreadId)) {
-        return json(res, 200, {
-          limit: `This turn has already used its ${MAX_ASKS_PER_TURN} teammate messages. Work with the replies you have, or hand the rest off with delegate_bot.`,
-        });
+      const taskId = newId();
+      if (!claimOpenAsk(fromThreadId, taskId)) {
+        return json(res, 200, { limit: `You already have ${MAX_OPEN_ASKS} teammate messages waiting. Collect those replies first.` });
       }
+      const credit = reserve(snapshot.rootId, "ask");
+      if (!credit.ok) {
+        releaseOpenAsk(fromThreadId, taskId);
+        postRefusalNotice(store, credit.reason, snapshot.rootId, taskId, fromThreadId, store.dmGroup(from.id, target.id)?.threadId);
+        return json(res, 200, { limit: refusalText(credit.reason) });
+      }
+      const reservation = credit.reservation;
+      const refuse = (code: number, error: string) => {
+        release(reservation);
+        releaseOpenAsk(fromThreadId, taskId);
+        return json(res, code, { error });
+      };
       let currentFrom = from;
       let currentTarget = target;
       const queueAsk = (approved = false) => {
-        const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth, root: snapshot.rootId ?? undefined }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved, turnId: snapshot.turnId });
-        if (queued.id && deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
+        const queued = queueDelegation(commsBus, currentFrom, { toBotId, message, depth, root: snapshot.rootId ?? undefined }, MAX_COMMS_DEPTH, fromThreadId, { kind: "ask", ready: true, approved, turnId: snapshot.turnId, id: taskId, reservation });
+        if (!queued.id) return refuse(200, "no such bot");
+        if (deps.runDelegatedTurn) drainWaitingOn(commsBus, approvalBus, deps.runDelegatedTurn);
         return json(res, 200, { botName: currentTarget.name, taskId: queued.id, shown: false, text: `@${currentTarget.name} is working on it. Task id: ${queued.id}. Collect the reply with wait_delegation; do not ask again.` });
       };
       if (target.busy) return queueAsk();
@@ -338,16 +354,14 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
           "ask_bot",
           fromThreadId,
         );
-        if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
-        if (!turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
+        if (verdict !== "allow") return refuse(200, "denied by user");
+        if (!turnRegistry.get(snapshot.turnId)) return refuse(200, "This turn has ended, so it can't message teammates.");
         // The card may have been open for minutes. Re-read both records so
         // deleted bots cannot recreate transcripts through stale objects.
         const freshFrom = store.bot(fromBotId);
         const freshTarget = store.bot(toBotId);
-        if (!freshFrom || !freshTarget) return json(res, 404, { error: "no such bot" });
-        if (!connectorThread(freshFrom.id, fromThreadId)) {
-          return json(res, 404, { error: "source task no longer exists" });
-        }
+        if (!freshFrom || !freshTarget) return refuse(404, "no such bot");
+        if (!connectorThread(freshFrom.id, fromThreadId)) return refuse(404, "source task no longer exists");
         currentFrom = freshFrom;
         currentTarget = freshTarget;
         if (freshTarget.busy) return queueAsk(true);
@@ -355,7 +369,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       const channel = getOrCreateChannel(store, currentFrom, currentTarget);
       const sourceChipId = mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
       const prefixed = peerMessagePrompt(currentFrom, message, "ask");
-      const taskId = acceptPeerTask(currentFrom, currentTarget, fromThreadId, "ask", "dispatching", undefined, snapshot.rootId ?? undefined, snapshot.turnId);
+      acceptPeerTask(currentFrom, currentTarget, fromThreadId, "ask", "dispatching", taskId, snapshot.rootId ?? undefined, snapshot.turnId);
       const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId, {
         sender: currentFrom,
         channel,
@@ -363,6 +377,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         transcriptText: message,
         taskId,
         commsRoot: snapshot.rootId,
+        reservation,
       });
       // the peer's real reply reaches the channel and this thread when its turn ends
       if (reply.taskId) {
@@ -444,6 +459,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       } catch (e) {
         return json(res, (e as { status?: number }).status ?? 400, { error: (e as Error).message });
       }
+      const verdict = checkPicture(from, saved.path, roots);
+      if (!verdict.ok) {
+        try { unlinkSync(saved.path); } catch {}
+        return json(res, 403, { error: `picture gate: ${verdict.reason}. Run picture-gate check ${body.path}` });
+      }
       const caption = typeof body.caption === "string" ? body.caption.trim().slice(0, 500) : "";
       const message = store.appendMessage(fromThreadId, {
         role: "bot",
@@ -476,7 +496,7 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, (e as { status?: number }).status ?? 500, { error: (e as Error).message });
       }
       recordKeyUse(DATA_DIR, "openaiImageApiKey", from.id);
-      if (body.show === false) return json(res, 201, { path: generated.path });
+      if (body.show === false || from.hooks?.pictures) return json(res, 201, { path: generated.path });
       // Generation is slow; the conversation may be gone by now.
       const current = connectorThread(from.id, fromThreadId);
       if (!current) return json(res, 201, { path: generated.path, showError: "the conversation is gone" });
@@ -570,15 +590,22 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
         return json(res, 403, { error: "source thread does not belong to sender" });
       }
       if (!snapshot || !turnRegistry.get(snapshot.turnId)) return json(res, 200, { error: "This turn has ended, so it can't message teammates." });
+      if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
+      const credit = reserve(snapshot.rootId, "delegation");
+      if (!credit.ok) {
+        postRefusalNotice(store, credit.reason, snapshot.rootId, newId(), fromThreadId, store.dmGroup(from.id, target.id)?.threadId);
+        return json(res, 200, { error: refusalText(credit.reason) });
+      }
       const queued = queueDelegation(
         commsBus,
         from,
         { toBotId, message, reason, depth, root: snapshot.rootId ?? undefined },
         MAX_COMMS_DEPTH,
         fromThreadId,
-        { turnId: snapshot.turnId },
+        { turnId: snapshot.turnId, reservation: credit.reservation },
       );
       if (queued.result !== "ok" || !queued.id) {
+        release(credit.reservation);
         // the agent reads this string - a bare enum ("too_deep") tells it
         // nothing about what to do instead
         const said: Record<Exclude<QueueResult, "ok">, string> = {

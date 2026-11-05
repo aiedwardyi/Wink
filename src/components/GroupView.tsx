@@ -55,12 +55,12 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
-import { groupActivityRuns, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
+import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { roomRetry } from "@/lib/room-retry";
 import { nextBulletin } from "@/lib/room-bulletin";
-import { ActivityRun, ActivityStep, approvalHover } from "./ActivityRun";
+import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { FolderFix } from "./FolderFix";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
@@ -231,13 +231,14 @@ export function RoomToolChip({
           )}
         >
           <span
+            style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}
             className={tool.ok === false && expanded
               ? cn("min-w-0 max-w-full break-words whitespace-pre-wrap", !status && "font-mono")
               : status
                 ? "min-w-0 max-w-[480px] break-words"
                 : "min-w-0 max-w-[480px] truncate font-mono"}
           >
-            {localizeServerLine(tool.name, t)}
+            {isCommsNotice(tool.name) ? <CommsNotice text={localizeServerLine(tool.name, t)} /> : localizeServerLine(tool.name, t)}
           </span>
         </div>
         {setupAction === "cli" && instance ? (

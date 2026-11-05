@@ -189,7 +189,7 @@ describe("no reply hint", () => {
 
   it("drops the elapsed timer and wraps instead of truncating while the hint shows", () => {
     expect(chatView).toContain("wrap={Boolean(noReply)}");
-    expect(chatView).toContain("since={noReply ? undefined : lastUserMessage?.at}");
+    expect(chatView).toContain("since={noReply ? undefined : since}");
     const hint = renderToStaticMarkup(createElement(TurnPresence, { avatar: null, visible: true, label: "The model hasn't replied in 12\u00a0min", wrap: true }));
     expect(hint).not.toContain("whitespace-nowrap");
     const stage = renderToStaticMarkup(createElement(TurnPresence, { avatar: null, visible: true, label: "Running a command" }));

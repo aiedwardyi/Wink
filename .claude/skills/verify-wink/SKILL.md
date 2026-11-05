@@ -61,9 +61,11 @@ $C expect reply text '[data-orbit-message="bot"] >> nth=-1' "STUB CODEX" --page 
 Each launch writes `<root>/evidence/<time>-<sha7>/`:
 
 - `steps.log`: every line the driver printed. `proofs.log`: the PASS/FAIL lines.
-- `shots/` plus `shots.jsonl` from `shot <name>`. End names with `-desktop` or `-phone` so `sheet` pairs them.
+- `shots/` plus `shots.jsonl` from `shot <name>`. End names with `-desktop` or `-phone` so `sheet` pairs them. `manifest.json` records CSS widths, observed fonts and fixture text for picture-gate.
 - `sheet.png` from `sheet`: desktop and phone side by side with big labels.
 - `server.log`, `browser-*.log`, `build.log`, `spawns.jsonl` (every child process), `stubs.jsonl` (every prompt the engines saw).
+
+`open phone --phone=360,392 --font=Verdana` opens both Android widths. `shot <name> --url=http://127.0.0.1:<port> --phone=360,392 --font=Verdana` captures desktop and both phones from an existing offline harness without launching the server. The harness owns its fixture API and initialization; external requests are blocked. Manifest data comes from the rendered page, so missing long names, email or Korean stays missing.
 
 ## Cleanup
 
