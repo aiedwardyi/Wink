@@ -22,6 +22,7 @@ export interface Lease {
   captured: Captured;
   signal: AbortSignal;
   attach(child: WarmChild): void;
+  /** Call before the prompt write: a lease still not ready `pendingMs` after reserve is closed, even if taken. */
   ready(): void;
   /** Idempotent. */
   release(reason: string): void;
@@ -362,7 +363,7 @@ export class WarmPool {
     this.lastSweep = now;
     for (const entry of [...this.entries]) {
       if (entry.state === "idle" && (now - entry.idleSince >= IDLE_TTL_MS || entry.child?.alive() === false)) this.drop(entry, "idle");
-      else if (entry.state === "pending" && now - entry.since >= entry.pendingMs) this.drop(entry, "pending timeout");
+      else if ((entry.state === "pending" || (entry.state === "taken" && !entry.ready)) && now - entry.since >= entry.pendingMs) this.drop(entry, "pending timeout");
     }
     if (this.smaller() && (this.liveTurns() || [...this.entries].some((entry) => entry.state === "taken"))) {
       for (const entry of [...this.entries]) if (entry.kind === "speculative" && (entry.state === "idle" || entry.state === "pending")) this.drop(entry, "busy");
