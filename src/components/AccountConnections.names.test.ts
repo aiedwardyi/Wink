@@ -136,7 +136,7 @@ it("keeps account identities inside Connections account rows", async () => {
     await click(button(locale === "en" ? "Add Account" : "계정 추가"));
     expect(host.querySelector('[role="alert"]'), "Add Account failure").not.toBeNull();
     scan();
-    for (const section of ["usage", "general", "account", "devices", "themes", "team", "models-index", "shortcuts"] as AppSettingsSection[]) {
+    for (const section of ["usage", "general", "account", "companion", "themes", "team", "models-index", "shortcuts"] satisfies AppSettingsSection[]) {
       await act(async () => store.dispatch({ type: "toggleAppSettings", section, open: true }));
       await settle();
       expect(scanForCanary(canary), `${section}, phone=${phone}, ${locale}`).toEqual([]);
@@ -300,4 +300,15 @@ it.each([false, true])("gives the address its own line under the name on a phone
   expect(line.contains(more), "the address runs under the more button").toBe(false);
   expect(more.querySelector("svg"), "an icon, not a text glyph").not.toBeNull();
   expect(more.textContent).toBe("");
+});
+
+it("keeps one menu, on the name row, for a signed-out named account on a phone", async () => {
+  accounts[0]!.snapshot = { state: "available", authenticated: false };
+  await mount({ phone: true });
+  const menus = row()!.querySelectorAll<HTMLElement>("[data-connection-menu]");
+  expect(menus, "no second menu floating over Sign In").toHaveLength(1);
+  expect(menus[0]!.closest(".absolute"), "the menu is not an overlay").toBeNull();
+  let line = menus[0]!.parentElement;
+  while (line && line !== row() && !line.textContent?.includes("Claude 1")) line = line.parentElement;
+  expect(line, "it sits on the name row, not on the account as a whole").not.toBe(row());
 });

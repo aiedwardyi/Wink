@@ -112,14 +112,16 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const mark = <ProviderMark driverKind={account.driverKind} size={16} />;
   const tile = name && <span data-account-number="" className="shrink-0"><Tile number={name.number} terminal={terminal} /></span>;
   const draining = account.drain && account.drain.phase !== "failed";
+  const signInRow = !ready && !account.drain;
   const toggleMenu = () => afterFold(`${id}-actions`, () => setMenu(!menu));
   const more = <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu} aria-controls={`${id}-actions`}
     onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button>;
   // On a phone the address gets its own line under the tile, running under the more button, so a 30-character email shows whole.
-  const stacked = phone && name && !draining;
+  // Connected rows only: the sign-in row keeps its menu on its name row, so an overlay there would cover Sign In.
+  const stacked = phone && name && !draining && !signInRow;
   return (
     <div data-connection-account={account.instanceId} className="relative min-w-0">
-      {!ready && !account.drain ? <>
+      {signInRow ? <>
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
         {name && <ConnectionRow label={<>
           {tile}
