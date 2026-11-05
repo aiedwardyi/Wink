@@ -294,6 +294,23 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(text(q("[data-meter-second]"))).toBe("5h 34%");
   });
 
+  it("keeps quick-view document listeners across clock ticks", async () => {
+    await mount(makeBot("bot-atlas", "Atlas", "claude"));
+    await click(meter());
+    expect(quick()).not.toBeNull();
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    await act(async () => {
+      vi.setSystemTime(usageBoardNow + 61_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const closes = (calls: unknown[][]) => calls.filter(([type]) => type === "pointerdown" || type === "keydown");
+    expect(closes(add.mock.calls)).toEqual([]);
+    expect(closes(remove.mock.calls)).toEqual([]);
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(quick()).toBeNull();
+  });
+
   it("closes the old quick view before the next bot renders", async () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
     await click(meter());
@@ -603,7 +620,7 @@ describe("chat usage meter, quick view and wait card", () => {
     await settle();
     expect(text(q("[data-meter-name]"))).toBe("Codex 1");
     expect(text(q("[data-meter-first]"))).toBe("7d 62%");
-    expect(text(q("[data-meter-second]"))).toBe("5h No data");
+    expect(text(q("[data-meter-second]"))).toBe("Weekly only");
     await show(makeBot("bot-atlas", "Atlas", "claude"));
     await settle();
     expect(text(q("[data-meter-name]"))).toBe("Claude 1");

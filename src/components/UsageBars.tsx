@@ -31,7 +31,7 @@ export function barSlots(engine: string, account: Pick<UsageBoardAccount, "windo
     const { session, week, others } = splitWindows(account.windows);
     return [
       ...session ? [slot("session", session, t("usage.limits.sessionShort"))] : [],
-      ...week ? [slot("week", week, t("usage.limits.weeklyShort"))] : [],
+      ...week ? [slot("week", week)] : [],
       ...others.map((window) => slot(window.id, window)),
     ];
   }
@@ -58,11 +58,12 @@ function resetTime(reset: CompactReset, t: Translate) {
 export function WindowBar({ slot, now, t }: { slot: Slot; now: number; t: Translate }) {
   const { window, label } = slot;
   const left = windowExpired(window.resetsAt, now) ? null : Math.round(leftOf(window));
+  const reached = left !== null && window.usedPercent >= 100;
   const reset = left === null ? null : resetCompact(window.resetsAt, now);
   // A window not started yet has no reset: it reads the same on every account, with no "not reported" words.
   const phrase = reset && resetPhrase(window.resetsAt, now);
   return (
-    <div role="group" data-window={slot.key} className="usage-meter mt-2 text-[13px] leading-[1.4] text-ink"
+    <div role="group" data-window={slot.key} data-model-window={window.id.includes("opus") ? "" : undefined} className="usage-meter mt-2 text-[13px] leading-[1.4] text-ink"
       aria-label={`${label}: ${left === null ? t("usage.desk.resetPassed") : t("usage.desk.windowLeft", { percent: left })}${phrase ? `, ${t(phrase.key, phrase.vars)}` : ""}`}>
       <span aria-hidden="true" className="whitespace-nowrap">{label}</span>
       <Cells left={left ?? 0} tone={barTone(window.usedPercent)} />
@@ -71,7 +72,7 @@ export function WindowBar({ slot, now, t }: { slot: Slot; now: number; t: Transl
       </span>
       <span aria-hidden="true" data-reset={slot.key} className="min-w-0 text-[12px] tabular-nums text-ink-secondary">
         {left === null ? t("usage.desk.resetPassed") : <>
-          {left === 0 && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>{reset && " · "}</>}
+          {reached && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>{reset && " · "}</>}
           {reset && <span className="whitespace-nowrap">{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span>}
         </>}
       </span>

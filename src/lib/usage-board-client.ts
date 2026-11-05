@@ -26,16 +26,16 @@ function upsertEvents(kept: UsageBoardEvent[], changed: UsageBoardEvent[]): Usag
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq).slice(-EVENT_CAP);
 }
 
-/** Workers come from live panes and change without a revision bump: an equal-revision reply updates only them. */
+/** Workers and sign-in probes can change without a revision bump. */
 function liveWorkers(shown: UsageBoard, reply: UsageBoard): UsageBoard | null {
   let changed = shown.runs !== reply.runs;
   const engines = shown.engines.map((engine) => {
     const latest = reply.engines.find((each) => each.base === engine.base);
     return { ...engine, accounts: engine.accounts.map((account) => {
-      const workers = latest?.accounts.find((each) => each.id === account.id)?.workers;
-      if (workers === undefined || JSON.stringify(workers) === JSON.stringify(account.workers)) return account;
+      const live = latest?.accounts.find((each) => each.id === account.id);
+      if (!live || (live.signIn === account.signIn && JSON.stringify(live.workers) === JSON.stringify(account.workers))) return account;
       changed = true;
-      return { ...account, workers };
+      return { ...account, signIn: live.signIn, workers: live.workers };
     }) };
   });
   return changed ? { ...shown, runs: reply.runs, engines } : null;

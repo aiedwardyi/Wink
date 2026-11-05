@@ -92,6 +92,8 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
     onClose();
     if (focus) anchor.current?.focus();
   };
+  const closeRef = useRef(close);
+  useLayoutEffect(() => { closeRef.current = close; });
   useBackLayer(true, close);
 
   useLayoutEffect(() => {
@@ -127,12 +129,12 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
       if (box.current?.contains(target) || anchor.current?.contains(target)) return;
       // An open account menu inside the view is the top layer; its own listener closes it.
       if (box.current?.querySelector('[role="menu"]')) return;
-      close();
+      closeRef.current();
     };
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
-      close();
+      closeRef.current();
     };
     document.addEventListener("pointerdown", away, true);
     document.addEventListener("keydown", key);
@@ -140,7 +142,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
       document.removeEventListener("pointerdown", away, true);
       document.removeEventListener("keydown", key);
     };
-  });
+  }, [anchor]);
 
   const settings = (section: "usage" | "connections") => {
     close(false);

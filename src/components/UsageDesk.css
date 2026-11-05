@@ -17,24 +17,27 @@
 }
 .usage-meter {
   display: grid;
-  grid-template-columns: 2em 190px 6.2em minmax(0, 1fr);
+  grid-template-columns: var(--usage-label-width, 2em) 190px 6.2em minmax(0, 1fr);
   column-gap: 12px;
   align-items: center;
 }
 /* Korean labels run to "24시간" (Gemini's day), even in a wide font. */
 .usage-meter:lang(ko) {
-  grid-template-columns: 3.4em 190px 6.2em minmax(0, 1fr);
+  grid-template-columns: var(--usage-label-width, 3.4em) 190px 6.2em minmax(0, 1fr);
+}
+.usage-meter[data-model-window] {
+  --usage-label-width: max-content;
 }
 @container usage-group (width < 486px) {
   .usage-group [data-account-row] {
     padding-inline: 14px;
   }
   .usage-meter {
-    grid-template-columns: 2em minmax(0, 1fr) 6.2em;
+    grid-template-columns: var(--usage-label-width, 2em) minmax(0, 1fr) 6.2em;
     column-gap: 10px;
   }
   .usage-meter:lang(ko) {
-    grid-template-columns: 3.4em minmax(0, 1fr) 6.2em;
+    grid-template-columns: var(--usage-label-width, 3.4em) minmax(0, 1fr) 6.2em;
   }
   .usage-meter > [data-left] {
     text-align: right;

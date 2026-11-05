@@ -77,7 +77,8 @@ export function windowFacts(account: UsageBoardAccount, t: Translate) {
   const fact = (window: UsageBoardWindow) => `${shortLabel(window, t)} ${Math.round(leftOf(window))}%`;
   const other = binding === session ? week : binding === week ? session : undefined;
   // The fact says which window has no data, so "7d 0%" never seems to own it; the bars' one empty state says the same.
-  const missing = !session && week ? t("usage.desk.windowNoData", { window: t("usage.limits.sessionShort") }) : null;
+  const missing = !session && week ? account.coverage === "complete" ? t("usage.desk.weeklyOnly")
+    : t("usage.desk.windowNoData", { window: t("usage.limits.sessionShort") }) : null;
   return { binding, first: binding ? fact(binding) : t("usage.desk.noData"), second: other ? fact(other) : binding === week ? missing : null };
 }
 

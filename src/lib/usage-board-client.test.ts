@@ -40,6 +40,19 @@ describe("mergeBoard", () => {
     expect(account(merged!, "claude").workers).toEqual(account(fresh(), "claude").workers);
   });
 
+  it.each(["signed-out", "signing-in", "ready"] as const)("takes live sign-in state %s without replacing history or the cursor", (signIn) => {
+    const shown = fresh();
+    account(shown, "claude").signIn = signIn === "ready" ? "signed-out" : "ready";
+    const reply = fresh({ full: false, cursor: "c-again" });
+    account(reply, "claude").signIn = signIn;
+    account(reply, "claude").history = { fine: [], coarse: [] };
+    const merged = mergeBoard(shown, reply);
+    expect(merged).not.toBeNull();
+    expect(account(merged!, "claude").signIn).toBe(signIn);
+    expect(account(merged!, "claude").history).toEqual(account(shown, "claude").history);
+    expect(merged!.cursor).toBe(shown.cursor);
+  });
+
   it("takes the first reply whatever its revision", () => {
     const reply = fresh({ revision: 1, full: false });
     expect(mergeBoard(null, reply)).toBe(reply);

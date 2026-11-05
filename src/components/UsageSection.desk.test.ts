@@ -1181,6 +1181,33 @@ describe("Usage desk", () => {
     expect(text(row(CLAUDE_2)?.querySelector('[data-window="week"] [data-reset="week"]'))).toBe(locale === "en" ? "Limit reached" : "한도 도달");
   });
 
+  it.each(["en", "ko"] as const)("keeps 99.9 percent usage below Limit reached (%s)", async (locale) => {
+    accountOf(server.board, CLAUDE_2).windows.find((each) => each.kind === "week")!.usedPercent = 99.9;
+    await mount({ locale });
+    const week = row(CLAUDE_2)?.querySelector('[data-window="week"]');
+    expect(text(week?.querySelector("[data-left]"))).toBe(locale === "en" ? "0% left" : "0% 남음");
+    expect(text(week?.querySelector("[data-reset]"))).not.toContain(locale === "en" ? "Limit reached" : "한도 도달");
+  });
+
+  it.each(["en", "ko"] as const)("keeps the Opus qualifier on a standalone weekly window (%s)", async (locale) => {
+    accountOf(server.board, "claude").windows = [{ id: "seven_day_opus", kind: "week", usedPercent: 40, resetsAt: usageBoardNow + 1440 * MIN, windowMinutes: 10080 }];
+    await mount({ locale });
+    expect(row("claude")?.querySelector('[data-window="week"]')?.getAttribute("aria-label")).toMatch(locale === "en" ? /^Opus 7d:/ : /^Opus 7일:/);
+  });
+
+  it.each(["en", "ko"] as const)("updates Muse sign-in after an equal-revision reread (%s)", async (locale) => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount({ locale });
+    const boardClient = await client();
+    accountOf(server.board, "muse").signIn = "signed-out";
+    await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
+    expect(row("muse")?.querySelector("[data-account-bars], [data-main-check]")).toBeNull();
+    expect(text(row("muse"))).toContain(locale === "en" ? "Sign In" : "로그인");
+    accountOf(server.board, "muse").signIn = "ready";
+    await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
+    expect(row("muse")?.querySelector("[data-account-bars]")).not.toBeNull();
+  });
+
   it.each(["en", "ko"] as const)("says No usage yet, the same on every engine, for an account with no windows (%s)", async (locale) => {
     await mount({ locale });
     const words = locale === "en" ? "No usage yet" : "아직 사용량 없음";

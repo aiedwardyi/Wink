@@ -4,10 +4,10 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { applyLocale } from "@/lib/i18n";
+import { applyLocale, t } from "@/lib/i18n";
 import type { RateLimitWindow } from "../../server/contracts.ts";
 
-import { ChatPlanMeters } from "./ChatPlanMeters";
+import { ChatPlanMeters, lineFacts } from "./ChatPlanMeters";
 
 const now = Date.UTC(2026, 8, 4, 12, 0, 0);
 
@@ -24,6 +24,13 @@ function line(html: string) {
 }
 
 describe("ChatPlanMeters", () => {
+  it.each(["en", "ko"] as const)("distinguishes weekly-only coverage from a missing report (%s)", (locale) => {
+    applyLocale(locale);
+    const windows = [{ id: "seven_day", kind: "week" as const, usedPercent: 71, resetsAt: now + 53 * 3_600_000, windowMinutes: 10080 }];
+    expect(lineFacts(windows, "complete", t).second).toBe(locale === "en" ? "Weekly only" : "주간만");
+    expect(lineFacts(windows, "unknown", t).second).toBe(locale === "en" ? "5h No data" : "5시간 데이터 없음");
+  });
+
   it("hides when the engine has no live plan windows", () => {
     expect(render(undefined)).toBe("");
     expect(render([])).toBe("");
