@@ -2,6 +2,24 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.234] - 2026-11-05
+
+### Added
+- Bots can upload files, like a voice memo for speech-to-text or an image to edit, when they call an outside service with your saved key.
+- Bot Details shows a green Saved mark beside Description each time your edit saves.
+
+### Changed
+- Bots can go 24 turns with each other for each message you send, up from about 3. When they reach it, the chat says so and how to reset it.
+- Grok and Muse keep their sessions ready between turns, so their next reply can start sooner.
+
+### Fixed
+- Pictures and videos a bot links in chat now open on your other PCs and your phone, even when saved outside the bot's folder.
+- Gemini workers no longer stop at the "trust this folder" question.
+- Clicking beside a long Description no longer jumps to the bottom of the text.
+- The reply timer keeps counting from your first message when you add more while a bot is replying.
+- Restarting Windows is no longer reported as Wink closing unexpectedly.
+- Worker panes keep their private message keys off the screen and out of notes.
+
 ## [1.0.233] - 2026-11-05
 
 ### Changed
@@ -602,6 +620,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.234]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.234
 [1.0.233]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.233
 [1.0.231]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.231
 [1.0.230]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.230
