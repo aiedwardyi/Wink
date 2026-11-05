@@ -1053,4 +1053,26 @@ describe("ProviderRegistry", () => {
     expect(closeAll).toHaveBeenCalledWith("exit", { final: true });
     expect(disposedAtClose).toEqual([["a"]]);
   });
+
+  it("a confirmed sign-out keeps a newer account barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      let confirm: (() => void) | undefined;
+      vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      vi.spyOn(registry.logins, "wait").mockImplementation(() => new Promise<void>((resolve) => { confirm = resolve; }));
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: false });
+      const signedOut = registry.signOut("a");
+      await vi.waitFor(() => expect(confirm).toBeDefined());
+      registry.invalidateAccount("a");
+      confirm!();
+      expect(await signedOut).toBe(true);
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
 });
