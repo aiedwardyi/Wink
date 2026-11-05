@@ -275,6 +275,7 @@ import {
   hostMatchesRemote,
   initRemoteAccess,
   originAllowedByRemote,
+  remoteCookieAuthorized,
   remoteCookieRefresh,
   remoteKeyMatches,
   remoteLinkUrl,
@@ -394,6 +395,8 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
+import { VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
@@ -5363,6 +5366,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
+      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -6305,6 +6309,7 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
+  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7114,6 +7119,19 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifySite = createVerifySite({
+  store,
+  resolveCommsCaller: (header) => commsCallers.resolve(header),
+  botOutputRoots,
+  autoVerdict,
+  isUnattended,
+  bridge: () => terminalBridgeAccess && verifyBridgeClient(terminalBridgeAccess),
+  broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
+  logDecision: (row) => appendDecision(DATA_DIR, row),
+  deviceId: () => profileSyncSettings.deviceId,
+  appToken: authorizedComms,
+  remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+});
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
@@ -7257,6 +7275,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)) {
       return json(res, 401, { error: "unauthorized" });
     }
+    const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
+    if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.
     if (method === "GET" && path === "/remote") {
       const provided = url.searchParams.get("key");
@@ -7273,6 +7293,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/team-report") {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
+      if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";
