@@ -5603,6 +5603,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
+      if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;
@@ -5610,7 +5611,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       markMailRead(store, threadId, mailParts, started.turnId ?? "");
       accountNote.commit();
       markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
-      store.markPaneNotesDelivered(bot.id, threadId, holdNotes ? undefined : newestPaneNoteId);
+      store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       boardTurnStarted(bot.id, threadId, started.turnId);
       if (currentTurnEpoch(bot.id) !== epoch) return;

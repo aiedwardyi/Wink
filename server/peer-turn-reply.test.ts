@@ -116,4 +116,17 @@ describe("peerTurnReplies", () => {
     next.release();
     expect(r.replies._live()).toBe(0);
   });
+
+  it("keeps a handoff's collection when a competing ask on its thread never starts", () => {
+    const r = rig();
+    const handoff = r.replies.start("wink");
+    const ask = r.replies.start("wink");
+    ask.release();
+    r.started("wink", "t1");
+    r.text("wink", "t1", "Yes, the ko check runs in the release gate.");
+    r.completed("wink", "t1");
+    expect(handoff.text()).toBe("Yes, the ko check runs in the release gate.");
+    expect(ask.text()).toBeUndefined();
+    expect(r.replies._live()).toBe(0);
+  });
 });

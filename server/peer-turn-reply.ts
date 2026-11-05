@@ -12,30 +12,31 @@ export interface PeerTurnReply {
 }
 
 export function peerTurnReplies(stale: (threadId: string, turnId: string | undefined) => boolean) {
-  const live = new Map<string, (event: RuntimeEvent) => void>();
+  const live = new Map<string, Set<(event: RuntimeEvent) => void>>();
   return {
-    /** Collects the next turn on `threadId`, replacing any older collection there. */
+    /** Collects the next turn on `threadId`. A competing ask that never starts leaves another collection there intact. */
     start(threadId: string): PeerTurnReply {
       const reply = ownTurnReply(stale);
       let text: string | undefined;
       let done = false;
+      const release = () => {
+        const observers = live.get(threadId);
+        if (observers?.delete(observe) && !observers.size) live.delete(threadId);
+      };
       const observe = (event: RuntimeEvent) => {
         if (done || (event.type === "item.completed" && event.itemType === "assistant_text" && event.summarized)) return;
         const step = reply.fold(event);
-        if (step === "completed") done = true;
-        else if (step) text = step.replace || text === undefined ? step.text : `${text}\n${step.text}`;
+        if (step === "completed") {
+          done = true;
+          release();
+        } else if (step) text = step.replace || text === undefined ? step.text : `${text}\n${step.text}`;
       };
-      live.set(threadId, observe);
-      return {
-        text: () => text,
-        release: () => {
-          if (live.get(threadId) === observe) live.delete(threadId);
-        },
-      };
+      live.set(threadId, (live.get(threadId) ?? new Set()).add(observe));
+      return { text: () => text, release };
     },
     observe(event: RuntimeEvent): void {
-      live.get(event.threadId)?.(event);
+      for (const observe of live.get(event.threadId) ?? []) observe(event);
     },
-    _live: () => live.size,
+    _live: () => [...live.values()].reduce((count, observers) => count + observers.size, 0),
   };
 }

@@ -19,7 +19,7 @@ const preparation = source.slice(source.indexOf("  const folded = currentTurnEpo
 const marker = "const started = await dispatchAdapterTurn(threadId, async () => {";
 const start = source.indexOf(marker) + marker.length;
 const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start)).replace("(base: string)", "(base)").replace("const late: string[]", "const late");
-const delivery = source.slice(source.indexOf("      // a deferred recycle's live session"), source.indexOf("      store.markReactionsDelivered", start));
+const delivery = source.slice(source.indexOf("      if (holdNotes) newestPaneNoteId = undefined;"), source.indexOf("      store.markReactionsDelivered", start));
 const runDispatch = new Function("scope", `with (scope) { return (async () => {${messaging}\n${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`);
 
 beforeEach(() => {
