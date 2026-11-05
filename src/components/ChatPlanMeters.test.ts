@@ -66,7 +66,7 @@ describe("ChatPlanMeters", () => {
   });
 
   it("keeps a weekly-only report and says the session window has no data", () => {
-    expect(line(render([{ id: "seven_day", usedPercent: 71, resetsAt: now + 53 * 3_600_000 }]))).toEqual({ first: "7d 29%", second: "5h no data" });
+    expect(line(render([{ id: "seven_day", usedPercent: 71, resetsAt: now + 53 * 3_600_000 }]))).toEqual({ first: "7d 29%", second: "5h No data" });
   });
 
   it("never renders a token readout", () => {

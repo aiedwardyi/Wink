@@ -72,7 +72,8 @@ describe("UsageSection", () => {
   it("never shows a token readout in settings or the chat strip", async () => {
     mockApi.mockImplementation(async (path) => path.startsWith("/api/usage/board") ? structuredClone(usageBoardFixture) : {});
     await mounted(async (host) => {
-      expect(host.querySelector("[data-usage-hero]")).not.toBeNull();
+      expect(host.querySelector("[data-account-bars]")).not.toBeNull();
+      expect(host.querySelector("[data-usage-hero]")).toBeNull();
       expect(host.textContent).not.toContain("↑");
       expect(host.textContent).not.toContain("↓");
     });

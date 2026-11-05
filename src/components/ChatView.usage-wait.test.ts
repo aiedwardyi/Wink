@@ -28,7 +28,7 @@ async function mount(locale: LocaleId, view?: UsageWaitView, onRetry?: () => voi
   return { host, render, reset, close: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
-const actions = (host: HTMLElement) => host.querySelectorAll<HTMLButtonElement>("button:not([data-engine-details]):not([data-all-usage])");
+const actions = (host: HTMLElement) => host.querySelectorAll<HTMLButtonElement>("button:not([data-all-usage])");
 
 it.each(["en", "ko"] as const)("renders every usage wait line in %s without duplicate rows", async (locale) => {
   const view = await mount(locale, base);
@@ -47,8 +47,7 @@ it.each(["en", "ko"] as const)("renders every usage wait line in %s without dupl
     await view.render({ ...base, state: "manual" });
     expect(view.host.textContent).toContain(translate(locale, "chat.usageWaitManual"));
     expect(actions(view.host)).toHaveLength(0);
-    expect(view.host.textContent).not.toContain("Provider detail");
-    await act(async () => view.host.querySelector<HTMLButtonElement>("[data-engine-details]")!.click());
+    expect(view.host.querySelector("[data-engine-details]")).toBeNull();
     expect(view.host.querySelector("[data-engine-details-body]")?.textContent).toBe("Provider detail");
     expect(view.host.textContent?.match(/Provider detail/g)).toHaveLength(1);
   } finally { await view.close(); }

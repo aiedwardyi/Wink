@@ -46,7 +46,9 @@ it("names accounts only and reports picks by id", async () => {
   await render();
   expect(picker().textContent).toBe("Claude 1");
   await act(async () => picker().click());
-  expect(items().map((item) => item.textContent)).toEqual(["Claude 1", "Claude 2", "Studio", "Claude 4"]);
+  expect(items().map((item) => item.textContent)).toEqual(["1Claude 1", "2Claude 2", "3Studio", "4Claude 4"]);
+  expect(items().map((item) => item.querySelector("[data-tile]")?.textContent)).toEqual(["1", "2", "3", "4"]);
+  expect(host.querySelector('[role="menu"] svg')).toBeNull();
   expect(items().map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false", "false", "false"]);
   await act(async () => items()[2]!.click());
   expect(picked).toEqual(["acct-3"]);
@@ -62,7 +64,7 @@ it("tags Main in the list in English and Korean", async () => {
     root = createRoot(host);
     await render(list);
     await act(async () => picker().click());
-    expect(items().map((item) => item.textContent)).toEqual(["Claude 1", `Claude 2${main}`, "Studio", "Claude 4"]);
+    expect(items().map((item) => item.textContent)).toEqual(["1Claude 1", `2Claude 2${main}`, "3Studio", "4Claude 4"]);
     expect(items()[1]!.getAttribute("aria-label")).toBe(`Claude 2 ${main}`);
   }
 });

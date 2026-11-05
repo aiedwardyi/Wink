@@ -77,23 +77,25 @@ function setMedia({ phone = false, coarse = phone, reduce = false }: { phone?: b
 
 const text = (node: Element | null | undefined) => (node?.textContent ?? "").replace(/\s+/g, " ").trim();
 const q = (selector: string) => host.querySelector(selector);
+const section = (engine: string) => q(`section[data-usage-engine="${engine}"]`);
 const row = (id: string) => q(`[data-account-row="${id}"]`);
 const useButton = (id: string) => row(id)?.querySelector<HTMLButtonElement>("button[data-use]") ?? null;
-const checkRow = () => q("[data-main-check]")?.closest("[data-account-row]")?.getAttribute("data-account-row") ?? null;
+const checkRow = (engine = "claude") => section(engine)?.querySelector("[data-main-check]")?.closest("[data-account-row]")?.getAttribute("data-account-row") ?? null;
 const boardGets = () => server.calls.filter((call) => call.startsWith("GET /api/usage/board"));
 const mainPosts = () => server.calls.filter((call) => call.startsWith("POST /api/accounts/"));
-const heroName = () => text(q("[data-hero-name]"));
-const heroLeft = () => text(q("[data-hero-left]"));
-const verdict = () => text(q("[data-verdict]"));
+const heroName = (engine = "claude") => text(section(engine)?.querySelector("[data-hero-name]"));
+const left = (id: string, slot = "session") => text(row(id)?.querySelector(`[data-window="${slot}"] [data-left]`));
+const who = (id: string) => [...row(id)?.querySelector("[data-account-who]")?.children ?? []].map((node) => text(node)).join(" ");
+const slots = (id: string) => [...row(id)?.querySelector("[data-account-bars]")?.children ?? []].map((node) => node.getAttribute("aria-label")?.split(":")[0]);
+const HIDDEN = '[data-usage-hero], [data-hero-left], [data-verdict], [data-projection], [data-usage-chart], [data-trace], [data-chart-fold], [data-today-normal], [data-details], [role="tablist"], [role="tab"], [data-usage-event]';
 const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
 const click = async (node: Element | null | undefined) => {
   expect(node, "control to click").toBeTruthy();
   await act(async () => { (node as HTMLElement).click(); await vi.advanceTimersByTimeAsync(0); });
 };
-const tab = (engine: string) => q(`[role="tab"][data-engine="${engine}"]`);
-const picker = () => q('[data-usage-hero] button[aria-haspopup="menu"]');
+const picker = (engine = "claude") => section(engine)?.querySelector('button[aria-haspopup="menu"]') ?? null;
 const menuItems = () => [...host.querySelectorAll('[role="menuitemradio"]')];
-const menuName = (item: Element) => text(item.querySelector("span"));
+const menuName = (item: Element) => text(item.querySelector("span:not([data-tile])"));
 async function pick(name: string) {
   await click(picker());
   await click(menuItems().find((item) => menuName(item) === name));
@@ -103,7 +105,11 @@ async function pick(name: string) {
 async function client() {
   const load = clientModules["../lib/usage-board-client.ts"];
   expect(load, "usage board client module").toBeDefined();
-  return await load!() as { usageBoardFrame: (revision: number) => void; usageBoardReconnected: () => void };
+  return await load!() as {
+    usageBoardFrame: (revision: number) => void;
+    usageBoardReconnected: () => void;
+    usageBoardState: () => { board: UsageBoard | null };
+  };
 }
 
 async function mount({ phone = false, coarse = phone, locale = "en", reduce = false }: { phone?: boolean; coarse?: boolean; locale?: "en" | "ko"; reduce?: boolean } = {}) {
@@ -165,6 +171,7 @@ afterEach(async () => {
   if (host?.isConnected) await unmount();
   document.body.replaceChildren();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 // Points every 5 minutes ending at `end`, used % climbing by `rate` per minute.
@@ -197,7 +204,7 @@ describe("Usage desk", () => {
       scans.push(label);
       expect(scanForCanary(canary), label).toEqual([]);
     };
-    expect(picker(), "hero account selector").not.toBeNull();
+    expect(picker(), "engine account selector").not.toBeNull();
     scan("closed");
     for (const node of host.querySelectorAll("button, [tabindex]")) {
       await act(async () => {
@@ -213,13 +220,17 @@ describe("Usage desk", () => {
     scan("open picker");
     await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     scan("closing picker");
-    await click(q("button[data-details]"));
-    scan("details fold");
+    await pick("Studio");
+    scan("picked account");
+    const counts = [...host.querySelectorAll("button[data-bot-count]")];
+    expect(counts.length).toBeGreaterThan(0);
+    for (const count of counts) await click(count);
+    expect(counts.map((count) => count.getAttribute("aria-expanded"))).toEqual(counts.map(() => "true"));
+    scan("bot names");
     await click(useButton(CLAUDE_3));
     expect(q('[role="alert"]')).not.toBeNull();
     scan("error");
-    expect(q('[data-usage-event="auto"]')).not.toBeNull();
-    scan("receipts");
+    expect(q("[data-usage-event]")).toBeNull();
     expect(scans).toHaveLength(7);
   });
 
@@ -233,9 +244,10 @@ describe("Usage desk", () => {
     expect(text(row(CLAUDE_3)?.querySelector("[data-tile]"))).toBe("3");
     expect(text(row(CLAUDE_2)?.querySelector("[data-account-name]"))).toBe("Claude 2");
     expect(text(row("claude")?.querySelector("[data-account-name]"))).toBe("Claude 1");
+    expect([...section("claude")?.querySelectorAll("[data-account-row]") ?? []].map((node) => node.getAttribute("data-account-row"))).toEqual([CLAUDE_3, "claude", CLAUDE_2]);
     await click(picker());
     expect(menuItems().map(menuName)).toEqual(["Studio", "Claude 1", "Claude 2"]);
-    expect(menuItems().map(text)).toEqual(["Studio", "Claude 1Main", "Claude 2"]);
+    expect(menuItems().map(text)).toEqual(["3Studio", "1Claude 1Main", "2Claude 2"]);
     const all = text(host);
     expect(all).not.toContain("Account 1");
     expect(all).not.toContain(CLAUDE_3);
@@ -271,7 +283,9 @@ describe("Usage desk", () => {
     await act(async () => { read.resolve(confirmed); await vi.advanceTimersByTimeAsync(0); });
     expect(checkRow()).toBe(CLAUDE_3);
     expect(text(host)).not.toContain("Switching...");
-    expect(text(q('[data-usage-event="main"]'))).toContain("Claude Main changed: Claude 1 -> Studio.");
+    expect(text(row(CLAUDE_3)?.querySelector("[data-main-check]"))).toBe("Main");
+    expect(useButton("claude")).not.toBeNull();
+    expect(q("[data-usage-event]")).toBeNull();
   });
 
   it("sends one Main request per engine while one is pending", async () => {
@@ -283,7 +297,8 @@ describe("Usage desk", () => {
     expect(mainPosts()).toEqual([`POST /api/accounts/${encodeURIComponent(CLAUDE_3)}/default`]);
     await pick("Claude 2");
     expect(heroName()).toBe("Claude 2");
-    await click(tab("codex"));
+    expect(mainPosts()).toHaveLength(1);
+    expect(section("codex")?.contains(useButton(CODEX_2) ?? null)).toBe(true);
     await click(useButton(CODEX_2));
     expect(mainPosts()).toHaveLength(2);
     expect(mainPosts()[1]).toBe(`POST /api/accounts/${encodeURIComponent(CODEX_2)}/default`);
@@ -317,12 +332,12 @@ describe("Usage desk", () => {
     await act(async () => { post.resolve({}); await vi.advanceTimersByTimeAsync(0); });
     expect(checkRow()).toBe(CLAUDE_3);
     expect(heroName()).toBe("Claude 2");
-    expect(heroLeft()).toBe("0%");
+    expect(left(CLAUDE_2, "week")).toBe("0%");
   });
 
   it("drops a board reply whose revision is not higher (equal and out of order)", async () => {
     await mount();
-    expect(heroLeft()).toBe("34%");
+    expect(left("claude")).toBe("34%");
     const { usageBoardFrame } = await client();
     const reply = (revision: number, used: number) => {
       const board = fresh();
@@ -333,21 +348,23 @@ describe("Usage desk", () => {
     server.board = reply(42, 90);
     await act(async () => { usageBoardFrame(43); await vi.advanceTimersByTimeAsync(0); });
     expect(boardGets()).toHaveLength(2);
-    expect(heroLeft()).toBe("34%");
+    expect(left("claude")).toBe("34%");
     server.board = reply(40, 95);
     await act(async () => { usageBoardFrame(44); await vi.advanceTimersByTimeAsync(0); });
-    expect(heroLeft()).toBe("34%");
+    expect(left("claude")).toBe("34%");
     server.board = reply(45, 50);
     await act(async () => { usageBoardFrame(45); await vi.advanceTimersByTimeAsync(0); });
-    expect(heroLeft()).toBe("50%");
+    expect(left("claude")).toBe("50%");
   });
 
   it("upserts a partial board and drops a removed account", async () => {
     await mount();
-    const points = () => Number(q("[data-trace]")?.getAttribute("data-points"));
-    const before = points();
+    const { usageBoardFrame, usageBoardState } = await client();
+    const shown = () => usageBoardState().board?.engines.find((engine) => engine.base === "claude");
+    const fine = () => shown()?.accounts.find((account) => account.id === "claude")?.history.fine ?? [];
+    const before = fine().length;
     expect(before).toBeGreaterThan(0);
-    const { usageBoardFrame } = await client();
+    expect(left("claude")).toBe("34%");
     const partial = fresh();
     partial.revision = 43;
     partial.full = false;
@@ -361,9 +378,12 @@ describe("Usage desk", () => {
     server.board = partial;
     await act(async () => { usageBoardFrame(43); await vi.advanceTimersByTimeAsync(0); });
     expect(boardGets().at(-1)).toBe("GET /api/usage/board?cursor=fixture-42");
-    expect(points()).toBe(before + 1);
-    expect(q('[data-usage-event="main"]')).not.toBeNull();
-    expect(text(q('[data-usage-event="moved"]'))).toContain("MIRA-2");
+    expect(fine().slice(-2)).toEqual([[last, 66, 41], [last + 5, 67, 41]]);
+    expect(fine()).toHaveLength(Math.min(before + 1, 288));
+    expect(shown()?.events.map((event) => event.kind)).toEqual(["limit", "auto", "main", "reset", "moved"]);
+    expect(shown()?.events.at(-1)).toMatchObject({ kind: "moved", label: "MIRA-2" });
+    expect(left("claude")).toBe("33%");
+    expect(q("[data-usage-event]")).toBeNull();
     await pick("Studio");
     expect(heroName()).toBe("Studio");
     const full = fresh();
@@ -419,10 +439,10 @@ describe("Usage desk", () => {
     expect(q("[data-usage-desk]"), "shell paints before the board").not.toBeNull();
     expect(text(q("[data-empty-state]"))).toBe(i18n.translate("en", "usage.desk.loading" as never));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(heroLeft()).toBe("34%");
+    expect(left("claude")).toBe("34%");
     await unmount();
     await mount();
-    expect(heroLeft(), "cached board on the first frame").toBe("34%");
+    expect(left("claude"), "cached board on the first frame").toBe("34%");
     expect(q("[data-empty-state]")).toBeNull();
   });
 
@@ -471,13 +491,15 @@ describe("Usage desk", () => {
     });
     server.board = await board.read();
     await mount();
-    expect(text(q('[data-reset="session"]'))).toContain("Resets in 1h");
-    expect(text(q('[data-reset="week"]'))).toContain("Resets in 7d");
-    expect(text(q('[data-reset="session"]'))).not.toContain("No data");
-    expect(text(q('[data-reset="week"]'))).not.toContain("No data");
+    expect(row("codex")?.querySelector('[data-window="session"]')?.getAttribute("aria-label")).toBe("5h: 76% left, Resets in 1 hour");
+    expect(row("codex")?.querySelector('[data-window="week"]')?.getAttribute("aria-label")).toBe("7d: 60% left, Resets in 7 days");
+    expect(text(q('[data-reset="session"]'))).toBe("(1h)");
+    expect(text(q('[data-reset="week"]'))).toBe("(7d)");
+    expect(row("codex")?.querySelector("[data-window-empty]")).toBeNull();
+    expect(text(row("codex"))).not.toContain("No data");
   });
 
-  it("forecasts only under the pace rules", async () => {
+  it("shows the 5h bar and no forecast under every pace case", async () => {
     const now = usageBoardNow;
     const cases: Array<[string, UsageBoard, string]> = [
       ["exactly 10 min before reset", paceBoard({ resetsAt: now + 50 * MIN }, trail(now, 13, 80, 0.5)), "Lasts to reset"],
@@ -500,24 +522,67 @@ describe("Usage desk", () => {
       await reload();
       server.board = board;
       await mount();
-      expect(verdict(), name).toBe(expected);
-      if (name === "past reset") expect(heroLeft(), name).not.toBe("100%");
-      if (name === "11 min before reset") expect(q("[data-projection]"), name).not.toBeNull();
-      if (expected !== "Runs out ~3:40 PM" && expected !== "Lasts to reset") expect(q("[data-projection]"), name).toBeNull();
+      expect(q("[data-verdict]"), name).toBeNull();
+      expect(q("[data-projection]"), name).toBeNull();
+      expect(text(host), name).not.toContain(expected);
+      if (name === "past reset") {
+        expect(left("claude"), name).toBe("");
+        expect(row("claude")?.querySelector("[data-window-empty]")?.getAttribute("aria-label"), name).toBe("5h: Reset passed");
+      } else expect(left("claude"), name).toBe("20%");
+      expect(left("claude", "week"), name).toBe("90%");
       await unmount();
     }
   });
 
-  it("says Weekly only only with complete coverage", async () => {
+  it("says No data for a missing 5h whatever the coverage", async () => {
     await mount();
-    await click(tab("codex"));
-    expect(heroName()).toBe("Codex 1");
-    expect(text(q('[data-reset="session"]'))).toContain("Weekly only");
-    expect(text(tab("codex"))).toContain("7d 62%");
-    await click(tab("claude"));
-    await pick("Claude 2");
-    expect(text(q('[data-reset="session"]'))).toContain("No data");
-    expect(text(q('[data-reset="session"]'))).not.toContain("Weekly only");
+    expect(accountOf(server.board, "codex").coverage).toBe("complete");
+    expect(row("codex")?.querySelector("[data-window-empty]")?.getAttribute("aria-label")).toBe("5h: No data");
+    expect(left("codex", "week")).toBe("62%");
+    expect(accountOf(server.board, CLAUDE_2).coverage).toBe("unknown");
+    expect(row(CLAUDE_2)?.querySelector("[data-window-empty]")?.getAttribute("aria-label")).toBe("5h: No data");
+    expect(text(host)).not.toContain("Weekly only");
+  });
+
+  it.each([
+    [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
+  ] as const)("shows Today's bars, 5h then 7d, for every account (phone=%s, %s)", async (phone, locale) => {
+    await mount({ phone, locale });
+    const say = (key: Parameters<typeof i18n.translate>[1], vars?: Record<string, number>) => i18n.translate(locale, key, vars);
+    const [h5, d7, noData] = [say("usage.limits.sessionShort"), say("usage.limits.weeklyShort"), say("usage.desk.noData")];
+    const accounts = usageBoardFixture.engines.flatMap((engine) => engine.accounts.map((account) => ({ engine: engine.engine, account })));
+    for (const { engine, account } of accounts) {
+      const bars = row(account.id)?.querySelector("[data-account-bars]");
+      expect(bars, `${account.name} bars`).toBeTruthy();
+      expect(section(engine)?.contains(bars ?? null), `${account.name} under its engine`).toBe(true);
+      expect(slots(account.id), account.name).toEqual(engine === "gemini" ? [say("usage.limits.compactH", { hours: 24 })] : [h5, d7]);
+      if (locale === "en") expect(who(account.id), account.name).toMatch(/^\d+ bots? · /);
+    }
+    expect(host.querySelectorAll("[data-account-row]")).toHaveLength(accounts.length);
+    const empties = [...host.querySelectorAll("[data-window-empty]")];
+    expect(empties.map((node) => node.closest("[data-account-row]")?.getAttribute("data-account-row"))).toEqual([CLAUDE_2, "codex", "grok", "grok"]);
+    expect(empties.map((node) => node.getAttribute("aria-label"))).toEqual([`${h5}: ${noData}`, `${h5}: ${noData}`, `${h5}: ${noData}`, `${d7}: ${noData}`]);
+    const tree = (node: Element | undefined): string => node ? `${node.tagName}.${node.className}(${[...node.children].map(tree).join(",")})` : "";
+    for (const node of empties) {
+      expect(text(node)).toContain(noData);
+      expect(tree(node)).toBe(tree(empties[0]));
+    }
+    expect(empties[1]?.outerHTML).toBe(empties[0]?.outerHTML);
+    expect(empties[2]?.outerHTML).toBe(empties[0]?.outerHTML);
+    const week = row(CLAUDE_2)?.querySelector('[data-window="week"]');
+    expect(week?.querySelector("[data-cells]")?.getAttribute("data-cells")).toBe("0");
+    expect(week?.querySelector("[data-cells]")?.className).toMatch(/\btext-danger\b/);
+    expect(text(week?.querySelector("[data-left]"))).toBe("0%");
+    expect(text(week?.querySelector('[data-reset="week"]'))).toBe(locale === "en" ? "(5d2h)" : "(5일 2시간)");
+    expect(document.querySelector(HIDDEN)).toBeNull();
+    expect(text(host)).not.toContain(say("usage.desk.quota"));
+    const controls = [...host.querySelectorAll("[data-account-row] [data-main-check], [data-account-row] button[data-use]")];
+    expect(controls).toHaveLength(accounts.length);
+    for (const control of controls) {
+      expect(control.className).toContain("w-[4.5rem]");
+      expect(control.className).toMatch(/(^|\s)min-h-7(\s|$)/);
+    }
+    expect(host.querySelector("[data-account-row] svg.lucide-check")).toBeNull();
   });
 
   it("shows unknown workers apart from none", async () => {
@@ -526,14 +591,17 @@ describe("Usage desk", () => {
     for (const account of engineOf(board, "claude").accounts) account.workers = null;
     server.board = board;
     await mount();
-    expect(text(row("claude"))).toContain("Workers unknown");
-    expect(text(row("claude"))).not.toMatch(/\b0 workers\b/);
+    expect(who("claude")).toBe("2 bots · Workers unknown");
+    expect(who(CLAUDE_3)).toBe("0 bots · Workers unknown");
+    expect(who(CLAUDE_3)).not.toMatch(/\b0 workers\b/);
     await reload();
     server.board = fresh();
     await mount();
-    expect(text(row("claude"))).toContain("3 workers");
-    expect(text(row(CLAUDE_3))).not.toContain("Workers unknown");
-    expect(text(row(CLAUDE_3))).not.toMatch(/\b0 workers\b/);
+    expect(who("claude")).toBe("2 bots · 3 workers");
+    expect(who(CLAUDE_3)).toBe("0 bots · 0 workers");
+    expect(who(CLAUDE_3)).not.toContain("Workers unknown");
+    expect(text(row("claude"))).not.toContain("Atlas, Mira");
+    await click(row("claude")?.querySelector("button[data-bot-count]"));
     expect(text(row("claude"))).toContain("Atlas, Mira");
   });
 
@@ -554,55 +622,63 @@ describe("Usage desk", () => {
     board.engines.push(muse);
     server.board = board;
     await mount();
-    await click(q("button[data-details]"));
-    expect(text(q("[data-details-body]"))).toContain("Opus");
-    expect(text(q("[data-details-body]"))).toContain("25% left");
-    await click(tab("gemini"));
-    await click(q("button[data-details]"));
-    expect(text(q("[data-details-body]"))).toContain("24h");
-    expect(text(q("[data-details-body]"))).toContain("82% left");
-    // The daily window keeps no history: no pace line and no chart rather than "No recent data".
+    expect(slots("claude")).toEqual(["5h", "7d", "Opus 7d"]);
+    const opus = row("claude")?.querySelector('[data-window="seven_day_opus"]');
+    expect(opus?.getAttribute("aria-label")).toBe("Opus 7d: 25% left, Resets in 2 days");
+    expect(text(opus?.querySelector("[data-left]"))).toBe("25%");
+    expect(slots("gemini")).toEqual(["24h"]);
+    expect(row("gemini")?.querySelector('[data-window="daily"]')?.getAttribute("aria-label")).toBe("24h: 82% left, Resets in 9 hours");
+    expect(left("gemini", "daily")).toBe("82%");
     expect(q("[data-verdict]")).toBeNull();
-    expect(text(q("[data-usage-hero]"))).not.toContain("No history yet");
-    await click(tab("muse"));
-    expect(heroName()).toBe("Muse");
-    expect(text(q("[data-usage-hero]"))).toContain("Last seen 2h ago");
-    expect(q("[data-usage-hero]")?.hasAttribute("data-stale")).toBe(true);
-    expect(text(q("[data-usage-hero]"))).toContain("Limit reached.");
+    expect(text(host)).not.toContain("No history yet");
+    expect(text(section("muse")?.querySelector("[data-engine-name]"))).toBe("Muse");
+    expect(text(row("muse")?.querySelector("[data-account-name]"))).toBe("Muse");
+    expect(slots("muse")).toEqual(["5h", "7d"]);
+    expect(left("muse", "five_hour")).toBe("0%");
+    expect(row("muse")?.querySelector('[data-window="five_hour"] [data-cells]')?.className).toMatch(/\btext-danger\b/);
+    expect(left("muse", "seven_day")).toBe("39%");
+    expect(text(host)).not.toContain("Last seen");
+    expect(text(host)).not.toContain("Limit reached.");
+    expect(q("[data-stale]")).toBeNull();
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
   });
 
   it("keeps the last good board after a failed read", async () => {
     await mount();
-    expect(heroLeft()).toBe("34%");
+    expect(left("claude")).toBe("34%");
     server.reply = async () => { throw new Error("Not found"); };
     await act(async () => { (await client()).usageBoardFrame(43); await vi.advanceTimersByTimeAsync(0); });
-    expect(heroLeft()).toBe("34%");
+    expect(left("claude")).toBe("34%");
     expect(text(q("[data-board-status]"))).toBe(i18n.translate("en", "usage.desk.stale" as never));
     await unmount();
     vi.resetModules();
     i18n = await import("@/lib/i18n");
     await mount();
     expect(text(q("[data-empty-state]"))).toBe(i18n.translate("en", "usage.desk.unavailable" as never));
-    expect(q("[data-hero-left]")).toBeNull();
+    expect(q("[data-account-row]")).toBeNull();
   });
 
   it("inspects another account without a Main request", async () => {
     await mount();
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    const animated = vi.spyOn(Element.prototype, "animate");
     await pick("Studio");
     expect(heroName()).toBe("Studio");
-    expect(heroLeft()).toBe("40%");
+    expect(scrolled.mock.contexts.at(-1)).toBe(row(CLAUDE_3));
+    expect(scrolled).toHaveBeenLastCalledWith({ block: "nearest", behavior: "smooth" });
+    expect(animated.mock.contexts).toContain(row(CLAUDE_3));
+    expect(left(CLAUDE_3)).toBe("40%");
     expect(mainPosts()).toEqual([]);
     expect(checkRow()).toBe("claude");
     expect(menuItems()).toHaveLength(0);
   });
 
-  it("shows a fresh-worker receipt and keeps Main", async () => {
+  it("keeps Main through fresh-worker and moved events and shows no receipt lines", async () => {
     await mount();
-    expect(text(q('[data-usage-event="auto"]'))).toContain("Claude 2 ran out. New worker ATLAS-2 uses Claude 1.");
-    expect(text(q('[data-usage-event="auto"]'))).not.toContain("Main stays");
-    expect(text(q('[data-usage-event="main"]'))).toContain(
-      "Claude Main changed: Claude 2 -> Claude 1. Replies already resolved keep their account. Still running on Claude 2: MIRA-2.");
+    expect(checkRow()).toBe("claude");
+    expect(q("[data-usage-event]")).toBeNull();
+    expect(text(host)).not.toContain("ran out");
+    expect(text(host)).not.toContain("Main changed");
     await unmount();
     const board = fresh();
     engineOf(board, "claude").events.push(
@@ -613,23 +689,26 @@ describe("Usage desk", () => {
     vi.resetModules();
     i18n = await import("@/lib/i18n");
     await mount();
-    expect(text(q('[data-usage-event="auto"]'))).toContain("New worker ATLAS-3 uses Studio. Main stays Claude 1.");
-    expect(text(q('[data-usage-event="auto"]'))).not.toContain("ran out");
-    expect(text(q('[data-usage-event="moved"]'))).toContain("MIRA-2 resumed on Studio.");
-    expect(text(q('[data-usage-event="moved"]'))).not.toContain("Main");
     expect(checkRow()).toBe("claude");
+    expect(text(row("claude")?.querySelector("[data-main-check]"))).toBe("Main");
+    expect(mainPosts()).toEqual([]);
+    expect(q("[data-usage-event]")).toBeNull();
+    expect(text(host)).not.toContain("New worker");
+    expect(text(host)).not.toContain("resumed on");
     await unmount();
     vi.resetModules();
     i18n = await import("@/lib/i18n");
     await mount({ locale: "ko" });
-    expect(text(q('[data-usage-event="moved"]'))).toContain("MIRA-2");
-    expect(text(q('[data-usage-event="moved"]'))).toContain("Studio에서");
+    expect(checkRow()).toBe("claude");
+    expect(q("[data-usage-event]")).toBeNull();
+    expect(text(host)).not.toContain("Studio에서");
   });
 
-  it("omits Today vs normal without three comparable days", async () => {
+  it("never shows Today vs normal, with or without three comparable days", async () => {
     await mount();
-    await click(tab("codex"));
-    expect(q("[data-today-normal]")).not.toBeNull();
+    expect(slots("codex")).toEqual(["5h", "7d"]);
+    expect(q("[data-today-normal]")).toBeNull();
+    expect(text(host)).not.toMatch(/× normal|than normal today|About normal today/);
     await unmount();
     const board = fresh();
     const codex = accountOf(board, "codex");
@@ -638,23 +717,32 @@ describe("Usage desk", () => {
     vi.resetModules();
     i18n = await import("@/lib/i18n");
     await mount();
-    await click(tab("codex"));
     expect(q("[data-usage-desk]")).not.toBeNull();
+    expect(slots("codex")).toEqual(["5h", "7d"]);
     expect(q("[data-today-normal]")).toBeNull();
   });
 
   it("shows an account change at its own values and settles under reduced motion", async () => {
     await mount({ reduce: true });
-    expect(heroLeft()).toBe("34%");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    const animated = vi.spyOn(Element.prototype, "animate");
+    expect(left("claude")).toBe("34%");
     await pick("Studio");
-    expect(heroLeft()).toBe("40%");
+    expect(heroName()).toBe("Studio");
+    expect(left(CLAUDE_3)).toBe("40%");
+    expect(left("claude")).toBe("34%");
+    expect(scrolled.mock.contexts.at(-1)).toBe(row(CLAUDE_3));
+    expect(scrolled).toHaveBeenLastCalledWith({ block: "nearest", behavior: "auto" });
     await pick("Claude 1");
+    expect(scrolled.mock.contexts.at(-1)).toBe(row("claude"));
+    expect(animated.mock.contexts.filter((node) => node instanceof Element && node.hasAttribute("data-account-row"))).toEqual([]);
     const update = fresh();
     update.revision = 43;
     accountOf(update, "claude").windows[0]!.usedPercent = 70;
     server.board = update;
     await act(async () => { (await client()).usageBoardFrame(43); await vi.advanceTimersByTimeAsync(0); });
-    expect(heroLeft()).toBe("30%");
+    expect(left("claude")).toBe("30%");
+    expect(row("claude")?.querySelector('[data-window="session"] [data-cells]')?.getAttribute("data-cells")).toBe("3");
   });
 
   it.each(["en", "ko"] as const)("drops Refresh All, Used/Remaining and Alt+R in both languages (%s)", async (locale) => {
@@ -696,11 +784,14 @@ describe("Usage desk", () => {
     claude.accounts.push(...extra);
     server.board = board;
     await mount({ phone: true, locale: "ko" });
-    const rows = [...host.querySelectorAll("[data-account-row]")];
+    const rows = [...section("claude")?.querySelectorAll("[data-account-row]") ?? []];
     expect(rows).toHaveLength(8);
+    expect(rows[0]?.parentElement?.className).not.toMatch(/\bgrid-cols-2\b/);
     for (const node of rows) {
-      const use = node.querySelector("button[data-use]");
-      if (use) expect(use.className).toMatch(/\[@media\(pointer:coarse\)\]:min-h-11/);
+      const control = node.querySelector("button[data-use], [data-main-check]");
+      expect(control?.className).toContain("w-[4.5rem]");
+      expect(control?.className).toMatch(/\[@media\(pointer:coarse\)\]:after:-inset-y-2/);
+      expect(node.querySelector("[data-account-name]")?.className).toMatch(/\bmin-w-0\b.*\btruncate\b/);
       const names = node.querySelector("button[data-bot-count]");
       if (names) {
         expect(names.getAttribute("aria-expanded")).toBe("false");
@@ -710,7 +801,8 @@ describe("Usage desk", () => {
       }
     }
     for (const fact of host.querySelectorAll("[data-reset]")) expect(fact.className).not.toMatch(/\btruncate\b/);
-    expect(text(q('[data-reset="session"]'))).toMatch(/후 초기화/);
+    expect(q('[data-window="session"]')?.getAttribute("aria-label")).toMatch(/후 초기화$/);
+    expect(text(q('[data-reset="session"]'))).toBe("(40분)");
     expect(q("[data-usage-desk]")?.className).toMatch(/min-w-0/);
   });
 });

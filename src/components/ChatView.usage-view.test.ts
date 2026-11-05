@@ -57,12 +57,8 @@ const poke = async (node: Element) => act(async () => {
   node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
   (node as HTMLElement).focus();
 });
-const key = async (node: Element, name: string) => {
-  const down = new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true });
-  await act(async () => { node.dispatchEvent(down); });
-  if (!down.defaultPrevented && node instanceof HTMLButtonElement) await act(async () => node.click());
-  await settle();
-};
+const whoLine = (row: Element) => [...row.querySelector("[data-account-who]")?.children ?? []].map((node) => text(node)).join(" ");
+const HIDDEN = '[data-usage-hero], [data-hero-left], [data-verdict], [data-projection], [data-usage-chart], [data-trace], [data-chart-fold], [data-today-normal], [data-details], [role="tablist"], [role="tab"], [data-usage-event]';
 
 function setMedia(phone: boolean) {
   window.matchMedia = ((query: string) => ({
@@ -95,6 +91,17 @@ function viewport(width: number, height: number): Viewport {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
   Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
   return vv;
+}
+
+function seatMeter(vv: Viewport) {
+  const rect = Element.prototype.getBoundingClientRect;
+  const meterTop = () => vv.offsetTop + vv.height - 132;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    if (!this.closest("[data-usage-meter]")) return rect.call(this);
+    const top = meterTop();
+    return { x: 0, y: top, top, bottom: top + 28, left: 0, right: vv.width, width: vv.width, height: 28, toJSON: () => ({}) } as DOMRect;
+  });
+  return meterTop;
 }
 
 function instancesFor(board: UsageBoard): InstanceInfo[] {
@@ -219,23 +226,16 @@ describe("chat usage meter, quick view and wait card", () => {
       scan("open quick view");
       for (const node of quick()!.querySelectorAll("button, [tabindex]")) await poke(node);
       scan("quick view hover and focus");
-      await click(quick()!.querySelector("[data-chart-fold]"));
-      scan("chart fold");
+      expect(quick()!.querySelector("[data-chart-fold], [data-usage-hero]"), "no chart fold or hero").toBeNull();
       for (const count of quick()!.querySelectorAll("button[data-bot-count]")) await click(count);
       scan("names");
-      const picker = quick()!.querySelector('button[aria-haspopup="menu"]');
-      if (picker) {
-        await click(picker);
-        scan("open picker");
-        await click(picker);
-        scan("closing picker");
-      }
+      expect(quick()!.querySelector('button[aria-haspopup="menu"]'), "no picker in the quick view").toBeNull();
       await click(quick()!.querySelector(`[data-account-row="${CLAUDE_3}"] button[data-use]`));
       expect(quick()!.querySelector('[role="alert"]'), "failed Main save").not.toBeNull();
       scan("failed Main save");
       const card = q("[data-usage-wait]");
       expect(card, "wait card").not.toBeNull();
-      await click(card!.querySelector("[data-engine-details]"));
+      expect(card!.querySelector("[data-engine-details]"), "no details toggle").toBeNull();
       expect(card!.querySelector("[data-engine-details-body]"), "engine details").not.toBeNull();
       scan("engine details");
       await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
@@ -244,7 +244,7 @@ describe("chat usage meter, quick view and wait card", () => {
       scan("closed");
       await unmount();
     }
-    expect(scans.length).toBeGreaterThanOrEqual(4 * 9);
+    expect(scans).toHaveLength(4 * 8);
   });
 
   it("puts the binding fact first and paints today's values before the first board read", async () => {
@@ -358,18 +358,82 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(footer.isConnected && footer.contains(quick()!.querySelector("[data-quick-close]")), "a roomy view keeps Close in its header").toBe(false);
   });
 
+  it("keeps 48 px of the last message on a short phone, with no 120 px floor", async () => {
+    const vv = viewport(390, 844);
+    const meterTop = seatMeter(vv);
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { phone: true });
+    await click(meter());
+    expect(quick(), "quick view").not.toBeNull();
+    for (const height of [300, 260]) {
+      await vv.resize(height);
+      const room = meterTop() - 6 - 48;
+      const max = parseFloat(quick()!.style.maxHeight);
+      expect(room, `${height}`).toBeLessThan(120);
+      expect(max, `${height}: the room above the last message`).toBe(room);
+      expect(meterTop() - max, `${height}: 48 px of the last message`).toBeGreaterThanOrEqual(47.5);
+      expect(quick()!.querySelector("[data-all-usage]"), `${height}: All usage`).not.toBeNull();
+    }
+  });
+
+  it.each([
+    [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
+  ] as const)("shows Today's bars for every account of the chat's engine (phone=%s, %s)", async (phone, locale) => {
+    seatMeter(viewport(phone ? 390 : 1280, phone ? 844 : 800));
+    const say = (key: Parameters<Mods["i18n"]["translate"]>[1], vars?: Record<string, number>) => m.i18n.translate(locale, key, vars);
+    const [h5, d7, noData] = [say("usage.limits.sessionShort"), say("usage.limits.weeklyShort"), say("usage.desk.noData")];
+    const empties: string[] = [];
+    for (const engine of server.board.engines.filter((each) => each.accounts.some((account) => account.windows.length > 0))) {
+      await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone, locale });
+      await click(meter());
+      const view = quick();
+      expect(view, `${engine.engine} quick view`).not.toBeNull();
+      const rows = [...view?.querySelectorAll("[data-account-row]") ?? []];
+      expect(rows.map((node) => node.getAttribute("data-account-row")), engine.engine).toEqual(engine.accounts.map((account) => account.id));
+      for (const node of rows) {
+        const name = text(node.querySelector("[data-account-name]"));
+        const bars = node.querySelector("[data-account-bars]");
+        expect(bars, `${name} bars`).toBeTruthy();
+        expect([...bars?.children ?? []].map((bar) => bar.getAttribute("aria-label")?.split(":")[0]), name)
+          .toEqual(engine.engine === "gemini" ? [say("usage.limits.compactH", { hours: 24 })] : [h5, d7]);
+        if (locale === "en") expect(whoLine(node), name).toMatch(/^\d+ bots? · /);
+        const control = node.querySelector("[data-main-check], button[data-use]");
+        expect(control?.className, name).toContain("w-[4.5rem]");
+        expect(control?.className, name).toMatch(/(^|\s)min-h-7(\s|$)/);
+        expect(node.querySelector("svg.lucide-check"), name).toBeNull();
+      }
+      for (const empty of view?.querySelectorAll("[data-window-empty]") ?? []) {
+        expect(empty.getAttribute("aria-label")).toBe(`${h5}: ${noData}`);
+        expect(text(empty)).toContain(noData);
+        empties.push(empty.outerHTML);
+      }
+      if (engine.engine === "claude") {
+        const week = view?.querySelector(`[data-account-row="${CLAUDE_2}"] [data-window="week"]`);
+        expect(week?.querySelector("[data-cells]")?.getAttribute("data-cells")).toBe("0");
+        expect(week?.querySelector("[data-cells]")?.className).toMatch(/\btext-danger\b/);
+        expect(text(week?.querySelector("[data-left]"))).toBe("0%");
+        expect(text(week?.querySelector('[data-reset="week"]'))).toBe(locale === "en" ? "(5d2h)" : "(5일 2시간)");
+      }
+      expect(view?.querySelector(HIDDEN), `${engine.engine} hero or chart`).toBeNull();
+      expect(text(view)).not.toContain(say("usage.desk.quota"));
+      expect(text(view?.querySelector("[data-all-usage]"))).toContain(say("usage.chat.allUsage"));
+      await unmount();
+    }
+    expect(empties).toHaveLength(2);
+    expect(empties[1]).toBe(empties[0]);
+  });
+
   it("shows the reset of a binding window that keeps no history, with no empty chart fold", async () => {
     await mount(makeBot("bot-juno", "Juno", "gemini"));
     await click(meter());
     const view = quick();
     expect(view, "quick view").not.toBeNull();
-    const extra = view!.querySelector("[data-reset=\"extra\"]");
-    expect(text(extra), "the daily reset line").toMatch(/Resets in/);
+    expect(view!.querySelector("[data-window=\"daily\"]")?.getAttribute("aria-label"), "the daily bar").toMatch(/Resets in/);
+    expect(text(view!.querySelector("[data-reset=\"daily\"]")), "the daily reset").toBe("(9h)");
     expect(view!.querySelector("[data-chart-fold]"), "no fold over an empty chart").toBeNull();
     expect(view!.querySelector("[data-empty-state]"), "no empty chart message").toBeNull();
   });
 
-  it("reaches both groups of one driver from the Settings ticker and in All usage", async () => {
+  it("reaches both groups of one driver in Settings, each under its own header", async () => {
     const board = fresh();
     const claude = board.engines[0]!;
     const twin = structuredClone(claude);
@@ -381,14 +445,14 @@ describe("chat usage meter, quick view and wait card", () => {
     server.board = board;
     const instances = instancesFor(board).map((each) => each.instanceId === "claude-work" ? { ...each, displayName: "Claude work" } : each);
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, instances });
-    const tabs = () => [...document.querySelectorAll<HTMLButtonElement>("[role=\"tab\"]")];
-    expect(tabs()).toHaveLength(board.engines.length);
-    expect(text(tabs()[1]), "the twin tab names its instance").toContain("Claude work");
-    await click(tabs()[1]);
-    expect(tabs().map((tab) => tab.getAttribute("aria-selected"))).toEqual(board.engines.map((_, i) => String(i === 1)));
-    expect(q("[data-usage-hero]")?.getAttribute("aria-label"), "the twin group in All usage").toBe("Claude Work 1");
-    await click(tabs()[0]);
-    expect(q("[data-usage-hero]")?.getAttribute("aria-label"), "the first group again").toBe("Claude 1");
+    const sections = [...document.querySelectorAll("[data-usage-desk]:not([data-usage-quick]) section[data-usage-engine]")];
+    expect(sections.map((section) => section.getAttribute("data-usage-engine"))).toEqual(board.engines.map((engine) => engine.engine));
+    expect(q("[role=\"tab\"]")).toBeNull();
+    expect(text(sections[0]?.querySelector("[data-engine-name]")), "the first group").toBe("Claude");
+    expect(text(sections[1]?.querySelector("[data-engine-name]")), "the twin header names its instance").toBe("Claude work");
+    expect(text(sections[1]?.querySelector("[data-account-row=\"claude-work\"] [data-account-name]")), "the twin group in All usage").toBe("Claude Work 1");
+    expect(sections[0]?.querySelector("[data-account-row=\"claude-work\"]")).toBeNull();
+    expect(text(sections[0]?.querySelector("[data-account-row=\"claude\"] [data-account-name]")), "the first group keeps its own").toBe("Claude 1");
   });
 
   it("counts bots instead of cutting their names to a stub", async () => {
@@ -407,17 +471,16 @@ describe("chat usage meter, quick view and wait card", () => {
 
   it.each(["en", "ko"] as const)("names the window a row has no data for (%s)", async (locale) => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true, locale });
-    const expected = locale === "en" ? "5h no data" : "5시간 미확인";
-    const settings = q(`[data-usage-section] [data-account-row="${CLAUDE_2}"], [data-account-row="${CLAUDE_2}"]`);
-    expect(text(settings), "Settings row").toContain(expected);
+    const expected = locale === "en" ? "5h: No data" : "5시간: 데이터 없음";
+    const settings = q(`[data-usage-desk]:not([data-usage-quick]) [data-account-row="${CLAUDE_2}"] [data-window-empty]`);
+    expect(settings?.getAttribute("aria-label"), "Settings row").toBe(expected);
+    expect(text(settings)).toContain(locale === "en" ? "No data" : "데이터 없음");
     await click(meter());
     const row = quick()!.querySelector(`[data-account-row="${CLAUDE_2}"]`);
-    expect(text(row), "quick view row").toContain(expected);
-    expect(text(row)).not.toMatch(locale === "en" ? /0%s*No data/ : /0%s*데이터 없음/);
-    const fact = [...row!.querySelectorAll("span")].find((node) => text(node) === expected);
-    expect(fact?.parentElement?.className, "the facts column keeps each fact on one line").toContain("whitespace-nowrap");
-    expect(fact?.parentElement?.className, "at its fixed width, so names and the spark keep their room").toContain("w-[4.5rem]");
-    expect(fact?.parentElement?.className).not.toContain("min-w-[4.5rem]");
+    const empty = row?.querySelector("[data-window-empty]");
+    expect(empty?.getAttribute("aria-label"), "quick view row").toBe(expected);
+    expect(text(row)).not.toMatch(locale === "en" ? /0%\s*No data/ : /0%\s*데이터 없음/);
+    expect(empty?.outerHTML, "one empty state on both surfaces").toBe(settings?.outerHTML);
   });
 
   it("keeps the board quiet through an equal pane poll", async () => {
@@ -451,7 +514,7 @@ describe("chat usage meter, quick view and wait card", () => {
     await settle();
     expect(text(q("[data-meter-name]"))).toBe("Codex 1");
     expect(text(q("[data-meter-first]"))).toBe("7d 62%");
-    expect(text(q("[data-meter-second]"))).toBe("Weekly only");
+    expect(text(q("[data-meter-second]"))).toBe("5h No data");
     await show(makeBot("bot-atlas", "Atlas", "claude"));
     await settle();
     expect(text(q("[data-meter-name]"))).toBe("Claude 1");
@@ -496,6 +559,7 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(card, "wait card").not.toBeNull();
     const all = card!.querySelector("[data-all-usage]");
     expect(all, "All usage").not.toBeNull();
+    expect(text(all)).toBe(locale === "en" ? "All usage in Settings" : "설정의 전체 사용량");
     expect(text(card)).toContain(m.i18n.translate(locale, "chat.cancelQueuedAction"));
     const labels = [...card!.querySelectorAll("button")].filter((button) => !button.hasAttribute("data-all-usage"))
       .map((button) => `${text(button)} ${button.getAttribute("aria-label") ?? ""}`);
@@ -507,29 +571,19 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(store.state.appSettingsSection).toBe("usage");
   });
 
-  it("keeps engine details readable by touch and keyboard", async () => {
+  it("keeps engine details readable without a toggle", async () => {
     const raw = `Rate limited for ${canary.address} on ${canary.domain}. Try again later.`;
     await mount(makeBot("bot-atlas", "Atlas", "claude", [limitMessage(raw, waiting)]));
     const card = q("[data-usage-wait]");
     expect(card, "wait card").not.toBeNull();
-    const details = card!.querySelector<HTMLButtonElement>("[data-engine-details]");
-    expect(details?.tagName).toBe("BUTTON");
-    expect(details!.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => { details!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })); });
-    await click(details);
-    expect(details!.getAttribute("aria-expanded")).toBe("true");
+    expect(card!.querySelector("[data-engine-details]")).toBeNull();
+    expect(card!.querySelector("[aria-expanded]")).toBeNull();
     const body = card!.querySelector("[data-engine-details-body]");
     expect(text(body)).toContain("Rate limited for");
     expect(text(body)).toContain("Try again later.");
-    await click(details);
-    expect(details!.getAttribute("aria-expanded")).toBe("false");
-    details!.focus();
-    expect(document.activeElement).toBe(details);
-    await key(details!, "Enter");
-    expect(details!.getAttribute("aria-expanded")).toBe("true");
-    await key(details!, " ");
-    expect(details!.getAttribute("aria-expanded")).toBe("false");
-    await key(details!, "Enter");
+    await act(async () => { card!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })); });
+    expect(card!.querySelector("[data-engine-details-body]"), "still shown after a touch").toBe(body);
+    expect(text(card!.querySelector("[data-all-usage]"))).toBe("All usage in Settings");
     const titles = [...document.querySelectorAll("[title]")].map((node) => node.getAttribute("title") ?? "");
     expect(titles.filter((title) => title.includes("Rate limited"))).toEqual([]);
     expect(scanForCanary(canary)).toEqual([]);
