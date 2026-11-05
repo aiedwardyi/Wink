@@ -21,6 +21,10 @@ import { Tile } from "./UsageDesk";
 const LINE = "flex min-h-9 items-center [@media(pointer:coarse)]:min-h-11";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
 
+function signInPending(account: UsageAccount): boolean {
+  return !accountReady(account) && (account.loginState === "pending" || (!account.loginState && account.accountState === "pending"));
+}
+
 export function ConnectionRow({ mark, label, actions, children }: { mark?: ReactNode; label: ReactNode; actions?: ReactNode; children?: ReactNode }) {
   return (
     <div className="min-w-0 break-keep text-[12px] text-ink-secondary">
@@ -160,21 +164,28 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const { t } = useI18n();
   const { board } = useUsageBoard();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
+  useEffect(() => {
+    if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
+      && signInPending(account))) setError(null);
+  }, [accounts, error]);
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
+    const signInIds = accounts.filter(signInPending).map((account) => account.instanceId);
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       if (sourceId) body = await api(`/api/accounts/${encodeURIComponent(sourceId)}/destination`);
       await api(path, { method: "POST", body: JSON.stringify(body) });
       await reload();
     } catch (error) {
-      setError(error instanceof Error && error.message === "No ready account can take over this profile"
-        ? t("accounts.noDestination") : safeProviderText(error instanceof Error ? error.message : "", accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"));
+      const message = error instanceof Error ? error.message : "";
+      setError({ message: message === "No ready account can take over this profile"
+        ? t("accounts.noDestination") : safeProviderText(message, accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"),
+        signInIds: ["Sign-in is already in progress", "Another sign-in for this engine is still running"].includes(message) ? signInIds : [] });
     }
     finally { setBusy(false); }
   };
@@ -197,7 +208,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
             reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
         );
       })}
-      {error && <div role="alert" className="pl-7 text-[12px] text-danger">{error}</div>}
+      {error && <div role="alert" className="pl-7 text-[12px] text-danger">{error.message}</div>}
     </div>
   );
 }
