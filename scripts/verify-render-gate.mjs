@@ -12,15 +12,22 @@ import { prepareVerifyProbe } from "../electron/verify-probe-bootstrap.mjs";
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const scratch = path.join(os.tmpdir(), "wink-lv0-host");
 fs.mkdirSync(scratch, { recursive: true });
-const probe = prepareVerifyProbe({ app, root: fs.mkdtempSync(path.join(scratch, "render-")) });
+const requestedRoot = app.commandLine.getSwitchValue("verify-probe-root");
+const probe = prepareVerifyProbe({ app, root: requestedRoot || fs.mkdtempSync(path.join(scratch, "render-")) });
 const output = path.join(probe.root, "render.json");
-const report = { versions: process.versions, root: probe.root, cases: [], pick: null, errors: [] };
+const resolverRules = app.commandLine.getSwitchValue("host-resolver-rules");
+const childSpike = process.argv.includes("--s11-child");
+const report = { versions: process.versions, root: probe.root, resolverRules, childSpike, paths: probe.paths, cases: [], pick: null, errors: [] };
 const checkS11 = process.argv.includes("--s11");
 const nonce = randomUUID().replaceAll("-", "");
 let canaryPort = 0;
 const canaryHits = [];
 let finishing = false;
 const owned = new Set();
+
+function startup(name) {
+  process.stdout.write(JSON.stringify({ marker: name, pid: process.pid, uptimeMs: process.uptime() * 1000 }) + "\n");
+}
 
 function writeReport() {
   fs.writeFileSync(output, JSON.stringify(report, null, 2) + "\n");
@@ -228,6 +235,10 @@ async function renderCase(mode, origin) {
     await send("Emulation.setFocusEmulationEnabled", { enabled: true });
     await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false, scale: 1 });
     const version = await send("Browser.getVersion");
+    if (!report.guardedReadyMs) {
+      report.guardedReadyMs = process.uptime() * 1000;
+      startup("guarded-ready");
+    }
     if (mode === "inactive") win.showInactive();
     phase(mode + ":load");
     await bounded(contents.loadURL(`${origin}/render.html`));
@@ -299,7 +310,9 @@ async function renderCase(mode, origin) {
         unapprovedDns: escapes.map((event) => ({ type: types.get(event.type), phase: event.phase, params: event.params })),
         systemTasks, logPath, sanitized,
       };
-      result.s11.pass = result.s11.dnsPositive && controlHits > 0 && !observedHits && !escapes.length && !systemTasks.length;
+      result.s11.speculative = escapes.filter((event) => event.type === netlog.constants.logEventTypes.HOST_RESOLVER_MANAGER_REQUEST && event.params?.is_speculative).length;
+      const instrumentation = childSpike ? !result.s11.dnsPositive && Boolean(control.error) : result.s11.dnsPositive;
+      result.s11.pass = instrumentation && controlHits > 0 && !observedHits && !escapes.length && !systemTasks.length;
     }
     return result;
   } finally {
@@ -311,7 +324,12 @@ async function renderCase(mode, origin) {
 const deadline = setTimeout(() => fatal(new Error("Render gate exceeded 60 s")), 60_000);
 phase("await-ready");
 app.whenReady().then(async () => {
+  report.appReadyMs = process.uptime() * 1000;
+  startup("app-ready");
   phase("ready");
+  if (childSpike && (resolverRules !== "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" || app.commandLine.getSwitchValue("user-data-dir") !== probe.paths.userData)) {
+    throw new Error("S11 child requires exact resolver rules and its own user-data-dir");
+  }
   if (!app.requestSingleInstanceLock()) throw new Error("Scratch probe instance lock unavailable");
   const origin = await fixtureServer();
   if (checkS11) {
