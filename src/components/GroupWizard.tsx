@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, useStore, type Bot } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
+import { pickerInstances } from "@/lib/cross-model-picker";
 import { BotPickerList } from "./BotPickerList";
 import {
   WIZARD_BOT_NAME_LIMIT,
@@ -204,12 +205,10 @@ export function NewBotRow({
   const nameRef = useRef<HTMLInputElement>(null);
   const [nameInvalid, setNameInvalid] = useState(false);
   const preferKinds = PREFERS[Math.min(preferIndex, PREFERS.length - 1)]!;
-  const pick: EnginePick | null = row.instanceId
-    ? (() => {
-      const instance = instances.find((x) => x.instanceId === row.instanceId) ?? null;
-      return instance ? { instance, substituted: false } : null;
-    })()
-    : (suggestEngine(instances, preferKinds) ?? null);
+  const instance = pickerInstances(instances).find((x) => x.instanceId === row.instanceId);
+  const pick: EnginePick | null = instance
+    ? { instance, substituted: false }
+    : suggestEngine(instances, preferKinds);
   const preferKind = preferKinds[0]!;
   const showSubstituted = !!pick?.substituted && instances.some((i) => i.driverKind === preferKind);
   const engineOptions = wizardEngineOptions(instances, pick?.instance ?? null);

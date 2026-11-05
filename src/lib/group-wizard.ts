@@ -2,21 +2,22 @@
 // naming, and the create payloads. No React, no I/O — unit-tested below.
 import type { InstanceInfo } from "@/state/store";
 import { isRetiredEngineKind } from "../../shared/model-selection.ts";
+import { pickerInstances } from "./cross-model-picker";
 
 /** An engine row the host can actually run a turn on. */
 export function isEngineConnected(instance: InstanceInfo): boolean {
   return instance.snapshot.state === "available" && instance.snapshot.authenticated !== false;
 }
 
-/** Engine dropdown options: connected instances minus retired kinds. The
- * current pick stays selectable via the unshift fallback. */
+/** Keep disconnected current engines selectable, excluding account copies. */
 export function wizardEngineOptions(
   instances: InstanceInfo[],
   current: InstanceInfo | null,
 ): InstanceInfo[] {
-  const connected = instances
+  const connected = pickerInstances(instances)
     .filter(isEngineConnected)
     .filter((i) => !isRetiredEngineKind(i.driverKind));
+  current = current ? pickerInstances([current])[0] ?? null : null;
   if (current && !isRetiredEngineKind(current.driverKind) && !connected.some((i) => i.instanceId === current.instanceId)) {
     return [current, ...connected];
   }
@@ -66,7 +67,7 @@ export function suggestEngine(
   preferKinds: readonly string[],
   excludeInstanceIds?: ReadonlySet<string>,
 ): EnginePick | null {
-  const open = instances.filter((i) => isEngineConnected(i) && !isRetiredEngineKind(i.driverKind) && !excludeInstanceIds?.has(i.instanceId));
+  const open = pickerInstances(instances).filter((i) => isEngineConnected(i) && !isRetiredEngineKind(i.driverKind) && !excludeInstanceIds?.has(i.instanceId));
   for (const kind of preferKinds) {
     const hit = open.find((i) => i.driverKind === kind);
     if (hit) return { instance: hit, substituted: false };

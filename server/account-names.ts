@@ -95,7 +95,7 @@ export function createAccountNames(dataDir: string): AccountNames {
         const engine = engineOf(row);
         const previous = Object.hasOwn(accounts, row.id) ? accounts[row.id] : undefined;
         if (previous) {
-          if (previous.generation !== row.generation) accounts[row.id] = { engine, number: previous.number, generation: row.generation };
+          if (previous.generation !== row.generation) accounts[row.id] = { ...previous, generation: row.generation };
           continue;
         }
         const used = new Set(Object.values(accounts).filter((entry) => entry.engine === engine).map((entry) => entry.number));
