@@ -8,7 +8,9 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { handle } from "./agents-proxy.ts";
 
 const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));
 
@@ -309,6 +311,18 @@ afterAll(async () => {
 });
 
 describe("agents-proxy MCP surface", () => {
+  it("answers the handshake through the exported handler", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await handle({ id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } });
+      expect(write).toHaveBeenCalledWith(`${JSON.stringify({ jsonrpc: "2.0", id: 1, result: {
+        protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "opengrokbot-agents", version: "0.1.0" },
+      } })}\n`);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("answers the MCP handshake and lists the tool surface", async () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05" });
     expect(init.result.serverInfo.name).toContain("agents");
@@ -456,6 +470,26 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("Call request_credential with openaiImageApiKey");
     const empty = await callTool("generate_image", { prompt: " " });
     expect(empty.result.content[0].text).toContain("needs a prompt");
+  });
+
+  it("advertises multipart uploads and forwards the form to the key broker", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "call_api");
+    expect(tool.description).toContain("For file uploads (multipart), pass form with fields and files (absolute paths inside your working folder).");
+    expect(tool.inputSchema.properties.form).toMatchObject({
+      type: "object",
+      properties: {
+        fields: { type: "object", additionalProperties: { type: "string" } },
+        files: { type: "array", items: {
+          type: "object", required: ["field", "path"],
+          properties: { field: { type: "string" }, path: { type: "string" }, filename: { type: "string" }, content_type: { type: "string" } },
+        } },
+      },
+    });
+    const form = { fields: { model: "asr" }, files: [{ field: "audio", path: "/proj/speech.m4a", filename: "voice.m4a", content_type: "audio/mp4" }] };
+    await callTool("call_api", { credential_id: "xaiApiKey", method: "POST", url: "https://api.x.ai/v1/chat", form });
+    expect(lastCallApiBody.form).toEqual(form);
+    expect(lastCallApiBody).not.toHaveProperty("body");
   });
 
   it("calls an API through the harness key broker", async () => {

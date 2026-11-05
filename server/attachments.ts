@@ -129,12 +129,11 @@ export function sniffImageMime(bytes: Buffer): string | null {
   return null;
 }
 
-/** Copy a bot's local image into the store; the original path is never served.
- * UNC and device paths are refused before any fs call: resolving one can block the event loop on a network share. */
-export function importLocalImage(path: string, roots: readonly string[]): SavedAttachment & { name: string } {
+// Reject network paths before fs access, which can block on a share.
+export function resolveLocalFile(path: string, roots: readonly string[], kind = "file"): { path: string; size: number } {
   const fail = (status: number, msg: string) => Object.assign(new Error(msg), { status });
   const folders = roots.join(", ") || "none set";
-  const outside = `${path}: image must be inside your project or workspace folder (${folders}); save it there first`;
+  const outside = `${path}: ${kind} must be inside your project or workspace folder (${folders}); save it there first`;
   const missing = `${path}: file not found`;
   if (/^[\\/]{2}/.test(path)) throw fail(403, outside);
   if (!isAbsolute(path)) throw fail(400, `${path}: path must be absolute, inside ${folders}`);
@@ -164,6 +163,12 @@ export function importLocalImage(path: string, roots: readonly string[]): SavedA
     if ((e as { status?: number }).status) throw e;
     throw fail(404, missing);
   }
+  return { path: real, size };
+}
+
+export function importLocalImage(path: string, roots: readonly string[]): SavedAttachment & { name: string } {
+  const { path: real, size } = resolveLocalFile(path, roots, "image");
+  const fail = (status: number, msg: string) => Object.assign(new Error(msg), { status });
   if (size === 0) throw fail(400, "empty image");
   if (size > IMAGE_MAX_BYTES) throw fail(413, `image exceeds ${IMAGE_MAX_BYTES} bytes`);
   const bytes = readFileSync(real);
