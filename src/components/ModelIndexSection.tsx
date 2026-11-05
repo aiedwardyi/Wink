@@ -400,6 +400,7 @@ function Scatter({
   const hi = scores.length ? Math.max(...scores) : 100;
   const pad = (hi - lo) * 0.1 || 1;
   const baseY = linearTicks(Math.max(0, lo - pad), Math.min(PERCENT.has(index) ? 100 : Infinity, hi + pad), 5);
+  // Screen-top zoom offsets start at the high end of the score domain.
   const [y0, y1] = zoomRange(baseY.domain, 1 - zoom.y - 1 / zoom.scale, zoom.scale);
   const yTicks = zoom.scale === 1 ? baseY.ticks : linearTicks(y0, y1, 5).ticks.filter((tick) => tick >= y0 && tick <= y1);
   const y = (score: number) => bottom - ((score - y0) / (y1 - y0)) * (bottom - top);

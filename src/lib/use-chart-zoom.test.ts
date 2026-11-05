@@ -76,4 +76,29 @@ describe("useChartZoom", () => {
     touch("touchmove", [[0, 100], [300, 100]]);
     expect(frames).toHaveLength(1);
   });
+
+  it("resets a zoomed double-tap when its second tap moves 3 px", () => {
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(host.querySelector("svg")!.getAttribute("data-scale")).toBe("2");
+    touch("touchstart", [[200, 100]]);
+    touch("touchend", []);
+    touch("touchstart", [[200, 100]]);
+    touch("touchmove", [[203, 100]]);
+    touch("touchend", []);
+    expect(host.querySelector("svg")!.getAttribute("data-scale")).toBe("1");
+  });
+
+  it.each(["close", "index"])("clears a painted pinch when interrupted by %s", async (change) => {
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    act(() => frames[0]!(16));
+    const svg = host.querySelector("svg")!;
+    const line = host.querySelector("[data-mi-live-lines]")!;
+    expect(svg.hasAttribute("data-mi-gesture")).toBe(true);
+    expect(line.getAttribute("transform")).toContain("matrix(2");
+    await act(async () => root.render(createElement(Chart, change === "close" ? { enabled: false } : { index: "b" })));
+    expect({ gesture: svg.hasAttribute("data-mi-gesture"), transform: line.getAttribute("transform") }).toEqual({ gesture: false, transform: null });
+  });
 });

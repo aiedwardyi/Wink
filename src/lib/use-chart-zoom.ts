@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { FULL_ZOOM, doubleTapZoom, panZoom, zoomAt, type ChartSpot, type ChartZoom } from "./chart-zoom";
-import { PHONE_QUERY, SWIPE_MOTION_MS, SWIPE_SPRING, hapticTick, lockAxis, reducedMotion, swipeBlocked, swipeStep, type SwipeAxis } from "./phone-swipe";
+import { FULL_ZOOM, doubleTapZoom, inZoom, panZoom, zoomAt, type ChartSpot, type ChartZoom } from "./chart-zoom";
+import { PHONE_QUERY, SWIPE_MOTION_MS, SWIPE_SLOP, SWIPE_SPRING, hapticTick, lockAxis, reducedMotion, swipeBlocked, swipeStep, type SwipeAxis } from "./phone-swipe";
 
 type Plot = { left: number; right: number; top: number; bottom: number };
 type Drag = { start: ChartSpot; last: ChartSpot; time: number; velocity: number; axis: SwipeAxis; pan: boolean; blocked: boolean };
@@ -69,7 +69,7 @@ export function useChartZoom(
       for (const dot of dots) {
         const x = Number(dot.dataset.miX), y = Number(dot.dataset.miY);
         dot.style.transform = `translate(${left + (x - next.x) * next.scale * (right - left)}px, ${top + (y - next.y) * next.scale * (bottom - top)}px)`;
-        dot.style.opacity = x >= next.x && x <= next.x + 1 / next.scale && y >= next.y && y <= next.y + 1 / next.scale ? "1" : "0";
+        dot.style.opacity = inZoom(next, { x, y }) ? "1" : "0";
       }
       for (const label of labels) label.style.transform = `translate(${Number(label.dataset.miX) * scale + dx}px, ${Number(label.dataset.miY) * scale + dy}px)`;
       for (const line of lines) line.setAttribute("transform", `matrix(${scale} 0 0 ${scale} ${dx} ${dy})`);
@@ -137,7 +137,7 @@ export function useChartZoom(
       const spot = point(first);
       const dx = spot.x - drag.start.x;
       drag.axis ??= lockAxis(dx, spot.y - drag.start.y);
-      if (drag.pan || drag.axis === "x") {
+      if (drag.pan ? moving || distance(drag.start, spot) >= SWIPE_SLOP : drag.axis === "x") {
         if (e.cancelable) e.preventDefault();
         suppress.current = true;
         tap = null;
@@ -162,7 +162,7 @@ export function useChartZoom(
       const ended = drag;
       drag = null;
       settle();
-      if (ended.axis === null && distance(ended.start, ended.last) < 10) {
+      if (ended.axis === null && distance(ended.start, ended.last) < SWIPE_SLOP) {
         if (tap && e.timeStamp - tap.time < 300 && distance(tap.point, ended.last) < 24) {
           if (e.cancelable) e.preventDefault();
           suppress.current = true;
@@ -189,6 +189,8 @@ export function useChartZoom(
     el.addEventListener("click", onClick, true);
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      for (const line of lines) line.removeAttribute("transform");
+      el.removeAttribute("data-mi-gesture");
       el.removeEventListener("touchstart", onStart);
       el.removeEventListener("touchmove", onMove);
       el.removeEventListener("touchend", onEnd);

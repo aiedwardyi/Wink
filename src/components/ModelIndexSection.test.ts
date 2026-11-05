@@ -795,4 +795,20 @@ describe("full screen chart", () => {
     tap();
     expect(svg().getAttribute("data-mi-zoom")).toBe("1");
   });
+
+  it("opens a zoomed dot tooltip after 3 px of finger jitter", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+    const [x, y] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number);
+    touch("touchstart", [[x!, y!]]);
+    touch("touchmove", [[x! + 3, y!]]);
+    touch("touchend", []);
+    act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x! + 3, clientY: y! })));
+    expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+  });
 });
