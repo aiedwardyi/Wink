@@ -368,6 +368,17 @@ describe("warm pool", () => {
     expect(small.reserve("t2", "museAgent")).not.toBe("denied");
   });
 
+  it("an adopted prepare that never becomes ready expires", () => {
+    const { pool, reserve, pass } = fixture();
+    const stuck = asLease(reserve("t1"));
+    expect(pool.take(key("t1"), "fp", captured, undefined)).toEqual({ pending: stuck });
+    pass(60_000);
+    expect(stuck.signal.aborted).toBe(false);
+    pass(60_000);
+    expect(stuck.signal.aborted).toBe(true);
+    expect(pool.take(key("t1"), "fp", captured, undefined)).toBe("miss");
+  });
+
   it("a same-key replace is not denied by its own closing child", () => {
     const small = fixture();
     small.mem.total = 6 * GiB;
