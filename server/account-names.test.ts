@@ -131,17 +131,19 @@ describe("account names", () => {
     expect(f.names.get(second.id)?.number).toBe(3);
   });
 
-  it("keeps the number and clears the nickname when the sign-in changes generation", async () => {
+  it("keeps the number and nickname when the sign-in changes generation", async () => {
     const f = fixture();
     const account = await f.accounts.add("claude");
     f.sync();
     f.names.setNickname(account.id, "Studio");
     await f.accounts.identify(account.id, "fixture-identity");
     f.sync();
-    expect(f.names.get(account.id)).toMatchObject({ number: 2, nickname: null, name: "Claude 2" });
+    expect(f.names.get(account.id)).toMatchObject({ number: 2, nickname: "Studio", name: "Studio" });
     f.names.setNickname("claude", "PC");
     f.names.sync(f.accounts.list().map((row) => row.id === "claude" ? { ...row, generation: 1 } : row));
-    expect(f.names.get("claude")).toMatchObject({ number: 1, nickname: null, name: "Claude 1" });
+    expect(f.names.get("claude")).toMatchObject({ number: 1, nickname: "PC", name: "PC" });
+    expect(JSON.parse(readFileSync(f.file, "utf8")).accounts[account.id].generation).toBe(2);
+    expect(createAccountNames(f.dir).get("claude")).toMatchObject({ number: 1, nickname: "PC", name: "PC" });
   });
 
   it("refuses too-long, control, format, @, colon and quote characters", () => {
