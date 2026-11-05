@@ -21,6 +21,10 @@ import { Tile } from "./UsageDesk";
 const LINE = "flex min-h-9 items-center [@media(pointer:coarse)]:min-h-11";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
 
+function signInPending(account: UsageAccount): boolean {
+  return !accountReady(account) && (account.loginState === "pending" || (!account.loginState && account.accountState === "pending"));
+}
+
 export function ConnectionRow({ mark, label, actions, children }: { mark?: ReactNode; label: ReactNode; actions?: ReactNode; children?: ReactNode }) {
   return (
     <div className="min-w-0 break-keep text-[12px] text-ink-secondary">
@@ -161,13 +165,14 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const [error, setError] = useState<{ message: string; signInIds: string[] } | null>(null);
   useEffect(() => {
     if (error?.signInIds.length && !accounts.some((account) => error.signInIds.includes(account.instanceId)
-      && !accountReady(account) && (account.loginState === "pending" || !account.loginState && account.accountState === "pending"))) setError(null);
+      && signInPending(account))) setError(null);
   }, [accounts, error]);
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object, sourceId?: string) => {
     if (busy) return;
+    const signInIds = accounts.filter(signInPending).map((account) => account.instanceId);
     setBusy(true);
     setError(null);
     try {
@@ -176,10 +181,9 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       await reload();
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      const signInIds = ["Sign-in is already in progress", "Another sign-in for this engine is still running"].includes(message)
-        ? accounts.filter((account) => !accountReady(account) && (account.loginState === "pending" || !account.loginState && account.accountState === "pending")).map((account) => account.instanceId) : [];
       setError({ message: message === "No ready account can take over this profile"
-        ? t("accounts.noDestination") : safeProviderText(message, accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"), signInIds });
+        ? t("accounts.noDestination") : safeProviderText(message, accounts.map((account) => account.snapshot.account)) || t("engines.didntFinish"),
+        signInIds: ["Sign-in is already in progress", "Another sign-in for this engine is still running"].includes(message) ? signInIds : [] });
     }
     finally { setBusy(false); }
   };
