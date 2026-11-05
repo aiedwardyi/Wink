@@ -567,7 +567,7 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
       };
       const prepareSession = async (shape: PrepareTurn, captured: Captured) => {
         if (active.has(shape.threadId)) return;
-        const lease = pool.reserve(keyFor(shape.threadId), warmFingerprint(eligibility(shape, captured)), captured, "speculative");
+        const lease = pool.reserve(keyFor(shape.threadId), warmFingerprint(eligibility(shape, captured)), captured, "speculative", { focus: true });
         if (typeof lease === "string") return;
         const cwd = shape.cwd ?? config.workspace ?? homedir();
         await prepareLease(lease, cwd, async (host, request) => {
@@ -671,7 +671,9 @@ export function createMspDriver(support: MspSupport): ProviderDriver<MspMuseConf
           active.delete(threadId);
           throw new Error("a turn is already running on this thread");
         }
-        const taken = cancelled ? "miss" : own !== "miss" ? own : pool.take(keyFor(HANDSHAKE), handshakeFingerprint(), capture(""), undefined);
+        const shake = cancelled || (typeof own === "object" && "hit" in own) ? "miss" : pool.take(keyFor(HANDSHAKE), handshakeFingerprint(), capture(""), undefined);
+        if (typeof own === "object" && "pending" in own && typeof shake === "object") own.pending.release("handshake first");
+        const taken = cancelled ? "miss" : typeof shake === "object" ? shake : own !== "miss" ? own : shake;
         claimed = typeof taken === "object" ? ("hit" in taken ? taken.hit : taken.pending) : null;
         let host: Host | null = typeof taken === "object" && "hit" in taken ? (hosts.get(taken.hit) ?? null) : null;
         if (host && !host.alive()) {

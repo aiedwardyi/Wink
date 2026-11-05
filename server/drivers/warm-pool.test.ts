@@ -67,6 +67,84 @@ const asLease = (lease: Lease | "busy" | "denied") => {
 };
 
 describe("warm pool", () => {
+  it("a matching guess joins a kept session without marking it", () => {
+    const { pool, reserve } = fixture();
+    const kept = ready(reserve("t1"));
+    expect(pool.reserve(key("t1"), "fp", captured, "speculative", { focus: true })).toBe(kept.lease);
+    expect(pool.reserve(key("t1"), "other", captured, "speculative", { focus: true })).toBe("busy");
+    expect(kept.child.close).not.toHaveBeenCalled();
+  });
+
+  it("an offer drops guesses rather than being refused", () => {
+    const { pool, reserve } = fixture();
+    const kept = ready(reserve("kept"));
+    pool.take(key("kept"), "fp", captured, undefined);
+    const guesses = ["t1", "t2"].map((id) => ready(pool.reserve(key(id), "fp", captured, "speculative", { focus: true })));
+    expect(pool.offer(kept.lease)).toBe(true);
+    for (const guess of guesses) expect(guess.child.close).toHaveBeenCalledWith("yield");
+    expect(kept.child.close).not.toHaveBeenCalled();
+  });
+
+  it("a reserve under the floor counts guess memory and drops guesses", () => {
+    const { pool, mem } = fixture();
+    const guess = ready(pool.reserve(key("guess"), "fp", captured, "speculative", { focus: true }), child({ kind: "fresh" }, 2 * GiB));
+    mem.free = 4 * GiB;
+    expect(typeof pool.reserve(key("retained"), "fp", captured, "speculative")).toBe("object");
+    expect(guess.child.close).toHaveBeenCalledWith("yield");
+  });
+
+  it("unknown guess memory never admits a reserve below the floor", () => {
+    const { pool, mem } = fixture();
+    const guess = ready(pool.reserve(key("guess"), "fp", captured, "speculative", { focus: true }));
+    mem.free = 4 * GiB;
+    expect(pool.reserve(key("retained"), "fp", captured, "speculative")).toBe("denied");
+    expect(guess.child.close).not.toHaveBeenCalled();
+    expect(pool.reserve(key("other", "museAgent"), "fp", captured, "speculative", { focus: true })).toBe("denied");
+  });
+
+  it.each([false, true])("memory pressure evicts guesses first (pending %s)", (pending) => {
+    const { pool, reserve, mem, pass } = fixture();
+    const kept = ready(reserve("kept"), child({ kind: "fresh" }, 2 * GiB));
+    const lease = asLease(pool.reserve(key("guess"), "fp", captured, "speculative", { focus: true }));
+    const guessed = child({ kind: "fresh" }, GiB);
+    lease.attach(guessed);
+    if (!pending) lease.ready();
+    mem.free = 4 * GiB;
+    pass(60_000);
+    expect(guessed.close).toHaveBeenCalledWith("memory");
+    expect(kept.child.close).not.toHaveBeenCalled();
+  });
+
+  it("a taken guess is kept like any session", () => {
+    const { pool } = fixture();
+    const guess = ready(pool.reserve(key("guess"), "fp", captured, "speculative", { focus: true }));
+    expect(pool.take(key("guess"), "fp", captured, undefined)).toEqual({ hit: guess.lease });
+    expect(pool.offer(guess.lease)).toBe(true);
+    expect(pool.reserve(key("guess"), "other", captured, "speculative", { focus: true })).toBe("busy");
+    expect(guess.child.close).not.toHaveBeenCalled();
+  });
+
+  it.each([[32, 16, false], [7, 16, true], [8, 4, true], [8, 5, false]])("smallerPc follows memory %i GiB and %i CPUs", (total, cpus, expected) => {
+    const { pool } = fixture({ totalmem: () => total * GiB, cpus: () => cpus });
+    expect(pool.smallerPc()).toBe(expected);
+  });
+
+  it("a guess never replaces a kept session", () => {
+    const { pool, reserve } = fixture();
+    const kept = ready(reserve("t1"));
+    expect(pool.reserve(key("t1"), "other", captured, "speculative", { focus: true })).toBe("busy");
+    expect(kept.child.close).not.toHaveBeenCalled();
+    expect(pool.take(key("t1"), "fp", captured, undefined)).toEqual({ hit: kept.lease });
+  });
+
+  it("a retain reserve drops guesses rather than being denied", () => {
+    const { pool } = fixture();
+    const guesses = ["t1", "t2"].map((id) => ready(pool.reserve(key(id), "fp", captured, "speculative", { focus: true })));
+    const retained = pool.reserve(key("t3"), "fp", captured, "speculative");
+    expect(typeof retained).toBe("object");
+    for (const guess of guesses) expect(guess.child.close).toHaveBeenCalledWith("yield");
+  });
+
   it("concurrent reserves take the cap before spawning", () => {
     const { reserve } = fixture();
     const first = [reserve("t1"), reserve("t2"), reserve("t3")];

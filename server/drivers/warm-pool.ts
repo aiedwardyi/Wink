@@ -33,6 +33,7 @@ type Kind = "speculative" | "handshake";
 type Entry = {
   lease: Lease;
   kind: Kind;
+  focus?: boolean;
   state: "pending" | "idle" | "taken" | "closing";
   ready: boolean;
   stale: boolean;
@@ -113,6 +114,7 @@ export class WarmPool {
   }
 
   setLiveTurns(probe: () => boolean) { this.liveTurns = probe; }
+  smallerPc() { return this.smaller(); }
 
   /** The pool's own generation for an instance; Captured uses it when the account has none. */
   generation(key: Pick<WarmKey, "engine" | "instanceId">): number {
@@ -120,7 +122,7 @@ export class WarmPool {
   }
 
   /** A same-key reserve joins a pending lease; every caller that got it releases once. `pendingMs` bounds a prepare that never becomes ready. */
-  reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number } = {}): Lease | "busy" | "denied" {
+  reserve(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, opts: { pendingMs?: number; focus?: boolean } = {}): Lease | "busy" | "denied" {
     if (this.final) return "denied";
     const existing = this.byKey.get(keyOf(key));
     if (existing?.state === "taken") return "busy";
@@ -129,11 +131,15 @@ export class WarmPool {
       if (existing.state === "pending") existing.holders += 1;
       return existing.lease;
     }
+    if (existing && opts.focus && !existing.focus) return "busy";
     if (existing) this.drop(existing, "replaced");
     const among = [...this.entries].filter((entry) => entry !== existing);
-    if (kind === "speculative" && !this.admits(key.engine, among)) return "denied";
-    if (kind === "speculative" && this.freemem() < this.floor()) return "denied";
-    return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS);
+    if (kind === "speculative" && !this.admitsOver(key.engine, among, opts.focus === true)) return "denied";
+    if (kind === "speculative" && this.freemem() < this.floor()) {
+      if (opts.focus || this.freemem() + this.guessRss(among) < this.floor()) return "denied";
+      this.dropGuesses(among);
+    }
+    return this.add(key, fingerprint, captured, kind, opts.pendingMs ?? PENDING_TTL_MS, opts.focus === true);
   }
 
   take(key: WarmKey, fingerprint: string, captured: Captured, resumeCursor: unknown): { hit: Lease } | { pending: Lease } | "busy" | "miss" {
@@ -151,6 +157,7 @@ export class WarmPool {
     }
     entry.state = "taken";
     entry.cursor = { value: resumeCursor };
+    entry.focus = false;
     return entry.ready ? { hit: entry.lease } : { pending: entry.lease };
   }
 
@@ -163,7 +170,7 @@ export class WarmPool {
     const others = [...this.entries].filter((other) => other !== entry);
     const ok = entry.state === "taken" && entry.ready && !entry.stale && !this.final
       && entry.child?.alive() === true && entry.generation === this.generation(lease.key) && !this.held(lease.key)
-      && (entry.kind === "handshake" || this.admits(lease.key.engine, others));
+      && (entry.kind === "handshake" || this.admitsOver(lease.key.engine, others, false));
     if (!ok) {
       this.drop(entry, "refused");
       return false;
@@ -237,7 +244,7 @@ export class WarmPool {
     return { reserved: pending + idle + closing, pending, idle, closing, byEngine, ...(measured ? { rssMiB: Math.round(rss / 1024 ** 2) } : {}) };
   }
 
-  private add(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, pendingMs: number): Lease {
+  private add(key: WarmKey, fingerprint: string, captured: Captured, kind: Kind, pendingMs: number, focus = false): Lease {
     const controller = new AbortController();
     let entry!: Entry;
     const close = (reason: string) => {
@@ -283,7 +290,7 @@ export class WarmPool {
         close(reason);
       },
     };
-    entry = { lease, kind, state: "pending", ready: false, stale: false, generation: this.generation(key), idleSince: 0, since: this.now(), pendingMs, holders: 1, close };
+    entry = { lease, kind, focus, state: "pending", ready: false, stale: false, generation: this.generation(key), idleSince: 0, since: this.now(), pendingMs, holders: 1, close };
     this.entries.add(entry);
     this.byKey.set(keyOf(key), entry);
     this.startSweep();
@@ -330,6 +337,21 @@ export class WarmPool {
   private smaller() { return this.totalmem() < 8 * GiB || this.cpus() <= 4; }
   private floor() { return Math.max(1.5 * GiB, 0.15 * this.totalmem()); }
 
+  private admitsOver(engine: string, among: Entry[], focus: boolean) {
+    if (this.admits(engine, among)) return true;
+    if (focus || !this.admits(engine, among.filter((entry) => !entry.focus))) return false;
+    this.dropGuesses(among);
+    return true;
+  }
+
+  private dropGuesses(among: Entry[]) {
+    for (const entry of among) if (entry.focus && (entry.state === "idle" || entry.state === "pending")) this.drop(entry, "yield");
+  }
+
+  private guessRss(among: Entry[]) {
+    return among.reduce((sum, entry) => sum + (entry.focus && entry.child ? this.treeRss(entry.child) ?? 0 : 0), 0);
+  }
+
   private admits(engine: string, among = [...this.entries]) {
     if (this.paused || this.final) return false;
     const held = among.filter((entry) => entry.state !== "taken");
@@ -371,9 +393,9 @@ export class WarmPool {
     let short = this.floor() - this.freemem();
     if (short <= 0) return;
     const idle = [...this.entries]
-      .filter((entry) => entry.state === "idle" && entry.child)
+      .filter((entry) => entry.child && (entry.state === "idle" || (entry.focus && entry.state === "pending")))
       .map((entry) => ({ entry, rss: this.treeRss(entry.child!) ?? 0 }))
-      .sort((a, b) => b.rss - a.rss);
+      .sort((a, b) => Number(b.entry.focus === true) - Number(a.entry.focus === true) || b.rss - a.rss);
     for (const { entry, rss } of idle) {
       if (short <= 0) break;
       this.drop(entry, "memory");
