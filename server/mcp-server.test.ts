@@ -312,11 +312,11 @@ describe("MCP tool execution", () => {
     }, fetcher)).rejects.toThrow("Wink did not return the renamed task");
   });
 
-  it("searches with encoded, bounded parameters", async () => {
+  it.each([undefined, 100])("searches with encoded parameters and limit %s", async (limit) => {
     const fetcher = vi.fn(async () => ({ hits: [{ messageId: "m1" }] }));
-    const result: any = await handleToolCall("search_messages", { query: "release notes", task_id: "task-1", limit: 100 }, fetcher);
-    expect(fetcher).toHaveBeenCalledWith("/api/search?q=release+notes&limit=100&threadId=task-1");
-    expect(result.hits).toHaveLength(1);
+    const result: any = await handleToolCall("search_messages", { query: "release notes", task_id: "task-1", ...(limit ? { limit } : {}) }, fetcher);
+    expect(fetcher).toHaveBeenCalledWith(`/api/search?q=release+notes&limit=${limit ?? 40}&threadId=task-1`);
+    expect(result).toEqual({ hits: [{ messageId: "m1" }] });
   });
 
   it("requires an exact available model and hands a busy bot's pick to the server", async () => {
