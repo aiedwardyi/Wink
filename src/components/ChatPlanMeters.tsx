@@ -143,10 +143,10 @@ function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = ""
           open && "bg-raised-hover", reading?.stale && "opacity-70")}
       >
         {name && <span data-meter-name="" className="min-w-0 truncate text-[12px]">{name}</span>}
-        <span data-meter-first="" className={cn("usage-num shrink-0 whitespace-nowrap text-[12.5px]",
+        <span data-meter-first="" className={cn("usage-num shrink-0 whitespace-nowrap text-[12px]",
           reading?.stale ? "text-ink-secondary" : facts.binding && facts.binding.usedPercent >= 100 ? "text-danger" : runsOut ? "text-warning" : "text-ink")}>{facts.first}</span>
-        {facts.second && <span data-meter-second="" className="usage-num shrink-0 whitespace-nowrap text-[11px]">{facts.second}</span>}
-        {reading?.stale && <span id={ageId} className="min-w-0 truncate text-[11px]">{reading.label(t)}</span>}
+        {facts.second && <span data-meter-second="" className="usage-num shrink-0 whitespace-nowrap text-[12px]">{facts.second}</span>}
+        {reading?.stale && <span id={ageId} className="min-w-0 truncate text-[12px]">{reading.label(t)}</span>}
       </button>
       {open && target && board?.board && (
         <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} />

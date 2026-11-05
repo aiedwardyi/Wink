@@ -13,14 +13,15 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
-import { AccountRow, engineName, Hero, type Clock } from "./UsageDesk";
+import { ProviderMark } from "./ProviderIcons";
+import { AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
 import "./UsageDesk.css";
 
 const HOUR = 3_600_000;
 const GAP = 6;
 const MESSAGE_KEPT = 48;
-/** Below this the 48 px rule yields: Close, All usage and the % left line stay usable. */
-const USABLE = 120;
+/** Hidden for the bars-first look: the hero and its chart stay in code, not rendered. */
+const SHOW_QUICK_HERO = false;
 /** Phone heights under this drop the header and seat Close beside All usage. */
 const TIGHT = 320;
 
@@ -59,7 +60,7 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   if (phone) {
     const cap = height * 0.6;
     const room = rect.top - gap - keptTop(top);
-    const maxHeight = Math.max(0, Math.floor(Math.min(cap, Math.max(room, Math.min(USABLE, cap, rect.top - gap - top)))));
+    const maxHeight = Math.max(0, Math.floor(Math.min(cap, room)));
     const edge = terminal ? 0 : 16;
     return { left: edge, bottom, width: window.innerWidth - 2 * edge, maxHeight, dimBottom: window.innerHeight - rect.top };
   }
@@ -151,18 +152,19 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
         className={cn("fixed z-50 flex flex-col overflow-hidden border border-hairline/60 bg-panel shadow-2xl",
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
-        {!tight && <div className="flex shrink-0 items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
-          <span className="min-w-0 truncate text-[12.5px] text-ink-secondary">{engineName(engine.engine)}</span>
+        {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
+          <span className="flex w-4 shrink-0 justify-center"><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+          <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{engineName(engine.engine)}</span>
           {closeButton}
         </div>}
         <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3")}>
-          <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
-            terminal={terminal} phone={phone} clock={clock} instances={store.instances} />
-          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
-          {engine.accounts.length > 1 && <div role="group" aria-label={engineName(engine.engine)} className="-mx-1 flex min-w-0 flex-col divide-y divide-hairline/40 rounded-[3px] [corner-shape:bevel] bg-inset">
+          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
+            terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
+          <div role="group" aria-label={engineName(engine.engine)} className="grid min-w-0 gap-y-4 pl-6">
             {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
-              phone={phone} terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
-          </div>}
+              terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
+          </div>
+          {state.failed.has(engine.base) && <div role="alert" className="pl-6 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">
           <button type="button" data-all-usage="" onClick={allUsage}

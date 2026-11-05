@@ -1,13 +1,10 @@
-// The quota subview of a chat error row: today's wait states, All usage and the engine's own words, cleaned.
-import { useId, useState } from "react";
+// The quota subview of a chat error row: today's wait states and the engine's own words, cleaned, then a link to Usage.
 import { ChevronRight, Gauge, RefreshCw } from "lucide-react";
 import type { UsageWaitView } from "../../server/limit-wait-store";
 import { api, useOptionalStoreDispatch } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
-import { cn } from "@/lib/cn";
 import { safeProviderText } from "@/lib/safe-provider-text";
 import { usageLimitReset } from "@/lib/usage";
-import { Fold } from "./Fold";
 import { useNow } from "./PlanUsageBar";
 
 export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, retryDisabled, identities = [] }: {
@@ -23,8 +20,6 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
   const { t, locale } = useI18n();
   const dispatch = useOptionalStoreDispatch();
   const now = useNow();
-  const [open, setOpen] = useState(false);
-  const detailsId = useId();
   const reset = !usageWait ? usageLimitReset(usageLimit.resetsAt, now) : null;
   const waiting = usageWait?.state === "waiting";
   const time = usageWait?.resumesAt == null ? "" : new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", ...(usageWait.weekly ? { weekday: "short" } : {}) }).format(usageWait.resumesAt);
@@ -39,6 +34,7 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
               : waiting ? <span>{t(!time ? "chat.usageWaitUnknown" : usageWait.weekly ? "chat.usageWaitWeekly" : "chat.usageWaitAt", { time })}</span>
                 : usageWait.state === "manual" ? <span>{t("chat.usageWaitManual")}</span> : null}
             {waiting && usageWait.cancelable && <> · <button className="underline" onClick={() => void api(`/api/bots/${botId}/usage-wait/${usageWait.id}/cancel`, { method: "POST" }).catch(() => {})}>{t("chat.cancelQueuedAction")}</button></>}
+            {details && <span data-engine-details-body="" className="mt-1 block break-words text-[12px] text-ink-secondary">{details}</span>}
           </span>
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-[23px] text-[12.5px] text-ink-secondary">
@@ -54,19 +50,7 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
               {t("usage.wait.allUsage")}<ChevronRight size={13} aria-hidden="true" />
             </button>
           )}
-          {details && (
-            <button type="button" data-engine-details="" aria-expanded={open} aria-controls={detailsId} onClick={() => setOpen(!open)}
-              className="inline-flex items-center gap-0.5 hover:text-ink [@media(pointer:coarse)]:-my-[13px] [@media(pointer:coarse)]:py-[13px]">
-              {t("usage.wait.details")}
-              <ChevronRight size={13} aria-hidden="true" className={cn("transition-transform duration-100 motion-reduce:transition-none", open && "rotate-90")} />
-            </button>
-          )}
         </div>
-        {details && (
-          <Fold open={open} id={detailsId}>
-            <span data-engine-details-body="" className="block break-words pl-[23px] pt-1 text-[12px] text-ink-secondary">{details}</span>
-          </Fold>
-        )}
       </div>
     </div>
   );

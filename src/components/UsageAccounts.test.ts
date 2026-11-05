@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// The hero's account picker: passive inspection by name, keyed by id. The old paged account columns are now the desk's rows.
+// The engine header's account picker: passive inspection by name and number, keyed by id. The old paged account columns are now the desk's rows.
 import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,10 +7,10 @@ import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { AccountPicker } from "./UsageAccounts";
 
 const accounts = [
-  { id: "acct-1", name: "Claude 1" },
-  { id: "acct-2", name: "Claude 2" },
-  { id: "acct-3", name: "Studio" },
-  { id: "acct-4", name: "Claude 4" },
+  { id: "acct-1", name: "Claude 1", number: 1 },
+  { id: "acct-2", name: "Claude 2", number: 2 },
+  { id: "acct-3", name: "Studio", number: 3 },
+  { id: "acct-4", name: "Claude 4", number: 4 },
 ];
 let root: Root;
 let host: HTMLDivElement;

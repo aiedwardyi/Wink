@@ -1,5 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Bot, Check } from "lucide-react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
@@ -17,13 +16,14 @@ import { Fold } from "./Fold";
 import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
 import { AccountPicker } from "./UsageAccounts";
+import { AccountBars } from "./UsageBars";
 import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
 import "./UsageDesk.css";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const ENGINE_NAME: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" };
-const ENGINE_DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "geminiAgent", muse: "museAgent" };
+export const ENGINE_DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "geminiAgent", muse: "museAgent" };
 const TONE_TEXT: Record<ChartTone, string> = { ok: "text-ink", warn: "text-warning", out: "text-danger" };
 export const engineName = (engine: string) => ENGINE_NAME[engine] ?? engine;
 
@@ -70,9 +70,8 @@ export function windowFacts(account: UsageBoardAccount, t: Translate) {
     ?? bindingWindow(account.windows);
   const fact = (window: UsageBoardWindow) => `${shortLabel(window, t)} ${Math.round(leftOf(window))}%`;
   const other = binding === session ? week : binding === week ? session : undefined;
-  // The fact says which window has no data, so "7d 0%" never seems to own it.
-  const missing = !session && week ? account.coverage === "complete" ? t("usage.desk.weeklyOnly")
-    : t("usage.desk.windowNoData", { window: t("usage.limits.sessionShort") }) : null;
+  // The fact says which window has no data, so "7d 0%" never seems to own it; the bars' one empty state says the same.
+  const missing = !session && week ? t("usage.desk.windowNoData", { window: t("usage.limits.sessionShort") }) : null;
   return { binding, first: binding ? fact(binding) : t("usage.desk.noData"), second: other ? fact(other) : binding === week ? missing : null };
 }
 
@@ -164,10 +163,8 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
       {board.engines.map((engine) => {
         const main = engine.accounts.find((account) => account.id === engine.mainId) ?? engine.accounts[0];
         const facts = main ? windowFacts(main, t) : null;
-        // Groups are one per base; two instances of one driver share `engine`, so the twin tab names its instance.
         const selected = engine.base === engineId;
-        const twin = board.engines.some((other) => other !== engine && other.engine === engine.engine);
-        const label = (twin && instances.find((each) => each.instanceId === engine.base)?.displayName) || engineName(engine.engine);
+        const label = engineLabel(board, engine, instances);
         const series = main && facts?.binding ? chartSeries(main, facts.binding, engine.events, clock.now) : null;
         const tone = toneOf(facts?.binding, undefined);
         return (
@@ -190,90 +187,62 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-function Who({ account, runs, phone, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; phone: boolean; t: Translate }) {
+function Who({ account, runs, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; t: Translate }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const names = [...new Set(account.bots.map((bot) => bot.bot))];
-  // Names show whole or not at all: names that would cut count like the phone instead, measured before paint and again on resize.
-  const joined = names.join(", ");
-  const shown = useRef<HTMLSpanElement>(null);
-  const [cutFor, setCutFor] = useState<string | null>(null);
-  useLayoutEffect(() => { if (shown.current && shown.current.scrollWidth > shown.current.clientWidth) setCutFor(joined); });
-  useEffect(() => { const reset = () => setCutFor(null); window.addEventListener("resize", reset); return () => window.removeEventListener("resize", reset); }, []);
+  const bots = t(names.length === 1 ? "usage.desk.botOne" : "usage.desk.bots", { count: names.length });
   const workers = runs !== "known" || account.workers === null ? t("usage.desk.workersUnknown")
-    : account.workers.length ? t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length }) : "";
-  const count = workers && <span className="flex shrink-0 items-center gap-1"><Bot size={12} aria-hidden="true" />{workers}</span>;
-  if ((phone || cutFor === joined) && names.length) return (
-    <>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-[12px] text-ink-secondary">
-        <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id}
-          onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
-          className="shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:min-h-11">
-          {t(names.length === 1 ? "usage.desk.botOne" : "usage.desk.bots", { count: names.length })}
-        </button>
-        {count}
-      </span>
-      <Fold open={open} id={id}><span className="block text-[12px] text-ink-secondary">{names.join(", ")}</span></Fold>
-    </>
-  );
-  if (!names.length && !workers) return null;
+    : t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length });
+  // Counts on every surface; the bot count opens the names.
   return (
-    <span className="flex min-w-0 items-center gap-2 text-[12px] text-ink-secondary">
-      {names.length > 0 && <span ref={shown} className="min-w-0 truncate">{joined}</span>}
-      {count}
-    </span>
+    <>
+      <span data-account-who="" className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-ink-secondary">
+        {names.length > 0
+          ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
+            className="relative shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-x-1 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
+          : <span className="shrink-0">{bots}</span>}
+        <span aria-hidden="true">·</span>
+        <span className="min-w-0 truncate">{workers}</span>
+      </span>
+      {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
+    </>
   );
 }
 
 const SIGN_IN_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "accounts.signedOut", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+/** Main and Use share one box: same width, height and shape; a larger touch target sits outside it on phones. */
+const CONTROL = "relative inline-flex min-h-7 w-[4.5rem] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border px-1 text-center text-[12px] leading-tight [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 
-export function AccountRow({ engine, account, board, state, checked, phone, terminal, clock, reloadInstances }: {
+/** Today's account block: tile, name and Main or Use, then bots and workers, then the bars. */
+export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
-  phone: boolean; terminal: boolean; clock: Clock; reloadInstances: () => unknown;
+  terminal: boolean; clock: Clock; reloadInstances: () => unknown;
 }) {
   const { t } = clock;
-  const facts = windowFacts(account, t);
-  const tone = toneOf(facts.binding, undefined);
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
-  const series = facts.binding ? chartSeries(account, facts.binding, engine.events, clock.now) : null;
   let control: ReactNode;
-  if (account.signIn !== "ready") control = <span data-row-status="" className="shrink-0 text-[12px] text-ink-secondary">{t(SIGN_IN_KEY[account.signIn])}</span>;
-  else if (checked) control = <span className="shrink-0 text-[12px] text-ink-secondary">{t("accounts.main")}</span>;
+  if (account.signIn !== "ready") control = <span data-row-status="" className={cn(CONTROL, "border-transparent text-ink-secondary")}>{t(SIGN_IN_KEY[account.signIn])}</span>;
+  else if (checked) control = <span data-main-check="" className={cn(CONTROL, "border-hairline/40 bg-raised text-ink")}>{t("accounts.main")}</span>;
   else control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
       onClick={() => requestMain(engine.base, account.id, reloadInstances)}
-      className={cn("relative inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-[3px] [corner-shape:bevel] border border-hairline/40 px-2.5 text-[12px] text-ink-secondary transition-colors duration-100 hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11",
+      className={cn(CONTROL, "whitespace-nowrap border-hairline/40 text-ink-secondary transition-colors duration-100 hover:bg-raised-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent motion-reduce:transition-none",
         pending && !switching && "opacity-50")}>
       {switching ? t("usage.desk.switching") : t("usage.desk.use")}
     </button>
   );
   return (
-    <div data-account-row={account.id} className="min-w-0 px-3 py-1.5">
-    <div className="flex min-h-11 min-w-0 items-center gap-2.5">
-      <span className="flex w-4 shrink-0 justify-center">
-        {checked && <Check data-main-check="" size={15} strokeWidth={2.5} aria-label={t("accounts.main")} className="text-accent" />}
-      </span>
-      <Tile number={account.number} terminal={terminal} />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span data-account-name="" className={cn("min-w-0 text-[13.5px] leading-tight text-ink", phone ? "line-clamp-2 break-words" : "truncate")}>{account.name}</span>
-        {!phone && <Who account={account} runs={board.runs} phone={phone} t={t} />}
-      </span>
-      {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
-      {!phone && <span className="usage-num flex w-[4.5rem] shrink-0 flex-col items-end whitespace-nowrap">
-        <span className={cn("text-[13px] leading-tight", TONE_TEXT[tone])}>{facts.first}</span>
-        {facts.second && <span className="text-[11px] leading-tight text-ink-secondary">{facts.second}</span>}
-      </span>}
-      {control}
-    </div>
-    {phone && <div className="flex min-w-0 flex-col gap-0.5 pb-1 pl-[3.25rem]">
-      <span data-account-facts="" className="usage-num flex min-w-0 flex-wrap items-baseline gap-x-2 leading-tight">
-        <span className={cn("text-[13px]", TONE_TEXT[tone])}>{facts.first}</span>
-        {facts.second && <span className="text-[11.5px] text-ink-secondary">{facts.second}</span>}
-      </span>
-      <Who account={account} runs={board.runs} phone={phone} t={t} />
-    </div>}
+    <div data-account-row={account.id} tabIndex={-1} className="min-w-0 rounded-[3px] [corner-shape:bevel] outline-none">
+      <div className="flex min-h-7 min-w-0 items-center gap-2">
+        <Tile number={account.number} terminal={terminal} />
+        <span data-account-name="" className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{account.name}</span>
+        {control}
+      </div>
+      <Who account={account} runs={board.runs} t={t} />
+      <div className="mt-2"><AccountBars engine={engine.engine} account={account} now={clock.now} t={t} /></div>
     </div>
   );
 }
@@ -378,7 +347,50 @@ export function Hero({ engine, account, accounts, select, terminal, phone, clock
   );
 }
 
-/** Settings > Usage: one ticker cell per engine, the viewed account's hero and chart, then every account as a row. */
+/** Hidden for the bars-first look: the engine strip, hero, chart and event lines stay in code, not rendered. */
+const SHOW_DESK_HERO = false;
+
+function EngineSection({ engine, board, state, stacked, terminal, clock, label, reloadInstances }: {
+  engine: UsageBoardEngine; board: UsageBoard; state: UsageBoardState; stacked: boolean; terminal: boolean; clock: Clock; label: string;
+  reloadInstances: () => unknown;
+}) {
+  const { t } = clock;
+  const checked = checkedMain(state, engine.base);
+  const main = engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0]!;
+  const [viewed, setViewed] = useState(main.id);
+  const rows = useRef<HTMLDivElement>(null);
+  // The picker only finds an account: it brings its block into view and never changes Main.
+  const show = (id: string) => {
+    setViewed(id);
+    const row = [...rows.current?.querySelectorAll<HTMLElement>("[data-account-row]") ?? []].find((each) => each.dataset.accountRow === id);
+    row?.scrollIntoView?.({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+    row?.focus({ preventScroll: true });
+    if (!reducedMotion()) row?.animate?.([{ backgroundColor: "var(--color-raised-hover)" }, { backgroundColor: "transparent" }], { duration: 700, easing: EASE_ENTRANCE });
+  };
+  return (
+    <section data-usage-engine={engine.engine} aria-label={label} className="min-w-0">
+      <div className="flex min-h-9 min-w-0 items-center gap-2">
+        <span className="flex w-4 shrink-0 justify-center"><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+        <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{label}</span>
+        {engine.accounts.length > 1 && <AccountPicker viewedId={viewed} select={show}
+          accounts={engine.accounts.map((each) => ({ id: each.id, name: each.name, number: each.number, main: each.id === checked }))} />}
+      </div>
+      <div ref={rows} role="group" aria-label={label} className={cn("mt-1 grid min-w-0 gap-y-4 pl-6", !stacked && "grid-cols-2 gap-x-8")}>
+        {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
+          terminal={terminal} clock={clock} reloadInstances={reloadInstances} />)}
+      </div>
+      {state.failed.has(engine.base) && <div role="alert" className="mt-2 pl-6 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+    </section>
+  );
+}
+
+/** One engine label per board group: the instance's own name when two groups share a driver. */
+export function engineLabel(board: UsageBoard, engine: UsageBoardEngine, instances: { instanceId: string; displayName?: string }[]) {
+  const twin = board.engines.some((other) => other !== engine && other.engine === engine.engine);
+  return (twin && instances.find((each) => each.instanceId === engine.base)?.displayName) || engineName(engine.engine);
+}
+
+/** Settings > Usage: every engine under its own header, every account as Today's block with its 5h and 7d bars. */
 export function UsageDesk() {
   const { t, locale } = useI18n();
   const { state: store, refreshInstances } = useStore();
@@ -387,34 +399,29 @@ export function UsageDesk() {
   const terminal = isTerminalSkin(useSkin());
   const [engineId, setEngineId] = useState<string | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
-  const minute = useVisibleClock();
-  const board = state.board;
-  const engine = board?.engines.find((each) => each.base === engineId) ?? board?.engines[0];
-  const main = engine?.accounts.find((each) => each.id === engine.mainId) ?? engine?.accounts[0];
-  const account = engine?.accounts.find((each) => each.id === viewed[engine.base]) ?? main;
-  const soon = account?.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR) ?? false;
-  const now = useVisibleClock(soon);
+  const now = useVisibleClock();
   const clock: Clock = { t, locale: localeTag(locale), now };
+  const board = state.board;
   if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
-  if (!engine || !account) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
-  const checked = checkedMain(state, engine.base);
+  if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
+  const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
+  const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
   return (
-    <div data-usage-desk="" className="flex min-w-0 flex-col gap-4">
-      <Ticker board={board} engineId={engine.base} select={setEngineId} phone={phone} terminal={terminal} clock={clock} instances={store.instances} />
+    <div data-usage-desk="" className="flex min-w-0 flex-col gap-5">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
-      <Hero key={engine.base} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}
-        instances={store.instances} select={(id) => setViewed((current) => ({ ...current, [engine.base]: id }))} />
-      {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
-      {engine.accounts.length > 1 && <div role="group" aria-label={engineName(engine.engine)} className="flex min-w-0 flex-col divide-y divide-hairline/40 overflow-hidden rounded-[3px] [corner-shape:bevel] bg-inset">
-        {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
-          phone={phone} terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
-      </div>}
-      {eventLines(engine, board, clock).map((line) => (
-        <div key={line.kind} data-usage-event={line.kind} className="usage-num -mt-2 flex min-w-0 gap-2 text-[12px] leading-5 text-ink-secondary">
-          <span className="min-w-0">{line.text}</span>
-          <span className="shrink-0">{clockText(line.at, clock)}</span>
-        </div>
-      ))}
+      {board.engines.filter((each) => each.accounts.length).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
+        terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} reloadInstances={() => refreshInstances()} />)}
+      {SHOW_DESK_HERO && account && <>
+        <Ticker board={board} engineId={engine.base} select={setEngineId} phone={phone} terminal={terminal} clock={clock} instances={store.instances} />
+        <Hero key={engine.base} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}
+          instances={store.instances} select={(id) => setViewed((current) => ({ ...current, [engine.base]: id }))} />
+        {eventLines(engine, board, clock).map((line) => (
+          <div key={line.kind} data-usage-event={line.kind} className="usage-num -mt-2 flex min-w-0 gap-2 text-[12px] leading-5 text-ink-secondary">
+            <span className="min-w-0">{line.text}</span>
+            <span className="shrink-0">{clockText(line.at, clock)}</span>
+          </div>
+        ))}
+      </>}
     </div>
   );
 }
