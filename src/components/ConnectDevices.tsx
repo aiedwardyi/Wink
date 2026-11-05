@@ -32,13 +32,14 @@ function Step({ n, done, active, title, label, children }: { n: number; done: bo
 }
 
 const help = "mt-1 break-keep text-[12px] leading-relaxed text-ink-secondary";
+let lastStatus: RemotePhoneLink | null = null;
 
 export function ConnectDevices() {
   const { t } = useI18n();
   const onThisPc = Boolean(window.ogb) || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   const phone = !onThisPc;
   const deviceWindow = window.ogb?.deviceWindow;
-  const [status, setStatus] = useState<RemotePhoneLink | null>(null);
+  const [status, setStatus] = useState<RemotePhoneLink | null>(lastStatus);
   const [tab, setTab] = useState<"phone" | "pc">("phone");
   const [copied, setCopied] = useState(false);
   const [loginOpened, setLoginOpened] = useState(false);
@@ -61,6 +62,7 @@ export function ConnectDevices() {
     live.current = true;
     let active = true;
     let pending = false;
+    let first = lastStatus === null;
     let ready = false;
     let probedAt = 0;
     let timer: number | undefined;
@@ -70,10 +72,11 @@ export function ConnectDevices() {
       pending = true;
       try {
         // A periodic real probe finds PCs and phones that join while the page stays open.
-        const cached = ready && !probe && !waiting.current && Date.now() - probedAt < 30_000;
+        const cached = first || (ready && !probe && !waiting.current && Date.now() - probedAt < 30_000);
         if (!cached) probedAt = Date.now();
         const body: RemotePhoneLink = await api(`/api/remote-link?setup=1${cached ? "&cached=1" : ""}`);
         if (active) {
+          lastStatus = body;
           ready = body.setup?.state === "ready" && Boolean(body.url);
           if (waiting.current && (Date.now() >= waiting.current.until || waiting.current.state !== JSON.stringify([body.setup?.state, body.setup?.backendState]))) waiting.current = null;
           setStatus(body);
@@ -85,7 +88,10 @@ export function ConnectDevices() {
       } finally {
         pending = false;
         if (waiting.current && Date.now() >= waiting.current.until) waiting.current = null;
-        if (active) timer = window.setTimeout(() => void load(), waiting.current ? 2_000 : 6_000);
+        if (first) {
+          first = false;
+          if (active) void load(true);
+        } else if (active) timer = window.setTimeout(() => void load(), waiting.current ? 2_000 : 6_000);
       }
     };
     const onFocus = () => void load(true);
@@ -150,8 +156,10 @@ export function ConnectDevices() {
     {copied ? t("settings.phoneLink.copied") : t("settings.phoneLink.copy")}
   </button>;
 
+  if (!status) return null;
+
   return (
-    <div data-devices-settings>
+    <div data-devices-settings className="animate-fade-in">
       {phoneOpened && <ul data-phone-list className="mb-3 flex flex-col gap-1.5">
         {phones.map((item) => <li key={item.id} className="text-[13px] text-ink">
           {t(`settings.phone.kind.${item.kind}`)}<span className="text-ink-secondary"> · {activeText(item.lastSeen, Date.now(), t)}</span>
