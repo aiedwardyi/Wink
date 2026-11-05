@@ -21,6 +21,7 @@ import type { Readable, Writable } from "node:stream";
 import { basename, isAbsolute, join } from "node:path";
 import { findCliCandidates, resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
 import { accountLaunch, type AccountContext } from "./account-policy.ts";
+import { shareUserSetup } from "./account-shared-setup.ts";
 
 type AccountLaunchOptions = { account?: AccountContext; accountDriver?: string };
 
@@ -31,11 +32,12 @@ export function resolveCli(cli: string, args: string[] = []): ResolvedSpawn {
 export function spawnCli(
   cli: string,
   args: string[],
-  opts: SpawnOptions & AccountLaunchOptions,
+  opts: SpawnOptions & AccountLaunchOptions & { accountBaseHome?: string },
 ): ChildProcessByStdio<Writable, Readable, Readable> {
   const resolved = resolveCli(cli, args);
-  const { account, accountDriver, ...options } = opts;
-  const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env);
+  const { account, accountDriver, accountBaseHome, ...options } = opts;
+  if (account && accountBaseHome) shareUserSetup(accountDriver ?? "", account, accountBaseHome);
+  const launch = accountLaunch(account, accountDriver ?? "", resolved.args, options.env ?? process.env, Boolean(accountBaseHome));
   const child = spawn(resolved.command, launch.args, {
     ...options,
     ...(account ? { env: launch.env } : {}),
