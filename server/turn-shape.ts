@@ -179,7 +179,8 @@ export function turnDescriptor(deps: AgentsDescriptorDeps, input: TurnDescriptor
   };
 }
 
-// A missing cached snapshot must never stand in for empty turn fields.
+// A missing cached snapshot must never stand in for empty turn fields;
+// wrap absence with the outer `undefined`, never with `{ value: null | undefined }`.
 export type Cached<T> = { value: T } | undefined;
 
 export interface DryTurnState {
