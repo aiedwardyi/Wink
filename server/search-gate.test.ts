@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import {
@@ -21,7 +21,7 @@ import {
   updateMessage,
   withMessageTransaction,
 } from "./message-db.ts";
-import { ackSearchCache, searchCacheState, syncRequestStarted, untrustSearchCache } from "./search-gate.ts";
+import { ackSearchCache, onSearchDirt, searchCacheState, searchDirty, syncRequestStarted, untrustSearchCache } from "./search-gate.ts";
 import { Store, type Message } from "./store.ts";
 import { ThreadSyncV2 } from "./thread-sync-v2.ts";
 import { registerMigration } from "./thread-sync-v2-migration.ts";
@@ -68,6 +68,8 @@ beforeEach(() => {
   rmSync(DATA_DIR, { recursive: true, force: true });
   mkdirSync(DATA_DIR, { recursive: true });
 });
+
+afterEach(() => onSearchDirt(null));
 
 describe("search gate", () => {
   it("only message-db.ts writes messages", () => {
@@ -219,6 +221,124 @@ describe("search gate", () => {
     closeMessageDb();
     messageDatabase();
     expect(ackSearchCache(built.epoch, built.generation)).toBe(false);
+  });
+
+  it("acks only the dirt stamped at or before the posted epoch", () => {
+    messageDatabase();
+    onSearchDirt(() => {});
+    untrustSearchCache();
+    insertMessage("t", msg("a"));
+    const a = searchCacheState();
+    insertMessage("t", msg("b"));
+    const b = searchCacheState();
+    expect(b).toMatchObject({ full: true, trusted: false });
+    expect([b.threads, b.keys, b.keys.get("t")]).toEqual([new Set(), new Map([["t", new Set(["a", "b"])]]), new Set(["a", "b"])]);
+    b.threads.add("x");
+    b.keys.get("t")!.add("x");
+    b.keys.set("y", new Set(["y"]));
+    expect(dirt().keys).toEqual([["t", ["a", "b"]]]);
+    expect(ackSearchCache(a.epoch, a.generation)).toBe(false);
+    expect(searchCacheState()).toMatchObject({ full: false, trusted: false });
+    expect(dirt().keys).toEqual([["t", ["b"]]]);
+    expect(ackSearchCache(b.epoch, b.generation)).toBe(true);
+    expect(searchCacheState()).toMatchObject({ full: false, trusted: true, threads: new Set(), keys: new Map() });
+
+    insertMessage("t", msg("a"));
+    const key = searchCacheState();
+    updateMessage("t", msg("a", "again"));
+    expect(ackSearchCache(key.epoch, key.generation)).toBe(false);
+    expect(dirt().keys).toEqual([["t", ["a"]]]);
+    expect(ackSearchCache(searchCacheState().epoch, key.generation)).toBe(true);
+
+    deleteThread("r");
+    const thread = searchCacheState();
+    deleteThread("r");
+    expect(ackSearchCache(thread.epoch, thread.generation)).toBe(false);
+    expect(dirt()).toMatchObject({ threads: ["r"], keys: [] });
+    expect(ackSearchCache(searchCacheState().epoch, thread.generation)).toBe(true);
+
+    deleteThread("t");
+    const older = searchCacheState();
+    insertMessage("t", msg("c"));
+    expect(dirt()).toMatchObject({ threads: ["t"], keys: [["t", ["c"]]] });
+    expect(ackSearchCache(older.epoch, older.generation)).toBe(false);
+    expect(dirt()).toMatchObject({ threads: [], keys: [["t", ["c"]]] });
+    expect(ackSearchCache(searchCacheState().epoch, older.generation)).toBe(true);
+    expect(searchCacheState()).toMatchObject({ trusted: true, threads: new Set(), keys: new Map() });
+  });
+
+  it("calls the dirt listener once per published commit, outside any transaction", () => {
+    const { epoch } = trust();
+    const calls: boolean[] = [];
+    onSearchDirt(() => calls.push(messageDatabase().isTransaction));
+    insertMessage("t", msg("a"));
+    expect(calls).toEqual([false]);
+    withMessageTransaction(() => {
+      withMessageTransaction(() => insertMessage("t", msg("b")));
+      expect(() => withMessageTransaction(() => {
+        insertMessage("t", msg("inner"));
+        throw new Error("savepoint");
+      })).toThrow("savepoint");
+      expect(calls).toHaveLength(1);
+    });
+    expect(calls).toEqual([false, false]);
+    expect(dirt()).toEqual({ epoch: epoch + 2, threads: [], keys: [["t", ["a", "b", "inner"]]] });
+    expect(() => withMessageTransaction(() => {
+      insertMessage("t", msg("gone"));
+      throw new Error("rollback");
+    })).toThrow("rollback");
+    setActiveLeaf("t", "a");
+    expect(calls).toHaveLength(2);
+    insertMessage("u", msg("kept"));
+    expect(calls).toEqual([false, false, false]);
+    expect(dirt()).toEqual({ epoch: epoch + 3, threads: [], keys: [["t", ["a", "b", "inner", "gone"]], ["u", ["kept"]]] });
+    applySyncedRows("s", [msg("s1")]);
+    expect(calls).toHaveLength(4);
+    expect(applySyncedRows("s", [msg("s1")])).toBe(0);
+    expect(calls).toEqual([false, false, false, false]);
+    expect(searchCacheState().epoch).toBe(epoch + 4);
+  });
+
+  it("untrusts once past 10,000 distinct dirty threads and keys", () => {
+    const { generation } = trust();
+    const database = messageDatabase();
+    const batch = (from: number, to: number) => {
+      const before = searchCacheState().generation;
+      withMessageTransaction(() => {
+        for (let i = from; i < to; i++) searchDirty(database, "k", `id-${i}`);
+        expect(searchCacheState().generation).toBe(before);
+      });
+    };
+    const counts = () => {
+      const state = searchCacheState();
+      return { generation: state.generation, full: state.full, threads: state.threads.size, keys: state.keys.get("k")?.size ?? 0, inner: state.keys.size };
+    };
+    for (let i = 0; i < 4000; i++) searchDirty(database, `thread-${i}`);
+    batch(0, 6000);
+    searchDirty(database, "thread-0");
+    searchDirty(database, "k", "id-0");
+    expect(counts()).toEqual({ generation, full: false, threads: 4000, keys: 6000, inner: 1 });
+    searchDirty(database, "k", "id-6000");
+    expect(counts()).toEqual({ generation: generation + 1, full: true, threads: 0, keys: 0, inner: 0 });
+    searchDirty(database, "k", "dropped");
+    expect(counts()).toEqual({ generation: generation + 1, full: true, threads: 0, keys: 0, inner: 0 });
+
+    onSearchDirt(() => {});
+    batch(0, 6000);
+    const posted = searchCacheState();
+    batch(6000, 10_000);
+    expect(counts()).toEqual({ generation: generation + 1, full: true, threads: 0, keys: 10_000, inner: 1 });
+    expect(ackSearchCache(posted.epoch, posted.generation)).toBe(false);
+    expect(counts()).toEqual({ generation: generation + 1, full: false, threads: 0, keys: 4000, inner: 1 });
+    batch(10_000, 16_000);
+    searchDirty(database, "k", "id-15999");
+    expect(counts()).toEqual({ generation: generation + 1, full: false, threads: 0, keys: 10_000, inner: 1 });
+    untrustSearchCache();
+    batch(0, 10_005);
+    expect(counts()).toEqual({ generation: generation + 3, full: true, threads: 0, keys: 0, inner: 0 });
+    searchDirty(database, "k", "after");
+    expect(dirt()).toMatchObject({ threads: [], keys: [["k", ["after"]]] });
+    expect(searchCacheState().generation).toBe(generation + 3);
   });
 
   it("untrusts an external write unless a sync request ran since the last sample", () => {

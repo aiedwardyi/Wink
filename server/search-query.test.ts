@@ -1,10 +1,23 @@
+import dc from "node:diagnostics_channel";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
-import { applySyncedRows, closeMessageDb, insertMessage, messageDatabase, replaceThread, searchMessages, updateMessage, withMessageTransaction } from "./message-db.ts";
+import {
+  appendMessage,
+  applySyncedRows,
+  closeMessageDb,
+  insertMessage,
+  messageDatabase,
+  replaceThread,
+  searchMessages,
+  updateMessage,
+  withMessageTransaction,
+} from "./message-db.ts";
+import { createSearchIndexer, startSearchCache, stopSearchCache } from "./search-cache.ts";
 import { ackSearchCache, searchCacheState, syncRequestStarted, untrustSearchCache } from "./search-gate.ts";
 import * as query from "./search-query.ts";
 import type { Message } from "./store.ts";
@@ -71,6 +84,15 @@ function trace(before?: (database: DatabaseSync, sql: string) => void, after?: (
   });
 }
 
+function hiddenOnly() {
+  const rows = Array.from({ length: 3000 }, (_, i) => msg(`hidden-${i}`, "", {
+    at: i, kind: "activity", tool: { name: "Read", detail: { input: "public/file.txt", output: ["HiddenOnlyNeedle"], outputHidden: true } },
+  }));
+  applySyncedRows("hidden", rows);
+  const raw = messageDatabase().prepare("UPDATE messages SET json = ? WHERE thread_id = 'hidden' AND id = ?");
+  withMessageTransaction(() => { for (const row of rows) raw.run(JSON.stringify(row), row.id); });
+}
+
 function corpus() {
   for (const thread of ["one", "two"]) {
     const rows = Array.from({ length: 140 }, (_, i) => msg(`${thread}-${i}`, `${literals} ${i}`, {
@@ -86,8 +108,9 @@ function corpus() {
   applySyncedRows("noise", Array.from({ length: 700 }, (_, i) => msg(`noise-${i}`, "irrelevant newer row", { at: 1000 + i })));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   closeMessageDb();
+  await stopSearchCache();
   rmSync(DATA_DIR, { recursive: true, force: true });
   mkdirSync(DATA_DIR, { recursive: true });
   fts = [];
@@ -95,7 +118,10 @@ beforeEach(() => {
   scanned = 0;
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  await stopSearchCache();
+  vi.restoreAllMocks();
+});
 
 describe("search query", () => {
   it("scans a small trusted scope without opening the cache", async () => {
@@ -142,18 +168,129 @@ describe("search query", () => {
   });
 
   it("rejects 3,000 older hidden-only previews with bounded source fetches", async () => {
-    const rows = Array.from({ length: 3000 }, (_, i) => msg(`hidden-${i}`, "", {
-      at: i, kind: "activity", tool: { name: "Read", detail: { input: "public/file.txt", output: ["HiddenOnlyNeedle"], outputHidden: true } },
-    }));
-    applySyncedRows("hidden", rows);
-    const raw = messageDatabase().prepare("UPDATE messages SET json = ? WHERE thread_id = 'hidden' AND id = ?");
-    withMessageTransaction(() => { for (const row of rows) raw.run(JSON.stringify(row), row.id); });
+    hiddenOnly();
     await ready();
     trace();
     expect(searchMessages("HiddenOnlyNeedle")).toEqual([]);
     expect(fetched).toBeLessThanOrEqual(10);
     expect(fts.some((match) => match.includes("g000068000069000064") && match.includes("kindactivity"))).toBe(true);
     expect(scanned).toBe(0);
+  });
+
+  it("serves hidden-only searches from the cache while writes continue after a restart", { timeout: 180_000 }, async () => {
+    hiddenOnly();
+    await ready();
+    closeMessageDb();
+    await stopSearchCache();
+    messageDatabase();
+    expect(searchCacheState()).toMatchObject({ full: true, trusted: false });
+    trace();
+    let failure: unknown;
+    let written = 0;
+    let newest = "";
+    let samples = 0;
+    let served = 0;
+    let current = 0;
+    let done: { epoch: number; generation: number } | undefined;
+    const append = () => {
+      newest = `live-${written}`;
+      appendMessage("live", msg(newest, `LiveNeedle ${written}`, { at: 10_000 + written++ }));
+    };
+    const sample = () => {
+      try {
+        samples++;
+        const state = searchCacheState();
+        const before = { fetched, scanned, fts: fts.length };
+        expect(searchMessages("HiddenOnlyNeedle")).toEqual([]);
+        const cached = { fetched: fetched - before.fetched <= 10, scanned: scanned - before.scanned, matched: fts.slice(before.fts).some((match) => match.includes("g000068000069000064") && match.includes("kindactivity")) };
+        if (cached.fetched && !cached.scanned && cached.matched) served++;
+        if (done?.epoch === state.epoch && done.generation === state.generation) {
+          current++;
+          expect(state.trusted).toBe(true);
+          expect(cached).toEqual({ fetched: true, scanned: 0, matched: true });
+        }
+        const live = searchMessages("LiveNeedle", 41);
+        expect(live).toEqual(withMessageTransaction(() => searchMessages("LiveNeedle", 41)));
+        if (written) expect(live[0]?.messageId).toBe(newest);
+        setImmediate(startSearchCache, DATA_DIR);
+      } catch (error) {
+        failure ??= error;
+      }
+    };
+    const handlers: Array<[Worker, (message: { type: string; epoch: number; generation: number }) => void]> = [];
+    const spawned = (message: unknown) => {
+      const { worker } = message as { worker: Worker };
+      const post = worker.postMessage.bind(worker);
+      worker.postMessage = (work: { type: string; full?: boolean }) => {
+        post(work);
+        if (work.type === "work" && work.full) append();
+      };
+      const handle = (message: { type: string; epoch: number; generation: number }) => {
+        if (message.type !== "done") return;
+        done = { epoch: message.epoch, generation: message.generation };
+        sample();
+      };
+      handlers.push([worker, handle]);
+      // after the controller's own listener, which acks first
+      queueMicrotask(() => worker.on("message", handle));
+    };
+    const until = async (ready: () => boolean, ms: number) => {
+      for (const end = Date.now() + ms; !failure && !ready() && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 50));
+      if (failure) throw failure;
+    };
+    dc.subscribe("worker_threads", spawned);
+    const writer = setInterval(() => {
+      try {
+        append();
+      } catch (error) {
+        failure ??= error;
+      }
+    }, 1000);
+    const sampler = setInterval(sample, 250);
+    try {
+      const start = Date.now();
+      await until(() => served > 0, 60_000);
+      expect(served, "a hidden search was served from the cache within 60 s").toBeGreaterThan(0);
+      const first = Date.now() - start;
+      await until(() => false, 15_000);
+      expect(current).toBeGreaterThan(0);
+      console.log(`search converge: first cache-served ${first} ms after the first sample; ${served}/${samples} samples served, ${current} at a current done, ${written} writes`);
+    } finally {
+      clearInterval(writer);
+      clearInterval(sampler);
+      dc.unsubscribe("worker_threads", spawned);
+      for (const [worker, handle] of handlers) worker.off("message", handle);
+      await stopSearchCache();
+    }
+  });
+
+  it("takes the scan after a partial ack and the cache after the final one", async () => {
+    insertMessage("one", msg("old", "search"));
+    await ready();
+    const indexer = createSearchIndexer(DATA_DIR);
+    try {
+      insertMessage("one", msg("first", "search", { at: 2 }));
+      const posted = searchCacheState();
+      insertMessage("one", msg("second", "search", { at: 3 }));
+      expect(await indexer.work(posted)).toBe(true);
+      expect(ackSearchCache(posted.epoch, posted.generation)).toBe(false);
+      trace();
+      const baseline = withMessageTransaction(() => searchMessages("search"));
+      expect(baseline.map((hit) => hit.messageId)).toEqual(["second", "first", "old"]);
+      const generation = searchCacheState().generation;
+      scanned = 0;
+      expect(searchMessages("search")).toEqual(baseline);
+      expect([scanned, fts]).toEqual([1, []]);
+      const last = searchCacheState();
+      expect(last.generation).toBe(generation);
+      expect(await indexer.work(last)).toBe(true);
+      expect(ackSearchCache(last.epoch, last.generation)).toBe(true);
+      expect(searchMessages("search")).toEqual(baseline);
+      expect(scanned).toBe(1);
+      expect(fts.length).toBeGreaterThan(0);
+    } finally {
+      indexer.close();
+    }
   });
 
   it("matches every ordered field for fixed and generated literals, paging and pending writes", async () => {

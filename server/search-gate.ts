@@ -7,6 +7,12 @@ interface Dirt {
   keys: Map<string, Set<string>>;
 }
 
+/** The epoch each dirty thread or key was last published at. */
+interface Stamped {
+  threads: Map<string, number>;
+  keys: Map<string, Map<string, number>>;
+}
+
 export interface SearchCacheState {
   epoch: number;
   generation: number;
@@ -17,15 +23,21 @@ export interface SearchCacheState {
   keys: Map<string, Set<string>>;
 }
 
+// Past this many dirty threads and keys a full pass is cheaper than catching up.
+const MAX_DIRT = 10_000;
+
 const empty = (): Dirt => ({ threads: new Set(), keys: new Map() });
+const stamped = (): Stamped => ({ threads: new Map(), keys: new Map() });
 
 let source: DatabaseSync | null = null;
 let version: number | null = null;
 let epoch = 0;
 let generation = 0;
 let full = true;
-let committed = empty();
+let committed = stamped();
+let size = 0;
 let pending = empty();
+let onDirt: (() => void) | null = null;
 let syncRequests = 0;
 let syncSince = false;
 
@@ -39,7 +51,8 @@ export function searchSource(database: DatabaseSync | null): void {
 export function untrustSearchCache(): void {
   generation++;
   full = true;
-  committed = empty();
+  committed = stamped();
+  size = 0;
 }
 
 /** Call after a statement that wrote messages: an autocommit publishes now, a transaction at its outermost COMMIT. */
@@ -56,17 +69,30 @@ export function searchDirty(database: DatabaseSync, threadId: string, id?: strin
 /** Call right after the outermost COMMIT. */
 export function publishSearchDirt(): void {
   if (!pending.threads.size && !pending.keys.size) return;
-  // an untrusted cache is revalidated whole, so its dirt is not kept
-  if (!full) {
-    for (const threadId of pending.threads) committed.threads.add(threadId);
-    for (const [threadId, ids] of pending.keys) {
-      const into = committed.keys.get(threadId);
-      if (into) for (const id of ids) into.add(id);
-      else committed.keys.set(threadId, ids);
-    }
-  }
+  const { threads, keys } = pending;
   pending = empty();
   epoch++;
+  // with no worker to catch up, an untrusted cache is revalidated whole, so its dirt is not kept
+  if (!full || onDirt) keep(threads, keys);
+  onDirt?.();
+}
+
+function keep(threads: Set<string>, keys: Map<string, Set<string>>): void {
+  for (const threadId of threads) if (!stamp(committed.threads, threadId)) return;
+  for (const [threadId, ids] of keys) {
+    let into = committed.keys.get(threadId);
+    if (!into) committed.keys.set(threadId, (into = new Map()));
+    for (const id of ids) if (!stamp(into, id)) return;
+  }
+}
+
+function stamp(into: Map<string, number>, key: string): boolean {
+  if (!into.has(key) && ++size > MAX_DIRT) {
+    untrustSearchCache();
+    return false;
+  }
+  into.set(key, epoch);
+  return true;
 }
 
 // data_version moves only for other connections' commits, and only compares on the same live handle.
@@ -84,19 +110,30 @@ export function searchCacheState(): SearchCacheState {
     epoch,
     generation,
     full,
-    trusted: !full && !committed.threads.size && !committed.keys.size,
-    threads: new Set(committed.threads),
-    keys: new Map([...committed.keys].map(([threadId, ids]) => [threadId, new Set(ids)])),
+    trusted: !full && !size,
+    threads: new Set(committed.threads.keys()),
+    keys: new Map([...committed.keys].map(([threadId, ids]) => [threadId, new Set(ids.keys())])),
   };
 }
 
-/** A cache built from the state at (epoch, generation) is current only if nothing committed, reopened or wrote from outside since. */
+/** Work posted at (epoch, generation) covers the dirt stamped up to that epoch, unless a reopen or outside write came since. True once no dirt is left. */
 export function ackSearchCache(builtEpoch: number, builtGeneration: number): boolean {
   sample();
-  if (!source || builtEpoch !== epoch || builtGeneration !== generation) return false;
+  if (!source || builtGeneration !== generation) return false;
   full = false;
-  committed = empty();
-  return true;
+  for (const [threadId, at] of committed.threads) {
+    if (at <= builtEpoch && committed.threads.delete(threadId)) size--;
+  }
+  for (const [threadId, ids] of committed.keys) {
+    for (const [id, at] of ids) if (at <= builtEpoch && ids.delete(id)) size--;
+    if (!ids.size) committed.keys.delete(threadId);
+  }
+  return !size;
+}
+
+/** The running search worker's catch-up trigger, or null. Called after each publish, outside any transaction. */
+export function onSearchDirt(listener: (() => void) | null): void {
+  onDirt = listener;
 }
 
 /** Chat sync's worker commits on its own connection; it counts as busy until the returned call. */

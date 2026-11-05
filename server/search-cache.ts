@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 
-import { ackSearchCache, searchCacheState, untrustSearchCache, type SearchCacheState } from "./search-gate.ts";
+import { ackSearchCache, onSearchDirt, searchCacheState, untrustSearchCache, type SearchCacheState } from "./search-gate.ts";
 import { messageSearchGrams } from "./search-text.ts";
 import type { Message } from "./store.ts";
 
@@ -372,6 +372,13 @@ let exited = Promise.resolve();
 let working = false;
 let off = false;
 let rebuilt = false;
+let pushed: NodeJS.Immediate | null = null;
+
+function detach(): void {
+  onSearchDirt(null);
+  if (pushed) clearImmediate(pushed);
+  pushed = null;
+}
 
 function nextWork(): void {
   if (!worker || working) return;
@@ -385,6 +392,7 @@ function fail(current: Worker, reason: string): void {
   if (worker !== current) return;
   worker = null;
   working = false;
+  detach();
   untrustSearchCache();
   // a corrupt file was deleted; the next search rebuilds it once
   if (reason === "corrupt" && !rebuilt) rebuilt = true;
@@ -405,6 +413,13 @@ export function startSearchCache(dataDir: string, crash?: SearchCrash): void {
   });
   worker = current;
   working = true;
+  // catch up after each write, one turn later and off the send path, instead of waiting for the next search
+  onSearchDirt(() => {
+    pushed ??= setImmediate(() => {
+      pushed = null;
+      if (worker === current) nextWork();
+    });
+  });
   current.on("message", (message: SearchWorkerMessage) => {
     if (worker !== current) return;
     if (message.type === "failed") return fail(current, message.reason);
@@ -425,6 +440,7 @@ export function stopSearchCache(): Promise<void> {
   const current = worker;
   worker = null;
   working = false;
+  detach();
   current?.ref();
   current?.postMessage({ type: "stop" });
   return exited;
