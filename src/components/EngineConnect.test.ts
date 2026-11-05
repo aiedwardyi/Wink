@@ -94,10 +94,36 @@ describe("first engine connection", () => {
     expect(setup.querySelector("code")?.textContent).toBe("claude login");
     expect(setup.textContent).not.toContain(locale === "en" ? "Install Claude" : "Claude 설치");
     await click(label, row);
-    expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/api/instances/claude/sign-in",
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/api/instances/${main.instanceId}/sign-in`,
       expect.objectContaining({ method: "POST", body: '{"device":false}' }));
     expect(window.ogb!.openEngineInstall).not.toHaveBeenCalled();
     expect(base.snapshot).toEqual({ state: "available", authenticated: false, version: "1.0" });
+  });
+
+  it.each(["en", "ko"] as const)("signs in the Main account copy, not the base account, in %s", async (locale) => {
+    persistPreference(locale);
+    const id = "acct_11111111-1111-1111-1111-111111111111";
+    const base = { ...instances[0]!, accountOf: "claude", snapshot: { state: "available" as const, authenticated: true, version: "1.0" },
+      pickerSnapshot: { state: "unavailable" as const } };
+    const main = { ...base, instanceId: id, accountMain: true, accountState: "ready" as const,
+      snapshot: { state: "available" as const, authenticated: false, version: "1.0" }, pickerSnapshot: undefined };
+    instances = [base, main, ...instances.slice(1)];
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    const row = () => host.querySelector('[data-engine-connect="claude"]')!;
+    const label = locale === "en" ? "Sign in to Claude" : "Claude에 로그인";
+    expect(host.querySelectorAll("[data-engine-connect]")).toHaveLength(5);
+    await click(label, row());
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/api/instances/${id}/sign-in`, expect.objectContaining({ method: "POST" }));
+    await click(locale === "en" ? "Show Commands" : "명령어 보기");
+    await click(locale === "en" ? "Open Sign-in in Terminal" : "터미널에서 로그인", host.querySelector("[data-engine-connect-commands]")!);
+    expect(window.ogb!.openEngineSignIn).toHaveBeenCalledExactlyOnceWith(id);
+
+    instances = [{ ...base, pickerSnapshot: { state: "available", authenticated: true } }, { ...main, snapshot: { ...main.snapshot, authenticated: true } }, ...instances.slice(2)];
+    await advance(2000);
+    expect(refreshInstances).toHaveBeenCalled();
+    await render(createElement(EngineConnect, { instances, onRefresh: refreshInstances }));
+    expect(row().hasAttribute("data-onboarding-ready")).toBe(true);
+    expect(row().textContent).toContain(locale === "en" ? "Claude is ready" : "Claude 준비 완료");
   });
 
   it.each([false, true])("uses Main readiness without losing CLI installation (base signed in: %s)", async (authenticated) => {
