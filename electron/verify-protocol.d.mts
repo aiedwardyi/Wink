@@ -97,9 +97,10 @@ export interface VerifyRunInput {
   progress(counts: VerifyCounts): void;
   /** network requests the session cancelled, for the FONT rule's "sheet blocked" skip */
   blockedUrls(): string[];
+  revisionUnchanged: () => Promise<boolean>;
   signal: AbortSignal;
   onTiming?(name: "run-start" | "first-check", epochMs: number): void;
 }
 /** done never rejects: errors become a blocked VerifyResult with honest partial counts. rescale() re-applies input.scale() after a window resize. */
 export type RunVerify = (input: VerifyRunInput) => { done: Promise<VerifyResult>; rescale(): void };
-export type StartSiteServer = (input: { root: string; entry: string; revision: string }) => Promise<{ origin: string; url: string; fontUrls: string[]; close(): Promise<void> }>;
+export type StartSiteServer = (input: { root: string; entry: string; revision: string }) => Promise<{ origin: string; url: string; fontUrls: string[]; revisionUnchanged(): Promise<boolean>; close(): Promise<void> }>;
