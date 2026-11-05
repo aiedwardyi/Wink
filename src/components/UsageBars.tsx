@@ -80,8 +80,8 @@ export function WindowBar({ slot, now, t }: { slot: Slot; now: number; t: Transl
 }
 
 /** Every reported window as a meter; with none, the one empty state. */
-export function AccountBars({ engine, account, now, t }: { engine: string; account: Pick<UsageBoardAccount, "windows">; now: number; t: Translate }) {
+export function AccountBars({ engine, account, now, t, muted = false }: { engine: string; account: Pick<UsageBoardAccount, "windows">; now: number; t: Translate; muted?: boolean }) {
   const slots = barSlots(engine, account, t);
   if (!slots.length) return <div data-window-empty="" className="mt-1.5 text-[12px] text-ink-secondary">{t("usage.desk.noUsage")}</div>;
-  return <div data-account-bars="" className="min-w-0">{slots.map((slot) => <WindowBar key={slot.key} slot={slot} now={now} t={t} />)}</div>;
+  return <div data-account-bars="" className={cn("min-w-0", muted && "opacity-60")}>{slots.map((slot) => <WindowBar key={slot.key} slot={slot} now={now} t={t} />)}</div>;
 }

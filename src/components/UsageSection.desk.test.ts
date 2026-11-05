@@ -671,21 +671,22 @@ describe("Usage desk", () => {
     expect(text(row("claude"))).toContain("Atlas, Mira");
   });
 
+  const museEngine = (observedAt: number): UsageBoardEngine => ({
+    engine: "muse", base: "muse", mainId: "muse", events: [],
+    accounts: [{
+      id: "muse", number: 1, nickname: null, name: "Muse", main: true, signIn: "ready", coverage: "unknown",
+      windows: [
+        { id: "five_hour", kind: "session", usedPercent: 100, resetsAt: usageBoardNow + 2 * 60 * MIN, windowMinutes: 300 },
+        { id: "seven_day", kind: "week", usedPercent: 61, resetsAt: usageBoardNow + 4 * 1440 * MIN, windowMinutes: 10080 },
+      ],
+      observedAt, history: { fine: [], coarse: [] }, bots: [], workers: [],
+    }],
+  });
+
   it("keeps every reported window and Muse", async () => {
     const board = fresh();
     accountOf(board, "claude").windows.push({ id: "seven_day_opus", kind: "week", usedPercent: 75, resetsAt: usageBoardNow + 2 * 1440 * MIN, windowMinutes: 10080 });
-    const muse: UsageBoardEngine = {
-      engine: "muse", base: "muse", mainId: "muse", events: [],
-      accounts: [{
-        id: "muse", number: 1, nickname: null, name: "Muse", main: true, signIn: "ready", coverage: "unknown",
-        windows: [
-          { id: "five_hour", kind: "session", usedPercent: 100, resetsAt: usageBoardNow + 2 * 60 * MIN, windowMinutes: 300 },
-          { id: "seven_day", kind: "week", usedPercent: 61, resetsAt: usageBoardNow + 4 * 1440 * MIN, windowMinutes: 10080 },
-        ],
-        observedAt: usageBoardNow - 2 * 60 * MIN, history: { fine: [], coarse: [] }, bots: [], workers: [],
-      }],
-    };
-    board.engines.push(muse);
+    board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
     server.board = board;
     await mount();
     expect(slots("claude")).toEqual(["5h", "7d", "Opus 7d"]);
@@ -706,10 +707,21 @@ describe("Usage desk", () => {
     expect(row("muse")?.querySelector('[data-window="five_hour"] [data-left]')?.className).toMatch(/\btext-danger\b/);
     expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("bg-ink/12"));
     expect(left("muse", "seven_day")).toBe("39% left");
-    expect(text(host)).not.toContain("Last seen");
+    expect(text(row("muse")?.querySelector("[data-reading-age]")), "Muse states the age of its reading").toBe("Last seen 2h ago");
+    expect(row("muse")?.querySelector("[data-account-bars]")?.className, "and mutes a reading over 1h old").toMatch(/\bopacity-60\b/);
+    expect(host.querySelectorAll("[data-reading-age]"), "only Muse").toHaveLength(1);
     expect(text(host)).not.toContain("Limit reached.");
     expect(q("[data-stale]")).toBeNull();
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it.each(["en", "ko"] as const)("states Muse's reading age on its row and mutes it only past 1h (%s)", async (locale) => {
+    const board = fresh();
+    board.engines.push(museEngine(usageBoardNow - 5 * MIN));
+    server.board = board;
+    await mount({ locale });
+    expect(text(row("muse")?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 5m ago" : "5분 전 기준");
+    expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
   });
 
   it("keeps the last good board after a failed read", async () => {

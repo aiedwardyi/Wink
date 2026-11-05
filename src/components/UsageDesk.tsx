@@ -232,6 +232,8 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   terminal: boolean; clock: Clock; reloadInstances: () => unknown; signIn: () => void;
 } & RowSlots) {
   const { t } = clock;
+  // Muse's limits move only when a turn or Check now reads them, so its rows state the age and mute past 1h (museReading).
+  const muse = engine.engine === "muse" ? museReading("museAgent", account.observedAt === null ? undefined : new Date(account.observedAt).toISOString(), clock.now) : null;
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
@@ -248,8 +250,10 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   return (
     <div data-account-row={account.id} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
       <Head account={account} runs={board.runs} name={name} control={control} t={t} />
-      {account.signIn === "ready" ? <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
-        : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
+      {account.signIn === "ready" ? <>
+        <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} muted={muse?.stale} />
+        {muse && <div data-reading-age="" className="mt-1.5 text-[12px] text-ink-secondary">{muse.label(t)}</div>}
+      </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
     </div>
   );
 }
