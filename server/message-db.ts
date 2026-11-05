@@ -14,11 +14,12 @@ import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync } 
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { termVerb } from "../shared/tool-verb.ts";
-
 import { DATA_DIR } from "./config.ts";
+import { activityHaystack } from "./search-text.ts";
 import type { Message } from "./store.ts";
 import { redactToolMessage } from "./tool-detail.ts";
+
+export { searchHaystack } from "./search-text.ts";
 
 const DB_FILE = () => join(DATA_DIR, "messages.db");
 
@@ -267,53 +268,6 @@ export interface SearchHit {
   matches: number;
   /** room messages: which member said it */
   from?: string;
-}
-
-// Same header and detail block the terminal row draws. Search must not outrun it.
-const INPUT_HEADERS = new Set(["Bash", "Update", "Write"]);
-
-type ToolBody = NonNullable<Message["tool"]>;
-type ToolDetail = NonNullable<ToolBody["detail"]>;
-
-function shownArgs(verb: string, summary: string | undefined, detail: ToolDetail | undefined, fallback?: string): string | undefined {
-  return (INPUT_HEADERS.has(verb) ? detail?.input ?? summary : summary ?? detail?.input) ?? fallback;
-}
-
-/** Detail text the terminal row draws: header input, then the visible output or diff lines. */
-function shownDetailLines(tool: ToolBody): string[] {
-  const detail = tool.detail;
-  const lines: string[] = [];
-  const args = shownArgs(termVerb(tool.verb ?? tool.name), tool.summary, detail, tool.verb ? tool.name : undefined);
-  if (args && (args === detail?.input || args === tool.summary)) lines.push(args);
-  if (!detail || detail.outputHidden) return lines;
-  const diff = tool.ok !== false && detail.diff?.length ? detail.diff : undefined;
-  const body = diff ?? detail.output;
-  if (!body?.length) return lines;
-  if (!detail.more && diff && detail.input && !lines.includes(detail.input)) lines.push(detail.input);
-  for (const line of body) {
-    lines.push(diff && (line[0] === "+" || line[0] === "-") ? `${line[0]} ${line.slice(1)}` : line);
-  }
-  return lines;
-}
-
-/** Text a find hit may quote. Activity rows include only detail the terminal row draws; `chips` rows draw the name and summary. */
-export function searchHaystack(message: Pick<Message, "kind" | "text" | "tool" | "comm">, chips = false): string {
-  if (message.kind !== "activity") return message.text ?? "";
-  const tool = message.tool;
-  if (!tool?.name) return "";
-  const lines = chips ? (tool.summary ? [tool.summary] : []) : shownDetailLines(tool);
-  // a comm chip draws its message body under the label
-  const detail = message.comm && message.text ? [...lines, message.text] : lines;
-  return detail.length ? `${tool.name}\n${detail.join("\n")}` : tool.name;
-}
-
-/** Visible detail text for one activity hit, from the tool object SQLite extracted. `body` is a comm chip's text. */
-function activityHaystack(toolJson: string | null, body: string | null, chips: boolean): string {
-  if (!toolJson) return "";
-  // SAFETY: tool_json is the $.tool object from a stored Message envelope.
-  const tool = redactToolMessage({ tool: JSON.parse(toolJson) as ToolBody }).tool;
-  const shown = searchHaystack({ kind: "activity", tool }, chips);
-  return shown && body ? `${shown}\n${body}` : shown;
 }
 
 /** Window around the first case-insensitive hit, with offsets after whitespace folding. */
