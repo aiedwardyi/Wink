@@ -25,7 +25,7 @@ const REPORT_WRAP_MS = 60_000;
 // A worker idle on its own background jobs keeps its turn-end note this long at most.
 const JOBS_HOLD_MS = 30 * 60_000;
 // Claude ends a background shell by 2 h and wakes its worker on each monitor line or timeout, so either wait holds STALLED that long plus slack.
-const SHELL_HOLD_MS = 125 * 60_000;
+const WAIT_HOLD_MS = 125 * 60_000;
 // Long enough for an agent woken by its finished job to show busy and drop the note.
 const JOBS_QUIET_MS = 30_000;
 const JOBS_FOOTER_LINES = 4;
@@ -743,7 +743,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       const capacity = session.engine === "codex" && codexCapacity(session.screen.snapshot({ maxScrollbackChars: 0 }));
       const held = !limit && (!session.agentSeen || session.engine === "claude" && agentJobsRunning(text, true));
-      const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? SHELL_HOLD_MS : JOBS_HOLD_MS;
+      const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? WAIT_HOLD_MS : JOBS_HOLD_MS;
       if (session.stallFired && (limit || capacity || AGENT_BUSY_RE.test(text) || session.stallPosts > STALL_REPEATS || at <= session.stallRepeatAt)) continue;
       if (at - session.stallChangedAt < threshold || at < session.stallRetryAt) continue;
       // Typed input can sit in the PTY before the screen echoes it
