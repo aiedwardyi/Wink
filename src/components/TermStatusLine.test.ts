@@ -182,7 +182,7 @@ describe("TermStatusLine", () => {
     expect(host.textContent).not.toMatch(/summary|turns kept|요약|보관된 턴/);
     const ticker = host.querySelector("[data-term-status] [data-term-ticker]")!;
     expect(shown(ticker)).toBe("5h 29% ↻ 1:00");
-    expect(ticker.querySelector("[data-glyphs]")).not.toBeNull();
+    expect(ticker.querySelector("[data-glyphs]")).toBeNull();
   });
 
   it("mutes and describes a stale Muse reading with its age", async () => {

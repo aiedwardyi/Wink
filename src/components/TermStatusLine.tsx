@@ -71,8 +71,10 @@ export function TermStatusLine({ bot, engine, cwd = bot.cwd, hidden }: { bot: Bo
 }
 
 const HOUR = 3_600_000;
+/** Hidden for the bars-first look (no graphs anywhere): the glyph trace stays in code, not rendered. */
+const SHOW_SPARK = false;
 
-/** The quota half of the status line: tile, glyph trace, % left and the reset countdown; the words live in its description. */
+/** The quota half of the status line: tile, % left and the reset countdown; the words live in its description. */
 function TermTicker({ hidden, identity, instance, instanceId, tightest, phone }: { hidden?: boolean; identity: string; instance: InstanceInfo | undefined; instanceId: string; tightest: boolean; phone: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
@@ -116,10 +118,10 @@ function TermTicker({ hidden, identity, instance, instanceId, tightest, phone }:
         {reading && !phone && <><span id={ageId} className="text-ink-secondary">{reading.label(t)}</span><span aria-hidden="true" className="text-ink-secondary"> · </span></>}
         {reading && phone && <span id={ageId} className="sr-only">{reading.label(t)}</span>}
         {multi && <span aria-hidden="true" className="text-ink-secondary">[{target.account.number}] </span>}
-        <span data-glyphs={brailleFits() ? "braille" : "block"} className="inline-flex align-baseline">
+        {SHOW_SPARK && <span data-glyphs={brailleFits() ? "braille" : "block"} className="inline-flex align-baseline">
           <UsageSpark series={series} tone={tone} terminal />
-        </span>
-        <span aria-hidden="true" className={tone === "out" ? "text-danger" : tone === "warn" ? "text-warning" : undefined}> {facts.first}</span>
+        </span>}
+        <span aria-hidden="true" className={tone === "out" ? "text-danger" : tone === "warn" ? "text-warning" : undefined}>{SHOW_SPARK && " "}{facts.first}</span>
         {reset && <span aria-hidden="true" className="text-ink-secondary"> ↻ {reset}</span>}
         {!tightest && second && <span aria-hidden="true" className="text-ink-secondary"> │ {second}</span>}
         <span id={summaryId} className="sr-only">{summary}</span>

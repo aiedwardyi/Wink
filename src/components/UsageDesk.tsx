@@ -197,7 +197,7 @@ function Who({ account, runs, t }: { account: UsageBoardAccount; runs: UsageBoar
   // Counts on every surface; the bot count opens the names.
   return (
     <>
-      <span data-account-who="" className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-ink-secondary">
+      <span data-account-who="" className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-5 text-ink-secondary">
         {names.length > 0
           ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); setOpen(!open); }}
             className="relative shrink-0 rounded-[3px] [corner-shape:bevel] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-x-1 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
@@ -205,7 +205,7 @@ function Who({ account, runs, t }: { account: UsageBoardAccount; runs: UsageBoar
         <span aria-hidden="true">·</span>
         <span className="min-w-0 truncate">{workers}</span>
       </span>
-      {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
+      {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12.5px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
     </>
   );
 }
@@ -370,16 +370,16 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   return (
     <section data-usage-engine={engine.engine} aria-label={label} className="min-w-0">
       <div className="flex min-h-9 min-w-0 items-center gap-2">
-        <span className="flex w-4 shrink-0 justify-center"><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+        <span data-engine-mark="" className={cn("flex shrink-0", terminal ? "usage-glyphs w-[3ch] text-[12px]" : "w-[18px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
         <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{label}</span>
         {engine.accounts.length > 1 && <AccountPicker viewedId={viewed} select={show}
           accounts={engine.accounts.map((each) => ({ id: each.id, name: each.name, number: each.number, main: each.id === checked }))} />}
       </div>
-      <div ref={rows} role="group" aria-label={label} className={cn("mt-1 grid min-w-0 gap-y-4 pl-6", !stacked && "grid-cols-2 gap-x-8")}>
+      <div ref={rows} role="group" aria-label={label} className={cn("mt-1 grid min-w-0 gap-y-4", !stacked && "grid-cols-2 gap-x-8")}>
         {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
           terminal={terminal} clock={clock} reloadInstances={reloadInstances} />)}
       </div>
-      {state.failed.has(engine.base) && <div role="alert" className="mt-2 pl-6 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+      {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
     </section>
   );
 }

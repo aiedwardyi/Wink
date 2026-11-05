@@ -20,6 +20,8 @@ import "./UsageDesk.css";
 const HOUR = 3_600_000;
 const GAP = 6;
 const MESSAGE_KEPT = 48;
+/** Phone: the All usage row, its rule and the view's border always show, so the view never shrinks to nothing. */
+const FOOTER_KEPT = 51;
 /** Hidden for the bars-first look: the hero and its chart stay in code, not rendered. */
 const SHOW_QUICK_HERO = false;
 /** Phone heights under this drop the header and seat Close beside All usage. */
@@ -60,7 +62,7 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   if (phone) {
     const cap = height * 0.6;
     const room = rect.top - gap - keptTop(top);
-    const maxHeight = Math.max(0, Math.floor(Math.min(cap, room)));
+    const maxHeight = Math.max(FOOTER_KEPT, Math.floor(Math.min(cap, room)));
     const edge = terminal ? 0 : 16;
     return { left: edge, bottom, width: window.innerWidth - 2 * edge, maxHeight, dimBottom: window.innerHeight - rect.top };
   }
@@ -93,16 +95,24 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   useBackLayer(true, close);
 
   useLayoutEffect(() => {
-    const update = () => { if (anchor.current) setSpot(place(anchor.current, phone, terminal)); };
+    const update = () => {
+      if (!anchor.current) return;
+      const next = place(anchor.current, phone, terminal);
+      setSpot((spot) => spot && (Object.keys(next) as (keyof Spot)[]).every((key) => spot[key] === next[key]) ? spot : next);
+    };
+    // The transcript may still be settling when the keyboard opens (it keeps to the bottom): measure again when it scrolls.
+    const scrolled = (event: Event) => { if (!box.current?.contains(event.target as Node)) update(); };
     update();
     const viewport = window.visualViewport;
     window.addEventListener("resize", update);
     viewport?.addEventListener("resize", update);
     viewport?.addEventListener("scroll", update);
+    document.addEventListener("scroll", scrolled, { capture: true, passive: true });
     return () => {
       window.removeEventListener("resize", update);
       viewport?.removeEventListener("resize", update);
       viewport?.removeEventListener("scroll", update);
+      document.removeEventListener("scroll", scrolled, { capture: true });
     };
   }, [anchor, phone, terminal]);
 
@@ -139,6 +149,8 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
 
   if (!spot) return null;
   const tight = phone && spot.maxHeight < TIGHT;
+  // No room for one line (the scroll area's own padding is 24 px): only All usage and Close show.
+  const bare = tight && spot.maxHeight < FOOTER_KEPT + 24;
   const closeButton = (
     <button type="button" data-quick-close="" aria-label={t("usage.chat.close")} onClick={() => close()}
       className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
@@ -153,18 +165,18 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>
         {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
-          <span className="flex w-4 shrink-0 justify-center"><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+          <span data-engine-mark="" className={cn("flex shrink-0", terminal ? "usage-glyphs w-[3ch] text-[12px]" : "w-[18px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
           <span data-engine-name="" className="min-w-0 flex-1 truncate text-[13px] text-ink">{engineName(engine.engine)}</span>
           {closeButton}
         </div>}
-        <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3")}>
+        <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
           {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
-          <div role="group" aria-label={engineName(engine.engine)} className="grid min-w-0 gap-y-4 pl-6">
+          <div role="group" aria-label={engineName(engine.engine)} className="grid min-w-0 gap-y-4">
             {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} />)}
           </div>
-          {state.failed.has(engine.base) && <div role="alert" className="pl-6 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+          {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">
           <button type="button" data-all-usage="" onClick={allUsage}

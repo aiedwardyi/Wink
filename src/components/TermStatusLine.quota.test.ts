@@ -128,18 +128,16 @@ afterEach(async () => {
 });
 
 describe("terminal status line quota ticker", () => {
-  it("falls back to block glyphs without braille", async () => {
-    await load(3);
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
-    const ticker = q("[data-term-ticker]");
-    expect(ticker, "ticker").not.toBeNull();
-    expect(ticker!.querySelector("[data-glyphs]")?.getAttribute("data-glyphs")).toBe("block");
-    expect(text(ticker)).not.toMatch(/[⠀-⣿]/);
-    await unmount();
-    await load(7.2);
-    await mount(botOn("claude"), instancesFor(usageBoardFixture));
-    expect(q("[data-term-ticker] [data-glyphs]")?.getAttribute("data-glyphs")).toBe("braille");
-    expect(text(q("[data-term-ticker]"))).toMatch(/[⠀-⣿]/);
+  it("draws no glyph trace, with or without braille", async () => {
+    for (const width of [3, 7.2]) {
+      await load(width);
+      await mount(botOn("claude"), instancesFor(usageBoardFixture));
+      const ticker = q("[data-term-ticker]");
+      expect(ticker, "ticker").not.toBeNull();
+      expect(ticker!.querySelector("[data-glyphs]")).toBeNull();
+      expect(text(ticker)).not.toMatch(/[⠀-⣿▁-█]/);
+      await unmount();
+    }
   });
 
   it("opens the quick view from the ticker, else all Usage", async () => {

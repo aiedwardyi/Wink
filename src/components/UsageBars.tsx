@@ -12,6 +12,10 @@ const SLIDING_CELLS = "relative inline-block [-webkit-text-fill-color:transparen
   + "after:transition-[width] after:duration-300 after:ease-out motion-reduce:after:transition-none";
 /** Engines that report a 5h and a 7d window; the rest show their own windows (Gemini its daily one). */
 const SESSION_WEEK = new Set(["claude", "codex", "grok"]);
+/** Today's line: label, cells, then the % and the reset. Fixed label and % widths (the % fits "100%") keep every column on one edge. */
+const LINE = "flex min-w-0 items-center gap-2 text-[12.5px] leading-5";
+const LABEL = "min-w-6 shrink-0 whitespace-nowrap [&:lang(ko)]:min-w-10";
+const NUMS = "flex items-center gap-1.5 whitespace-nowrap tabular-nums";
 
 export function barTone(usedPercent: number) {
   return usedPercent >= 90 ? "text-danger" : usedPercent >= 75 ? "text-warning" : "text-accent";
@@ -47,7 +51,7 @@ export function barSlots(engine: string, account: Pick<UsageBoardAccount, "windo
 function Cells({ left, tone, slide = true }: { left: number | null; tone: string; slide?: boolean }) {
   const filled = left === null ? 0 : Math.round(left / CELLS);
   return (
-    <span aria-hidden="true" data-cells={filled} className={cn("usage-glyphs shrink-0 tracking-tight", tone, slide && SLIDING_CELLS)}
+    <span aria-hidden="true" data-cells={filled} className={cn("shrink-0 font-mono tracking-tight", tone, slide && SLIDING_CELLS)}
       style={slide ? { "--fill": `${filled * CELLS}%` } as CSSProperties : undefined}>
       {"▰".repeat(filled) + "▱".repeat(CELLS - filled)}
     </span>
@@ -57,10 +61,10 @@ function Cells({ left, tone, slide = true }: { left: number | null; tone: string
 /** The one empty state for a window with no reading, the same on every surface and engine. */
 export function NoWindow({ label, text }: { label: string; text: string }) {
   return (
-    <div role="group" aria-label={`${label}: ${text}`} data-window-empty="" className="usage-bar-line text-ink-secondary">
-      <span aria-hidden="true" className="usage-bar-label">{label}</span>
+    <div role="group" aria-label={`${label}: ${text}`} data-window-empty="" className={cn(LINE, "text-ink-secondary")}>
+      <span aria-hidden="true" className={LABEL}>{label}</span>
       <Cells left={null} tone="text-ink-secondary" slide={false} />
-      <span aria-hidden="true" className="whitespace-nowrap">{text}</span>
+      <span aria-hidden="true" className={NUMS}>{text}</span>
     </div>
   );
 }
@@ -74,11 +78,13 @@ export function WindowBar({ slot, now, muted = false, t }: { slot: Slot; now: nu
   const phrase = resetPhrase(window.resetsAt, now);
   return (
     <div role="group" data-window={slot.key} aria-label={`${label}: ${t("usage.desk.windowLeft", { percent: left })}, ${t(phrase.key, phrase.vars)}`}
-      className={cn("usage-bar-line", muted ? "text-ink-secondary" : "text-ink")}>
-      <span aria-hidden="true" className="usage-bar-label">{label}</span>
+      className={cn(LINE, muted ? "text-ink-secondary" : "text-ink")}>
+      <span aria-hidden="true" className={LABEL}>{label}</span>
       <Cells left={left} tone={muted ? "text-ink-secondary" : barTone(window.usedPercent)} />
-      <span aria-hidden="true" data-left="" className="usage-num usage-bar-pct">{left}%</span>
-      {reset && <span aria-hidden="true" data-reset={slot.key} className="usage-num whitespace-nowrap text-ink-secondary">({t(reset.key, reset.vars)})</span>}
+      <span aria-hidden="true" className={NUMS}>
+        <span data-left="" className="min-w-[2.65em] [&:lang(ko)]:min-w-[2.45em]">{left}%</span>
+        {reset && <span data-reset={slot.key} title={t(phrase.key, phrase.vars)} className="text-ink-secondary">({t(reset.key, reset.vars)})</span>}
+      </span>
     </div>
   );
 }

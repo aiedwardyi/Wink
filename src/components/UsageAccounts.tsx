@@ -45,7 +45,7 @@ export function AccountPicker({ accounts, viewedId, select }: {
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [open]);
   return (
-    <div className={cn("relative -mr-1.5 flex min-w-0 shrink-0 items-center rounded-[3px] [corner-shape:bevel] pl-1.5 hover:bg-raised-hover has-[>button:active]:scale-[0.97] has-[>button:active]:bg-raised-hover", PRESS, open && "bg-raised-hover")}>
+    <div className={cn("relative flex min-w-0 shrink-0 items-center rounded-[3px] [corner-shape:bevel] pl-1.5 hover:bg-raised-hover has-[>button:active]:scale-[0.97] has-[>button:active]:bg-raised-hover", PRESS, open && "bg-raised-hover")}>
       <button ref={trigger} type="button" aria-label={t("accounts.choose", { account: viewed.name })}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}
         className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 text-[12px] text-ink-secondary [@media(pointer:coarse)]:h-11">
@@ -69,7 +69,11 @@ export function AccountPicker({ accounts, viewedId, select }: {
         }}>
         {accounts.map((item) => <button key={item.id} type="button" role="menuitemradio" tabIndex={-1}
           aria-label={item.main ? `${item.name} ${t("accounts.main")}` : undefined}
-          aria-checked={item.id === viewed.id} onClick={() => { select(item.id); close(); }}
+          aria-checked={item.id === viewed.id} onClick={() => {
+            select(item.id);
+            // A pick that moves focus (Usage focuses the account it brings into view) keeps it there.
+            if (menu.current?.contains(document.activeElement)) close(); else setOpen(false);
+          }}
           className={cn("flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] font-normal text-ink hover:bg-raised/70 [@media(pointer:coarse)]:min-h-11",
             item.id === viewed.id && "bg-raised/50")}>
           <Tile number={item.number} terminal={terminal} />
