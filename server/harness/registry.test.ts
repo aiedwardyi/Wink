@@ -14,7 +14,7 @@ import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { MuseAgentDriver } from "../drivers/acp/muse.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { setWslGateForTests } from "../wsl-gate.ts";
-import { createWarmPool } from "../drivers/warm-pool.ts";
+import { createWarmPool, type Lease } from "../drivers/warm-pool.ts";
 
 /** A fake driver whose snapshot() and refreshModels() stand in for CLI launches. */
 function countingDriver() {
@@ -68,9 +68,112 @@ async function warmRegistry(install: Record<string, unknown> = {}) {
   return { fake, pool, registry };
 }
 
+function createLeaseRegistry() {
+  const fake = makeFakeDriver({ kind: "museAgent" });
+  const pool = testPool();
+  const leases: Lease[] = [];
+  const create = fake.driver.create.bind(fake.driver);
+  fake.driver.create = async (input) => {
+    const instance = await create(input);
+    const incarnation = input.incarnation ?? "own";
+    const lease = pool.reserve({ engine: "museAgent", instanceId: input.instanceId, threadId: `t-${leases.length}` }, "fp", { generation: 0, incarnation, identity: "auth-hash" }, "speculative");
+    if (typeof lease === "string") throw new Error(lease);
+    leases.push(lease);
+    return instance;
+  };
+  return { registry: new ProviderRegistry([fake.driver], { warmPool: pool }), pool, leases };
+}
+
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
 describe("ProviderRegistry", () => {
+  it("a driver gets the registry incarnation at create", async () => {
+    const fake = makeFakeDriver();
+    const create = vi.spyOn(fake.driver, "create");
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      await registry.load({ a: { driver: "fake" } });
+      const created = create.mock.calls[0][0];
+      expect(created.incarnation).toBe(registry.incarnation("a"));
+    } finally { await registry.disposeAll(); }
+  });
+
+  it("a reload invalidates leases a driver reserved with its create incarnation", async () => {
+    const { registry, pool, leases } = createLeaseRegistry();
+    try {
+      await registry.load({ a: { driver: "museAgent" } });
+      const old = leases[0];
+      expect(old.signal.aborted).toBe(false);
+      await registry.load({ a: { driver: "museAgent" } });
+      expect(leases).toHaveLength(2);
+      expect(old.signal.aborted).toBe(true);
+      expect(leases[1].captured.incarnation).toBe(registry.incarnation("a"));
+      expect(leases[1].signal.aborted).toBe(false);
+      expect(pool.stats().pending).toBe(1);
+    } finally {
+      await registry.disposeAll();
+      await pool.closeAll("test", { final: true });
+    }
+  });
+
+  it("parallel creates get distinct incarnations matching their own input", async () => {
+    const fake = makeFakeDriver();
+    const originalCreate = fake.driver.create.bind(fake.driver);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const order: string[] = [];
+    const create = vi.spyOn(fake.driver, "create").mockImplementation(async (input) => {
+      if (input.instanceId === "a") await gate;
+      order.push(input.instanceId);
+      return originalCreate(input);
+    });
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      const loading = registry.load({ a: { driver: "fake" }, b: { driver: "fake" } });
+      expect(create).toHaveBeenCalledTimes(2);
+      release();
+      await loading;
+      expect(order).toEqual(["b", "a"]);
+      const inputs = create.mock.calls.map(([input]) => input);
+      expect(new Set(inputs.map((input) => input.incarnation)).size).toBe(2);
+      for (const input of inputs) {
+        expect(input.incarnation).toBeTruthy();
+        expect(input.incarnation).toBe(registry.incarnation(input.instanceId));
+      }
+    } finally {
+      release();
+      await registry.disposeAll();
+    }
+  });
+
+  it("a failed create gets no incarnation", async () => {
+    const fake = makeFakeDriver();
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      await registry.load({ a: { driver: "fake" } });
+      expect(registry.incarnation("a")).toBeTruthy();
+      vi.spyOn(fake.driver, "create").mockRejectedValueOnce(new Error("create failed"));
+      await registry.load({ a: { driver: "fake" } });
+      expect(registry.get("a")).toBeNull();
+      expect(registry.incarnation("a")).toBeUndefined();
+    } finally { await registry.disposeAll(); }
+  });
+
+  it("removing an instance invalidates its create incarnation's leases", async () => {
+    const { registry, pool, leases } = createLeaseRegistry();
+    try {
+      await registry.load({ a: { driver: "museAgent" } });
+      expect(leases[0].signal.aborted).toBe(false);
+      const removed = registry.remove("a");
+      expect(leases[0].signal.aborted).toBe(true);
+      expect(registry.incarnation("a")).toBeUndefined();
+      await removed?.dispose();
+    } finally {
+      await registry.disposeAll();
+      await pool.closeAll("test", { final: true });
+    }
+  });
+
   it.each(["antigravityAgent", "claudeAgent", "codex", "museAgent"])("marks completed available auth probes for %s", async (kind) => {
     const fake = makeFakeDriver({ kind });
     const registry = new ProviderRegistry([fake.driver]);

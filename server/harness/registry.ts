@@ -155,7 +155,7 @@ export class ProviderRegistry {
               reason: `unknown driver "${entry.driver}": kept as configured, unavailable here`,
             },
           },
-        } satisfies { entry: RegistryEntry; rawCli?: string };
+        } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       }
       const rawCli = cliOfRaw(entry.config);
       try {
@@ -163,15 +163,17 @@ export class ProviderRegistry {
         // Override detection is on the RAW config, never the decoded one:
         // decodeConfig fills in the driver default ("claude", "codex", …),
         // so reading `cli` there would flag every instance as overridden.
+        const incarnation = `${instanceId}#${++this.incarnationSeq}`;
         const live = await driver.create({
           instanceId,
+          incarnation,
           displayName: entry.displayName ?? driver.metadata.displayName,
           environment: entry.environment ?? {},
           enabled: entry.enabled ?? true,
           config,
           ...(entry.account ? { account: entry.account } : {}),
         });
-        return { entry: { instanceId, live }, rawCli } satisfies { entry: RegistryEntry; rawCli?: string };
+        return { entry: { instanceId, live }, rawCli, incarnation } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       } catch (e) {
         return {
           entry: {
@@ -186,7 +188,7 @@ export class ProviderRegistry {
             },
           },
           rawCli,
-        } satisfies { entry: RegistryEntry; rawCli?: string };
+        } satisfies { entry: RegistryEntry; rawCli?: string; incarnation?: string };
       }
     }));
     for (const result of loaded) {
@@ -196,7 +198,7 @@ export class ProviderRegistry {
       if (result.rawCli) this.cliByInstance.set(result.entry.instanceId, result.rawCli);
       else this.cliByInstance.delete(result.entry.instanceId);
       this.retire(result.entry.instanceId);
-      if (result.entry.live) this.incarnations.set(result.entry.instanceId, `${result.entry.instanceId}#${++this.incarnationSeq}`);
+      if (result.entry.live && result.incarnation) this.incarnations.set(result.entry.instanceId, result.incarnation);
       this.byId.set(result.entry.instanceId, result.entry);
       result.entry.live?.setAccountBlocked?.(this.blockedAccounts.has(result.entry.instanceId));
       const live = result.entry.live;
