@@ -8,6 +8,8 @@ import { needleGrams } from "./search-text.ts";
 
 type Rows = Iterable<Record<string, SQLOutputValue>>;
 const FINGERPRINT = searchCacheFingerprint();
+export const SEARCH_SCAN_ROWS = 20000;
+const routes = new WeakMap<DatabaseSync, { epoch: number; generation: number; scopes: Map<string, boolean> }>();
 
 function* candidates(cache: DatabaseSync, source: DatabaseSync, match: string, limit: number, ordered: StatementSync, args: SQLInputValue[]): Rows {
   const scoped = args.length > 2;
@@ -61,7 +63,7 @@ export function querySearchCache<T>(
   const grams = needleGrams(needle);
   if (!grams.length) return;
   const file = join(dataDir, SEARCH_CACHE_FILE);
-  if (!existsSync(file)) {
+  if (!routes.has(source) && !existsSync(file)) {
     untrustSearchCache();
     return;
   }
@@ -69,6 +71,23 @@ export function querySearchCache<T>(
   try {
     const state = searchCacheState();
     if (!state.trusted) return;
+    let route = routes.get(source);
+    if (!route || route.epoch !== state.epoch || route.generation !== state.generation) {
+      route = { epoch: state.epoch, generation: state.generation, scopes: new Map() };
+      routes.set(source, route);
+    }
+    const key = JSON.stringify(args.slice(2));
+    let large = route.scopes.get(key);
+    if (large === undefined) {
+      const scope = args.length > 2 ? ` WHERE thread_id = ?1${args.length > 3 ? " AND (at < ?2 OR (at = ?2 AND rowid < ?3))" : ""}` : "";
+      large = Boolean(source.prepare(`SELECT 1 FROM messages${scope} LIMIT 1 OFFSET ${SEARCH_SCAN_ROWS - 1}`).get(...args.slice(2)));
+      route.scopes.set(key, large);
+    }
+    if (!large) return;
+    if (!existsSync(file)) {
+      untrustSearchCache();
+      return;
+    }
     cache = new DatabaseSync(file, { readOnly: true });
     const meta = cache.prepare("SELECT format, fingerprint, generation, state FROM search_meta WHERE id = 1").get();
     if (!meta || meta.format !== 1 || meta.fingerprint !== FINGERPRINT || Number(meta.generation) < 1 || meta.state !== "current") {

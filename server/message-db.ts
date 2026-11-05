@@ -337,6 +337,7 @@ export function searchMessages(
 ): SearchHit[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
+  const database = db();
   // escape LIKE wildcards so a literal % or _ in the query stays literal
   const like = (text: string) => `%${text.replace(/([\\%_])/g, "\\$1")}%`;
   const pattern = like(needle);
@@ -355,7 +356,7 @@ export function searchMessages(
     : "";
   // SAFETY: This projection selects at and SQLite's rowid.
   const cursor = threadId && before
-    ? db().prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
+    ? database.prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
     : undefined;
   if (before && !cursor) return [];
   const scope = threadId ? `thread_id = ?3 AND ${cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : ""}` : "";
@@ -367,13 +368,13 @@ export function searchMessages(
     ? "(lower(ifnull(json_extract(json, '$.tool.name'), '')) LIKE ?1 ESCAPE '\\' OR lower(ifnull(json_extract(json, '$.tool.summary'), '')) LIKE ?1 ESCAPE '\\')"
     : `lower(json_extract(json, '$.tool.name', '$.tool.summary', '$.tool.detail.input', '$.tool.detail.output', '$.tool.detail.diff')) LIKE ?2 ESCAPE '\\'${decoded}`;
   // Sorts row ids only; the hit loop reads each row once it needs it.
-  const ordered = db().prepare(
+  const ordered = database.prepare(
     "SELECT rowid AS row FROM messages " +
       `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\' AND json_extract(json, '$.summarized') IS NOT 1) ` +
       "   OR (kind = 'activity' AND ((text IS NOT NULL AND json_extract(json, '$.comm') IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\') " +
       `     OR (lower(json) LIKE ?2 ESCAPE '\\' AND ${gate})))) ORDER BY ${order}at DESC, rowid DESC`,
   );
-  const fetch = db().prepare(
+  const fetch = database.prepare(
     "SELECT thread_id, id, at, role, kind, CASE WHEN kind != 'activity' OR json_extract(json, '$.comm') IS NOT NULL THEN text END AS text, " +
       "CASE WHEN kind = 'activity' THEN json_extract(json, '$.tool') END AS tool_json, json_extract(json, '$.from.name') AS from_name FROM messages WHERE rowid = ?",
   );
@@ -409,7 +410,7 @@ export function searchMessages(
     }
     return hits;
   };
-  return querySearchCache(db(), DATA_DIR, needle, limit, ordered, args, collect) ?? collect(ordered.iterate(...args));
+  return querySearchCache(database, DATA_DIR, needle, limit, ordered, args, collect) ?? collect(ordered.iterate(...args));
 }
 
 /** Test/shutdown hook — closes the handle so a wiped DATA_DIR starts clean. */

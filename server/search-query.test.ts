@@ -6,16 +6,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { applySyncedRows, closeMessageDb, insertMessage, messageDatabase, replaceThread, searchMessages, updateMessage, withMessageTransaction } from "./message-db.ts";
 import { ackSearchCache, searchCacheState, syncRequestStarted, untrustSearchCache } from "./search-gate.ts";
+import * as query from "./search-query.ts";
 import type { Message } from "./store.ts";
 
 const msg = (id: string, text = id, extra: Partial<Message> = {}): Message => ({ id, role: "user", kind: "text", text, at: 1, parentId: null, ...extra });
 const fixed = ["a", "is", "API", "error", "search", "Bash", "the result", "node:sqlite", "%", "qzxv_1105\\nohit", "검", "결", "검사", "결과", "검색", "요", "완료", "다음 단계", "결과:", "쀍쀍없는결과"];
 const literals = "a is API error search Bash the result node:sqlite 100% _ \\ \" ' 검사 결과 검색 요 완료 다음 단계 결과: 🧠 e\u0301 É İ Σ";
+const scanRows = "SEARCH_SCAN_ROWS" in query ? Number(query.SEARCH_SCAN_ROWS) : 20000;
 let fts: string[];
 let fetched: number;
 let scanned: number;
 
-async function ready() {
+async function ready(pad = true) {
+  if (pad) {
+    const source = messageDatabase();
+    const threads = source.prepare("SELECT DISTINCT thread_id FROM messages").all();
+    const insert = source.prepare("INSERT OR IGNORE INTO messages VALUES (?, ?, -1, 'user', 'note', '', ?)");
+    withMessageTransaction(() => {
+      for (const { thread_id } of threads) {
+        for (let i = 0; i < scanRows; i++) {
+          const row = msg(`search-query-padding-${i}`, "", { at: -1, kind: "note" });
+          insert.run(thread_id, row.id, JSON.stringify(row));
+        }
+      }
+    });
+  }
   const module = await import("./search-cache.ts").catch(() => null);
   if (!module) return;
   const state = searchCacheState();
@@ -83,6 +98,49 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("search query", () => {
+  it("scans a small trusted scope without opening the cache", async () => {
+    replaceThread("small", Array.from({ length: 100 }, (_, i) => msg(`small-${i}`, "small search", { at: i })), "small-99");
+    const baseline = searchMessages("search", 40, "small");
+    await ready(false);
+    let opened = 0;
+    trace((_database, sql) => { if (sql.startsWith("SELECT format, fingerprint")) opened++; });
+    expect(searchMessages("search", 40, "small")).toEqual(baseline);
+    expect(scanned).toBe(1);
+    expect(opened).toBe(0);
+    expect(searchCacheState().trusted).toBe(true);
+  });
+
+  it("reuses scope counts only within the current source epoch and generation", async () => {
+    replaceThread("memo", Array.from({ length: scanRows - 1 }, (_, i) => msg(`memo-${i}`, "memo", { kind: i ? "note" : "text" })), "memo-0");
+    await ready(false);
+    const source = messageDatabase();
+    let probes = 0;
+    trace((database, sql) => { if (database === source && sql.endsWith(`LIMIT 1 OFFSET ${scanRows - 1}`)) probes++; });
+    expect(searchMessages("memo", 40, "memo")).toHaveLength(1);
+    expect(searchMessages("memo", 40, "memo")).toHaveLength(1);
+    expect(probes).toBe(1);
+    insertMessage("memo", msg("memo-new", "memo", { at: 2 }));
+    const changed = searchMessages("memo", 40, "memo");
+    await ready(false);
+    fts = [];
+    expect(searchMessages("memo", 40, "memo")).toEqual(changed);
+    expect(probes).toBe(2);
+    expect(fts.length).toBeGreaterThan(0);
+    const other = new DatabaseSync(join(DATA_DIR, "messages.db"));
+    other.prepare("DELETE FROM messages WHERE thread_id = 'memo' AND id = 'memo-new'").run();
+    other.close();
+    expect(searchMessages("memo", 40, "memo")).toHaveLength(1);
+    expect(searchCacheState().trusted).toBe(false);
+    await ready(false);
+    fts = [];
+    scanned = 0;
+    expect(searchMessages("memo", 40, "memo")).toHaveLength(1);
+    expect(searchMessages("memo", 40, "memo")).toHaveLength(1);
+    expect(probes).toBe(3);
+    expect(scanned).toBe(2);
+    expect(fts).toEqual([]);
+  });
+
   it("rejects 3,000 older hidden-only previews with bounded source fetches", async () => {
     const rows = Array.from({ length: 3000 }, (_, i) => msg(`hidden-${i}`, "", {
       at: i, kind: "activity", tool: { name: "Read", detail: { input: "public/file.txt", output: ["HiddenOnlyNeedle"], outputHidden: true } },
@@ -166,6 +224,7 @@ describe("search query", () => {
       insertMessage("one", msg(`one-${i}`, "search", { at: Math.floor(i / 3) }));
       insertMessage("two", msg(`two-${i}`, "search", { at: 1000 + i }));
     }
+    insertMessage("empty", msg("unsearchable", "", { kind: "note" }));
     const baseline = searchMessages("search", 100, "one", { before: "one-100" });
     await ready();
     trace();
@@ -174,6 +233,35 @@ describe("search query", () => {
     expect(fts.length).toBeGreaterThan(0);
     expect(scanned).toBe(0);
   });
+
+  it("preserves ordered parity at the scan cutoff and on cursor-reduced scopes", async () => {
+    const sizes = [scanRows - 1, scanRows, scanRows + 1];
+    const cases = sizes.flatMap((n) => {
+      const thread = `boundary-${n}`;
+      replaceThread(thread, Array.from({ length: n }, (_, i) => msg(`${thread}-${i}`, "boundary 검사 100%", {
+        at: Math.floor(i / 3), kind: i % 10 ? "note" : "text",
+      })), `${thread}-${n - 1}`);
+      return ["boundary", "검사", "%"].flatMap((needle) => [1, 12, 40, 41, 100].flatMap((limit) => [false, true].flatMap((chips) =>
+        [undefined, `${thread}-${Math.floor(n / 2)}`, "missing"].map((before) => ({ thread, needle, limit, options: { chips, before } })))));
+    });
+    const baseline = cases.map(({ thread, needle, limit, options }) => searchMessages(needle, limit, thread, options));
+    await ready(false);
+    trace();
+    for (const [i, { thread, needle, limit, options }] of cases.entries()) expect(searchMessages(needle, limit, thread, options)).toEqual(baseline[i]);
+    for (const n of sizes) {
+      scanned = 0;
+      fts = [];
+      searchMessages("boundary", 40, `boundary-${n}`);
+      expect(scanned).toBe(n < scanRows ? 1 : 0);
+      expect(fts.length > 0).toBe(n >= scanRows);
+    }
+    insertMessage(`boundary-${scanRows}`, msg("pending-boundary", "boundary 검사 100%", { at: scanRows }));
+    const pending = cases.map(({ thread, needle, limit, options }) => searchMessages(needle, limit, thread, options));
+    const matched = fts.length;
+    untrustSearchCache();
+    for (const [i, { thread, needle, limit, options }] of cases.entries()) expect(searchMessages(needle, limit, thread, options)).toEqual(pending[i]);
+    expect(fts.length).toBe(matched);
+  }, 60_000);
 
   it.each(["", "  ", "\0", "a\0b", "\ud800", "\udfff"])("keeps the baseline for unsupported literal %j", async (query) => {
     insertMessage("one", msg("literal", `a${query}b`));
