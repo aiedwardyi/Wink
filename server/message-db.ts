@@ -17,6 +17,7 @@ import { DatabaseSync } from "node:sqlite";
 import { termVerb } from "../shared/tool-verb.ts";
 
 import { DATA_DIR } from "./config.ts";
+import { publishSearchDirt, searchDirty, searchSource } from "./search-gate.ts";
 import type { Message } from "./store.ts";
 import { redactToolMessage } from "./tool-detail.ts";
 
@@ -68,6 +69,7 @@ function db(): DatabaseSync {
   } catch {}
   handle = open();
   handlePath = DB_FILE();
+  searchSource(handle);
   return handle;
 }
 
@@ -120,6 +122,7 @@ function importLegacy(threadId: string, legacyFile: string): ThreadRows {
     }
     setActiveLeaf(threadId, activeLeafId);
     db().exec("COMMIT");
+    searchDirty(db(), threadId);
   } catch (error) {
     db().exec("ROLLBACK");
     throw error;
@@ -137,9 +140,11 @@ function importLegacy(threadId: string, legacyFile: string): ThreadRows {
 
 export function insertMessage(threadId: string, message: Message): void {
   message = redactToolMessage(message);
-  db()
+  const database = db();
+  database
     .prepare("INSERT OR REPLACE INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(threadId, message.id, message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message));
+  searchDirty(database, threadId, message.id);
 }
 
 /** Persist a new message and the branch head as one crash-safe mutation. */
@@ -152,9 +157,11 @@ export function appendMessage(threadId: string, message: Message): void {
 
 export function updateMessage(threadId: string, message: Message): void {
   message = redactToolMessage(message);
-  db()
+  const database = db();
+  database
     .prepare("UPDATE messages SET at = ?, role = ?, kind = ?, text = ?, json = ? WHERE thread_id = ? AND id = ?")
     .run(message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message), threadId, message.id);
+  searchDirty(database, threadId, message.id);
 }
 
 export function setActiveLeaf(threadId: string, leafId: string | null): void {
@@ -175,6 +182,7 @@ export function replaceThread(threadId: string, messages: Message[], activeLeafI
     for (const message of messages) insertMessage(threadId, message);
     setActiveLeaf(threadId, activeLeafId);
     database.exec("COMMIT");
+    searchDirty(database, threadId);
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -188,6 +196,7 @@ export function withMessageTransaction<T>(work: (database: DatabaseSync) => T): 
   try {
     const result = work(database);
     database.exec(nested ? "RELEASE message_write" : "COMMIT");
+    if (!nested) publishSearchDirt();
     return result;
   } catch (error) {
     database.exec(nested ? "ROLLBACK TO message_write; RELEASE message_write" : "ROLLBACK");
@@ -227,9 +236,11 @@ export function applySyncedRows(
   let touched = 0;
   for (const source of messages) {
     const message = redactToolMessage(source);
-    touched += Number(upsert.run(
+    const changes = Number(upsert.run(
       threadId, message.id, message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message),
     ).changes);
+    if (changes) searchDirty(database, threadId, message.id);
+    touched += changes;
   }
   if (activeLeafId !== undefined) {
     touched += Number(database.prepare(
@@ -249,7 +260,25 @@ export function lastMessageAt(threadId: string): number | null {
 
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
+  searchDirty(db(), threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
+}
+
+/** Drop PC-local sync notices; their children and the branch head move up to each notice's parent. */
+export function removeSyncNotices(threadId: string, ids: string[]): void {
+  withMessageTransaction((database) => {
+    for (const id of ids) {
+      const row = database.prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id);
+      if (!row) continue;
+      const message: Message = JSON.parse(String(row.json));
+      const parent = message.parentId ?? null;
+      database.prepare("UPDATE messages SET json = json_set(json, '$.parentId', ?) WHERE thread_id = ? AND json_extract(json, '$.parentId') = ?")
+        .run(parent, threadId, id);
+      database.prepare("UPDATE thread_state SET active_leaf_id = ? WHERE thread_id = ? AND active_leaf_id = ?").run(parent, threadId, id);
+      database.prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(threadId, id);
+      searchDirty(database, threadId);
+    }
+  });
 }
 
 export interface SearchHit {
@@ -431,4 +460,5 @@ export function closeMessageDb(): void {
   } catch {}
   handle = null;
   handlePath = null;
+  searchSource(null);
 }

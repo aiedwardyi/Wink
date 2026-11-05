@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
+import { syncRequestStarted } from "./search-gate.ts";
 import type { Message } from "./store.ts";
 import type { ThreadRowPage } from "./message-db.ts";
 import type { MigrationCrash, MigrationProgress } from "./thread-sync-v2-migration.ts";
@@ -121,6 +122,7 @@ export class ThreadSyncV2 {
   private pending = new Map<number, { resolve: (value: SyncResponse) => void; reject: (error: Error) => void }>();
   private failure: Error | null = null;
   private exited: Promise<void>;
+  private starting = syncRequestStarted();
 
   constructor(options: SyncOptions) {
     const source = new URL("./thread-sync-v2-worker.ts", import.meta.url);
@@ -132,6 +134,7 @@ export class ThreadSyncV2 {
       resourceLimits: { maxYoungGenerationSizeMb: 4 },
     });
     this.worker.on("message", ({ id, value, error }: { id: number; value: SyncResponse; error?: string }) => {
+      this.starting();
       const pending = this.pending.get(id);
       this.pending.delete(id);
       if (error) pending?.reject(new Error(error));
@@ -146,13 +149,15 @@ export class ThreadSyncV2 {
 
   private fail(error: Error): void {
     this.failure = error;
+    this.starting();
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
   }
 
   private request<T extends SyncResponse>(request: SyncRequest): Promise<T> {
     if (this.failure) return Promise.reject(this.failure);
-    return new Promise((resolve, reject) => {
+    const done = syncRequestStarted();
+    return new Promise<T>((resolve, reject) => {
       const id = ++this.nextId;
       // SAFETY: The private callers pair each worker method with its response type.
       this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
@@ -162,7 +167,7 @@ export class ThreadSyncV2 {
         this.pending.delete(id);
         reject(error);
       }
-    });
+    }).finally(done);
   }
 
   commit(scope: SyncScope, mutations: SyncMutation[], crash?: "before-commit" | "after-commit"): Promise<SyncApplyResult> {
