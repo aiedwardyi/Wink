@@ -146,6 +146,44 @@ describe("Claude user setup", () => {
 });
 
 describe.each(["claudeAgent", "codex"])("%s setup safety", (driver) => {
+  it("skips unchanged skill scans and rescans after source or destination changes", () => {
+    const f = fixture();
+    const source = join(f.base, "skills");
+    const destination = join(f.home, "skills");
+    f.write(join(source, "first/SKILL.md"));
+    f.share(driver);
+    const scan = vi.spyOn(fs, "readdirSync");
+    f.share(driver);
+    expect(scan).not.toHaveBeenCalled();
+    f.write(join(source, "later/SKILL.md"));
+    fs.utimesSync(source, new Date(1000), new Date(1000));
+    f.share(driver);
+    expect(scan).toHaveBeenCalledExactlyOnceWith(source);
+    expect(fs.lstatSync(join(destination, "later")).isSymbolicLink()).toBe(true);
+    scan.mockClear();
+    fs.rmSync(join(destination, "first"));
+    fs.utimesSync(destination, new Date(2000), new Date(2000));
+    f.share(driver);
+    expect(scan).toHaveBeenCalledExactlyOnceWith(source);
+    expect(fs.lstatSync(join(destination, "first")).isSymbolicLink()).toBe(true);
+    scan.mockClear();
+    f.share(driver);
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed skill link on the next launch", () => {
+    const f = fixture();
+    f.write(join(f.base, "skills/first/SKILL.md"));
+    f.write(join(f.base, "skills/second/SKILL.md"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const link = vi.spyOn(fs, "symlinkSync").mockImplementationOnce(() => { throw new Error("fixture"); });
+    f.share(driver);
+    f.absent("skills/first");
+    link.mockClear();
+    f.share(driver);
+    expect(link).toHaveBeenCalledExactlyOnceWith(resolve(join(f.base, "skills/first")), join(f.home, "skills/first"), "junction");
+  });
+
   it("links individual skills including linked sources and picks up new entries", () => {
     const f = fixture();
     for (const name of ["synced", ".hidden", ".system", "mine", "own"]) f.write(join(f.base, "skills", name, "SKILL.md"));

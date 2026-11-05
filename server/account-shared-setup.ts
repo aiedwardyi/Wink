@@ -6,9 +6,11 @@ import { dirname, join, resolve } from "node:path";
 import { canonicalAccountHome, type AccountContext } from "./account-policy.ts";
 import { DATA_DIR } from "./config.ts";
 
+const skillScans = new Map<string, { sourceMtimeMs: number; destinationMtimeMs: number }>();
+
 export function shareUserSetup(driver: string, account: AccountContext, baseHome: string): void {
   const attempt = (name: string, action: () => void) => {
-    try { action(); } catch { console.warn("Could not share user setup:", name); }
+    try { action(); return true; } catch { console.warn("Could not share user setup:", name); return false; }
   };
   let sameHome = true;
   attempt("home", () => { sameHome = canonicalAccountHome(baseHome) === canonicalAccountHome(account.home); });
@@ -34,11 +36,21 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
   }
   attempt("skills", () => {
     const source = join(baseHome, "skills");
-    if (!sourceStat(source)?.isDirectory()) return;
+    const sourceInfo = sourceStat(source);
+    if (!sourceInfo?.isDirectory()) return;
+    const destination = join(account.home, "skills");
+    const destinationInfo = present(destination);
+    const key = `${canonicalAccountHome(source)}\0${canonicalAccountHome(destination)}`;
+    const cached = skillScans.get(key);
+    if (destinationInfo?.isDirectory() && cached?.sourceMtimeMs === sourceInfo.mtimeMs && cached.destinationMtimeMs === destinationInfo.mtimeMs) return;
+    skillScans.delete(key);
+    let complete = true;
     for (const name of readdirSync(source)) {
       if (name === "synced" || name.startsWith(".")) continue;
-      attempt(name, () => link(join(source, name), join(account.home, "skills", name)));
+      if (!attempt(name, () => link(join(source, name), join(destination, name)))) complete = false;
     }
+    const current = present(destination);
+    if (complete && current?.isDirectory()) skillScans.set(key, { sourceMtimeMs: sourceInfo.mtimeMs, destinationMtimeMs: current.mtimeMs });
   });
   if (driver === "codex") attempt("AGENTS.md", () => {
     const override = join(baseHome, "AGENTS.override.md");
