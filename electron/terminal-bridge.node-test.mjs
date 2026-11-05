@@ -7,6 +7,35 @@ import { BOT_PANE_LIMIT, createTerminalHost } from "./terminal-host.mjs";
 import { closeBotPanes } from "../server/terminal-cleanup.ts";
 import { terminalPaneCountsGrant as serverTerminalPaneCountsGrant, terminalSendGrant as serverTerminalSendGrant, updateGrant as serverUpdateGrant } from "../server/terminal-grant.ts";
 
+test("delegates verify routes and awaits verify shutdown", async (t) => {
+  let factoryToken;
+  let release;
+  const bridge = createTerminalBridge({
+    host: { readBot: () => ({ text: "terminal" }), sendBot() {} },
+    verify: (token) => {
+      factoryToken = token;
+      return {
+        handle(req, res, url) { res.writeHead(202).end(JSON.stringify({ path: url.pathname })); return true; },
+        close: () => new Promise((resolve) => { release = resolve; }),
+      };
+    },
+  });
+  t.after(() => { release?.(); return bridge.close(); });
+  const access = await bridge.start();
+  assert.equal(factoryToken, access.token);
+  const response = await fetch(`${access.url}/v1/verify/bots/bot-1/runs`, { method: "POST", body: "x".repeat(20000) });
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { path: "/v1/verify/bots/bot-1/runs" });
+  const headers = { authorization: `Bearer ${terminalReadGrant(access.token, "bot-1")}` };
+  assert.equal((await fetch(`${access.url}/v1/bots/bot-1/terminal/send`, { method: "POST", headers, body: JSON.stringify({ text: "x".repeat(20000) }) })).status, 413);
+  let closed = false;
+  const pending = bridge.close().then(() => { closed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(closed, false);
+  release();
+  await pending;
+});
+
 function accountRunFixture(t) {
   const children = [];
   const owner = { id: 1, isDestroyed: () => false, send() {} };

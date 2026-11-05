@@ -48,6 +48,20 @@ it("rejects relative, device and outside-scratch roots", () => {
   }
 });
 
+it("validates the explicit child probe scale", () => {
+  for (const scale of ["1", "1.25", "1.5", "2"]) {
+    const f = fixture();
+    f.env.OMB_VERIFY_PROBE_SCALE = scale;
+    expect(prepareVerifyProbe(f).scale).toBe(Number(scale));
+  }
+  expect(prepareVerifyProbe(fixture()).scale).toBeNull();
+  for (const scale of ["", "3", "1.0", "NaN"]) {
+    const f = fixture();
+    f.env.OMB_VERIFY_PROBE_SCALE = scale;
+    expect(() => prepareVerifyProbe(f)).toThrow();
+  }
+});
+
 it("guards reveal, focus, opacity, bounds and mouse paths before navigation", () => {
   const probe = prepareVerifyProbe(fixture());
   const calls = [];

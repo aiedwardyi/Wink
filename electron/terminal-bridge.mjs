@@ -140,11 +140,13 @@ async function handleUpdate(req, res, updater, token, action) {
 }
 
 /** Private loopback bridge between the Electron terminal host and a scoped MCP proxy. */
-export function createTerminalBridge({ host, updater, errorReports, saveCredential, token = randomBytes(24).toString("hex"), port = 0 } = {}) {
+export function createTerminalBridge({ host, updater, errorReports, saveCredential, verify: verifyFactory, token = randomBytes(24).toString("hex"), port = 0 } = {}) {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The host is supplied by the Electron main process.
   if (!host || typeof host.readBot !== "function" || typeof host.sendBot !== "function") throw new Error("Terminal host is required");
   let server;
   let address;
+  const verify = verifyFactory?.(token);
+  let closing;
   const start = () => new Promise((resolve, reject) => {
     server = createServer(async (req, res) => {
       let parsed;
@@ -152,6 +154,10 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         parsed = new URL(req.url ?? "/", "http://127.0.0.1");
       } catch {
         return json(res, 400, { error: "Invalid terminal request" });
+      }
+      if (parsed.pathname.startsWith("/v1/verify/") && verify) {
+        try { if (await verify.handle(req, res, parsed)) return; }
+        catch { return json(res, 500, { error: "Verify unavailable" }); }
       }
       if (parsed.pathname === "/v1/error-reports" && errorReports) return handleServerErrorReport(req, res, token, errorReports);
       if (parsed.pathname === "/v1/terminal/session") {
@@ -281,10 +287,10 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       resolve({ url: `http://127.0.0.1:${address.port}`, token });
     });
   });
-  const close = () => new Promise((resolve) => {
-    if (!server) return resolve();
-    server.close(() => resolve());
-  });
+  const close = () => closing ??= Promise.all([
+    Promise.resolve().then(() => verify?.close()).catch(() => {}),
+    new Promise((resolve) => { if (server) server.close(() => resolve()); else resolve(); }),
+  ]).then(() => {});
   return {
     start,
     close,

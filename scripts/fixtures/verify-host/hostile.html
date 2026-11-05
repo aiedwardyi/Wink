@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verify isolation fixture</title>
+  <link rel="dns-prefetch" href="//static-dns-__NONCE__.invalid">
+  <link rel="preconnect" href="http://static-connect-__NONCE__.localhost:__TCP__">
+  <link rel="prefetch" href="http://static-fetch-__NONCE__.localhost:__TCP__/prefetch">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400&amp;display=swap">
+  <link rel="stylesheet" href="/render.css">
+  <style>body { font-family: Roboto, sans-serif; }</style>
+  <script src="/render.js" defer></script>
+  <script src="/hostile.js" defer></script>
+</head>
+<body data-nonce="__NONCE__" data-tcp="__TCP__" data-udp="__UDP__">
+  <button id="target" type="button">Click</button>
+  <input id="typing" aria-label="Typing">
+  <input id="file" type="file" aria-label="Choose file">
+  <div id="transition"></div>
+  <img id="lazy" loading="lazy" src="/pixel.svg" width="40" height="40" alt="Fixture">
+</body>
+</html>
