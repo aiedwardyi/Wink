@@ -306,6 +306,10 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
           else patch.section = trimmed;
         }
       }
+      if (body.pinned !== undefined) {
+        if (typeof body.pinned !== "boolean") return json(res, 400, { error: "pinned must be a boolean" });
+        patch.pinned = body.pinned;
+      }
       if (body.cwd !== undefined) repinRoomCwd(store, existing, patch.cwd as string | undefined);
       const group = store.patchGroup(m[1], patch);
       if (!group) return json(res, 404, { error: "no such room" });
