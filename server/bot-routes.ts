@@ -9,7 +9,7 @@ import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
-import { botHooksSchema } from "./bot-hooks.ts";
+import { botHooksSchema, pictureStampsError } from "./bot-hooks.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
@@ -23,7 +23,7 @@ import { modelPickPatch } from "./pending-model.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
-import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile } from "./workspace.ts";
+import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 type BotRouteDeps = {
   cancelUsageWait?: (botId: string) => void;
@@ -392,6 +392,13 @@ export function createBotRoutes(deps: BotRouteDeps) {
         if (!checked.ok) return json(res, 400, { error: checked.error });
         cwdBefore = existingBot?.cwd ?? undefined;
         patch.cwd = checked.cwd ?? undefined;
+      }
+      const pictures = (patch.hooks as BotRecord["hooks"])?.pictures;
+      if (existingBot && pictures) {
+        const cwd = body.cwd !== undefined ? patch.cwd as string | undefined : existingBot.cwd;
+        const roots = [cwd, workspaceDir(existingBot.id)].filter((root): root is string => Boolean(root));
+        const error = pictureStampsError(pictures.stamps, roots);
+        if (error) return json(res, 400, { error });
       }
       if (body.hidden === true && existingBot?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });

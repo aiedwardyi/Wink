@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,12 @@ import { DATA_DIR } from "./config.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import type { BotRecord, Store } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
+import { workspaceDir } from "./workspace.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return { ...original, unlinkSync: vi.fn(original.unlinkSync) };
+});
 
 vi.mock("./config.ts", async (importOriginal) => {
   const { mkdtempSync } = await import("node:fs");
@@ -32,8 +39,7 @@ let store: Store;
 
 beforeEach(() => {
   folder = mkdtempSync(join(DATA_DIR, "case-"));
-  stamps = join(folder, "stamps");
-  mkdirSync(stamps);
+  stamps = mkdtempSync(join(DATA_DIR, "stamps-"));
   path = join(folder, "picture.gif");
   writeFileSync(path, pixels);
   bot = { id: "teacher", threadId: "thread", name: "Teacher", color: "green", cwd: folder } as BotRecord;
@@ -43,6 +49,7 @@ beforeEach(() => {
     taskByThread: () => undefined,
     groupTaskByThread: () => undefined,
     patchBot: (_id: string, patch: Partial<BotRecord>) => Object.assign(bot, patch),
+    resetTasksForCwdChange: vi.fn(),
     appendMessage,
   } as unknown as Store;
 });
@@ -76,9 +83,9 @@ function show(group = false) {
   return call(routes(group).showImage, { fromBotId: bot.id, fromThreadId: bot.threadId, path, caption: "  Picture  " });
 }
 
-function patch(hooks: unknown) {
+function patch(hooks: unknown, fields: Record<string, unknown> = {}) {
   const route = createBotRoutes({ store, wireBot: (record: BotRecord) => record } as unknown as Parameters<typeof createBotRoutes>[0]);
-  return call((req, res) => route.patch(req, res, ["", bot.id]), { hooks });
+  return call((req, res) => route.patch(req, res, ["", bot.id]), { hooks, ...fields });
 }
 
 function gate() {
@@ -101,6 +108,127 @@ async function refused(reason: string) {
 }
 
 describe("picture gate routes", () => {
+  it.each(["working folder", "workspace"])("refuses stamps inside the bot's %s in PATCH", async (root) => {
+    gate();
+    const hooks = bot.hooks;
+    const inside = join(root === "workspace" ? workspaceDir(bot.id) : folder, "stamps");
+    mkdirSync(inside, { recursive: true });
+    const result = await patch({ pictures: { stamps: inside } }, { name: "Changed" });
+    expect(result.status).toBe(400);
+    expect(result.body.error).toContain("outside bot folders");
+    expect(bot.hooks).toBe(hooks);
+    expect(bot.name).toBe("Teacher");
+  });
+
+  it("refuses a stamp folder that is the working root itself", async () => {
+    expect((await patch({ pictures: { stamps: folder } })).status).toBe(400);
+    expect(bot).not.toHaveProperty("hooks");
+  });
+
+  it("resolves stamp junctions before accepting PATCH", async () => {
+    const alias = join(DATA_DIR, "stamp-alias");
+    symlinkSync(folder, alias, "junction");
+    const result = await patch({ pictures: { stamps: alias } });
+    expect(result.status).toBe(400);
+    expect(bot).not.toHaveProperty("hooks");
+  });
+
+  it("resolves working-root junctions before accepting PATCH", async () => {
+    const alias = join(DATA_DIR, "working-alias");
+    symlinkSync(folder, alias, "junction");
+    bot.cwd = alias;
+    const result = await patch({ pictures: { stamps: folder } });
+    expect(result.status).toBe(400);
+    expect(bot).not.toHaveProperty("hooks");
+  });
+
+  it("checks the working folder supplied alongside hooks in PATCH", async () => {
+    const result = await patch({ pictures: { stamps } }, { cwd: stamps });
+    expect(result.status).toBe(400);
+    expect(bot.cwd).toBe(folder);
+    expect(bot).not.toHaveProperty("hooks");
+  });
+
+  it("accepts an outside sibling with the same working-folder prefix", async () => {
+    const sibling = `${folder}-stamps`;
+    mkdirSync(sibling);
+    const hooks = { pictures: { stamps: sibling } };
+    expect(await patch(hooks)).toMatchObject({ status: 200, body: { bot: { hooks } } });
+  });
+
+  it.each(["working folder", "workspace"])("fails closed when the stamp folder becomes a junction inside the %s", async (root) => {
+    expect((await patch({ pictures: { stamps } })).status).toBe(200);
+    stamp();
+    const inside = join(root === "workspace" ? workspaceDir(bot.id) : folder, "moved-stamps");
+    renameSync(stamps, inside);
+    symlinkSync(inside, stamps, "junction");
+    await refused("stamps must be outside bot folders");
+  });
+
+  it("rejects an unreadable stamp folder in PATCH", async () => {
+    expect(await patch({ pictures: { stamps: join(folder, "missing") } })).toMatchObject({
+      status: 400, body: { error: "stamp folder unreadable" },
+    });
+    expect(bot).not.toHaveProperty("hooks");
+  });
+
+  it("fails closed when the configured stamp folder disappears", async () => {
+    expect((await patch({ pictures: { stamps } })).status).toBe(200);
+    renameSync(stamps, `${stamps}-moved`);
+    await refused("stamp folder unreadable");
+  });
+
+  it("accepts outside stamps before the bot's workspace is created", async () => {
+    bot.id = "new-teacher";
+    expect(existsSync(workspaceDir(bot.id))).toBe(false);
+    expect((await patch({ pictures: { stamps } })).status).toBe(200);
+    stamp();
+    expect((await show()).status).toBe(201);
+    expect(existsSync(workspaceDir(bot.id))).toBe(false);
+  });
+
+  it("fails closed when the working folder moves around the stamps", async () => {
+    expect((await patch({ pictures: { stamps } })).status).toBe(200);
+    stamp();
+    bot.cwd = DATA_DIR;
+    await refused("stamps must be outside bot folders");
+  });
+
+  it("checks pinned task folders when showing a picture", async () => {
+    gate();
+    stamp();
+    store.taskByThread = () => ({ cwd: DATA_DIR }) as ReturnType<Store["taskByThread"]>;
+    await refused("stamps must be outside bot folders");
+  });
+
+  it("checks pinned group folders when showing a picture", async () => {
+    gate();
+    stamp();
+    store.groupTaskByThread = () => ({ pinnedCwd: DATA_DIR }) as ReturnType<Store["groupTaskByThread"]>;
+    const result = await show(true);
+    expect(result.status).toBe(403);
+    expect(result.body.error).toContain("stamps must be outside bot folders");
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the gate refusal when imported-copy cleanup fails", async () => {
+    gate();
+    let imported: string | undefined;
+    const spy = vi.spyOn(fs, "unlinkSync").mockImplementationOnce((target) => {
+      imported = String(target);
+      throw new Error("file busy");
+    });
+    try {
+      const result = await show();
+      expect(result).toMatchObject({ status: 403, body: { error: `picture gate: stamp missing. Run picture-gate check ${path}` } });
+      expect(appendMessage).not.toHaveBeenCalled();
+      expect(readFileSync(path)).toEqual(pixels);
+    } finally {
+      spy.mockRestore();
+      if (imported) unlinkSync(imported);
+    }
+  });
+
   it("refuses a picture with no stamp and removes only its imported copy", async () => {
     gate();
     await refused("stamp missing");

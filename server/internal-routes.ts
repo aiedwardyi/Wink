@@ -459,9 +459,9 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
       } catch (e) {
         return json(res, (e as { status?: number }).status ?? 400, { error: (e as Error).message });
       }
-      const verdict = checkPicture(from, saved.path);
+      const verdict = checkPicture(from, saved.path, roots);
       if (!verdict.ok) {
-        unlinkSync(saved.path);
+        try { unlinkSync(saved.path); } catch {}
         return json(res, 403, { error: `picture gate: ${verdict.reason}. Run picture-gate check ${body.path}` });
       }
       const caption = typeof body.caption === "string" ? body.caption.trim().slice(0, 500) : "";
