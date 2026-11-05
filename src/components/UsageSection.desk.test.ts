@@ -1195,6 +1195,25 @@ describe("Usage desk", () => {
     expect(row("claude")?.querySelector('[data-window="week"]')?.getAttribute("aria-label")).toMatch(locale === "en" ? /^Opus 7d:/ : /^Opus 7일:/);
   });
 
+  it.each(["en", "ko"] as const)("shows the age of retained quota readings until a fresh report arrives (%s)", async (locale) => {
+    for (const id of ["claude", "codex", "grok"]) {
+      const account = accountOf(server.board, id);
+      account.windows = structuredClone(accountOf(server.board, "claude").windows);
+      account.observedAt = usageBoardNow - 10 * MIN;
+    }
+    await mount({ locale });
+    for (const id of ["claude", "codex", "grok"]) {
+      expect(text(row(id)?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 10m ago" : "10분 전 기준");
+    }
+    const boardClient = await client();
+    await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
+    expect(text(row("claude")?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 10m ago" : "10분 전 기준");
+    for (const id of ["claude", "codex", "grok"]) accountOf(server.board, id).observedAt = usageBoardNow - 5 * MIN;
+    server.board.revision++;
+    await act(async () => { boardClient.usageBoardFrame(server.board.revision); await vi.advanceTimersByTimeAsync(0); });
+    for (const id of ["claude", "codex", "grok"]) expect(row(id)?.querySelector("[data-reading-age]")).toBeNull();
+  });
+
   it.each(["en", "ko"] as const)("updates Muse sign-in after an equal-revision reread (%s)", async (locale) => {
     server.board.engines.push(museEngine(usageBoardNow));
     await mount({ locale });

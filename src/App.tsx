@@ -647,7 +647,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div ref={swipeStageRef} className="flex min-h-0 flex-1" inert={terminalOpen} aria-hidden={terminalOpen}>
             <ChatView
               bot={bot}
-              hidden={terminalOpen}
+              hidden={terminalOpen || nativeViewOverlayOpen}
               focusComposerBlocked={paletteOpen || terminalOpen}
               onOpenTerminal={openMainTerminal}
               onOpenTerminalPane={openTerminalPane}

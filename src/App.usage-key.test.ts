@@ -148,6 +148,20 @@ describe("Alt+U", () => {
     expect(quick(), "view back after the terminal").toBeNull();
   });
 
+  it.each([
+    { code: "KeyT", key: "t", altKey: true },
+    { code: "KeyI", key: "i", altKey: true },
+    { code: "KeyK", key: "k", ctrlKey: true, altKey: false },
+  ])("shuts the quick view when an app overlay opens ($code)", async (shortcut) => {
+    await mount(botOn("claude"), instancesFor(usageBoardFixture));
+    await press();
+    expect(quick()).not.toBeNull();
+    await press(shortcut);
+    expect(quick(), "view over the app overlay").toBeNull();
+    await press({ code: "Escape", key: "Escape", altKey: false });
+    expect(quick(), "view after the overlay closes").toBeNull();
+  });
+
   it("leaves Settings shut when a view takes Alt+U", async () => {
     await mount(botOn("muse"), [...instancesFor(usageBoardFixture), muse]);
     const take = (event: Event) => event.preventDefault();

@@ -9,6 +9,10 @@ describe("safeProviderText", () => {
     expect(text).toContain("on this plan.");
   });
 
+  it.each([{ identities: [] }, { identities: ["mary.o'connor@example.org"] }])("removes an apostrophe address without leaving its local prefix ($identities)", ({ identities }) => {
+    expect(safeProviderText("Limit hit for mary.o'connor@example.org on this plan.", identities)).toBe("Limit hit for … on this plan.");
+  });
+
   it("removes each part of a known identity on its own, in any case", () => {
     const canary = makeIdentityCanary();
     const raw = `Account ${canary.local.toUpperCase()} at ${canary.domain} (${canary.address}) reached its limit.`;

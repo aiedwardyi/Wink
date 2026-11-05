@@ -7,7 +7,8 @@ import { localeTag, useI18n, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
-import { museReading, resetCompact, windowExpired } from "@/lib/usage";
+import { museReading, readingAge, resetCompact, windowExpired } from "@/lib/usage";
+import { AUTO_REFRESH_MS } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
@@ -236,6 +237,9 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   const { t } = clock;
   // Muse's limits move only when a turn or Check now reads them, so its rows state the age and mute past 1h (museReading).
   const muse = engine.engine === "muse" ? museReading("museAgent", account.observedAt === null ? undefined : new Date(account.observedAt).toISOString(), clock.now) : null;
+  const cached = engine.engine !== "muse" && account.windows.length > 0 && account.observedAt !== null && clock.now - account.observedAt > AUTO_REFRESH_MS
+    ? readingAge(new Date(account.observedAt).toISOString(), clock.now) : null;
+  const age = muse?.label(t) ?? (cached ? t("usage.limits.readAgo", { age: t(cached.key, cached.vars) }) : null);
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
@@ -254,7 +258,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
       <Head account={account} runs={board.runs} name={name} control={control} t={t} />
       {account.signIn === "ready" ? <>
         <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} muted={muse?.stale} />
-        {muse && <div data-reading-age="" className="mt-1.5 text-[12px] text-ink-secondary">{muse.label(t)}</div>}
+        {age && <div data-reading-age="" className="mt-1.5 text-[12px] text-ink-secondary">{age}</div>}
       </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
     </div>
   );
