@@ -332,6 +332,20 @@ describe("server notices", () => {
     expect(classifyServerNotice("Auto mode couldn't answer: nope")).toBeNull();
   });
 
+  it("shows both bots-paused notices with tool calls off and never folds them", () => {
+    for (const name of ["Bot messaging limit reached. Send a message to reset it.", "Bot messaging paused. Send a message to reset it."]) {
+      expect(activityVisibleInChat(running(name), false)).toBe(true);
+      expect(groupActivityRuns([running(name), running(name)], false).map((item) => item.kind)).toEqual(["message", "message"]);
+    }
+    // the short unavailable line still matches only its own entry, not the paused one
+    const [paused, unavailable] = ["Bot messaging limit reached. Send a message to reset it.", "Bot messaging paused. Send a message to reset it."]
+      .map((name) => SERVER_LINES.filter((line) => line.re.test(name)).map((line) => line.pick(line.re.exec(name)!)[0]));
+    expect([paused, unavailable]).toEqual([["chat.comms.paused"], ["chat.comms.unavailable"]]);
+    for (const name of ["Delegation to @Atlas denied by user", "Delivered to @Atlas", "Delegated turn completed", "Bot messaging"]) {
+      expect(activityVisibleInChat(named(name, name), false), name).toBe(false);
+    }
+  });
+
   it("hides approval notices with the other work steps", () => {
     expect(activityVisibleInChat(named("n", "auto-approved Bash: npm test"), false)).toBe(false);
     expect(activityVisibleInChat(named("n2", "retrying \u2014 attempt 1/5 in 1s \u2014 reset"), false)).toBe(false);
@@ -479,6 +493,8 @@ describe("localizeServerLine", () => {
     ["Gemini is busy. Retrying in 30 sec.", "Gemini가 바쁩니다. 30초 후 다시 시도합니다."],
     ["Gemini is busy. Retrying in 2 min.", "Gemini가 바쁩니다. 2분 후 다시 시도합니다."],
     ["error: Gemini is still busy after 3 tries. Try another model.", "Gemini가 3번 시도한 뒤에도 바쁩니다. 다른 모델을 써 보세요."],
+    ["Bot messaging limit reached. Send a message to reset it.", "봇 메시지 한도에 도달했어요. 메시지를 보내면 한도가 초기화돼요."],
+    ["Bot messaging paused. Send a message to reset it.", "봇 메시지가 일시 중지됐어요. 메시지를 보내면 한도가 초기화돼요."],
   ];
 
   it.each(samples)("maps %s into Korean", (line, korean) => {
@@ -522,6 +538,15 @@ describe("localizeServerLine", () => {
 
   it("keeps the bot name whole when it holds punctuation", () => {
     expect(localizeServerLine("Delivered to @R2-D2 (v2)", ko)).toBe("@R2-D2 (v2)에게 전달됨");
+  });
+
+  it("keeps the raw English bots-paused notices for a reader without their lines", () => {
+    const known = SERVER_LINES.splice(0, SERVER_LINES.length, ...SERVER_LINES.filter((line) => line.file !== "comms-notice.ts"));
+    try {
+      for (const line of ["Bot messaging limit reached. Send a message to reset it.", "Bot messaging paused. Send a message to reset it."]) expect(localizeServerLine(line, ko)).toBe(line);
+    } finally {
+      SERVER_LINES.splice(0, SERVER_LINES.length, ...known);
+    }
   });
 
   it("passes unknown lines through", () => {

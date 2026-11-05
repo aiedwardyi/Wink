@@ -5,8 +5,9 @@
 // stays out of these — the integration happens in comms.test.ts (the full
 // e2e through the agents proxy + fake ACP CLI).
 import { rmSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { _resetCommsRoots, rootForStart } from "./comms-root.ts";
 import { getOrCreateChannel, settleDelegationChip, type CommsBus } from "./comms-visibility.ts";
 import { DATA_DIR } from "./config.ts";
 import { prepareModelContext } from "./context-compaction.ts";
@@ -878,6 +879,43 @@ describe("busy retries and receipts", () => {
     expect(dropped?.from?.botId).toBe(from.id);
   });
 
+  it.each(["ask", "delegation"] as const)("releases a queued reservation when its target bot is deleted", async (kind) => {
+    const roots = await import("./comms-root.ts");
+    const asks = await import("./comms-budget.ts");
+    const root = rootForStart(from.threadId, { kind: "human", messageKey: `delete-target-${kind}` })!;
+    for (let index = 0; index < roots.ROOT_TURNS - 1; index++) {
+      const credit = roots.reserve(root, kind);
+      if (!credit.ok) throw new Error("no credit");
+      roots.commit(credit.reservation);
+    }
+    const credit = roots.reserve(root, kind);
+    if (!credit.ok) throw new Error("no credit");
+    const queued = queueDelegation(commsBus, from, { toBotId: target.id, message: "never runs", depth: 0, root }, 1, from.threadId, { kind, reservation: credit.reservation });
+    if (queued.result !== "ok" || !queued.id) throw new Error("not queued");
+    if (kind === "ask") expect(asks.claimOpenAsk(from.threadId, queued.id)).toBe(true);
+    expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "reserved" });
+    const release = vi.spyOn(roots, "release");
+    const releaseAsk = vi.spyOn(asks, "releaseOpenAsk");
+    try {
+      discardDelegationsFrom(commsBus, target.id);
+      store.deleteBot(target.id);
+
+      const next = roots.reserve(root, "ask");
+      expect(next.ok).toBe(true);
+      expect(_pendingCount(from.threadId)).toBe(0);
+      expect(findDelegationReceipt(queued.id)?.state).toBe("failed");
+      discardDelegationsFrom(commsBus, target.id);
+      expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "reserved" });
+      expect(release).toHaveBeenCalledExactlyOnceWith(credit.reservation);
+      expect(releaseAsk).toHaveBeenCalledExactlyOnceWith(from.threadId, queued.id);
+      if (next.ok) roots.commit(next.reservation);
+      expect(roots.reserve(root, "ask")).toEqual({ ok: false, reason: "exhausted" });
+    } finally {
+      release.mockRestore();
+      releaseAsk.mockRestore();
+    }
+  });
+
   it("names the source bot on a room failure after a roster edit drops it", async () => {
     const group = store.createGroup("Project room", [from.id, target.id]);
     queueDelegation(commsBus, from, { toBotId: target.id, message: "run this", depth: 0 }, 1, group.threadId);
@@ -1083,6 +1121,7 @@ describe("user takeover of a delegated turn", () => {
   let commsBus: CommsBus;
   let approvalBus: BusPair["approvalBus"];
   let dispatched: Array<{ message: string; channel?: GroupRecord; taskId: string; transcriptText?: string }>;
+  let root: string;
 
   beforeEach(() => {
     rmSync(DATA_DIR, { recursive: true, force: true });
@@ -1093,6 +1132,8 @@ describe("user takeover of a delegated turn", () => {
     wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
     ({ commsBus, approvalBus } = setupBuses(store));
     dispatched = [];
+    _resetCommsRoots();
+    root = rootForStart(career.threadId, { kind: "human", messageKey: "send-1" })!;
   });
   afterEach(() => {
     _resetPending();
@@ -1117,7 +1158,7 @@ describe("user takeover of a delegated turn", () => {
   const paused = "Wink paused to answer Edward; it will reply after";
 
   async function takenOverOnce() {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
@@ -1127,7 +1168,7 @@ describe("user takeover of a delegated turn", () => {
   }
 
   it("completes with the finished reply when the read came after it, without a rerun", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     settleTakenOverDelegation(commsBus, turnOf(dispatched[0]!), "Edward", "Two bullets were reworded.");
@@ -1141,7 +1182,7 @@ describe("user takeover of a delegated turn", () => {
   });
 
   it("reruns when the read came mid-reply", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
@@ -1211,7 +1252,7 @@ describe("user takeover of a delegated turn", () => {
   });
 
   it("mirrors the final text as before when nobody takes the turn over", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     finishDelegatedTurn(commsBus, turnOf(dispatched[0]!), true, "Two bullets were reworded.");
@@ -1230,7 +1271,7 @@ describe("user takeover of a delegated turn", () => {
   }
 
   it("mirrors only the reply from before a pane note joined the turn", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "FYI: NIGHT-PAD is on the shared API key.", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "FYI: NIGHT-PAD is on the shared API key.", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
@@ -1248,7 +1289,7 @@ describe("user takeover of a delegated turn", () => {
   });
 
   it("mirrors only the completed row when a pane note joined before any reply", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "FYI: NIGHT-PAD is on the shared API key.", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "FYI: NIGHT-PAD is on the shared API key.", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
@@ -1266,7 +1307,7 @@ describe("user takeover of a delegated turn", () => {
   });
 
   it("still reruns on a user takeover after a pane note joined", async () => {
-    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
@@ -1283,7 +1324,7 @@ describe("user takeover of a delegated turn", () => {
   });
 
   it("fails a taken-over turn that did not finish, without a rerun", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
@@ -1344,7 +1385,7 @@ describe("user takeover of a delegated turn", () => {
 
   it("skips the card on a rerun of an approved handoff", async () => {
     store.patchBot(career.id, { approvePeerComms: true });
-    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     const card = await waitFor(() => store.messagesFor(career.threadId).find((m) => m.card?.requestId));
     resolvePeerComms(approvalBus, card.card!.requestId!, "allow");
@@ -1360,12 +1401,12 @@ describe("user takeover of a delegated turn", () => {
 
   it("drains only the handoffs waiting on a settling target", async () => {
     store.patchBot(wink.id, { busy: true });
-    const waiting = queueDelegation(commsBus, career, { toBotId: wink.id, message: "First", depth: 0 }, 1);
+    const waiting = queueDelegation(commsBus, career, { toBotId: wink.id, message: "First", depth: 0, root }, 1);
     drain();
     await waitFor(() => pendingDelegationInfo(waiting.id!)?.attempts === 1);
     await new Promise((r) => setTimeout(r, 50));
     // queued by Career's still-running turn: it waits for that turn to end
-    const fresh = queueDelegation(commsBus, career, { toBotId: wink.id, message: "Second", depth: 0 }, 1);
+    const fresh = queueDelegation(commsBus, career, { toBotId: wink.id, message: "Second", depth: 0, root }, 1);
     store.patchBot(wink.id, { busy: false });
 
     drainDelegations(commsBus, approvalBus, career.threadId, runTarget, undefined, wink.id);
@@ -1418,7 +1459,7 @@ describe("user takeover of a delegated turn", () => {
   });
 
   it("fails a dispatched handoff whose target has no thread to watch", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     failUnwatchedDelegation(queued.id!, career.threadId, wink.id, "Wink", "Delegated turn could not start: no such bot", commsBus);

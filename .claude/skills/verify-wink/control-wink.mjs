@@ -7,6 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { capturePicture, parseFlags, pictureContext, shootPicture } from "./picture-shots.mjs";
 import { readSeedProfile } from "./seed-profile.mjs";
 
 const require = createRequire(import.meta.url);
@@ -26,14 +27,13 @@ const IMAGE = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABkCAIAAACO1KzYAAAAwUlEQVR42u3cMQ0AM
 const NAV = 'aside[aria-label="Bots and navigation"]';
 const BUSY = "[data-orbit-composer-stop], [data-turn-mascot]";
 const SYSTEM_VARS = ["SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION", "NUMBER_OF_PROCESSORS", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432", "ALLUSERSPROFILE", "PUBLIC", "COMPUTERNAME", "USERNAME", "USERDOMAIN"];
-const SWITCHES = new Set(["fill", "full", "help"]);
 
 const HELP = `node control-wink.mjs <command> [args] [--page <name>] [--timeout <ms>]   scratch: ${ROOT}
   launch [--checkout <path>]                     build a checkout's UI + server into scratch, start it on 8970-8979
   doctor                                         read-only: our PIDs, port owner, build sha, data dir, stubs, spawns
   seed [--long <n>]                              5 bots on 5 engines + an n-message chat on Atlas (default 320), via the API
   seed --from-profile [<dir>]                    bots and rooms shaped like a profile (default ~/.orbit), stub chats; read-only on it
-  open desktop|phone [--engine webkit] [--name <page>]   desktop 1440x900; phone 390x844 touch DPR 3
+  open desktop|phone [--engine webkit] [--name <page>] [--phone=360,392]   Android touch DPR 3
   pages                                          list open pages
   click <selector>                               click (tap on phone pages)
   type <selector> <text> [--fill]                type like a user (--fill for long text)
@@ -43,20 +43,15 @@ const HELP = `node control-wink.mjs <command> [args] [--page <name>] [--timeout 
   wait-settle [--text <s>]                       wait until a reply finished streaming
   expect <proof> visible|hidden|in-view|text|count <selector> [value]   PASS/FAIL line, logged to proofs.log
   snapshot [--selector <selector>] [--lines <n>] trimmed accessibility tree
-  shot <name> [--selector <selector>] [--full]   PNG into the evidence dir
+  shot <name> [--selector <selector>] [--full] [--font=Verdana]   PNG + manifest into evidence
+  shot <name> --url=http://127.0.0.1:<port> [--phone=360,392] [--font=Verdana]   existing offline harness
   eval <expression>                              read the DOM; DOM writes and synthetic input are refused
   reload                                         reload the page
   sheet [shot ...] [--name <sheet>]              contact sheet, desktop and phone side by side
   cleanup                                        stop only our PIDs, remove scratch, keep evidence`;
 
 const [command, ...rest] = process.argv.slice(2);
-const flags = {};
-const args = [];
-for (let i = 0; i < rest.length; i++) {
-  if (!rest[i].startsWith("--")) args.push(rest[i]);
-  else if (SWITCHES.has(rest[i].slice(2)) || rest[i + 1] === undefined || rest[i + 1].startsWith("--")) flags[rest[i].slice(2)] = true;
-  else flags[rest[i].slice(2)] = rest[++i];
-}
+const { flags, args } = parseFlags(rest);
 const TIMEOUT = Number(flags.timeout ?? 10_000);
 let RUN = null;
 
@@ -283,11 +278,10 @@ async function browserHost() {
 
 const connect = (engine) => playwright()[engine].connect(readJson(join(ROOT, `browser-${engine}.json`)).ws);
 
-async function newContext(browser, name, kind, token) {
+async function newContext(browser, name, kind, token, width = 390) {
   const phone = kind === "phone";
   const context = await browser.newContext({
-    viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
-    ...(phone && { screen: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: playwright().devices["iPhone 13"].userAgent }),
+    ...pictureContext(phone ? width : undefined),
     locale: "en-US",
     extraHTTPHeaders: { Authorization: `Bearer ${token}` },
   });
@@ -342,12 +336,19 @@ async function open() {
   await ensureBrowser(state, engine);
   const browser = await connect(engine);
   try {
-    const page = await (await newContext(browser, name, kind, state.token)).newPage();
-    const bots = await gotoApp(page, state);
-    const chat = await page.locator("textarea[data-orbit-composer]").getAttribute("placeholder", { timeout: 2000 }).catch(() => null);
-    saveState({ ...state, pages: { ...state.pages, [name]: { engine, kind } }, lastPage: name });
-    const { width, height } = page.viewportSize();
-    say(`open ${name}: ${kind} ${engine} ${width}x${height}, ${bots} bots listed, ${chat ? `composer "${chat}"` : "no chat open"}`);
+    const widths = kind === "phone" && flags.phone ? String(flags.phone).split(",").map(Number) : [kind === "phone" ? 390 : undefined];
+    for (const width of widths) {
+      const pageName = widths.length > 1 ? `${name}-${width}` : name;
+      if (state.pages[pageName]) throw new Error(`page "${pageName}" is already open`);
+      const page = await (await newContext(browser, pageName, kind, state.token, width)).newPage();
+      const bots = await gotoApp(page, state);
+      const chat = await page.locator("textarea[data-orbit-composer]").getAttribute("placeholder", { timeout: 2000 }).catch(() => null);
+      state.pages[pageName] = { engine, kind, ...(flags.font && { font: flags.font }) };
+      state.lastPage = pageName;
+      saveState(state);
+      const viewport = page.viewportSize();
+      say(`open ${pageName}: ${kind} ${engine} ${viewport.width}x${viewport.height}, ${bots} bots listed, ${chat ? `composer "${chat}"` : "no chat open"}`);
+    }
   } finally {
     await browser.close();
   }
@@ -539,10 +540,16 @@ async function snapshot() {
 async function shot() {
   const name = args[0];
   if (!/^[\w.-]+$/.test(name ?? "")) throw new Error("shot <name> (letters, digits, . _ -)");
+  if (flags.url) {
+    const run = join(ROOT, "evidence", `${new Date().toISOString().replace(/[:.]/g, "-")}-${name}`);
+    const files = await capturePicture(flags, name, run, playwright);
+    for (const file of files) say(`shot ${file}`);
+    say(`manifest ${join(run, "manifest.json")}`);
+    return;
+  }
   await withPage(async (page, info, state) => {
     const file = join(state.run, "shots", `${name}.png`);
-    const options = { path: file, animations: "disabled", timeout: TIMEOUT };
-    await (flags.selector ? page.locator(flags.selector).screenshot(options) : page.screenshot({ ...options, fullPage: Boolean(flags.full) }));
+    await shootPicture(page, file, state.run, { ...flags, font: flags.font ?? info.font });
     appendFileSync(join(state.run, "shots.jsonl"), `${JSON.stringify({ name, page: info.name, kind: info.kind, engine: info.engine, file: relative(state.run, file) })}\n`);
     say(`shot ${name} [${info.name}]: ${file}`);
   });

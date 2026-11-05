@@ -4,8 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CommsCallers } from "./comms-caller.ts";
-import { clearAskBudget, claimDelegationWake, clearDelegationWakeBudget } from "./comms-budget.ts";
-import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, rootForStart } from "./comms-root.ts";
+import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, commit, release, reserve, ROOT_TURNS, rootForStart, rootThreadOf } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
 import { loadDelegationReceipts, resetDelegationReceipts } from "./delegation-ledger.ts";
 import { _loadPending, _resetPending, drainDelegations, drainWaitingOn, findDelegationReceipt, finishDelegatedTurn, queueDelegation, recordDelegationReceipt } from "./delegations.ts";
@@ -34,8 +33,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cancelPeerApprovalsFor(from.id);
-  clearAskBudget(from.threadId);
-  clearDelegationWakeBudget(from.threadId);
   const turn = turnRegistry.current(from.threadId);
   if (turn) turnRegistry.settle(turn.turnId);
   vi.restoreAllMocks();
@@ -317,11 +314,57 @@ it("keeps room roots out of queued-sends.json", () => {
   expect(readFileSync(join(DATA_DIR, "queued-sends.json"), "utf8")).not.toContain("room-secret");
 });
 
-it("keeps the four-ask and four-reply-wake caps", async () => {
-  start();
-  for (let index = 0; index < 4; index++) expect((await send(request())).error).toBeUndefined();
-  expect((await send(request())).limit).toContain("already used its 4 teammate messages");
-  expect(Array.from({ length: 5 }, () => claimDelegationWake(from.threadId))).toEqual([true, true, true, true, false]);
+it("keeps four open asks and spends one root credit per started ask", async () => {
+  const root = start()!;
+  const commitPeer = vi.fn(async (..._args: unknown[]) => {
+    const peer = _args[4] as { reservation?: Parameters<typeof commit>[0] };
+    if (peer.reservation) commit(peer.reservation);
+    return { replied: false, text: "", taskId: "adopted" };
+  });
+  for (let index = 0; index < 4; index++) expect((await send(request(commitPeer))).error).toBeUndefined();
+  expect((await send(request(commitPeer))).limit).toBe("You already have 4 teammate messages waiting. Collect those replies first.");
+  expect(commitPeer).toHaveBeenCalledTimes(4);
+  for (let index = 4; index < ROOT_TURNS; index++) commit((reserve(root, "wake") as { reservation: Parameters<typeof commit>[0] }).reservation);
+  expect(reserve(root, "ask")).toEqual({ ok: false, reason: "exhausted" });
+});
+
+it("reserves, commits and releases each credit once", () => {
+  const root = start()!;
+  expect(rootThreadOf(root)).toBe(from.threadId);
+  const held = Array.from({ length: ROOT_TURNS }, () => reserve(root, "ask"));
+  expect(held.every((credit) => credit.ok)).toBe(true);
+  expect(reserve(root, "delegation")).toEqual({ ok: false, reason: "reserved" });
+  const [first, second] = held.map((credit) => (credit as { reservation: Parameters<typeof commit>[0] }).reservation);
+  release(first!);
+  release(first!);
+  commit(first!);
+  const again = reserve(root, "rerun");
+  expect(again.ok).toBe(true);
+  expect(reserve(root, "rerun")).toEqual({ ok: false, reason: "reserved" });
+  commit(second!);
+  commit(second!);
+  release(second!);
+  expect(reserve(root, "wake")).toEqual({ ok: false, reason: "reserved" });
+  for (const credit of [...held.slice(2), again]) commit((credit as { reservation: Parameters<typeof commit>[0] }).reservation);
+  expect(reserve(root, "ask")).toEqual({ ok: false, reason: "exhausted" });
+  expect(reserve(null, "ask")).toEqual({ ok: false, reason: "missing" });
+  expect(reserve("forged-root", "ask")).toEqual({ ok: false, reason: "missing" });
+  expect(rootThreadOf("forged-root")).toBeNull();
+});
+
+it("autonomous starts never refill the human root", () => {
+  const root = start()!;
+  for (let index = 0; index < ROOT_TURNS; index++) commit((reserve(root, "ask") as { reservation: Parameters<typeof commit>[0] }).reservation);
+  // routine, card resume, keep-going and pane note starts all take the automatic kind (comms-root-index.test.ts)
+  for (const start of ["routine", "card resume", "keep-going", "pane note"]) {
+    const rootId = rootForStart(from.threadId, { kind: "automatic" });
+    expect(rootId, start).toBe(root);
+    expect(reserve(rootId, "wake"), start).toEqual({ ok: false, reason: "exhausted" });
+  }
+  expect(rootForStart(from.threadId, { kind: "inherit", rootId: root })).toBe(root);
+  const next = rootForStart(from.threadId, { kind: "human", messageKey: "second" })!;
+  expect(next).not.toBe(root);
+  expect(reserve(next, "ask").ok).toBe(true);
 });
 
 it("stores opaque roots without account identity", () => {

@@ -76,14 +76,14 @@ import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
 import { screenImageUrl, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
-import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
+import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
-import { ActivityRun, ActivityStep, approvalHover } from "./ActivityRun";
+import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -290,15 +290,15 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
         title={failed ? t("chat.stepDidNotComplete") : approvalHover(notices, t)}
         className="flex min-w-0 max-w-full items-center gap-2 border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary"
       >
-        {tool.ok === undefined ? (
+        {isCommsNotice(tool.name) ? null : tool.ok === undefined ? (
           <Loader2 data-idle-hide size={13} className="shrink-0 animate-spin" />
         ) : failed ? (
           <X size={13} strokeWidth={1.5} className="shrink-0" />
         ) : (
           <Check size={13} className="shrink-0 text-success" />
         )}
-        <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"}>
-          {localizeServerLine(tool.name, t)}
+        <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"} style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>
+          {isCommsNotice(tool.name) ? <CommsNotice text={localizeServerLine(tool.name, t)} /> : localizeServerLine(tool.name, t)}
           {tool.summary && ` ${tool.summary}`}
         </span>
       </div>
@@ -887,7 +887,7 @@ export function PinnedBanner({
 
 export function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch, turnOrigin } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const sidebarOnRight = useSidebarSide() === "right";
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -903,6 +903,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   }, []);
 
   const stream = useStreaming();
+  const since = turnOrigin(bot.threadId);
   const provisioning = state.provisioning[bot.id];
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
   const engine = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
@@ -1199,7 +1200,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     slot: dockSlot,
     live: dockLive,
     label: activityLabel,
-    since: noReply ? undefined : lastUserMessage?.at,
+    since: noReply ? undefined : since,
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     onSwitch: noReply && !modelSwitch.active ? modelSwitch.open : undefined,
@@ -1213,7 +1214,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
         trackPointer={false}
       />
     ),
-  } : null, [dockSlot, dockLive, activityLabel, lastUserMessage?.at, bot, toolInFlight, noReply, modelSwitch.active, modelSwitch.open]);
+  } : null, [dockSlot, dockLive, activityLabel, since, bot, toolInFlight, noReply, modelSwitch.active, modelSwitch.open]);
 
   // regenerate = fork the last user message with the same text — reuses the
   // existing branch machinery, so the old answer stays reachable via ‹ ›
@@ -1738,7 +1739,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
-            since={noReply ? undefined : lastUserMessage?.at}
+            since={noReply ? undefined : since}
           />
           {queued.map((m, index) => (
             <div key={m.id} className="contents" data-mid={m.id}>

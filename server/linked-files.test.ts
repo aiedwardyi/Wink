@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
@@ -20,14 +20,19 @@ import {
   type ThreadSyncHost,
 } from "./thread-sync.ts";
 
+vi.mock("node:fs", async (original) => {
+  const actual = await original<typeof import("node:fs")>();
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
+
 const roots: string[] = [];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function temp(prefix: string): string {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+function temp(prefix: string, parent = tmpdir()): string {
+  const root = mkdtempSync(join(parent, prefix));
   roots.push(root);
   return root;
 }
@@ -69,6 +74,150 @@ async function linkedSite(files: Record<string, string>) {
 }
 
 describe("linked files", () => {
+  it("judges a media-named file symlink by its resolved type without Windows link privileges", async () => {
+    const root = temp("linked-real-type-", process.cwd());
+    const folder = join(root, "bot");
+    mkdirSync(folder);
+    const alias = join(root, "alias.mp4");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [{ id: "m1", role: "bot", text: `[video](<${alias}>)` }],
+      writerDeviceId: () => null, rootsFor: () => [folder],
+    }));
+    try {
+      for (const ext of ["txt", "exe", "png"]) {
+        const target = join(root, `target.${ext}`);
+        writeFileSync(target, "private");
+        vi.mocked(realpathSync).mockReturnValueOnce(target);
+        const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(alias)}`, { headers: { Range: "bytes=0-0" } });
+        expect(response.status).toBe(ext === "png" ? 206 : 404);
+        if (ext === "png") {
+          expect(response.headers.get("content-type")).toBe("image/png");
+          expect(await response.text()).toBe("p");
+        } else expect(await response.json()).toEqual({ error: "not found", reason: "outside" });
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each(["other-PC", "phone"])("streams bot-linked Desktop media outside roots to %s", async (client) => {
+    const user = join(temp("linked-anywhere-", process.cwd()), "Users", "mredw");
+    const desktop = join(user, "Desktop");
+    const folder = join(user, "Projects", "car-advisor");
+    mkdirSync(desktop, { recursive: true });
+    mkdirSync(folder, { recursive: true });
+    const types = [["mp4", "video/mp4"], ["png", "image/png"], ["mp3", "audio/mpeg"], ["pdf", "application/pdf"]];
+    const messages = types.map(([ext]) => ({ id: ext!, role: "bot", text: `[demo](<${join(desktop, `demo.${ext}`)}>)` }));
+    for (const [ext] of types) writeFileSync(join(desktop, `demo.${ext}`), "0123456789");
+    const options = {
+      bearerOk: false, remoteKey: client === "other-PC" ? "k" : undefined,
+      phoneSession: client === "phone", threadId: "t1", deviceId: "home",
+      messages, writerDeviceId: () => null, rootsFor: () => [folder],
+    };
+    const server = await listen((req, res) => serveLinkedFile(req, res, options));
+    try {
+      for (const [ext, mime] of types) {
+        const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(desktop, `demo.${ext}`))}`, {
+          headers: { cookie: "orbit_remote=k", Range: "bytes=0-0" },
+        });
+        expect(response.status).toBe(206);
+        expect(response.headers.get("content-type")).toBe(mime);
+        expect(response.headers.get("content-range")).toBe("bytes 0-0/10");
+        expect(response.headers.get("content-disposition")).toMatch(/^inline;/);
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(await response.text()).toBe("0");
+      }
+      const unauthenticated = await listen((req, res) => serveLinkedFile(req, res, { ...options, remoteKey: undefined, phoneSession: false }));
+      try {
+        const denied = await fetch(`${unauthenticated.url}/api/threads/t1/linked-file?path=${encodeURIComponent(join(desktop, "demo.mp4"))}`);
+        expect(denied.status).toBe(401);
+      } finally {
+        await unauthenticated.close();
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps unlinked, non-media, hidden, AppData, system, and disguised files outside roots refused", async () => {
+    const root = temp("linked-media-policy-", process.cwd());
+    const folder = join(root, "bot");
+    const desktop = join(root, "Users", "mredw", "Desktop");
+    mkdirSync(folder);
+    mkdirSync(desktop, { recursive: true });
+    const refused = [
+      ...["txt", "json", "html", "exe"].map((ext) => join(desktop, `linked.${ext}`)),
+      join(desktop, ".hidden", "linked.png"),
+      join(desktop, ".linked.png"),
+      join(root, "Users", "someone-else", "aPpDaTa", "Local", "linked.mp4"),
+      ...["WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"].map((name) => join(root, name, "linked.mp4")),
+    ];
+    for (const name of ["WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"]) vi.stubEnv(name, join(root, name));
+    const unlinked = join(desktop, "unlinked.mp4");
+    for (const path of [...refused, unlinked]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "private");
+    }
+    const alias = join(desktop, "junction.mp4");
+    symlinkSync(dirname(refused[0]!), alias, "junction");
+    const disguised = join(alias, "linked.txt");
+    const mediaAlias = join(desktop, "appdata.mp4");
+    symlinkSync(dirname(refused[6]!), mediaAlias, "junction");
+    const secretMedia = join(mediaAlias, "linked.mp4");
+    const hiddenAlias = join(desktop, "visible");
+    symlinkSync(dirname(refused[4]!), hiddenAlias, "junction");
+    const hiddenMedia = join(hiddenAlias, "linked.png");
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: true, remoteKey: undefined, threadId: "t1", deviceId: "home",
+      messages: [...refused, disguised, secretMedia, hiddenMedia].map((path) => ({ id: path, role: "bot", text: `[file](<${path}>)` })),
+      writerDeviceId: () => null, rootsFor: () => [folder],
+    }));
+    try {
+      for (const path of [...refused, disguised, secretMedia, hiddenMedia, unlinked]) {
+        const response = await fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`, { headers: { Range: "bytes=0-0" } });
+        expect(response.status, path).toBe(404);
+        expect(await response.json(), path).toEqual(path === unlinked ? { error: "not found" } : { error: "not found", reason: "outside" });
+      }
+    } finally {
+      await server.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["other-PC", "phone"])("explains a bot-linked Desktop video outside roots to %s without exposing unlinked paths", async (client) => {
+    const user = join(temp("linked-desktop-"), "Users", "mredw");
+    const desktop = join(user, "Desktop");
+    const folder = join(user, "Projects", "car-advisor");
+    mkdirSync(desktop, { recursive: true });
+    mkdirSync(folder, { recursive: true });
+    const file = join(desktop, "donecheck-demo.mp4");
+    writeFileSync(file, "video");
+    writeFileSync(join(desktop, "unlinked.mp4"), "private");
+    mkdirSync(join(desktop, "directory.mp4"));
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: false, remoteKey: client === "other-PC" ? "k" : undefined,
+      phoneSession: client === "phone", threadId: "t1", deviceId: "home",
+      messages: [file, join(desktop, "missing.mp4"), join(desktop, "directory.mp4")].map((path) => ({ id: path, role: "bot", text: `[video](<${path}>)` })),
+      writerDeviceId: () => null, rootsFor: () => [folder],
+    }));
+    try {
+      const get = (path: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`, {
+        headers: { cookie: "orbit_remote=k", Range: "bytes=0-0" },
+      });
+      const outside = await get(file);
+      expect(outside.status).toBe(404);
+      expect(await outside.json()).toEqual({ error: "not found", reason: "outside" });
+      for (const name of ["unlinked.mp4", "unknown.mp4", "missing.mp4", "directory.mp4"]) {
+        const response = await get(join(desktop, name));
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "not found" });
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("downloads linked non-media files, including empty files, with the existing auth", async () => {
     const root = temp("linked-download-");
     const names = ["file.zip", "notes.md", "notes.txt", "report.docx", "LICENSE", "empty.zip"];

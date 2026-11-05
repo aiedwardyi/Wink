@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canReuseWarmSession, warmFingerprint, warmToolsKey } from "./warm-eligibility.ts";
+import { canReuseWarmSession, canServeTurn, warmFingerprint, warmToolsKey } from "./warm-eligibility.ts";
 
 describe("warm-eligibility", () => {
   const base = {
@@ -133,4 +133,39 @@ describe("warm-eligibility", () => {
     );
   });
 
+  it("rejects an otherwise identical follow-up after the generation changes", () => {
+    expect(canReuseWarmSession({ ...base, generation: 1 }, { ...base, generation: 1 }, "sess-1", "sess-1")).toBe(true);
+    expect(canReuseWarmSession({ ...base, generation: 1 }, { ...base, generation: 2 }, "sess-1", "sess-1")).toBe(false);
+    expect(canReuseWarmSession(base, { ...base, generation: 0 }, "sess-1", "sess-1")).toBe(false);
+  });
+
+  it("a fresh session serves only a cursorless turn", () => {
+    expect(canServeTurn({ kind: "fresh" }, undefined)).toBe(true);
+    expect(canServeTurn({ kind: "fresh" }, "")).toBe(true);
+    expect(canServeTurn({ kind: "fresh" }, "sess-1")).toBe(false);
+  });
+
+  it("a loaded session serves only its own cursor", () => {
+    expect(canServeTurn({ kind: "loaded", id: "sess-1" }, "sess-1")).toBe(true);
+    expect(canServeTurn({ kind: "loaded", id: "sess-1" }, "sess-2")).toBe(false);
+    expect(canServeTurn({ kind: "loaded", id: "sess-1" }, undefined)).toBe(false);
+    expect(canServeTurn({ kind: "loaded", id: "" }, "")).toBe(false);
+  });
+
+  it("an argv session serves on the fingerprint alone", () => {
+    expect(canServeTurn({ kind: "argv" }, undefined)).toBe(true);
+    expect(canServeTurn({ kind: "argv" }, "sess-1")).toBe(true);
+  });
+
+  it("depth 0, 1 and 2 never match each other", () => {
+    const at = (depth: number) => ({
+      ...base,
+      toolsKey: warmToolsKey({ agents: { command: "node", args: ["agents-proxy.js"], env: { OMB_BOT_ID: "b1", OMB_TURN_DEPTH: String(depth) } } }),
+    });
+    for (const a of [0, 1, 2]) {
+      for (const b of [0, 1, 2]) {
+        expect(canReuseWarmSession(at(a), at(b), "sess-1", "sess-1")).toBe(a === b);
+      }
+    }
+  });
 });
