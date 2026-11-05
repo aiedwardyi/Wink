@@ -49,7 +49,9 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className={cn(DETAILS_ROW, "block")}>
+    <label className={cn(DETAILS_ROW, "block")} onClick={(event) => {
+      if (event.target === event.currentTarget) event.preventDefault();
+    }}>
       <div className="mb-1.5 text-[14px] font-medium text-ink">{label}</div>
       {children}
     </label>

@@ -99,7 +99,7 @@ afterEach(() => {
   scrolled.mockClear();
 });
 
-async function renderPanel() {
+async function renderPanel(value = bot) {
   HTMLElement.prototype.scrollIntoView = () => {
     scrolled();
   };
@@ -107,7 +107,7 @@ async function renderPanel() {
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot })));
+    root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: value })));
   });
   return { host, root };
 }
@@ -146,6 +146,29 @@ describe("chat avatar opens Bot Details collapsed", () => {
       expect(document.body.textContent).toContain("Done");
       expect(document.querySelector("[data-avatar-picker]")).not.toBeNull();
       expect(scrolled).toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+});
+
+describe("Bot Details field padding", () => {
+  it.each(["en", "ko"] as const)("does not activate profile fields from row padding in %s", async (locale) => {
+    localStorage.setItem("omb-locale", locale);
+    const { host, root } = await renderPanel({ ...bot, description: "Keep the editing position.\n".repeat(100) });
+    try {
+      const rows = host.querySelectorAll("label");
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        const padding = new MouseEvent("click", { bubbles: true, cancelable: true });
+        row.dispatchEvent(padding);
+        expect(padding.defaultPrevented).toBe(true);
+        for (const target of [row.firstElementChild!, row.querySelector("input, textarea")!]) {
+          const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+          target.dispatchEvent(click);
+          expect(click.defaultPrevented).toBe(false);
+        }
+      }
     } finally {
       await act(async () => root.unmount());
     }
