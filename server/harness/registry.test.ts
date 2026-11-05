@@ -1054,6 +1054,28 @@ describe("ProviderRegistry", () => {
     expect(disposedAtClose).toEqual([["a"]]);
   });
 
+  it("a completed login refresh keeps a newer account barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      let probed: (() => void) | undefined;
+      registry.logins.waitExternal("a");
+      registry.get("a")!.snapshot = () => new Promise((resolve) => { probed = () => resolve({ state: "available", authenticated: true }); });
+      const refreshed = registry.refreshLogins();
+      await vi.waitFor(() => expect(probed).toBeDefined());
+      registry.invalidateAccount("a");
+      probed!();
+      await refreshed;
+      expect(registry.logins.state("a")).toBe("complete");
+      expect(canReserve(pool, "t1")).toBe(false);
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
   it("a confirmed sign-out keeps a newer account barrier", async () => {
     const { pool, registry } = await warmRegistry();
     try {

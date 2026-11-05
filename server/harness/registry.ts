@@ -394,7 +394,9 @@ export class ProviderRegistry {
       this.probed.set(entry.instanceId, { ...previous, snapshot });
       this.probeVersion += 1;
       if (snapshot.authenticated) {
-        since = this.holdIdentity(entry.instanceId, "sign-in complete");
+        const newer = (this.identityHolds.get(entry.instanceId)?.seq ?? since) > since;
+        const complete = this.holdIdentity(entry.instanceId, "sign-in complete");
+        if (!newer) since = complete;
         this.logins.complete(entry.instanceId);
       }
       this.logins.acknowledge(entry.instanceId, snapshot.authenticated === true);
