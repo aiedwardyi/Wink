@@ -659,7 +659,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const lease = pool.reserve(keyFor(turn.threadId), fingerprint, captured, shape ? "speculative" : "handshake");
         if (typeof lease === "string") return Promise.resolve();
         const existing = entries.get(lease);
-        if (existing) return existing.ready.catch(() => {});
+        if (existing) return existing.ready.catch(() => { lease.release("prepare failed"); });
         const epoch = pool.generation(lease.key);
         const check = (entry?: WarmEntry) => {
           const current = capture();

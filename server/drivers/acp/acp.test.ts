@@ -35,10 +35,19 @@ const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "test
 
 const acceleratedWarmPool = (ttlMs: number) => {
   let now = 0;
-  return createWarmPool({ now: () => now, timers: {
-    setInterval(fn) { const timer = setInterval(() => { now += 60_000; fn(); }, ttlMs / 10); timer.unref(); return timer; },
+  const pool: WarmPool = createWarmPool({ now: () => now, timers: {
+    setInterval(fn) {
+      const timer = setInterval(() => {
+        // Keep accelerated idle expiry from shortening protocol setup.
+        if (pool.stats().idle > 0) now += 60_000;
+        fn();
+      }, ttlMs / 10);
+      timer.unref();
+      return timer;
+    },
     clearInterval(timer) { clearInterval(timer as ReturnType<typeof setInterval>); },
   } });
+  return pool;
 };
 
 describe("Grok warm leases (recorded transport)", () => {
@@ -191,6 +200,18 @@ describe("Grok warm leases (recorded transport)", () => {
     expect(peers).toHaveLength(1);
     expect(pool.stats()).toMatchObject({ reserved: 1, idle: 1 });
     expect(prompts()).toHaveLength(0);
+  });
+
+  it("releases every pending joiner when shared preparation fails", async () => {
+    held.add("0:ping");
+    await start();
+    const preparing = Array.from({ length: 8 }, () => instance.prepare!(shape()));
+    await drain();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(preparing);
+    expect(peers).toHaveLength(1);
+    expect(peers[0].child.killed).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
   });
 
   it("counts a no-shape handshake without creating a session", async () => {
