@@ -121,6 +121,8 @@ export class ProviderRegistry {
   private readonly warmPool: WarmPool;
   private identityHolds = new Map<InstanceId, { release: () => void; seq: number }>();
   private holdSeq = 0;
+  private incarnations = new Map<InstanceId, string>();
+  private incarnationSeq = 0;
 
   constructor(drivers: readonly AnyProviderDriver[], options: ProviderRegistryOptions = {}) {
     this.driversByKind = new Map(drivers.map((d) => [d.driverKind, d]));
@@ -193,6 +195,8 @@ export class ProviderRegistry {
       this.forget(result.entry.instanceId);
       if (result.rawCli) this.cliByInstance.set(result.entry.instanceId, result.rawCli);
       else this.cliByInstance.delete(result.entry.instanceId);
+      this.retire(result.entry.instanceId);
+      if (result.entry.live) this.incarnations.set(result.entry.instanceId, `${result.entry.instanceId}#${++this.incarnationSeq}`);
       this.byId.set(result.entry.instanceId, result.entry);
       result.entry.live?.setAccountBlocked?.(this.blockedAccounts.has(result.entry.instanceId));
       const live = result.entry.live;
@@ -353,7 +357,7 @@ export class ProviderRegistry {
     if (!config?.install?.logout) return null;
     if (this.signingOut.has(instanceId)) return false;
     this.signingOut.add(instanceId);
-    this.holdIdentity(instanceId, "sign-out");
+    const since = this.holdIdentity(instanceId, "sign-out");
     try {
       await this.logins.cancel(instanceId);
       await this.logins.start(instanceId, config.cli, config.install.logout, config.env, [], { scope: config.engine, account: config.account });
@@ -370,7 +374,7 @@ export class ProviderRegistry {
           this.probeVersion += 1;
         }
       }
-      if (success) this.settleIdentity(instanceId);
+      if (success) this.settleIdentity(instanceId, since);
       return success;
     } finally {
       this.signingOut.delete(instanceId);
@@ -406,8 +410,19 @@ export class ProviderRegistry {
     return [...this.byId.values()].flatMap((e) => (e.live ? [e.live] : []));
   }
 
+  /** `Captured.incarnation` for this instance's warm leases; a replacement or removal invalidates the old one's. */
+  incarnation(instanceId: InstanceId): string | undefined { return this.incarnations.get(instanceId); }
+
+  private retire(instanceId: InstanceId) {
+    const incarnation = this.incarnations.get(instanceId);
+    if (incarnation === undefined) return;
+    this.incarnations.delete(instanceId);
+    this.warmPool.invalidate({ instanceId, incarnation }, "reload");
+  }
+
   remove(instanceId: InstanceId): ProviderInstance | null {
     const live = this.get(instanceId);
+    this.retire(instanceId);
     void this.logins.cancel(instanceId);
     this.logins.clear(instanceId);
     this.byId.delete(instanceId);

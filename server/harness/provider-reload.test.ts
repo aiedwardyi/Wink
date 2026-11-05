@@ -116,6 +116,33 @@ describe("provider settings reload", () => {
     expect(leases.get("muse-2")!.signal.aborted).toBe(false);
     expect(pool.stats().pending).toBe(1);
   });
+
+  it("a reload invalidates the old incarnation's leases without the driver's help", async () => {
+    const pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    const muse = makeFakeDriver({ kind: "museAgent" });
+    const registry = new ProviderRegistry([muse.driver], { warmPool: pool });
+    const initial = { muse: { driver: "museAgent" } };
+    await registry.load(initial);
+    const bus = new EventBus(() => {});
+    bus.attach(registry.instances());
+    const reload = new ProviderReload(registry, bus, initial);
+    const reserve = (threadId: string) => {
+      const incarnation = registry.incarnation?.("muse") ?? "";
+      const lease = pool.reserve({ engine: "museAgent", instanceId: "muse", threadId }, "fp", { generation: 0, incarnation, identity: "auth-hash" }, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      return lease;
+    };
+    const old = reserve("t-old");
+
+    await reload.reload({ muse: { driver: "museAgent", config: { cli: "muse-preset" } } });
+
+    expect(old.signal.aborted).toBe(true);
+    const next = reserve("t-new");
+    expect(next.captured.incarnation).not.toBe(old.captured.incarnation);
+    expect(next.signal.aborted).toBe(false);
+    registry.remove("muse");
+    expect(next.signal.aborted).toBe(true);
+  });
 });
 
 describe("reload wait at dispatch", () => {
