@@ -359,7 +359,7 @@ function phoneMediaKind(filePath: string): PhoneKind | null {
   return isPhoneExt(ext) ? PHONE_MEDIA[ext] : null;
 }
 
-const missingFileSchema = z.object({ deviceId: z.string().min(1).optional() });
+const missingFileSchema = z.object({ deviceId: z.string().min(1).optional(), reason: z.literal("outside").optional() });
 const deviceListSchema = z.object({
   devices: z.array(z.object({
     deviceId: z.string(),
@@ -461,7 +461,7 @@ function PhoneFile({
 }) {
   const { t } = useI18n();
   const src = linkedFileSrc(threadId, filePath);
-  const [phase, setPhase] = useState<"pending" | "local" | "remote" | "desktop">("pending");
+  const [phase, setPhase] = useState<"pending" | "local" | "remote" | "desktop" | "outside">("pending");
   const [remote, setRemote] = useState<{ name: string; host: string } | null>(null);
 
   useEffect(() => {
@@ -474,6 +474,10 @@ function PhoneFile({
           return;
         }
         const body = missingFileSchema.safeParse(await res.json().catch(() => null));
+        if (body.success && body.data.reason === "outside") {
+          setPhase("outside");
+          return;
+        }
         const deviceId = body.success ? body.data.deviceId : undefined;
         if (!deviceId) {
           setPhase("desktop");
@@ -499,6 +503,14 @@ function PhoneFile({
     };
   }, [src]);
 
+  if (phase === "outside") {
+    return (
+      <span title={filePath} data-file-unavailable="outside" className="break-words">
+        {children}
+        <span className="ml-1.5 text-[12px] text-ink-secondary">{t("chat.fileLink.remoteOutsideFolder")}</span>
+      </span>
+    );
+  }
   if (phase === "desktop") return <DesktopFileLink filePath={filePath}>{children}</DesktopFileLink>;
   if (phase === "remote" && remote) {
     return (

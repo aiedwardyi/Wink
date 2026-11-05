@@ -61,7 +61,7 @@ export interface ServeLinkedFileOptions {
   rootsFor(message: LinkedMessage): readonly string[];
 }
 
-function sendJson(res: ServerResponse, status: number, body: { error: string; deviceId?: string }): void {
+function sendJson(res: ServerResponse, status: number, body: { error: string; deviceId?: string; reason?: "outside" }): void {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -344,7 +344,9 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
   }
   const roots = hits.flatMap((hit) => hit.roots);
   if (!insideRoot(real, roots)) {
-    sendJson(res, 404, { error: "not found" });
+    let file = false;
+    try { file = statSync(real).isFile(); } catch { /* file disappeared */ }
+    sendJson(res, 404, file ? { error: "not found", reason: "outside" } : { error: "not found" });
     return;
   }
   const html = /\.html?$/i.test(requested) && /\.html?$/i.test(real);

@@ -69,6 +69,39 @@ async function linkedSite(files: Record<string, string>) {
 }
 
 describe("linked files", () => {
+  it.each(["other-PC", "phone"])("explains a bot-linked Desktop video outside roots to %s without exposing unlinked paths", async (client) => {
+    const user = join(temp("linked-desktop-"), "Users", "mredw");
+    const desktop = join(user, "Desktop");
+    const folder = join(user, "Projects", "car-advisor");
+    mkdirSync(desktop, { recursive: true });
+    mkdirSync(folder, { recursive: true });
+    const file = join(desktop, "donecheck-demo.mp4");
+    writeFileSync(file, "video");
+    writeFileSync(join(desktop, "unlinked.mp4"), "private");
+    mkdirSync(join(desktop, "directory.mp4"));
+    const server = await listen((req, res) => serveLinkedFile(req, res, {
+      bearerOk: false, remoteKey: client === "other-PC" ? "k" : undefined,
+      phoneSession: client === "phone", threadId: "t1", deviceId: "home",
+      messages: [file, join(desktop, "missing.mp4"), join(desktop, "directory.mp4")].map((path) => ({ id: path, role: "bot", text: `[video](<${path}>)` })),
+      writerDeviceId: () => null, rootsFor: () => [folder],
+    }));
+    try {
+      const get = (path: string) => fetch(`${server.url}/api/threads/t1/linked-file?path=${encodeURIComponent(path)}`, {
+        headers: { cookie: "orbit_remote=k", Range: "bytes=0-0" },
+      });
+      const outside = await get(file);
+      expect(outside.status).toBe(404);
+      expect(await outside.json()).toEqual({ error: "not found", reason: "outside" });
+      for (const name of ["unlinked.mp4", "unknown.mp4", "missing.mp4", "directory.mp4"]) {
+        const response = await get(join(desktop, name));
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "not found" });
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("downloads linked non-media files, including empty files, with the existing auth", async () => {
     const root = temp("linked-download-");
     const names = ["file.zip", "notes.md", "notes.txt", "report.docx", "LICENSE", "empty.zip"];
