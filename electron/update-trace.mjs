@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const MAX_BYTES = 32768;
+
 export function formatUpdateTrace(event, { pid, ppid, version, packaged, uptime, argv }) {
   if (!["start", "lock won", "lock lost"].includes(event)) return null;
   const args = argv.slice(packaged ? 1 : 2);
@@ -16,14 +18,12 @@ export function formatUpdateTrace(event, { pid, ppid, version, packaged, uptime,
 export function appendUpdateTrace(app, runtime, event, io = fs) {
   try {
     const logs = app.getPath("logs");
-    const file = path.join(logs, "server.log");
+    const file = path.join(logs, "update-trace.log");
     const text = formatUpdateTrace(event, { pid: runtime.pid, ppid: runtime.ppid, version: app.getVersion(), packaged: app.isPackaged, uptime: runtime.uptime(), argv: runtime.argv });
     if (!text) return;
-    const line = `[${new Date().toISOString()}] ${text}\n`;
-    let size = 0;
-    try { size = io.statSync(file).size; } catch (error) { if (error?.code !== "ENOENT") return; }
-    if (size + Buffer.byteLength(line) > 1048576) return;
     io.mkdirSync(logs, { recursive: true });
-    io.appendFileSync(file, line, "utf8");
+    // Rotate by rename so a concurrent launch's append is never truncated away.
+    try { if (io.statSync(file).size > MAX_BYTES) io.renameSync(file, path.join(logs, "update-trace.1.log")); } catch {}
+    io.appendFileSync(file, `[${new Date().toISOString()}] ${text}\n`, "utf8");
   } catch {}
 }
