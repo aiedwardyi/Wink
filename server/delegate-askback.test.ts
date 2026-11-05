@@ -3,7 +3,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getOrCreateChannel, type CommsBus } from "./comms-visibility.ts";
-import { claimAsk, claimDelegationWake, clearAskBudget, clearDelegationWakeBudget, MAX_ASKS_PER_TURN } from "./comms-budget.ts";
+import { _resetCommsRoots, commit, reserve, ROOT_TURNS, rootForStart } from "./comms-root.ts";
 import { DATA_DIR } from "./config.ts";
 import { paneNotesForTurn, paneNotesSinceLastUserTurn, prepareModelContext, withoutTurnNotes } from "./context-compaction.ts";
 import { _resetPending, acceptPeerTask, drainDelegations, finishDelegatedTurn, queueDelegation, type DelegatedTurn } from "./delegations.ts";
@@ -53,7 +53,14 @@ describe("delegated ask-back", () => {
   let turn: DelegatedTurn;
   let scheduler: PaneWakeScheduler;
   let busy: boolean;
+  let root: string;
   const wake = vi.fn();
+  const spend = (count = ROOT_TURNS) => {
+    for (let index = 0; index < count; index++) {
+      const credit = reserve(root, "delegation");
+      if (credit.ok) commit(credit.reservation);
+    }
+  };
 
   beforeEach(async () => {
     rmSync(DATA_DIR, { recursive: true, force: true });
@@ -63,7 +70,8 @@ describe("delegated ask-back", () => {
     store = new Store(() => ({ instanceId: "claude", model: "fake-model" }));
     sender = store.patchBot(store.createBot().id, { name: "Sender" })!;
     peer = store.patchBot(store.createBot().id, { name: "Helper" })!;
-    clearDelegationWakeBudget(sender.threadId);
+    _resetCommsRoots();
+    root = rootForStart(sender.threadId, { kind: "human", messageKey: "send-1" })!;
     bus = { store, deviceId: "local-device", broadcast: () => {}, wakeSender: (botId, threadId) => scheduler.noteArrived(botId, threadId) };
     const notes = (threadId: string) => paneNotesForTurn(store.activePath(threadId), new Set(), store.taskByThread(sender.id, threadId)?.paneNotesDeliveredId ?? undefined, false, false, 128_000);
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -78,7 +86,8 @@ describe("delegated ask-back", () => {
       busy: () => busy,
       paused: (id) => store.bot(id)?.paneWakePaused === true,
       hasNotes: prod.paneNotesPending,
-      wake: (botId, threadId) => {
+      wake: (botId, threadId, admission) => {
+        if (admission.reservation) commit(admission.reservation);
         const pending = notes(threadId);
         const parts = mailForTurn(store, threadId, pending.ids, 128_000, pending.tokens);
         const input = buildTurnContext({
@@ -93,7 +102,7 @@ describe("delegated ask-back", () => {
       admit: prod.admit,
       warn: () => {},
     });
-    const queued = queueDelegation(bus, sender, { toBotId: peer.id, message: "Check this", depth: 0 }, 1);
+    const queued = queueDelegation(bus, sender, { toBotId: peer.id, message: "Check this", depth: 0, root }, 1);
     drainDelegations(bus, bus, sender.threadId, (toBotId, _text, _depth, sourceThreadId, channel, taskId, sourceBotId) => {
       turn = { toBotId, sourceThreadId, channelId: channel?.id, taskId, sourceBotId };
     });
@@ -106,8 +115,6 @@ describe("delegated ask-back", () => {
     scheduler.forgetBot(sender.id);
     vi.useRealTimers();
     _resetPending();
-    clearDelegationWakeBudget(sender.threadId);
-    clearAskBudget(sender.threadId);
   });
 
   it("wakes the sender once with the full delegated question and one reply row", async () => {
@@ -171,14 +178,15 @@ describe("delegated ask-back", () => {
     expect(wake).not.toHaveBeenCalled();
   });
 
-  it("preserves the wake budget when posting the reply fails", async () => {
+  it("preserves the root credit when posting the reply fails", async () => {
+    spend(ROOT_TURNS - 1);
     const post = vi.spyOn(store, "appendMessage");
-    for (let index = 0; index < MAX_ASKS_PER_TURN; index++) {
+    for (let index = 0; index < 4; index++) {
       post.mockImplementationOnce((_threadId, message) => ({ ...message, id: "unsaved", at: Date.now() }));
       finishDelegatedTurn(bus, turn, true, "@Sender, which branch?");
       await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
       expect(wake).not.toHaveBeenCalled();
-      queueDelegation(bus, sender, { toBotId: peer.id, message: "Try again", depth: 0 }, 1);
+      queueDelegation(bus, sender, { toBotId: peer.id, message: "Try again", depth: 0, root }, 1);
       drainDelegations(bus, bus, sender.threadId, (toBotId, _text, _depth, sourceThreadId, channel, taskId, sourceBotId) => {
         turn = { toBotId, sourceThreadId, channelId: channel?.id, taskId, sourceBotId };
       });
@@ -195,17 +203,20 @@ describe("delegated ask-back", () => {
     vi.spyOn(store, "appendMessage").mockImplementationOnce((_threadId, message) => ({ ...message, id: "unsaved", at: Date.now() }));
     finishDelegatedTurn(bus, turn, true, "@Sender, which branch?");
     expect(replyUnwoken).toHaveBeenCalledExactlyOnceWith(sender.id, "reply post failed");
-    queueDelegation(bus, sender, { toBotId: peer.id, message: "Try again", depth: 0 }, 1);
+    queueDelegation(bus, sender, { toBotId: peer.id, message: "Try again", depth: 0, root }, 1);
     drainDelegations(bus, bus, sender.threadId, (toBotId, _text, _depth, sourceThreadId, channel, taskId, sourceBotId) => {
       turn = { toBotId, sourceThreadId, channelId: channel?.id, taskId, sourceBotId };
     });
     await vi.advanceTimersByTimeAsync(0);
-    while (claimDelegationWake(sender.threadId));
+    spend();
     finishDelegatedTurn(bus, turn, true, "@Sender, which tag?");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     expect(wake).not.toHaveBeenCalled();
     expect(replyUnwoken).toHaveBeenLastCalledWith(sender.id, "wake budget spent");
     expect(replyUnwoken).toHaveBeenCalledTimes(2);
+    const paused = (threadId: string) => store.messagesFor(threadId).filter((row) => row.tool?.name?.startsWith("Bot messaging"));
+    expect(paused(sender.threadId)).toHaveLength(1);
+    expect(paused(getOrCreateChannel(store, sender, peer).threadId)).toHaveLength(1);
   });
 
   it.each([true, false])("delivers to the original task after the sender switches tasks (terminal sharing: %s)", async (shareTerminalWithChat) => {
@@ -267,7 +278,7 @@ describe("delegated ask-back", () => {
   });
 
   it("wakes once for an adopted private ask_bot reply without an ask-back note", async () => {
-    const taskId = acceptPeerTask(sender, peer, sender.threadId, "ask", "dispatching");
+    const taskId = acceptPeerTask(sender, peer, sender.threadId, "ask", "dispatching", undefined, root);
     turn = { toBotId: peer.id, sourceThreadId: sender.threadId, channelId: getOrCreateChannel(store, sender, peer).id, taskId, sourceBotId: sender.id, ask: true };
     finishDelegatedTurn(bus, turn, true, "@Sender, which branch?");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
@@ -278,7 +289,7 @@ describe("delegated ask-back", () => {
   it("wakes for a pane note after the reply wake budget is spent", async () => {
     const replyUnwoken = vi.fn();
     bus.replyUnwoken = replyUnwoken;
-    while (claimDelegationWake(sender.threadId));
+    spend();
     finishDelegatedTurn(bus, turn, true, "@Sender, which branch?");
     store.appendMessage(sender.threadId, { role: "bot", kind: "note", text: "Worker finished", origin: "local-device" });
     scheduler.noteArrived(sender.id, sender.threadId);
@@ -322,35 +333,38 @@ describe("delegated ask-back", () => {
     expect(messages.filter((message) => message.kind === "note")).toHaveLength(0);
   });
 
-  it("bounds ping-pong by the comms budget while preserving the depth cap", async () => {
+  it("bounds ping-pong by the root budget while preserving the depth cap", async () => {
     const ids = new Set([turn.taskId]);
-    for (let index = 0; index <= MAX_ASKS_PER_TURN; index++) {
+    // the first delegation's start and one other start, then a reply wake and a follow-up start per round
+    spend(2);
+    const rounds = (ROOT_TURNS - 2) / 2;
+    for (let index = 0; index <= rounds; index++) {
       finishDelegatedTurn(bus, turn, true, `@Sender, question ${index}?`);
       await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-      clearAskBudget(sender.threadId);
-      if (index === MAX_ASKS_PER_TURN) break;
+      if (index === rounds) break;
       expect(wake).toHaveBeenCalledTimes(index + 1);
-      expect(claimAsk(sender.threadId)).toBe(true);
-      expect(queueDelegation(bus, peer, { toBotId: sender.id, message: "Recurse", depth: 1 }, 1).result).toBe("too_deep");
-      const queued = queueDelegation(bus, sender, { toBotId: peer.id, message: "Follow up", depth: 0 }, 1);
+      expect(queueDelegation(bus, peer, { toBotId: sender.id, message: "Recurse", depth: 1, root }, 1).result).toBe("too_deep");
+      const queued = queueDelegation(bus, sender, { toBotId: peer.id, message: "Follow up", depth: 0, root }, 1);
       expect(queued.result).toBe("ok");
       expect(ids.has(queued.id)).toBe(false);
       ids.add(queued.id);
+      spend(1);
       drainDelegations(bus, bus, sender.threadId, (toBotId, _text, depth, sourceThreadId, channel, taskId, sourceBotId) => {
         expect(depth).toBe(1);
         turn = { toBotId, sourceThreadId, channelId: channel?.id, taskId, sourceBotId };
       });
       await vi.advanceTimersByTimeAsync(0);
     }
-    expect(wake).toHaveBeenCalledTimes(MAX_ASKS_PER_TURN);
-    clearDelegationWakeBudget(sender.threadId);
-    queueDelegation(bus, sender, { toBotId: peer.id, message: "User's next request", depth: 0 }, 1);
+    expect(wake).toHaveBeenCalledTimes(rounds);
+    expect(reserve(root, "wake")).toEqual({ ok: false, reason: "exhausted" });
+    root = rootForStart(sender.threadId, { kind: "human", messageKey: "send-2" })!;
+    queueDelegation(bus, sender, { toBotId: peer.id, message: "User's next request", depth: 0, root }, 1);
     drainDelegations(bus, bus, sender.threadId, (toBotId, _text, _depth, sourceThreadId, channel, taskId, sourceBotId) => {
       turn = { toBotId, sourceThreadId, channelId: channel?.id, taskId, sourceBotId };
     });
     await vi.advanceTimersByTimeAsync(0);
     finishDelegatedTurn(bus, turn, true, "@Sender, another question?");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledTimes(MAX_ASKS_PER_TURN + 1);
+    expect(wake).toHaveBeenCalledTimes(rounds + 1);
   });
 });

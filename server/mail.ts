@@ -1,9 +1,10 @@
 import { peerMessagePrompt } from "./chief-of-staff.ts";
-import { claimDelegationWake } from "./comms-budget.ts";
+import { postRefusalNotice, type NoticeStore } from "./comms-notice.ts";
+import { reserve, type ReserveResult } from "./comms-root.ts";
 import type { Message, Store } from "./store.ts";
 import type { MailRead } from "./mail-types.ts";
-import { paneNoteWaiting } from "./pane-wake.ts";
-import { receiptSnapshot } from "./delegation-ledger.ts";
+import { paneNoteWaiting, type WakeAdmission } from "./pane-wake.ts";
+import { findDelegationReceipt, receiptSnapshot } from "./delegation-ledger.ts";
 import { delegationGist } from "./delegation-context.ts";
 
 export function recentDelegations(store: Pick<Store, "botByThread" | "messagesFor">, botId: string, threadId: string) {
@@ -159,13 +160,38 @@ export function hasUnreadReplyWake(store: MailStore, threadId: string): boolean 
   return unreadMail(store, threadId).some((row) => row.comm!.wake || replyWakeKeys.has(row.comm!.mailKey!));
 }
 
-export function claimReplyWake(store: MailStore, threadId: string): boolean {
-  return !hasUnreadReplyWake(store, threadId) || claimDelegationWake(threadId);
+type Refusal = { row: Message; rootId?: string; reason: Exclude<ReserveResult, { ok: true }>["reason"] };
+
+/** Coalesced replies reserve one wake, from the newest reply whose root has credit. */
+function pickReplyWake(store: MailStore, threadId: string): WakeAdmission | Refusal[] {
+  const replies = unreadMail(store, threadId).filter((row) => row.comm!.wake || replyWakeKeys.has(row.comm!.mailKey!));
+  if (!replies.length) return { rootId: null, reservation: null };
+  const refused: Refusal[] = [];
+  const tried = new Set<string>();
+  for (const row of replies.toReversed()) {
+    const rootId = row.comm!.taskId ? findDelegationReceipt(row.comm!.taskId)?.root : undefined;
+    if (rootId && tried.has(rootId)) continue;
+    if (rootId) tried.add(rootId);
+    const credit = reserve(rootId, "wake");
+    if (credit.ok) return { rootId: credit.reservation.rootId, reservation: credit.reservation };
+    refused.push({ row, rootId, reason: credit.reason });
+  }
+  return refused;
 }
 
-/** A spent reply budget must not drop a pane note's own wake. */
-export function admitPaneWake(store: MailStore, botId: string, threadId: string, replyUnwoken?: (botId: string, detail: string) => void): boolean {
-  if (claimReplyWake(store, threadId) || paneNoteWaiting(store, botId, threadId)) return true;
+export function claimReplyWake(store: MailStore, threadId: string): WakeAdmission | null {
+  const picked = pickReplyWake(store, threadId);
+  return Array.isArray(picked) ? null : picked;
+}
+
+/** A spent reply root must not drop a pane note's own wake, and must not lend it credit. */
+export function admitPaneWake(store: MailStore & NoticeStore & Pick<Store, "dmGroup">, botId: string, threadId: string, replyUnwoken?: (botId: string, detail: string) => void): WakeAdmission | null {
+  const picked = pickReplyWake(store, threadId);
+  if (!Array.isArray(picked)) return picked;
+  if (paneNoteWaiting(store, botId, threadId)) return { rootId: null, reservation: null };
   if (unreadMail(store, threadId).some((row) => row.comm!.wake)) replyUnwoken?.(botId, "wake budget spent");
-  return false;
+  for (const { row, rootId, reason } of picked) {
+    postRefusalNotice(store, reason, rootId, row.comm!.taskId ?? row.id, threadId, store.dmGroup(botId, row.comm!.withBotId)?.threadId);
+  }
+  return null;
 }

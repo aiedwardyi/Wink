@@ -1,9 +1,12 @@
+import type { Reservation } from "./comms-root.ts";
 import type { Message, Store } from "./store.ts";
 
 export const PANE_WAKE_PROMPT = "A pane note arrived. Act on it.";
 export const PANE_WAKE_DEBOUNCE_MS = 3_000;
 export const PANE_WAKE_HOURLY_CAP = 20;
 const HOUR_MS = 60 * 60 * 1000;
+
+export interface WakeAdmission { rootId: string | null; reservation: Reservation | null }
 
 export interface PaneWakeDeps {
   enabled(botId: string, threadId: string): boolean;
@@ -15,8 +18,9 @@ export interface PaneWakeDeps {
   closedByBot?(botId: string, paneIds: string[]): Promise<boolean>;
   /** A burst was dropped because the bot closed all its panes. */
   skipped?(botId: string, threadId: string): void;
-  wake(botId: string, threadId: string): void;
-  admit?(botId: string, threadId: string): boolean;
+  /** Starts with the admission's own root and reservation, never a re-read. */
+  wake(botId: string, threadId: string, admission: WakeAdmission): void;
+  admit?(botId: string, threadId: string): WakeAdmission | null;
   warn(line: string): void;
   now?(): number;
 }
@@ -170,8 +174,9 @@ export class PaneWakeScheduler {
       entry.timer.unref?.();
       return;
     }
-    if (this.deps.admit && !this.deps.admit(botId, threadId)) return;
+    const admission = this.deps.admit ? this.deps.admit(botId, threadId) : { rootId: null, reservation: null };
+    if (!admission) return;
     this.wakes.set(botId, [...recent, now]);
-    this.deps.wake(botId, threadId);
+    this.deps.wake(botId, threadId, admission);
   }
 }
