@@ -80,10 +80,16 @@
   .usage-figures { column-gap: 6px; }
   .usage-reset-long { display: none; }
   .usage-reset-short { display: inline; }
+  @media (width < 768px) {
+    .usage-meter { column-gap: 3px; }
+    .usage-figures { display: flex; flex-wrap: wrap; }
+  }
 }
-@container usage-group (width < 344px) {
-  .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-figures { display: contents; }
-  .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-reset { grid-column: 2 / 4; }
+@media (width >= 768px) {
+  @container usage-group (width < 344px) {
+    .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-figures { display: contents; }
+    .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-reset { grid-column: 2 / 4; }
+  }
 }
 @media (pointer: coarse) {
   .usage-toolbar button::after, .usage-grip::after { content: ""; position: absolute; inset: -10px -2px; }
