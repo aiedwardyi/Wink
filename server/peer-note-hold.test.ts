@@ -345,9 +345,9 @@ describe("worker notes while a bot answers a bot", () => {
     callTool(wink.threadId);
     emit(wink.threadId, { type: "item.completed", itemType: "assistant_text", text: "Checked the logs.", summarized: true });
     complete(wink.threadId);
-    expect(findDelegationReceipt(taskId)).toMatchObject({ status: "failed", result: "@Wink finished without a reply" });
+    expect(findDelegationReceipt(taskId)).toMatchObject({ status: "failed", result: "No reply from @Wink" });
     expect(taskRows(taskId).filter((m) => m.comm?.peer === "reply")).toEqual([]);
-    expect(taskRows(taskId).some((m) => m.tool?.name === "@Wink finished without a reply" && m.tool.ok === false)).toBe(true);
+    expect(taskRows(taskId).some((m) => m.tool?.name === "No reply from @Wink" && m.tool.ok === false)).toBe(true);
     expect(senderWakes).not.toHaveBeenCalled();
   });
 

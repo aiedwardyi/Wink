@@ -680,7 +680,7 @@ export function finishDelegatedTurn(
   // tool calls or summaries only: a blank success would read as an answer
   if (ok && !pointer && !reply.trim()) {
     ok = false;
-    failureName = `@${target?.name ?? turn.toBotId} finished without a reply`;
+    failureName = `No reply from @${target?.name ?? turn.toBotId}`;
   }
   const channel = turn.channelId ? bus.store.group(turn.channelId) : undefined;
   const sender = turn.sourceBotId ? bus.store.bot(turn.sourceBotId) : turn.sourceThreadId ? bus.store.botByThread(turn.sourceThreadId) : undefined;

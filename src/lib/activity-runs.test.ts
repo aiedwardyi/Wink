@@ -487,7 +487,7 @@ describe("localizeServerLine", () => {
     ["@Atlas replied", "@Atlas 답장 도착"],
     ["Atlas answered Edward in its own chat instead", "Atlas - 대신 자기 채팅에서 Edward에게 답변함"],
     ["Delegated turn did not finish", "위임한 턴이 끝나지 않았습니다"],
-    ["@Atlas finished without a reply", "@Atlas - 답장 없이 턴을 마쳤습니다"],
+    ["No reply from @Atlas", "@Atlas 답장 없음"],
     ["Delegated turn completed", "위임한 턴이 완료되었습니다"],
     ["Delegated turn stalled and was stopped", "위임한 턴이 멈춰서 중단되었습니다"],
     ["Delegated turn could not start \u2014 spawn failed", "위임한 턴을 시작하지 못했습니다 - spawn failed"],

@@ -162,7 +162,7 @@ describe("comms e2e (fake ACP fleet)", () => {
             config: { cli: FAKE_CLI, fullAuto: true },
           },
           // a successful peer turn that deliberately emits no assistant
-          // text: the channel records it as finished without a reply.
+          // text: the channel records it as no reply.
           helperEmpty: {
             driver: "grokAgent",
             environment: { FAKE_ACP_MODE: "empty-reply" },
@@ -627,7 +627,7 @@ describe("comms e2e (fake ACP fleet)", () => {
             m.from?.botId === helper.id
             && m.kind === "activity"
             && m.tool?.ok === false
-            && m.tool?.name === "@Helper finished without a reply",
+            && m.tool?.name === "No reply from @Helper",
         );
         if (terminal) break;
         if (Date.now() > deadline) {

@@ -150,7 +150,7 @@ export const SERVER_LINES: ServerLine[] = [
     file: "delegations.ts",
     needles: [" answered ", " in its own chat instead"],
   },
-  { re: /^@(.+) finished without a reply$/, pick: (m) => ["chat.delegation.finishedWithoutReply", { name: m[1] }], file: "delegations.ts", needles: [" finished without a reply"] },
+  { re: /^No reply from @(.+)$/, pick: (m) => ["chat.delegation.finishedWithoutReply", { name: m[1] }], file: "delegations.ts", needles: ["No reply from @"] },
   { re: /^Delegated turn did not finish$/, pick: () => ["chat.delegation.turnDidNotFinish", {}], file: "delegations.ts", needles: ["Delegated turn did not finish"] },
   { re: /^Delegated turn completed$/, pick: () => ["chat.delegation.turnCompleted", {}], file: "peer-reply-publication.ts", needles: ["Delegated turn completed"] },
   { re: /^interrupted by a restart$/, pick: () => ["chat.delegation.interrupted", {}], file: "delegations.ts", needles: ["interrupted by a restart"] },
