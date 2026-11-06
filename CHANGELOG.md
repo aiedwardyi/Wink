@@ -2,6 +2,24 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.237] - 2026-11-06
+
+### Added
+- Zoom the desktop model chart with the mouse wheel.
+- Pin groups to the top of the sidebar.
+- Usage page redone: compact rows, slanted bars back above the chat box, drag to reorder, and expand all.
+- Claude API errors that end a turn now show in chat.
+
+### Fixed
+- Show earlier messages now loads a full screen on each click.
+- Fixed several layout snags on the phone.
+- Korean words stay whole on phones.
+- Worker notes wait while a bot answers a bot, and read "No reply from @bot" when it does not.
+- Bot tools are no longer blocked after a Main account switch.
+- Added Claude accounts share your user setup, including new skills.
+- STALLED notes hold through Claude monitor waits.
+- Update launch logs are kept past 1 MB.
+
 ## [1.0.236] - 2026-11-05
 
 ### Fixed
@@ -640,6 +658,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.237]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.237
 [1.0.236]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.236
 [1.0.235]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.235
 [1.0.234]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.234
