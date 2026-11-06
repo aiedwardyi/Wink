@@ -99,6 +99,7 @@ import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
+import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
@@ -2918,6 +2919,7 @@ const usageBoard = createUsageBoard({
     get drains() { return accounts.drains; },
   },
   names: accountNames, rateLimits: rateLimitsByInstance, history: createUsageHistory(DATA_DIR),
+  accountChanged: (id, ready) => { checkMuseUsage.invalidate(id); void refreshSwappedUsage(id, ready); },
   runs: async (timeoutMs) => {
     const result = await liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs);
     return result.known ? { known: true, runs: result.runs.map((run) => ({ ...run, label: run.label ?? "" })) } : result;
@@ -2934,6 +2936,9 @@ const refreshUsage = createUsageRefresh({
   accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
 });
 const checkMuseUsage = createMuseCheck();
+const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+});
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
   save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); },
@@ -2978,7 +2983,9 @@ const accountUpdates = createAccountUpdates({
     rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
 
-function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
+function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[number]>(instances: T[]) {
+  rememberAutomaticAvailability(instances);
+  usageBoard.sync();
   return instances.map((instance) => {
     const rateLimits = rateLimitsByInstance.get(instance.instanceId);
     return rateLimits ? { ...instance, rateLimits } : instance;

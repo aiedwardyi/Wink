@@ -557,7 +557,7 @@ describe("Usage desk", () => {
     const empty = () => ({ version: 1 as const, accounts: {}, events: {}, seq: 0, counter: 0 });
     const board = createUsageBoard({
       accounts: { list: () => [{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }], defaultFor: () => "codex", drains: {} },
-      names: { get: () => null }, rateLimits: { get: () => report },
+      names: { get: () => null }, rateLimits: { get: () => report, delete: vi.fn() },
       history: { snapshot: empty, since: empty, record: vi.fn(), event: vi.fn(), purge: vi.fn() },
       runs: async () => ({ known: true, runs: [] }), bots: () => [], now: () => usageBoardNow,
     });
@@ -1254,6 +1254,35 @@ describe("Usage desk", () => {
     accountOf(server.board, "muse").signIn = "ready";
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
     expect(row("muse")?.querySelector("[data-account-bars]")).not.toBeNull();
+  });
+
+  it.each(["en", "ko"] as const)("clears swapped usage and pace before painting the new email (%s)", async (locale) => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    const ids = ["claude", "codex", "grok", "gemini", "muse"];
+    for (const id of ids) accountOf(server.board, id).windows = structuredClone(accountOf(server.board, "claude").windows);
+    await mount({ locale });
+    for (const id of ids) expect(row(id)?.querySelector("[data-account-bars]")).not.toBeNull();
+    const reply = deferred<UsageBoard>();
+    server.reply = () => reply.promise;
+    h.state.instances = h.state.instances.map((instance) => ({ ...instance as object,
+      snapshot: { state: "available", authenticated: true, account: "new@example.test" },
+    }));
+    await rerender();
+    for (const id of ids) {
+      if (id === "gemini") { expect(row(id)).toBeNull(); continue; }
+      expect(text(row(id))).toContain("new@example.test");
+      expect(row(id)?.querySelector("[data-account-bars], [data-window], [data-pace]")).toBeNull();
+      expect(text(row(id)?.querySelector("[data-window-empty]"))).toBe(locale === "en" ? "No usage yet" : "아직 사용량 없음");
+    }
+    const next = fresh();
+    next.engines.push(museEngine(usageBoardNow));
+    next.revision++;
+    for (const id of ids) {
+      accountOf(next, id).windows = [{ ...UNUSED, usedPercent: 40 }];
+      accountOf(next, id).history = { fine: [], coarse: [] };
+    }
+    await act(async () => { reply.resolve(next); await vi.advanceTimersByTimeAsync(0); });
+    for (const id of ids) expect(text(row(id)?.querySelector("[data-left]"))).toBe(locale === "en" ? "60% left" : "60% 남음");
   });
 
   it.each(["en", "ko"] as const)("says No usage yet, the same on every engine, for an account with no windows (%s)", async (locale) => {

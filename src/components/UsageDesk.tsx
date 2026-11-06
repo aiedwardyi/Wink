@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
+import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
@@ -456,7 +457,7 @@ export function UsageDesk() {
       && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
       .map((each) => joinRefresh(each.instanceId, async () => {
         const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
-        if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report });
+        if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
         if (result.error) throw new Error("refresh");
         return result;
       })));

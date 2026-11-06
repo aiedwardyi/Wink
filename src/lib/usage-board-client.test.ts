@@ -173,6 +173,30 @@ describe("createUsageBoardClient", () => {
     stop();
   });
 
+  it("clears swapped windows and history immediately and ignores an older in-flight read", async () => {
+    const client = make();
+    const instances = (account: string) => [{ instanceId: "claude", snapshot: { authenticated: true, account } }];
+    client.instances(instances("old@example.test"));
+    client.subscribe(() => {});
+    reads[0].resolve(fresh());
+    await flush();
+    const kept = client.snapshot().board;
+    client.instances(instances("old@example.test"));
+    expect(client.snapshot().board).toBe(kept);
+    expect(reads).toHaveLength(1);
+    client.invalidate();
+    client.instances(instances("new@example.test"));
+    expect(account(client.snapshot().board!, "claude")).toMatchObject({ windows: [], observedAt: null, history: { fine: [], coarse: [] } });
+    reads[1].resolve(fresh({ revision: 43 }));
+    await flush();
+    expect(account(client.snapshot().board!, "claude").windows).toEqual([]);
+    expect(reads).toHaveLength(3);
+    expect(reads[2].cursor).toBe("");
+    reads[2].resolve(fresh({ revision: 44 }));
+    await flush();
+    expect(account(client.snapshot().board!, "claude").windows.length).toBeGreaterThan(0);
+  });
+
   it("keeps one read in flight and coalesces triggers into one follow-up", async () => {
     const client = make();
     client.subscribe(() => {});
