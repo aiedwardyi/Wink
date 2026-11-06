@@ -49,7 +49,7 @@ it("shows one button: Watch live while streaming, Watch with kept replays, else 
   expect(watch).toContain(">Watch<");
   expect(watch).not.toContain("Rerun");
   expect(render(card())).toContain("Rerun");
-  expect(render(card({ status: "waiting" }))).not.toMatch(/Rerun|Watch/);
+  expect(render(card({ status: "waiting", offeredAt: Date.now(), startedAt: Date.now() }))).not.toMatch(/Rerun|Watch/);
 });
 
 it("never offers Watch live on a phone", () => {
@@ -62,7 +62,7 @@ it("says waiting, counts checks and says fixed after a same-turn recheck, in bot
   const counts = { planned: 312, completed: 312, passed: 298, failed: 0, blocked: 14, notRun: 0 };
   for (const locale of ["en", "ko"] as const) {
     applyLocale(locale);
-    expect(render(card({ status: "waiting" }))).toContain(locale === "en" ? "Waiting for another check" : "다른 확인을 기다리는 중");
+    expect(render(card({ status: "waiting", offeredAt: Date.now(), startedAt: Date.now() }))).toContain(locale === "en" ? "Waiting for another check" : "다른 확인을 기다리는 중");
     expect(render(card({ fixed: 2 }))).toContain(locale === "en" ? "Fixed 2 problems · desktop and phone clean · 12 s" : "문제 2개 해결 · 데스크톱과 휴대폰 문제 없음 · 12초");
     expect(render(card({ fixed: 2, counts }))).toContain(locale === "en" ? "Fixed 2 problems · 298 checks clean · 12 s" : "문제 2개 해결 · 확인 298개 통과 · 12초");
     expect(render(card({ counts }))).toContain(locale === "en" ? "312 checks · desktop + phone · no problems · 12 s" : "확인 312개 · 데스크톱 + 휴대폰 · 문제 없음 · 12초");
