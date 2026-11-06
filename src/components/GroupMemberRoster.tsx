@@ -39,7 +39,7 @@ export function GroupMemberRoster({
       className="flex min-w-0 cursor-pointer select-none items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 [-webkit-touch-callout:none] hover:bg-raised/60 max-md:gap-0"
     >
       <span aria-live="polite" className="sr-only">{moved}</span>
-      <div ref={reorder.rowRef} className="md:contents max-md:flex max-md:min-w-0 max-md:touch-pan-x max-md:items-center max-md:-space-x-1.5 max-md:overflow-x-auto max-md:[scrollbar-width:none]">
+      <div ref={reorder.rowRef} className="md:contents max-md:flex max-md:min-w-0 max-md:touch-pan-x max-md:items-center max-md:-space-x-1.5 max-md:overflow-x-auto max-md:[scrollbar-width:none] pointer-coarse:-my-3 pointer-coarse:py-3">
         {members.map((b, i) => (
           <button
             key={b.id}
@@ -48,7 +48,7 @@ export function GroupMemberRoster({
             onKeyDown={reorder.onKeyDown}
             aria-label={b.name}
             aria-keyshortcuts={members.length > 1 ? "Alt+ArrowLeft Alt+ArrowRight" : undefined}
-            className="relative flex shrink-0 rounded-full"
+            className="relative flex shrink-0 rounded-full pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-3"
           >
             {mauses[i]}
           </button>
