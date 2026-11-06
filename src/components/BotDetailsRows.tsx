@@ -75,6 +75,16 @@ export function FitTextarea({ className, ...props }: TextareaHTMLAttributes<HTML
     if (ref.current) fit(ref.current);
   }, [props.value]);
   useEffect(() => {
+    let alive = true;
+    const refit = () => { if (alive && ref.current) fit(ref.current); };
+    void document.fonts?.ready.then(refit);
+    document.fonts?.addEventListener("loadingdone", refit);
+    return () => {
+      alive = false;
+      document.fonts?.removeEventListener("loadingdone", refit);
+    };
+  }, []);
+  useEffect(() => {
     const box = ref.current;
     if (!box || typeof ResizeObserver === "undefined") return;
     let width = box.clientWidth;
