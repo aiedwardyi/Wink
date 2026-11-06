@@ -252,7 +252,7 @@ it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", asy
   expect(q('[data-usage-engine="gemini"] [data-account-row="gemini"]')).not.toBeNull();
   await click("[data-usage-refresh]");
   expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
-  expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report });
+  expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report, identity: instance.snapshot.account });
 });
 
 it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh when %s", async (state) => {

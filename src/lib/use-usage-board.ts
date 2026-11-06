@@ -1,6 +1,6 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { api, useStore } from "@/state/store";
-import { connectUsageBoard, invalidateUsageBoard, subscribeUsageBoard, usageBoardState } from "./usage-board-client";
+import { connectUsageBoard, invalidateUsageBoard, subscribeUsageBoard, usageBoardInstances, usageBoardState } from "./usage-board-client";
 
 connectUsageBoard(api);
 
@@ -15,6 +15,7 @@ let seenPanes = "";
 /** The cached board at once; reads happen behind it and never gate paint. */
 export function useUsageBoard() {
   const { state } = useStore();
+  useLayoutEffect(() => { usageBoardInstances(state.instances); }, [state.instances]);
   const key = panesKey(state.terminalPanes);
   const panes = useRef(key);
   useEffect(() => {
