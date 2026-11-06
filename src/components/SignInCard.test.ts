@@ -85,7 +85,7 @@ it("gives the sign-in code input room for its whole placeholder", () => {
   expect(host.querySelector("input[type=password]")!.className).toContain(" w-60 ");
 });
 
-it("moves the open sign-in row under the text instead of squeezing the title", () => {
+it("keeps the open sign-in row beside the text and wraps it under only when the title no longer fits", () => {
   const html = renderToStaticMarkup(createElement(I18nProvider, null,
     createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
       setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped",
@@ -94,11 +94,17 @@ it("moves the open sign-in row under the text instead of squeezing the title", (
   host.innerHTML = html;
   const card = host.querySelector("[data-sign-in-card]")!;
   const row = card.querySelector("[data-sign-in-open]")!;
+  const text = card.children[1] as HTMLElement;
+  const slot = card.lastElementChild as HTMLElement;
   expect(row.querySelector("input[type=password]")).not.toBeNull();
-  expect(card.lastElementChild!.contains(row)).toBe(true);
+  expect(slot.contains(row)).toBe(true);
+  // wraps (right-aligned) only when the text's own width plus the row no longer fit
   expect(card.className).toContain("[data-sign-in-open]");
   expect(card.className).toContain("flex-wrap");
-  expect(card.lastElementChild!.className).toContain("[data-sign-in-open]");
-  expect(card.lastElementChild!.className).toContain("basis-full");
+  expect(text.className).toContain("group-has-[[data-sign-in-open]]/card:basis-52");
+  expect(slot.className).toContain("has-[[data-sign-in-open]]:ml-auto");
+  expect(slot.className).toContain("has-[[data-sign-in-open]]:max-w-full");
+  // never forced onto its own line: that would leave a gap beside the text on wide cards
+  expect(slot.className).not.toContain("[data-sign-in-open]]:basis-full");
   expect(row.className).toContain("items-end");
 });
