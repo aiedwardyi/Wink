@@ -4,7 +4,7 @@ reviews:
   path_filters:
     - "!CHANGELOG.md"
     - "!**/*.md"
-    - "!**/*.{png,jpg,jpeg,gif,svg,webp,ico,bmp,avif}"
+    - "!**/*.{png,jpg,jpeg,gif,svg,webp,ico,icns,bmp,avif}"
   auto_review:
     enabled: true
     auto_incremental_review: false
