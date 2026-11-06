@@ -1,11 +1,20 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { Window } from "happy-dom";
 import { afterEach, expect, it, vi } from "vitest";
 
-const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [] }));
+const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false }));
 vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
-  async send(method, params) { f.commands.push(method); f.calls.push({ tile: page.tile, method, params }); },
+  async send(method, params) {
+    f.commands.push(method); f.calls.push({ tile: page.tile, method, params });
+    if (method !== "Input.dispatchMouseEvent") return;
+    if (f.failInput) throw new Error("Input failed");
+    const window = f.windows.get(page.tile);
+    if (window && params.type === "mouseReleased") window.document.querySelector("button").click();
+  },
   on(name, handler) { (f.events[page.tile] ??= {})[name] = handler; return () => {}; },
   async ev(expression) {
+    if (expression.startsWith("lv.allow(")) return f.windows.get(page.tile)?.eval(expression);
     if (expression.includes("document.fonts")) return true;
     if (expression.includes("!!document.querySelector")) return true;
     if (expression.includes("const { all, visible, where }")) return f.targets;
@@ -20,7 +29,7 @@ vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
 }) }));
 import { runHiddenVerify } from "./verify-hidden.mjs";
 
-afterEach(() => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; });
+afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
 function input() {
   const aborter = new AbortController();
   const pages = Object.fromEntries(["desktop", "phone"].map(tile => [tile, Object.assign(new EventEmitter(), { tile, loadURL: vi.fn(async () => {}) })]));
@@ -77,6 +86,28 @@ it("emits actual click targets through CDP without native window input", async (
   const i = input(); await runHiddenVerify(i).done;
   expect(f.commands.filter(command => command === "Input.dispatchMouseEvent")).toHaveLength(4);
   expect(i.emit.mock.calls.map(([event]) => event).filter(event => event.kind === "point")).toEqual(expect.arrayContaining([expect.objectContaining({ inp: expect.objectContaining({ type: "click", x: 20, y: 30 }), scrollY: 40 })]));
+});
+
+it.each([false, true])("opens the probe guard for recorded clicks and restores it after input failure=%s", async failInput => {
+  f.targets = [{ index: 0, where: "button#signup", key: "signup" }];
+  f.failInput = failInput;
+  const handlers = [];
+  for (const tile of ["desktop", "phone"]) {
+    const window = new Window(), handler = vi.fn();
+    window.document.body.innerHTML = '<button id="signup">Sign up</button>';
+    window.eval(readFileSync(new URL("./verify/probe.js", import.meta.url), "utf8"));
+    window.document.querySelector("button").addEventListener("click", handler);
+    window.document.querySelector("button").click();
+    expect(handler).not.toHaveBeenCalled();
+    f.windows.set(tile, window); handlers.push(handler);
+  }
+  const i = input(); i.frame = vi.fn();
+  const result = await runHiddenVerify(i).done;
+  expect(result.errorCode).toBeUndefined();
+  for (const handler of handlers) expect(handler).toHaveBeenCalledTimes(failInput ? 0 : 1);
+  for (const window of f.windows.values()) window.document.querySelector("button").click();
+  for (const handler of handlers) expect(handler).toHaveBeenCalledTimes(failInput ? 0 : 1);
+  if (failInput) expect(result.notChecked).toEqual(expect.arrayContaining(["visible interactions (desktop)", "visible interactions (phone)"]));
 });
 
 it("counts placeholder text and link destination as separate real trials", async () => {

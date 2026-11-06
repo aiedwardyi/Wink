@@ -71,6 +71,28 @@ describe("verify static server", () => {
     expect((await get("/index.html", { method: "POST" })).status).toBe(405);
   });
 
+  it("serves directory URLs only through their admitted index files", async () => {
+    await mkdir(join(root, "about"));
+    await mkdir(join(root, "nodir"));
+    await writeFile(join(root, "about/index.html"), "<h1>About</h1>");
+    await start();
+    const index = await get("/about/index.html");
+    const directory = await get("/about/");
+    expect(directory.status).toBe(200);
+    expect(directory.body).toBe(index.body);
+    expect(directory.headers["content-type"]).toBe(index.headers["content-type"]);
+    const head = await get("/about/", { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.body).toBe("");
+    expect(head.headers["content-length"]).toBe(index.headers["content-length"]);
+    for (const path of ["/nodir/", "/about//", "/about/../about/", "/about/%2e%2e/about/", "/about%3asecret/", "/about%5c/"]) expect((await get(path)).status, path).toBe(404);
+    expect((await get("/about/", { headers: { Host: "foreign.invalid" } })).status).toBe(404);
+    expect(await server.revisionUnchanged()).toBe(true);
+    await writeFile(join(root, "about/index.html"), "<h1>Changed</h1>");
+    expect((await get("/about/")).status).toBe(404);
+    expect(await server.revisionUnchanged()).toBe(false);
+  });
+
   it.each(["edit", "addition", "replacement"])("detects an unrequested %s at finalize", async change => {
     await writeFile(join(root, "asset.css"), "body{color:red}");
     await start();

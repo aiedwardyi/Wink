@@ -109,6 +109,7 @@ export async function startSiteServer({ root, entry, revision }) {
       let rel;
       try { rel = decodeURIComponent(raw.slice(1)); } catch { return reply(404); }
       if (rel === "") rel = entry;
+      else if (rel.endsWith("/")) rel += "index.html";
       if (!safeRelative(rel) || !pinned.files.has(rel)) return reply(404);
       const expected = pinned.files.get(rel);
       try {
