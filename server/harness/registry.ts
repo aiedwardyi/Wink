@@ -370,6 +370,8 @@ export class ProviderRegistry {
         const previous = this.probed.get(instanceId);
         const live = this.get(instanceId);
         if (live) {
+          // A probe started before logout must not restore the old authentication.
+          this.probing.delete(instanceId);
           const snapshot = await live.snapshot({ refresh: true });
           success = success && (this.accounts.has(instanceId) ? snapshot.accountAuthenticated === false : snapshot.authenticated === false);
           if (previous && this.get(instanceId) === live) this.probed.set(instanceId, { ...previous, snapshot });
@@ -448,9 +450,10 @@ export class ProviderRegistry {
       const pending = [];
       for (const entry of this.entries()) {
         if (this.cacheDir) await new Promise<void>((resolve) => setImmediate(resolve));
-        pending.push(this.startProbe(entry, candidatesFor, opts).then((probe) => this.row(entry, probe)));
+        pending.push(this.startProbe(entry, candidatesFor, opts).then((probe) => ({ entry, probe })));
       }
-      const rows = await Promise.all(pending);
+      const completed = await Promise.all(pending);
+      const rows = completed.map(({ entry, probe }) => this.row(entry, this.probed.get(entry.instanceId) ?? probe));
       this.saveProbes();
       return this.currentAccountRows(rows);
     };
