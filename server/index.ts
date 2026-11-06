@@ -4588,7 +4588,7 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
     throw busyRejection("the bot is already working - interrupt it first");
   }
   try {
-    return await startClaimedTurn(botId, text, opts);
+    return await traceClaimedTurn(() => ({ botId, threadId: opts?.threadId, sendId: opts?.sendId ?? opts?.userMessage?.sendId }), () => startClaimedTurn(botId, text, opts));
   } finally {
     if (opts?.reservation && !dispatchingReservations.has(opts.reservation)) release(opts.reservation);
     takeStartingHold(botId)();
@@ -4603,10 +4603,6 @@ async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
 }
 
 async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
-  return traceClaimedTurn(() => ({ botId, threadId: opts?.threadId, sendId: opts?.sendId ?? opts?.userMessage?.sendId }), () => buildClaimedTurn(botId, text, opts));
-}
-
-async function buildClaimedTurn(botId: string, text: string, opts?: StartTurnOptions) {
   const trace = currentTurnTrace();
   const epoch = currentTurnEpoch(botId);
   // Sends queued before this claim belong to drain, not to this turn's folds.
