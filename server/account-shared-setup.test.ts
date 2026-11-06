@@ -150,8 +150,14 @@ describe.each(["claudeAgent", "codex"])("%s setup safety", (driver) => {
     const f = fixture();
     const source = join(f.base, "skills");
     const destination = join(f.home, "skills");
+    const settle = () => {
+      const settled = new Date(Date.now() - 60_000);
+      for (const path of [source, destination]) fs.utimesSync(path, settled, settled);
+      f.share(driver);
+    };
     f.write(join(source, "first/SKILL.md"));
     f.share(driver);
+    settle();
     const scan = vi.spyOn(fs, "readdirSync");
     f.share(driver);
     expect(scan).not.toHaveBeenCalled();
@@ -160,15 +166,30 @@ describe.each(["claudeAgent", "codex"])("%s setup safety", (driver) => {
     f.share(driver);
     expect(scan).toHaveBeenCalledExactlyOnceWith(source);
     expect(fs.lstatSync(join(destination, "later")).isSymbolicLink()).toBe(true);
+    settle();
     scan.mockClear();
     fs.rmSync(join(destination, "first"));
     fs.utimesSync(destination, new Date(2000), new Date(2000));
     f.share(driver);
     expect(scan).toHaveBeenCalledExactlyOnceWith(source);
     expect(fs.lstatSync(join(destination, "first")).isSymbolicLink()).toBe(true);
+    settle();
     scan.mockClear();
     f.share(driver);
     expect(scan).not.toHaveBeenCalled();
+  });
+
+  it("picks up a skill added within the same timestamp tick", () => {
+    const f = fixture();
+    const source = join(f.base, "skills");
+    const tick = new Date(Math.floor(Date.now() / 1000) * 1000);
+    f.write(join(source, "first/SKILL.md"));
+    fs.utimesSync(source, tick, tick);
+    f.share(driver);
+    f.write(join(source, "later/SKILL.md"));
+    fs.utimesSync(source, tick, tick);
+    f.share(driver);
+    expect(fs.lstatSync(join(f.home, "skills/later")).isSymbolicLink()).toBe(true);
   });
 
   it("retries a failed skill link on the next launch", () => {

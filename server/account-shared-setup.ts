@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { canonicalAccountHome, type AccountContext } from "./account-policy.ts";
 import { DATA_DIR } from "./config.ts";
 
+const SETTLE_MS = 2000; // coarsest timestamp tick (FAT): a change in the scan's own tick leaves mtime equal
 const skillScans = new Map<string, { sourceMtimeMs: number; destinationMtimeMs: number }>();
 
 export function shareUserSetup(driver: string, account: AccountContext, baseHome: string): void {
@@ -35,6 +36,7 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
     for (const name of ["rules", "agents", "commands", "output-styles"]) attempt(name, () => link(join(baseHome, name), join(account.home, name)));
   }
   attempt("skills", () => {
+    const scanStart = Date.now();
     const source = join(baseHome, "skills");
     const sourceInfo = sourceStat(source);
     if (!sourceInfo?.isDirectory()) return;
@@ -50,7 +52,7 @@ export function shareUserSetup(driver: string, account: AccountContext, baseHome
       if (!attempt(name, () => link(join(source, name), join(destination, name)))) complete = false;
     }
     const current = present(destination);
-    if (complete && current?.isDirectory()) skillScans.set(key, { sourceMtimeMs: sourceInfo.mtimeMs, destinationMtimeMs: current.mtimeMs });
+    if (complete && current?.isDirectory() && scanStart - Math.max(sourceInfo.mtimeMs, current.mtimeMs) > SETTLE_MS) skillScans.set(key, { sourceMtimeMs: sourceInfo.mtimeMs, destinationMtimeMs: current.mtimeMs });
   });
   if (driver === "codex") attempt("AGENTS.md", () => {
     const override = join(baseHome, "AGENTS.override.md");
