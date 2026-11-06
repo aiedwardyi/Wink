@@ -887,9 +887,9 @@ export function createUsageRefresh(deps: {
           for (const [id, snapshot] of Object.entries(result.rateLimitsByLimitId ?? {})) {
             // the map lists the default bucket again under its own limitId
             if (id === (rateLimits.limitId ?? "codex")) continue;
-            const bucket = codexRateLimitWindows(snapshot);
+            const bucket = codexRateLimitWindows(snapshot, id);
             if (!bucket.length) skipWindow(name, id);
-            windows.push(...bucket.map((window) => ({ ...window, id: `${id}:${window.id}` })));
+            windows.push(...bucket);
           }
         } else if (driver === "grokAgent") {
           const billing = deps.billing ?? readGrokBillingRpc;

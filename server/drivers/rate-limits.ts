@@ -2,6 +2,8 @@
 // RateLimitWindow. Parsers are total: a window with a missing or malformed
 // fill level is dropped rather than thrown mid-stream, and a window is only
 // ever built from a fill level the provider actually sent.
+import { z } from "zod";
+
 import type { RateLimitWindow } from "../contracts.ts";
 
 const MINUTES_PER_DAY = 24 * 60;
@@ -10,12 +12,6 @@ const SEVEN_DAYS = 7 * MINUTES_PER_DAY;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-/** One decimal for display — but never rounded up across 100, because the
- * same number decides whether a window is spent and 99.96% still has room. */
-const round1 = (value: number) => {
-  const rounded = Math.round(value * 10) / 10;
-  return rounded >= 100 && value < 100 ? 99.9 : rounded;
-};
 
 /** Both CLIs send epoch seconds. A value that already looks like
  * milliseconds is kept as-is so a future wire change cannot land a reset
@@ -38,12 +34,12 @@ export function claudeRateLimitWindows(info: unknown): RateLimitWindow[] {
       if (id.includes("overage")) continue;
       const windowMinutes = id === "five_hour" ? FIVE_HOURS : id.startsWith("seven_day") ? SEVEN_DAYS : undefined;
       if (!isRecord(window) || !finite(window.utilization)) continue;
-      out.push({ id, usedPercent: round1(window.utilization * 100), resetsAt: epochMs(window.resetsAt), windowMinutes });
+      out.push({ id, usedPercent: window.utilization * 100, resetsAt: epochMs(window.resetsAt), windowMinutes });
     }
   }
   if (out.length === 0 && typeof info.rateLimitType === "string" && info.rateLimitType !== "overage" && finite(info.utilization)) {
     const id = info.rateLimitType;
-    const window: RateLimitWindow = { id, usedPercent: round1(info.utilization * 100), resetsAt: epochMs(info.resetsAt) };
+    const window: RateLimitWindow = { id, usedPercent: info.utilization * 100, resetsAt: epochMs(info.resetsAt) };
     if (id === "five_hour") window.windowMinutes = FIVE_HOURS;
     else if (id.startsWith("seven_day")) window.windowMinutes = SEVEN_DAYS;
     out.push(window);
@@ -54,15 +50,18 @@ export function claudeRateLimitWindows(info: unknown): RateLimitWindow[] {
 /** Codex app-server `account/rateLimits/updated` params.rateLimits: `primary`
  * is the short window and `secondary` the long one, each with usedPercent,
  * windowDurationMins, and resetsAt in epoch seconds. */
-export function codexRateLimitWindows(snapshot: unknown): RateLimitWindow[] {
+export function codexRateLimitWindows(snapshot: unknown, bucketId?: string): RateLimitWindow[] {
   if (!isRecord(snapshot)) return [];
+  const bucket = bucketId ?? snapshot.limitId;
+  const parsed = z.string().regex(/^[a-zA-Z0-9._-]+$/).safeParse(bucket);
+  const prefix = bucket == null || bucket === "codex" ? "" : `${parsed.success ? parsed.data : "unknown"}:`;
   const out: RateLimitWindow[] = [];
   for (const slot of ["primary", "secondary"] as const) {
     const window = snapshot[slot];
     if (!isRecord(window) || !finite(window.usedPercent)) continue;
     const windowMinutes = finite(window.windowDurationMins) && window.windowDurationMins > 0 ? window.windowDurationMins : undefined;
     const id = windowMinutes === FIVE_HOURS ? "five_hour" : windowMinutes === SEVEN_DAYS ? "seven_day" : slot;
-    const normalized: RateLimitWindow = { id, usedPercent: round1(window.usedPercent), resetsAt: epochMs(window.resetsAt) };
+    const normalized: RateLimitWindow = { id: `${prefix}${id}`, usedPercent: window.usedPercent, resetsAt: epochMs(window.resetsAt) };
     if (windowMinutes) normalized.windowMinutes = windowMinutes;
     out.push(normalized);
   }
@@ -111,7 +110,7 @@ export function grokRateLimitWindows(payload: unknown): RateLimitWindow[] {
   return [
     {
       id: "seven_day",
-      usedPercent: round1(used),
+      usedPercent: used,
       resetsAt: Number.isNaN(end) ? null : end,
       windowMinutes: SEVEN_DAYS,
     },
@@ -200,7 +199,7 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
     if (!kind) continue;
     if (typeof candidate.fraction !== "number" || !Number.isFinite(candidate.fraction)) continue;
     if (candidate.fraction < 0 || candidate.fraction > 1) continue;
-    const usedPercent = round1((1 - candidate.fraction) * 100);
+    const usedPercent = 100 - candidate.fraction * 100;
     const current = best.get(kind.id);
     if (!current || usedPercent > current.usedPercent) {
       best.set(kind.id, { id: kind.id, usedPercent, resetsAt: candidate.resetMs, windowMinutes: kind.windowMinutes });
