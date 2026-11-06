@@ -138,4 +138,3 @@ it("swaps Main instantly without highlight under reduced motion", async () => {
   expect(q(`[data-account-row="${engine.mainId}"] [data-main-check]`)).not.toBeNull();
   expect(q("[data-usage-switched]")).toBeNull();
 });
-
