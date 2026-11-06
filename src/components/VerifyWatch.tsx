@@ -40,6 +40,10 @@ interface FrameProps {
   onClose(): void;
 }
 
+const TAG_FONT = `10px "Cascadia Mono", ui-monospace, monospace`;
+// measureText resolves the font on first use (several ms); the tag font is monospace.
+const TAG_CHAR = 6.1;
+
 export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
@@ -171,7 +175,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       ctx.beginPath(); ctx.arc(show.ring.x, show.ring.y, 3 * px, 0, 2 * Math.PI); ctx.fill();
     }
     if (!ARROW) return;
-    ctx.font = `${10 * px}px "Cascadia Mono", ui-monospace, monospace`;
+    ctx.font = TAG_FONT;
     for (const [checker, cursor] of show.cursors) {
       if (cursor.tile !== tile) continue;
       const p = show.cursorAt(cursor), color = ROLE[checker] ?? "#e2e8f0", tag = TAG[checker] ?? checker;
@@ -180,10 +184,8 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       ctx.scale(px, px);
       ctx.fillStyle = color; ctx.strokeStyle = "#f8fafc"; ctx.lineWidth = 1.2;
       ctx.fill(ARROW); ctx.stroke(ARROW);
-      const tw = ctx.measureText(tag).width / px + 8;
-      ctx.fillRect(11, 15, tw, 14);
+      ctx.fillRect(11, 15, tag.length * TAG_CHAR + 8, 14);
       ctx.fillStyle = "#0a0d14";
-      ctx.font = `10px "Cascadia Mono", ui-monospace, monospace`;
       ctx.fillText(tag, 15, 25);
       ctx.restore();
     }
