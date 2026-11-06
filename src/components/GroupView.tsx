@@ -55,6 +55,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
+import { GroupMemberRoster } from "./GroupMemberRoster";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -1553,19 +1554,25 @@ export function GroupView({ group }: { group: Group }) {
           ) : (
             // The roster lives where you already look to see who is in the
             // room; a dashed + says the row is editable without shouting.
-            <button
-              ref={membersTriggerRef}
-              type="button"
-              onClick={() => setMembersOpen(true)}
-              title={t("room.manageMembers")}
-              aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-              className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60 max-md:gap-0 max-md:-space-x-1.5"
+            <GroupMemberRoster
+              group={group}
+              members={members}
+              mauses={memberMauses}
+              onOpen={(pressed) => {
+                if (pressed) membersTriggerRef.current = pressed;
+                setMembersOpen(true);
+              }}
             >
-              {memberMauses}
-              <span className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary">
+              <button
+                ref={membersTriggerRef}
+                type="button"
+                title={t("room.manageMembers")}
+                aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
+                className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary"
+              >
                 <Plus size={11} />
-              </span>
-            </button>
+              </button>
+            </GroupMemberRoster>
           )}
         </div>
       </div>
