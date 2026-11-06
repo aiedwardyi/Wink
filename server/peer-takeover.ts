@@ -7,8 +7,9 @@ import type { Message } from "./store.ts";
 //
 // Only user words take a turn over: the send route's steer and the queued
 // sends a starting turn folds in. Pane notes, narration notices and other
-// control-plane steers never call takeOverPeerTurn. A pane note the turn reads
-// ends the teammate's answer instead (peerInputJoined).
+// control-plane steers never call takeOverPeerTurn. Pane notes wait for the
+// wake after a teammate's turn; as a backstop, one the turn still reads ends
+// the teammate's answer instead (peerInputJoined).
 
 interface PeerWatch {
   takeOver: (afterReply: boolean) => void;
@@ -59,8 +60,8 @@ export function takeOverPeerTurn(threadId: string, afterReply = false): boolean 
   return true;
 }
 
-/** The running turn on `threadId` read an input that is not the user's (a
- * pane note). A teammate's answer is what the turn said before it. */
+/** Backstop: the running turn on `threadId` read an input that is not the
+ * user's (a pane note). A teammate's answer is what the turn said before it. */
 export function peerInputJoined(threadId: string): void {
   for (const watch of [...(peerTurns.get(threadId) ?? [])]) watch.joined?.();
 }
