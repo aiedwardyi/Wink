@@ -59,10 +59,13 @@ function fixture({ probe = true, packaged = false, resolves = false } = {}) {
   return { host, frames, contents, windows, sessions, calls, ipc, dependencies, input: () => runInput, finish: (value = result()) => resolveRun(value) };
 }
 
-it("refuses the stub outside probes and keeps native copy bilingual", async () => {
+it("runs the real hidden path outside probes and keeps native copy bilingual", async () => {
   const f = fixture({ probe: false }); await f.host.handle(start());
-  expect(f.frames).toEqual([{ type: "rejected", runId: start().runId, error: "internal" }, { type: "idle" }]); expect(f.windows).toHaveLength(0);
-  expect(verifyCopy("ko", "unavailable")).toMatch(/[가-힣]/); expect(verifyCopy("en", "title", "site")).toBe("Live Verify - site");
+  await until(() => f.input());
+  expect(f.input().hidden).toBe(true);
+  expect(f.calls.some(c => ["show", "showInactive", "focus", "moveTop"].includes(c[0]))).toBe(false);
+  f.finish(); await until(() => f.frames.some(v => v.state === "completed"));
+  expect(verifyCopy("ko", "unavailable")).toMatch(/[가-힣]/);
 });
 
 it("attests both partitions before ENGINE and creates the inactive shape with taskbar identity", async () => {

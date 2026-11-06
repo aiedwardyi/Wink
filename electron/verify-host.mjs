@@ -153,14 +153,14 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
       const args = d.app.isPackaged ? [] : [repo];
       if (probe?.appPath) args.splice(0, args.length, probe.appPath);
       if (probe?.exe && !probe.appPath) args.length = 0;
-      args.push("--orbit-verify-child", `--host-resolver-rules=${RESOLVER_RULES}`, `--user-data-dir=${path.join(c.root, "userData")}`);
+      args.push("--headless", "--mute-audio", "--orbit-verify-child", `--host-resolver-rules=${RESOLVER_RULES}`, `--user-data-dir=${path.join(c.root, "userData")}`);
       if (probe) {
         args.push("--mute-audio", "--remote-debugging-port=0", `--log-net-log=${path.join(c.root, "net.json")}`);
         if (probe.scale != null) args.push(`--force-device-scale-factor=${probe.scale}`);
       }
       if (closed) throw fault("cancelled");
       c.spawned = d.now();
-      c.proc = d.spawn(probe?.exe ?? process.execPath, args, { cwd: c.root, env, stdio: ["pipe", "pipe", "pipe"] });
+      c.proc = d.spawn(probe?.exe ?? process.execPath, args, { cwd: c.root, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
       c.proc.stdin.on("error", () => {});
       c.stdoutLink = createChildLink({ nonce, direction: "parent", input: c.proc.stdout, output: c.proc.stdin, onFrame: () => void kill(c), onError: () => void kill(c), onLog: (msg) => log(msg) });
       c.proc.stderr.on("data", (bytes) => { c.stderr = Buffer.concat([c.stderr, bytes]).subarray(-16384); });

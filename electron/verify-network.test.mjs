@@ -54,6 +54,9 @@ it("S01-S08/S10/S16 installs denial, headers, proxy and audio policies before lo
   expect(callback(f.handlers.onBeforeSendHeaders, { requestHeaders: { Cookie: "fake", AUTHORIZATION: "fake", "Proxy-Authorization": "fake", Referer: "fake", Accept: "ok" } })).toEqual({ requestHeaders: { Accept: "ok" } });
   const headers = callback(f.handlers.onHeadersReceived, { responseHeaders: { "Set-Cookie": ["fake"] } }).responseHeaders;
   expect(headers["Set-Cookie"]).toBeUndefined(); expect(headers["X-DNS-Prefetch-Control"]).toEqual(["off"]);
+  expect(headers["Content-Security-Policy"][0]).toContain("script-src 'self' 'unsafe-inline'");
+  expect(headers["Content-Security-Policy"][0]).not.toContain("'unsafe-eval'");
+  for (const part of ["img-src 'self' data: blob:", "media-src 'self' blob:", "manifest-src 'self'", "connect-src 'self';", "object-src 'none'", "base-uri 'none'", "form-action 'none'"]) expect(headers["Content-Security-Policy"][0]).toContain(part);
   expect(f.handlers.proxy).toMatchObject({ mode: "fixed_servers", proxyBypassRules: "<-loopback>;http://127.0.0.1:12345" });
   expect(f.calls).toContainEqual(["mute", true]); expect(f.calls).toContainEqual(["rtc", "disable_non_proxied_udp"]);
   expect(f.calls).toContainEqual(["visualZoom", 1, 1]);
@@ -97,6 +100,16 @@ it("S09 admits exact declared sheets and their pinned gstatic URLs without forwa
 
 it.each([{ status: 302 }, { type: "text/html" }, { body: "x".repeat(128 * 1024 + 1) }, { body: "a{src:url(https://attacker.invalid/font.woff2)}" }, { length: 999999 }])("S09 refuses redirect, MIME and byte/URL escapes", async (options) => {
   const f = fontFixture(options); expect((await f.request()).status).toBe(403);
+});
+
+it.each([{ length: 999999 }, { length: 0 }])("S09 settles a font cut off after its response started (%o)", async ({ length }) => {
+  const fonts = createVerifyFonts({ fontUrls: ["https://fonts.googleapis.com/css2?family=Roboto"], request(_url, _options, callback) {
+    const req = new EventEmitter();
+    req.end = () => queueMicrotask(() => { const res = new PassThrough(); res.statusCode = 200; res.headers = { "content-type": "text/css", ...(length ? { "content-length": length } : {}) }; callback(res); if (!res.destroyed) res.write(Buffer.alloc(128 * 1024 + 1)); });
+    req.destroy = () => {}; return req;
+  } });
+  cleanup.push(fonts.close);
+  expect((await fonts.handle(new Request("https://fonts.googleapis.com/css2?family=Roboto"))).status).toBe(403);
 });
 
 it("S09 bounds a stalled request at five seconds", async () => {

@@ -10,7 +10,8 @@ import { createVerifyFonts } from "./verify-fonts.mjs";
 import { isolatePage, isolateWall, VERIFY_PAGE_PREFERENCES } from "./verify-network.mjs";
 import { guardVerifyProbeWindow, verifyProbeWindowOptions } from "./verify-probe-bootstrap.mjs";
 import { tileRect, VERIFY_IPC, VERIFY_RUN_MS } from "./verify-protocol.mjs";
-import { runVerify, startSiteServer } from "./verify-stub-run.mjs";
+import { runVerify } from "./verify-run.mjs";
+import { startSiteServer } from "./verify-site-server.mjs";
 
 export const VERIFY_RENDER_MODE = "inactive";
 const stageUrl = new URL("./verify/stage.html", import.meta.url).href;
@@ -289,11 +290,11 @@ export function createVerifyChildHost({ send, probe = null, log = () => {}, depe
         listen(r, view.webContents, "unresponsive", () => fail(r, "page-failed"));
       }
       resize(r);
-      r.win.showInactive();
+      if (r.input.watch) r.win.showInactive();
       if (r.input.watch) await watch(r, r.input);
       r.prepareDone();
       if (r.abort.signal.aborted) return;
-      r.handle = d.runVerify({ runId: r.input.runId, site: r.input.site, url: r.server.url, pages: Object.fromEntries(tiles.map((tile) => [tile, r.pages[tile].view.webContents])), scale: (tile) => { const [w, h] = r.win.getContentSize(); return tileRect(tile, w, h).scale; }, emit: (ev) => emit(r, ev), progress: (c) => progress(r, c), blockedUrls: () => tiles.flatMap((tile) => r.pages[tile]?.guard?.blockedUrls() ?? []), revisionUnchanged: r.server.revisionUnchanged, signal: r.abort.signal, ...(probe ? { onTiming: (name, epochMs) => send({ type: "timing", runId: r.input.runId, name, epochMs }) } : {}) });
+      r.handle = d.runVerify({ hidden: !r.input.watch, runId: r.input.runId, site: r.input.site, url: r.server.url, pages: Object.fromEntries(tiles.map((tile) => [tile, r.pages[tile].view.webContents])), scale: (tile) => { const [w, h] = r.win.getContentSize(); return tileRect(tile, w, h).scale; }, emit: (ev) => emit(r, ev), progress: (c) => progress(r, c), blockedUrls: () => tiles.flatMap((tile) => r.pages[tile]?.guard?.blockedUrls() ?? []), revisionUnchanged: r.server.revisionUnchanged, signal: r.abort.signal, ...(probe ? { onTiming: (name, epochMs) => send({ type: "timing", runId: r.input.runId, name, epochMs }) } : {}) });
       const result = await r.handle.done;
       await finish(r, result);
     } catch (err) { fail(r, err.errorCode ?? "internal"); }
@@ -328,7 +329,7 @@ export function createVerifyChildHost({ send, probe = null, log = () => {}, depe
     if (closing) return;
     if (frame.type === "start") {
       if (active) { send({ type: "rejected", runId: frame.runId, error: "busy" }); return; }
-      if (!probe) { send({ type: "rejected", runId: frame.runId, error: "internal" }); idle(); return; }
+      if (frame.watch && !probe) { send({ type: "rejected", runId: frame.runId, error: "internal" }); idle(); return; }
       const r = { input: frame, started: epoch(), state: "preparing", pages: {}, listeners: [], abort: new AbortController(), counts: null, lastTime: 0, watching: false, snapshot: { runId: frame.runId, site: frame.site, muted: frame.muted, locale: frame.locale, lastSeq: 0, clock: null, scan: null, score: null, events: [], result: null } };
       r.prepared = new Promise((resolve) => { r.prepareDone = resolve; });
       active = r; records.set(frame.runId, r);

@@ -20,7 +20,6 @@ import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mai
 import { createPaneRuns } from "./pane-runs.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
-import { createVerifyBridge } from "./verify-bridge.mjs";
 import { createCredentialWriter } from "./credential-writer.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { readTerminalAppearance } from "./terminal-appearance.mjs";
@@ -362,7 +361,7 @@ const writeCredential = createCredentialWriter({
   updateCredentials: updateSecureCredentialDocument,
   serverAccess: () => ({ port: app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), token: serverToken }),
 });
-const terminalBridge = createTerminalBridge({ host: terminalHost, updater: app.isPackaged ? updaterBridge : undefined, errorReports, saveCredential: writeCredential, verify: (token) => createVerifyBridge({ token, log: slog }) });
+const terminalBridge = createTerminalBridge({ host: terminalHost, updater: app.isPackaged ? updaterBridge : undefined, errorReports, saveCredential: writeCredential, verify: (token) => import("./verify-bridge.mjs").then(({ createVerifyBridge }) => createVerifyBridge({ token, log: slog })) });
 let terminalBridgeAccess = null;
 ipcMain.handle("terminal:open", (event, input) => terminalHost.open(event, input));
 ipcMain.handle("terminal:prestart", (event, input) => terminalHost.prestart(event, input));

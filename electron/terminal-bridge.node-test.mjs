@@ -23,9 +23,10 @@ test("delegates verify routes and awaits verify shutdown", async (t) => {
   });
   t.after(() => { release?.(); return bridge.close(); });
   const access = await bridge.start();
-  assert.equal(factoryToken, access.token);
+  assert.equal(factoryToken, undefined);
   const response = await fetch(`${access.url}/v1/verify/bots/bot-1/runs`, { method: "POST", body: "x".repeat(20000) });
   assert.equal(response.status, 202);
+  assert.equal(factoryToken, access.token);
   assert.deepEqual(await response.json(), { path: "/v1/verify/bots/bot-1/runs" });
   const headers = { authorization: `Bearer ${terminalReadGrant(access.token, "bot-1")}` };
   assert.equal((await fetch(`${access.url}/v1/bots/bot-1/terminal/send`, { method: "POST", headers, body: JSON.stringify({ text: "x".repeat(20000) }) })).status, 413);
@@ -35,6 +36,12 @@ test("delegates verify routes and awaits verify shutdown", async (t) => {
   assert.equal(closed, false);
   release();
   await pending;
+});
+
+test("does not load verification during terminal bridge startup or shutdown", async () => {
+  const bridge = createTerminalBridge({ host: { readBot() {}, sendBot() {} }, verify: () => { assert.fail("Verification loaded without a run"); } });
+  await bridge.start();
+  await bridge.close();
 });
 
 function accountRunFixture(t) {

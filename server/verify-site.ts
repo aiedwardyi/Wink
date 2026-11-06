@@ -4,14 +4,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS, VERIFY_RUN_STATES, type VerifyRunState } from "../electron/verify-protocol.mjs";
-import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, VERIFY_TOOL_ENV, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyDecision, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
+import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, VERIFY_TOOL_ENV, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
 import type { autoVerdict } from "./auto-approve.ts";
 import { callerSnapshot } from "./comms-root.ts";
 import type { DecisionRow } from "./decision-log.ts";
 import { json, readBody } from "./http-helpers.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { VERIFY_REASONS, verifyCardText, verifyReplyText } from "./verify-message.ts";
+import { VERIFY_REASONS, verifyCardText, verifyProblems, verifyReplyText } from "./verify-message.ts";
 
 // Same admission rules as ENGINE's site server (electron/verify-site-server.mjs): both sides must reach one revision.
 const SITE_TYPES = new Set([".html", ".htm", ".js", ".mjs", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".wav", ".mp3", ".mp4", ".webm", ".ttf", ".otf", ".woff", ".woff2"]);
@@ -53,20 +53,13 @@ export interface VerifySiteDeps {
 }
 
 interface Site { root: string; entry: string; revision: string; site: string }
-type Decided = VerifyDecision | "stale" | { error: VerifyErrorCode };
 interface Run extends VerifyBridgeRun {
   threadId: string;
   turnId: string;
-  entryText: string;
   nonce: string;
-  held: boolean;
   card: VerifyCardData;
   messageId?: string;
-  offerEnds: number;
-  claimed: boolean;
-  decide?: (decided: Decided) => void;
   live?: { stop: (code: VerifyErrorCode) => void };
-  timer?: NodeJS.Timeout;
 }
 
 const within = (root: string, path: string) => {
@@ -192,37 +185,48 @@ export function verifyDecisionRunId(path: string): string | null {
 export function createVerifySite(deps: VerifySiteDeps) {
   const { store } = deps;
   const runs = new Map<string, Run>();
+  const queue: Array<() => void> = [];
   let slot: string | null = null;
   const enabled = () => LIVE_VERIFY_V0 && (deps.platform ?? process.platform) === "win32";
   const reserve = (runId: string) => (slot === null || slot === runId ? ((slot = runId), true) : false);
   const free = (runId: string) => {
-    if (slot === runId) slot = null;
+    if (slot === runId) { slot = null; queue.shift()?.(); }
   };
+  const acquire = (runId: string, signal?: AbortSignal) => new Promise<boolean>(resolve => {
+    if (signal?.aborted) { resolve(false); return; }
+    if (!queue.length && reserve(runId)) { resolve(true); return; }
+    const finish = (granted: boolean) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      const index = queue.indexOf(enter);
+      if (index >= 0) queue.splice(index, 1);
+      resolve(granted);
+    };
+    const enter = () => finish(reserve(runId));
+    const cancel = () => finish(false);
+    const timer = setTimeout(cancel, Math.max(1, VERIFY_LIMITS.toolMs - VERIFY_LIMITS.runMs - 10_000));
+    queue.push(enter);
+    signal?.addEventListener("abort", cancel, { once: true });
+  });
   const turnLive = (run: { threadId: string; turnId: string }) => turnRegistry.current(run.threadId)?.turnId === run.turnId;
   const blocked = (code: VerifyErrorCode, site: string): VerifyToolReply => ({ status: "blocked", errorCode: code, text: verifyReplyText("blocked", site, { errorCode: code }) });
 
   const drop = (run: Run) => {
-    clearTimeout(run.timer);
     free(run.runId);
     if (runs.get(run.runId) === run) runs.delete(run.runId);
   };
 
-  // One current card per owner/thread: a new run takes over the old card and voids its run.
   const writeCard = (run: Run, patch: Partial<VerifyCardData>) => {
     run.card = { ...run.card, ...patch };
-    const fields = { text: verifyCardText(run.card), verify: run.card };
+    const bot = store.bot(run.botId);
+    const group = store.conversationForBot(run.botId, run.threadId)?.group;
+    const fields = { text: verifyCardText(run.card), verify: run.card, ...(group && bot ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}) };
     if (run.messageId && store.patchMessage(run.threadId, run.messageId, fields)) return;
-    for (const old of runs.values()) if (old !== run && old.botId === run.botId && old.threadId === run.threadId && !old.live) {
-      old.decide?.({ error: "cancelled" });
-      drop(old);
-    }
-    const existing = store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify?.owner === run.botId);
+    const existing = store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify);
     if (existing && store.patchMessage(run.threadId, existing.id, fields)) {
       run.messageId = existing.id;
       return;
     }
-    const bot = store.bot(run.botId);
-    const group = store.conversationForBot(run.botId, run.threadId)?.group;
     run.messageId = store.appendMessage(run.threadId, {
       role: "bot",
       kind: "note",
@@ -231,21 +235,21 @@ export function createVerifySite(deps: VerifySiteDeps) {
       ...(group && bot ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}),
     }).id;
   };
-  const current = (run: Run) => store.messagesFor(run.threadId).find((message) => message.id === run.messageId)?.verify?.runId === run.runId;
 
   const finish = (run: Run, status: VerifyCardStatus, detail: { result?: VerifyResult | null; errorCode?: VerifyErrorCode; counts?: VerifyCounts | null }): VerifyToolReply => {
     const result = detail.result ?? null;
     const errorCode = detail.errorCode ?? result?.errorCode;
     const counts = result?.counts ?? detail.counts ?? undefined;
-    writeCard(run, { status, counts, issues: result?.issues, issueTotal: result?.issueTotal, errorCode, endedAt: Date.now() });
+    const issues = result ? verifyProblems(result.issues) : undefined;
+    const details = result ? [...(result.details ?? []), ...result.issues.filter(row => !issues!.includes(row))].slice(0, VERIFY_LIMITS.issues) : undefined;
+    writeCard(run, { status, counts, issues, issueTotal: issues?.length, notChecked: result?.notChecked, details, errorCode, endedAt: Date.now() });
     drop(run);
     return { status, runId: run.runId, ...(result ? { result } : {}), ...(errorCode ? { errorCode } : {}), text: verifyReplyText(status, run.site, { result, errorCode, counts }) };
   };
 
-  /** Starts the approved run on the desktop and waits for its end. Never rejects. */
   const execute = async (run: Run, bridge: VerifyBridge, watch: boolean, signal: AbortSignal | null): Promise<VerifyToolReply> => {
     run.expiresAt = Date.now() + VERIFY_LIMITS.toolMs;
-    writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, endedAt: undefined });
+    writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, endedAt: undefined });
     const aborter = new AbortController();
     let stopped: VerifyErrorCode | null = null;
     let counts: VerifyCounts | null = null;
@@ -260,7 +264,6 @@ export function createVerifySite(deps: VerifySiteDeps) {
     signal?.addEventListener("abort", onAbort, { once: true });
     const ends = Date.now() + VERIFY_LIMITS.runMs + 10_000;
     const deadline = setTimeout(() => stop("timeout"), ends - Date.now());
-    // a held Watch outlives its caller's turn; a tool call does not
     const turnCheck = signal ? setInterval(() => { if (!turnLive(run)) stop("cancelled"); }, TURN_CHECK_MS) : undefined;
     try {
       const started = await bridge.start(run, watch, aborter.signal);
@@ -296,32 +299,6 @@ export function createVerifySite(deps: VerifySiteDeps) {
     }
   };
 
-  const awaitDecision = (run: Run, signal: AbortSignal) => new Promise<Decided | "cancelled">((settle) => {
-    const done = (decided: Decided | "cancelled") => {
-      clearTimeout(expiry);
-      clearInterval(turnCheck);
-      signal.removeEventListener("abort", onAbort);
-      run.decide = undefined;
-      settle(decided);
-    };
-    const onAbort = () => done("cancelled");
-    const expiry = setTimeout(() => done("stale"), run.offerEnds - Date.now());
-    const turnCheck = setInterval(() => { if (!turnLive(run)) done("cancelled"); }, TURN_CHECK_MS);
-    signal.addEventListener("abort", onAbort, { once: true });
-    run.decide = done;
-    if (signal.aborted) done("cancelled");
-  });
-
-  /** Owner, task, roots and the frozen revision still hold for this offer. */
-  const revalidate = async (run: Run): Promise<VerifyErrorCode | null> => {
-    const conversation = store.conversationForBot(run.botId, run.threadId);
-    if (!conversation || (!run.held && !turnLive(run))) return "cancelled";
-    const site = await resolveVerifySite(run.entryText, deps.botOutputRoots(conversation.bot, run.threadId, conversation.group?.id));
-    if (typeof site === "string") return site;
-    if (site.root !== run.root || site.entry !== run.entry) return "outside-folders";
-    return site.revision === run.revision ? null : "site-changed";
-  };
-
   async function handleTool(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!enabled()) return json(res, 404, { error: "not found" });
     const scoped = deps.resolveCommsCaller(req.headers.authorization);
@@ -347,7 +324,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const bridge = deps.bridge();
     if (!bridge) return send(blocked("desktop-required", entryText));
     const runId = randomUUID();
-    if (!reserve(runId)) return send(blocked("busy", entryText));
+    if (!await acquire(runId, caller.signal)) return send(blocked(caller.signal.aborted ? "cancelled" : "busy", entryText));
     let site: Site | VerifyErrorCode;
     try {
       site = await resolveVerifySite(entryText, deps.botOutputRoots(conversation.bot, captured.threadId, conversation.group?.id));
@@ -358,46 +335,13 @@ export function createVerifySite(deps: VerifySiteDeps) {
       free(runId);
       return send(blocked(typeof site === "string" ? site : "cancelled", typeof site === "string" ? entryText : site.site));
     }
-    const { bot } = conversation;
-    const unattended = deps.isUnattended(bot.id);
-    const summary = `Check the site ${site.site}`;
-    const verdict = deps.autoVerdict(bot, VERIFY_TOOL, summary, { unattended });
     const nonce = randomBytes(16).toString("hex");
     const run: Run = {
-      ...site, runId, botId: bot.id, threadId: captured.threadId, turnId: captured.turnId, entryText, nonce, expiresAt: 0,
-      held: verdict.approve === null && unattended, claimed: false, offerEnds: 0,
-      card: { v: 1, runId, owner: bot.id, site: site.site, status: "offered", mode: verdict.approve === null ? "ask" : "auto", decisionNonce: nonce, offeredAt: Date.now() },
+      ...site, runId, botId: captured.botId, threadId: captured.threadId, turnId: captured.turnId, nonce, expiresAt: 0,
+      card: { v: 1, runId, owner: captured.botId, site: site.site, entry: join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
     };
     runs.set(runId, run);
-    if (verdict.approve !== null) {
-      store.appendMessage(run.threadId, {
-        role: "bot",
-        kind: "activity",
-        tool: { name: `${verdict.approve}: ${summary.slice(0, 120)}`, ok: true, approval: true },
-        ...(conversation.group ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}),
-      });
-      deps.logDecision({ threadId: run.threadId, requestId: runId, botId: bot.id, botName: bot.name, tool: VERIFY_TOOL, summary, decision: "auto-approved", source: verdict.source, rule: verdict.rule, unattended: unattended || undefined });
-      return send(await execute(run, bridge, false, caller.signal));
-    }
-    if (run.held) {
-      // A held offer keeps no page slot; Watch reserves one again.
-      free(runId);
-      run.offerEnds = Date.now() + VERIFY_LIMITS.heldMs;
-      writeCard(run, { errorCode: "needs-approval" });
-      run.timer = setTimeout(() => {
-        if (run.claimed || runs.get(runId) !== run) return;
-        writeCard(run, { status: "stale" });
-        drop(run);
-      }, VERIFY_LIMITS.heldMs);
-      run.timer.unref?.();
-      return send({ status: "offered", runId, errorCode: "needs-approval", text: verifyReplyText("offered", run.site, { errorCode: "needs-approval" }) });
-    }
-    run.offerEnds = Date.now() + VERIFY_LIMITS.askWaitMs;
-    writeCard(run, {});
-    const decided = await awaitDecision(run, caller.signal);
-    if (decided === "watch") return send(await execute(run, bridge, true, caller.signal));
-    if (decided === "skip" || decided === "stale") return send(finish(run, decided === "skip" ? "skipped" : "stale", {}));
-    return send(finish(run, "blocked", { errorCode: decided === "cancelled" ? "cancelled" : decided.error }));
+    return send(await execute(run, bridge, false, caller.signal));
   }
 
   async function handleDecision(req: IncomingMessage, res: ServerResponse, runId: string, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
@@ -410,51 +354,41 @@ export function createVerifySite(deps: VerifySiteDeps) {
         ? req.headers["x-openmausbot-companion"] === "1" || deps.remoteClient(req) ? "phone" : "desktop"
         : deps.remoteClient(req) ? "phone" : null;
     if (!client) return json(res, 401, { error: "unauthorized" });
-    let body: { action?: unknown; nonce?: unknown };
+    let body: { action?: unknown; nonce?: unknown; threadId?: unknown; owner?: unknown };
     try {
       body = await readBody(req);
     } catch (error) {
       return json(res, (error as { status?: number }).status ?? 400, { error: (error as Error).message });
     }
-    const action = body?.action;
-    if ((action !== "watch" && action !== "skip") || typeof body.nonce !== "string") return json(res, 400, { error: "action and nonce required" });
-    const notHere = () => json(res, 404, { error: "not-here" });
-    const run = runs.get(runId);
-    if (!run || run.nonce !== body.nonce || !current(run)) return notHere();
-    if (action === "watch" && client !== "desktop") return json(res, 403, { error: "desktop-required" });
-    if (run.live) {
-      if (action === "skip") return json(res, 200, { status: run.card.status });
-      const bridge = deps.bridge();
-      return bridge && await bridge.watch(run) ? json(res, 200, { status: run.card.status }) : notHere();
-    }
-    if (run.claimed || Date.now() >= run.offerEnds || (!run.held && !run.decide)) return notHere();
-    // First valid decision wins; later ones find the offer claimed.
-    run.claimed = true;
-    if (action === "skip") {
-      if (run.decide) run.decide("skip");
-      else finish(run, "skipped", {});
-      return json(res, 200, { status: "skipped" });
-    }
-    const problem = await revalidate(run);
-    if (problem || runs.get(runId) !== run) {
-      if (run.decide) run.decide({ error: problem ?? "cancelled" });
-      else if (runs.get(runId) === run) finish(run, "blocked", { errorCode: problem ?? "cancelled" });
-      return notHere();
-    }
-    if (!run.held) {
-      if (!run.decide) return notHere();
-      run.decide("watch");
-      return json(res, 200, { status: "preparing" });
-    }
+    if (body.action !== "rerun" || typeof body.nonce !== "string" || typeof body.threadId !== "string" || typeof body.owner !== "string") return json(res, 400, { error: "rerun, nonce, owner and threadId required" });
+    const conversation = store.conversationForBot(body.owner, body.threadId);
+    if (!conversation) return json(res, 404, { error: "not-here" });
+    const previous = store.activePath(body.threadId).findLast(message => message.verify?.runId === runId && message.verify.owner === body.owner)?.verify;
+    if (!previous || previous.decisionNonce !== body.nonce || previous.status === "running" || previous.status === "preparing") return json(res, 404, { error: "not-here" });
     const bridge = deps.bridge();
-    if (!bridge || !reserve(runId)) {
-      run.claimed = false;
-      return json(res, 409, { error: bridge ? "busy" : "desktop-required" });
+    if (!bridge) return json(res, 409, { error: "desktop-required" });
+    const nextId = randomUUID();
+    if (!await acquire(nextId)) return json(res, 409, { error: "busy" });
+    try {
+      const roots = deps.botOutputRoots(conversation.bot, body.threadId, conversation.group?.id);
+      const site = await resolveVerifySite(previous.entry ?? previous.site, roots);
+      const currentCard = store.activePath(body.threadId).findLast(message => message.verify?.owner === body.owner)?.verify;
+      if (typeof site === "string" || currentCard?.runId !== runId || currentCard.decisionNonce !== body.nonce) {
+        free(nextId);
+        return json(res, 409, { error: typeof site === "string" ? site : "not-here" });
+      }
+      const nonce = randomBytes(16).toString("hex");
+      const run: Run = {
+        ...site, runId: nextId, botId: body.owner, threadId: body.threadId, turnId: "", nonce, expiresAt: 0,
+        card: { v: 1, runId: nextId, owner: body.owner, site: site.site, entry: join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
+      };
+      runs.set(nextId, run);
+      void execute(run, bridge, false, null);
+      return json(res, 200, { status: "preparing" });
+    } catch {
+      free(nextId);
+      return json(res, 409, { error: "not-a-site" });
     }
-    clearTimeout(run.timer);
-    // The result lands on the card only; the caller's turn is over, so nothing wakes it.
-    void execute(run, bridge, true, null);
-    return json(res, 200, { status: "preparing" });
   }
 
   return { handleTool, handleDecision };

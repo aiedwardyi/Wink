@@ -83,6 +83,7 @@ export interface LiveVerifyCamera {
 
 /** electron/verify-run.mjs (ENGINE) entry point, called by electron/verify-host.mjs (HOST). */
 export interface VerifyRunInput {
+  hidden?: boolean;
   runId: string;
   site: string;
   /** http://127.0.0.1:<port>/<entry> from startSiteServer() */

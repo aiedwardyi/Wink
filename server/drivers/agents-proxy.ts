@@ -58,7 +58,7 @@ const verifyCalls = new Map<unknown, AbortController>();
 
 const VERIFY_SITE_TOOL = {
   name: "verify_site",
-  description: "Check a static site in your working folder or workspace with real checks on a desktop and a phone page (text, contrast, fonts, headings, links, buttons, nav, forms, fit) while the user can watch live. Use it after you build or change a site and when asked to check one. Waits for the result: counts plus each issue with where and what was measured.",
+  description: "After changing files that render in a browser, call verify_site before saying done. Checks a static site in your working folder or workspace, hidden in a real browser on desktop and phone. Fix the reported problems in this turn, then recheck at most twice. Reports page errors, dead links, phone sideways scroll, missing phone menus and leftover copy, with locations and reproduction steps. Not checked means unverified; form delivery is never proved.",
   inputSchema: {
     type: "object",
     properties: { entry: { type: "string", description: "The site folder or .html file, absolute or relative to your working folder." } },

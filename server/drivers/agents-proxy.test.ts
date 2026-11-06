@@ -4,7 +4,9 @@
 // endpoints, and drive the MCP stdio surface end to end. No shebang, no
 // shell — plain node child, so this runs on every OS like index.test.ts.
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { build } from "esbuild";
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1131,9 +1133,9 @@ describe("agents-proxy MCP surface", () => {
   });
 });
 
-function probeWithIdentity(identity: Record<string, string>, name = "react", args: unknown = { emoji: "👍" }): Promise<{ list: any; call: any }> {
+function probeWithIdentity(identity: Record<string, string>, name = "react", args: unknown = { emoji: "👍" }, proxyFile = PROXY): Promise<{ list: any; call: any }> {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OMB_")));
-  const proxy = spawn(process.execPath, [PROXY], {
+  const proxy = spawn(process.execPath, [proxyFile], {
     windowsHide: true,
     env: { ...inherited, OMB_HARNESS_URL: "http://127.0.0.1:9", ...identity },
     stdio: ["pipe", "pipe", "inherit"],
@@ -1204,6 +1206,28 @@ describe("agents-proxy identity gate", () => {
   });});
 
 describe("agents-proxy verify_site", () => {
+  let verifyProxy: string;
+  let enabledRoot: string;
+  const probe = (identity: Record<string, string>, name?: string, args?: unknown) => probeWithIdentity(identity, name, args, verifyProxy);
+  beforeAll(async () => {
+    const root = join(tmpdir(), "wink-LV-DONE-CHECK");
+    mkdirSync(root, { recursive: true });
+    enabledRoot = mkdtempSync(join(root, "proxy-"));
+    verifyProxy = join(enabledRoot, "agents-proxy.mjs");
+    await build({ entryPoints: [PROXY], outfile: verifyProxy, bundle: true, platform: "node", format: "esm", plugins: [{ name: "verify-enabled-fixture", setup(builder) {
+      builder.onLoad({ filter: /shared[\\/]live-verify\.ts$/ }, ({ path }) => ({ contents: readFileSync(path, "utf8").replace("LIVE_VERIFY_V0: boolean = false", "LIVE_VERIFY_V0: boolean = true"), loader: "ts" }));
+    } }] });
+  });
+  afterAll(() => rmSync(enabledRoot, { recursive: true, force: true }));
+
+  it("keeps the shipped flag off even when the tool env is set", async () => {
+    lastVerify = null;
+    const { list, call } = await probeWithIdentity(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
+    expect(names(list)).not.toContain("verify_site");
+    expect(call.error).toBeTruthy();
+    expect(lastVerify).toBeNull();
+  });
+
   const identity = (depth: number, flags: Record<string, string>) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, ...flags });
   const names = (list: any): string[] => list.result.tools.map((t: { name: string }) => t.name);
 
@@ -1213,33 +1237,31 @@ describe("agents-proxy verify_site", () => {
     [{ OMB_TEAM_REPORTS: "1" }, 19, false],
     [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 20, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
-    const { list } = await probeWithIdentity(identity(0, flags));
+    const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);
     expect(names(list).includes("verify_site")).toBe(listed);
   });
 
   it.each<Record<string, string>>([{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1" }])("keeps the five peer tools and never lists verify_site at depth > 0 (%o)", async (flags) => {
-    const { list, call } = await probeWithIdentity(identity(1, flags), "verify_site", { entry: "site" });
+    const { list, call } = await probe(identity(1, flags), "verify_site", { entry: "site" });
     expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "list_routines", "update_task_state", "wait_delegation"]);
     expect(call.result?.isError ?? call.error).toBeTruthy();
   });
 
   it("refuses a direct peer call before calling the harness", async () => {
     lastVerify = null;
-    const { call } = await probeWithIdentity(identity(1, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
+    const { call } = await probe(identity(1, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
     expect(call.result.isError).toBe(true);
     expect(call.result.content[0].text).toContain("unavailable in peer turns");
     expect(lastVerify).toBeNull();
   });
 
   it.each([
-    [{ status: "completed", text: "Live Verify: site/index.html - 22 checks, 22 passed, 0 issues, 0 blocked, 0 not run (21 s).\nNo issues found." }, false],
-    [{ status: "offered", errorCode: "needs-approval", text: "Live Verify for site/index.html needs the user's OK and they are away. A card is waiting in the chat; nothing ran." }, false],
-    [{ status: "skipped", text: "The user skipped Live Verify for site/index.html. Nothing ran." }, false],
+    [{ status: "completed", text: "Desktop and phone: no problems found." }, false],
     [{ status: "blocked", errorCode: "busy", text: "Live Verify could not finish site: another Live Verify run is going; try again when it finishes." }, true],
   ])("posts the entry with the bearer and returns the reply text (%o)", async (reply, isError) => {
     verifyResponse = reply;
-    const { call } = await probeWithIdentity(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site", fromBotId: "bot-other" });
+    const { call } = await probe(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site", fromBotId: "bot-other" });
     expect(lastVerify).toEqual({ auth: `Bearer ${TOKEN}`, body: { entry: "site" } });
     expect(call.result.content[0].text).toBe(reply.text);
     expect(Boolean(call.result.isError)).toBe(isError);
@@ -1248,7 +1270,7 @@ describe("agents-proxy verify_site", () => {
   it("drops the harness request on notifications/cancelled and sends no reply", async () => {
     lastVerify = null;
     const dropped = new Promise<boolean>((resolve) => (verifyHold = resolve));
-    const proxy = spawn(process.execPath, [PROXY], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1" }) }, stdio: ["pipe", "pipe", "inherit"] });
+    const proxy = spawn(process.execPath, [verifyProxy], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1" }) }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     proxy.stdout!.on("data", (chunk) => (out += chunk));
     try {

@@ -29,10 +29,12 @@ export function validResult(v) {
   return shape(v, {
     v: (n) => n === 1, runId, site: (s) => text(s, 512), counts: validCounts,
     issues: (issues) => Array.isArray(issues) && issues.length <= 40 && issues.every((issue) => shape(issue, {
-      checker: (c) => ["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT"].includes(c),
+      checker: (c) => ["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"].includes(c),
       tile: (t) => ["desktop", "phone"].includes(t), rule: (s) => text(s, 120), where: (s) => text(s, 120), measured: (s) => text(s, 160), scrollY: optional(Number.isFinite),
     })),
     issueTotal: integer, errorCode: optional(error), durationMs: integer,
+    notChecked: optional(v => Array.isArray(v) && v.length <= 20 && v.every(s => text(s, 200))),
+    details: optional(v => Array.isArray(v) && v.length <= 40 && v.every(row => validResult({ v: 1, runId: "detail-123", site: "", counts: { planned: 1, completed: 1, passed: 0, failed: 1, blocked: 0, notRun: 0 }, issues: [row], issueTotal: 1, durationMs: 0 }))),
   }) && v.issueTotal >= v.issues.length && v.issueTotal <= v.counts.failed;
 }
 

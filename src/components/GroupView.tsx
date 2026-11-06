@@ -3,6 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { ErrorRow } from "./ChatView";
+import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
 import {
@@ -467,7 +468,9 @@ export const Transcript = memo(function Transcript({
           // `tool` distinguishes a permission from a QUESTION — a question
           // only accepts an "answer", so routing it here would offer an
           // Allow the broker rejects
-          m.kind === "secret" && m.secret && m.from?.botId ? (
+          m.kind === "note" && m.verify ? (
+            <VerifyCard card={m.verify} threadId={group.threadId} />
+          ) : m.kind === "secret" && m.secret && m.from?.botId ? (
             <SecretRequestCard botId={m.from.botId} threadId={group.threadId} message={m} />
           ) : m.kind === "connector" && m.connector && m.from?.botId ? (
             <ConnectorCard botId={m.from.botId} threadId={group.threadId} message={m} />

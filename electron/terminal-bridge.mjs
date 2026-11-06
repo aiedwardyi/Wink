@@ -145,7 +145,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
   if (!host || typeof host.readBot !== "function" || typeof host.sendBot !== "function") throw new Error("Terminal host is required");
   let server;
   let address;
-  const verify = verifyFactory?.(token);
+  let verify;
   let closing;
   const start = () => new Promise((resolve, reject) => {
     server = createServer(async (req, res) => {
@@ -155,8 +155,11 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       } catch {
         return json(res, 400, { error: "Invalid terminal request" });
       }
-      if (parsed.pathname.startsWith("/v1/verify/") && verify) {
-        try { if (await verify.handle(req, res, parsed)) return; }
+      if (parsed.pathname.startsWith("/v1/verify/") && verifyFactory) {
+        try {
+          verify ??= Promise.resolve(verifyFactory(token));
+          if (await (await verify).handle(req, res, parsed)) return;
+        }
         catch { return json(res, 500, { error: "Verify unavailable" }); }
       }
       if (parsed.pathname === "/v1/error-reports" && errorReports) return handleServerErrorReport(req, res, token, errorReports);
@@ -288,7 +291,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
     });
   });
   const close = () => closing ??= Promise.all([
-    Promise.resolve().then(() => verify?.close()).catch(() => {}),
+    Promise.resolve(verify).then(value => value?.close()).catch(() => {}),
     new Promise((resolve) => { if (server) server.close(() => resolve()); else resolve(); }),
   ]).then(() => {});
   return {

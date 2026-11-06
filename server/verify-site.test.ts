@@ -91,10 +91,9 @@ function tool(body: unknown, init: { auth?: string; signal?: AbortSignal } = {})
     .then(async (res) => ({ status: res.status, body: (await res.json()) as any }));
 }
 function decide(runId: string, action: string, nonce: string, headers: Record<string, string> = { authorization: "Bearer app-token" }) {
-  return fetch(`${base}/decision/${runId}`, { method: "POST", headers, body: JSON.stringify({ action, nonce }) })
+  return fetch(`${base}/decision/${runId}`, { method: "POST", headers, body: JSON.stringify({ action, nonce, owner: botId, threadId }) })
     .then(async (res) => ({ status: res.status, body: (await res.json()) as any }));
 }
-const offered = () => until(() => card()?.status === "offered" && card());
 
 beforeEach(async () => {
   rmSync(DATA_DIR, { recursive: true, force: true });
@@ -205,151 +204,62 @@ describe("verify_site scope", () => {
     expect(bridge!.starts[0]).toMatchObject({ entry: "page.htm", root: expect.stringMatching(/site$/), revision: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
-  it("answers desktop-required without a bridge, and busy while a run holds the slot", async () => {
+  it("answers desktop-required without a bridge and queues another run", async () => {
     bridge = null;
     expect((await tool({ entry: "site" })).body).toMatchObject({ status: "blocked", errorCode: "desktop-required" });
     expect(card()).toBeUndefined();
     bridge = fakeBridge();
-    const first = tool({ entry: "site" });
-    await offered();
-    const second = await tool({ entry: "site" });
-    expect(second.body).toMatchObject({ status: "blocked", errorCode: "busy" });
-    expect(second.body.text).toBe("Live Verify could not finish site: another Live Verify run is going; try again when it finishes.");
-    await decide(card()!.runId, "skip", card()!.decisionNonce);
-    await first;
-  });
-});
-
-describe("verify_site Ask", () => {
-  it("starts nothing before Watch, then starts with watch true", async () => {
-    const pending = tool({ entry: "site" });
-    const offer = await offered();
-    expect(offer.mode).toBe("ask");
-    expect(bridge!.starts).toEqual([]);
-    bridge!.states = finalStates(result());
-    expect((await decide(offer.runId, "watch", offer.decisionNonce)).body).toEqual({ status: "preparing" });
-    const reply = await pending;
+    const aborter = new AbortController();
+    const first = tool({ entry: "site" }, { signal: aborter.signal }).catch(() => null);
+    await until(() => bridge!.starts.length === 1);
+    const second = tool({ entry: "site" });
+    await new Promise(resolve => setTimeout(resolve, 30));
     expect(bridge!.starts).toHaveLength(1);
-    expect(bridge!.starts[0]!.watch).toBe(true);
-    expect(reply.body.status).toBe("completed");
-  });
-
-  it("Skip runs nothing", async () => {
-    const pending = tool({ entry: "site" });
-    const offer = await offered();
-    await decide(offer.runId, "skip", offer.decisionNonce, { authorization: "Bearer app-token", "x-openmausbot-companion": "1" });
-    expect((await pending).body).toMatchObject({ status: "skipped", text: "The user skipped Live Verify for site/index.html. Nothing ran." });
-    expect(card()?.status).toBe("skipped");
-    expect(bridge!.starts).toEqual([]);
-  });
-
-  it("goes stale when nobody answers", async () => {
-    flags.limits.askWaitMs = 200;
-    const reply = await tool({ entry: "site" });
-    expect(reply.body).toMatchObject({ status: "stale", text: "No answer on the Live Verify card for site/index.html within 2 minutes. Nothing ran." });
-    expect(card()?.status).toBe("stale");
-    expect(bridge!.starts).toEqual([]);
-  });
-
-  it("holds the card and answers needs-approval at once when unattended", async () => {
-    unattended = true;
-    const reply = await tool({ entry: "site" });
-    expect(reply.body).toMatchObject({
-      status: "offered", errorCode: "needs-approval",
-      text: "Live Verify for site/index.html needs the user's OK and they are away. A card is waiting in the chat; nothing ran.",
-    });
-    expect(card()).toMatchObject({ status: "offered", errorCode: "needs-approval", mode: "ask" });
-    expect(verdict).toHaveBeenCalledWith(expect.objectContaining({ id: botId }), "verify_site", "Check the site site/index.html", { unattended: true });
-    expect(bridge!.starts).toEqual([]);
-  });
-
-  it("runs a held offer on a later local Watch after the turn ended, card only", async () => {
-    unattended = true;
-    await tool({ entry: "site" });
-    const held = card()!;
-    turnRegistry.settle("turn-1");
     bridge!.states = finalStates(result());
-    expect((await decide(held.runId, "watch", held.decisionNonce)).status).toBe(200);
-    await until(() => card()?.status === "completed");
-    expect(bridge!.starts[0]!.watch).toBe(true);
+    aborter.abort();
+    await first;
+    expect((await second).body.status).toBe("completed");
+    expect(bridge!.starts).toHaveLength(2);
   });
 });
 
-describe("verify_site decisions", () => {
-  it("refuses unknown runs, old nonces, phone Watch and scoped comms callers", async () => {
-    const pending = tool({ entry: "site" });
-    const offer = await offered();
-    expect((await decide("unknown-run", "watch", offer.decisionNonce)).body).toEqual({ error: "not-here" });
-    expect((await decide(offer.runId, "watch", "old-nonce")).status).toBe(404);
-    expect((await decide(offer.runId, "watch", offer.decisionNonce, { "x-relay": "1" })).status).toBe(403);
-    expect((await decide(offer.runId, "watch", offer.decisionNonce, { authorization: "Bearer app-token", "x-remote": "1" })).status).toBe(403);
-    expect((await decide(offer.runId, "watch", offer.decisionNonce, { authorization: `Bearer ${token}` })).status).toBe(403);
-    expect((await decide(offer.runId, "watch", offer.decisionNonce, {})).status).toBe(401);
-    expect(bridge!.starts).toEqual([]);
-    await decide(offer.runId, "skip", offer.decisionNonce, { "x-relay": "1" });
-    expect((await pending).body.status).toBe("skipped");
-  });
-
-  it("refuses Watch after the site changed and starts nothing", async () => {
-    const pending = tool({ entry: "site" });
-    const offer = await offered();
-    writeFileSync(join(work, "site", "a.css"), "h1{color:blue}");
-    expect((await decide(offer.runId, "watch", offer.decisionNonce)).status).toBe(404);
-    expect((await pending).body).toMatchObject({ status: "blocked", errorCode: "site-changed" });
-    expect(bridge!.starts).toEqual([]);
-  });
-
-  it("refuses an expired held offer", async () => {
-    unattended = true;
-    flags.limits.heldMs = 50;
-    await tool({ entry: "site" });
-    const held = card()!;
-    await new Promise((r) => setTimeout(r, 80));
-    expect((await decide(held.runId, "watch", held.decisionNonce)).status).toBe(404);
-    expect(bridge!.starts).toEqual([]);
-  });
-
-  it("starts once when Watch and Skip race", async () => {
-    const pending = tool({ entry: "site" });
-    const offer = await offered();
+describe("verify_site hidden checks", () => {
+  it.each([false, true])("runs without an Ask offer, including unattended=%s", async away => {
+    unattended = away;
     bridge!.states = finalStates(result());
-    const answers = await Promise.all([
-      decide(offer.runId, "watch", offer.decisionNonce),
-      decide(offer.runId, "watch", offer.decisionNonce),
-      decide(offer.runId, "skip", offer.decisionNonce),
-    ]);
-    const won = answers.filter((a) => a.status === 200);
-    expect(won).toHaveLength(1);
-    await pending;
-    expect(bridge!.starts).toHaveLength(won[0]!.body.status === "preparing" ? 1 : 0);
+    expect((await tool({ entry: "site" })).body.status).toBe("completed");
+    expect(bridge!.starts[0]!.watch).toBe(false);
+    expect(verdict).not.toHaveBeenCalled();
+    expect(decisions).toEqual([]);
   });
 
-  it("Watch on a running Auto run opens it; Skip changes nothing", async () => {
-    store.patchBot(botId, { autoApprove: true });
-    bridge!.states = [{ runId: "x", revision: 1, state: "running", counts: counts(2), result: null }];
-    const pending = tool({ entry: "site" });
-    const running = await until(() => card()?.status === "running" && card());
-    expect((await decide(running.runId, "skip", running.decisionNonce)).body).toEqual({ status: "running" });
-    expect((await decide(running.runId, "watch", running.decisionNonce)).status).toBe(200);
-    expect(bridge!.watches).toBe(1);
+  it("reruns hidden from the phone after the bot turn ends, updating the same card", async () => {
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    const previous = card()!;
     turnRegistry.settle("turn-1");
-    expect((await pending).body).toMatchObject({ status: "blocked", errorCode: "cancelled" });
+    writeFileSync(join(work, "site", "index.html"), "<h1>Updated</h1>");
+    bridge!.states = finalStates(result());
+    const reply = await decide(previous.runId, "rerun", previous.decisionNonce, { authorization: "Bearer app-token", "x-openmausbot-companion": "1" });
+    expect(reply.status).toBe(200);
+    await until(() => card()?.status === "completed" && card()!.runId !== previous.runId);
+    expect(bridge!.starts.map(row => row.watch)).toEqual([false, false]);
+    expect(bridge!.starts[0]!.revision).not.toBe(bridge!.starts[1]!.revision);
+    expect(store.activePath(threadId).filter(message => message.verify)).toHaveLength(1);
+    expect((await decide(previous.runId, "rerun", previous.decisionNonce)).status).toBe(404);
+  });
+
+  it("refuses stale nonces, comms callers and show actions", async () => {
+    bridge!.states = finalStates(result()); await tool({ entry: "site" });
+    const previous = card()!;
+    expect((await decide(previous.runId, "rerun", "stale")).status).toBe(404);
+    expect((await decide(previous.runId, "rerun", previous.decisionNonce, { authorization: `Bearer ${token}` })).status).toBe(403);
+    expect((await decide(previous.runId, "watch", previous.decisionNonce)).status).toBe(400);
+    expect(bridge!.starts).toHaveLength(1);
   });
 });
 
 describe("verify_site Auto", () => {
-  it("calls autoVerdict with verify_site, logs the chip and starts unwatched", async () => {
-    store.patchBot(botId, { autoApprove: true });
-    bridge!.states = finalStates(result());
-    const reply = await tool({ entry: "site" });
-    expect(verdict).toHaveBeenCalledWith(expect.objectContaining({ id: botId }), "verify_site", "Check the site site/index.html", { unattended: false });
-    const chip = store.activePath(threadId).find((m) => m.tool?.approval);
-    expect(chip?.tool).toEqual({ name: "auto-approved verify_site: Check the site site/index.html", ok: true, approval: true });
-    expect(decisions).toEqual([expect.objectContaining({ tool: "verify_site", decision: "auto-approved", source: "auto-mode" })]);
-    expect(bridge!.starts[0]!.watch).toBe(false);
-    expect(reply.body.status).toBe("completed");
-  });
-
   it("moves the card preparing, running, completed with counts, broadcasting counts only in memory", async () => {
     store.patchBot(botId, { autoApprove: true });
     const seen: string[] = [];
@@ -358,13 +268,9 @@ describe("verify_site Auto", () => {
     const reply = await tool({ entry: "site" });
     expect([...new Set(seen)]).toEqual(["preparing", "running", "completed"]);
     expect(broadcasts.at(-1)?.verify?.counts?.completed).toBe(5);
-    expect(card()).toMatchObject({ status: "completed", counts: counts(10, 1), issueTotal: 1 });
-    expect(reply.body.text).toBe([
-      "Live Verify: site/index.html - 10 checks, 9 passed, 1 issues, 0 blocked, 0 not run (22 s).",
-      "Issues (1 of 1):",
-      "1. CONTRAST phone · p.lede · 3.1:1, needs 4.5:1",
-      "Fix them in the site files, then call verify_site again for a fresh full run.",
-    ].join("\n"));
+    expect(card()).toMatchObject({ status: "completed", counts: counts(10, 1), issueTotal: 0, issues: [], details: [expect.objectContaining({ rule: "contrast" })] });
+    expect(reply.body.text).toContain("no problems found");
+    expect(reply.body.text).not.toContain("3.1:1");
   });
 
   it("patches one card per owner and thread for the next run", async () => {
@@ -398,7 +304,7 @@ describe("verify_site cancellation", () => {
     const pending = tool({ entry: "site" });
     await until(() => bridge!.starts.length === 1);
     turnRegistry.start("turn-2", { botId, threadId, owner: "user", depth: 0 });
-    expect((await pending).body).toMatchObject({ status: "blocked", errorCode: "cancelled", text: "Live Verify could not finish site/index.html: the run was cancelled." });
+    expect((await pending).body).toMatchObject({ status: "blocked", errorCode: "cancelled", text: "Not checked: the run was cancelled." });
     expect(bridge!.cancels).toBe(1);
   });
 
@@ -407,7 +313,7 @@ describe("verify_site cancellation", () => {
     bridge!.states = [{ runId: "x", revision: 1, state: "running", counts: counts(3), result: null }];
     const reply = await tool({ entry: "site" });
     expect(reply.body).toMatchObject({ status: "blocked", errorCode: "timeout" });
-    expect(reply.body.text).toBe("Live Verify could not finish site/index.html: the run passed its time limit.\nPartial: 3 checks, 3 passed, 0 issues, 0 blocked, 7 not run.");
+    expect(reply.body.text).toBe("Not checked: the run passed its time limit.");
     expect(bridge!.cancels).toBe(1);
   });
 
@@ -424,24 +330,23 @@ describe("verify_site replies", () => {
 
   it("says no issues found", async () => {
     bridge!.states = finalStates(result());
-    expect((await tool({ entry: "site" })).body.text).toBe("Live Verify: site/index.html - 10 checks, 10 passed, 0 issues, 0 blocked, 0 not run (22 s).\nNo issues found.");
+    expect((await tool({ entry: "site" })).body.text).toBe("Desktop and phone: no problems found.");
   });
 
   it("trims issue lines to the reply cap", async () => {
-    const issues = Array.from({ length: 40 }, () => ({ checker: "FIT" as const, tile: "desktop" as const, rule: "cut text", where: "w".repeat(120), measured: "m".repeat(160) }));
+    const issues = Array.from({ length: 40 }, () => ({ checker: "FIT" as const, tile: "phone" as const, rule: "sideways scroll", where: "w".repeat(120), measured: "m".repeat(160) }));
     bridge!.states = finalStates(result(issues, { issueTotal: 55 }));
     const text: string = (await tool({ entry: "site" })).body.text;
-    expect(text.length).toBeLessThanOrEqual(8_000);
-    expect(text).toMatch(/^Issues \((\d+) of 55\):$/m);
-    expect(Number(/Issues \((\d+) of/.exec(text)![1])).toBeLessThan(40);
-    expect(text.endsWith("Fix them in the site files, then call verify_site again for a fresh full run.")).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(1200);
+    expect(text).toContain("Phone 392 px");
+    expect(text).toContain("at most twice");
   });
 
   it("reports a blocked run with its reason and partial counts", async () => {
     bridge!.states = [{ runId: "x", revision: 1, state: "blocked", counts: counts(4), result: result([], { counts: counts(4), errorCode: "page-failed" }), errorCode: "page-failed" }];
     expect((await tool({ entry: "site" })).body).toMatchObject({
       status: "blocked", errorCode: "page-failed",
-      text: "Live Verify could not finish site/index.html: a page crashed or never loaded.\nPartial: 4 checks, 4 passed, 0 issues, 0 blocked, 6 not run.",
+      text: "Not checked: a page crashed or never loaded.",
     });
   });
 

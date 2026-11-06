@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { runHiddenVerify } from "./verify-hidden.mjs";
 import { attach } from "./verify-cdp.mjs";
 import { checks, SCROLL, world } from "./verify-checks.mjs";
 import { conduct, finalize, pickLive, scanScore } from "./verify-conduct.mjs";
@@ -14,6 +15,7 @@ const bytes = value => Buffer.byteLength(J(value));
 const plain = (value, n) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, n);
 
 export function runVerify(input) {
+  if (input.hidden) return runHiddenVerify(input);
   const started = Date.now(), adapters = {}, pages = {}, scales = {}, disposers = [], timers = new Set();
   const monotonic = performance.now(), now = () => started + performance.now() - monotonic;
   const ledger = new Map(), observations = [];

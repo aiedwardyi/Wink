@@ -2,7 +2,7 @@ import { VERIFY_LIMITS, type VerifyCardData, type VerifyCardStatus, type VerifyC
 import { redactSecretsInText } from "./redact.ts";
 
 const STATUSES = new Set<VerifyCardStatus>(["offered", "preparing", "running", "completed", "skipped", "blocked", "stale"]);
-const CHECKERS = new Set<VerifyChecker>(["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT"]);
+const CHECKERS = new Set<VerifyChecker>(["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"]);
 const TILES = new Set<VerifyTile>(["desktop", "phone"]);
 
 export const VERIFY_REASONS: Record<VerifyErrorCode, string> = {
@@ -52,9 +52,12 @@ export function redactVerifyCard(value: unknown): VerifyCardData | undefined {
   const site = text(value.site, VERIFY_LIMITS.entryChars);
   if (site === null) return undefined;
   const out: VerifyCardData = { v: 1, runId: value.runId, owner: value.owner, site, status: value.status as VerifyCardStatus, mode: value.mode, decisionNonce: value.decisionNonce, offeredAt: value.offeredAt as number };
+  if (typeof value.entry === "string") out.entry = text(value.entry, VERIFY_LIMITS.entryChars) ?? undefined;
   const tally = counts(value.counts);
   if (tally) out.counts = tally;
   if (Array.isArray(value.issues)) out.issues = value.issues.slice(0, VERIFY_LIMITS.issues).map(issue).filter((row): row is VerifyIssue => row !== null);
+  if (Array.isArray(value.notChecked)) out.notChecked = value.notChecked.slice(0, 20).map(row => text(row, 200)).filter((row): row is string => row !== null);
+  if (Array.isArray(value.details)) out.details = value.details.slice(0, VERIFY_LIMITS.issues).map(issue).filter((row): row is VerifyIssue => row !== null);
   if (count(value.issueTotal)) out.issueTotal = value.issueTotal as number;
   if (typeof value.errorCode === "string" && Object.hasOwn(VERIFY_REASONS, value.errorCode)) out.errorCode = value.errorCode as VerifyErrorCode;
   if (time(value.startedAt)) out.startedAt = value.startedAt as number;
@@ -62,31 +65,29 @@ export function redactVerifyCard(value: unknown): VerifyCardData | undefined {
   return out;
 }
 
-const countsLine = (c: VerifyCounts) => `${c.completed} checks, ${c.passed} passed, ${c.failed} issues, ${c.blocked} blocked, ${c.notRun} not run`;
+const problemRules = new Set(["page error", "broken image", "missing target", "local 404", "self sign-up", "sideways scroll", "phone menu gone", "placeholder contact", "lorem", "TODO", "undefined", "NaN"]);
 
+export const verifyProblems = (issues: VerifyIssue[]) => issues.filter(row => problemRules.has(row.rule));
+const tokenCost = (text: string) => [...text].reduce((n, c) => n + (c.charCodeAt(0) < 128 ? 1 / 3 : 2), 0);
 type ReplyDetail = { result?: VerifyResult | null; errorCode?: VerifyErrorCode; counts?: VerifyCounts | null };
 
-/** Exactly what the bot gets back. Issue lines are trimmed first to stay under the reply cap. */
-export function verifyReplyText(status: VerifyCardStatus, site: string, detail: ReplyDetail = {}): string {
+export function verifyReplyText(status: VerifyCardStatus, _site: string, detail: ReplyDetail = {}): string {
   const { result } = detail;
   const code = detail.errorCode ?? result?.errorCode;
-  if (status === "skipped") return `The user skipped Live Verify for ${site}. Nothing ran.`;
-  if (status === "stale") return `No answer on the Live Verify card for ${site} within 2 minutes. Nothing ran.`;
-  if (code === "needs-approval") return `Live Verify for ${site} needs the user's OK and they are away. A card is waiting in the chat; nothing ran.`;
-  if (status !== "completed" || !result || code) {
-    const tally = result?.counts ?? detail.counts;
-    const partial = tally && tally.completed > 0 ? `\nPartial: ${countsLine(tally)}.` : "";
-    return `Live Verify could not finish ${site}: ${VERIFY_REASONS[code ?? "internal"]}.${partial}`.slice(0, VERIFY_LIMITS.resultTextChars);
+  if (status !== "completed" || !result || code) return `Not checked: ${VERIFY_REASONS[code ?? "internal"]}.`.slice(0, VERIFY_LIMITS.resultTextChars);
+  const issues = verifyProblems(result.issues);
+  const head = issues.length ? "Desktop and phone: problems found." : "Desktop and phone: no problems found.";
+  const tail = issues.length ? "Fix these in this turn; call verify_site again, at most twice." : "";
+  const unchecked = [...(result.notChecked ?? [])].sort((a, b) => Number(b === "form delivery") - Number(a === "form delivery")).map(row => `Not checked: ${row.slice(0, 80)}`).join("\n");
+  const lines = issues.map(row => `${row.tile === "phone" ? "Phone 392 px" : "Desktop 1280 px"}: ${row.rule} at ${row.where.slice(0, 70)}. ${row.measured.slice(0, 80)}. ${row.checker === "LINKS" ? "Click this link." : row.checker === "PAGE_ERRORS" ? "Reload the page." : "View this location."}`);
+  let reply = [head, unchecked, tail].filter(Boolean).join("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const candidate = [head, ...lines.slice(0, i + 1), unchecked, tail].filter(Boolean).join("\n");
+    if (candidate.length > VERIFY_LIMITS.resultTextChars || tokenCost(candidate) > 390) break;
+    reply = candidate;
   }
-  const head = `Live Verify: ${site} - ${countsLine(result.counts)} (${Math.round(result.durationMs / 1000)} s).`;
-  if (!result.issues.length) return `${head}\nNo issues found.`.slice(0, VERIFY_LIMITS.resultTextChars);
-  const tail = "Fix them in the site files, then call verify_site again for a fresh full run.";
-  const lines = result.issues.map((row, i) => `${i + 1}. ${row.checker} ${row.tile} · ${row.where} · ${row.measured}`);
-  for (let shown = lines.length; shown >= 0; shown--) {
-    const reply = [head, `Issues (${shown} of ${result.issueTotal}):`, ...lines.slice(0, shown), tail].join("\n");
-    if (reply.length <= VERIFY_LIMITS.resultTextChars) return reply;
-  }
-  return head.slice(0, VERIFY_LIMITS.resultTextChars);
+  while (reply.length > VERIFY_LIMITS.resultTextChars || tokenCost(reply) > 400) reply = reply.slice(0, -1);
+  return redactSecretsInText(reply);
 }
 
 /** The card's plain-text summary, for transcripts and model context. */
@@ -97,7 +98,7 @@ export function verifyCardText(card: VerifyCardData): string {
   if (card.status === "preparing" || card.status === "running") return `Live Verify is checking ${card.site}.`;
   if (card.status === "stale") return `The Live Verify offer for ${card.site} expired. Nothing ran.`;
   const result: VerifyResult | null = card.status === "completed" && card.counts
-    ? { v: 1, runId: card.runId, site: card.site, counts: card.counts, issues: card.issues ?? [], issueTotal: card.issueTotal ?? 0, durationMs: (card.endedAt ?? 0) - (card.startedAt ?? card.offeredAt) }
+    ? { v: 1, runId: card.runId, site: card.site, counts: card.counts, issues: card.issues ?? [], issueTotal: card.issueTotal ?? 0, notChecked: card.notChecked, durationMs: (card.endedAt ?? 0) - (card.startedAt ?? card.offeredAt) }
     : null;
   return verifyReplyText(card.status, card.site, { result, errorCode: card.errorCode, counts: card.counts }).split("\n")[0]!;
 }

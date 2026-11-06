@@ -1,0 +1,8 @@
+<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Isolation probes</title><body><h1>Isolated page</h1>
+<script>
+const target = '__CANARY__';
+fetch(target + '/fetch').catch(() => {}); fetch('/write', { method: 'POST', body: 'probe' }).catch(() => {});
+try { navigator.sendBeacon(target + '/beacon', 'probe'); } catch {} try { new WebSocket(target.replace('http:', 'ws:') + '/socket'); } catch {}
+const image = new Image(); image.src = target + '/image'; window.open(target + '/popup'); alert('Isolated dialog');
+navigator.clipboard?.writeText('isolation probe').catch(() => {}); try { new Worker(target + '/worker.js'); } catch {}
+</script></body></html>

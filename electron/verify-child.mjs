@@ -1,4 +1,4 @@
-import { app, session } from "electron";
+import { app, dialog, session } from "electron";
 import fs from "node:fs";
 import { createConnection } from "node:net";
 import os from "node:os";
@@ -32,6 +32,7 @@ export function validateChildLaunch({ env, argv, commandLine }) {
 }
 
 export function bootVerifyChild({ app, session, stdin, stdout, stderr = process.stderr, env = process.env, argv = process.argv, priority = os.setPriority, worker = (source, options) => new Worker(source, options), exit = (code) => app.exit(code) }) {
+  dialog.showErrorBox = () => {};
   let link;
   let ending = false;
   let host;

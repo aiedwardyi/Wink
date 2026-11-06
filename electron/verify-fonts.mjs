@@ -31,13 +31,13 @@ export function createVerifyFonts({ fontUrls, logLookup = () => {}, request = ht
           lookup(name, options, callback);
         } }, (res) => {
           const type = String(res.headers["content-type"] ?? "").split(";")[0].toLowerCase();
-          if (res.statusCode !== 200 || (sheet ? type !== "text/css" : !fontTypes.has(type)) || Number(res.headers["content-length"] ?? 0) > cap) { res.destroy(); req.destroy(new Error("Font response denied")); return; }
+          if (res.statusCode !== 200 || (sheet ? type !== "text/css" : !fontTypes.has(type)) || Number(res.headers["content-length"] ?? 0) > cap) { res.destroy(); req.destroy(); finish(new Error("Font response denied")); return; }
           const chunks = [];
           let bytes = 0;
           res.on("error", (err) => finish(err));
           res.on("data", (chunk) => {
             bytes += chunk.length; total += chunk.length;
-            if (bytes > cap || total > 8 * 1024 * 1024 || closed) { res.destroy(); req.destroy(new Error("Font byte cap")); return; }
+            if (bytes > cap || total > 8 * 1024 * 1024 || closed) { res.destroy(); req.destroy(); finish(new Error("Font byte cap")); return; }
             chunks.push(chunk);
           });
           res.on("end", () => {
@@ -53,7 +53,8 @@ export function createVerifyFonts({ fontUrls, logLookup = () => {}, request = ht
         });
         pending.add(req);
         req.once("error", (err) => finish(err));
-        timer = setTimeout(() => req.destroy(new Error("Font request timeout")), 5000);
+        // req emits no error once a response exists, so every cutoff settles itself.
+        timer = setTimeout(() => { req.destroy(); finish(new Error("Font request timeout")); }, 5000);
         req.end();
       } catch (err) { finish(err); }
     });

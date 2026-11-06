@@ -1,6 +1,7 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
+import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
@@ -788,7 +789,7 @@ const MessagesList = memo(function MessagesList({
             case "note":
             case "launch": {
               const worker = workerAt.get(m.id);
-              if (worker === undefined) return m.kind === "note" ? <NoteMessage message={m} /> : null;
+              if (worker === undefined) return m.verify ? <VerifyCard card={m.verify} threadId={bot.threadId} /> : m.kind === "note" ? <NoteMessage message={m} /> : null;
               if (!worker) return null;
               const live = livePanes && worker.run.sessionId ? livePanes.has(worker.run.sessionId) : null;
               return <WorkerRow {...worker} live={live} onOpenTerminalPane={onOpenTerminalPane} open={open.has(worker.run.id)} onToggle={() => toggle(worker.run.id)} />;

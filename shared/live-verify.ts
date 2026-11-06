@@ -1,9 +1,5 @@
-// Live Verify v0 shared protocol (server + UI). Frozen by
-// Orbit-cards/live-verify/V0.md; change it only in LV0-INTEGRATE.
-
-/** The v0 kill switch. false hides the verify_site tool (no env, no route),
- * the chat card and the top-bar icon. Flip it for the 11-12 build if v0 is rough. */
-export const LIVE_VERIFY_V0: boolean = true;
+// Keep the build switch off until the eval passes.
+export const LIVE_VERIFY_V0: boolean = false;
 
 export const VERIFY_TOOL = "verify_site";
 /** agents-proxy lists verify_site only when this env var is "1". */
@@ -12,7 +8,7 @@ export const VERIFY_TOOL_ENV = "OMB_LIVE_VERIFY";
 export type VerifyTile = "desktop" | "phone";
 export type VerifyChecker =
   | "TEXT_A" | "TEXT_B" | "HEADINGS" | "LINKS" | "FONT" | "CONTRAST"
-  | "BUTTONS" | "NAV" | "CLICK" | "FORM" | "FIT";
+  | "BUTTONS" | "NAV" | "CLICK" | "FORM" | "FIT" | "PAGE_ERRORS";
 
 export type VerifyCardStatus =
   | "offered"    // Ask: waiting for Watch / Skip; nothing has loaded
@@ -73,6 +69,8 @@ export interface VerifyResult {
   /** Set when the run ended early; counts are then honest partial counts. */
   errorCode?: VerifyErrorCode;
   durationMs: number;
+  notChecked?: string[];
+  details?: VerifyIssue[];
 }
 
 /** message.verify on a kind:"note" chat message: one current card per owner/thread, patched in place. */
@@ -82,12 +80,15 @@ export interface VerifyCardData {
   /** Bot id that called verify_site. */
   owner: string;
   site: string;
+  entry?: string;
   status: VerifyCardStatus;
   mode: "ask" | "auto";
   decisionNonce: string;
   counts?: VerifyCounts;
   issues?: VerifyIssue[];
   issueTotal?: number;
+  notChecked?: string[];
+  details?: VerifyIssue[];
   errorCode?: VerifyErrorCode;
   /** epoch ms */
   offeredAt: number;
@@ -107,7 +108,7 @@ export const VERIFY_LIMITS = {
   /** Whole tool call; below the 300 s agents-MCP limit (server/drivers/codex.ts:147). */
   toolMs: 230_000,
   issues: 40,
-  resultTextChars: 8_000,
+  resultTextChars: 1_200,
   entryChars: 1_024,
 } as const;
 
@@ -118,7 +119,7 @@ export const VERIFY_ROUTES = {
   decision: "/api/verify/runs/:runId/decision",
 } as const;
 
-export type VerifyDecision = "watch" | "skip";
+export type VerifyDecision = "watch" | "skip" | "rerun";
 
 export interface VerifyToolReply {
   status: VerifyCardStatus;

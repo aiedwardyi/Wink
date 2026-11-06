@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import vm from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 
-vi.mock("electron", () => ({ app: {}, session: {} }));
+vi.mock("electron", () => ({ app: {}, dialog: {}, session: {} }));
 import { bootVerifyChild, validateChildLaunch, watchdogSource } from "./verify-child.mjs";
 import { CHILD_PATHS, RESOLVER_RULES } from "./verify-child-link.mjs";
 

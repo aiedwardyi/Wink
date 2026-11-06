@@ -4,6 +4,7 @@
 // visible line and the bubble reads as the previous speaker's.
 import { activityRunVisible, activityVisibleInChat, type TranscriptItem } from "./activity-runs";
 import { isShownMessage } from "./shown-message";
+import { LIVE_VERIFY_V0 } from "../../shared/live-verify";
 import type { Message } from "@/state/store";
 
 export interface RoomTranscriptOptions {
@@ -25,6 +26,8 @@ export interface RoomTranscriptRow {
  * named-tool pills stay too — quiet default-off hides success, not failure. */
 export function messageVisible(message: Message, showToolCalls: boolean, showActivities = showToolCalls): boolean {
   switch (message.kind) {
+    case "note":
+      return LIVE_VERIFY_V0 && Boolean(message.verify);
     case "text":
       return Boolean(message.text) && isShownMessage(message);
     case "activity":

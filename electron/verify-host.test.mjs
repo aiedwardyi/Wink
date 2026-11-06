@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Duplex, PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -72,8 +73,8 @@ it("reserves before spawn, starts lazily, scrubs env and pins production argv", 
   expect(() => f.host.start(input("run-234567"))).toThrow("busy");
   await until(() => f.frames.some((v) => v.type === "start"));
   const spawn = f.calls.find((v) => v[0] === "spawn");
-  expect(spawn[2]).toEqual(["--orbit-verify-child", `--host-resolver-rules=${RESOLVER_RULES}`, `--user-data-dir=${path.join(spawn[3].cwd, "userData")}`]);
-  expect(spawn[3]).not.toHaveProperty("windowsHide");
+  expect(spawn[2]).toEqual(["--headless", "--mute-audio", "--orbit-verify-child", `--host-resolver-rules=${RESOLVER_RULES}`, `--user-data-dir=${path.join(spawn[3].cwd, "userData")}`]);
+  expect(spawn[3].windowsHide).toBe(true);
   expect(Object.keys(spawn[3].env).sort()).toEqual(["APPDATA", "HOME", "LOCALAPPDATA", "ORBIT_VERIFY_CHILD", "ORBIT_VERIFY_ROOT", "PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE"].sort());
   expect(f.frames.find((v) => v.type === "start").locale).toBe("ko");
 });
@@ -122,7 +123,7 @@ it("adds only probe flags and quits on idle", async () => {
   const f = fixture({ probe: { scale: 1.5 }, packaged: false }); f.host.start(input());
   await until(() => f.frames.some((v) => v.type === "start"));
   const args = f.calls.find((v) => v[0] === "spawn")[2];
-  expect(args[0].replaceAll("\\", "/")).toContain("/lv0-host/");
+  expect(path.resolve(args[0])).toBe(path.resolve(fileURLToPath(new URL("../", import.meta.url))));
   expect(args).toContain("--mute-audio"); expect(args).toContain("--force-device-scale-factor=1.5");
   f.send({ type: "idle" });
   await until(() => f.frames.some((v) => v.type === "quit"));

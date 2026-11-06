@@ -65,7 +65,7 @@ export async function isolatePage(ses, contents, { origin, fontUrls = [], logLoo
     ses.webRequest.onHeadersReceived({ urls: ["<all_urls>"] }, (details, callback) => {
       const headers = Object.fromEntries(Object.entries(details.responseHeaders ?? {}).filter(([key]) => !["set-cookie", "x-dns-prefetch-control", "content-security-policy"].includes(key.toLowerCase())));
       headers["X-DNS-Prefetch-Control"] = ["off"];
-      headers["Content-Security-Policy"] = ["default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"];
+      headers["Content-Security-Policy"] = ["default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; manifest-src 'self'; connect-src 'self'; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"];
       callback({ responseHeaders: headers });
     });
     await ses.protocol.handle("https", async (request) => {
