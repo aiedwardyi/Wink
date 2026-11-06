@@ -65,6 +65,7 @@ import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
+import { baseAccount } from "../worker-resume.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 
@@ -728,6 +729,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
+    const turnPolicy = input.account ? { ...launchPolicy, accountBaseHome: baseAccount(input.account.of, DRIVER_KIND, { ...process.env, ...input.environment }).home } : launchPolicy;
     let admitted = !input.account;
     let accountBlocked = false;
     let helpers = 0;
@@ -1252,7 +1254,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           args.splice(args.indexOf("--append-system-prompt"), 2, "--append-system-prompt-file", systemPromptPath);
         }
         child = spawnCli(config.cli, args, {
-          ...launchPolicy,
+          ...(turn.leanStartup === true ? launchPolicy : turnPolicy),
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
