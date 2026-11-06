@@ -10,6 +10,7 @@ import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } fro
 import type { Message } from "./store.ts";
 import { createSummaryBuild, type SummaryWait } from "./summary-build.ts";
 import { buildResumeFallback, buildTurnContext, systemTurnInput, withSystemChanges } from "./turn-context.ts";
+import { currentTurnTrace, tracePart } from "./turn-timing.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 // Execute the production folds and dispatch without booting the server.
@@ -168,7 +169,7 @@ describe("summary grace dispatch", () => {
       }
       const seed = { cursor: "session" as unknown, compactionId: null as string | null };
       const scope = {
-        currentTurnEpoch: () => 1, epoch: 1,
+        currentTurnEpoch: () => 1, epoch: 1, tracePart, trace: currentTurnTrace(),
         accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
         providerReload: { started: () => {
           if (fold === "dispatch") enqueue();

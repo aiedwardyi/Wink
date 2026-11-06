@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartupTiming } from "./startup-timing.ts";
 import { foldQueuedSends, isSendCancelled, queueMark, queueSteeredMessage, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
+import { currentTurnTrace, traceClaimedTurn } from "./turn-timing.ts";
 
 afterEach(() => vi.useRealTimers());
 
@@ -292,7 +293,7 @@ describe("startup timing", () => {
     const claims = new Set<string>();
     const startTurn = runInNewContext(`${ts.transpile(turn.getText(source), { target: ts.ScriptTarget.ES2022 })}
       async function startClaimedTurn(botId, text, opts) { ${body} dispatch(botId, text, opts); } startTurn`, {
-      startupTiming, currentTurnEpoch: () => 0, queueMark, dispatch, store: { bot: () => ({ threadId: "t1" }) }, turnStartClaims: claims,
+      startupTiming, currentTurnTrace, traceClaimedTurn, currentTurnEpoch: () => 0, queueMark, dispatch, store: { bot: () => ({ threadId: "t1" }) }, turnStartClaims: claims,
       tryClaimTurnStart: (id: string) => { if (claims.has(id)) return false; claims.add(id); return true; },
       takeStartingHold: () => () => {},
       busyRejection: (message: string) => new Error(message), queueMicrotask() {},
@@ -328,7 +329,7 @@ describe("startup timing", () => {
     const dispatch = vi.fn();
     _resetSteerQueue();
     const pending = runInNewContext(`(async () => { ${ts.transpile(`${prefix}\n${folded}\n${stopped}\ndispatch(folded);`, { target: ts.ScriptTarget.ES2022 })} })()`, {
-      botId: bot.id, bot, threadId, opts: {}, store, startupTiming, queueMark, foldQueuedSends, isSendCancelled,
+      botId: bot.id, bot, threadId, opts: {}, store, startupTiming, queueMark, foldQueuedSends, isSendCancelled, currentTurnTrace,
       currentTurnEpoch: () => epoch, logSummaryWait() {}, startedTurn() {}, userMessage: {}, dispatch,
     }) as Promise<void>;
     try {

@@ -41,6 +41,8 @@ import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
+import { recordToolSchemas } from "../turn-timing.ts";
+import { createToolCatalog } from "./tool-catalog.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
@@ -1016,6 +1018,9 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 
+const eligibleTools = TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [];
+const catalog = process.env.OMB_WINK_TOOL_CATALOG === "1" ? createToolCatalog(eligibleTools) : undefined;
+
 export async function handle(msg: Json) {
   const id = msg.id;
   const method = msg.method as string | undefined;
@@ -1038,18 +1043,33 @@ export async function handle(msg: Json) {
       ok(id, {});
       return;
     case "tools/list":
-      ok(id, { tools: TOOLS_ENABLED ? TOOLS.filter((tool) => DEPTH === 0 || PEER_TOOLS.has(tool.name)) : [] });
+      recordToolSchemas(() => catalog?.tools ?? eligibleTools);
+      ok(id, { tools: catalog?.tools ?? eligibleTools });
       return;
     case "tools/call": {
-      const name = params.name as string;
+      if (!TOOLS_ENABLED) return rpcErr(id, -32602, `Unknown tool: ${params.name}`);
+      let name = params.name as string;
+      let args = (params.arguments ?? {}) as Json;
+      const gateway = name === "call_wink_tool" && catalog;
+      if (name === "find_wink_tool" && catalog) {
+        const result = catalog.find(args);
+        return textResult(id, result.text, result.isError);
+      }
+      if (gateway) {
+        const call = catalog.resolve(args);
+        if ("error" in call) return textResult(id, call.error, true);
+        name = call.name;
+        args = call.arguments as Json;
+      }
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
       if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
       const verify = name === VERIFY_SITE_TOOL.name ? new AbortController() : null;
       if (verify) verifyCalls.set(id, verify);
       const deadline = verify ? setTimeout(() => verify.abort("deadline"), VERIFY_LIMITS.toolMs) : undefined;
       try {
-        const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json, verify?.signal);
-        textResult(id, text, isError);
+        const { text, isError } = await callTool(name, args, verify?.signal);
+        if (gateway) ok(id, { content: [{ type: "text", text }], isError: isError ?? false, _meta: { winkTool: name } });
+        else textResult(id, text, isError);
       } catch (e) {
         // A cancelled request gets no response (MCP cancellation).
         if (verify?.signal.reason === "cancelled") return;

@@ -18,6 +18,7 @@ import {
   queueSteeredMessage,
 } from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
+import { traceClaimedTurn } from "./turn-timing.ts";
 
 // Windows CI checks out CRLF; the slice markers below are written with \n.
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8").replace(/\r\n/g, "\n");
@@ -139,6 +140,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   let rejectBusy = options.rejectBusy ?? false;
   const startTurn = load("startTurn", {
     store,
+    traceClaimedTurn,
     tryClaimTurnStart: (botId: string, threadId: string) => {
       if (claims.has(botId)) return false;
       claims.set(botId, threadId);

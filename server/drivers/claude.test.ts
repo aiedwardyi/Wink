@@ -429,6 +429,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await removeTempDir(scratch);
   });
 
+  it("keeps prompt bytes identical with tracing on and off", async () => {
+    const previous = process.env.ORBIT_TURN_TIMING;
+    const requests: string[] = [];
+    try {
+      for (const flag of ["0", "1"]) {
+        process.env.ORBIT_TURN_TIMING = flag;
+        const log = join(scratch, `timing-${flag}.jsonl`);
+        await create("bench-quiet", { FAKE_CLAUDE_PROMPT_LOG: log });
+        await instance.adapter.sendTurn({ threadId: "t-timing", text: "current", system: "memory and task", resumeCursor: "remembered", resumeFallback: { text: "history and current" } });
+        await recorder.until((event) => event.type === "turn.completed");
+        const rows = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+        requests.push(JSON.stringify(rows.map((row) => ({ text: row.text, system: row.systemPrompt }))));
+        recorder.stop();
+        await instance.dispose();
+      }
+      expect(requests[1]).toBe(requests[0]);
+    } finally {
+      if (previous === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = previous;
+    }
+  });
+
   it("normalizes a full turn into the canonical event sequence", async () => {
     await create();
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-happy", text: "hi", model: "claude-sonnet-5" });
@@ -1080,7 +1102,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(readFileSync(dump, "utf8")).toBe(before);
   });
 
-  it("mounts the agents comms proxy as an MCP server and pre-allows its tools", async () => {
+  it.each(["0", "1"])("mounts the agents proxy with catalog flag %s and preserves permissions", async (flag) => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
@@ -1109,6 +1132,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.stringify(seen.argv)).not.toContain("tok");
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
+    expect(seen.mcpConfig.mcpServers.agents.env.OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    vi.unstubAllEnvs();
   });
 
   it("pre-allows terminal_read but leaves terminal_send to the permission prompt", async () => {

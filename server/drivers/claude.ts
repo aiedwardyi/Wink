@@ -29,7 +29,8 @@ import { augmentedPath } from "../env-path.ts";
 import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
-import { startTurnTimer } from "../turn-timing.ts";
+import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
+import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 
 import type {
@@ -806,6 +807,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mergeGuard?: ReturnType<typeof setTimeout>;
         restartSteers?: string[];
         timer: ReturnType<typeof startTurnTimer>;
+        trace?: TurnTrace;
       } | null;
       idleTimer: ReturnType<typeof setTimeout> | null;
       /** the last turn sendTurn started was in Auto, and attended */
@@ -918,7 +920,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (!s.child.stdin.writable || s.child.stdin.destroyed) return Promise.resolve(false);
       return new Promise((resolve) => {
         try {
+          const endDispatch = s.turn?.trace?.span("dispatch", "user-stream-write");
+          s.turn?.trace?.delivered("user-stream", () => ({ current_input: text }));
           s.child.stdin.write(JSON.stringify(promptMsg) + "\n", (error) => {
+            endDispatch?.(error ? "error" : "written");
             if (error) return resolve(false);
             const logged = { ...promptMsg, message: { ...promptMsg.message, content: elideImageData(content) } };
             appendNative(threadId, { dir: "out", source: "claude.sdk.message", msg: logged });
@@ -948,10 +953,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       });
     };
 
-    const emit = (event: RuntimeEvent) => {
+    const emit = (event: RuntimeEvent) => traceRuntimeEvent(event, () => {
       finishNative(event);
       for (const l of [...listeners]) l(event);
-    };
+    });
     const base = (threadId: string, turnId: string) => ({
       eventId: newEventId(),
       provider: DRIVER_KIND,
@@ -978,6 +983,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         throw new Error("local computer control requires the interactive approval broker");
       }
       const turnId = relaunchOf ?? newId();
+    const trace = restart?.turn.trace ?? turn.trace ?? startTurnTrace({ engine: "claude", threadId, turnId });
+    trace?.identify({ threadId, turnId, engine: "claude" });
     const turnTimer = restart?.turn.timer ?? startTurnTimer({
       engine: "claude",
       model: turn.model,
@@ -1063,7 +1070,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // agentsIntegration(); pre-allowing matters doubly here, or the CLI's
       // own ListAgents look-alike shadows it and "@Bot" asks go nowhere
       if (turn.integrations?.agents) {
-        mcpServers.agents = { ...turn.integrations.agents, ...orbitOwned };
+        mcpServers.agents = { ...experimentalAgents(turn.integrations.agents), ...orbitOwned };
         allowed.push("mcp__agents");
       }
       if (turn.integrations?.phone) {
@@ -1144,8 +1151,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && sessionId !== null && sessionId === live.sessionId) {
         if (live.idleTimer) clearTimeout(live.idleTimer);
         turnTimer.mark("spawnOrReuse");
+        trace?.span("spawn", "reused")();
+        trace?.span("initialize", "reused")();
+        trace?.span("resume", "loaded-session")();
         turnTimer.mark("cliReady");
-        live.turn = { turnId, settled: false, sawStreamDelta: false, timer: turnTimer, launch: { request: turn, retry, abort: retryAbort } };
+        live.turn = { turnId, settled: false, sawStreamDelta: false, timer: turnTimer, trace, launch: { request: turn, retry, abort: retryAbort } };
         live.auto = auto;
         live.autoAttended = autoAttended;
         active.set(threadId, {
@@ -1254,12 +1264,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           writeFileSync(systemPromptPath, turn.system, { mode: 0o600 });
           args.splice(args.indexOf("--append-system-prompt"), 2, "--append-system-prompt-file", systemPromptPath);
         }
+        const endSpawn = trace?.span("spawn", "cold", retry.attempt);
         child = spawnCli(config.cli, args, {
           ...(turn.leanStartup === true ? launchPolicy : turnPolicy),
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
         });
+        child.once("spawn", () => endSpawn?.("spawned"));
+        child.once("error", () => endSpawn?.("error"));
+        trace?.unknown("initialize", "CLI-owned/unobservable");
+        trace?.unknown(sessionId ? "resume" : "start", "CLI-owned/unobservable");
+        trace?.delivered(sessionId ? "resume-launch" : "start", () => ({ system: turn.system ?? "" }));
       } catch (error) {
         broker?.close();
         if (mcpConfigPath) {
@@ -1286,6 +1302,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           settled: false,
           sawStreamDelta: false,
           timer: turnTimer,
+          trace,
           launch: { request: turn, retry, abort: retryAbort },
         },
         idleTimer: null,
@@ -1457,6 +1474,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         ) {
           openContinuation();
         }
+        if (session.turn?.promptAccepted && !o.parent_tool_use_id && o.type !== "system") session.turn.trace?.mark("first_event");
         switch (o.type) {
           case "system":
             if (o.subtype === "init") {
@@ -1493,6 +1511,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // subagent narration is dropped — N parallel Tasks would
             // interleave their prose into one bubble (upstream-verified bug)
             if (o.parent_tool_use_id) break;
+            session.turn?.trace?.mark("first_event");
             const ev = o.event ?? {};
             if (ev.type === "content_block_start" && String(ev.content_block?.type ?? "").endsWith("tool_use") && session.turn) {
               session.turn.toolStarted = true;
@@ -1518,6 +1537,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "assistant": {
             if (o.error && !o.parent_tool_use_id && session.turn) session.turn.usageFailure = o;
             if (session.turn) session.turn.promptAccepted = true;
+            if (!o.parent_tool_use_id) session.turn?.trace?.mark("first_event");
             const msg = o.message ?? {};
             // a subagent's final report is the main agent's input, not a reply
             if (!o.parent_tool_use_id && !o.error) {
@@ -1575,19 +1595,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             }
             for (const b of Array.isArray(msg.content) ? msg.content : []) {
               if (b.type === "tool_use") {
-                const summary = claudeToolSummary(b.name, b.input, cwd);
-                toolCalls.set(b.id, { at: Date.now(), name: b.name, input: b.input, summary });
+                const call = originalCatalogCall(b.name, b.input);
+                const summary = claudeToolSummary(call.name, call.input, cwd);
+                toolCalls.set(b.id, { at: Date.now(), name: call.name, input: call.input, summary });
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.started",
                   itemType: "tool",
                   itemId: b.id,
-                  title: b.name,
+                  title: call.name,
                   ...(summary ? { summary } : {}),
                 });
               }
             }
             if (msg.usage) {
+              session.turn?.trace?.request(msg.id ?? o.request_id ?? o.uuid, { ...claudeUsage(msg.usage)!, cacheCreation: msg.usage.cache_creation_input_tokens }, Boolean(o.parent_tool_use_id));
               // this call's whole prompt: cache reads and writes fill the window too
               const prompt = (msg.usage.input_tokens || 0) + (msg.usage.cache_read_input_tokens || 0) + (msg.usage.cache_creation_input_tokens || 0);
               // a subagent's calls carry its own context, not this session's
@@ -1610,6 +1632,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "user":
             for (const b of Array.isArray(o.message?.content) ? o.message.content : []) {
               if (b.type === "tool_result") {
+                session.turn?.trace?.delivered("tool-result", () => ({ tool_output: firstText(b.content) }));
                 const call = toolCalls.get(b.tool_use_id);
                 toolCalls.delete(b.tool_use_id);
                 const summary = call?.name === "Bash" ? claudeToolSummary(call.name, call.input, cwd, firstText(b.content).slice(0, 40)) : undefined;
@@ -1642,6 +1665,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             session.replies.get(o.response?.request_id)?.(o.response?.subtype === "success");
             break;
           case "result": {
+            session.turn?.trace?.mark("native_completion");
             if (o.is_error === true && session.turn && (!session.turn.usageFailure || chatUsageLimit("claude", o, session.turn.usageWindows, !injected.injected))) session.turn.usageFailure = o;
             const interrupted = Boolean(session.turn?.merging);
             if (session.turn?.merging) {
@@ -1697,6 +1721,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
               }
             }
+            session.turn?.trace?.reconcile(claudeUsage(o.usage));
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null, claudeUsage(o.usage));
             break;
           }
@@ -1990,6 +2015,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       effort?: "low",
       ephemeral = false,
       lean = false,
+      onUsage?: UsageObserver,
     ): Promise<string> =>
       new Promise((resolve, reject) => {
         if (!admitted || accountBlocked) return reject(new Error("Sign in to this Claude account before using helpers"));
@@ -2017,6 +2043,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           if (settled) return;
           settled = true;
           helpers -= 1;
+          try { onUsage?.(undefined); } catch {}
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
           if (error) reject(error);
@@ -2064,15 +2091,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       effort?: "low",
       ephemeral = false,
       lean = false,
+      onUsage?: UsageObserver,
     ): Promise<string> => {
-      if (!lean || leanRejected) return runHelper(prompt, signal, timeoutMs, effort, ephemeral, false);
+      if (!lean || leanRejected) return runHelper(prompt, signal, timeoutMs, effort, ephemeral, false, onUsage);
       const deadline = Date.now() + timeoutMs;
-      return runHelper(prompt, signal, timeoutMs, effort, ephemeral, true).catch((error: unknown) => {
+      return runHelper(prompt, signal, timeoutMs, effort, ephemeral, true, onUsage).catch((error: unknown) => {
         const flag = error instanceof Error ? /unknown option '(--safe-mode|--tools|--strict-mcp-config)'/.exec(error.message)?.[1] : undefined;
         if (!flag) throw error;
         if (!leanRejected) console.warn(`${config.cli} rejects ${flag}; running notes and approval reviews without lean flags`);
         leanRejected = true;
-        return runHelper(prompt, signal, Math.max(0, deadline - Date.now()), effort, ephemeral, false);
+        return runHelper(prompt, signal, Math.max(0, deadline - Date.now()), effort, ephemeral, false, onUsage);
       });
     };
 
@@ -2147,10 +2175,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         },
       },
       generateText: (prompt, opts) =>
-        generateReview(prompt, opts?.signal, opts?.timeoutMs ?? SUMMARY_TIMEOUT_MS, "low", opts?.ephemeral, opts?.lean),
+        traceHelperCall("claude", opts?.onUsage, (onUsage) => generateReview(prompt, opts?.signal, opts?.timeoutMs ?? SUMMARY_TIMEOUT_MS, "low", opts?.ephemeral, opts?.lean, onUsage)),
       textModel: "claude-haiku-5-5",
       textTimeoutMs: SUMMARY_TIMEOUT_MS,
-      reviewPermission: (prompt, signal) => generateReview(prompt, signal, undefined, undefined, true, true),
+      reviewPermission: (prompt, signal) => traceHelperCall("claude", undefined, (onUsage) => generateReview(prompt, signal, undefined, undefined, true, true, onUsage)),
       dispose: async () => {
         for (const { stop } of active.values()) stop();
         for (const threadId of [...sessions.keys()]) closeSession(threadId, "dispose");
