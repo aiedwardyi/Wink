@@ -72,11 +72,11 @@ it("matches sidebar name and chat meter sizes while keeping emails small", () =>
   expect(rule(".usage-email")).toContain("font-weight: 400");
 });
 
-it("shares phone label and bar columns while preserving the collapsed box and row heights", () => {
+it("shares phone label and bar columns with room between collapsed rows", () => {
   expect(rule(".usage-summary")).toContain("display: flex");
-  expect(rule(".usage-summary")).toContain("gap: 2px 14px");
+  expect(rule(".usage-summary")).toContain("gap: 4px 14px");
   expect(rule(".usage-meter-summary")).toContain("flex-wrap: wrap");
-  expect(rule(".usage-meter-summary")).toContain("line-height: 17px");
+  expect(rule(".usage-meter-summary")).toContain("line-height: 20px");
   expect(rule(".usage-meter-summary .usage-figures")).toContain("gap: 6px");
   expect(rule(".usage-cells-mini")).toContain("--cells-w: 70px");
   expect(rule(".usage-cells-mini")).toContain("--cell-h: 4px");
