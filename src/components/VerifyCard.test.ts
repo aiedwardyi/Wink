@@ -94,7 +94,7 @@ it("localizes Korean problem lines by rule while retaining destinations and meas
   expect([...host.querySelectorAll(".verify-card-problems li > div:nth-child(2)")].map(row => row.textContent)).toEqual(issues.map(issue => issue.measured));
 });
 
-it("keeps the phone Rerun target at least 44 px without enlarging desktop or Watch", () => {
+it("keeps the phone Rerun and Watch targets at least 44 px without enlarging desktop", () => {
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(readFileSync("src/components/VerifyCard.css", "utf8"));
   const host = document.createElement("div");
@@ -116,7 +116,8 @@ it("keeps the phone Rerun target at least 44 px without enlarging desktop or Wat
   expect(height(360, card())).toBeGreaterThanOrEqual(44);
   expect(height(392, card())).toBeGreaterThanOrEqual(44);
   expect(height(1280, card())).toBe(32);
-  expect(height(360, card({ replay: ["a"] }))).toBe(32);
+  expect(height(360, card({ replay: ["a"] }))).toBeGreaterThanOrEqual(44);
+  expect(height(1280, card({ replay: ["a"] }))).toBe(32);
 });
 
 it("shows one button: Watch live while streaming, Watch with kept replays, else Rerun", () => {

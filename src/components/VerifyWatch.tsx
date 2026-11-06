@@ -19,6 +19,7 @@ const RED = "#f05d5d";
 const PARTS: Part[] = ["loads", "links", "phone"];
 const ARROW = typeof Path2D === "undefined" ? null : new Path2D("M1.5 1.5 L1.5 17 L5.6 13.2 L8.5 19.6 L11.3 18.4 L8.5 12.2 L13.8 12.2 Z");
 const route = (path: string, runId: string) => path.replace(":runId", encodeURIComponent(runId));
+const tileSize = (show: VerifyWatchShow) => show.head?.tiles[show.tile] ?? (show.tile === "phone" ? [392, 800] : [1280, 720]);
 
 function useVisibility() {
   const [visibility, setVisibility] = useState(() => document.visibilityState);
@@ -127,7 +128,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
     const canvas = canvasRef.current, ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     const tile = show.tile;
-    const [w, h] = show.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]);
+    const [w, h] = tileSize(show);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     const stored = show.frame();
     if (stored && bitmap.current?.jpeg !== stored.jpeg) {
@@ -227,7 +228,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
         <button type="button" className="verify-watch-icon" onClick={rerun} disabled={rerunning || card.status === "running" || card.status === "preparing"} aria-label={c.rerun} title={c.rerun}><RefreshCw size={14} className={rerunning ? "animate-spin" : undefined} /></button>
         <span className="verify-watch-url" title={head?.page}>{head?.site ?? card.site}</span>
       </div>
-      <div className="verify-watch-stage" data-tile={tile} onClick={inline ? () => close.current() : undefined}>
+      <div className="verify-watch-stage" data-tile={tile} style={{ aspectRatio: tileSize(show).join(" / ") }} onClick={inline ? () => close.current() : undefined}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
           <div className="verify-watch-pill">{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>

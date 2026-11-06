@@ -17,5 +17,5 @@
 .verify-card-details { list-style: none; margin: 4px 0 0; padding: 0; color: var(--color-ink-secondary); font-size: 12px; }
 .verify-card-details li { padding: 2px 0; }
 @media (max-width: 767px) {
-  .verify-card-actions .verify-card-rerun { min-height: 44px; }
+  .verify-card-actions .verify-card-rerun, .verify-card-actions [data-verify-watch] { min-height: 44px; }
 }

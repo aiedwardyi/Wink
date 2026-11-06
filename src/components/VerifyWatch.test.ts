@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
+import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData } from "../../shared/live-verify";
@@ -115,4 +116,38 @@ it.each(["en", "ko"] as const)("uses the card's failed-check wording for blocked
   await tick(5);
   expect(host.querySelector('[role="status"]')?.textContent).toBe(locale === "en" ? "Could not check this page" : "페이지를 확인하지 못했어요");
   expect(host.textContent).not.toContain(locale === "en" ? "No problems" : "문제 없음");
+});
+
+it("keeps the tabs on one line at their own width and the phone controls at least 44 px, desktop unchanged", async () => {
+  applyLocale("ko");
+  await render({ live: false, hidden: false });
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(readFileSync("src/components/VerifyWatch.css", "utf8"));
+  const style = (el: Element, width: number, prop: string) => {
+    let value = "";
+    const visit = (rules: CSSRuleList) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSMediaRule) {
+          const max = /max-width:\s*(\d+)px/.exec(rule.conditionText);
+          if (max && width <= Number(max[1])) visit(rule.cssRules);
+        } else if (rule instanceof CSSStyleRule && el.matches(rule.selectorText)) value = rule.style.getPropertyValue(prop) || value;
+      }
+    };
+    visit(sheet.cssRules);
+    return value;
+  };
+  const tabs = [...host.querySelectorAll(".verify-watch-tabs button")];
+  const icons = [...host.querySelectorAll(".verify-watch-icon")];
+  expect(tabs.map(tab => tab.textContent)).toEqual(["데스크톱", "휴대폰"]);
+  expect(icons).toHaveLength(3);
+  for (const width of [360, 392, 1280]) {
+    for (const tab of tabs) expect([style(tab, width, "white-space"), style(tab, width, "overflow-wrap"), style(tab, width, "flex-shrink")]).toEqual(["nowrap", "normal", "0"]);
+    expect(style(host.querySelector(".verify-watch-tabs")!, width, "flex-shrink")).toBe("0");
+  }
+  for (const width of [360, 392]) {
+    for (const tab of tabs) expect(parseFloat(style(tab, width, "height"))).toBeGreaterThanOrEqual(44);
+    for (const icon of icons) expect([parseFloat(style(icon, width, "width")), parseFloat(style(icon, width, "height"))].every(px => px >= 44)).toBe(true);
+  }
+  for (const tab of tabs) expect(style(tab, 1280, "height")).toBe("100%");
+  for (const icon of icons) expect([style(icon, 1280, "width"), style(icon, 1280, "height")]).toEqual(["28px", "28px"]);
 });
