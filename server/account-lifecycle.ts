@@ -121,19 +121,23 @@ export class AccountLifecycle {
         if (guarded) {
           this.registry.blockAccount(id, true);
           try {
-            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in");
+            if (await this.hooks.referenced(id, true) || ((!blocked || destinations.length > 0) && await this.hooks.panesBusy?.(id))) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
           } catch (error) {
             this.registry.blockAccount(id, blocked);
             throw error;
           }
         }
         let capture;
-        try { capture = await this.registry.startSignIn(id, device); }
-        catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
+        try {
+          capture = await this.registry.startSignIn(id, device);
+          if (!capture) throw new AccountError("Unknown engine sign-in", 404);
+        } catch (error) { if (guarded) this.registry.blockAccount(id, blocked); throw error; }
         if (this.registry.accountBlocked(id)) {
           const finished = this.registry.logins.wait(id).then(async () => {
             const snapshot = await this.registry.get(id)?.snapshot({ refresh: true });
-            if (snapshot?.authenticated === true) this.registry.blockAccount(id, false);
+            if (snapshot?.authenticated !== true) return;
+            this.registry.blockAccount(id, false);
+            this.hooks.changed?.();
           }).catch(() => { console.error("Account sign-in snapshot could not be refreshed"); })
             .finally(() => { if (this.pending.get(id) === finished) this.pending.delete(id); });
           this.pending.set(id, finished);
@@ -143,7 +147,7 @@ export class AccountLifecycle {
       if (this.jobs.has(id)) return this.registry.logins.capture(id);
       this.registry.blockAccount(id, true);
       try {
-        if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in");
+        if (await this.hooks.referenced(id, true) || ((account.state !== "stopped" || destinations.length > 0) && await this.hooks.panesBusy?.(id))) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
         return await this.begin(account, device);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);
@@ -151,6 +155,21 @@ export class AccountLifecycle {
         throw error;
       }
     });
+  }
+
+  // Clears only through a successful sign-in; sessions, generation and Main stay.
+  async signedOut(id: string) {
+    const account = this.accounts.get(id);
+    if (this.jobs.has(id) || this.pending.has(id) || this.registry.logins.state(id) === "pending" || this.accounts.drains[id] || (account && account.state !== "ready")) return;
+    this.registry.blockAccount(id, true);
+    if (!account) {
+      this.hooks.changed?.();
+      return;
+    }
+    await this.exclusive(async () => {
+      const current = this.accounts.get(id);
+      if (current?.generation === account.generation && current.state === "ready") await this.accounts.stop(id);
+    }, false).catch(() => { console.error("Signed-out account could not be saved"); });
   }
 
   cancel(id: string) {
