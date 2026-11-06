@@ -94,15 +94,48 @@ it("keeps the limit separator with its reset when a narrow meter wraps", async (
   expect([...reset.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join("")).not.toContain("·");
 });
 
-it("uses straight shared box segments in expanded, collapsed and chat meters", async () => {
-  expect(rule(".usage-cells > span")).not.toContain("skew");
+const bars = (root: ParentNode = host) => [...root.querySelectorAll("[data-cells]")].map((bar) => [bar.tagName.toLowerCase(), bar.getAttribute("class")!.split(" ")[0], [...bar.children].map((cell) => cell.tagName.toLowerCase()).join(",")]);
+const shared = ["svg", "usage-cells", Array(10).fill("polygon").join(",")];
+
+it("draws every bar as the one shared slanted shape, never glyphs or skewed boxes", async () => {
+  expect(css).not.toMatch(/skew|box-shadow: inset/);
+  expect(rule(".usage-cells")).toContain("fill: currentColor");
+  expect(rule('.usage-cells > [data-cell="off"]')).toContain("fill-opacity");
+  vi.stubGlobal("devicePixelRatio", 1.25);
+  const size = vi.spyOn(SVGElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 120, 7));
   await mount();
-  expect(q("[data-account-bars] [data-cells]")!.children).toHaveLength(10);
+  const bar = q("[data-account-bars] [data-cells]")!;
+  expect(bar.getAttribute("viewBox")).toBe("0 0 150 9");
+  const shapes = [...bar.children].map((cell) => cell.getAttribute("points")!.split(" ").map((point) => point.split(",").map(Number)));
+  expect(new Set(shapes.flatMap((points) => points.map(([, y]) => y)))).toEqual(new Set([0, 9]));
+  expect(new Set(shapes.map(([[left], [right]]) => (right! - left!).toFixed(6))).size).toBe(1);
+  expect(new Set(shapes.map(([[bottomLeft], [bottomRight], [topRight], [topLeft]]) => `${(topLeft! - bottomLeft!).toFixed(6)} ${(topRight! - bottomRight!).toFixed(6)}`))).toEqual(new Set(["2.700000 2.700000"]));
+  expect(shapes.slice(1).map(([[left]], index) => left! - shapes[index]![1]![0]!).map((gap) => gap.toFixed(6))).toEqual(Array(9).fill("2.000000"));
+  expect(Math.max(...shapes.flatMap((points) => points.map(([x]) => x!)))).toBeLessThanOrEqual(150);
+  expect(new Set([...bar.children].map((cell) => cell.getAttribute("data-cell")))).toEqual(new Set(["on", "off"]));
+  size.mockRestore();
+  expect(host.textContent).not.toMatch(/[─-▟▰▱]/u);
+});
+
+it("renders the shared bar in expanded, collapsed, quick view, chat and terminal skin", async () => {
+  const sites: Record<string, string[][]> = {};
+  await mount();
+  sites.expanded = bars(q("[data-account-bars]")!);
   await click("[data-fold-all]");
-  expect(q("[data-engine-summary] .usage-cells-mini")!.children).toHaveLength(10);
+  sites.collapsed = bars(q("[data-engine-summary]")!);
   await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
-  expect(q("[data-usage-meter] .usage-cells")!.children).toHaveLength(10);
-  expect(host.textContent).not.toMatch(/[\u25b0\u25b1]/u);
+  sites.chat = bars(q("[data-usage-meter]")!);
+  await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+  sites.quick = bars(document.querySelector("[data-usage-quick]")!);
+  document.documentElement.dataset.skin = "terminal";
+  await mount(createElement(UsageDesk, { key: "terminal" }));
+  sites.terminal = bars();
+  delete document.documentElement.dataset.skin;
+  for (const [site, found] of Object.entries(sites)) {
+    expect(found.length, site).toBeGreaterThan(0);
+    for (const bar of found) expect(bar, site).toEqual(shared);
+  }
+  expect(document.body.textContent).not.toMatch(/[─-▟▰▱]/u);
 });
 
 it.each(["en", "ko"] as const)("puts Collapse all then the refresh icon at the right in %s and spins only while busy", async (locale) => {

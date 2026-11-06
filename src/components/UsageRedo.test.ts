@@ -282,13 +282,16 @@ it("opens Settings on a chat bar click and preserves both Alt+U presses", async 
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
 });
 
-it("draws CSS chat bars without the desktop hover row or mini phone cells", async () => {
+it("draws chat bars as shared shapes without the desktop hover row or mini phone cells", async () => {
   await mount(createElement(ChatPlanMeters, { windows: [{ id: "five_hour", usedPercent: 20, resetsAt: usageBoardNow + 60_000 }], now: usageBoardNow, onOpenUsage: () => {} }));
   expect(q("[data-usage-meter]")!.className).not.toContain("hover:bg");
-  expect(host.querySelectorAll("[data-cell]")).toHaveLength(10);
+  expect(q("[data-cells]")!.tagName.toLowerCase()).toBe("svg");
+  expect(q("[data-cells]")!.classList).not.toContain("usage-cells-mini");
+  expect([...host.querySelectorAll("[data-cell]")].map((cell) => cell.tagName.toLowerCase())).toEqual(Array(10).fill("polygon"));
+  expect(host.textContent).not.toMatch(/[─-▟▰▱]/u);
   const css = readFileSync(resolve("src/components/UsageDesk.css"), "utf8");
-  expect(css).not.toContain("skewX");
-  expect(css).toContain("--cell-w: 10px");
+  expect(css).not.toContain("skew");
+  expect(css).toContain("--cells-w: 120px");
 });
 
 
