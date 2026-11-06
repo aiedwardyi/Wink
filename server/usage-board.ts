@@ -37,6 +37,10 @@ const titles = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini
 function kind(window: { id: string; windowMinutes?: number }): UsageBoardWindow["kind"] {
   if (window.windowMinutes === 300 || window.id === "five_hour") return "session";
   if (window.windowMinutes === 10080 || window.id === "seven_day" || window.id.startsWith("seven_day_")) return "week";
+  if (window.windowMinutes === undefined) {
+    if (window.id === "primary") return "session";
+    if (window.id === "secondary") return "week";
+  }
   return "other";
 }
 
@@ -191,7 +195,8 @@ export function createUsageBoard(deps: Deps) {
       const named = deps.names.get(row.id);
       const number = named?.number ?? 1;
       const fallback = engine === "claude" || engine === "codex" ? `${titles[engine]} ${number}` : titles[engine];
-      const nickname = named?.nickname ? text(named.nickname, "") || null : null;
+      // Validated user labels may match the provider's sign-in name.
+      const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
       const report = deps.rateLimits.get(row.id);
       const windows: UsageBoardWindow[] = (report?.windows ?? []).filter((window) => Number.isFinite(window.usedPercent)).map((window) => ({
         id: text(window.id, "other"), kind: kind(window), usedPercent: window.usedPercent,
@@ -212,7 +217,7 @@ export function createUsageBoard(deps: Deps) {
       else if (row.status?.authenticated === true) signIn = "ready";
       else if (row.status?.authenticated === false) signIn = "signed-out";
       const observedAt = report ? Date.parse(report.observedAt) : NaN;
-      group.accounts.push({ id: row.id, number, nickname, name: text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
+      group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
         history: points?.generation === row.generation ? { fine: points.fine, coarse: points.coarse } : { fine: [], coarse: [] },
         bots: accountBots, workers: null });

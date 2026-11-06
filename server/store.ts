@@ -265,6 +265,7 @@ export interface GroupRecord {
   /** sidebar section heading this room is filed under; shares the bots'
    * namespace so one heading can hold a project's room and its people */
   section?: string;
+  pinned?: boolean;
   /** New user-created rooms start with setup pending. Null timestamps are
    * intentional: records from before room setup has existed omit both keys
    * and remain immediately usable. */
@@ -1074,7 +1075,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();

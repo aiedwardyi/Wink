@@ -3466,8 +3466,8 @@ test("a failed report with no later report sends a note-lost snag after 10 minut
   }
 });
 
-for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
-  test(`a Claude running-shell footer stalls after 125 minutes despite status ticks: ${jobs}`, async (t) => {
+for (const jobs of ["1 shell", "2 shells, 1 monitor", "1 monitor", "3 monitors"]) {
+  test(`a Claude running shell or monitor footer stalls after 125 minutes despite status ticks: ${jobs}`, async (t) => {
     const f = stallFixture();
     t.after(() => f.host.dispose());
     await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
@@ -3496,6 +3496,38 @@ for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
     assert.match(f.notes[1].text, /^STALLED: no screen change for 2 min/);
   });
 }
+
+test("an idle Claude pane waiting on one monitor stalls after 125 minutes", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const rule = "─".repeat(120);
+  f.children[0].data([
+    "\x1b[2J\x1b[H● Monitor(wait until 05:00 KST for timing legs)",
+    "  ⎿  Monitor started · task bzeizogyg · timeout 1800s",
+    "",
+    "● While waiting, I'm precreating the empty leg directories. That's not a timing leg.",
+    "",
+    "✻ Cogitated for 31m 44s · done 4:28 AM · 1 monitor still running",
+    "",
+    rule,
+    ">",
+    rule,
+    "  ctx 136k/300k",
+    "  ⏵⏵ bypass permissions on · 1 monitor",
+    "",
+  ].join("\r\n"));
+  await f.settle();
+  let waited = 0;
+  for (const minutes of [2, 31, 61, 124]) {
+    await f.advance((minutes - waited) * 60_000);
+    waited = minutes;
+    assert.equal(f.notes.length, 0, `${minutes} min`);
+  }
+  await f.advance(60_000);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: no screen change for 125 min/);
+});
 
 test("a Claude agent row that keeps changing holds the stall note until the screen freezes", async (t) => {
   const f = stallFixture();

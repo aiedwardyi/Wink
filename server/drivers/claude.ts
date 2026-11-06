@@ -65,6 +65,7 @@ import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
+import { baseAccount } from "../worker-resume.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 
@@ -728,6 +729,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
+    const turnPolicy = input.account ? { ...launchPolicy, accountBaseHome: baseAccount(input.account.of, DRIVER_KIND, { ...process.env, ...input.environment }).home } : launchPolicy;
     let admitted = !input.account;
     let accountBlocked = false;
     let helpers = 0;
@@ -1252,7 +1254,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           args.splice(args.indexOf("--append-system-prompt"), 2, "--append-system-prompt-file", systemPromptPath);
         }
         child = spawnCli(config.cli, args, {
-          ...launchPolicy,
+          ...(turn.leanStartup === true ? launchPolicy : turnPolicy),
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1638,8 +1640,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "control_response":
             session.replies.get(o.response?.request_id)?.(o.response?.subtype === "success");
             break;
-          case "result":
+          case "result": {
             if (o.is_error === true && session.turn && (!session.turn.usageFailure || chatUsageLimit("claude", o, session.turn.usageWindows, !injected.injected))) session.turn.usageFailure = o;
+            const interrupted = Boolean(session.turn?.merging);
             if (session.turn?.merging) {
               const t = session.turn;
               const { held } = t.merging!;
@@ -1687,10 +1690,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               if (classifyError({ text }).reason === "auth") {
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
+              } else if (text.trim() && session.turn && !interrupted && !session.closing
+                && !chatUsageLimit("claude", session.turn.usageFailure, session.turn.usageWindows, !injected.injected)) {
+                // the CLI already retried; a limit gets its own row from settle
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
               }
             }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null, claudeUsage(o.usage));
             break;
+          }
         }
       };
 

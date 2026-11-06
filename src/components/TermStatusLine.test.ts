@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
 import { PHONE_QUERY } from "@/lib/phone-swipe";
-import { setUsageMode } from "@/lib/usage-preferences";
 import { StoreProvider, useStore, type Bot, type InstanceInfo, type Message } from "@/state/store";
 
 import { TermStatusLine } from "./TermStatusLine";
@@ -42,7 +41,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   delete document.documentElement.dataset.skin;
   applyLocale("en");
-  setUsageMode("remaining");
 });
 
 async function render(current = bot, instance = engine, cwd?: string | null, instances = [instance], locale: "en" | "ko" = "en") {
@@ -68,6 +66,15 @@ async function render(current = bot, instance = engine, cwd?: string | null, ins
   await act(async () => store.dispatch({ type: "instances", instances }));
   return Object.assign(host, { store: () => store });
 }
+
+function shown(button: Element) {
+  const copy = button.cloneNode(true) as Element;
+  copy.querySelectorAll(".sr-only").forEach((node) => node.remove());
+  return copy.textContent!.replace(/\s+/g, " ").trim();
+}
+
+const described = (host: Element, button: Element) =>
+  (button.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean).map((id) => host.querySelector(`[id="${id}"]`));
 
 function phoneMedia(matches = true) {
   const media = window.matchMedia(`${PHONE_QUERY} and (pointer: coarse)`);
@@ -95,10 +102,12 @@ describe("TermStatusLine", () => {
       expect(status.getAttribute("data-term-phone")).toBe(skin);
       expect(status.querySelector("[data-term-model]")?.textContent).toBe(skin === "multiplexer" ? "Sonnet 4.6" : "◆ Sonnet 4.6");
       expect(status.textContent).not.toMatch(/Claude|Thinking|\/default|low|9999|summary|요약/);
-      const button = status.querySelector("button")!;
-      const weekly = locale === "en" ? "7d 29% (5d6h)" : "7일 29% (5일 6시간)";
-      const session = locale === "en" ? "5h 90% (1m)" : "5시간 90% (1분)";
-      expect(button.textContent).toBe(skin === "multiplexer" ? weekly : `${session} │ ${weekly}`);
+      const button = status.querySelector<HTMLButtonElement>("[data-term-ticker]")!;
+      const weekly = locale === "en" ? "7d 29% ↻ 5d 6h" : "7일 29% ↻ 5일 6시간";
+      const session = locale === "en" ? "5h 90%" : "5시간 90%";
+      expect(shown(button)).toBe(skin === "multiplexer" ? weekly : `${weekly} │ ${session}`);
+      expect(status.querySelector("[data-term-meters]")?.getAttribute("data-term-meters")).toBe(skin === "multiplexer" ? "1" : "2");
+      expect(described(host, button)[0]?.textContent).toContain(locale === "en" ? "7d 29%" : "7일 29%");
       expect(status.querySelector("[data-term-bar]")).toBeNull();
       const tab = status.querySelector("[data-term-tab]");
       expect(tab?.textContent ?? null).toBe(skin === "multiplexer" ? `0:${current.name}*` : null);
@@ -111,18 +120,13 @@ describe("TermStatusLine", () => {
   });
 
   it.each([
-    ["remaining", 80, 20, "5h", "(1h)", 20],
-    ["remaining", 20, 80, "7d", "(5d6h)", 20],
-    ["remaining", 80, 80, "5h", "(1h)", 20],
-    ["remaining", 100, 120, "5h", "(1h)", 0],
-    ["used", 80, 20, "5h", "(1h)", 80],
-    ["used", 20, 80, "7d", "(5d6h)", 80],
-    ["used", 80, 80, "5h", "(1h)", 80],
-    ["used", 100, 120, "5h", "(1h)", 100],
-  ] as const)("selects the tighter window in %s mode (%i session / %i weekly used -> %s)", async (mode, session, weekly, label, reset, percent) => {
+    ["remaining", 80, 20, "5h", "↻ 1h 0m", 20],
+    ["remaining", 20, 80, "7d", "↻ 5d 6h", 20],
+    ["remaining", 80, 80, "5h", "↻ 1h 0m", 20],
+    ["remaining", 100, 120, "5h", "↻ 1h 0m", 0],
+  ] as const)("selects the tighter window in %s mode (%i session / %i weekly used -> %s)", async (_mode, session, weekly, label, reset, percent) => {
     phoneMedia();
     document.documentElement.dataset.skin = "multiplexer";
-    setUsageMode(mode);
     const host = await render(bot, {
       ...engine,
       rateLimits: { ...engine.rateLimits!, windows: [
@@ -130,10 +134,8 @@ describe("TermStatusLine", () => {
         { id: "five_hour", usedPercent: session, resetsAt: now + 3600_000 },
       ] },
     });
-    const button = host.querySelector("button")!;
-    expect(button.textContent).toContain(label);
-    expect(button.textContent).toContain(reset);
-    expect(button.textContent).toContain(`${percent}%`);
+    const button = host.querySelector<HTMLButtonElement>("[data-term-ticker]")!;
+    expect(shown(button)).toBe(`${label} ${percent}% ${reset}`);
     expect(button.textContent).not.toContain(label === "5h" ? "7d" : "5h");
   });
 
@@ -144,27 +146,25 @@ describe("TermStatusLine", () => {
       ...engine,
       rateLimits: { ...engine.rateLimits!, windows: [{ id: "seven_day", usedPercent: 71, resetsAt: now + (5 * 24 + 6) * 3600_000 }] },
     });
-    const button = host.querySelector("button")!;
-    expect(button.textContent).toContain("7d");
-    expect(button.textContent).toContain("29% (5d6h)");
+    const button = host.querySelector<HTMLButtonElement>("[data-term-ticker]")!;
+    expect(shown(button)).toMatch(/^7d 29% ↻ 5d 6h/);
     expect(button.textContent).not.toContain("5h");
   });
 
   it("falls back to the session meter when there is no weekly window", async () => {
     phoneMedia();
     const host = await render();
-    expect(host.querySelector("[data-term-phone] button")?.textContent).toContain("5h");
-    expect(host.querySelector("button")?.textContent).toContain("29%");
-    expect(host.querySelector("button")?.textContent).toContain("(1m)");
+    expect(shown(host.querySelector("[data-term-phone] [data-term-ticker]")!)).toBe("5h 29% ↻ 1:00");
   });
 
   it("keeps a stale phone reading accessible when the visual age is omitted", async () => {
     phoneMedia();
     const host = await render(bot, { ...engine, driverKind: "museAgent", rateLimits: { ...engine.rateLimits!, observedAt: new Date(now - 4 * 86400_000).toISOString() } });
-    const button = host.querySelector("button")!;
-    const age = host.querySelector(`[id="${button.getAttribute("aria-describedby")}"]`)!;
-    expect(age.textContent).toBe("Last seen 4d ago");
+    const button = host.querySelector<HTMLButtonElement>("[data-term-ticker]")!;
+    const age = described(host, button).find((node) => node?.textContent === "Last seen 4d ago")!;
+    expect(age).toBeTruthy();
     expect(age.className).toBe("sr-only");
+    expect(shown(button)).not.toContain("Last seen");
     expect(button.className).toContain("text-ink-secondary");
   });
 
@@ -180,18 +180,17 @@ describe("TermStatusLine", () => {
     expect(host.textContent).toContain("Old model");
     expect(host.textContent).toContain("/default");
     expect(host.textContent).not.toMatch(/summary|turns kept|요약|보관된 턴/);
-    expect(host.querySelector("[data-term-status]")?.textContent).toMatch(/[▰▱]{5}/);
+    const ticker = host.querySelector("[data-term-status] [data-term-ticker]")!;
+    expect(shown(ticker)).toBe("5h 29% ↻ 1:00");
+    expect(ticker.querySelector("[data-glyphs]")).toBeNull();
   });
 
   it("mutes and describes a stale Muse reading with its age", async () => {
     const host = await render(bot, { ...engine, driverKind: "museAgent", rateLimits: { ...engine.rateLimits!, observedAt: new Date(now - 4 * 86400_000).toISOString() } });
-    const button = host.querySelector("button")!;
-    expect(button.textContent).toContain("Last seen 4d ago");
-    expect(button.textContent).toMatch(/^Last seen 4d ago · 5h/);
+    const button = host.querySelector<HTMLButtonElement>("[data-term-ticker]")!;
+    expect(shown(button)).toMatch(/^Last seen 4d ago · 5h 29%/);
     expect(button.className).toContain("text-ink-secondary");
-    const age = button.getAttribute("aria-describedby");
-    expect(age).toBeTruthy();
-    expect(host.querySelector('[id="' + age + '"]')?.textContent).toBe("Last seen 4d ago");
+    expect(described(host, button).map((node) => node?.textContent)).toContain("Last seen 4d ago");
     expect(button.getAttribute("aria-label")).toBe("Open Usage Settings");
   });
 

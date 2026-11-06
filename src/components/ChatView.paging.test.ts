@@ -233,7 +233,7 @@ describe("paged transcripts", () => {
       : "1 working, 0 waiting, 0 failed, 0 done. Show workers");
     await act(async () => strip.click());
     expect(Array.from(document.querySelectorAll("[data-worker-list] li")).map((li) => li.textContent)).toEqual(
-      chat ? ["CURRENTscript●Working", "JOBscript✓Done"] : ["CURRENTscript●Working"],
+      chat ? ["CURRENTscriptWorking", "JOBscriptDone"] : ["CURRENTscriptWorking"],
     );
     await act(async () => host.querySelector<HTMLButtonElement>("[data-worker-run] > button")!.click());
     expect(host.textContent).toContain("UNIQUE_REPORT_final");
@@ -1081,6 +1081,7 @@ describe("open window and jump pill", () => {
     scroller.scrollTop = 300;
     await act(async () => scroller.dispatchEvent(new Event("scroll")));
     expect(pill(host)).toBeDefined();
+    expect(pill(host)!.className).toContain("whitespace-nowrap");
 
     // the keyboard closes: the view grows over the newest row with no scroll event
     size.client = 700;

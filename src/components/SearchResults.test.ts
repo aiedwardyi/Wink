@@ -4,8 +4,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
-import { StoreProvider } from "@/state/store";
+import { StoreProvider, type Bot } from "@/state/store";
 
+import { BotAvatar } from "./Avatar";
 import { SearchResults } from "./SearchResults";
 
 class FakeEventSource {
@@ -25,6 +26,51 @@ afterEach(() => {
 });
 
 describe("SearchResults", () => {
+  it.each([
+    { mascotStyle: "icon-01", avatarCrop: "mascot" },
+    { avatarUrl: "/api/attachments/123e4567-e89b-12d3-a456-426614174000.webp", avatarCrop: "circle" },
+    { mascotStyle: "teal", avatarCrop: "mascot" },
+    {},
+  ] satisfies Partial<Bot>[])("matches the bot list avatar for %j", async (picture) => {
+    const bot = { id: "scout", name: "Scout", color: "blue" as const, messages: [], ...picture };
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [bot], groups: [] });
+      if (path.startsWith("/api/search")) return Response.json({ hits: [{
+        threadId: "scout-thread", messageId: "m1", botId: bot.id, name: bot.name, role: "bot", kind: "text", at: 1,
+        snippet: "needle here", matchStart: 0, matchLength: 6, onActivePath: true,
+      }] });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement("div", null,
+        createElement("div", { "data-reference": "" }, createElement(BotAvatar, { bot, size: 26, state: "idle", animated: false })),
+        createElement(StoreProvider, null, createElement(SearchResults, { query: "needle", onLanded: () => {} })),
+      )));
+      await act(async () => FakeEventSource.current!.onmessage?.({
+        data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }), lastEventId: "",
+      }));
+      await vi.waitFor(() => expect(host.textContent).toContain("needle here"));
+      const row = host.querySelector("[data-search-results] button")!;
+      const reference = host.querySelector("[data-reference]")!;
+      if (reference.querySelector("img")) {
+        expect(row.querySelector("img")?.outerHTML).toBe(reference.querySelector("img")!.outerHTML);
+        expect(row.querySelector(".mascot-avatar")).toBeNull();
+      } else {
+        expect(row.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(bot.name);
+        expect([...row.querySelectorAll("path")].map((path) => path.getAttribute("d")))
+          .toEqual([...reference.querySelectorAll("path")].map((path) => path.getAttribute("d")));
+        expect((row.querySelector(".mascot-avatar") as HTMLElement).style.width).toBe("26px");
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("drops hits inside a hidden bot-to-bot channel and keeps the rest", async () => {
     const mirrored = { id: "m1", role: "bot", kind: "text", at: 1, text: "hi", from: { botId: "wink", name: "Wink", color: "blue" } };
     const sent = { id: "m2", role: "user", kind: "text", at: 2, text: "hello" };
@@ -75,6 +121,49 @@ describe("SearchResults", () => {
       expect(host.textContent).toContain("needle in joined-hit");
       expect(host.textContent).not.toContain("needle in hidden-hit");
       expect(host.textContent).toContain("3");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
+describe("SearchResults row", () => {
+  it.each([
+    { task: "Quarterly launch readiness and design review", capped: true },
+    { task: undefined, capped: false },
+  ])("caps the bot name only when a task shows (task: $task)", async ({ task, capped }) => {
+    const bot = { id: "wink", name: "Wink", color: "blue" as const, messages: [] };
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [bot], groups: [] });
+      if (path.startsWith("/api/search")) return Response.json({ hits: [{
+        threadId: "wink-thread", messageId: "m1", botId: bot.id, name: bot.name, task, role: "bot", kind: "text", at: 1,
+        snippet: "needle here", matchStart: 0, matchLength: 6, onActivePath: true,
+      }] });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(SearchResults, { query: "needle", onLanded: () => {} }))));
+      await act(async () => FakeEventSource.current!.onmessage?.({
+        data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
+        lastEventId: "",
+      }));
+      await vi.waitFor(() => expect(host.textContent).toContain("needle here"));
+      const [name, ...rest] = host.querySelectorAll("[data-search-results] button .items-baseline > span");
+      expect(name!.textContent).toBe("Wink");
+      expect(name!.className.split(" ")).toContain("truncate");
+      expect(name!.className.split(" ").includes("shrink-0")).toBe(capped);
+      expect(name!.className.split(" ").includes("max-w-[65%]")).toBe(capped);
+      expect(rest.length).toBe(capped ? 2 : 1);
+      if (capped) {
+        expect(rest[0]!.textContent).toContain("Quarterly launch readiness");
+        expect(rest[0]!.className.split(" ")).not.toContain("shrink-0");
+        expect(rest[0]!.className.split(" ")).toContain("truncate");
+      }
     } finally {
       await act(async () => root.unmount());
       host.remove();

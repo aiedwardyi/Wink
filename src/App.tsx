@@ -264,12 +264,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           return;
         }
         if (e.code === "KeyU") {
+          if (e.repeat || e.isComposing) return;
+          const usageOpen = state.appSettingsOpen && state.appSettingsSection === "usage";
+          if (!usageOpen && (onboardingOpen || (nativeViewOverlayOpen && !state.appSettingsOpen))) return;
           e.preventDefault();
-          dispatch({
-            type: "toggleAppSettings",
-            open: !(state.appSettingsOpen && state.appSettingsSection === "usage"),
-            section: "usage",
-          });
+          // A chat's usage line takes the first press for its quick view; the next reaches all Usage.
+          if (!state.appSettingsOpen && !window.dispatchEvent(new CustomEvent("orbit:usage-key", { cancelable: true }))) return;
+          dispatch({ type: "toggleAppSettings", open: !usageOpen, section: "usage" });
           return;
         }
       }
@@ -646,6 +647,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <div ref={swipeStageRef} className="flex min-h-0 flex-1" inert={terminalOpen} aria-hidden={terminalOpen}>
             <ChatView
               bot={bot}
+              hidden={terminalOpen || nativeViewOverlayOpen}
               focusComposerBlocked={paletteOpen || terminalOpen}
               onOpenTerminal={openMainTerminal}
               onOpenTerminalPane={openTerminalPane}

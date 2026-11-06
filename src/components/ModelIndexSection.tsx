@@ -8,6 +8,8 @@ import { localeTag, useI18n } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-catalog";
 import { isPhone } from "@/lib/phone-swipe";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { inZoom, zoomRange } from "@/lib/chart-zoom";
+import { useChartZoom } from "@/lib/use-chart-zoom";
 import {
   CHART_PROVIDERS,
   chartProvider,
@@ -181,7 +183,7 @@ function wrapLines(text: string, max: number, measure: (text: string) => number)
   return lines;
 }
 
-function useSize() {
+function useSize(key?: string) {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [height, setHeight] = useState(0);
@@ -194,20 +196,20 @@ function useSize() {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [key]);
   return [ref, width, height] as const;
 }
 
-/** Items that just left, held at their last spot until their fade-out ends. */
-function useLeaving<T extends { key: string }>(items: T[]): T[] {
+/** Items that just left, held at their last spot until their fade-out ends; ones a zoom moved off just go. */
+function useLeaving<T extends { key: string }>(items: T[], zoom = ""): T[] {
   const last = useRef(items);
   const keys = items.map((item) => item.key).join("|");
-  const [shown, setShown] = useState(keys);
+  const [shown, setShown] = useState({ keys, zoom });
   const [leaving, setLeaving] = useState<T[]>([]);
-  if (keys !== shown) {
+  if (keys !== shown.keys || zoom !== shown.zoom) {
     const live = new Set(items.map((item) => item.key));
-    setShown(keys);
-    setLeaving([...leaving, ...last.current].filter((item, i, all) => !live.has(item.key) && all.findIndex((other) => other.key === item.key) === i));
+    setShown({ keys, zoom });
+    setLeaving([...leaving, ...(zoom === shown.zoom ? last.current : [])].filter((item, i, all) => !live.has(item.key) && all.findIndex((other) => other.key === item.key) === i));
   }
   useLayoutEffect(() => {
     last.current = items;
@@ -245,25 +247,28 @@ function placeLabels(
   measure: (text: string) => number,
 ) {
   const placed = [...taken];
-  const out = new Map<string, Spot & { leader?: [Spot, Spot] }>();
+  const out = new Map<string, Spot & { anchor: Spot; leader?: [Spot, Spot] }>();
   for (const item of items) {
     const w = measure(item.text) + 2;
     const h = 12;
-    const hug = item.anchors.flatMap(({ x, y }) => [
-      { x: x + 7, y: y - h / 2 },
-      { x: x - 7 - w, y: y - h / 2 },
-      { x: x - w / 2, y: y - 8 - h },
-      { x: x - w / 2, y: y + 8 },
-      { x: x + 5, y: y - 5 - h },
-      { x: x - 5 - w, y: y - 5 - h },
-      { x: x + 5, y: y + 5 },
-      { x: x - 5 - w, y: y + 5 },
-    ]);
+    const hug = item.anchors.flatMap((anchor) => {
+      const { x, y } = anchor;
+      return [
+        { x: x + 7, y: y - h / 2 },
+        { x: x - 7 - w, y: y - h / 2 },
+        { x: x - w / 2, y: y - 8 - h },
+        { x: x - w / 2, y: y + 8 },
+        { x: x + 5, y: y - 5 - h },
+        { x: x - 5 - w, y: y - 5 - h },
+        { x: x + 5, y: y + 5 },
+        { x: x - 5 - w, y: y + 5 },
+      ].map((spot) => ({ ...spot, anchor }));
+    });
     const end = item.anchors[0]!;
     const rings = [20, 32, 46, 62].flatMap((reach) =>
       [0, -30, 30, -60, 60, -90, 90, -120, 120, -150, 150, 180].map((deg) => {
         const [cos, sin] = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)];
-        return { x: end.x + cos * (reach + (w / 2) * Math.abs(cos)) - w / 2, y: end.y + sin * (reach + (h / 2) * Math.abs(sin)) - h / 2, from: end };
+        return { x: end.x + cos * (reach + (w / 2) * Math.abs(cos)) - w / 2, y: end.y + sin * (reach + (h / 2) * Math.abs(sin)) - h / 2, anchor: end, from: end };
       }),
     );
     const spot = [...hug, ...rings].find(
@@ -281,6 +286,7 @@ function placeLabels(
     out.set(item.id, {
       x: spot.x,
       y: spot.y + 9,
+      anchor: spot.anchor,
       leader: to && along ? [{ x: end.x + ((to.x - end.x) / along) * 7, y: end.y + ((to.y - end.y) / along) * 7 }, to] : undefined,
     });
   }
@@ -351,6 +357,8 @@ function Scatter({
   points,
   width,
   fitHeight,
+  full = false,
+  onSwipe,
   phone,
   hover,
   onHover,
@@ -362,6 +370,8 @@ function Scatter({
   width: number;
   /** Full screen hands the chart its height instead of deriving one from the width. */
   fitHeight?: number;
+  full?: boolean;
+  onSwipe: (step: -1 | 1) => boolean;
   phone: boolean;
   hover: string | null;
   onHover: OnHover;
@@ -378,19 +388,27 @@ function Scatter({
     fitHeight ??
     Math.round(Math.min(420, Math.max(300, width * 0.62, phone ? Math.min(360, width * 1.15) : 0))) + (caption.length - 1) * CAPTION_LINE;
   const bottom = height - (caption.length - 1) * CAPTION_LINE - MARGIN.bottom;
+  const svgRef = useRef<SVGSVGElement>(null);
+  const input = full ? "touch" : phone ? undefined : "mouse";
+  const zoomable = Boolean(input);
+  const { zoom, css, suppress } = useChartZoom(svgRef, input, index, { left, right, top, bottom }, onSwipe, () => onHover(null));
 
   const costs = plotted.map((point) => point.cost!);
-  const xMin = costs.length ? Math.min(...costs) / 1.6 : 1;
-  const xMax = costs.length ? Math.max(...costs) * 1.6 : 1000;
+  const xBase: [number, number] = [Math.log10(costs.length ? Math.min(...costs) / 1.6 : 1), Math.log10(costs.length ? Math.max(...costs) * 1.6 : 1000)];
+  const [xLo, xHi] = zoomRange(xBase, zoom.x, zoom.scale);
+  const [xMin, xMax] = [10 ** xLo, 10 ** xHi];
   const x = (usd: number) =>
-    Math.min(right, Math.max(left, left + ((Math.log10(usd) - Math.log10(xMin)) / (Math.log10(xMax) - Math.log10(xMin))) * (right - left)));
+    left + ((Math.log10(usd) - xLo) / (xHi - xLo)) * (right - left);
   const xTicks = fitLogTicks(xMin, xMax, right - left, (usd) => measure(formatCostTick(usd)));
 
   const scores = plotted.map((point) => point.score);
   const lo = scores.length ? Math.min(...scores) : 0;
   const hi = scores.length ? Math.max(...scores) : 100;
   const pad = (hi - lo) * 0.1 || 1;
-  const { domain: [y0, y1], ticks: yTicks } = linearTicks(Math.max(0, lo - pad), Math.min(PERCENT.has(index) ? 100 : Infinity, hi + pad), 5);
+  const baseY = linearTicks(Math.max(0, lo - pad), Math.min(PERCENT.has(index) ? 100 : Infinity, hi + pad), 5);
+  // Screen-top zoom offsets start at the high end of the score domain.
+  const [y0, y1] = zoomRange(baseY.domain, 1 - zoom.y - 1 / zoom.scale, zoom.scale);
+  const yTicks = zoom.scale === 1 ? baseY.ticks : linearTicks(y0, y1, 5).ticks.filter((tick) => tick >= y0 && tick <= y1);
   const y = (score: number) => bottom - ((score - y0) / (y1 - y0)) * (bottom - top);
 
   const unit = unitOf(index);
@@ -399,13 +417,16 @@ function Scatter({
   const gradient = `mi-best${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const yItems = yTicks.map((tick) => ({ key: `${unit}:${tick}`, label: formatTick(unit, tick), at: y(tick) }));
   const xItems = xTicks.map((tick) => ({ key: String(tick), label: formatCostTick(tick), at: x(tick) }));
-  const yLeaving = useLeaving(yItems);
-  const xLeaving = useLeaving(xItems);
+  const zoomKey = `${zoom.scale},${zoom.x},${zoom.y}`;
+  const yLeaving = useLeaving(yItems, zoomKey);
+  const xLeaving = useLeaving(xItems, zoomKey);
   const titleLeaving = useLeaving([{ key: title }]);
 
-  const at = new Map(plotted.map((point) => [point.key, { x: x(point.cost!), y: y(point.score) }]));
+  const visible = plotted.filter((point) => inZoom(zoom, { x: (Math.log10(point.cost!) - xBase[0]) / (xBase[1] - xBase[0]), y: 1 - (point.score - baseY.domain[0]) / (baseY.domain[1] - baseY.domain[0]) }));
+  const at = new Map(visible.map((point) => [point.key, { x: x(point.cost!), y: y(point.score) }]));
+  const allAt = new Map(plotted.map((point) => [point.key, { x: x(point.cost!), y: y(point.score) }]));
   const byModel = new Map<string, ModelIndexPoint[]>();
-  for (const point of plotted) byModel.set(point.model, [...(byModel.get(point.model) ?? []), point]);
+  for (const point of visible) byModel.set(point.model, [...(byModel.get(point.model) ?? []), point]);
   for (const list of byModel.values()) list.sort((a, b) => effortRank(a.effort) - effortRank(b.effort));
   const models = [...new Map(marks.map((mark) => [mark.model, mark])).values()];
   const ends = new Set([...byModel.values()].filter((list) => list.length > 1).map((list) => list[list.length - 1]!.key));
@@ -416,10 +437,19 @@ function Scatter({
     const model = plotted.find((point) => point.key === key)?.model;
     return { dots: [...at.values()], line: (byModel.get(model ?? "") ?? []).map((point) => at.get(point.key)!) };
   };
+  const nearestDot = (pointer: Spot) => {
+    let nearest: string | null = null;
+    let reach = 22;
+    for (const [key, spot] of at) {
+      const gap = Math.hypot(spot.x - pointer.x, spot.y - pointer.y);
+      if (gap < reach) [nearest, reach] = [key, gap];
+    }
+    return nearest;
+  };
 
   const quad = plotted.length >= 3 ? { x: x(10 ** median(costs.map(Math.log10))), y: y(median(scores)) } : undefined;
   const bestValue = t("modelIndex.bestValue");
-  const frontier = paretoFrontier(plotted).map((point) => at.get(point.key)!);
+  const frontier = paretoFrontier(plotted).map((point) => allAt.get(point.key)!);
   const labels = placeLabels(
     [...byModel.values()]
       .sort((a, b) => Math.max(...b.map((p) => p.score)) - Math.max(...a.map((p) => p.score)))
@@ -437,19 +467,34 @@ function Scatter({
   );
 
   return (
-    <svg width={width} height={height} className="block overflow-visible" role="img" aria-label={title}>
+    <svg
+      ref={svgRef}
+      width={width}
+      height={height}
+      data-mi-zoom={zoomable ? zoom.scale : undefined}
+      className="block overflow-visible"
+      style={{ touchAction: full ? "none" : undefined }}
+      role="img"
+      aria-label={title}
+    >
+      {zoomable && <style>{css}</style>}
       <defs>
+        <clipPath id={`${gradient}-clip`}><rect x={left} y={top} width={right - left} height={bottom - top} /></clipPath>
         <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.085 }} />
           <stop offset="1" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.02 }} />
         </linearGradient>
       </defs>
-      <path
-        data-mi-line
-        fill={`url(#${gradient})`}
-        style={{ d: `path("M${left} ${top}H${quad?.x ?? left}V${quad?.y ?? top}H${left}Z")`, opacity: quad ? 1 : 0 } as React.CSSProperties}
-      />
-      {[...yItems.map((item) => [item, true] as const), ...yLeaving.map((item) => [item, false] as const)].map(([item, live]) => (
+      <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
+        <g data-mi-live-lines={zoomable ? "" : undefined}>
+          <path
+            data-mi-line
+            fill={`url(#${gradient})`}
+            style={{ d: `path("M${left} ${top}H${quad?.x ?? left}V${quad?.y ?? top}H${left}Z")`, opacity: quad ? 1 : 0 } as React.CSSProperties}
+          />
+        </g>
+      </g>
+      {[...yItems.map((item) => [item, true] as const), ...(full ? [] : yLeaving).map((item) => [item, false] as const)].map(([item, live]) => (
         <g
           key={`y${item.key}`}
           data-mi-move
@@ -463,7 +508,7 @@ function Scatter({
           </text>
         </g>
       ))}
-      {[...xItems.map((item) => [item, true] as const), ...xLeaving.map((item) => [item, false] as const)].map(([item, live]) => (
+      {[...xItems.map((item) => [item, true] as const), ...(full ? [] : xLeaving).map((item) => [item, false] as const)].map(([item, live]) => (
         <g
           key={`x${item.key}`}
           data-mi-move
@@ -509,94 +554,105 @@ function Scatter({
       >
         {bestValue}
       </text>
-      <path
-        data-mi-line
-        fill="none"
-        strokeWidth={9}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="stroke-ink"
-        style={{ d: `path("${padPath(frontier.length ? frontier : [{ x: left, y: bottom }], FRONTIER_SLOTS)}")`, opacity: frontier.length > 1 ? 0.08 : 0 } as React.CSSProperties}
-      />
-      {models.map((mark) => {
-        const list = byModel.get(mark.model) ?? [];
-        return (
-          <g key={`line-${mark.model}`} data-mi-focus={dim(mark.model)}>
-            <path
-              data-mi-line
-              fill="none"
-              strokeWidth={1.25}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              style={{
-                stroke: color(mark.provider),
-                opacity: list.length > 1 ? 0.8 : 0,
-                d: `path("${padPath(list.length ? list.map((point) => at.get(point.key)!) : [rest()], LINE_SLOTS)}")`,
-              } as React.CSSProperties}
-            />
-          </g>
-        );
-      })}
-      {marks.map((mark) => {
-        const spot = at.get(mark.key);
-        const { x: px, y: py } = spot ?? rest();
-        return (
-          <g key={mark.key} data-mi-focus={dim(mark.model)}>
-            <g
-              data-mi-move
-              style={{
-                transform: `translate(${px}px, ${py}px)`,
-                opacity: spot ? 1 : 0,
-                pointerEvents: spot ? undefined : "none",
-              }}
-            >
-              <g data-mi-pop style={{ transform: `scale(${hover === mark.key ? 1.6 : 1})` }}>
-                <circle
-                  data-mi-paint
-                  r={6}
-                  fill="none"
-                  strokeWidth={1}
-                  style={{ stroke: color(mark.provider), opacity: ends.has(mark.key) ? 0.6 : 0 }}
-                />
+      <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
+        <g data-mi-live-lines={zoomable ? "" : undefined}>
+          <path
+            data-mi-line
+            fill="none"
+            strokeWidth={9}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="stroke-ink"
+            style={{ d: `path("${padPath(frontier.length ? frontier : [{ x: left, y: bottom }], FRONTIER_SLOTS)}")`, opacity: frontier.length > 1 ? 0.08 : 0 } as React.CSSProperties}
+          />
+          {models.map((mark) => {
+            const list = plotted.filter((point) => point.model === mark.model).sort((a, b) => effortRank(a.effort) - effortRank(b.effort));
+            return (
+              <g key={`line-${mark.model}`} data-mi-focus={dim(mark.model)}>
                 <path
-                  data-mi-paint
-                  d={shapeOf(mark.model)}
-                  paintOrder="stroke"
-                  style={{ fill: color(mark.provider), stroke: "var(--color-card)", strokeWidth: 3 }}
+                  data-mi-line
+                  fill="none"
+                  strokeWidth={1.25}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  style={{
+                    stroke: color(mark.provider),
+                    opacity: list.length > 1 ? 0.8 : 0,
+                    d: `path("${padPath(list.length ? list.map((point) => allAt.get(point.key)!) : [rest()], LINE_SLOTS)}")`,
+                  } as React.CSSProperties}
                 />
               </g>
-              <circle
-                ref={(el) => {
-                  if (el) dots.current.set(mark.key, el);
-                  else dots.current.delete(mark.key);
+            );
+          })}
+        </g>
+        {marks.map((mark) => {
+          const spot = at.get(mark.key);
+          const actual = allAt.get(mark.key);
+          const { x: px, y: py } = actual ?? rest();
+          return (
+            <g key={mark.key} data-mi-focus={dim(mark.model)}>
+              <g
+                data-mi-move
+                data-mi-point={zoomable && actual ? "" : undefined}
+                data-mi-x={actual ? zoom.x + (actual.x - left) / (right - left) / zoom.scale : undefined}
+                data-mi-y={actual ? zoom.y + (actual.y - top) / (bottom - top) / zoom.scale : undefined}
+                style={{
+                  transform: `translate(${px}px, ${py}px)`,
+                  opacity: spot ? 1 : 0,
+                  pointerEvents: spot ? undefined : "none",
                 }}
-                r={12}
-                fill="transparent"
-                tabIndex={spot ? 0 : -1}
-                aria-label={`${mark.label} ${mark.effort}`}
-                className="pointer-events-none outline-none"
-                onFocus={(e) => onHover(mark.key, e.currentTarget, avoidFor(mark.key))}
-                onBlur={() => onHover(null)}
-              />
+              >
+                <g data-mi-pop style={{ transform: `scale(${hover === mark.key ? 1.6 : 1})` }}>
+                  <circle
+                    data-mi-paint
+                    r={6}
+                    fill="none"
+                    strokeWidth={1}
+                    style={{ stroke: color(mark.provider), opacity: ends.has(mark.key) ? 0.6 : 0 }}
+                  />
+                  <path
+                    data-mi-paint
+                    d={shapeOf(mark.model)}
+                    paintOrder="stroke"
+                    style={{ fill: color(mark.provider), stroke: "var(--color-card)", strokeWidth: 3 }}
+                  />
+                </g>
+                <circle
+                  ref={(el) => {
+                    if (el) dots.current.set(mark.key, el);
+                    else dots.current.delete(mark.key);
+                  }}
+                  r={12}
+                  fill="transparent"
+                  tabIndex={spot ? 0 : -1}
+                  aria-label={`${mark.label} ${mark.effort}`}
+                  className="pointer-events-none outline-none"
+                  onFocus={(e) => onHover(mark.key, e.currentTarget, avoidFor(mark.key))}
+                  onBlur={() => onHover(null)}
+                />
+              </g>
             </g>
-          </g>
-        );
-      })}
+          );
+        })}
+      </g>
       <rect
         x={left - 14}
         y={top - 14}
         width={right - left + 28}
         height={bottom - top + 28}
         fill="transparent"
+        onClick={(e) => {
+          if (!full || suppress.current) return;
+          const frame = svgRef.current!.getBoundingClientRect();
+          const nearest = nearestDot({ x: e.clientX - frame.left, y: e.clientY - frame.top });
+          setLineFocus(null);
+          onHover(nearest, nearest ? dots.current.get(nearest) : undefined, nearest ? avoidFor(nearest) : undefined);
+        }}
         onMouseMove={(e) => {
+          if (suppress.current) return;
           const frame = e.currentTarget.getBoundingClientRect();
           const pointer = { x: e.clientX - frame.left + left - 14, y: e.clientY - frame.top + top - 14 };
-          let nearest: string | null = null;
-          let reach = 22;
-          for (const [key, spot] of at) {
-            const gap = Math.hypot(spot.x - pointer.x, spot.y - pointer.y);
-            if (gap < reach) [nearest, reach] = [key, gap];
-          }
+          const nearest = nearestDot(pointer);
           let line: string | null = null;
           let near = 7;
           for (const [model, list] of nearest ? [] : byModel) {
@@ -613,37 +669,47 @@ function Scatter({
           onHover(null);
         }}
       />
-      {models.map((mark) => {
-        const list = byModel.get(mark.model);
-        const label = labels.get(mark.model);
-        const { x: lx, y: ly } = label ?? (list ? at.get(list[list.length - 1]!.key)! : rest());
-        const [from, to] = label?.leader ?? [{ x: lx, y: ly }, { x: lx, y: ly }];
-        return (
-          <g key={`label-${mark.model}`} data-mi-focus={dim(mark.model)}>
-            <path
-              data-mi-line
-              fill="none"
-              strokeWidth={1}
-              className="stroke-ink-secondary"
-              style={{ d: `path("M${from.x.toFixed(1)} ${from.y.toFixed(1)}L${to.x.toFixed(1)} ${to.y.toFixed(1)}")`, opacity: label?.leader ? 0.55 : 0 } as React.CSSProperties}
-            />
-            <text
-              data-mi-move
-              className="pointer-events-none fill-ink text-[10.5px] font-medium"
-              style={{
-                stroke: "var(--color-card)",
-                strokeWidth: 3,
-                strokeLinejoin: "round",
-                paintOrder: "stroke",
-                transform: `translate(${lx}px, ${ly}px)`,
-                opacity: label ? 0.92 : 0,
-              }}
-            >
-              {shortLabel(mark.label)}
-            </text>
-          </g>
-        );
-      })}
+      <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
+        {models.map((mark) => {
+          const list = byModel.get(mark.model);
+          const label = labels.get(mark.model);
+          const { x: lx, y: ly } = label ?? (list ? at.get(list[list.length - 1]!.key)! : rest());
+          const [from, to] = label?.leader ?? [{ x: lx, y: ly }, { x: lx, y: ly }];
+          const anchor = input === "mouse" && label ? { "data-mi-ax": label.anchor.x, "data-mi-ay": label.anchor.y } : {};
+          return (
+            <g key={`label-${mark.model}`} data-mi-focus={dim(mark.model)}>
+              <path
+                {...anchor}
+                data-mi-line
+                data-mi-live-lines={zoomable ? "" : undefined}
+                vectorEffect={zoomable ? "non-scaling-stroke" : undefined}
+                fill="none"
+                strokeWidth={1}
+                className="stroke-ink-secondary"
+                style={{ d: `path("M${from.x.toFixed(1)} ${from.y.toFixed(1)}L${to.x.toFixed(1)} ${to.y.toFixed(1)}")`, opacity: label?.leader ? 0.55 : 0 } as React.CSSProperties}
+              />
+              <text
+                {...anchor}
+                data-mi-move
+                data-mi-label={zoomable && label ? "" : undefined}
+                data-mi-x={lx}
+                data-mi-y={ly}
+                className="pointer-events-none fill-ink text-[10.5px] font-medium"
+                style={{
+                  stroke: "var(--color-card)",
+                  strokeWidth: 3,
+                  strokeLinejoin: "round",
+                  paintOrder: "stroke",
+                  transform: `translate(${lx}px, ${ly}px)`,
+                  opacity: label ? 0.92 : 0,
+                }}
+              >
+                {shortLabel(mark.label)}
+              </text>
+            </g>
+          );
+        })}
+      </g>
     </svg>
   );
 }
@@ -732,6 +798,7 @@ export function ModelIndexSection() {
   const { points, missing } = useMemo(() => indexView(index, catalog, undefined, today), [index, catalog, today]);
   const priced = points.some((point) => point.cost);
   const shown = priced ? view : "bars";
+  const [chartRef, chartWidth, chartHeight] = useSize(shown);
   const noCost = shown === "scatter" ? points.filter((point) => !point.cost).length : 0;
   const providers = CHART_PROVIDERS.filter((provider) => points.some((point) => chartProvider(point.provider) === provider));
   const sources = [...new Map(points.map((point) => [point.source, point])).values()];
@@ -883,34 +950,64 @@ export function ModelIndexSection() {
           {shown === "bars" && points.length > 0 && (
             <div className="mb-2 text-[11.5px] font-medium text-ink-secondary">{t(AXIS_KEY[index])}</div>
           )}
-          <div ref={wrapRef} className={full ? "fixed inset-0 z-[60] overflow-y-auto bg-panel px-3 pb-3 pt-12" : "relative min-w-0"}>
+          <div ref={wrapRef} data-mi-full={full ? "" : undefined} className={full ? "fixed inset-0 z-[60] flex flex-col gap-2 overflow-hidden bg-panel px-3 pb-3 pt-2" : "relative min-w-0"}>
             {full && (
-              <>
-                <div className="absolute left-4 top-3.5 text-[13px] font-semibold text-ink">{t(INDEX_KEY[tab])}</div>
+              <div className="flex shrink-0 items-start gap-2">
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <Segmented
+                    label={t("modelIndex.indexLabel")}
+                    peek
+                    value={tab}
+                    options={TABS.map((id) => ({ id, label: t(INDEX_KEY[id]) }))}
+                    onChange={(id) => {
+                      setHover(null);
+                      setTab(id);
+                    }}
+                  />
+                  {tab === "coding" && (
+                    <Segmented<Coding>
+                      label={t("modelIndex.codingLabel")}
+                      value={coding}
+                      options={CODING.map((id) => ({ id, label: t(BENCH_KEY[id]) }))}
+                      onChange={(id) => {
+                        setHover(null);
+                        setCoding(id);
+                      }}
+                    />
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => {
                     setHover(null);
                     setFull(false);
                   }}
-                  className="absolute right-2 top-1.5 flex size-9 items-center justify-center rounded-lg text-ink-secondary hover:bg-control"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-secondary hover:bg-control"
                   aria-label={t("modelIndex.exitFullScreen")}
                 >
                   <X size={19} />
                 </button>
-              </>
+              </div>
             )}
             {points.length === 0 ? (
               <p className="py-10 text-center text-[13px] text-ink-secondary">{t("modelIndex.empty")}</p>
             ) : (
-              <div key={shown} data-mi-view>
+              <div key={shown} ref={chartRef} data-mi-view className={full ? "min-h-0 flex-1 overflow-y-auto" : undefined}>
                 {shown === "scatter" ? (
                   <Scatter
                     index={index}
                     marks={MARKS}
                     points={points}
-                    width={width}
-                    fitHeight={full ? height : undefined}
+                    width={full ? chartWidth : width}
+                    fitHeight={full ? chartHeight || height : undefined}
+                    full={full}
+                    onSwipe={(step) => {
+                      const next = TABS[TABS.indexOf(tab) + step];
+                      if (!next) return false;
+                      setHover(null);
+                      setTab(next);
+                      return true;
+                    }}
                     phone={phone}
                     hover={hover?.key ?? null}
                     onHover={onHover}

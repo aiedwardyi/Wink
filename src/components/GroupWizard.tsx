@@ -1,8 +1,10 @@
 // Draft rows survive failed creates.
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { api, useStore, type Bot } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
+import { pickerInstances } from "@/lib/cross-model-picker";
 import { BotPickerList } from "./BotPickerList";
 import {
   WIZARD_BOT_NAME_LIMIT,
@@ -111,11 +113,11 @@ export function GroupWizard({
     });
   };
 
-  return (
+  return createPortal(
     <div
       data-closing={closing || undefined}
       inert={closing}
-      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+      className="animate-fade-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -128,48 +130,50 @@ export function GroupWizard({
         aria-modal={!closing || undefined}
         aria-labelledby="group-wizard-title"
         tabIndex={-1}
-        className="animate-pop-in w-[380px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
+        className="animate-pop-in flex max-h-full w-full max-w-[380px] flex-col rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl outline-none"
       >
         <div id="group-wizard-title" className="mb-3 text-[15px] font-semibold text-ink">{t("groupWizard.title")}</div>
-        <input
-          ref={nameRef}
-          autoFocus
-          maxLength={100}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") createGroup();
-          }}
-          placeholder={t("groupWizard.nameTitle")}
-          aria-label={t("groupWizard.nameTitle")}
-          className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
-        />
-
-        <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="" />
-
-        {rows.map((row, rowIndex) => (
-          <NewBotRow
-            key={row.key}
-            row={row}
-            preferIndex={addedNew + rowIndex}
-            instances={state.instances}
-            onPatch={(patch) => patchRow(row.key, patch)}
-            onAdd={(pick) => void addBot(row, pick)}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <input
+            ref={nameRef}
+            autoFocus
+            maxLength={100}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") createGroup();
+            }}
+            placeholder={t("groupWizard.nameTitle")}
+            aria-label={t("groupWizard.nameTitle")}
+            className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
-        ))}
 
-        <button
-          onClick={() => setRows((prev) => [...prev, { key: nextRowKey++, name: "", instanceId: null, model: null, saving: false, error: null }])}
-          className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
-        >
-          {rows.length === 0 && addedNew === 0 ? t("groupWizard.newBot") : t("groupWizard.addAnother")}
-        </button>
+          <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="" />
 
-        <p className="mt-3 text-[12.5px] text-ink-secondary">{t("room.hint.everyone")}</p>
+          {rows.map((row, rowIndex) => (
+            <NewBotRow
+              key={row.key}
+              row={row}
+              preferIndex={addedNew + rowIndex}
+              instances={state.instances}
+              onPatch={(patch) => patchRow(row.key, patch)}
+              onAdd={(pick) => void addBot(row, pick)}
+            />
+          ))}
 
-        {createError && <div role="alert" className="mt-2 text-[12.5px] text-danger">{createError}</div>}
+          <button
+            onClick={() => setRows((prev) => [...prev, { key: nextRowKey++, name: "", instanceId: null, model: null, saving: false, error: null }])}
+            className="mt-2 text-[13px] font-medium text-accent hover:brightness-110"
+          >
+            {rows.length === 0 && addedNew === 0 ? t("groupWizard.newBot") : t("groupWizard.addAnother")}
+          </button>
 
-        <div className="mt-3 flex justify-end gap-2">
+          <p className="mt-3 text-[12.5px] text-ink-secondary">{t("room.hint.everyone")}</p>
+
+          {createError && <div role="alert" className="mt-2 text-[12.5px] text-danger">{createError}</div>}
+        </div>
+
+        <div className="mt-3 flex shrink-0 justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-3 py-2 text-[13px] text-ink-secondary hover:bg-raised/70">
             {t("groupWizard.cancel")}
           </button>
@@ -182,7 +186,8 @@ export function GroupWizard({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -204,12 +209,10 @@ export function NewBotRow({
   const nameRef = useRef<HTMLInputElement>(null);
   const [nameInvalid, setNameInvalid] = useState(false);
   const preferKinds = PREFERS[Math.min(preferIndex, PREFERS.length - 1)]!;
-  const pick: EnginePick | null = row.instanceId
-    ? (() => {
-      const instance = instances.find((x) => x.instanceId === row.instanceId) ?? null;
-      return instance ? { instance, substituted: false } : null;
-    })()
-    : (suggestEngine(instances, preferKinds) ?? null);
+  const instance = pickerInstances(instances).find((x) => x.instanceId === row.instanceId);
+  const pick: EnginePick | null = instance
+    ? { instance, substituted: false }
+    : suggestEngine(instances, preferKinds);
   const preferKind = preferKinds[0]!;
   const showSubstituted = !!pick?.substituted && instances.some((i) => i.driverKind === preferKind);
   const engineOptions = wizardEngineOptions(instances, pick?.instance ?? null);

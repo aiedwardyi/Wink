@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Clock,
   Crown,
-  Gauge,
   ListTree,
   Loader2,
   Pin,
@@ -56,6 +55,7 @@ import { FolderFix } from "./FolderFix";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ChatPlanMeters } from "./ChatPlanMeters";
+import { UsageWaitCard } from "./UsageWaitCard";
 import { TermStatusLine } from "./TermStatusLine";
 import { ChatFindBar } from "./ChatFindBar";
 import { TurnRail } from "./TurnRail";
@@ -101,9 +101,7 @@ import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { localeTag, useI18n } from "@/lib/i18n";
-import { usageLimitReset } from "@/lib/usage";
 import { usageAccount } from "@/lib/accounts";
-import { useNow } from "./PlanUsageBar";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
@@ -207,6 +205,7 @@ export function ErrorRow({
   signIn,
   folder,
   botId,
+  identities,
 }: {
   message: string;
   botName?: string;
@@ -218,9 +217,9 @@ export function ErrorRow({
   signIn?: boolean;
   folder?: string;
   botId: string;
+  identities?: readonly (string | undefined)[];
 }) {
-  const { t, locale } = useI18n();
-  const now = useNow();
+  const { t } = useI18n();
   if (folder) return <FolderFix folder={folder} botId={botId} onRetry={onRetry} />;
   const action = setupErrorAction(setupInstance, signIn);
   if (setupInstance && !needsCli(setupInstance)) {
@@ -232,18 +231,16 @@ export function ErrorRow({
       </div>
     );
   }
+  if (usageLimit) return <UsageWaitCard message={message} botId={botId} usageLimit={usageLimit} usageWait={usageWait} onRetry={onRetry} retryDisabled={retryDisabled} identities={identities} />;
   const shown = chatErrorText(message, botName ?? t("errors.bot"), t);
-  if (!usageLimit && !setupInstance && !shown) return null;
-  const reset = usageLimit && !usageWait ? usageLimitReset(usageLimit.resetsAt, now) : null;
-  const waiting = usageWait?.state === "waiting";
-  const time = usageWait?.resumesAt == null ? "" : new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", ...(usageWait.weekly ? { weekday: "short" } : {}) }).format(usageWait.resumesAt);
+  if (!setupInstance && !shown) return null;
   const retryButton = onRetry && (
     <button
       onClick={onRetry}
       disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-        usageLimit ? "border-warning/30 hover:bg-warning/15" : "border-danger/30 hover:bg-danger/15",
+        "border-danger/30 hover:bg-danger/15",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
@@ -256,23 +253,12 @@ export function ErrorRow({
         className="w-fit max-w-[min(42rem,78%)] rounded-xl border border-hairline/50 bg-inset px-3.5 py-2.5 text-[13.5px] text-ink"
       >
         <div className="flex items-start gap-2">
-          {usageLimit ? <Gauge size={15} className="mt-0.5 shrink-0 text-warning" /> : <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />}
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
           <span className="min-w-0 break-words">
-            {usageLimit ? (
-              <>
-                {!usageWait ? <><span className="font-semibold">{t("chat.usageLimit")}</span>{" "}{t("chat.usageLimitBody")}{reset && <> {t(reset.key, reset.vars)}</>}</>
-                  : waiting ? <span>{t(!time ? "chat.usageWaitUnknown" : usageWait.weekly ? "chat.usageWaitWeekly" : "chat.usageWaitAt", { time })}</span>
-                    : usageWait.state === "manual" ? <span>{t("chat.usageWaitManual")}</span> : null}
-                {waiting && usageWait.cancelable && <> · <button className="underline" onClick={() => void api(`/api/bots/${botId}/usage-wait/${usageWait.id}/cancel`, { method: "POST" }).catch(() => {})}>{t("chat.cancelQueuedAction")}</button></>}
-                {/* the engine's own words survive a misread of them */}
-                <span className="mt-1 block text-[12px] opacity-70">{message}</span>
-              </>
-            ) : (
-              setupInstance ? localizeServerLine(message, t) : shown?.text ?? message
-            )}
+            {setupInstance ? localizeServerLine(message, t) : shown?.text ?? message}
           </span>
         </div>
-        {!usageLimit && !setupInstance && <ErrorDetails raw={shown?.raw} />}
+        {!setupInstance && <ErrorDetails raw={shown?.raw} />}
         {action === "cli" && setupInstance ? (
           <>
             <EngineSetup instance={setupInstance} signIn={signIn} className="mt-2 text-ink-secondary" />
@@ -280,7 +266,7 @@ export function ErrorRow({
             {signIn && retryButton}
           </>
         ) : (
-          usageLimit && usageWait ? null : retryButton
+          retryButton
         )}
       </div>
     </div>
@@ -789,6 +775,7 @@ const MessagesList = memo(function MessagesList({
                     usageLimit={m.tool.usageLimit}
                     usageWait={m.tool.usageWait}
                     signIn={m.tool.signIn}
+                    identities={state.instances.map((instance) => instance.snapshot.account)}
                   />
                 );
               }
@@ -898,7 +885,7 @@ export function PinnedBanner({
   );
 }
 
-export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const { t } = useI18n();
   const { state, dispatch, turnOrigin } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
@@ -1807,7 +1794,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           data-jump-latest
           onClick={jumpToLatest}
           aria-label={t("chat.jumpToLatest")}
-          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
+          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
           style={{ bottom: composerDock.height }}
         >
           <ArrowDown size={13} /> {t("chat.jumpToLatest")}
@@ -1831,6 +1818,9 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
         />
         {!terminal && (
           <ChatPlanMeters
+            identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
+            hidden={hidden}
+            instanceId={shownEngine?.instanceId}
             windows={shownEngine?.rateLimits?.windows}
             driverKind={shownEngine?.driverKind}
             observedAt={shownEngine?.rateLimits?.observedAt}
@@ -1849,7 +1839,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
         />
-        {terminal && <TermStatusLine bot={bot} engine={engine} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
+        {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>
       </div>
 

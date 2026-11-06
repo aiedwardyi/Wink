@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Bot, ChevronDown, ScrollText, TerminalSquare, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, ChevronDown, ScrollText, TerminalSquare, X } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
@@ -15,12 +15,12 @@ import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 
 export const WORKER_STATUS = {
-  working: { glyph: "●", key: "workers.working", text: "text-accent", dot: "bg-accent" },
-  waiting: { glyph: "‖", key: "workers.waiting", text: "text-warning", dot: "bg-warning" },
-  failed: { glyph: "!", key: "workers.failed", text: "text-danger", dot: "bg-danger" },
-  done: { glyph: "✓", key: "workers.done", text: "text-success", dot: "bg-success" },
-  ended: { glyph: "○", key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary" },
-} as const satisfies Record<WorkerShownState, { glyph: string; key: string; text: string; dot: string }>;
+  working: { key: "workers.working", text: "text-accent", dot: "bg-accent" },
+  waiting: { key: "workers.waiting", text: "text-warning", dot: "bg-warning" },
+  failed: { key: "workers.failed", text: "text-danger", dot: "bg-danger" },
+  done: { key: "workers.done", text: "text-success", dot: "bg-success" },
+  ended: { key: "workers.ended", text: "text-ink-secondary", dot: "bg-ink-secondary" },
+} as const satisfies Record<WorkerShownState, { key: string; text: string; dot: string }>;
 
 export type ShownRun = { run: WorkerRun; state: WorkerShownState };
 
@@ -46,12 +46,25 @@ export function WorkerMark({ provider, compact = false }: { provider: string | n
   );
 }
 
+// Drawn, not typed: text glyph shapes render differently per OS.
+function WorkerStatusMark({ state }: { state: WorkerShownState }) {
+  return (
+    <span aria-hidden data-worker-mark className="flex size-3 shrink-0 items-center justify-center">
+      {state === "working" ? <span className={cn("size-2 rounded-full", WORKER_STATUS.working.dot)} />
+        : state === "ended" ? <span className="size-2 rounded-full border border-current" />
+        : state === "waiting" ? <span className="flex gap-0.5"><span className="h-2.5 w-0.5 bg-current" /><span className="h-2.5 w-0.5 bg-current" /></span>
+        : state === "failed" ? <AlertTriangle size={12} />
+        : <Check size={12} />}
+    </span>
+  );
+}
+
 function WorkerStatus({ state }: { state: WorkerShownState }) {
   const { t } = useI18n();
   const status = WORKER_STATUS[state];
   return (
     <span data-worker-state={state} className={cn("flex shrink-0 items-center gap-1 text-[12.5px]", status.text)}>
-      <span aria-hidden>{status.glyph}</span>
+      <WorkerStatusMark state={state} />
       {t(status.key)}
     </span>
   );

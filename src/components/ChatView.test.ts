@@ -191,7 +191,7 @@ describe("ChatView worker rows", () => {
     ] } as Bot;
     const { host, unmount } = await mountChat(current);
     try {
-      expect(rows(host).map((b) => b.textContent)).toEqual(["OPUSOpus 5.5 · High●Working"]);
+      expect(rows(host).map((b) => b.textContent)).toEqual(["OPUSOpus 5.5 · HighWorking"]);
       expect(host.querySelector("[data-orbit-worker]")).toBeNull();
       await act(async () => { rows(host)[0]!.click(); });
       const shown = host.querySelector("[data-orbit-worker]")?.textContent ?? "";
@@ -213,7 +213,7 @@ describe("ChatView worker rows", () => {
     const current = { ...botA, messages: [userMsg("ua", "go"), launch("p1", LABEL), launch("p2", "B"), launch("p3", "C | script")] } as Bot;
     const { host, unmount } = await mountChat(current);
     try {
-      expect(rows(host).map((b) => b.textContent)).toEqual(["THEME-CYCLESonnet 5.5 · MediumMed●Working", "B●Working", "Cscript●Working"]);
+      expect(rows(host).map((b) => b.textContent)).toEqual(["THEME-CYCLESonnet 5.5 · MediumMedWorking", "BWorking", "CscriptWorking"]);
       await act(async () => { rows(host)[0]!.click(); });
       expect(host.querySelector("[data-orbit-worker]")?.textContent).toBe("Folder: C:\\repo");
       expect(host.textContent).not.toContain("Launched");
@@ -264,7 +264,7 @@ describe("ChatView worker rows", () => {
     const { host, unmount } = await mountChat(current);
     try {
       expect(rows(host)).toHaveLength(1);
-      expect(rows(host)[0]!.textContent).toBe("AOpus 5.5 · High●Working");
+      expect(rows(host)[0]!.textContent).toBe("AOpus 5.5 · HighWorking");
       expect(host.querySelector("[data-worker-run]")!.closest("[data-mid]")?.getAttribute("data-mid")).toBe("r1");
       await act(async () => { rows(host)[0]!.click(); });
       expect(host.querySelector("[data-orbit-worker]")?.textContent).toContain("All green.");
@@ -287,7 +287,7 @@ describe("ChatView worker rows", () => {
     ] } as Bot;
     const { host, unmount } = await mountChat(current, vi.fn());
     try {
-      expect(rows(host).map((b) => b.textContent)).toEqual(["A✓Done", "B!Failed"]);
+      expect(rows(host).map((b) => b.textContent)).toEqual(["ADone", "BFailed"]);
       await act(async () => { rows(host)[0]!.click(); });
       const shown = host.querySelector("[data-orbit-worker]")?.textContent ?? "";
       expect(shown).toBe("Ran in C:\\repoFailedfirst try brokeFinishedAll green.");
@@ -403,7 +403,7 @@ describe("ChatView worker rows", () => {
       expect(list.getAttribute("role")).toBe("dialog");
       expect(list.querySelector("h2")?.textContent).toBe("A's workers");
       expect(Array.from(list.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
-        "GUIDEOpus 5.5 · High‖Waiting", "BUILDGPT-6 Astra · High●Working",
+        "GUIDEOpus 5.5 · HighWaiting", "BUILDGPT-6 Astra · HighWorking",
       ]);
       await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
       expect(document.body.querySelector("[data-worker-list]")).toBeNull();
@@ -753,7 +753,7 @@ describe("ChatView worker rows", () => {
     const root = createRoot(host);
     try {
       await act(async () => root.render(createElement(StoreProvider, null, createElement(GroupView, { group }))));
-      expect(rows(host).map((b) => b.textContent)).toEqual(["REVIEWGPT-6.1 Sol · High●Working", "CHECKOpus 5.5 · High✓Done"]);
+      expect(rows(host).map((b) => b.textContent)).toEqual(["REVIEWGPT-6.1 Sol · HighWorking", "CHECKOpus 5.5 · HighDone"]);
       expect(host.textContent).not.toContain("Green.");
       const chip = host.querySelector("[data-worker-strip]");
       const find = host.querySelector('button[aria-label="Find in conversation"]')!;
@@ -1240,7 +1240,8 @@ describe("error row Retry", () => {
     try {
       await act(async () => root.render(createElement(StoreProvider, null, createElement(Harness))));
       expect(host.textContent).toContain("Usage limit reached");
-      expect(host.textContent).toContain("Plan spent");
+      expect(host.querySelector("[data-engine-details]")).toBeNull();
+      expect(host.querySelector("[data-engine-details-body]")?.textContent).toBe("Plan spent");
       expect(host.textContent).toContain("Try again after it resets.");
       expect(host.textContent).not.toContain("send Continue after it resets");
       expect(host.textContent).not.toContain("Resumes at");

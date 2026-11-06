@@ -1,9 +1,10 @@
 import "./ProfileFields.test-dom.ts";
-import { act, createElement } from "react";
+import { act, createElement, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, applyLocale, localeTag } from "@/lib/i18n";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { MODEL_INDEX_ENTRIES, MODEL_INDEX_SOURCES } from "../../shared/model-index-data.ts";
 
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -621,7 +622,20 @@ describe("score vs cost axis", () => {
 });
 
 describe("full screen chart", () => {
-  const rebuild = async (phone: boolean, size: { width: number; height: number }) => {
+  const innerWidth = window.innerWidth;
+  const back = vi.fn();
+  function SettingsChart() {
+    const ref = useRef<HTMLDivElement>(null);
+    useSettingsSwipe(ref, true, "models-index", back);
+    return createElement("div", { ref },
+      createElement("div", { "data-settings-underlay": "" }),
+      createElement("div", { "data-settings-page": "models-index" },
+        createElement("p", { "data-outside-chart": "" }, "Model Index"),
+        createElement(ModelIndexSection),
+      ),
+    );
+  }
+  const rebuild = async (phone: boolean, size: { width: number; height: number }, settings = false) => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -635,11 +649,13 @@ describe("full screen chart", () => {
     await act(async () => root.unmount());
     host.innerHTML = "";
     root = createRoot(host);
-    await act(async () => root.render(createElement(I18nProvider, null, createElement(ModelIndexSection))));
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(settings ? SettingsChart : ModelIndexSection))));
   };
   const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  const svg = () => host.querySelector("svg[role=img]")!;
+  const svg = () => host.querySelector<SVGSVGElement>("svg[role=img]")!;
   afterEach(() => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: innerWidth });
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -682,5 +698,273 @@ describe("full screen chart", () => {
       if (original) Object.defineProperty(HTMLElement.prototype, "requestFullscreen", original);
       else Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
     }
+  });
+
+  it.each(["en", "ko"] as const)("keeps full-screen tabs and the coding choice in %s", async (locale) => {
+    vi.stubGlobal("localStorage", { getItem: () => locale });
+    applyLocale(locale);
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button(locale === "en" ? "Full Screen" : "전체 화면")!.click());
+    const full = svg().closest("[data-mi-full]")!;
+    const tabs = full?.querySelector('[role="radiogroup"]');
+    expect(tabs).toBeTruthy();
+    act(() => [...tabs!.querySelectorAll<HTMLButtonElement>("button")][1]!.click());
+    expect(full.textContent).toContain("Terminal-Bench");
+    expect(full.textContent).toContain("FrontierCode");
+    act(() => full.querySelector<HTMLButtonElement>('button[aria-label]')!.click());
+    expect(tab()).toBe(locale === "en" ? "Coding" : "코딩");
+  });
+
+  const touch = (type: string, points: Array<[number, number]>, time?: number) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", { value: points.map(([clientX, clientY], identifier) => ({ clientX, clientY, identifier })) });
+    if (time !== undefined) Object.defineProperty(event, "timeStamp", { value: time });
+    act(() => svg().dispatchEvent(event));
+  };
+  const swipe = (from: number, to: number) => {
+    touch("touchstart", [[from, 150]]);
+    touch("touchmove", [[to, 150]]);
+    touch("touchend", []);
+  };
+
+  it.each(["pan", "index"])("keeps a fallback chart %s off Settings back at 390 px", async (gesture) => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    back.mockReset();
+    await rebuild(true, { width: 366, height: 330 }, true);
+    expect(document.fullscreenElement).toBeFalsy();
+    act(() => button("Full Screen")!.click());
+    if (gesture === "pan") {
+      touch("touchstart", [[100, 150], [200, 150]]);
+      touch("touchmove", [[50, 150], [250, 150]]);
+      touch("touchend", []);
+      expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    } else pick("Benchmark", "Coding");
+    touch("touchstart", [[60, 150]]);
+    touch("touchmove", [[320, 150]]);
+    expect(host.querySelector<HTMLElement>("[data-settings-page]")!.style.transform).toBe("");
+    touch("touchend", []);
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(back).not.toHaveBeenCalled();
+    expect(tab()).toBe("Intelligence");
+    if (gesture === "pan") expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    act(() => button("Exit Full Screen")!.click());
+    const outside = host.querySelector("[data-outside-chart]")!;
+    for (const [type, x] of [["touchstart", 60], ["touchmove", 320], ["touchend", 320]] as const) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: 150 }] });
+      act(() => void outside.dispatchEvent(event));
+    }
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(back).toHaveBeenCalledOnce();
+  });
+
+  it("swipes between indexes without wrapping or taking a vertical drag", async () => {
+    const vibrate = vi.fn();
+    Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    // SAFETY: phone and motion checks only read .matches.
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: false } as MediaQueryList);
+    swipe(100, 450);
+    expect(tab()).toBe("Intelligence");
+    swipe(450, 100);
+    expect(tab()).toBe("Coding");
+    swipe(100, 450);
+    expect(tab()).toBe("Intelligence");
+    touch("touchstart", [[100, 100]]);
+    touch("touchmove", [[140, 200]]);
+    touch("touchend", []);
+    expect(tab()).toBe("Intelligence");
+    MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "cost").forEach((entry) => { entry.cost = entry.score; });
+    pick("Benchmark", "Cost");
+    swipe(450, 100);
+    expect(tab()).toBe("Cost");
+    expect(vibrate).toHaveBeenCalledTimes(2);
+    Reflect.deleteProperty(window.navigator, "vibrate");
+  });
+
+  it("pans while zoomed and resets on index change and close", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(Number(svg().getAttribute("data-mi-zoom"))).toBeGreaterThan(1);
+    expect([...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].some((dot) => dot.style.opacity === "0")).toBe(true);
+    swipe(450, 100);
+    expect(tab()).toBe("Intelligence");
+    pick("Benchmark", "Coding");
+    expect(svg().getAttribute("data-mi-zoom")).toBe("1");
+    act(() => button("Exit Full Screen")!.click());
+    expect(svg().getAttribute("data-mi-zoom")).toBeNull();
+    expect(svg().style.touchAction).not.toBe("none");
+  });
+
+  it("ignores cancelled and edge swipes", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    touch("touchstart", [[450, 150]]);
+    touch("touchmove", [[100, 150]]);
+    touch("touchcancel", []);
+    expect(tab()).toBe("Intelligence");
+    swipe(10, 450);
+    expect(tab()).toBe("Intelligence");
+  });
+
+  it("opens a dot tooltip on tap and hides it on empty chart or zoom", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+    const [clientX, clientY] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number);
+    const hit = svg().querySelector('rect[fill="transparent"]')!;
+    const tap = (x: number, y: number) => act(() => void hit.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
+    tap(clientX!, clientY!);
+    expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+    tap(400, 10);
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    tap(clientX!, clientY!);
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+  });
+
+  it("double-taps 2x and back with reduced motion instant", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    // SAFETY: phone and motion checks only read .matches.
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+    const tap = () => { touch("touchstart", [[250, 150]]); touch("touchend", []); };
+    tap();
+    tap();
+    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    expect(svg().querySelector("style")?.textContent).toContain("transform 0s");
+    tap();
+    tap();
+    expect(svg().getAttribute("data-mi-zoom")).toBe("1");
+  });
+
+  it("opens a zoomed dot tooltip after 3 px of finger jitter", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    touch("touchstart", [[100, 100], [200, 100]]);
+    touch("touchmove", [[50, 100], [250, 100]]);
+    touch("touchend", []);
+    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+    const [x, y] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number);
+    touch("touchstart", [[x!, y!]]);
+    touch("touchmove", [[x! + 3, y!]]);
+    touch("touchend", []);
+    act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x! + 3, clientY: y! })));
+    expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+  });
+
+  it("opens a dot tooltip after staggered pinch lifts without resetting zoom", async () => {
+    await rebuild(true, { width: 780, height: 330 });
+    act(() => button("Full Screen")!.click());
+    const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => {
+      const x = Number(el.style.transform.match(/-?[\d.]+/)?.[0]);
+      return el.style.opacity === "1" && x > 200 && x < 500;
+    })!;
+    const [x, y] = dot.style.transform.match(/-?[\d.]+/g)!.map(Number) as [number, number];
+    touch("touchstart", [[x - 100, y], [x, y]], 1000);
+    touch("touchmove", [[x - 150, y], [x + 50, y]], 1020);
+    touch("touchend", [[x + 50, y]], 1040);
+    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    touch("touchend", [], 1060);
+    touch("touchstart", [[x + 50, y]], 1100);
+    touch("touchend", [], 1120);
+    act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x + 50, clientY: y })));
+    expect({ zoom: svg().getAttribute("data-mi-zoom"), tooltip: Boolean(host.querySelector('[role="tooltip"]')) }).toEqual({ zoom: "2", tooltip: true });
+  });
+
+  describe("desktop wheel zoom", () => {
+    const wheel = (deltaY: number, [clientX, clientY]: [number, number], time: number) => {
+      // happy-dom's WheelEvent drops clientX.
+      const event = new MouseEvent("wheel", { bubbles: true, cancelable: true, clientX, clientY });
+      for (const [key, value] of Object.entries({ deltaX: 0, deltaY, deltaMode: 0, timeStamp: time })) Object.defineProperty(event, key, { value });
+      act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(event));
+      return event;
+    };
+    const mouse = (target: EventTarget, type: string, [clientX, clientY]: [number, number]) =>
+      act(() => void target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, button: 0 })));
+    const zoomed = () => Number(svg().getAttribute("data-mi-zoom"));
+    const spot = (dot: SVGGElement) => dot.style.transform.match(/-?[\d.]+/g)!.map(Number) as [number, number];
+
+    it("zooms on the wheel, hides the tooltip, pans, and resets on double-click and index change", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await rebuild(false, { width: 780, height: 330 });
+      expect(button("Full Screen")).toBeNull();
+      const dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+      const [x, y] = spot(dot);
+      act(() => dot.querySelector<SVGElement>("[aria-label]")!.focus());
+      expect(host.querySelector('[role="tooltip"]')).not.toBeNull();
+      expect(wheel(-300, [x, y], 1000).defaultPrevented).toBe(true);
+      expect(host.querySelector('[role="tooltip"]')).toBeNull();
+      act(() => vi.advanceTimersByTime(200));
+      expect(zoomed()).toBeGreaterThan(1);
+      expect(spot(dot)[0]).toBeCloseTo(x);
+      expect(spot(dot)[1]).toBeCloseTo(y);
+      expect([...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].some((el) => el.style.opacity === "0")).toBe(true);
+      mouse(svg().querySelector("rect[fill=transparent]")!, "mousedown", [x, y]);
+      mouse(window, "mousemove", [x + 40, y]);
+      mouse(window, "mouseup", [x + 40, y]);
+      expect(spot(dot)[0]).toBeCloseTo(x + 40);
+      // SAFETY: phone and motion checks only read .matches.
+      vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: query.includes("reduce") }) as MediaQueryList);
+      mouse(svg(), "dblclick", [x, y]);
+      expect(zoomed()).toBe(1);
+      expect(svg().querySelector("style")?.textContent).toContain("transform 0s");
+      wheel(-300, [x, y], 2000);
+      act(() => vi.advanceTimersByTime(200));
+      expect(zoomed()).toBeGreaterThan(1);
+      pick("Benchmark", "Coding");
+      expect(zoomed()).toBe(1);
+    });
+
+    describe("hover while the wheel zooms", () => {
+      const hit = () => svg().querySelector<SVGRectElement>("rect[fill=transparent]")!;
+      const tooltip = () => host.querySelector('[role="tooltip"]');
+      const hover = (target: EventTarget, [clientX, clientY]: [number, number]) => mouse(target, "mousemove", [clientX, clientY]);
+      let dot: SVGGElement;
+      let old: [number, number];
+
+      beforeEach(async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await rebuild(false, { width: 780, height: 330 });
+        // happy-dom has no layout, so give the hit rect the box it has in a browser.
+        hit().getBoundingClientRect = () => ({ left: Number(hit().getAttribute("x")), top: Number(hit().getAttribute("y")) }) as DOMRect;
+        dot = [...svg().querySelectorAll<SVGGElement>("[data-mi-point]")].find((el) => el.style.opacity === "1")!;
+        old = spot(dot);
+        wheel(-300, [old[0] + 20, old[1]], 1000);
+        act(() => vi.advanceTimersByTime(40));
+      });
+
+      it("opens no tooltip for a dot's old spot, then follows it to the new spot", () => {
+        hover(hit(), old);
+        expect(tooltip()).toBeNull();
+        act(() => vi.advanceTimersByTime(200));
+        expect(spot(dot)[0]).not.toBeCloseTo(old[0]);
+        hover(hit(), spot(dot));
+        expect(tooltip()).not.toBeNull();
+      });
+
+      it("keeps hover off through a drag that outlasts the wheel", () => {
+        mouse(hit(), "mousedown", old);
+        act(() => vi.advanceTimersByTime(200));
+        hover(window, old);
+        hover(hit(), old);
+        expect(tooltip()).toBeNull();
+        mouse(window, "mouseup", old);
+      });
+    });
+
+    it("leaves the phone chart to the page scroll", async () => {
+      await rebuild(true, { width: 366, height: 330 });
+      expect(wheel(-300, [100, 100], 1000).defaultPrevented).toBe(false);
+      expect(svg().getAttribute("data-mi-zoom")).toBeNull();
+    });
   });
 });

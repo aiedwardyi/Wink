@@ -10,7 +10,7 @@ import { SavedKeys } from "./ApiKeys";
 import { updaterActions, useManualCheck, useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { ProfileFields } from "./ProfileFields";
-import { Card } from "./SettingsPrimitives";
+import { Card, ROW_BUTTON } from "./SettingsPrimitives";
 import { SegmentedRow } from "./Segmented";
 import { UsageSection } from "./UsageSection";
 import { QuorumRow, prefetchQuorum } from "./QuorumRow";
@@ -126,7 +126,7 @@ export function UpdatesRow() {
             check();
           }}
           disabled={s?.status === "checking" || s?.status === "downloading" || s?.status === "installing"}
-          className="shrink-0 rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
+          className={cn(ROW_BUTTON, "text-ink")}
         >
           {s?.status === "available"
             ? t("settings.updates.download")
@@ -651,7 +651,7 @@ export function SettingsModal({
             )}
 
             {section === "connections" && (
-              <Card>
+              <Card band>
                 <div className="flex flex-col gap-4">
                   <EnginesSettings />
                   <SavedKeys />

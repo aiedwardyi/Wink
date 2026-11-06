@@ -2,6 +2,26 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.236] - 2026-11-05
+
+### Fixed
+- Model Index charts in full screen on the phone keep their tabs on top, swipe to the next chart, and zoom with a pinch or a double-tap.
+- Settings > Devices no longer flickers its check marks when it opens.
+- The @ list and search show each bot's own picture.
+- New group lists each AI once, even with several accounts signed in, and signing in from that list uses your Main account.
+- A renamed account keeps its name after sign-in refreshes and restarts.
+
+## [1.0.235] - 2026-11-05
+
+### Changed
+- Settings > Usage shows each account as its own row with 5h and 7d meters, % left and the reset time. Each AI shows 3 accounts with Show more for the rest, and your Main account always stays in view.
+- Usage sections fold and stay folded on this device, numbers older than 5 minutes show how old they are, and the page refreshes on its own without a Refresh All button.
+- The usage quick view in chat uses the same rows on desktop and phone, and closes when another window opens over it.
+- Connections has a smoother menu on the phone, and an account still signing in shows one menu, clear of Cancel.
+
+### Fixed
+- The red sign-in warning clears once sign-in finishes.
+
 ## [1.0.234] - 2026-11-05
 
 ### Added
@@ -620,6 +640,8 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.236]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.236
+[1.0.235]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.235
 [1.0.234]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.234
 [1.0.233]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.233
 [1.0.231]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.231
