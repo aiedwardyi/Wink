@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { afterEach, expect, it, vi } from "vitest";
 
-const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false }));
+const f = vi.hoisted(() => ({ observations: [], failures: new Set(), commands: [], calls: [], events: {}, values: new Map(), targets: [], windows: new Map(), failInput: false, onClick: null }));
 vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
   async send(method, params) {
     f.commands.push(method); f.calls.push({ tile: page.tile, method, params });
@@ -11,6 +11,7 @@ vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
     if (f.failInput) throw new Error("Input failed");
     const window = f.windows.get(page.tile);
     if (window && params.type === "mouseReleased") window.document.querySelector("button").click();
+    if (params.type === "mouseReleased") f.onClick?.(f.events[page.tile]);
   },
   on(name, handler) { (f.events[page.tile] ??= {})[name] = handler; return () => {}; },
   async ev(expression) {
@@ -29,7 +30,7 @@ vi.mock("./verify-cdp.mjs", () => ({ attach: page => ({
 }) }));
 import { runHiddenVerify } from "./verify-hidden.mjs";
 
-afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
+afterEach(async () => { vi.useRealTimers(); f.observations = []; f.failures.clear(); f.commands = []; f.calls = []; f.events = {}; f.values.clear(); f.targets = []; f.failInput = false; f.onClick = null; for (const window of f.windows.values()) await window.happyDOM.close(); f.windows.clear(); });
 function input() {
   const aborter = new AbortController();
   const pages = Object.fromEntries(["desktop", "phone"].map(tile => [tile, Object.assign(new EventEmitter(), { tile, loadURL: vi.fn(async () => {}) })]));
@@ -86,6 +87,59 @@ it("emits actual click targets through CDP without native window input", async (
   const i = input(); await runHiddenVerify(i).done;
   expect(f.commands.filter(command => command === "Input.dispatchMouseEvent")).toHaveLength(4);
   expect(i.emit.mock.calls.map(([event]) => event).filter(event => event.kind === "point")).toEqual(expect.arrayContaining([expect.objectContaining({ inp: expect.objectContaining({ type: "click", x: 20, y: 30 }), scrollY: 40 })]));
+});
+
+it.each(["menu", "signup"])("reports page errors thrown by a recorded %s click", async key => {
+  f.targets = [{ index: 0, where: `button#${key}`, key }];
+  f.onClick = on => on["Runtime.exceptionThrown"]({ exceptionDetails: { url: "http://127.0.0.1:1234/index.html", lineNumber: 8, exception: { description: "Error: click failed" } } });
+  const i = input(), result = await runHiddenVerify(i).done;
+  expect(result.errorCode).toBeUndefined();
+  expect(result.issues).toEqual([{ checker: "PAGE_ERRORS", tile: "desktop", rule: "page error", where: "/index.html:9", measured: "Error: click failed; reload the page" }]);
+  expect(result.counts.failed).toBe(2);
+  expect(i.emit.mock.calls.flatMap(([event]) => event.checks ?? []).filter(row => row.checker === "PAGE_ERRORS")).toEqual([
+    expect.objectContaining({ tile: "desktop", result: "issue", where: "/index.html:9" }),
+    expect.objectContaining({ tile: "phone", result: "issue", where: "/index.html:9" }),
+  ]);
+});
+
+it.each([false, true])("reports failed local loads after clicks with aborted=%s", async aborted => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+  f.targets = [{ index: 0, where: "button#signup", key: "signup" }];
+  f.onClick = on => {
+    on["Network.requestWillBeSent"]({ requestId: "click", type: "Script", request: { url: "http://127.0.0.1:1234/missing.js" } });
+    if (aborted) on["Network.loadingFailed"]({ requestId: "click", type: "Script", errorText: "net::ERR_ABORTED" });
+    else on["Network.responseReceived"]({ type: "Script", response: { url: "http://127.0.0.1:1234/missing.js", status: 404 } });
+  };
+  const result = await runHiddenVerify(input()).done;
+  fetch.mockRestore();
+  expect(result.issues).toEqual([{ checker: "PAGE_ERRORS", tile: "desktop", rule: "page error", where: "/missing.js", measured: "HTTP 404; reload the page" }]);
+  expect(result.counts.failed).toBe(2);
+});
+
+it("keeps clean clicks free of issues and avoids recounting load errors", async () => {
+  f.targets = [{ index: 0, where: "button#signup", key: "signup" }];
+  const clean = await runHiddenVerify(input()).done;
+  expect(clean.issues).toEqual([]);
+  expect(clean.counts.failed).toBe(0);
+  const i = input();
+  for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async () => {
+    f.events[tile]["Runtime.exceptionThrown"]({ exceptionDetails: { text: "Error: load failed" } });
+  };
+  const result = await runHiddenVerify(i).done;
+  expect(result.issues).toHaveLength(1);
+  expect(result.counts.failed).toBe(2);
+});
+
+it("keeps click errors unchecked behind a blocked script and ignores remote failures", async () => {
+  f.targets = [{ index: 0, where: "button#signup", key: "signup" }];
+  f.onClick = on => {
+    on["Network.requestWillBeSent"]({ requestId: "remote", type: "Script", request: { url: "https://cdn.example.org/app.js" } });
+    on["Network.loadingFailed"]({ requestId: "remote", type: "Script", errorText: "net::ERR_BLOCKED_BY_CLIENT" });
+    on["Runtime.exceptionThrown"]({ exceptionDetails: { text: "ReferenceError: app is not defined" } });
+  };
+  const result = await runHiddenVerify(input()).done;
+  expect(result.issues).toEqual([]);
+  expect(result.notChecked).toContain("scripts (code from cdn.example.org is blocked in the check)");
 });
 
 it.each([false, true])("opens the probe guard for recorded clicks and restores it after input failure=%s", async failInput => {

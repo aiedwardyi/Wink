@@ -133,6 +133,13 @@ export function runHiddenVerify(input) {
     const statuses = await head([...new Set(data.links.filter(a => a.local && !a.missing && !a.samePage).map(a => a.url))]);
     for (const a of data.links) if (statuses.has(a.url)) { a.status = statuses.get(a.url); a.unchecked = a.status === null; }
   }
+  async function pageErrors(data, state, scriptsBlocked) {
+    const origin = new URL(input.url).origin, aborted = state.aborted.splice(0);
+    const statuses = await head([...new Set(aborted.map(r => r.url))]);
+    for (const r of aborted) if (errorsRule.failedLoad({ ...r, status: statuses.get(r.url) ?? 0 }, origin)) state.loads.push({ where: plain(new URL(r.url).pathname, 120), measured: `HTTP ${statuses.get(r.url)}; reload the page` });
+    Object.assign(data, { origin, scriptsBlocked, errors: [...new Map(state.events.splice(0).map(e => [e.where, e])).values()] });
+    data.loads = [...new Map(state.loads.splice(0).filter(e => !data.images.some(img => img.broken && img.src && new URL(img.src).pathname === e.where)).map(e => [e.where, e])).values()];
+  }
   async function interact(cdp, tile) {
     try {
       const targets = await race(cdp.ev(`(() => {
@@ -168,7 +175,7 @@ export function runHiddenVerify(input) {
     emit({ kind: "part", part: "loads" });
     const nav = {};
     for (const [i, tile] of ["desktop", "phone"].entries()) {
-      const { cdp, events, loads, aborted, blocked, requests } = tiles[i];
+      const { cdp, blocked, requests } = tiles[i];
       const types = new Map([...requests.values()].map(r => [r.url, r.type]));
       const guard = blockedGuard([...blocked, ...input.blockedUrls().map(url => ({ url, type: types.get(url) }))]);
       const forms = await race(cdp.ev("!!document.querySelector('form,input:not([type=hidden]):not([type=checkbox]):not([type=radio]),textarea,button[type=submit]') || [...document.querySelectorAll('a,button')].some(n => /sign[ -]?up|register|신청|가입/i.test(n.textContent))")).catch(error => {
@@ -188,12 +195,7 @@ export function runHiddenVerify(input) {
         const data = await observe(cdp, rule, tile);
         if (!data) continue;
         try {
-          if (rule === errorsRule) {
-            Object.assign(data, { origin: new URL(input.url).origin, scriptsBlocked: guard.scripts, errors: [...new Map(events.map(e => [e.where, e])).values()] });
-            const statuses = await head([...new Set(aborted.map(r => r.url))]);
-            for (const r of aborted) if (errorsRule.failedLoad({ ...r, status: statuses.get(r.url) ?? 0 }, new URL(input.url).origin)) loads.push({ where: plain(new URL(r.url).pathname, 120), measured: `HTTP ${statuses.get(r.url)}; reload the page` });
-            data.loads = [...new Map(loads.filter(e => !data.images.some(img => img.broken && img.src && new URL(img.src).pathname === e.where)).map(e => [e.where, e])).values()];
-          }
+          if (rule === errorsRule) await pageErrors(data, tiles[i], guard.scripts);
           if (rule === linksRule) await links(data);
           if (rule === menuRule) nav[tile] = data;
           const checked = rule === menuRule ? tile === "phone" && nav.desktop ? rule.check(data, nav.desktop) : { problems: [], notChecked: [] } : rule.check(data);
@@ -243,6 +245,16 @@ export function runHiddenVerify(input) {
         }
       }
       await interact(cdp, tile);
+      const data = { images: [] };
+      await pageErrors(data, tiles[i], blockedGuard(blocked).scripts || guard.scripts);
+      const checked = errorsRule.check(data);
+      for (const row of checked.problems) {
+        const issue = { checker: errorsRule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160) };
+        problems.push(issue);
+        complete(false, true, { ...issue, detail: false, scrollY: 0 });
+      }
+      for (const reason of checked.notChecked) notChecked.add(reason);
+      flushChecks();
       if (tile === "phone") emit({ kind: "part", part: "phone" });
     }
     if (!await race(input.revisionUnchanged())) throw fault("site-changed");

@@ -82,15 +82,22 @@ export function verifyReplyText(status: VerifyCardStatus, _site: string, detail:
   const issues = verifyProblems(result.issues);
   const head = issues.length ? "Desktop and phone: problems found." : "Desktop and phone: no problems found.";
   const tail = issues.length ? "Fix these in this turn; call verify_site again, at most twice." : "";
-  const unchecked = [...(result.notChecked ?? [])].sort((a, b) => Number(b === "form delivery") - Number(a === "form delivery")).map(row => `Not checked: ${row.slice(0, 80)}`).join("\n");
+  const unchecked = [...(result.notChecked ?? [])].sort((a, b) => Number(b === "form delivery") - Number(a === "form delivery")).map(row => `Not checked: ${row.slice(0, 80)}`);
   const lines = issues.map(row => `${row.tile === "phone" ? "Phone 392 px" : "Desktop 1280 px"}: ${row.rule} at ${row.where.slice(0, 70)}. ${row.measured.slice(0, 80)}. ${row.checker === "LINKS" ? "Click this link." : row.checker === "PAGE_ERRORS" ? "Reload the page." : "View this location."}`);
-  let reply = [head, unchecked, tail].filter(Boolean).join("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const candidate = [head, ...lines.slice(0, i + 1), unchecked, tail].filter(Boolean).join("\n");
-    if (candidate.length > VERIFY_LIMITS.resultTextChars || tokenCost(candidate) > 390) break;
+  const fits = (value: string) => value.length <= VERIFY_LIMITS.resultTextChars && tokenCost(value) <= 390;
+  const format = (n: number, coverage: string) => [head, ...lines.slice(0, n), coverage, tail].filter(Boolean).join("\n");
+  let coverage = unchecked.length ? `Not checked: ${unchecked.length} items` : "";
+  for (let i = 1; i <= unchecked.length; i++) {
+    const candidate = [...unchecked.slice(0, i), ...(i < unchecked.length ? [`and ${unchecked.length - i} more not checked`] : [])].join("\n");
+    if (candidate.length > 360 || tokenCost(candidate) > 120 || !fits(format(1, candidate))) break;
+    coverage = candidate;
+  }
+  let reply = format(1, coverage);
+  for (let i = 2; i <= lines.length; i++) {
+    const candidate = format(i, coverage);
+    if (!fits(candidate)) break;
     reply = candidate;
   }
-  while (reply.length > VERIFY_LIMITS.resultTextChars || tokenCost(reply) > 400) reply = reply.slice(0, -1);
   return redactSecretsInText(reply);
 }
 
