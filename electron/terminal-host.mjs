@@ -462,7 +462,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null, paneIdentity = null }) {
   const sessions = new Map();
   const active = new Map();
   const generations = new Map();
@@ -532,6 +532,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     };
     if (session.launchProject !== undefined) result.launchProject = session.launchProject;
     if (session.label) result.label = session.label;
+    if (session.processIdentity) result.processIdentity = session.processIdentity;
     return result;
   };
   const botSessions = (botId) => [...sessions.values()].filter((candidate) => candidate.botId === botId && !candidate.retired && active.get(candidate.key) === candidate.id);
@@ -1151,6 +1152,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       // spawn. Always wait for ready (or ready failure) before retiring.
       await ready;
       session.workerReady = true;
+      if (paneIdentity) void Promise.resolve(paneIdentity(pty.pid, session.id)).then((identity) => { session.processIdentity = identity; }).catch(() => {});
       // Workers yield a busy CPU to Wink; children inherit the class.
       if (botPane && Number.isInteger(pty.pid)) {
         try { setPriority(pty.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}

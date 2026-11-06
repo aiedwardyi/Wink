@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Notification, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -315,7 +315,15 @@ async function paneMailbox() {
   return { url: `http://127.0.0.1:${port}`, token, binDir };
 }
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
-const terminalHost = createTerminalHost({
+const hostedWorkers = process.env.WINK_WORKER_HOST === "1" ? await import("./worker-host-facade.mjs") : null;
+const terminalHost = (hostedWorkers?.createWorkerTerminalHost ?? createTerminalHost)({
+  ...(hostedWorkers ? { hostConfig: {
+    root: path.join(app.getPath("userData"), "worker-host"),
+    runtimeRoot: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), "Wink", "worker-host", createHash("sha256").update(app.getPath("userData")).digest("hex").slice(0, 12)),
+    home: app.getPath("home"), dataDir: process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"),
+    worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"),
+    ptyModule: require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"),
+  } } : {}),
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
     if (!trustedTerminalSender(event, mainWindow?.webContents, origin)) throw new Error("Untrusted terminal caller");
@@ -326,7 +334,7 @@ const terminalHost = createTerminalHost({
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
-  paneCleanup: createPaneCleanup({ home: app.getPath("home"), worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
+  paneCleanup: hostedWorkers ? null : createPaneCleanup({ home: app.getPath("home"), worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
     require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,
@@ -2072,7 +2080,7 @@ app.whenReady().then(async () => {
   if (!app.isPackaged) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
-  void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
+  void (hostedWorkers ? terminalHost.recoverWorkers.bind(terminalHost) : recoverWorkers)({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the
   // exact options the IPC handler uses. A failure surfaces in companionState

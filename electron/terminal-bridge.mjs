@@ -157,7 +157,8 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       if (parsed.pathname === "/v1/terminal/session") {
         if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
         try {
-          const captured = host.captureWorkerSession?.(req.headers.authorization, await readJson(req));
+          let captured = host.captureWorkerSession?.(req.headers.authorization, await readJson(req));
+          if (host.backgroundHost) captured = await captured;
           return json(res, captured ? 200 : 409, { captured: Boolean(captured) });
         } catch (error) {
           return json(res, error?.status === 413 ? 413 : 400, { error: "Invalid worker session" });
@@ -182,8 +183,14 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         if (!grantMatches(req.headers.authorization, token)) return json(res, 401, { error: "Unauthorized" });
         if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
         if (!host.enableWorkerAccounts) return json(res, 503, { error: "Worker account routing is unavailable" });
-        host.enableWorkerAccounts();
-        return json(res, 200, { enabled: true });
+        if (!host.backgroundHost) {
+          host.enableWorkerAccounts();
+          return json(res, 200, { enabled: true });
+        }
+        try {
+          await host.enableWorkerAccounts();
+          return json(res, 200, { enabled: true });
+        } catch { return json(res, 503, { error: "Background work unavailable" }); }
       }
       if (parsed.pathname === "/v1/terminal/account-runs") {
         if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });
@@ -206,7 +213,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         const accountId = parsed.searchParams.get("accountId") ?? "";
         if (!/^[\w.-]{1,128}$/.test(accountId)) return json(res, 400, { error: "Invalid account" });
         try {
-          return json(res, 200, host.livePanesForAccount?.(accountId) ?? { count: 0, unknown: 1, generations: {} });
+          return json(res, 200, (host.backgroundHost ? await host.livePanesForAccount?.(accountId) : host.livePanesForAccount?.(accountId)) ?? { count: 0, unknown: 1, generations: {} });
         } catch {
           return json(res, 503, { count: 0, unknown: 1, generations: {} });
         }
@@ -247,7 +254,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         if (req.method === "POST" && match[2] === "open") return json(res, 200, await host.openForBot(botId, await readJson(req)));
         if (req.method === "POST" && match[2] === "main") {
           await host.openMainForBot(botId);
-          return json(res, 200, host.readBot(botId));
+          return json(res, 200, host.backgroundHost ? await host.readBot(botId) : host.readBot(botId));
         }
         if (req.method === "POST" && match[2] === "close") {
           const input = await readJson(req);
@@ -256,14 +263,16 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         }
         if (req.method === "POST" && match[2] === "attention") {
           const note = await readJson(req);
-          return json(res, 200, { raised: host.attendBot(botId, note?.sessionId, note?.kind, note?.text) });
+          const raised = host.attendBot(botId, note?.sessionId, note?.kind, note?.text);
+          return json(res, 200, { raised: host.backgroundHost ? await raised : raised });
         }
         if (req.method === "POST" && match[2]) {
           const input = await readJson(req);
           // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Terminal text is untyped HTTP request input.
           if (input && typeof input === "object" && typeof input.text === "string") input.text = normalizeTerminalText(input.text);
           await host.sendBot(botId, input, { person: sendOnly });
-          return json(res, 200, host.readBot(botId, input?.sessionId ? { sessionId: input.sessionId, observe: true } : undefined));
+          const snapshot = host.readBot(botId, input?.sessionId ? { sessionId: input.sessionId, observe: true } : undefined);
+          return json(res, 200, host.backgroundHost ? await snapshot : snapshot);
         }
         return json(res, 405, { error: "Method not allowed" });
       } catch (error) {

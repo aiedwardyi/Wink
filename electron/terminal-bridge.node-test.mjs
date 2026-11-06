@@ -29,6 +29,15 @@ function accountRunFixture(t) {
   return { host, bridge, children, owner };
 }
 
+test("worker admission reports an unreachable background host without dropping the request", async (t) => {
+  const bridge = createTerminalBridge({ host: { backgroundHost: true, readBot() {}, sendBot() {}, async enableWorkerAccounts() { throw new Error("private failure"); } } });
+  t.after(() => bridge.close());
+  const access = await bridge.start();
+  const response = await fetch(`${access.url}/v1/terminal/worker-accounts`, { method: "POST", headers: { authorization: `Bearer ${access.token}` } });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "Background work unavailable" });
+});
+
 test("lists live worker runs with account and bot", async (t) => {
   const f = accountRunFixture(t);
   const access = await f.bridge.start();
