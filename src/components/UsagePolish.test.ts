@@ -66,19 +66,21 @@ it("matches sidebar name and chat meter sizes while keeping emails small", () =>
   expect(rule(".usage-account-identity")).toContain("font-weight: 500");
   expect(rule(".usage-name-button")).toContain("font-weight: 500");
   expect(rule(".usage-meter")).toContain("font-size: 12.5px");
-  expect(rule(".usage-meter-summary")).toContain("font-size: 12.5px");
+  expect(rule(".usage-meter-summary")).toContain("font-size: 11px");
   expect(rule(".usage-reset")).toContain("font-size: inherit");
   expect(rule(".usage-email")).toContain("font-size: 11px");
   expect(rule(".usage-email")).toContain("font-weight: 400");
 });
 
-it("keeps collapsed figures on one line with shared columns down to 360px", () => {
-  expect(rule(".usage-summary")).toContain("display: grid");
-  expect(rule(".usage-summary")).toContain("grid-template-columns: repeat(2, max-content)");
-  expect(rule(".usage-meter-summary")).toContain("grid-template-columns: 1.5em max-content max-content");
-  expect(rule(".usage-meter-summary .usage-figures")).toContain("white-space: nowrap");
-  expect(rule('.usage-meter-summary[data-window="week"]')).toContain("grid-column: 2");
-  expect(css).toMatch(/@container usage-summary \(width < 537px\)[\s\S]*\.usage-summary > \.usage-meter-summary \{[^}]*grid-column: 1 \/ -1/);
+it("preserves Today's collapsed layout and 70 by 4px bar box", () => {
+  expect(rule(".usage-summary")).toContain("display: flex");
+  expect(rule(".usage-summary")).toContain("gap: 2px 14px");
+  expect(rule(".usage-meter-summary")).toContain("flex-wrap: wrap");
+  expect(rule(".usage-meter-summary")).toContain("line-height: 17px");
+  expect(rule(".usage-meter-summary .usage-figures")).toContain("gap: 6px");
+  expect(rule(".usage-cells-mini")).toContain("--cells-w: 70px");
+  expect(rule(".usage-cells-mini")).toContain("--cell-h: 4px");
+  expect(css).not.toContain("@container usage-summary");
 });
 
 it("gives the refresh icon a 44px coarse-pointer hit area", () => {
@@ -96,6 +98,21 @@ it("keeps the limit separator with its reset when a narrow meter wraps", async (
 
 const bars = (root: ParentNode = host) => [...root.querySelectorAll("[data-cells]")].map((bar) => [bar.tagName.toLowerCase(), bar.getAttribute("class")!.split(" ")[0], [...bar.children].map((cell) => cell.tagName.toLowerCase()).join(",")]);
 const shared = ["svg", "usage-cells", Array(10).fill("polygon").join(",")];
+
+it("fits ten slanted cells and two-pixel gaps inside Today's collapsed box", async () => {
+  const size = vi.spyOn(SVGElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 70, 4));
+  await mount();
+  await click("[data-fold-all]");
+  const bar = q("[data-engine-summary] [data-cells]")!;
+  expect(bar.getAttribute("viewBox")).toBe("0 0 70 4");
+  const shapes = [...bar.children].map((cell) => cell.getAttribute("points")!.split(" ").map((point) => point.split(",").map(Number)));
+  expect(shapes).toHaveLength(10);
+  expect(shapes[0]![1]![0]! - shapes[0]![0]![0]!).toBeCloseTo(5.08);
+  expect(shapes[1]![0]![0]! - shapes[0]![1]![0]!).toBe(2);
+  expect(shapes[0]![3]![0]!).toBe(1.2);
+  expect(shapes[9]![2]![0]!).toBeCloseTo(70);
+  size.mockRestore();
+});
 
 it("draws every bar as the one shared slanted shape, never glyphs or skewed boxes", async () => {
   expect(css).not.toMatch(/skew|box-shadow: inset/);
