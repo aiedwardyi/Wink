@@ -3010,7 +3010,7 @@ export const ko = {
   "usage.desk.details": "자세히",
   "usage.desk.use": "전환",
   "usage.desk.useAria": "{name} 전환",
-  "usage.desk.switching": "바꾸는 중...",
+  "usage.desk.switching": "전환 중...",
   "usage.desk.mainFailed": "기본 계정을 바꾸지 못했습니다. 바뀐 것은 없습니다.",
   "usage.desk.signingIn": "로그인 중",
   "usage.desk.draining": "작업 마무리 중",
