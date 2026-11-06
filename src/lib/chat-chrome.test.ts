@@ -8,6 +8,7 @@ const components = join(here, "../components");
 const chatBubble = readFileSync(join(components, "ChatBubble.tsx"), "utf8");
 const chatView = [readFileSync(join(components, "ChatView.tsx"), "utf8"), chatBubble].join("\n");
 const groupView = readFileSync(join(components, "GroupView.tsx"), "utf8");
+const memberRoster = readFileSync(join(components, "GroupMemberRoster.tsx"), "utf8");
 const composer = readFileSync(join(components, "Composer.tsx"), "utf8");
 
 describe("chat TTS speaker chrome", () => {
@@ -227,7 +228,7 @@ describe("room header on a phone", () => {
   });
 
   it("overlaps the roster avatars on a phone", () => {
-    const roster = tokensAfter(header, "ref={membersTriggerRef}");
+    const roster = tokensAfter(memberRoster, "ref={reorder.rowRef}");
     expect(roster.has("max-md:-space-x-1.5")).toBe(true);
     expect(roster.has("max-md:gap-0")).toBe(true);
     expect(groupView).toContain('group.busyBotId === b.id && "z-10 ring-2');

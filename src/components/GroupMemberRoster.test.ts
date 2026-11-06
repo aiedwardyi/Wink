@@ -125,6 +125,15 @@ describe("group member roster", () => {
     expect(saved()).toEqual([]);
   });
 
+  it("drops a drag without saving when the room closes mid-drag", async () => {
+    await render();
+    await press("wink");
+    await pointer("pointermove", at("wink") + 50);
+    await act(async () => root.render(createElement(StoreProvider, null)));
+    await pointer("pointerup", at("wink") + 50);
+    expect(saved()).toEqual([]);
+  });
+
   it("lifts on touch only after a long press", async () => {
     vi.useFakeTimers();
     await render();

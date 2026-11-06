@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 
 import { hapticTick, reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "./phone-swipe";
 import { moveMember } from "./room-members";
@@ -90,6 +90,18 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
     focusId.current = null;
     if (id) pictures().find((el) => el.dataset.memberId === id)?.focus();
   }, [order]);
+
+  // leaving the room mid-drag drops the drag without saving
+  useEffect(
+    () => () => {
+      const p = press.current;
+      press.current = null;
+      clearTimeout(p?.timer);
+      p?.unbind();
+      clearTimeout(settling.current);
+    },
+    [],
+  );
 
   const lift = (p: Press) => {
     clearTimeout(settling.current);
