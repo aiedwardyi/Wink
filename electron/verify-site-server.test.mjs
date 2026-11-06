@@ -34,6 +34,67 @@ async function remove(path) {
 }
 const start = async () => server = await startSiteServer({ root, entry: "index.html", revision: await siteRevision({ root, entry: "index.html" }) });
 
+it("forwards negotiating headers without credentials and pins each response variant", async () => {
+  const requests = [];
+  const upstream = createServer((req, res) => {
+    requests.push(req.headers);
+    const json = req.headers.accept === "application/json";
+    res.writeHead(200, { "content-type": json ? "application/json" : "text/html" }).end(json ? JSON.stringify(req.headers) : "<h1>HTML</h1>");
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    const headers = { Accept: "application/json", "Accept-Language": "ko-KR", RSC: "1", "Next-Router-State-Tree": '["",{}]', "Next-Url": "/dashboard", "Next-Router-Prefetch": "1", "X-Requested-With": "XMLHttpRequest", Cookie: "private=1", Authorization: "Bearer private", "Proxy-Authorization": "Basic private", "Proxy-Foo": "private", Origin: "https://outside.invalid", Referer: "https://outside.invalid/private", "X-Api-Key": "private" };
+    const json = await get("/route", { headers });
+    expect(json.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(json.body)).toMatchObject({ accept: "application/json", "accept-language": "ko-KR", rsc: "1", "next-router-state-tree": '["",{}]', "next-url": "/dashboard", "next-router-prefetch": "1", "x-requested-with": "XMLHttpRequest" });
+    for (const key of ["cookie", "authorization", "proxy-authorization", "proxy-foo", "origin", "referer", "x-api-key"]) expect(requests[0][key], key).toBeUndefined();
+    expect((await get("/route", { headers: { ...headers, Accept: "text/html" } })).body).toBe("<h1>HTML</h1>");
+    const rsc = await get("/route", { headers: { ...headers, RSC: "0" } });
+    expect(JSON.parse(rsc.body).rsc).toBe("0");
+    expect((await get("/route", { headers: { ...headers, RSC: "0" }, method: "HEAD" })).headers["content-type"]).toBe("application/json");
+    expect((await get("/route", { headers: { ...headers, Cookie: "changed=1" } })).body).toBe(json.body);
+    expect(requests).toHaveLength(3);
+    const head = await get("/route", { headers: { Accept: "application/json", RSC: "head" }, method: "HEAD" });
+    expect(head.headers["content-type"]).toBe("application/json");
+    expect(requests.at(-1).rsc).toBe("head");
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
+it.each(["accept-language", "rsc"])("separates cached loopback responses by %s", async header => {
+  let requests = 0;
+  const upstream = createServer((req, res) => { requests++; res.end(req.headers[header] ?? "absent"); });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    const first = await get("/variant", { headers: { [header]: "first" } });
+    const second = await get("/variant", { headers: { [header]: "second" } });
+    expect(requests).toBe(2);
+    expect(first.body).toBe("first");
+    expect(second.body).toBe("second");
+    expect((await get("/variant", { headers: { [header]: "first" } })).body).toBe(first.body);
+    expect(requests).toBe(2);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
+it("pins only supported font sheets found in served loopback HTML and CSS", async () => {
+  const upstream = createServer((req, res) => {
+    const css = req.url === "/local.css";
+    res.writeHead(200, { "content-type": css ? "text/css" : "text/html" }).end(css ? '@import url("https://fonts.googleapis.com/css?family=Noto+Sans");' : '<link href="https://fonts.googleapis.com/css2?family=Roboto&amp;display=swap"><link href="https://fonts.googleapis.com/css2?family=Roboto&amp;display=swap"><link href="https://outside.invalid/style.css"><link href="https://fonts.googleapis.com.evil.invalid/css2?family=Other">');
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    const fonts = server.fontUrls;
+    await get("/"); await get("/local.css");
+    expect(server.fontUrls).toBe(fonts);
+    expect([...fonts].sort()).toEqual(["https://fonts.googleapis.com/css2?family=Roboto&display=swap", "https://fonts.googleapis.com/css?family=Noto+Sans"].sort());
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
 it("proxies only pinned loopback GET/HEAD without credentials, foreign redirects or writes", async () => {
   const requests = [];
   let content = "<h1>Local app</h1>";

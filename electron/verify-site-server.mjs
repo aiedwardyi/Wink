@@ -15,6 +15,7 @@ const TYPES = {
   ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2",
 };
 const PRIVATE = /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig(?:\..*)?\.json|(?:vite|webpack|eslint|postcss|tailwind)\.config\..*|(?:credentials?|secrets?|tokens?)(?:[._-].*)?)$/i;
+const LOOPBACK_HEADERS = new Set(["accept", "accept-language", "rsc", "next-router-state-tree", "next-url", "next-router-prefetch", "next-router-segment-prefetch", "x-requested-with"]);
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 const error = code => Object.assign(new Error(code), { code });
 const inside = (root, path) => path === root || path.startsWith(root + sep);
@@ -85,6 +86,15 @@ export async function siteRevision({ root, entry }) {
   return (await manifest(root, entry)).revision;
 }
 
+function fontStylesheets(bytes) {
+  const fonts = new Set(), text = bytes.toString("utf8").replaceAll("&amp;", "&");
+  for (const match of text.matchAll(/https:\/\/fonts\.googleapis\.com\/(?:css2?|icon)\?[^\s"'<>)}]+/g)) {
+    const url = new URL(match[0]);
+    if (url.hostname === "fonts.googleapis.com" && !url.username && !url.password && !url.port && !url.hash) fonts.add(url.href);
+  }
+  return [...fonts];
+}
+
 export async function startSiteServer({ root, entry, revision }) {
   if (verifyLoopbackUrl(root)?.href === root && entry === "index.html") {
     if (revision !== digest(root)) throw error("site-changed");
@@ -94,11 +104,7 @@ export async function startSiteServer({ root, entry, revision }) {
   if (!/^[a-f0-9]{64}$/.test(revision) || pinned.revision !== revision) throw error("site-changed");
   const fonts = new Set();
   for (const [name, file] of pinned.files) if (/\.(?:html?|css)$/i.test(name)) {
-    const text = file.bytes.toString("utf8").replaceAll("&amp;", "&");
-    for (const match of text.matchAll(/https:\/\/fonts\.googleapis\.com\/(?:css2?|icon)\?[^\s"'<>)}]+/g)) {
-      const url = new URL(match[0]);
-      if (url.hostname === "fonts.googleapis.com" && !url.username && !url.password && !url.port && !url.hash) fonts.add(url.href);
-    }
+    for (const url of fontStylesheets(file.bytes)) fonts.add(url);
   }
   let host, closed = false, changed = false;
   const headers = {
@@ -157,13 +163,13 @@ export async function startSiteServer({ root, entry, revision }) {
 }
 
 async function startLoopbackServer(root) {
-  const target = new URL(root), files = new Map(), aborter = new AbortController(), sockets = new Set();
+  const target = new URL(root), files = new Map(), fontUrls = [], aborter = new AbortController(), sockets = new Set();
   if (target.hostname === "localhost") target.hostname = "127.0.0.1";
   let host, origin, closing, failure, total = 0;
-  async function load(path, method = "GET") {
+  async function load(path, method, requestHeaders) {
     const url = new URL(path, target.origin);
     if (url.origin !== target.origin) throw error("outside-folders");
-    const response = await fetch(url, { method, redirect: "manual", signal: AbortSignal.any([aborter.signal, AbortSignal.timeout(5000)]) });
+    const response = await fetch(url, { method, headers: requestHeaders, redirect: "manual", signal: AbortSignal.any([aborter.signal, AbortSignal.timeout(5000)]) });
     const chunks = []; let size = 0;
     try {
       for await (const bytes of response.body ?? []) {
@@ -179,6 +185,9 @@ async function startLoopbackServer(root) {
       if (next.origin !== target.origin || next.username || next.password) status = 403;
       else headers.location = origin + next.pathname + next.search + next.hash;
     }
+    if (status === 200 && /^(?:text\/(?:html|css)|application\/xhtml\+xml)(?:;|$)/i.test(headers["content-type"])) {
+      for (const url of fontStylesheets(bytes)) if (!fontUrls.includes(url)) fontUrls.push(url);
+    }
     return { status, headers, bytes: status === 403 ? Buffer.alloc(0) : bytes };
   }
   const server = createServer((req, res) => {
@@ -186,15 +195,17 @@ async function startLoopbackServer(root) {
     const serve = async () => {
       if (req.headers.host !== host || !req.url?.startsWith("/") || req.url.startsWith("//") || /[\\\x00-\x1f]/.test(req.url)) return reply(404);
       if (!["GET", "HEAD"].includes(req.method)) return reply(405, { allow: "GET, HEAD" });
-      if (req.method === "HEAD" && !files.has(req.url)) {
-        const file = await load(req.url, "HEAD");
+      const requestHeaders = Object.fromEntries(Object.entries(req.headers).filter(([name]) => LOOPBACK_HEADERS.has(name)).sort(([a], [b]) => a.localeCompare(b)));
+      const key = JSON.stringify([req.url, requestHeaders]);
+      if (req.method === "HEAD" && !files.has(key)) {
+        const file = await load(req.url, "HEAD", requestHeaders);
         return reply(file.status, file.headers);
       }
-      if (!files.has(req.url)) {
+      if (!files.has(key)) {
         if (files.size >= 512) throw error("resource-limit");
-        files.set(req.url, load(req.url));
+        files.set(key, load(req.url, "GET", requestHeaders));
       }
-      const file = await files.get(req.url);
+      const file = await files.get(key);
       reply(file.status, file.headers, file.bytes);
     };
     serve().catch(err => {
@@ -209,7 +220,7 @@ async function startLoopbackServer(root) {
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   host = `127.0.0.1:${server.address().port}`; origin = `http://${host}`;
   return {
-    origin, url: origin + target.pathname + target.search + target.hash, fontUrls: [],
+    origin, url: origin + target.pathname + target.search + target.hash, fontUrls,
     async revisionUnchanged() {
       if (failure) throw error(failure);
       return true;
