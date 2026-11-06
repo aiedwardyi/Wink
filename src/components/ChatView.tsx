@@ -31,7 +31,7 @@ import {
   type Message,
 } from "@/state/store";
 import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
-import { SignedInCard, SignInCard } from "./SignInCard";
+import { AccountSignInCard, SignedInCard, SignInCard } from "./SignInCard";
 import { BotAvatar } from "./Avatar";
 import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -202,6 +202,7 @@ export function ErrorRow({
   usageLimit,
   usageWait,
   signIn,
+  bound,
   folder,
   botId,
   identities,
@@ -214,6 +215,8 @@ export function ErrorRow({
   usageLimit?: { resetsAt: number | null };
   usageWait?: NonNullable<Message["tool"]>["usageWait"];
   signIn?: boolean;
+  /** setupInstance is the account the turn failed on, not the bot's engine. */
+  bound?: boolean;
   folder?: string;
   botId: string;
   identities?: readonly (string | undefined)[];
@@ -221,10 +224,11 @@ export function ErrorRow({
   const { t } = useI18n();
   if (folder) return <FolderFix folder={folder} botId={botId} onRetry={onRetry} />;
   const action = setupErrorAction(setupInstance, signIn);
-  if (setupInstance && !needsCli(setupInstance)) {
+  if (setupInstance && (bound || !needsCli(setupInstance))) {
     return (
       <div className="flex max-w-[min(42rem,100%)] justify-start" title={message}>
-        {action === "cli"
+        {bound ? <AccountSignInCard instance={setupInstance} onRetry={onRetry} />
+          : action === "cli"
           ? <SignInCard instance={setupInstance} help={t("chat.signInRetryHelp")} onRetry={signIn ? onRetry : undefined} />
           : <SignedInCard instance={setupInstance} onRetry={onRetry} />}
       </div>
@@ -763,6 +767,7 @@ const MessagesList = memo(function MessagesList({
               // bot⇄bot comm chips stay because they link to another conversation.
               // plain tool runs stay out unless Settings → Tool calls is on.
               if (m.tool?.name.startsWith("error:")) {
+                const accountId = m.tool.accountId;
                 return (
                   <ErrorRow
                     botId={bot.id}
@@ -770,7 +775,8 @@ const MessagesList = memo(function MessagesList({
                     folder={m.tool.folder}
                     message={m.tool.name.slice(6).trim()}
                     onRetry={m.id === canonicalLastMessageId && canRetryLast && !m.tool.name.startsWith(SYNC_NOTICE) ? onRegenerate : undefined}
-                    setupInstance={m.tool.setup || m.tool.signIn ? engine : undefined}
+                    setupInstance={accountId ? state.instances.find((instance) => instance.instanceId === accountId) : m.tool.setup || m.tool.signIn ? engine : undefined}
+                    bound={Boolean(accountId)}
                     usageLimit={m.tool.usageLimit}
                     usageWait={m.tool.usageWait}
                     signIn={m.tool.signIn}

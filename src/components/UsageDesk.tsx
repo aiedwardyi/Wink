@@ -18,6 +18,7 @@ import { useVisibleClock } from "@/lib/use-visible-clock";
 import { api, useStore } from "@/state/store";
 import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { EngineSignIn } from "./EngineSetup";
 import { Fold } from "./Fold";
 import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
@@ -208,12 +209,15 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
 } & RowSlots) {
   const { t } = clock;
   const { state: store } = useStore();
-  const email = settings ? store.instances.find((each) => each.instanceId === account.id)?.snapshot.account : null;
+  const instance = store.instances.find((each) => each.instanceId === account.id);
+  const email = settings ? instance?.snapshot.account : null;
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
   let control: ReactNode = null;
-  if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
+  // While it waits, the sign-in's steps take their own line under the name.
+  if (account.signIn === "signed-out" && instance) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
+  else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
   else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
   else if (account.signIn === "ready") control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}

@@ -98,7 +98,8 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
     } catch (error) {
       const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500;
       if (nameRoute) json(res, status, error instanceof AccountNameError ? { error: error.message, code: error.code } : status === 400 ? { error: "Invalid nickname", code: "invalid-character" } : { error: "Account operation failed" });
-      else json(res, status, { error: status < 500 || error instanceof AccountError ? (error as Error).message : "Account operation failed" });
+      else if (status < 500 || error instanceof AccountError) json(res, status, { error: (error as Error).message, code: (error as { code?: unknown }).code });
+      else json(res, status, { error: "Account operation failed" });
     }
     return true;
   };

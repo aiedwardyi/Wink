@@ -1,5 +1,7 @@
 import { mkdirSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR, instanceConfigs } from "./config.ts";
@@ -181,6 +183,26 @@ describe("account removal references", () => {
     expect(f.accounts.get(f.account.id)).toEqual(f.account);
     expect(f.registry.accountBlocked(f.account.id)).toBe(false);
     expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["login-busy", "Another sign-in for this engine is still running"],
+    ["account-busy", "Finish this account's active work before signing in"],
+    ["host-unknown", "Terminal host is unreachable"],
+  ])("sends %s to the client when a sign-in is refused", async (code, message) => {
+    const f = await fixture();
+    const { createAccountRoutes } = await import("./account-routes.ts");
+    const { LoginBusyError } = await import("./engine-login.ts");
+    vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new LoginBusyError());
+    if (code === "account-busy") f.request.mockResolvedValue(Response.json({ count: 1, unknown: 0, generations: { [f.account.generation]: 1 } }));
+    if (code === "host-unknown") f.request.mockResolvedValue(Response.json({ count: 0, unknown: 1, generations: {} }));
+    let status = 0;
+    let raw = "";
+    const req = Object.assign(Readable.from(["{}"]), { headers: { "content-type": "application/json" } }) as unknown as IncomingMessage;
+    const res = { writeHead: (value: number) => { status = value; }, setHeader: () => {}, end: (value: string) => { raw = value; } } as unknown as ServerResponse;
+    await createAccountRoutes(f.controller, f.registry)(req, res, "POST", `/api/instances/${encodeURIComponent(f.account.id)}/sign-in`);
+    expect(status).toBe(409);
+    expect(JSON.parse(raw)).toEqual({ error: expect.stringContaining(message), code });
   });
 
   it.each(["bot", "pending", "turn", "helper", "pane"] as const)("refuses logout for a live %s reference", async (reference) => {
