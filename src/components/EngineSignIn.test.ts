@@ -312,9 +312,9 @@ describe("engine sign-in row", () => {
 
   it("shows why sign-in could not start and leaves the other sign-in running", async () => {
     const reasons = [
-      ["login-busy", "Another sign-in is still open. Finish or cancel it first.", "다른 로그인이 아직 진행 중이에요. 먼저 끝내거나 취소하세요."],
-      ["account-busy", "Finish this account's running work, then sign in.", "이 계정에서 실행 중인 작업이 끝난 뒤 로그인하세요."],
-      ["host-unknown", "Can't check this account's workers right now. Try again in a moment.", "지금은 이 계정의 작업을 확인할 수 없어요. 잠시 후 다시 시도하세요."],
+      ["login-busy", "Finish or cancel the other sign-in first.", "다른 로그인을 먼저 끝내거나 취소하세요."],
+      ["account-busy", "Finish this account's work first.", "이 계정의 작업이 끝나면 로그인하세요."],
+      ["host-unknown", "Can't check workers. Try again soon.", "작업을 확인할 수 없어요. 잠시 후 다시 해보세요."],
       [undefined, "Didn't finish. Try again.", "완료되지 않았어요. 다시 시도하세요."],
     ] as const;
     vi.stubGlobal("localStorage", window.localStorage);

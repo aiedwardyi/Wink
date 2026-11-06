@@ -338,7 +338,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   if (!forceSignIn && loading) return null;
   if (computerOnly) return <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   return (
-    <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
+    <div aria-live="polite" data-sign-in-open={waiting ? "" : undefined} className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
       {waiting ? <>
         <span>{copyFallback ? t("engine.pasteAndEnter") : capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>
         {copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}

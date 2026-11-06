@@ -23,7 +23,7 @@ describe("chat errors", () => {
     expect(classifyChatError(line)).toEqual({ kind: "known", key: "errors.signedOut" });
     try {
       applyLocale("ko");
-      expect(chatBannerError(new Error(line))).toBe("이 계정이 로그아웃됐어요. 다시 로그인한 뒤 메시지를 보내세요.");
+      expect(chatBannerError(new Error(line))).toBe("로그아웃됐어요. 다시 로그인한 뒤 보내세요.");
     } finally {
       applyLocale("en");
     }

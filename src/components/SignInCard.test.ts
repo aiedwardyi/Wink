@@ -84,3 +84,21 @@ it("gives the sign-in code input room for its whole placeholder", () => {
   host.innerHTML = html;
   expect(host.querySelector("input[type=password]")!.className).toContain(" w-60 ");
 });
+
+it("moves the open sign-in row under the text instead of squeezing the title", () => {
+  const html = renderToStaticMarkup(createElement(I18nProvider, null,
+    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
+      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped",
+        loginState: "pending", loginCapture: { inputGeneration: 1, url: "https://example.test/login" } } })));
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  const card = host.querySelector("[data-sign-in-card]")!;
+  const row = card.querySelector("[data-sign-in-open]")!;
+  expect(row.querySelector("input[type=password]")).not.toBeNull();
+  expect(card.lastElementChild!.contains(row)).toBe(true);
+  expect(card.className).toContain("[data-sign-in-open]");
+  expect(card.className).toContain("flex-wrap");
+  expect(card.lastElementChild!.className).toContain("[data-sign-in-open]");
+  expect(card.lastElementChild!.className).toContain("basis-full");
+  expect(row.className).toContain("items-end");
+});

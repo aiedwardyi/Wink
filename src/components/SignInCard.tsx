@@ -12,7 +12,7 @@ const BUTTON = "rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-semibold tex
 
 function Row({ instance, title, help, children }: { instance: InstanceInfo; title: string; help: string; children: ReactNode }) {
   return (
-    <div data-sign-in-card="" className="flex w-full items-center gap-3 has-[[data-computer-only]]:flex-wrap rounded-xl border border-hairline/30 bg-panel/70 px-3 py-2.5">
+    <div data-sign-in-card="" className="flex w-full items-center gap-3 has-[[data-computer-only],[data-sign-in-open]]:flex-wrap rounded-xl border border-hairline/30 bg-panel/70 px-3 py-2.5">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-inset">
         <ProviderMark driverKind={instance.driverKind} size={16} />
       </span>
@@ -20,7 +20,7 @@ function Row({ instance, title, help, children }: { instance: InstanceInfo; titl
         <div className="text-[13px] font-semibold text-ink">{title}</div>
         <p className="mt-0.5 text-[12px] leading-snug text-ink-secondary">{help}</p>
       </div>
-      <div className="shrink-0 has-[[data-computer-only]]:basis-full">{children}</div>
+      <div className="shrink-0 has-[[data-computer-only],[data-sign-in-open]]:basis-full">{children}</div>
     </div>
   );
 }
