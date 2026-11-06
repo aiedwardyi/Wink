@@ -24,8 +24,8 @@ export const TERMINAL_TURN_END_MS = 90_000;
 const REPORT_WRAP_MS = 60_000;
 // A worker idle on its own background jobs keeps its turn-end note this long at most.
 const JOBS_HOLD_MS = 30 * 60_000;
-// Claude ends a background shell by 2 h and wakes its worker, so a shell wait holds STALLED that long plus slack.
-const SHELL_HOLD_MS = 125 * 60_000;
+// Claude ends a background shell by 2 h and wakes its worker on each monitor line or timeout, so either wait holds STALLED that long plus slack.
+const WAIT_HOLD_MS = 125 * 60_000;
 // Long enough for an agent woken by its finished job to show busy and drop the note.
 const JOBS_QUIET_MS = 30_000;
 const JOBS_FOOTER_LINES = 4;
@@ -57,7 +57,7 @@ const AGENTS_RUNNING_RE = /^✻ Waiting for \d+ background agents?\b.*\n+─+$(?
 // Wrapping, borders, spinner glyphs and clocks change on a redraw without the worker moving; a busy agent's ticking timer still counts.
 const STALL_CHURN_RE = /[\u2500-\u257f\u2800-\u28ff✻✢✳✶✽·*●]|\b\d+[hms]\b|\d{1,2}:\d{2}(?::\d{2})?|\b\d+(?:\.\d+)?%(?=\s+context left\b)/gu;
 const stallSignature = (screenText) => AGENT_BUSY_RE.test(screenText) ? screenText : screenText.replace(STALL_CHURN_RE, "").replace(/\s+/g, "");
-const agentJobsRunning = (screenText, shellsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!shellsOnly || /\b[1-9]\d* shells?\b/u.test(line)));
+const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!waitsOnly || /\b[1-9]\d* (?:shells?|monitors?)\b/u.test(line)));
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 export const BOT_PANE_LIMIT = 16;
@@ -743,7 +743,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       const capacity = session.engine === "codex" && codexCapacity(session.screen.snapshot({ maxScrollbackChars: 0 }));
       const held = !limit && (!session.agentSeen || session.engine === "claude" && agentJobsRunning(text, true));
-      const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? SHELL_HOLD_MS : JOBS_HOLD_MS;
+      const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? WAIT_HOLD_MS : JOBS_HOLD_MS;
       if (session.stallFired && (limit || capacity || AGENT_BUSY_RE.test(text) || session.stallPosts > STALL_REPEATS || at <= session.stallRepeatAt)) continue;
       if (at - session.stallChangedAt < threshold || at < session.stallRetryAt) continue;
       // Typed input can sit in the PTY before the screen echoes it

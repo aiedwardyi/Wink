@@ -178,6 +178,7 @@ export type SidebarStartupGroup = {
   id: string;
   dm?: boolean;
   section?: string;
+  pinned?: boolean;
 };
 
 /** The id the sidebar renders first: chief tier, then pinned tier, then the
@@ -192,7 +193,7 @@ export function preferredStartupSelectionId(
       key: sidebarItemKey("group", group.id),
       id: group.id,
       sectionId: sectionIdFor(group.section),
-      priority: null as SidebarPriority | null,
+      priority: sidebarPriorityFor(group),
     })),
     ...bots
       .filter((bot) => !bot.hidden)

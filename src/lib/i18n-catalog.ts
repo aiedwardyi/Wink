@@ -656,7 +656,7 @@ export const en = {
   "chrome.noMessages": "No messages yet",
   "chrome.youPrefix": "You: {text}",
   "chrome.speakerPrefix": "{name}: {text}",
-  "chrome.newBot": "New Bot",
+  "chrome.newBot": "New bot",
   "chrome.newChannel": "New group",
   "chrome.exportAllBots": "Export all bots",
   "chrome.exporting": "Exporting…",

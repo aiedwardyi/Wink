@@ -76,9 +76,9 @@ async function renderWizard() {
   await act(async () => {
     root.render(createElement(GroupWizard, { onClose: () => undefined }));
   });
-  const dialog = host.querySelector('[role="dialog"]');
+  const dialog = document.body.querySelector('[role="dialog"]');
   if (!(dialog instanceof HTMLElement)) throw new Error("wizard did not render");
-  return { host, root };
+  return { host: document.body, root };
 }
 
 function button(host: HTMLElement, text: string): HTMLButtonElement {
@@ -130,6 +130,41 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
+  it("opens over the screen with a card that fits a 360 px phone", async () => {
+    const drawer = document.createElement("aside");
+    document.body.append(drawer);
+    const root = createRoot(drawer);
+    await act(async () => {
+      root.render(createElement(GroupWizard, { onClose: () => undefined }));
+    });
+    try {
+      const card = document.body.querySelector('[role="dialog"]')!;
+      expect(drawer.contains(card)).toBe(false);
+      expect(card.parentElement!.parentElement).toBe(document.body);
+      expect(card.parentElement!.className).toContain("p-4");
+      expect(card.className).toContain("w-full");
+      expect(card.className).toContain("max-w-[380px]");
+      expect(card.className.split(" ")).not.toContain("w-[380px]");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps the card inside a short screen: the body scrolls and Create stays in view", async () => {
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => button(host, "+ New bot").click());
+      const card = host.querySelector('[role="dialog"]')!;
+      const scroller = (el: Element) => el.closest(".overflow-y-auto:not(.max-h-64)");
+      expect(card.className).toContain("max-h-full");
+      expect(scroller(nameInputs(host)[0]!)).not.toBeNull();
+      expect(scroller(button(host, "Create"))).toBeNull();
+      expect(scroller(button(host, "Cancel"))).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it.each(["en", "ko"] as const)("creates with a base engine among four Claude and two Codex accounts in %s", async (locale) => {
     applyLocale(locale);
     const bases = [engine("claude", "claudeAgent", "Claude"), engine("codex", "codex", "Codex")];

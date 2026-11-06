@@ -200,16 +200,16 @@ function useSize(key?: string) {
   return [ref, width, height] as const;
 }
 
-/** Items that just left, held at their last spot until their fade-out ends. */
-function useLeaving<T extends { key: string }>(items: T[]): T[] {
+/** Items that just left, held at their last spot until their fade-out ends; ones a zoom moved off just go. */
+function useLeaving<T extends { key: string }>(items: T[], zoom = ""): T[] {
   const last = useRef(items);
   const keys = items.map((item) => item.key).join("|");
-  const [shown, setShown] = useState(keys);
+  const [shown, setShown] = useState({ keys, zoom });
   const [leaving, setLeaving] = useState<T[]>([]);
-  if (keys !== shown) {
+  if (keys !== shown.keys || zoom !== shown.zoom) {
     const live = new Set(items.map((item) => item.key));
-    setShown(keys);
-    setLeaving([...leaving, ...last.current].filter((item, i, all) => !live.has(item.key) && all.findIndex((other) => other.key === item.key) === i));
+    setShown({ keys, zoom });
+    setLeaving([...leaving, ...(zoom === shown.zoom ? last.current : [])].filter((item, i, all) => !live.has(item.key) && all.findIndex((other) => other.key === item.key) === i));
   }
   useLayoutEffect(() => {
     last.current = items;
@@ -247,25 +247,28 @@ function placeLabels(
   measure: (text: string) => number,
 ) {
   const placed = [...taken];
-  const out = new Map<string, Spot & { leader?: [Spot, Spot] }>();
+  const out = new Map<string, Spot & { anchor: Spot; leader?: [Spot, Spot] }>();
   for (const item of items) {
     const w = measure(item.text) + 2;
     const h = 12;
-    const hug = item.anchors.flatMap(({ x, y }) => [
-      { x: x + 7, y: y - h / 2 },
-      { x: x - 7 - w, y: y - h / 2 },
-      { x: x - w / 2, y: y - 8 - h },
-      { x: x - w / 2, y: y + 8 },
-      { x: x + 5, y: y - 5 - h },
-      { x: x - 5 - w, y: y - 5 - h },
-      { x: x + 5, y: y + 5 },
-      { x: x - 5 - w, y: y + 5 },
-    ]);
+    const hug = item.anchors.flatMap((anchor) => {
+      const { x, y } = anchor;
+      return [
+        { x: x + 7, y: y - h / 2 },
+        { x: x - 7 - w, y: y - h / 2 },
+        { x: x - w / 2, y: y - 8 - h },
+        { x: x - w / 2, y: y + 8 },
+        { x: x + 5, y: y - 5 - h },
+        { x: x - 5 - w, y: y - 5 - h },
+        { x: x + 5, y: y + 5 },
+        { x: x - 5 - w, y: y + 5 },
+      ].map((spot) => ({ ...spot, anchor }));
+    });
     const end = item.anchors[0]!;
     const rings = [20, 32, 46, 62].flatMap((reach) =>
       [0, -30, 30, -60, 60, -90, 90, -120, 120, -150, 150, 180].map((deg) => {
         const [cos, sin] = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)];
-        return { x: end.x + cos * (reach + (w / 2) * Math.abs(cos)) - w / 2, y: end.y + sin * (reach + (h / 2) * Math.abs(sin)) - h / 2, from: end };
+        return { x: end.x + cos * (reach + (w / 2) * Math.abs(cos)) - w / 2, y: end.y + sin * (reach + (h / 2) * Math.abs(sin)) - h / 2, anchor: end, from: end };
       }),
     );
     const spot = [...hug, ...rings].find(
@@ -283,6 +286,7 @@ function placeLabels(
     out.set(item.id, {
       x: spot.x,
       y: spot.y + 9,
+      anchor: spot.anchor,
       leader: to && along ? [{ x: end.x + ((to.x - end.x) / along) * 7, y: end.y + ((to.y - end.y) / along) * 7 }, to] : undefined,
     });
   }
@@ -385,7 +389,9 @@ function Scatter({
     Math.round(Math.min(420, Math.max(300, width * 0.62, phone ? Math.min(360, width * 1.15) : 0))) + (caption.length - 1) * CAPTION_LINE;
   const bottom = height - (caption.length - 1) * CAPTION_LINE - MARGIN.bottom;
   const svgRef = useRef<SVGSVGElement>(null);
-  const { zoom, css, suppress } = useChartZoom(svgRef, full, index, { left, right, top, bottom }, onSwipe, () => onHover(null));
+  const input = full ? "touch" : phone ? undefined : "mouse";
+  const zoomable = Boolean(input);
+  const { zoom, css, suppress } = useChartZoom(svgRef, input, index, { left, right, top, bottom }, onSwipe, () => onHover(null));
 
   const costs = plotted.map((point) => point.cost!);
   const xBase: [number, number] = [Math.log10(costs.length ? Math.min(...costs) / 1.6 : 1), Math.log10(costs.length ? Math.max(...costs) * 1.6 : 1000)];
@@ -411,8 +417,9 @@ function Scatter({
   const gradient = `mi-best${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const yItems = yTicks.map((tick) => ({ key: `${unit}:${tick}`, label: formatTick(unit, tick), at: y(tick) }));
   const xItems = xTicks.map((tick) => ({ key: String(tick), label: formatCostTick(tick), at: x(tick) }));
-  const yLeaving = useLeaving(yItems);
-  const xLeaving = useLeaving(xItems);
+  const zoomKey = `${zoom.scale},${zoom.x},${zoom.y}`;
+  const yLeaving = useLeaving(yItems, zoomKey);
+  const xLeaving = useLeaving(xItems, zoomKey);
   const titleLeaving = useLeaving([{ key: title }]);
 
   const visible = plotted.filter((point) => inZoom(zoom, { x: (Math.log10(point.cost!) - xBase[0]) / (xBase[1] - xBase[0]), y: 1 - (point.score - baseY.domain[0]) / (baseY.domain[1] - baseY.domain[0]) }));
@@ -464,13 +471,13 @@ function Scatter({
       ref={svgRef}
       width={width}
       height={height}
-      data-mi-zoom={full ? zoom.scale : undefined}
+      data-mi-zoom={zoomable ? zoom.scale : undefined}
       className="block overflow-visible"
       style={{ touchAction: full ? "none" : undefined }}
       role="img"
       aria-label={title}
     >
-      {full && <style>{css}</style>}
+      {zoomable && <style>{css}</style>}
       <defs>
         <clipPath id={`${gradient}-clip`}><rect x={left} y={top} width={right - left} height={bottom - top} /></clipPath>
         <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
@@ -478,8 +485,8 @@ function Scatter({
           <stop offset="1" style={{ stopColor: "var(--color-ink)", stopOpacity: 0.02 }} />
         </linearGradient>
       </defs>
-      <g clipPath={full ? `url(#${gradient}-clip)` : undefined}>
-        <g data-mi-live-lines={full ? "" : undefined}>
+      <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
+        <g data-mi-live-lines={zoomable ? "" : undefined}>
           <path
             data-mi-line
             fill={`url(#${gradient})`}
@@ -547,8 +554,8 @@ function Scatter({
       >
         {bestValue}
       </text>
-      <g clipPath={full ? `url(#${gradient}-clip)` : undefined}>
-        <g data-mi-live-lines={full ? "" : undefined}>
+      <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
+        <g data-mi-live-lines={zoomable ? "" : undefined}>
           <path
             data-mi-line
             fill="none"
@@ -586,7 +593,7 @@ function Scatter({
             <g key={mark.key} data-mi-focus={dim(mark.model)}>
               <g
                 data-mi-move
-                data-mi-point={full && actual ? "" : undefined}
+                data-mi-point={zoomable && actual ? "" : undefined}
                 data-mi-x={actual ? zoom.x + (actual.x - left) / (right - left) / zoom.scale : undefined}
                 data-mi-y={actual ? zoom.y + (actual.y - top) / (bottom - top) / zoom.scale : undefined}
                 style={{
@@ -642,7 +649,7 @@ function Scatter({
           onHover(nearest, nearest ? dots.current.get(nearest) : undefined, nearest ? avoidFor(nearest) : undefined);
         }}
         onMouseMove={(e) => {
-          if (full && suppress.current) return;
+          if (suppress.current) return;
           const frame = e.currentTarget.getBoundingClientRect();
           const pointer = { x: e.clientX - frame.left + left - 14, y: e.clientY - frame.top + top - 14 };
           const nearest = nearestDot(pointer);
@@ -662,26 +669,29 @@ function Scatter({
           onHover(null);
         }}
       />
-      <g clipPath={full ? `url(#${gradient}-clip)` : undefined}>
+      <g clipPath={zoomable ? `url(#${gradient}-clip)` : undefined}>
         {models.map((mark) => {
           const list = byModel.get(mark.model);
           const label = labels.get(mark.model);
           const { x: lx, y: ly } = label ?? (list ? at.get(list[list.length - 1]!.key)! : rest());
           const [from, to] = label?.leader ?? [{ x: lx, y: ly }, { x: lx, y: ly }];
+          const anchor = input === "mouse" && label ? { "data-mi-ax": label.anchor.x, "data-mi-ay": label.anchor.y } : {};
           return (
             <g key={`label-${mark.model}`} data-mi-focus={dim(mark.model)}>
               <path
+                {...anchor}
                 data-mi-line
-                data-mi-live-lines={full ? "" : undefined}
-                vectorEffect={full ? "non-scaling-stroke" : undefined}
+                data-mi-live-lines={zoomable ? "" : undefined}
+                vectorEffect={zoomable ? "non-scaling-stroke" : undefined}
                 fill="none"
                 strokeWidth={1}
                 className="stroke-ink-secondary"
                 style={{ d: `path("M${from.x.toFixed(1)} ${from.y.toFixed(1)}L${to.x.toFixed(1)} ${to.y.toFixed(1)}")`, opacity: label?.leader ? 0.55 : 0 } as React.CSSProperties}
               />
               <text
+                {...anchor}
                 data-mi-move
-                data-mi-label={full && label ? "" : undefined}
+                data-mi-label={zoomable && label ? "" : undefined}
                 data-mi-x={lx}
                 data-mi-y={ly}
                 className="pointer-events-none fill-ink text-[10.5px] font-medium"

@@ -128,6 +128,49 @@ describe("SearchResults", () => {
   });
 });
 
+describe("SearchResults row", () => {
+  it.each([
+    { task: "Quarterly launch readiness and design review", capped: true },
+    { task: undefined, capped: false },
+  ])("caps the bot name only when a task shows (task: $task)", async ({ task, capped }) => {
+    const bot = { id: "wink", name: "Wink", color: "blue" as const, messages: [] };
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (path === "/api/bots?messages=200") return Response.json({ bots: [bot], groups: [] });
+      if (path.startsWith("/api/search")) return Response.json({ hits: [{
+        threadId: "wink-thread", messageId: "m1", botId: bot.id, name: bot.name, task, role: "bot", kind: "text", at: 1,
+        snippet: "needle here", matchStart: 0, matchLength: 6, onActivePath: true,
+      }] });
+      return Response.json({ error: "not in this test" }, { status: 404 });
+    }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(StoreProvider, null, createElement(SearchResults, { query: "needle", onLanded: () => {} }))));
+      await act(async () => FakeEventSource.current!.onmessage?.({
+        data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
+        lastEventId: "",
+      }));
+      await vi.waitFor(() => expect(host.textContent).toContain("needle here"));
+      const [name, ...rest] = host.querySelectorAll("[data-search-results] button .items-baseline > span");
+      expect(name!.textContent).toBe("Wink");
+      expect(name!.className.split(" ")).toContain("truncate");
+      expect(name!.className.split(" ").includes("shrink-0")).toBe(capped);
+      expect(name!.className.split(" ").includes("max-w-[65%]")).toBe(capped);
+      expect(rest.length).toBe(capped ? 2 : 1);
+      if (capped) {
+        expect(rest[0]!.textContent).toContain("Quarterly launch readiness");
+        expect(rest[0]!.className.split(" ")).not.toContain("shrink-0");
+        expect(rest[0]!.className.split(" ")).toContain("truncate");
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
 describe("SearchResults in Korean", () => {
   async function mountSearch(search: () => Response) {
     applyLocale("ko");

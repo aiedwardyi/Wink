@@ -182,13 +182,48 @@ describe("decluttered sidebar menus", () => {
       await act(async () => buttonByText("New or share").click());
       expect(document.body.textContent?.includes("Export all bots")).toBe(visible);
       expect(document.body.textContent?.includes("Teams")).toBe(false);
-      expect(buttonByText("New Bot")).not.toBeNull();
+      expect(buttonByText("New bot")).not.toBeNull();
       expect(buttonByText("New group")).not.toBeNull();
       await act(async () => {
         document.querySelector('[data-sidebar-row-id="team"] button')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 60, clientY: 60 }));
       });
       const room = document.querySelector("[data-room-menu]")!;
-      expect([...room.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Rename Team", "Move to section", "Delete group"]);
+      expect([...room.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Pin", "Rename Team", "Move to section", "Delete group"]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+});
+
+describe("New menu with the phone drawer", () => {
+  it("is closed after the drawer closes and opens again", async () => {
+    const { host, root } = await renderSidebar();
+    const draw = (open: boolean) =>
+      act(async () => {
+        root.render(createElement(I18nProvider, null, createElement(Sidebar, { open, onClose: () => undefined })));
+      });
+    const settle = () => act(() => new Promise<void>((done) => setTimeout(done, PRESENCE_EXIT_MS + 60)));
+    try {
+      expect(en["chrome.newBot"]).toBe("New bot");
+      expect(ko["chrome.newBot"]).toBe("새 봇");
+      await act(async () => buttonByText("New or share").click());
+      expect(buttonByText("New group", host)).toBeDefined();
+      await draw(false);
+      await settle();
+      await draw(true);
+      expect([...host.querySelectorAll("button")].some((node) => node.textContent === "New group")).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("stays open while the desktop sidebar is shown without a drawer", async () => {
+    const { host, root } = await renderSidebar();
+    try {
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(Sidebar, { open: false, onClose: () => undefined }))));
+      await act(async () => buttonByText("New or share").click());
+      await act(() => new Promise<void>((done) => setTimeout(done, PRESENCE_EXIT_MS + 60)));
+      expect(buttonByText("New group", host)).toBeDefined();
     } finally {
       await act(async () => root.unmount());
     }

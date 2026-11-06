@@ -1652,6 +1652,48 @@ describe("Sidebar group avatar overflow", () => {
   });
 });
 
+describe("Sidebar group avatar slot", () => {
+  it.each([2, 3, 4, 7])("keeps the stacked avatars of a %s-member group inside the slot", async (count) => {
+    const members = Array.from({ length: count }, (_, index) => ({ ...bot(`m${index}`), color: "green" as const }));
+    const group = { id: "stack", threadId: "stack-thread", name: "Stack", memberIds: members.map((member) => member.id), messages: [] };
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        path === "/api/bots?messages=200"
+          ? new Response(JSON.stringify({ bots: members, groups: [group] }))
+          : new Response(JSON.stringify({ error: "not in this test" }), { status: 404 })),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    try {
+      await act(async () =>
+        root.render(createElement(StoreProvider, null, createElement(Sidebar, { open: false, onClose: () => {} }))),
+      );
+      await act(async () => FakeEventSource.current!.onmessage?.({
+        data: JSON.stringify({ kind: "hello", resumed: false, cursor: "c0" }),
+        lastEventId: "",
+      }));
+      const slot = await vi.waitFor(() => {
+        const element = host.querySelector("[data-sidebar-group-avatar-slot]");
+        expect(element).not.toBeNull();
+        return element!;
+      });
+      const faces = [...slot.querySelectorAll<HTMLElement>(".mascot-avatar")].map((face) => parseFloat(face.style.width));
+      const badge = slot.querySelector("[data-sidebar-group-overflow]") ? 22 : 0;
+      const overlap = 12;
+      const stack = [...faces, ...(badge ? [badge] : [])];
+      const used = stack.reduce((sum, width) => sum + width, 0) - overlap * (stack.length - 1);
+      expect(faces).toHaveLength(3 - (count === 2 ? 1 : 0));
+      expect(used).toBeLessThanOrEqual(slot.className.includes("min-w-[84px]") ? 84 : 48);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
 describe("Sidebar bot delete confirm", () => {
   it("asks before deleting: cancel keeps the bot, confirm deletes it", async () => {
     const deletes: string[] = [];
