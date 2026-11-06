@@ -930,6 +930,7 @@ async function startServerOn(port) {
     OMB_APP_VERSION: app.getVersion(),
     OMB_DOWNLOADS_DIR: app.getPath("downloads"),
     OMB_PACKAGED: "1",
+    ...(BRAND?.leadBot && { OMB_BRAND_LEAD_BOT: JSON.stringify(BRAND.leadBot) }),
     OMB_STARTUP_WINDOW_MS: String(startupWindowMs),
     OMB_STARTUP_FORK_MS: String(Math.round(process.uptime() * 1000)),
     ...(childEnvCredentials.composioApiKey

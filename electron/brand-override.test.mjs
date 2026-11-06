@@ -78,6 +78,25 @@ describe("brand override", () => {
     expect(readBrandOverride(dataDir)).toBeNull();
   });
 
+  it("reads a lead bot with an avatar beside it", () => {
+    writeFileSync(join(dataDir, "brand-icon.png"), PNG);
+    writeFileSync(join(dataDir, "brand-lead.png"), PNG);
+    brandFile({ name: "Desk", icon: "brand-icon.png", leadBot: { name: " 커맨더 ", avatar: "brand-lead.png" } });
+    expect(readBrandOverride(dataDir)?.leadBot).toEqual({ name: "커맨더", avatarPath: join(dataDir, "brand-lead.png") });
+  });
+
+  it.each([
+    ["no avatar", { name: "Lead" }],
+    ["avatar outside", { name: "Lead", avatar: "../outside.png" }],
+    ["avatar not an image", { name: "Lead", avatar: "brand.json" }],
+    ["no name", { avatar: "brand-icon.png" }],
+  ])("keeps the brand but drops a lead bot with %s", (_label, leadBot) => {
+    writeFileSync(join(dataDir, "brand-icon.png"), PNG);
+    writeFileSync(join(root, "outside.png"), PNG);
+    brandFile({ name: "Desk", icon: "brand-icon.png", leadBot });
+    expect(readBrandOverride(dataDir)).toEqual({ name: "Desk", iconPath: join(dataDir, "brand-icon.png") });
+  });
+
   it("ignores an oversized icon", () => {
     writeFileSync(join(dataDir, "brand-icon.png"), Buffer.alloc(1024 * 1024 + 1));
     brandFile({ name: "Desk", icon: "brand-icon.png" });
@@ -103,5 +122,6 @@ describe("brand override", () => {
     expect(main).toContain("appIcon: WINDOW_ICON,");
     expect(main).toContain('ipcMain.handle("desktop:brand", () => brandForRenderer(BRAND));');
     expect(main).not.toContain("icon: APP_ICON,");
+    expect(main).toContain("...(BRAND?.leadBot && { OMB_BRAND_LEAD_BOT: JSON.stringify(BRAND.leadBot) }),");
   });
 });

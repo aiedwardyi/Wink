@@ -39,7 +39,8 @@ import {
   projectPathsFromRecords,
   userProjectTexts,
 } from "./project-folder.ts";
-import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage } from "./attachments.ts";
+import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage, sniffImageMime } from "./attachments.ts";
+import { applyBrandLeadBot } from "./brand-lead-bot.ts";
 import { cloudSyncRoots, createUploads, uploadTargetDir } from "./uploads.ts";
 import "./avatar-image.ts";
 import "./bot-profile.ts";
@@ -7150,6 +7151,16 @@ const botRoutes = createBotRoutes({
   memoryHealthCheck,
   activeVpsThreads,
   resumePaneWakes,
+});
+applyBrandLeadBot({
+  dataDir: DATA_DIR,
+  leadBot: process.env.OMB_BRAND_LEAD_BOT,
+  chiefId: () => store.bots.find((bot) => bot.chiefOfStaff)?.id,
+  saveAvatar: (bytes) => {
+    const mime = sniffImageMime(bytes);
+    return mime ? botAvatarUrlFromStoredPath(saveImage(bytes, mime).path) : null;
+  },
+  applyProfile: botRoutes.applyProfile,
 });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
