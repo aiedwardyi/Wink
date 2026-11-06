@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { runtimeErrorTool } from "./chat-error.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import type { Message } from "./store.ts";
 import { INCOMPLETE_LOG_MESSAGE } from "./harness/bus.ts";
@@ -14,8 +15,8 @@ const javascript = ts.transpileModule(`switch (event.type) { case "runtime.error
 
 function errorRow(event: Extract<RuntimeEvent, { type: "runtime.error" }>) {
   const rows: Message[] = [];
-  const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", javascript);
-  run(event, { start() {} }, { messagesFor: () => [] }, (row: Message) => rows.push(row), null, () => {}, null, INCOMPLETE_LOG_MESSAGE);
+  const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "runtimeErrorTool", "accounts", javascript);
+  run(event, { start() {} }, { messagesFor: () => [] }, (row: Message) => rows.push(row), null, () => {}, null, INCOMPLETE_LOG_MESSAGE, runtimeErrorTool, new Map());
   return rows[0];
 }
 
