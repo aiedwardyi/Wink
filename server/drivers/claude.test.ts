@@ -2174,6 +2174,49 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
   });
 
+  it("sends a new account's asks to its own broker while the old account still holds the thread", async () => {
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-main-switch", text: "one" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    process.env.FAKE_CLAUDE_MODE = "hang";
+    const dump = join(scratch, "main-switch.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const next = await ClaudeDriver.create({
+      instanceId: "claude-test-next",
+      displayName: "Claude Test Next",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, permissionMode: "acceptEdits" },
+    });
+    const nextRecorder = recordEvents(next.adapter);
+    let conn: Socket | undefined;
+    try {
+      const second = await next.adapter.sendTurn({ threadId: "t-main-switch", text: "two" });
+      await nextRecorder.until((e) => e.type === "session.started" && e.turnId === second.turnId);
+      const socketPath = JSON.parse(readFileSync(dump, "utf8")).mcpConfig.mcpServers.ogb.args[1];
+
+      conn = await connectSocket(socketPath);
+      const answer = answerQueue(conn)();
+      conn.write(JSON.stringify({ t: "ask", id: "ask-main-switch", tool: "Bash", input: { command: "git status" } }) + "\n");
+      const first = await Promise.race([
+        answer.then((reply) => ({ reply })),
+        nextRecorder.until((e) => e.type === "request.opened" && e.requestId === "ask-main-switch").then((opened) => ({ opened })),
+      ]);
+      expect(first).toMatchObject({ opened: { tool: "Bash" } });
+      await expect(next.adapter.respondToRequest("t-main-switch", "ask-main-switch", { behavior: "allow" })).resolves.toBe(
+        "allowed-once",
+      );
+      await expect(answer).resolves.toMatchObject({ id: "ask-main-switch", behavior: "allow" });
+      await next.adapter.interruptTurn("t-main-switch");
+      await nextRecorder.until((e) => e.type === "turn.completed");
+    } finally {
+      conn?.destroy();
+      nextRecorder.stop();
+      await next.dispose();
+    }
+  });
+
   it("replaces and resumes a live process when its spawn contract changes", async () => {
     await create();
     const dumpPath = join(scratch, "dump.json");
