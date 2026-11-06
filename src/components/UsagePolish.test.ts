@@ -74,11 +74,11 @@ it("matches sidebar name and chat meter sizes while keeping emails small", () =>
 
 it("keeps collapsed figures on one line with shared columns down to 360px", () => {
   expect(rule(".usage-summary")).toContain("display: grid");
-  expect(rule(".usage-summary")).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
-  expect(rule(".usage-meter-summary")).toContain("flex-wrap: nowrap");
+  expect(rule(".usage-summary")).toContain("grid-template-columns: repeat(2, max-content)");
+  expect(rule(".usage-meter-summary")).toContain("grid-template-columns: 1.5em max-content max-content");
   expect(rule(".usage-meter-summary .usage-figures")).toContain("white-space: nowrap");
   expect(rule('.usage-meter-summary[data-window="week"]')).toContain("grid-column: 2");
-  expect(css).toMatch(/@media \(width < 768px\)[\s\S]*\.usage-summary \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+  expect(css).toMatch(/@container usage-summary \(width < 537px\)[\s\S]*\.usage-summary > \.usage-meter-summary \{[^}]*grid-column: 1 \/ -1/);
 });
 
 it("gives the refresh icon a 44px coarse-pointer hit area", () => {
