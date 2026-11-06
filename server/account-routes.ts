@@ -18,7 +18,8 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
     const route = /^\/api\/accounts(?:\/([^/]+)(?:\/(sign-in\/code|sign-in|sign-out|default|destination))?)?$/.exec(path);
     const nameRoute = deps.names && /^\/api\/accounts\/([^/]+)\/name$/.exec(path);
     const legacy = /^\/api\/instances\/([^/]+)\/(sign-in|sign-out)$/.exec(path);
-    const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1]));
+    const managed = legacy && (lifecycle.accounts.get(legacy[1]) || lifecycle.accounts.drains[legacy[1]] || lifecycle.accounts.snapshot.some((row) => row.of === legacy[1])
+      || (legacy[2] === "sign-in" && registry.accountBlocked(legacy[1])));
     if (!route && !managed && !nameRoute) return false;
     const id = nameRoute?.[1] ?? route?.[1] ?? legacy?.[1];
     const action = route?.[2] ?? legacy?.[2];
@@ -98,7 +99,10 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
     } catch (error) {
       const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500;
       if (nameRoute) json(res, status, error instanceof AccountNameError ? { error: error.message, code: error.code } : status === 400 ? { error: "Invalid nickname", code: "invalid-character" } : { error: "Account operation failed" });
-      else json(res, status, { error: status < 500 || error instanceof AccountError ? (error as Error).message : "Account operation failed" });
+      else if (status < 500 || error instanceof AccountError) {
+        const code = (error as { code?: unknown }).code;
+        json(res, status, { error: (error as Error).message, ...(typeof code === "string" ? { code } : {}) });
+      } else json(res, status, { error: "Account operation failed" });
     }
     return true;
   };

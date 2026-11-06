@@ -1689,7 +1689,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               const errors = Array.isArray(o.errors) ? o.errors.filter((error: unknown) => typeof error === "string") : [];
               const text = [typeof o.result === "string" ? o.result : "", ...errors].join("\n");
               if (classifyError({ text }).reason === "auth") {
-                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true });
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true, signedOut: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
               } else if (text.trim() && session.turn && !interrupted && !session.closing
                 && !chatUsageLimit("claude", session.turn.usageFailure, session.turn.usageWindows, !injected.injected)) {
@@ -2081,7 +2081,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       instanceId,
       ...(input.account ? { account: input.account } : {}),
       ...(input.account ? { invalidateAccount: () => { admitted = false; listeners.clear(); } } : {}),
-      ...(input.account ? { accountBusy: () => active.size > 0 || helpers > 0, setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; } } : {}),
+      ...(input.account ? { accountBusy: () => active.size > 0 || helpers > 0 } : {}),
+      setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; },
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,

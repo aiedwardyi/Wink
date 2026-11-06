@@ -3826,7 +3826,9 @@ bus.subscribe((event: RuntimeEvent) => {
         usageLimit: event.usageLimit,
         signIn: event.signIn,
         folder: event.folder,
+        ...(event.signedOut && event.providerInstanceId ? { accountId: event.providerInstanceId } : {}),
       };
+      if (event.signedOut && event.providerInstanceId) void accountRuntime.signedOut(event.providerInstanceId);
       const row = previousId
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });

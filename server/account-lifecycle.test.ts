@@ -139,6 +139,67 @@ describe("account lifecycle", () => {
     expect(f.registry.accountBlocked("claude")).toBe(false);
   });
 
+  it("starts sign-in on a signed-out account while its stopped worker panes are still open", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    const panesBusy = vi.fn(async () => true);
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = panesBusy;
+    await f.controller.signedOut?.(account.id);
+    await f.controller.signedOut?.("claude");
+    f.start.mockClear();
+    await expect(f.controller.signIn(account.id)).resolves.toBeDefined();
+    await f.controller.settled(account.id);
+    await expect(f.controller.signIn("claude")).resolves.toBeDefined();
+    expect(f.start.mock.calls.map(([id]) => id)).toEqual([account.id, "claude"]);
+    expect(panesBusy).not.toHaveBeenCalled();
+    f.references.add(account.id);
+    await f.controller.signedOut?.(account.id);
+    await expect(f.controller.signIn(account.id)).rejects.toThrow(/active work/);
+  });
+
+  it("still refuses sign-in on a ready account with live panes and gives the account-busy code", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => true;
+    f.start.mockClear();
+    for (const id of [account.id, "claude"]) {
+      await expect(f.controller.signIn(id)).rejects.toMatchObject({ message: "Finish this account's active work before signing in", code: "account-busy" });
+      expect(await request(f, "POST", `/api/accounts/${id}/sign-in`)).toMatchObject({ status: 409, body: { error: "Finish this account's active work before signing in", code: "account-busy" } });
+    }
+    expect(f.start).not.toHaveBeenCalled();
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    await expect(runtime!.accountPanesBusy(null, account.id)).rejects.toMatchObject({ code: "host-unknown" });
+    const { LoginBusyError } = await import("./engine-login.ts");
+    (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = async () => false;
+    vi.spyOn(f.registry, "startSignIn").mockRejectedValue(new LoginBusyError());
+    expect(await request(f, "POST", `/api/accounts/${account.id}/sign-in`)).toMatchObject({ status: 409, body: { code: "login-busy" } });
+    const refused = await request(f, "POST", "/api/accounts", { of: "nope" });
+    expect(refused).toMatchObject({ status: 400, body: { error: expect.any(String) } });
+    expect(refused.body.code).toBeUndefined();
+  });
+
+  it("leaves the sign-out mark alone during a sign-in or for a stopped account", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    f.invalidate.mockClear();
+    f.state("pending");
+    await f.controller.signedOut?.(account.id);
+    await f.controller.signedOut?.("claude");
+    expect(f.registry.accountBlocked(account.id)).toBe(false);
+    expect(f.registry.accountBlocked("claude")).toBe(false);
+    f.state("complete");
+    await f.accounts.stop(account.id);
+    f.changed.mockClear();
+    await f.controller.signedOut?.(account.id);
+    expect(f.registry.accountBlocked(account.id)).toBe(false);
+    expect(f.changed).not.toHaveBeenCalled();
+    await f.controller.signedOut?.("claude");
+    expect(f.registry.accountBlocked("claude")).toBe(true);
+    expect(f.changed).toHaveBeenCalledExactlyOnceWith();
+    expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
   it("omits stale live account rows during reload without spinning", async () => {
     const f = await fixture();
     const account = await f.add();

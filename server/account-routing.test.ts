@@ -384,6 +384,45 @@ describe("account removal drain", () => {
     expect((await f.request("POST", `/api/accounts/${f.added[0].id}/default`)).body.error).toContain("Sign in again in Settings > Connections");
   });
 
+  it("stops new chats on a Main whose turn just signed out and keeps its sessions, generation and other accounts", async () => {
+    const f = await fixture();
+    const [main, other] = f.added;
+    expect((await f.useDefault(main.id)).status).toBe(200);
+    f.store.setResumeCursor(f.bot.id, main.id, "cursor-1");
+    f.store.recordNativePrompt(f.bot.id, f.bot.threadId, main.id, { first: 10, last: 20 });
+    const commit = vi.spyOn(f.accounts as unknown as { commit(next: unknown): void }, "commit");
+    const invalidate = vi.spyOn(f.registry, "invalidateAccount");
+    const clear = vi.spyOn(f.store, "clearAccountSessions");
+    f.deps.changed.mockClear();
+    await f.controller.signedOut?.(main.id);
+    expect(f.resolve).toThrow("This account is signed out. Sign in again, then send your message.");
+    expect(f.accounts.get(main.id)).toMatchObject({ state: "stopped", generation: main.generation, identity: main.identity });
+    expect(f.accounts.defaultFor("claude")).toBe(main.id);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(f.deps.invalidateHolds).not.toHaveBeenCalled();
+    expect(f.deps.changed).toHaveBeenCalled();
+    expect(f.deps.changed.mock.calls.every((call) => call[0] === undefined)).toBe(true);
+    expect(f.bot.resumeCursors[main.id]).toBe("cursor-1");
+    expect(f.bot.tasks?.[0].resumeCursors[main.id]).toBe("cursor-1");
+    expect(f.bot.tasks?.[0].nativePrompt).toMatchObject({ cursor: "cursor-1", first: 10, last: 20 });
+    expect(new AccountService(f.root, () => f.bases).get(main.id)).toMatchObject({ state: "stopped", generation: main.generation });
+    expect(f.registry.accountAvailable(other.id)).toBe(true);
+    expect((await f.useDefault(other.id)).status).toBe(200);
+    expect(f.resolve().instanceId).toBe(other.id);
+  });
+
+  it("refuses a send to a signed-out base Main with the signed-out line", async () => {
+    const f = await fixture();
+    const commit = vi.spyOn(f.accounts as unknown as { commit(next: unknown): void }, "commit");
+    expect(f.resolve()).toBe(f.bot.modelSelection);
+    await f.controller.signedOut?.("claude");
+    expect(f.resolve).toThrow("This account is signed out. Sign in again, then send your message.");
+    expect(commit).not.toHaveBeenCalled();
+    expect(f.registry.accountAvailable(f.added[0].id)).toBe(true);
+  });
+
   it("keeps last-account sign-out available without changing portable selections", async () => {
     const f = await fixture(true);
     const before = JSON.stringify(f.bot.modelSelection);

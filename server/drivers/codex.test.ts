@@ -1085,6 +1085,62 @@ describe("CodexDriver turns (fake app-server)", () => {
     });
   });
 
+  it("marks one Codex sign-out across a 401 notification and its failed completion, not a reconnect", async () => {
+    const fixture = join(scratch, "signed-out.json");
+    writeFileSync(fixture, JSON.stringify([
+      { method: "error", params: { error: { message: "Reconnecting... 1/5 (unexpected status 401 Unauthorized)" }, willRetry: true } },
+      { method: "error", params: { error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header" }, willRetry: false } },
+      { method: "turn/completed", params: { turn: { status: "failed", error: { message: "unexpected status 401 Unauthorized" } } } },
+    ]));
+    await create({ environment: { FAKE_CODEX_TOOL_FIXTURE: fixture } });
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-codex-signed-out", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ turnId, message: "Codex is not signed in.", setup: true, signedOut: true }),
+    ]);
+    expect(recorder.events.filter((e) => e.type === "turn.retrying")).toHaveLength(1);
+  });
+
+  it("marks a Codex sign-out from a failed completion alone and from turn start", async () => {
+    const fixture = join(scratch, "signed-out-completion.json");
+    writeFileSync(fixture, JSON.stringify([
+      { method: "turn/completed", params: { turn: { status: "failed", error: { message: "unexpected status 401 Unauthorized" } } } },
+    ]));
+    await create({ environment: { FAKE_CODEX_TOOL_FIXTURE: fixture } });
+    await instance.adapter.sendTurn({ threadId: "t-codex-signed-out-completion", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ message: "Codex is not signed in.", setup: true, signedOut: true }),
+    ]);
+    recorder.stop();
+    await instance.dispose();
+
+    await create({ mode: "unauthorized" });
+    await instance.adapter.sendTurn({ threadId: "t-codex-signed-out-start", text: "hi" });
+    await expect(recorder.until((e) => e.type === "runtime.error")).resolves.toMatchObject({ setup: true, signedOut: true });
+  });
+
+  it("refuses a turn on a blocked base Codex instance and keeps healthy inputs identical", async () => {
+    const inputs = () => readFileSync(process.env.FAKE_CODEX_DUMP!, "utf8");
+    process.env.FAKE_CODEX_DUMP = join(scratch, "healthy.json");
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-codex-blocked-base", text: "same input" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const before = inputs();
+    recorder.stop();
+    await instance.dispose();
+
+    await create();
+    expect(instance.accountBusy).toBeUndefined();
+    expect(instance.invalidateAccount).toBeUndefined();
+    instance.setAccountBlocked?.(true);
+    await expect(instance.adapter.sendTurn({ threadId: "t-codex-blocked-base", text: "same input" })).rejects.toThrow("Sign in");
+    instance.setAccountBlocked?.(false);
+    await instance.adapter.sendTurn({ threadId: "t-codex-blocked-base", text: "same input" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(inputs()).toBe(before);
+  });
+
   it("auto-retries a transient turn/start failure, then completes with one final message", async () => {
     process.env.FAKE_CODEX_TRANSIENTS = "2";
     process.env.FAKE_CODEX_STATE = join(scratch, "codex-launches");

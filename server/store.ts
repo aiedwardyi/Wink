@@ -151,6 +151,7 @@ export interface Message {
     detail?: ToolDetail;
     setup?: boolean;
     signIn?: boolean;
+    accountId?: string;
     folder?: string;
     usageLimit?: { resetsAt: number | null };
     usageWait?: UsageWaitView;
