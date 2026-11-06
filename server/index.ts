@@ -2959,6 +2959,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
