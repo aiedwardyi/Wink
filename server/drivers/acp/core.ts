@@ -659,7 +659,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const turn: SendTurnInput = { ...(shape ?? { threadId: "__prewarm__" }), text: "" };
         const ctx = context(turn, captured);
         const fingerprint = warmFingerprint(ctx.eligibility);
-        const lease = pool.reserve(keyFor(turn.threadId), fingerprint, captured, shape ? "speculative" : "handshake");
+        const lease = pool.reserve(keyFor(turn.threadId), fingerprint, captured, shape ? "speculative" : "handshake", { focus: !!shape });
         if (typeof lease === "string") return Promise.resolve();
         const existing = entries.get(lease);
         if (existing) return existing.ready.catch(() => { lease.release("prepare failed"); });

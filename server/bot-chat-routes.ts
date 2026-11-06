@@ -6,7 +6,7 @@ import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/wor
 import { sameModelSelection } from "../shared/model-selection.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
-import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
+import type { PrepareTurn, ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
@@ -34,6 +34,8 @@ type BotChatRouteDeps = {
   threadSyncGate: ReturnType<typeof createThreadSyncV2Gate>;
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
+  prewarmTurn?: (bot: BotRecord, instance: ProviderInstance) => Promise<PrepareTurn | null>;
+  smallerPc?: () => boolean;
   store: Store;
   sendSequencer: SendSequencer;
   ensureChatLatency: (input: { sendId?: string; threadId: string; userMessageId?: string; turnId?: string }) => void;
@@ -74,6 +76,9 @@ type BotChatRouteDeps = {
 
 export function createBotChatRoutes(deps: BotChatRouteDeps) {
   const instanceForBot = deps.instanceForBot ?? ((bot: BotRecord) => deps.registry.get(bot.modelSelection.instanceId));
+  const prewarmTurn = deps.prewarmTurn ?? (async () => null);
+  const smallerPc = deps.smallerPc ?? (() => false);
+  const guessedAt = new Map<string, number>();
   const {
     cfg,
     threadSyncGate,
@@ -115,6 +120,17 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     resumeSecretCard,
     cancelUsageWait,
   } = deps;
+  const guess = async (botId: string, threadId: string, instance: ProviderInstance, snapshot: string) => {
+    const current = () => {
+      const bot = store.bot(botId);
+      return bot && bot.threadId === threadId && JSON.stringify(bot) === snapshot && instanceForBot(bot) === instance
+        && !botHasActiveTurn(botId, threadId) && !turnStartClaims?.has(botId) ? bot : undefined;
+    };
+    const bot = current();
+    if (!bot) return;
+    const turn = await prewarmTurn(bot, instance);
+    if (turn && current()) await instance.prepare?.(turn);
+  };
   const threadReleased = async (bot: BotRecord) => {
     const deadline = Date.now() + STOP_RELEASE_MS;
     while (botHasActiveTurn(bot.id, bot.threadId)) {
@@ -430,7 +446,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (typeof instance.prepare !== "function") {
         return json(res, 200, { ok: true, prepared: false, reason: "driver has no prepare" });
       }
-      void instance.prepare().catch(() => {});
+      const today = instance.prepare();
+      void today.catch(() => {});
+      const key = `${bot.id}:${bot.threadId}`;
+      if (!smallerPc() && Date.now() - (guessedAt.get(key) ?? -Infinity) >= 20_000) {
+        guessedAt.set(key, Date.now());
+        const snapshot = JSON.stringify(bot);
+        void today.then(() => guess(bot.id, bot.threadId, instance, snapshot), () => {}).catch(() => {});
+      }
       return json(res, 200, { ok: true, prepared: true });
     },
     interrupt: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
