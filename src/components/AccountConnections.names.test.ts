@@ -166,6 +166,22 @@ it("renames an account through the names API", async () => {
   expect(calls.some(({ path }) => path === "/api/accounts")).toBe(false);
 });
 
+it.each(["en", "ko"] as const)("keeps the original number tile beside phone account names in %s", async (locale) => {
+  await mount({ phone: true, locale });
+  const tile = row()?.querySelector("[data-account-number]");
+  expect(tile?.textContent).toBe("1");
+  expect(tile?.parentElement?.className).toBe("flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11");
+  expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
+});
+
+it.each(["en", "ko"] as const)("distinguishes identity buttons by account name without email in %s", async (locale) => {
+  await mount({ locale });
+  const labels = [...host.querySelectorAll('[data-connection-identity]')].map((node) => node.getAttribute("aria-label"));
+  expect(new Set(labels).size).toBe(accounts.length);
+  expect(labels[0]).toContain("Claude 1");
+  for (const label of labels) expect(label).not.toContain(canary.address);
+});
+
 it("clears a nickname with an empty name", async () => {
   board.engines[0]!.accounts[0]!.nickname = "Studio";
   board.engines[0]!.accounts[0]!.name = "Studio";
@@ -289,7 +305,7 @@ it.each([false, true])("gives the address its own line under the name on a phone
   const line = row()!.firstElementChild!;
   const identity = line.querySelector<HTMLElement>("[data-connection-identity]")!;
   expect(identity.querySelector("[data-account-email]")?.textContent).toBe(canary.address);
-  expect(identity.parentElement?.firstElementChild?.textContent).toBe("Claude 1");
+  expect(identity.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
   expect(identity.parentElement?.className).toContain("flex-col");
   if (!phone) {
     expect(row()!.querySelector("[data-connection-menu]")).toBeNull();

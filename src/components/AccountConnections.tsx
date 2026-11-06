@@ -137,13 +137,16 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
       </> : <ConnectionRow mark={mark}
         label={<>
           {!stacked && tile}
-          <div className="flex min-w-0 flex-1 flex-col items-start py-1">
-            {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
-              onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-              : <button type="button" data-edit-name="" disabled={!canName || busy} onClick={() => setEditing(true)}
-                className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
-            <button type="button" data-connection-identity="" aria-label={t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
-              onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className="min-w-0 max-w-full text-left text-[11px] text-ink-secondary">
+          <div className={cn("flex min-w-0 flex-1 flex-col", stacked ? "pb-2" : "items-start py-1")}>
+            <div className={stacked ? "flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11" : "contents"}>
+              {stacked && tile}
+              {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
+                onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+                : <button type="button" data-edit-name="" disabled={!canName || busy} onClick={() => setEditing(true)}
+                  className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
+            </div>
+            <button type="button" data-connection-identity="" aria-label={name ? `${t("connections.identity")}: ${name.name}` : t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
+              onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("min-w-0 max-w-full text-left text-[11px] text-ink-secondary", stacked && "-mt-1.5")}>
               <span data-account-email="" className="block min-w-0 truncate">{label}</span>
             </button>
           </div>

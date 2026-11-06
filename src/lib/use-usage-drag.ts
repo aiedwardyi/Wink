@@ -53,6 +53,11 @@ export function useUsageDrag() {
       return next;
     });
   };
+  const focus = (drag: Drag) => {
+    const selector = drag.node.matches(ROW) ? ROW : SECTION;
+    const node = [...list.current?.querySelectorAll<HTMLElement>(selector) ?? []].find((each) => identify(each) === identify(drag.node));
+    node?.querySelector<HTMLElement>("[data-usage-grip]")?.focus({ preventScroll: true });
+  };
   const lift = (pressed: HTMLElement) => {
     const node = pressed.closest<HTMLElement>(`${ROW}, ${SECTION}`);
     if (!node || active.current) return null;
@@ -95,7 +100,7 @@ export function useUsageDrag() {
       clean(drag);
       flushSync(() => commit(drag));
       active.current = null;
-      drag.node.querySelector<HTMLElement>("[data-usage-grip]")?.focus({ preventScroll: true });
+      focus(drag);
     };
     if (reducedMotion() || !drag.node.animate) { finish(); return; }
     drag.node.style.removeProperty("translate");
@@ -158,7 +163,7 @@ export function useUsageDrag() {
     });
     clean(drag);
     active.current = null;
-    pressed.focus({ preventScroll: true });
+    focus(drag);
   };
   useEffect(() => () => { unbind.current(); cancel(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return { orders, ref, onPointerDown, onKeyDown };

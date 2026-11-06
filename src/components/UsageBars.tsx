@@ -95,7 +95,8 @@ export function WindowBar({ slot, now, t, compact = false, chat = false }: { slo
   const mode = useUsageMode();
   const rawLeft = leftOf(window);
   const left = windowExpired(window.resetsAt, now) ? null : rawLeft > 0 ? Math.max(1, Math.round(rawLeft)) : 0;
-  const percent = useShownPercent(left === null ? null : mode === "remaining" ? left : Math.round(Math.min(100, window.usedPercent)), mode);
+  const used = Math.max(0, Math.min(window.usedPercent >= 100 ? 100 : 99, Math.round(window.usedPercent)));
+  const percent = useShownPercent(left === null ? null : mode === "remaining" ? left : used, mode);
   const reached = left !== null && window.usedPercent >= 100;
   const reset = left === null ? null : resetCompact(window.resetsAt, now);
   // A window not started yet has no reset: it reads the same on every account, with no "not reported" words.

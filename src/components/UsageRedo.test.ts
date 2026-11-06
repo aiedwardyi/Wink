@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
+import { setUsageMode } from "@/lib/usage-preferences";
 
 const h = vi.hoisted(() => ({ board: null as UsageBoard | null, instances: [] as any[], api: vi.fn(), dispatch: vi.fn() }));
 vi.mock("@/state/store", async (original) => ({
@@ -45,6 +46,7 @@ const key = async (selector: string, direction: string) => act(async () => {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  setUsageMode("remaining");
   persistPreference("en");
   vi.useFakeTimers({ now: usageBoardNow, toFake: ["Date", "setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"] });
   h.board = structuredClone(usageBoardFixture);
@@ -123,6 +125,20 @@ it("keeps one red cell for one percent and says Limit reached at zero", async ()
   expect(host.textContent).toContain("Limit reached");
 });
 
+it.each([[-3, 0], [99.49, 99], [99.5, 99], [99.9, 99], [100, 100], [120, 100]])("clamps used %s to %s without reaching the limit early", async (used, shown) => {
+  h.board!.engines[0]!.accounts[0]!.windows[0]!.usedPercent = used!;
+  await mount();
+  await click('[data-count-mode="used"]');
+  await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  const meter = q('[data-account-row="claude"] [data-window="session"]')!;
+  expect(meter.querySelector("[data-left]")!.textContent).toBe(`${shown}% used`);
+  expect(meter.hasAttribute("data-reached")).toBe(used! >= 100);
+  await click('[data-count-mode="remaining"]');
+  await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  const left = Math.max(0, Math.min(100, 100 - used!));
+  expect(meter.querySelector("[data-left]")!.textContent).toBe(`${left > 0 ? Math.max(1, Math.round(left)) : 0}% left`);
+});
+
 it("shows email under Settings names and nowhere in chat, quick view or picker", async () => {
   await mount();
   expect(q('[data-account-row="claude"] [data-account-email]')!.textContent).toBe("account-1@example.com");
@@ -152,6 +168,35 @@ it("reorders sections with Alt+Down and keeps the order after remount", async ()
   expect(engines()).toEqual([before[1], before[0], ...before.slice(2)]);
   await remount();
   expect(engines()).toEqual([before[1], before[0], ...before.slice(2)]);
+});
+
+it.each(["keyboard", "pointer", "animated pointer"])("restores the current grip after a capped row remounts through %s", async (how) => {
+  const engine = h.board!.engines[0]!;
+  engine.accounts.push({ ...engine.accounts[0]!, id: "claude-four", number: 4, name: "Claude 4", main: false });
+  await mount();
+  await click('[data-usage-engine="claude"] [data-accounts-cap]');
+  const id = engine.accounts[2]!.id;
+  const selector = `[data-account-row="${id}"] [data-usage-grip]`;
+  const pressed = q(selector)!;
+  pressed.focus();
+  if (how === "keyboard") await key(selector, "ArrowDown");
+  else {
+    for (const [index, row] of [...host.querySelectorAll<HTMLElement>('[data-usage-engine="claude"] [data-account-row]')].entries()) {
+      vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, index * 80, 400, 80));
+    }
+    Object.defineProperty(pressed.closest("[data-account-row]"), "animate", { configurable: true,
+      value: how === "animated pointer" ? () => ({ finished: Promise.resolve(), cancel() {} }) : undefined });
+    await act(async () => {
+      pressed.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", button: 0, clientY: 170, bubbles: true }));
+      document.dispatchEvent(new PointerEvent("pointermove", { clientY: 280, bubbles: true }));
+      document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    });
+  }
+  expect(pressed.isConnected).toBe(false);
+  expect(document.activeElement).toBe(q(selector));
+  await key(selector, "ArrowUp");
+  expect(rows()).toEqual(engine.accounts.map((account) => account.id));
+  expect(document.activeElement).toBe(q(selector));
 });
 
 it("keeps hidden accounts in place when a reorder key hits the list boundary", async () => {
