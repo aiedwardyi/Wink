@@ -44,7 +44,8 @@
 .usage-meter:lang(ko) { --usage-label-width: 3.4em; }
 .usage-meter[data-model-window] { --usage-label-width: max-content; }
 [data-account-bars] { margin-top: 4px; }
-.usage-meter + .usage-meter { margin-top: 4px; }
+.usage-meter + .usage-meter { margin-top: 1px; }
+.usage-group .usage-meter + .usage-meter { margin-top: 4px; }
 .usage-figures { display: grid; grid-template-columns: 4.6em minmax(0, 1fr); align-items: baseline; column-gap: 8px; min-width: 0; }
 .usage-reset { font-size: inherit; }
 .usage-reset-short { display: none; }
@@ -78,10 +79,10 @@
 .usage-grip:hover, .usage-grip:focus-visible { opacity: 1; }
 [data-usage-lifted] { z-index: 5; background: var(--color-panel); border-radius: var(--radius-lg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); scale: 1.03; transition: scale 140ms ease-out, box-shadow 140ms ease-out; }
 [data-usage-lifted] .usage-grip { cursor: grabbing; opacity: 1; }
-.usage-chat-button { --cells-w: 140.75px; --cell-h: 7px; padding-block: 4px; color: var(--color-ink); }
-.usage-chat-windows { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 24px; }
+.usage-chat-button { --cells-w: 140.75px; --cell-h: 7px; color: var(--color-ink); }
+.usage-chat-windows { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
 .usage-chat-windows[data-windows="1"] { grid-template-columns: 1fr; }
-.usage-meter-chat { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 4px 6px; font-size: 12.5px; line-height: 18px; }
+.usage-meter-chat { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 0 6px; font-size: 12.5px; line-height: 18px; }
 .usage-meter-chat .usage-figures { display: inline-flex; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
 .usage-meter-chat .usage-reset { font-size: inherit; }
 .usage-meter-chat .usage-reset-long { display: none; }
@@ -115,7 +116,7 @@
   [data-phone-columns] .usage-meter-summary { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
   [data-phone-columns] .usage-meter-summary .usage-figures { row-gap: 6px; }
   [data-phone-columns] .usage-reset > span { white-space: normal; }
-  .usage-reset { display: flex; flex-wrap: wrap; row-gap: 4px; }
+  .usage-desk .usage-reset, [data-usage-quick] .usage-reset { display: flex; flex-wrap: wrap; row-gap: 4px; }
 }
 @media (width >= 768px) {
   @container usage-group (width < 344px) {

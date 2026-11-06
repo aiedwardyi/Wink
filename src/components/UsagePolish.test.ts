@@ -87,6 +87,14 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
   expect(css).not.toContain("@container usage-summary");
 });
 
+it("keeps account spacing out of the chat meter above the composer", () => {
+  expect(rule(".usage-chat-button")).not.toContain("padding-block");
+  expect(rule(".usage-chat-windows")).toContain("column-gap: 24px");
+  expect(rule(".usage-meter-chat")).toContain("gap: 0 6px");
+  expect(rule(".usage-meter + .usage-meter")).toContain("margin-top: 1px");
+  expect(css).not.toMatch(/@media \(width < 768px\) \{[^@]*\n  \.usage-reset \{/);
+});
+
 it("measures phone rows before aligning and restores the expanded layout", async () => {
   vi.stubGlobal("innerWidth", 392);
   const size = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 302, 45));
