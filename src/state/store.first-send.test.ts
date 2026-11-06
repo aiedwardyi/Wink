@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { writeSnapshotCache } from "./snapshot-cache";
-import { StoreProvider, useStore, type Bot } from "./store";
+import { StoreProvider, useStore, type Bot, type InstanceInfo } from "./store";
 
 class FakeEventSource {
   static last: FakeEventSource;
@@ -206,7 +206,8 @@ describe("first-send hydration", () => {
 });
 
 describe("engines across a fresh snapshot", () => {
-  const row = (available: boolean) => ({ instanceId: "inst", available });
+  const row = (available: boolean): InstanceInfo => ({ instanceId: "inst", driverKind: "claudeAgent", displayName: "Claude",
+    snapshot: { state: available ? "available" : "unavailable" }, models: { default: "m", options: [] } });
 
   async function reconnectDuringHydration(instancesReply: () => Promise<Response>) {
     let idle!: () => void;
