@@ -4,6 +4,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { traceClaimedTurn } from "./turn-timing.ts";
 
 import {
   ensureWorkspace,
@@ -31,6 +32,25 @@ const BOT = "bot-workspace-test";
 describe("workspace", () => {
   beforeEach(() => {
     rmSync(WORKSPACES_DIR, { recursive: true, force: true });
+  });
+
+  it("preserves memory prompt and durable bytes with tracing on and off", async () => {
+    ensureWorkspace(BOT);
+    const text = "# Memory\n- Keep the corrected task at stage 39.\n";
+    writeMemoryFile(BOT, text);
+    const previous = process.env.ORBIT_TURN_TIMING;
+    const prompts: string[] = [];
+    try {
+      for (const flag of ["0", "1"]) {
+        process.env.ORBIT_TURN_TIMING = flag;
+        prompts.push(await traceClaimedTurn({ botId: BOT }, async () => memorySystemPrompt(BOT)));
+        expect(readFileSync(join(workspaceDir(BOT), "MEMORY.md"), "utf8")).toBe(text);
+      }
+      expect(prompts[1]).toBe(prompts[0]);
+    } finally {
+      if (previous === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = previous;
+    }
   });
 
   it("creates the workspace with a memory dir and no seed MEMORY.md, idempotently", () => {

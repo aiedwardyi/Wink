@@ -429,6 +429,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await removeTempDir(scratch);
   });
 
+  it("keeps prompt bytes identical with tracing on and off", async () => {
+    const previous = process.env.ORBIT_TURN_TIMING;
+    const requests: string[] = [];
+    try {
+      for (const flag of ["0", "1"]) {
+        process.env.ORBIT_TURN_TIMING = flag;
+        const log = join(scratch, `timing-${flag}.jsonl`);
+        await create("bench-quiet", { FAKE_CLAUDE_PROMPT_LOG: log });
+        await instance.adapter.sendTurn({ threadId: "t-timing", text: "current", system: "memory and task", resumeCursor: "remembered", resumeFallback: { text: "history and current" } });
+        await recorder.until((event) => event.type === "turn.completed");
+        const rows = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+        requests.push(JSON.stringify(rows.map((row) => ({ text: row.text, system: row.systemPrompt }))));
+        recorder.stop();
+        await instance.dispose();
+      }
+      expect(requests[1]).toBe(requests[0]);
+    } finally {
+      if (previous === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = previous;
+    }
+  });
+
   it("normalizes a full turn into the canonical event sequence", async () => {
     await create();
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-happy", text: "hi", model: "claude-sonnet-5" });

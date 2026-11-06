@@ -150,6 +150,27 @@ describe("CodexDriver turns (fake app-server)", () => {
     await removeTempDir(scratch);
   });
 
+  it.each(["happy", "resume"])("keeps %s request bytes identical with tracing on and off", async (mode) => {
+    const previous = process.env.ORBIT_TURN_TIMING;
+    const requests: string[] = [];
+    try {
+      for (const flag of ["0", "1"]) {
+        process.env.ORBIT_TURN_TIMING = flag;
+        const dump = join(scratch, `timing-${flag}.json`);
+        await create({ mode, environment: { FAKE_CODEX_DUMP: dump } });
+        await instance.adapter.sendTurn({ threadId: "t-timing", text: "current", system: "memory and task", resumeCursor: "remembered", resumeFallback: { text: "history and current" }, systemUpdate: "new instructions" });
+        await recorder.until((event) => event.type === "turn.completed");
+        requests.push(JSON.stringify(JSON.parse(readFileSync(dump, "utf8")).calls));
+        recorder.stop();
+        await instance.dispose();
+      }
+      expect(requests[1]).toBe(requests[0]);
+    } finally {
+      if (previous === undefined) delete process.env.ORBIT_TURN_TIMING;
+      else process.env.ORBIT_TURN_TIMING = previous;
+    }
+  });
+
   it("steers the native running turn without starting another turn", async () => {
     await create({ mode: "steer" });
     expect(instance.adapter.capabilities.queueing).toBe(true);
