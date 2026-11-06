@@ -397,7 +397,7 @@ import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { reportServerFailure } from "./error-reports.ts";
-import { writeChatError, usageError, startQueuedTurn } from "./chat-error.ts";
+import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
@@ -3820,14 +3820,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
       const previousId = event.usageLimit ? limitWaits.messageId(event.threadId) : undefined;
-      const tool = {
-        name: `error: ${event.message}`,
-        ok: false,
-        setup: event.setup,
-        usageLimit: event.usageLimit,
-        signIn: event.signIn,
-        folder: event.folder,
-      };
+      const tool = runtimeErrorTool(event, (id) => Boolean(accounts.get(id)));
       const row = previousId
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });

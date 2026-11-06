@@ -1151,9 +1151,26 @@ describe("Usage desk", () => {
     expect(button?.getAttribute("aria-label")).toBe(en ? "Switch to Claude 2" : "Claude 2 전환");
   });
 
-  it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account and opens Connections (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("starts that account's sign-in on the Usage page in one tap (%s)", async (locale) => {
     accountOf(server.board, CLAUDE_3).signIn = "signed-out";
     await mount({ locale });
+    h.state.instances = h.state.instances.map((each) => (each as { instanceId: string }).instanceId === CLAUDE_3 ? { ...each as object, accountState: "stopped" } : each);
+    await rerender();
+    const signIn = row(CLAUDE_3)?.querySelector("button[data-sign-in]") ?? null;
+    expect(boxOf(signIn)).toEqual(BOX);
+    expect(row(CLAUDE_3)?.querySelector("[data-account-head]")?.lastElementChild?.contains(signIn), "Sign In ends the head line").toBe(true);
+    h.api = async (path, init) => { server.calls.push(`${(init?.method ?? "GET").toUpperCase()} ${path}`); return { url: "https://auth.example/device", code: "ABCD-EFGH" }; };
+    await click(signIn);
+    expect(server.calls.filter((call) => call.includes("/sign-in"))).toEqual([`POST /api/instances/${encodeURIComponent(CLAUDE_3)}/sign-in`]);
+    expect(text(row(CLAUDE_3))).toContain("ABCD-EFGH");
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account Wink has no record of and opens Connections (%s)", async (locale) => {
+    accountOf(server.board, CLAUDE_3).signIn = "signed-out";
+    await mount({ locale });
+    h.state.instances = h.state.instances.filter((each) => (each as { instanceId: string }).instanceId !== CLAUDE_3);
+    await rerender();
     const en = locale === "en";
     const account = row(CLAUDE_3);
     const signIn = account?.querySelector("button[data-sign-in]") ?? null;
@@ -1230,6 +1247,7 @@ describe("Usage desk", () => {
     await mount({ locale });
     const boardClient = await client();
     accountOf(server.board, "muse").signIn = "signed-out";
+    h.state.instances = h.state.instances.map((each) => (each as { instanceId: string }).instanceId === "muse" ? { ...each as object, accountState: "stopped" } : each);
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
     expect(row("muse")?.querySelector("[data-account-bars], [data-main-check]")).toBeNull();
     expect(text(row("muse"))).toContain(locale === "en" ? "Sign In" : "로그인");
