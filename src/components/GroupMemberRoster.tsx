@@ -30,29 +30,30 @@ export function GroupMemberRoster({
 
   return (
     <div
-      ref={reorder.rowRef}
       data-no-swipe
       onClick={(event) => onOpen(event.target instanceof Element ? event.target.closest("button") : null)}
       onPointerDown={reorder.onPointerDown}
       onClickCapture={reorder.onClickCapture}
       onContextMenu={reorder.onContextMenu}
       onDragStart={(event) => event.preventDefault()}
-      className="flex cursor-pointer select-none items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 [-webkit-touch-callout:none] hover:bg-raised/60 max-md:gap-0 max-md:-space-x-1.5"
+      className="flex min-w-0 cursor-pointer select-none items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 [-webkit-touch-callout:none] hover:bg-raised/60 max-md:gap-0"
     >
       <span aria-live="polite" className="sr-only">{moved}</span>
-      {members.map((b, i) => (
-        <button
-          key={b.id}
-          type="button"
-          data-member-id={b.id}
-          onKeyDown={reorder.onKeyDown}
-          aria-label={b.name}
-          aria-keyshortcuts={members.length > 1 ? "Alt+ArrowLeft Alt+ArrowRight" : undefined}
-          className="relative flex touch-none rounded-full"
-        >
-          {mauses[i]}
-        </button>
-      ))}
+      <div ref={reorder.rowRef} className="md:contents max-md:flex max-md:min-w-0 max-md:touch-pan-x max-md:items-center max-md:-space-x-1.5 max-md:overflow-x-auto max-md:[scrollbar-width:none]">
+        {members.map((b, i) => (
+          <button
+            key={b.id}
+            type="button"
+            data-member-id={b.id}
+            onKeyDown={reorder.onKeyDown}
+            aria-label={b.name}
+            aria-keyshortcuts={members.length > 1 ? "Alt+ArrowLeft Alt+ArrowRight" : undefined}
+            className="relative flex shrink-0 rounded-full"
+          >
+            {mauses[i]}
+          </button>
+        ))}
+      </div>
       {children}
     </div>
   );

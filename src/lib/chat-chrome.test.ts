@@ -230,7 +230,7 @@ describe("room header on a phone", () => {
   it("overlaps the roster avatars on a phone", () => {
     const roster = tokensAfter(memberRoster, "ref={reorder.rowRef}");
     expect(roster.has("max-md:-space-x-1.5")).toBe(true);
-    expect(roster.has("max-md:gap-0")).toBe(true);
+    expect(roster.has("max-md:overflow-x-auto")).toBe(true);
     expect(groupView).toContain('group.busyBotId === b.id && "z-10 ring-2');
   });
 });

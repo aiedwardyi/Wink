@@ -1568,7 +1568,7 @@ export function GroupView({ group }: { group: Group }) {
                 type="button"
                 title={t("room.manageMembers")}
                 aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-                className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary"
+                className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary"
               >
                 <Plus size={11} />
               </button>

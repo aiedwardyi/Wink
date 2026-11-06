@@ -27,7 +27,7 @@ beforeEach(() => {
   opened = [];
   // 24 px pictures, 30 px apart, laid out in DOM order
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const left = [...(this.parentElement?.querySelectorAll("[data-member-id]") ?? [])].indexOf(this) * 30;
+    const left = [...(this.parentElement?.querySelectorAll("[data-member-id]") ?? [])].indexOf(this) * 30 - (this.parentElement?.scrollLeft ?? 0);
     // SAFETY: the reorder hook reads only left and width.
     return { left, width: 24, right: left + 24, top: 0, bottom: 24, height: 24, x: left, y: 0 } as DOMRect;
   });
@@ -157,6 +157,57 @@ describe("group member roster", () => {
     await click(picture("pokkey"));
     expect(opened).toEqual(["pokkey"]);
     expect(saved()).toEqual([]);
+  });
+
+  it("keeps Manage outside the scrolling faces and allows native horizontal swipes", async () => {
+    await render();
+    const strip = picture("wink").parentElement!;
+    expect(strip.contains([...document.querySelectorAll("button")].find((el) => el.textContent === "+")!)).toBe(false);
+    expect(strip.className).toContain("overflow-x-auto");
+    expect(picture("wink").className).not.toContain("touch-none");
+  });
+
+  it("swallows a sideways swipe without lifting or opening Manage", async () => {
+    vi.useFakeTimers();
+    await render();
+    await press("wink", "touch");
+    await pointer("pointermove", at("wink") + 40, "touch");
+    await act(async () => vi.advanceTimersByTime(LONG_PRESS_MS));
+    await pointer("pointerup", at("wink") + 40, "touch");
+    await click(picture("wink"));
+    expect(saved()).toEqual([]);
+    expect(opened).toEqual([]);
+    expect(picture("wink").style.scale).toBe("");
+  });
+
+  it.each(["first", "last"])("autoscrolls the %s face to the opposite end while held at the edge", async (end) => {
+    vi.useFakeTimers();
+    const extra = Array.from({ length: 9 }, (_, i) => ({ ...bots[0]!, id: `extra-${i}`, name: `Member ${i}` }));
+    bots.push(...extra);
+    try {
+      await render();
+      const strip = picture("wink").parentElement!;
+      Object.defineProperties(strip, { clientWidth: { value: 90 }, scrollWidth: { value: 354 } });
+      strip.getBoundingClientRect = () => new DOMRect(0, 0, 90, 24);
+      const last = bots.at(-1)!.id;
+      strip.scrollLeft = end === "last" ? 264 : 0;
+      const id = end === "last" ? last : "wink";
+      await press(id, "touch");
+      await act(async () => vi.advanceTimersByTime(LONG_PRESS_MS));
+      const move = new Event("touchmove", { bubbles: true, cancelable: true });
+      await act(async () => picture(id).dispatchEvent(move));
+      expect(move.defaultPrevented).toBe(true);
+      await pointer("pointermove", end === "last" ? 1 : 89, "touch");
+      await act(async () => vi.advanceTimersByTime(800));
+      expect(strip.scrollLeft).toBe(end === "last" ? 0 : 264);
+      await pointer("pointerup", end === "last" ? 1 : 89, "touch");
+      expect(saved()[0]).toEqual(end === "last" ? [last, ...bots.slice(0, -1).map((b) => b.id)] : [...bots.slice(1).map((b) => b.id), "wink"]);
+      const stopped = strip.scrollLeft;
+      await act(async () => vi.advanceTimersByTime(200));
+      expect(strip.scrollLeft).toBe(stopped);
+    } finally {
+      bots.splice(3);
+    }
   });
 
   it("moves with Alt+Left/Right like the sidebar, keeps focus and says where it went", async () => {

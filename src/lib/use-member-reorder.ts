@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent
 
 import { hapticTick, reducedMotion, SWIPE_MOTION_MS, SWIPE_SPRING } from "./phone-swipe";
 import { moveMember } from "./room-members";
-import { LONG_PRESS_MS, LONG_PRESS_SLOP } from "./use-touch-drag";
+import { LONG_PRESS_MS, LONG_PRESS_SLOP, SCROLL_EDGE, SCROLL_STEP } from "./use-touch-drag";
 
 const SLIDE = `translate ${SWIPE_MOTION_MS}ms ${SWIPE_SPRING}`;
 const LIFT = "scale 150ms ease-out, box-shadow 150ms ease-out";
@@ -13,6 +13,10 @@ type Press = {
   pointerId: number;
   x: number;
   y: number;
+  lastX: number;
+  scrollLeft: number;
+  maxScroll: number;
+  frame: number;
   lifted: boolean;
   centers: number[];
   to: number;
@@ -97,11 +101,21 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       const p = press.current;
       press.current = null;
       clearTimeout(p?.timer);
+      if (p) cancelAnimationFrame(p.frame);
       p?.unbind();
       clearTimeout(settling.current);
     },
     [],
   );
+
+  useEffect(() => {
+    const row = rowRef.current;
+    const onMove = (event: TouchEvent) => {
+      if (press.current?.lifted) event.preventDefault();
+    };
+    row?.addEventListener("touchmove", onMove, { passive: false });
+    return () => row?.removeEventListener("touchmove", onMove);
+  }, []);
 
   const lift = (p: Press) => {
     clearTimeout(settling.current);
@@ -110,12 +124,26 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
     for (const el of pictures()) el.style.transition = el === p.el ? LIFT : SLIDE;
     Object.assign(p.el.style, { zIndex: "20", scale: "1.2", boxShadow: "0 8px 24px rgb(0 0 0 / 0.35)", cursor: "grabbing" });
     hapticTick();
+    const tick = () => {
+      if (press.current !== p) return;
+      const row = rowRef.current;
+      if (row && row.clientWidth > 0 && p.maxScroll > 0) {
+        const rect = row.getBoundingClientRect();
+        const edge = Math.min(SCROLL_EDGE, rect.width / 3);
+        const step = p.lastX < rect.left + edge ? -SCROLL_STEP : p.lastX > rect.right - edge ? SCROLL_STEP : 0;
+        const before = row.scrollLeft;
+        row.scrollLeft = Math.max(0, Math.min(p.maxScroll, before + step));
+        if (row.scrollLeft !== before) follow(p, p.lastX);
+      }
+      p.frame = requestAnimationFrame(tick);
+    };
+    p.frame = requestAnimationFrame(tick);
   };
 
   const follow = (p: Press, x: number) => {
     const { ids } = latest.current;
     const from = ids.indexOf(p.id);
-    const dx = x - p.x;
+    const dx = x - p.x + (rowRef.current?.scrollLeft ?? 0) - p.scrollLeft;
     p.el.style.translate = `${dx}px 0`;
     const to = rosterSlot(p.centers, from, p.centers[from]! + dx);
     if (to === p.to) return;
@@ -131,6 +159,7 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
     if (!p) return;
     press.current = null;
     clearTimeout(p.timer);
+    cancelAnimationFrame(p.frame);
     p.unbind();
     if (!p.lifted) return;
     swallowClick.current = true;
@@ -150,6 +179,10 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
+      lastX: event.clientX,
+      scrollLeft: rowRef.current?.scrollLeft ?? 0,
+      maxScroll: Math.max(0, (rowRef.current?.scrollWidth ?? 0) - (rowRef.current?.clientWidth ?? 0)),
+      frame: 0,
       lifted: false,
       centers: [],
       to: latest.current.ids.indexOf(id),
@@ -161,10 +194,14 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       const far = Math.hypot(e.clientX - p.x, e.clientY - p.y) > LONG_PRESS_SLOP;
       if (!p.lifted) {
         if (!far) return;
-        if (touch) return end(false);
+        if (touch) {
+          swallowClick.current = true;
+          return end(false);
+        }
         lift(p);
       }
       e.preventDefault();
+      p.lastX = e.clientX;
       follow(p, e.clientX);
     };
     const onUp = (e: globalThis.PointerEvent) => e.pointerId === p.pointerId && end(true);
