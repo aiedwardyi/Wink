@@ -68,6 +68,15 @@ it("contains independent failures on both tiles and continues remaining rules", 
   expect(f.observations).toContain("phone:copy");
 });
 
+it("reports a blocked local image as unchecked while retaining genuine broken images", async () => {
+  const blocked = "http://127.0.0.1:1234/slow.png";
+  f.values.set("errors", { images: [{ where: "img#slow", src: blocked, broken: true }, { where: "img#missing", src: "http://127.0.0.1:1234/missing.png", broken: true }] });
+  const i = input(); i.blockedUrls = () => [blocked];
+  const result = await runHiddenVerify(i).done;
+  expect(result.issues.filter(row => row.rule === "broken image").map(row => row.where)).toEqual(["img#missing"]);
+  expect(result.notChecked).toContain("images blocked in the check");
+});
+
 it("counts actual per-element trials, carries boxes and records every detail check", async () => {
   f.values.set("copy", { texts: [{ where: "p#unfinished", text: "undefined NaN", box: [1, 2, 30, 40], scrollY: 0 }] });
   f.values.set("details", { rows: [{ where: "button", rule: "tap size", measured: "20 x 20", bad: true, box: [5, 6, 20, 20], scrollY: 0 }] });

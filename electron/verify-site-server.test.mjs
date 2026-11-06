@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -33,6 +33,89 @@ async function remove(path) {
   await rm(path, { recursive: true, force: true });
 }
 const start = async () => server = await startSiteServer({ root, entry: "index.html", revision: await siteRevision({ root, entry: "index.html" }) });
+
+it("proxies only pinned loopback GET/HEAD without credentials, foreign redirects or writes", async () => {
+  const requests = [];
+  let content = "<h1>Local app</h1>";
+  const upstream = createServer((req, res) => {
+    requests.push({ method: req.method, headers: req.headers, url: req.url });
+    if (req.url === "/foreign") return res.writeHead(302, { location: "http://192.168.1.2:3000/" }).end();
+    if (req.url === "/redirect") return res.writeHead(302, { location: "/dashboard" }).end();
+    res.writeHead(200, { "content-type": "text/html", "set-cookie": "private=value" }).end(content);
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/dashboard?q=1`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    const path = new URL(server.url).pathname + new URL(server.url).search;
+    const reply = await get(path, { headers: { Cookie: "secret=1", Authorization: "Bearer secret" } });
+    expect(reply.body).toBe(content);
+    expect(reply.headers["set-cookie"]).toBeUndefined();
+    expect(reply.headers["x-orbit-verify-loopback"]).toBe("1");
+    expect(requests[0]).toMatchObject({ method: "GET", url: "/dashboard?q=1" });
+    expect(requests[0].headers.cookie).toBeUndefined();
+    expect(requests[0].headers.authorization).toBeUndefined();
+    expect((await get(path, { method: "POST" })).status).toBe(405);
+    expect((await get("//192.168.1.2/")).status).toBe(404);
+    expect((await get("/foreign")).status).toBe(403);
+    expect((await get("/redirect")).headers.location).toBe(server.origin + "/dashboard");
+    expect((await get(path, { method: "HEAD" })).body).toBe("");
+    expect(await server.revisionUnchanged()).toBe(true);
+    content = "changed";
+    expect((await get(path)).body).toBe("<h1>Local app</h1>");
+    expect(await server.revisionUnchanged()).toBe(true);
+    expect(requests.every(row => row.method === "GET")).toBe(true);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
+it("bounds stalled loopback responses and closes active sockets", async () => {
+  const upstream = createServer((_req, res) => { res.writeHead(200, { "content-type": "text/event-stream" }); res.write("data: pending\n\n"); });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    const started = Date.now();
+    const reply = await get("/");
+    expect(reply.status).toBe(403);
+    expect(reply.headers["x-orbit-verify-blocked"]).toBe("1");
+    expect(Date.now() - started).toBeLessThan(6500);
+    expect(await server.revisionUnchanged()).toBe(true);
+    await server.close();
+    expect(server.counts().sockets).toBe(0);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
+it("waits for dev chunks and sends uncached HEAD probes without reading route bodies", async () => {
+  const methods = [];
+  const upstream = createServer((req, res) => {
+    methods.push(req.method);
+    if (req.url === "/slow.js") setTimeout(() => res.end("ready"), 1800);
+    else res.writeHead(200).end(req.method === "HEAD" ? undefined : "route");
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    expect((await get("/slow.js")).body).toBe("ready");
+    expect((await get("/other", { method: "HEAD" })).status).toBe(200);
+    expect(methods).toEqual(["GET", "HEAD"]);
+    expect(await server.revisionUnchanged()).toBe(true);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
+it("admits loopback dev chunks above the static-file limit", async () => {
+  const bytes = Buffer.alloc(9 * 1024 * 1024, 97);
+  const upstream = createServer((req, res) => res.end(req.url === "/over.js" ? Buffer.alloc(17 * 1024 * 1024) : bytes));
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    expect((await get("/chunk.js")).body.length).toBe(bytes.length);
+    expect(await server.revisionUnchanged()).toBe(true);
+    expect((await get("/over.js")).headers["x-orbit-verify-blocked"]).toBe("1");
+    await expect(server.revisionUnchanged()).rejects.toMatchObject({ code: "resource-limit" });
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
 
 describe("verify static server", () => {
   it("accepts system temp aliases and refuses linked root components", async () => {

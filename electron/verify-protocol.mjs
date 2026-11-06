@@ -4,6 +4,14 @@
 /** Scoped signed grant; see the bridge auth rule below. */
 export const VERIFY_GRANT_PREFIX = "orbit-verify-v1";
 
+export function verifyLoopbackUrl(value) {
+  if (typeof value !== "string" || /[\x00-\x20\x7f\\]/.test(value) || !/^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#]|$)/i.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return !url.username && !url.password && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ? url : null;
+  } catch { return null; }
+}
+
 /** Server -> main, on the terminal bridge (electron/terminal-bridge.mjs). */
 export const VERIFY_BRIDGE_ROUTES = {
   /** POST { runId, root, entry, revision, site, watch } -> 202 { runId } | 409 { error: "busy" } | 400 { error } */

@@ -3,6 +3,7 @@ import { unlink } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { VerifyRunState } from "../electron/verify-protocol.mjs";
@@ -266,9 +267,6 @@ describe("verify_site caller", () => {
 
 describe("verify_site scope", () => {
   it.each([
-    ["a sibling prefix folder", () => join(tmp, "work2")],
-    ["a .. escape", () => "site/../../outside"],
-    ["a junction out of the root", () => "link"],
     ["a UNC path", () => "\\\\server\\share\\site"],
     ["a stream path", () => "site/index.html:secret"],
   ])("refuses %s as outside-folders with no card", async (_label, entry) => {
@@ -290,6 +288,64 @@ describe("verify_site scope", () => {
     bridge!.states = finalStates(result());
     await tool({ entry: "site/page.htm" });
     expect(bridge!.starts[0]).toMatchObject({ entry: "page.htm", root: expect.stringMatching(/site$/), revision: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
+  it("accepts file URLs and refuses remote file hosts", async () => {
+    bridge!.states = finalStates(result());
+    expect((await tool({ entry: pathToFileURL(join(work, "site", "index.html")).href })).body.status).toBe("completed");
+    expect(bridge!.starts[0]).toMatchObject({ entry: "index.html", root: join(work, "site") });
+    for (const entry of ["file://other-pc/share/index.html", "file:///C:/index.html?secret", "file:///C:/index.html#fragment"]) {
+      expect((await tool({ entry })).body).toMatchObject({ status: "blocked", errorCode: "outside-folders" });
+    }
+    expect(bridge!.starts).toHaveLength(1);
+  });
+
+  it.each(["path", "file", "relative", "junction"])("accepts a site outside workspace folders via %s", async kind => {
+    bridge!.states = finalStates(result());
+    const entry = kind === "file" ? pathToFileURL(join(tmp, "outside", "index.html")).href : kind === "relative" ? "../outside" : kind === "junction" ? "link" : join(tmp, "outside", "index.html");
+    expect((await tool({ entry })).body.status).toBe("completed");
+    expect(bridge!.starts[0]).toMatchObject({ root: join(tmp, "outside"), entry: "index.html" });
+  });
+
+  it.each(["localhost", "127.0.0.1", "[::1]"])("accepts loopback dev servers on %s", async host => {
+    const local = createServer((_req, res) => res.end("ready"));
+    await new Promise<void>(resolve => local.listen(0, host === "[::1]" ? "::1" : "127.0.0.1", resolve));
+    try {
+      bridge!.states = finalStates(result());
+      const entry = `http://${host}:${(local.address() as { port: number }).port}/dashboard?q=1`;
+      expect((await tool({ entry })).body.status).toBe("completed");
+      expect(bridge!.starts[0]).toMatchObject({ root: expect.stringContaining("/dashboard?q=1"), entry: "index.html" });
+      expect(card()?.entry).toMatch(/^http:/);
+    } finally { await new Promise<void>(resolve => local.close(() => resolve())); }
+  });
+
+  it("waits for a slow loopback listener", async () => {
+    const local = createServer((_req, res) => res.end("ready"));
+    await new Promise<void>(resolve => local.listen(0, "127.0.0.1", resolve));
+    const port = (local.address() as { port: number }).port;
+    await new Promise<void>(resolve => local.close(() => resolve()));
+    const timer = setTimeout(() => local.listen(port, "127.0.0.1"), 650);
+    try {
+      bridge!.states = finalStates(result());
+      expect((await tool({ entry: `http://127.0.0.1:${port}/` })).body.status).toBe("completed");
+    } finally { clearTimeout(timer); if (local.listening) await new Promise<void>(resolve => local.close(() => resolve())); }
+  });
+
+  it("explains an unused loopback port within the startup budget", async () => {
+    const local = createServer();
+    await new Promise<void>(resolve => local.listen(0, "127.0.0.1", resolve));
+    const port = (local.address() as { port: number }).port;
+    await new Promise<void>(resolve => local.close(() => resolve()));
+    const started = Date.now(), reply = await tool({ entry: `http://127.0.0.1:${port}/` });
+    expect(reply.body).toMatchObject({ status: "blocked", errorCode: "page-failed" });
+    expect(reply.body.text).toContain(`nothing is running on port ${port}`);
+    expect(Date.now() - started).toBeLessThan(13_000);
+    expect(bridge!.starts).toHaveLength(0);
+  });
+
+  it.each(["http://192.168.1.2:3000/", "http://example.com/", "http://localhost.example.com/", "http://user:pass@127.0.0.1/", "http://2130706433/", "http://127.1/", "http://[::ffff:127.0.0.1]/"])("refuses noncanonical or foreign URL %s", async entry => {
+    expect((await tool({ entry })).body).toMatchObject({ status: "blocked", errorCode: "outside-folders" });
+    expect(bridge!.starts).toHaveLength(0);
   });
 
   it("answers desktop-required without a bridge and queues another run", async () => {

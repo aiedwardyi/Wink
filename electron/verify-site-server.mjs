@@ -3,6 +3,8 @@ import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 
+import { verifyLoopbackUrl } from "./verify-protocol.mjs";
+
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
@@ -79,10 +81,15 @@ async function manifest(root, entry) {
 }
 
 export async function siteRevision({ root, entry }) {
+  if (verifyLoopbackUrl(root)?.href === root && entry === "index.html") return digest(root);
   return (await manifest(root, entry)).revision;
 }
 
 export async function startSiteServer({ root, entry, revision }) {
+  if (verifyLoopbackUrl(root)?.href === root && entry === "index.html") {
+    if (revision !== digest(root)) throw error("site-changed");
+    return startLoopbackServer(root);
+  }
   const pinned = await manifest(root, entry);
   if (!/^[a-f0-9]{64}$/.test(revision) || pinned.revision !== revision) throw error("site-changed");
   const fonts = new Set();
@@ -146,5 +153,74 @@ export async function startSiteServer({ root, entry, revision }) {
       }
       return closing;
     },
+  };
+}
+
+async function startLoopbackServer(root) {
+  const target = new URL(root), files = new Map(), aborter = new AbortController(), sockets = new Set();
+  if (target.hostname === "localhost") target.hostname = "127.0.0.1";
+  let host, origin, closing, failure, total = 0;
+  async function load(path, method = "GET") {
+    const url = new URL(path, target.origin);
+    if (url.origin !== target.origin) throw error("outside-folders");
+    const response = await fetch(url, { method, redirect: "manual", signal: AbortSignal.any([aborter.signal, AbortSignal.timeout(5000)]) });
+    const chunks = []; let size = 0;
+    try {
+      for await (const bytes of response.body ?? []) {
+        size += bytes.length; total += bytes.length;
+        if (size > 16 * 1024 * 1024 || total > 64 * 1024 * 1024) throw error("resource-limit");
+        chunks.push(bytes);
+      }
+    } finally { await response.body?.cancel().catch(() => {}); }
+    const bytes = Buffer.concat(chunks), headers = { "content-type": response.headers.get("content-type") || "application/octet-stream" };
+    let status = response.status;
+    if (response.headers.has("location")) {
+      const next = new URL(response.headers.get("location"), url);
+      if (next.origin !== target.origin || next.username || next.password) status = 403;
+      else headers.location = origin + next.pathname + next.search + next.hash;
+    }
+    return { status, headers, bytes: status === 403 ? Buffer.alloc(0) : bytes };
+  }
+  const server = createServer((req, res) => {
+    const reply = (status, headers = {}, bytes) => res.writeHead(status, { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "x-orbit-verify-loopback": "1", ...headers }).end(req.method === "HEAD" ? undefined : bytes);
+    const serve = async () => {
+      if (req.headers.host !== host || !req.url?.startsWith("/") || req.url.startsWith("//") || /[\\\x00-\x1f]/.test(req.url)) return reply(404);
+      if (!["GET", "HEAD"].includes(req.method)) return reply(405, { allow: "GET, HEAD" });
+      if (req.method === "HEAD" && !files.has(req.url)) {
+        const file = await load(req.url, "HEAD");
+        return reply(file.status, file.headers);
+      }
+      if (!files.has(req.url)) {
+        if (files.size >= 512) throw error("resource-limit");
+        files.set(req.url, load(req.url));
+      }
+      const file = await files.get(req.url);
+      reply(file.status, file.headers, file.bytes);
+    };
+    serve().catch(err => {
+      if (req.method === "HEAD") return res.destroy();
+      if (err.code === "resource-limit") failure = "resource-limit";
+      if (!res.headersSent) reply(403, { "x-orbit-verify-blocked": "1" }); else res.destroy();
+    });
+  });
+  server.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  server.on("upgrade", (_req, socket) => socket.destroy());
+  server.on("clientError", (_error, socket) => socket.destroy());
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  host = `127.0.0.1:${server.address().port}`; origin = `http://${host}`;
+  return {
+    origin, url: origin + target.pathname + target.search + target.hash, fontUrls: [],
+    async revisionUnchanged() {
+      if (failure) throw error(failure);
+      return true;
+    },
+    close() {
+      if (!closing) {
+        aborter.abort();
+        closing = Promise.all([new Promise(resolve => server.close(resolve)), ...[...sockets].map(socket => new Promise(resolve => { socket.once("close", resolve); socket.destroy(); }))]).then(() => {});
+      }
+      return closing;
+    },
+    counts: () => ({ sockets: sockets.size }),
   };
 }

@@ -135,6 +135,11 @@ export function runHiddenVerify(input) {
   }
   async function pageErrors(data, state, scriptsBlocked) {
     const origin = new URL(input.url).origin, aborted = state.aborted.splice(0);
+    const blocked = new Set(input.blockedUrls());
+    data.images = data.images.filter(img => {
+      if (!blocked.has(img.src) || !img.src.startsWith(origin + "/")) return true;
+      notChecked.add("images blocked in the check"); return false;
+    });
     const statuses = await head([...new Set(aborted.map(r => r.url))]);
     for (const r of aborted) if (errorsRule.failedLoad({ ...r, status: statuses.get(r.url) ?? 0 }, origin)) state.loads.push({ where: plain(new URL(r.url).pathname, 120), measured: `HTTP ${statuses.get(r.url)}; reload the page` });
     Object.assign(data, { origin, scriptsBlocked, errors: [...new Map(state.events.splice(0).map(e => [e.where, e])).values()] });

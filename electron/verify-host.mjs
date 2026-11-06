@@ -102,6 +102,7 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
     if (frame.type === "muted") { muted = frame.muted; return; }
     if (frame.type === "idle") {
       c.idle = true; quit(c);
+      clearTimeout(c.quitTimer);
       c.quitTimer = setTimeout(() => void kill(c), 1500);
       return;
     }
@@ -115,6 +116,10 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
         record.state = { ...value, revision: record.state.revision + 1 };
         if (terminal(value)) record.cast.finish(value.result);
         if (terminal(value) && active === record) active = null;
+        if (terminal(value) && !record.watched) {
+          c.idle = true; quit(c);
+          c.quitTimer = setTimeout(() => void kill(c), 1500);
+        }
         publish();
       }
       return;
