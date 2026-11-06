@@ -149,7 +149,10 @@ export function runHiddenVerify(input) {
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
         emit({ kind: "scroll", tile, y: point.scrollY });
         emit({ kind: "point", inp: { tile, type: "click", key: target.key, path: target.where, x: point.x, y: point.y, doc: false }, scrollY: point.scrollY });
-        for (const type of ["mousePressed", "mouseReleased"]) await race(cdp.send("Input.dispatchMouseEvent", { type, x: point.x, y: point.y, button: "left", clickCount: 1 }));
+        await race(cdp.ev("lv.allow(true)"));
+        try {
+          for (const type of ["mousePressed", "mouseReleased"]) await race(cdp.send("Input.dispatchMouseEvent", { type, x: point.x, y: point.y, button: "left", clickCount: 1 }));
+        } finally { await cdp.ev("lv.allow(false)").catch(() => {}); }
         casts[tile]?.readerStop();
       }
     } catch (error) {
