@@ -1,9 +1,11 @@
-// Style 5 meters (Edward's pick): ten boxes filled by % left and toned by % used, then "% left" and the reset. The grid is in UsageDesk.css.
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { resetCompact, resetPhrase, windowExpired, type CompactReset } from "@/lib/usage";
 import type { UsageBoardAccount, UsageBoardWindow } from "@/lib/usage-board";
 import { leftOf, splitWindows } from "@/lib/usage-pace";
+import { reducedMotion } from "@/lib/phone-swipe";
+import { useUsageMode, type UsageMode } from "@/lib/usage-preferences";
 
 const CELLS = 10;
 /** Engines that report a 5h and a 7d window; the rest show their own windows (Gemini its daily one). */
@@ -38,12 +40,45 @@ export function barSlots(engine: string, account: Pick<UsageBoardAccount, "windo
   return [...account.windows].sort((a, b) => (a.windowMinutes ?? Infinity) - (b.windowMinutes ?? Infinity)).map((window) => slot(window.id, window));
 }
 
-function Cells({ left, tone }: { left: number; tone: string }) {
-  const filled = Math.round(left / CELLS);
+function litCells(percent: number) {
+  return percent > 0 ? Math.min(CELLS, Math.max(1, Math.round(percent / CELLS))) : 0;
+}
+
+function useShownPercent(target: number | null, mode: UsageMode) {
+  const [shown, setShown] = useState(target);
+  const current = useRef(target);
+  const last = useRef({ target, mode });
+  useEffect(() => {
+    const from = current.current;
+    const switching = last.current.mode !== mode;
+    last.current = { target, mode };
+    if (!switching || target === null || from === null || reducedMotion() || from === target) {
+      current.current = target;
+      setShown(target);
+      return;
+    }
+    let frame = 0;
+    let start: number | undefined;
+    const step = (now: number) => {
+      start ??= now;
+      const p = Math.min(1, (now - start) / 420);
+      const eased = p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2;
+      current.current = Math.round(from + (target - from) * eased);
+      setShown(current.current);
+      if (p < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [target, mode]);
+  return target === null ? null : last.current.mode === mode && last.current.target !== target ? target : shown;
+}
+
+function Cells({ percent, used, mini = false }: { percent: number; used: number; mini?: boolean }) {
+  const filled = litCells(percent);
   return (
-    <span aria-hidden="true" data-cells={filled} className="grid h-2.5 min-w-0 grid-cols-10 gap-[3px]">
+    <span aria-hidden="true" data-cells={filled} className={cn("usage-cells", mini && "usage-cells-mini", used >= 90 ? "text-danger" : used >= 75 ? "text-warning" : "text-accent")}>
       {Array.from({ length: CELLS }, (_, index) => <span key={index} data-cell={index < filled ? "on" : "off"}
-        className={cn("rounded-[2px] transition-colors duration-300 ease-out motion-reduce:transition-none", index < filled ? tone : "bg-ink/12")} />)}
+        className={index < filled ? barTone(used) : "bg-transparent"} />)}
     </span>
   );
 }
@@ -55,26 +90,32 @@ function resetTime(reset: CompactReset, t: Translate) {
   return t(reset.key, reset.vars);
 }
 
-export function WindowBar({ slot, now, t }: { slot: Slot; now: number; t: Translate }) {
+export function WindowBar({ slot, now, t, compact = false, chat = false }: { slot: Slot; now: number; t: Translate; compact?: boolean; chat?: boolean }) {
   const { window, label } = slot;
-  const left = windowExpired(window.resetsAt, now) ? null : Math.round(leftOf(window));
+  const mode = useUsageMode();
+  const rawLeft = leftOf(window);
+  const left = windowExpired(window.resetsAt, now) ? null : rawLeft > 0 ? Math.max(1, Math.round(rawLeft)) : 0;
+  const percent = useShownPercent(left === null ? null : mode === "remaining" ? left : Math.round(Math.min(100, window.usedPercent)), mode);
   const reached = left !== null && window.usedPercent >= 100;
   const reset = left === null ? null : resetCompact(window.resetsAt, now);
   // A window not started yet has no reset: it reads the same on every account, with no "not reported" words.
   const phrase = reset && resetPhrase(window.resetsAt, now);
   return (
-    <div role="group" data-window={slot.key} data-model-window={window.id.includes("opus") ? "" : undefined} className="usage-meter mt-2 text-[13px] leading-[1.4] text-ink"
-      aria-label={`${label}: ${left === null ? t("usage.desk.resetPassed") : t("usage.desk.windowLeft", { percent: left })}${phrase ? `, ${t(phrase.key, phrase.vars)}` : ""}`}>
+    <div role="group" data-window={slot.key} data-model-window={window.id.includes("opus") ? "" : undefined} data-reached={reached || undefined}
+      className={cn("usage-meter", compact && "usage-meter-summary", chat && "usage-meter-chat")}
+      aria-label={`${label}: ${percent === null ? t("usage.desk.resetPassed") : t(mode === "remaining" ? "usage.desk.windowLeft" : "usage.limits.used", { percent })}${phrase ? `, ${t(phrase.key, phrase.vars)}` : ""}`}>
       <span aria-hidden="true" className="whitespace-nowrap">{label}</span>
-      <Cells left={left ?? 0} tone={barTone(window.usedPercent)} />
-      <span aria-hidden="true" data-left="" className={cn("whitespace-nowrap tabular-nums", left === 0 && "text-danger")}>
-        {left !== null && t("usage.desk.windowLeft", { percent: left })}
+      <Cells percent={percent ?? 0} used={window.usedPercent} mini={compact} />
+      <span className="usage-figures">
+      <span aria-hidden="true" data-left="" className={cn("whitespace-nowrap tabular-nums", window.usedPercent >= 90 && "text-danger")}>
+        {percent !== null && t(chat ? "usage.limits.percentUsed" : mode === "remaining" ? "usage.desk.windowLeft" : "usage.limits.used", { percent })}
       </span>
-      <span aria-hidden="true" data-reset={slot.key} className="min-w-0 text-[12px] tabular-nums text-ink-secondary">
+      <span aria-hidden="true" data-reset={slot.key} className="usage-reset min-w-0 tabular-nums text-ink-secondary">
         {left === null ? t("usage.desk.resetPassed") : <>
           {reached && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>{reset && " · "}</>}
-          {reset && <span className="whitespace-nowrap">{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span>}
+          {reset && <><span className="usage-reset-long whitespace-nowrap">{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span><span className="usage-reset-short whitespace-nowrap">({resetTime(reset, t)})</span></>}
         </>}
+      </span>
       </span>
     </div>
   );

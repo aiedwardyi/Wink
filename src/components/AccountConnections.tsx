@@ -129,18 +129,24 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
         {name && <ConnectionRow label={<>
           {tile}
-          <span className="min-w-0 truncate">{name.name}</span>
+          {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name.nickname} inline
+            onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+            : <span className="min-w-0 truncate">{name.name}</span>}
         </>} actions={canName ? phone ? <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu}
           onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
       </> : <ConnectionRow mark={mark}
         label={<>
           {!stacked && tile}
-          <button type="button" data-connection-identity="" aria-label={t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
-            onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("flex min-w-0 flex-1 text-left text-[13px]", stacked ? "flex-col pb-2" : "h-9 items-center gap-2 [@media(pointer:coarse)]:h-11")}>
-            {stacked ? <span className="flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11">{tile}<span className="min-w-0 truncate text-ink">{name.name}</span></span>
-              : name && <span className="max-w-[40%] shrink truncate text-ink">{name.name}</span>}
-            <span className={cn("min-w-0 truncate text-ink-secondary", stacked ? "-mt-1.5" : "flex-1")}>{label}</span>
-          </button>
+          <div className="flex min-w-0 flex-1 flex-col items-start py-1">
+            {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
+              onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+              : <button type="button" data-edit-name="" disabled={!canName || busy} onClick={() => setEditing(true)}
+                className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
+            <button type="button" data-connection-identity="" aria-label={t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
+              onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className="min-w-0 max-w-full text-left text-[11px] text-ink-secondary">
+              <span data-account-email="" className="block min-w-0 truncate">{label}</span>
+            </button>
+          </div>
         </>}
         actions={draining ? <span role="status">{t("accounts.removing")}</span> : stacked ? undefined : phone ? more : controls}>
         <Fold open={expanded} id={`${id}-identity`}>
@@ -154,8 +160,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
           {controls}
         </div>
       </Fold>
-      {editing && named && <div className="pl-6"><AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null}
-        onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} /></div>}
     </div>
   );
 }
