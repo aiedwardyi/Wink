@@ -55,7 +55,7 @@ it("does nothing without a lead bot override", () => {
 
 it("renames the lead bot once through the profile path", () => {
   expect(boot()).toBe(true);
-  expect(bots[0]).toMatchObject({ name: "커맨더", avatarUrl: "/api/attachments/lead.png", avatarCrop: "square" });
+  expect(bots[0]).toMatchObject({ name: "커맨더", avatarUrl: "/api/attachments/lead.png", avatarCrop: "rounded" });
   expect(bots[1].name).toBe("Pokkey");
   expect(broadcast).toHaveBeenCalledWith({ kind: "bot", bot: expect.objectContaining({ id: "lead", name: "커맨더" }) });
   expect(JSON.parse(readFileSync(join(dataDir, BRAND_MARKER), "utf8")).leadBotAppliedAt).toEqual(expect.any(String));

@@ -47,6 +47,24 @@ describe("brand override", () => {
     expect(brandForRenderer(readBrandOverride(dataDir))?.icon).toMatch(/^data:image\/x-icon;base64,/);
   });
 
+  it("gives the sidebar mark the 48 px frame of an .ico", () => {
+    const sizes = [16, 24, 48, 256];
+    const frames = sizes.map((size) => Buffer.concat([PNG, Buffer.from([size])]));
+    const head = Buffer.alloc(6 + 16 * sizes.length);
+    head.writeUInt16LE(1, 2);
+    head.writeUInt16LE(sizes.length, 4);
+    let offset = head.length;
+    sizes.forEach((size, i) => {
+      head[6 + 16 * i] = size === 256 ? 0 : size;
+      head.writeUInt32LE(frames[i].length, 14 + 16 * i);
+      head.writeUInt32LE(offset, 18 + 16 * i);
+      offset += frames[i].length;
+    });
+    writeFileSync(join(dataDir, "brand-icon.ico"), Buffer.concat([head, ...frames]));
+    brandFile({ name: "Desk", icon: "brand-icon.ico" });
+    expect(brandForRenderer(readBrandOverride(dataDir))?.icon).toBe(`data:image/png;base64,${frames[2].toString("base64")}`);
+  });
+
   it.each([
     ["bad JSON", "{nope"],
     ["no name", { icon: "brand-icon.png" }],

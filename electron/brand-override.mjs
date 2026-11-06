@@ -4,6 +4,8 @@ import path from "node:path";
 const ICON_TYPES = { ".png": "image/png", ".ico": "image/x-icon" };
 const AVATAR_TYPES = [".png", ".jpg", ".jpeg", ".webp"];
 const MAX_IMAGE_BYTES = 1024 * 1024;
+const MARK_PX = 48;
+const PNG_MAGIC = Buffer.from("89504e470d0a1a0a", "hex");
 
 // realpath first, so a link can't lead the file out of the data folder.
 function dataFile(root, file, types) {
@@ -47,11 +49,30 @@ export function readBrandOverride(dataDir) {
   }
 }
 
+/** A browser draws an .ico from its largest frame, soft at 24 px; the sidebar mark wants the 48 px one. */
+function markFrame(ico) {
+  try {
+    const frames = [];
+    for (let i = 0, count = ico.readUInt16LE(4); i < count; i++) {
+      const entry = 6 + 16 * i;
+      const start = ico.readUInt32LE(entry + 12);
+      const frame = ico.subarray(start, start + ico.readUInt32LE(entry + 8));
+      if (frame.subarray(0, 8).equals(PNG_MAGIC)) frames.push({ size: ico[entry] || 256, frame });
+    }
+    frames.sort((a, b) => a.size - b.size);
+    return (frames.find((f) => f.size >= MARK_PX) ?? frames.at(-1))?.frame;
+  } catch {
+    return undefined;
+  }
+}
+
 export function brandForRenderer(brand) {
   if (!brand) return null;
   try {
-    const type = ICON_TYPES[path.extname(brand.iconPath).toLowerCase()];
-    return { name: brand.name, icon: `data:${type};base64,${fs.readFileSync(brand.iconPath).toString("base64")}` };
+    const ext = path.extname(brand.iconPath).toLowerCase();
+    const bytes = fs.readFileSync(brand.iconPath);
+    const frame = ext === ".ico" ? markFrame(bytes) : undefined;
+    return { name: brand.name, icon: `data:${frame ? "image/png" : ICON_TYPES[ext]};base64,${(frame ?? bytes).toString("base64")}` };
   } catch {
     return null;
   }

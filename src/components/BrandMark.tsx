@@ -19,7 +19,7 @@ export function BrandMark() {
   }, []);
   if (!brand) return <div />;
   return (
-    <div data-brand-override className="flex min-w-0 items-center gap-2">
+    <div data-brand-override className="-ml-1 flex min-w-0 items-center gap-2">
       <img src={brand.icon} alt="" className="size-6 shrink-0" />
       <span className="truncate text-[15px] font-semibold text-ink">{brand.name}</span>
     </div>

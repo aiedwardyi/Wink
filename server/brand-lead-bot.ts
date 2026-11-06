@@ -9,7 +9,7 @@ type LeadBotDeps = {
   leadBot: string | undefined;
   chiefId: () => string | undefined;
   saveAvatar: (bytes: Buffer) => string | null;
-  applyProfile: (id: string, input: { name: string; avatarUrl: string; avatarCrop: "square" }) => { status: number };
+  applyProfile: (id: string, input: { name: string; avatarUrl: string; avatarCrop: "rounded" }) => { status: number };
 };
 
 /** Renames the lead bot once, so a later rename by hand is kept. */
@@ -25,7 +25,7 @@ export function applyBrandLeadBot({ dataDir, leadBot, chiefId, saveAvatar, apply
     const id = chiefId();
     if (!id || typeof name !== "string" || typeof avatarPath !== "string") return false;
     const avatarUrl = saveAvatar(readFileSync(avatarPath));
-    if (!avatarUrl || applyProfile(id, { name, avatarUrl, avatarCrop: "square" }).status !== 200) return false;
+    if (!avatarUrl || applyProfile(id, { name, avatarUrl, avatarCrop: "rounded" }).status !== 200) return false;
     writeFileSync(marker, `${JSON.stringify({ leadBotAppliedAt: new Date().toISOString() })}\n`);
     return true;
   } catch {
