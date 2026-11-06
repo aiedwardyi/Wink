@@ -78,8 +78,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       const before = url.searchParams.get("before");
       const around = url.searchParams.get("around");
       const pages = Number(url.searchParams.get("pages") ?? 1);
-      if (!Number.isInteger(pages) || pages < 1 || pages > 5 || (pages > 1 && !before)) return json(res, 400, { error: "invalid page count" });
       if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      if (!Number.isInteger(pages) || pages < 1 || pages > 5 || (pages > 1 && !before)) return json(res, 400, { error: "invalid page count" });
       if (around) {
         const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
         if (!window) return json(res, 404, { error: "no such message" });

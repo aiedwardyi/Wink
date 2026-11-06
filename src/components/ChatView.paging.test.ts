@@ -198,6 +198,72 @@ describe("paged transcripts", () => {
     expect(button(host, "Show earlier messages")?.textContent ?? "").not.toMatch(/\d+ more/);
   });
 
+  async function chainedLoad(view: "chat" | "room", measured: boolean) {
+    const saves: Message[] = Array.from({ length: 2500 }, (_, i) => ({
+      id: `save${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, summary: "Saved a note" },
+    }));
+    const flat = [...rows(0, 40), ...saves, ...rows(40, 160)];
+    const thread = flat.map((message, i) => ({ ...message, parentId: flat[i - 1]?.id ?? null }));
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    const calls = pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const served = globalThis.fetch as unknown as (url: string) => Promise<Response>;
+    const held: (() => Promise<void>)[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).includes("before=")
+      ? new Promise<Response>((resolve) => { held.push(async () => resolve(await served(url))); })
+      : served(url)));
+    const host = await mount(view);
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    const topRows = () => [...scroller.querySelectorAll<HTMLElement>("[data-mid], [data-run]")].filter((el) => !el.parentElement?.closest("[data-mid], [data-run]"));
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => topRows().length * 30 });
+    if (measured) {
+      const originalBox = HTMLElement.prototype.getBoundingClientRect;
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this === scroller) return DOMRect.fromRect({ height: 300 });
+        const wrapper = this.parentElement;
+        if (wrapper?.matches("[data-mid], [data-run]") && wrapper.lastElementChild === this) {
+          return DOMRect.fromRect({ y: topRows().indexOf(wrapper) * 30 - scroller.scrollTop, height: 30 });
+        }
+        return originalBox.call(this);
+      });
+    }
+    scroller.scrollTop = 0;
+    await act(async () => button(host, "Show earlier messages")!.click());
+    const release = async (n: number) => {
+      await vi.waitFor(() => expect(held.length).toBeGreaterThan(n));
+      await act(async () => held[n]());
+    };
+    return { host, scroller, threadId, calls, held, release, topRows };
+  }
+
+  it.each(["chat", "room"] as const)("keeps the reader's place in a %s when they scroll during a chained batch", async (view) => {
+    const { scroller, held, release, topRows } = await chainedLoad(view, true);
+    await release(0);
+    await vi.waitFor(() => expect(held.length).toBe(2));
+    scroller.scrollTop = 60;
+    await act(async () => { scroller.dispatchEvent(new Event("scroll")); });
+    const row = topRows().find((el) => el.getBoundingClientRect().bottom > 0 || el.lastElementChild!.getBoundingClientRect().bottom > 0)!;
+    const mark = (el: HTMLElement) => el.lastElementChild!.getBoundingClientRect().top;
+    const id = row.getAttribute("data-mid")!;
+    const top = mark(row);
+    await release(1);
+    const after = topRows().find((el) => el.getAttribute("data-mid") === id)!;
+    expect(mark(after)).toBe(top);
+  });
+
+  it.each(["chat", "room"] as const)("keeps loading a %s when live messages arrive during a chained batch", async (view) => {
+    const { host, scroller, threadId, held, release } = await chainedLoad(view, false);
+    await release(0);
+    await vi.waitFor(() => expect(held.length).toBe(2));
+    for (let i = 0; i < 12; i++) await arrive(threadId, { id: `live${i}`, parentId: i ? `live${i - 1}` : "m159", at: 2, role: "user", kind: "text", text: `live ${i};` });
+    await release(1);
+    await vi.waitFor(() => expect(held.length).toBe(3));
+    await release(2);
+    await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(0));
+    expect(host.textContent).toContain("row 0;");
+  });
+
   it.each(["chat", "room"] as const)("moves a %s worker to its newest note and keeps it there when paging", async (view) => {
     const messages = [workerLaunch("launch", 0), ...rows(0, 180), workerDone("report", 182)];
     const thread = messages.map((message, i) => ({ ...message, parentId: messages[i - 1]?.id ?? null }));

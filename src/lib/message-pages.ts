@@ -316,15 +316,19 @@ export function useEarlierPage({
   previousScrollTop: React.RefObject<number>;
   expand: (onFail: () => void, beforeCommit: () => boolean, pages: number) => void;
 }) {
-  const pending = useRef<{ key: string; shown: Message[]; startIndex: number; height: number; screen: number; added: number; anchor: TranscriptAnchor | null; top: number } | null>(null);
+  const pending = useRef<{ key: string; landed: boolean; height: number; screen: number; added: number; anchor: TranscriptAnchor | null; top: number } | null>(null);
+  const latest = useRef(expand);
+  useLayoutEffect(() => { latest.current = expand; });
   const fail = () => { if (pending.current?.key === key) pending.current = null; };
   const measure = () => {
     const page = pending.current;
     const el = scrollRef.current;
     if (!page || !el || page.key !== key) return false;
-    page.anchor ??= captureTranscriptAnchor(el);
+    // Fresh per batch: the reader may have scrolled since the last one landed.
+    page.anchor = captureTranscriptAnchor(el);
     page.height = el.scrollHeight;
     page.top = el.scrollTop;
+    page.landed = true;
     return page.anchor !== null;
   };
   useLayoutEffect(() => {
@@ -332,21 +336,21 @@ export function useEarlierPage({
     const el = scrollRef.current;
     if (!page || !el) return;
     if (page.key !== key) { pending.current = null; return; }
-    if (page.shown === shown && page.startIndex === startIndex) return;
+    // A live message changes `shown` too; only the commit measure() armed is the batch.
+    if (!page.landed) return;
+    page.landed = false;
     if (page.anchor) restoreTranscriptAnchor(el, page.anchor);
     previousScrollTop.current = el.scrollTop;
     page.added += page.anchor ? el.scrollTop - page.top : el.scrollHeight - page.height;
     if (!hasMore || page.added >= page.screen) { fail(); return; }
     // Stored pages can fold to nothing; keep going until a screen actually lands.
-    page.shown = shown;
-    page.startIndex = startIndex;
-    expand(fail, measure, 5);
-  }, [key, shown, startIndex, hasMore, scrollRef, previousScrollTop, expand]);
+    latest.current(fail, measure, 5);
+  }, [key, shown, startIndex, hasMore, scrollRef, previousScrollTop]);
   return () => {
     if (pending.current?.key === key) return;
     const el = scrollRef.current;
     pending.current = el && el.clientHeight > 0
-      ? { key, shown, startIndex, height: el.scrollHeight, screen: el.clientHeight, added: 0, anchor: null, top: el.scrollTop }
+      ? { key, landed: false, height: el.scrollHeight, screen: el.clientHeight, added: 0, anchor: null, top: el.scrollTop }
       : null;
     expand(fail, measure, pending.current ? 5 : 1);
   };

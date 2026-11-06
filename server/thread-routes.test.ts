@@ -12,13 +12,14 @@ function pager() {
     threadSyncGate: { enabled: false }, pullSyncedThread: vi.fn(), DEFAULT_PAGE: 50,
     pageSize: (raw: string | null) => raw === null ? undefined : Math.min(Number(raw), 200), messagePage, messageWindow: vi.fn(() => ({ messages: [], hasMore: false })),
   } as unknown as Parameters<typeof createThreadRoutes>[0]);
+  let body = "";
   const request = async (query: string) => {
     let status = 0;
-    const res = { writeHead: (code: number) => { status = code; }, end: vi.fn() } as unknown as ServerResponse;
+    const res = { writeHead: (code: number) => { status = code; }, end: (text: string) => { body = text; } } as unknown as ServerResponse;
     await route.listMessages(res, ["", "thread"] as RegExpMatchArray, new URL(`http://localhost/messages?${query}`));
     return status;
   };
-  return { request, messagePage };
+  return { request, messagePage, error: () => JSON.parse(body).error as string };
 }
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
@@ -40,5 +41,11 @@ describe("older message batches", () => {
     const { request, messagePage } = pager();
     expect(await request(query)).toBe(400);
     expect(messagePage).not.toHaveBeenCalled();
+  });
+
+  it.each(["before=cursor&around=cursor", "before=cursor&around=cursor&pages=5", "before=cursor&around=cursor&pages=9"])("names the before and around clash first: %s", async (query) => {
+    const { request, error } = pager();
+    expect(await request(query)).toBe(400);
+    expect(error()).toBe("before and around cannot be combined");
   });
 });
