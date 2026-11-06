@@ -1102,7 +1102,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(readFileSync(dump, "utf8")).toBe(before);
   });
 
-  it("mounts the agents comms proxy as an MCP server and pre-allows its tools", async () => {
+  it.each(["0", "1"])("mounts the agents proxy with catalog flag %s and preserves permissions", async (flag) => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
@@ -1131,6 +1132,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.stringify(seen.argv)).not.toContain("tok");
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
+    expect(seen.mcpConfig.mcpServers.agents.env.OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    vi.unstubAllEnvs();
   });
 
   it("pre-allows terminal_read but leaves terminal_send to the permission prompt", async () => {

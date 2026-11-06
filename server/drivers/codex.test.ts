@@ -573,7 +573,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(recorder.events).toContainEqual(expect.objectContaining({ type: "item.completed", phase: "final_answer", text: messages.at(-1).text }));
   });
 
-  it("mounts peer-agent comms without placing the comms token in argv", async () => {
+  it.each(["0", "1"])("mounts peer-agent comms with catalog flag %s and private credentials", async (flag) => {
+    vi.stubEnv("ORBIT_WINK_TOOL_CATALOG", flag);
     await create();
     const dump = join(scratch, "agents.json");
     process.env.FAKE_CODEX_DUMP = dump;
@@ -606,6 +607,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.argv.join(" ")).not.toContain("peer-comms-secret");
     expect(seen.env.WINK_MCP_AGENTS_OMB_COMMS_TOKEN).toBe("peer-comms-secret");
     expect(instance.adapter.capabilities.agentsMcp).toBe(true);
+    expect(seen.env.WINK_MCP_AGENTS_OMB_WINK_TOOL_CATALOG).toBe(flag === "1" ? "1" : undefined);
+    vi.unstubAllEnvs();
   });
 
   it("mounts the Local VM computer MCP server without placing credentials in argv", async () => {

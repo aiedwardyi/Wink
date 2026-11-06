@@ -30,6 +30,7 @@ import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli 
 import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
+import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 
 import type {
@@ -1069,7 +1070,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // agentsIntegration(); pre-allowing matters doubly here, or the CLI's
       // own ListAgents look-alike shadows it and "@Bot" asks go nowhere
       if (turn.integrations?.agents) {
-        mcpServers.agents = { ...turn.integrations.agents, ...orbitOwned };
+        mcpServers.agents = { ...experimentalAgents(turn.integrations.agents), ...orbitOwned };
         allowed.push("mcp__agents");
       }
       if (turn.integrations?.phone) {
@@ -1594,14 +1595,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             }
             for (const b of Array.isArray(msg.content) ? msg.content : []) {
               if (b.type === "tool_use") {
-                const summary = claudeToolSummary(b.name, b.input, cwd);
-                toolCalls.set(b.id, { at: Date.now(), name: b.name, input: b.input, summary });
+                const call = originalCatalogCall(b.name, b.input);
+                const summary = claudeToolSummary(call.name, call.input, cwd);
+                toolCalls.set(b.id, { at: Date.now(), name: call.name, input: call.input, summary });
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.started",
                   itemType: "tool",
                   itemId: b.id,
-                  title: b.name,
+                  title: call.name,
                   ...(summary ? { summary } : {}),
                 });
               }

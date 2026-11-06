@@ -407,6 +407,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
 import { currentTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -5420,7 +5421,7 @@ async function buildClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         ? " Keep the durable task record current with update_task_state after meaningful plan changes, completed milestones, new blockers, or created files. Record only verified progress, use it before long operations, and do not call it after every tool. If the user asks you to stop working or to wait while they switch models, call update_task_state with pause_automatic_wakes: true, then end your turn."
         : "";
       const reactPrompt = canMessage ? ` ${reactionToolGuidance()}` : "";
-      const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
+      const showImagePrompt = canMessage ? ` ${slimStaticText(SHOW_IMAGE_GUIDANCE, instance.driverKind)}` : "";
 
       if (currentTurnEpoch(bot.id) !== epoch) {
         releaseLocalVmThread(threadId);

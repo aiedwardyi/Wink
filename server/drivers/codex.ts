@@ -19,6 +19,7 @@ import { describeSpawnFailure, execCli, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 import { startTurnTrace, traceHelperCall, traceRuntimeEvent } from "../turn-timing.ts";
+import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 
 import type {
   DriverCreateInput,
@@ -301,7 +302,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
         if (turn.integrations?.agents) {
-          mountMcpServer(appServerArgs, env, "agents", turn.integrations.agents, AGENTS_TOOL_TIMEOUT_SEC);
+          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents), AGENTS_TOOL_TIMEOUT_SEC);
         }
         if (turn.integrations?.computer) {
           const proxyEnv = computerProxyEnv(turn.integrations.computer);
@@ -571,7 +572,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                 : item.type === "fileChange"
                   ? "edit"
                   : item.type === "mcpToolCall"
-                    ? (item.tool ?? item.name ?? "mcp")
+                    ? originalCatalogCall(item.tool ?? item.name ?? "mcp", item.arguments, item.server).name
                     : item.type === "webSearch"
                       ? "web_search"
                       : null;
