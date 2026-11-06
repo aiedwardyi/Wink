@@ -133,7 +133,7 @@ export function createUsageBoardClient(
       }
       if (!changed.size) return;
       identityEpoch++;
-      if (state.board) set({ board: { ...state.board, cursor: "", engines: state.board.engines.map((engine) => ({ ...engine,
+      if (state.board) set({ board: { ...state.board, revision: -1, cursor: "", engines: state.board.engines.map((engine) => ({ ...engine,
         events: engine.events.filter((event) => ![event.accountId, event.from, event.to].some((id) => id && changed.has(id))),
         accounts: engine.accounts.map((account) => changed.has(account.id)
           ? { ...account, windows: [], observedAt: null, history: { fine: [], coarse: [] } } : account),

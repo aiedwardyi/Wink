@@ -197,6 +197,37 @@ describe("createUsageBoardClient", () => {
     expect(account(client.snapshot().board!, "claude").windows.length).toBeGreaterThan(0);
   });
 
+  it("restores usage from a same-revision full read after the board arrives before the swap", async () => {
+    const client = make();
+    const instances = (account: string) => [{ instanceId: "grok", snapshot: { authenticated: true, account } }];
+    const grok = (board: UsageBoard) => board.engines.find((engine) => engine.engine === "grok")!;
+    client.instances(instances("old@example.test"));
+    client.subscribe(() => {});
+    const before = fresh();
+    grok(before).accounts[0].windows = [{ id: "five_hour", kind: "session", usedPercent: 100, resetsAt: before.at + 3_600_000, windowMinutes: 300 }];
+    grok(before).accounts[0].observedAt = before.at;
+    reads[0].resolve(before);
+    await flush();
+    client.frame(43);
+    const reply = fresh({ revision: 43, cursor: "c-43" });
+    grok(reply).accounts[0].windows = grok(before).accounts[0].windows.map((window) => ({ ...window, usedPercent: 37 }));
+    grok(reply).accounts[0].observedAt = reply.at;
+    grok(reply).accounts[0].history = { fine: [[100, 37, null]], coarse: [[60, 37, null]] };
+    grok(reply).events = [{ seq: 11, at: reply.at, kind: "reset", accountId: "grok" }];
+    reads[1].resolve(reply);
+    await flush();
+    expect(client.snapshot().board).toEqual(reply);
+    client.instances(instances("new@example.test"));
+    expect(grok(client.snapshot().board!).accounts[0]).toMatchObject({ windows: [], observedAt: null, history: { fine: [], coarse: [] } });
+    expect(grok(client.snapshot().board!).events).toEqual([]);
+    expect(reads).toHaveLength(3);
+    expect(reads[2].cursor).toBe("");
+    reads[2].resolve(fresh({ ...reply, cursor: "c-43-full" }));
+    await flush();
+    expect(client.snapshot().board).toEqual({ ...reply, cursor: "c-43-full" });
+    expect(reads).toHaveLength(3);
+  });
+
   it("keeps one read in flight and coalesces triggers into one follow-up", async () => {
     const client = make();
     client.subscribe(() => {});
