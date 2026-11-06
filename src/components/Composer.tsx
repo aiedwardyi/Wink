@@ -421,6 +421,8 @@ export function Composer({
   const [stoppingBotId, setStoppingBotId] = useState<string | null>(null);
   const stopping = !group && Boolean(bot) && stoppingBotId === bot?.id;
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const framePress = useRef(true);
+  const frameControl = "button, a, input, textarea, select, label, [role='button'], [role='link'], [role='option'], [contenteditable], [tabindex]";
   const setComposerRef = useCallback(
     (element: HTMLTextAreaElement | null) => {
       inputRef.current = element;
@@ -1069,7 +1071,22 @@ export function Composer({
             aria-hidden
             className="absolute -left-5 -right-5 top-[calc(100%-1.5rem)] h-[50vh] bg-app"
           />
-        <div data-orbit-composer-frame data-rainbow={rainbow === "off" ? undefined : ""} className="relative grid grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-3xl bg-raised px-3 pb-2 pt-1">
+        <div
+          data-orbit-composer-frame
+          data-rainbow={rainbow === "off" ? undefined : ""}
+          className="relative grid cursor-text grid-cols-[auto_1fr_auto] items-center gap-x-2 rounded-3xl bg-raised px-3 pb-2 pt-1"
+          onPointerDownCapture={(e) => {
+            framePress.current = e.button === 0 && !(e.target as Element).closest(frameControl);
+            if (framePress.current && !inputRef.current?.disabled) e.preventDefault();
+          }}
+          onClick={(e) => {
+            const input = inputRef.current;
+            if (!framePress.current || e.defaultPrevented || !input || input.disabled || (e.target as Element).closest(frameControl)) return;
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+            setCaret(input.value.length);
+          }}
+        >
           {rainbow !== "off" && <RainbowRing theme={rainbow === "theme"} />}
           <input
             ref={fileInput}
