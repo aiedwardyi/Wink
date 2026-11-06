@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { realpath, unlink } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -293,7 +293,7 @@ describe("verify_site scope", () => {
   it("accepts file URLs and refuses remote file hosts", async () => {
     bridge!.states = finalStates(result());
     expect((await tool({ entry: pathToFileURL(join(work, "site", "index.html")).href })).body.status).toBe("completed");
-    expect(bridge!.starts[0]).toMatchObject({ entry: "index.html", root: join(work, "site") });
+    expect(bridge!.starts[0]).toMatchObject({ entry: "index.html", root: await realpath(join(work, "site")) });
     for (const entry of ["file://other-pc/share/index.html", "file:///C:/index.html?secret", "file:///C:/index.html#fragment"]) {
       expect((await tool({ entry })).body).toMatchObject({ status: "blocked", errorCode: "outside-folders" });
     }
@@ -304,7 +304,7 @@ describe("verify_site scope", () => {
     bridge!.states = finalStates(result());
     const entry = kind === "file" ? pathToFileURL(join(tmp, "outside", "index.html")).href : kind === "relative" ? "../outside" : kind === "junction" ? "link" : join(tmp, "outside", "index.html");
     expect((await tool({ entry })).body.status).toBe("completed");
-    expect(bridge!.starts[0]).toMatchObject({ root: join(tmp, "outside"), entry: "index.html" });
+    expect(bridge!.starts[0]).toMatchObject({ root: await realpath(join(tmp, "outside")), entry: "index.html" });
   });
 
   it.each(["localhost", "127.0.0.1", "[::1]"])("accepts loopback dev servers on %s", async host => {
