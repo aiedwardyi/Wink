@@ -378,7 +378,7 @@ function FoldSummary({ engine, account, clock }: { engine: UsageBoardEngine; acc
   const { t, now } = clock;
   const slots = account.signIn === "ready" ? barSlots(engine.engine, account, t) : [];
   return <span data-engine-summary="" className="usage-summary">
-    {account.signIn !== "ready" ? t(STATE_KEY[account.signIn]) : !slots.length ? t("usage.desk.noUsage")
+    {account.signIn !== "ready" ? <span>{t(STATE_KEY[account.signIn])}</span> : !slots.length ? <span>{t("usage.desk.noUsage")}</span>
         : slots.map((slot) => <WindowBar key={slot.key} slot={slot} now={now} t={t} compact />)}
   </span>;
 }
@@ -445,8 +445,23 @@ export function UsageDesk() {
     const list = desk.current?.querySelector<HTMLElement>("[data-usage-sections]");
     if (!list) return;
     const layout = () => {
+      delete list.dataset.desktopColumns;
       if (window.innerWidth >= 768) {
         delete list.dataset.phoneColumns;
+        const summaries = list.querySelectorAll<HTMLElement>(".usage-summary");
+        const widths: number[] = [];
+        for (const summary of summaries) {
+          [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
+            const index = meter.dataset.window === "week" ? 1 : slot;
+            widths[0] ??= 0;
+            widths[index] = Math.max(widths[index] ?? 0, meter.getBoundingClientRect().width);
+          });
+        }
+        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => name.getBoundingClientRect().width));
+        if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
+          list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
+          list.dataset.desktopColumns = "";
+        }
         return;
       }
       const heads = list.querySelectorAll<HTMLElement>(".usage-engine-head:has(.usage-summary)");
@@ -471,6 +486,7 @@ export function UsageDesk() {
       observer?.disconnect();
       document.fonts?.removeEventListener("loadingdone", layout);
       delete list.dataset.phoneColumns;
+      delete list.dataset.desktopColumns;
     };
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };

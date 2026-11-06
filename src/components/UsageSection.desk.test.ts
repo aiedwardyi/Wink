@@ -1123,7 +1123,7 @@ describe("Usage desk", () => {
     expect(engines.map((engine) => summary(engine))).toEqual(en
       ? ["5h 34% left · 7d 59% left", "7d 62% left", "No usage yet", "24h 82% left"]
       : ["5시간 34% 남음 · 7일 59% 남음", "7일 62% 남음", "아직 사용량 없음", "24시간 82% 남음"]);
-    expect(engines.map((engine) => section(engine)?.querySelector("[data-engine-summary]")?.childElementCount)).toEqual([2, 1, 0, 1]);
+    expect(engines.map((engine) => section(engine)?.querySelectorAll("[data-engine-summary] .usage-meter-summary").length)).toEqual([2, 1, 0, 1]);
     expect(q("[data-account-row]")).toBeNull();
     expect(q("[data-engine-summary] [data-left].text-danger")).toBeNull();
     const next = fresh();

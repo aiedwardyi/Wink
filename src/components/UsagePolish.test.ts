@@ -83,7 +83,7 @@ it("shares phone label and bar columns while preserving the collapsed box and ro
   expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content 70px minmax(0, 1fr)");
   expect(rule("[data-phone-columns] .usage-summary")).toContain("grid-template-columns: subgrid");
   expect(rule("[data-phone-columns] .usage-meter-summary")).toContain("grid-template-columns: subgrid");
-  expect(css).toMatch(/\[data-phone-columns\] \.usage-engine-head:has\(\.usage-summary\) \{[^}]*height: var\(--usage-row-height\)/);
+  expect(css).toMatch(/\[data-phone-columns\] \.usage-engine-head:has\(\.usage-summary\) \{[^}]*min-height: var\(--usage-row-height\)/);
   expect(css).not.toContain("@container usage-summary");
 });
 
@@ -101,6 +101,42 @@ it("measures phone rows before aligning and restores the expanded layout", async
   await click("[data-fold-all]");
   expect(q("[data-phone-columns]")).toBeNull();
   size.mockRestore();
+});
+
+it.each(["unknown", "signed-out", "ready"] as const)("keeps %s status text out of the shared meter columns", async (signIn) => {
+  vi.stubGlobal("innerWidth", 392);
+  const account = h.board!.engines[0]!.accounts[0]!;
+  account.signIn = signIn;
+  account.windows = [];
+  await mount();
+  await click("[data-fold-all]");
+  const summary = q('[data-usage-engine="claude"] .usage-summary')!;
+  expect(summary.children).toHaveLength(1);
+  expect(summary.firstElementChild!.tagName).toBe("SPAN");
+  expect(summary.firstElementChild!.textContent).not.toBe("");
+  expect(rule(".usage-summary > span")).toContain("grid-column: 1 / -1");
+});
+
+it("shares desktop window widths and drops them when expanded or too narrow", async () => {
+  vi.stubGlobal("innerWidth", 1280);
+  h.board!.engines.find((engine) => engine.engine === "codex")!.accounts[0]!.windows = structuredClone(h.board!.engines[0]!.accounts[0]!.windows);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return new DOMRect(0, 0, this.matches("[data-engine-fold]") ? 100 : this.matches('[data-window="session"]') ? this.closest('[data-usage-engine="codex"]') ? 210 : 180 : 190, 17);
+  });
+  let width = 628;
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
+  await mount();
+  await click("[data-fold-all]");
+  const list = q("[data-desktop-columns]")!;
+  expect(list).not.toBeNull();
+  expect(list.style.getPropertyValue("--usage-summary-columns")).toBe("210px 190px");
+  width = 400;
+  await mount();
+  expect(q("[data-desktop-columns]")).toBeNull();
+  width = 628;
+  await click("[data-fold-all]");
+  expect(q("[data-desktop-columns]")).toBeNull();
+  vi.restoreAllMocks();
 });
 
 it("gives the refresh icon a 44px coarse-pointer hit area", () => {
