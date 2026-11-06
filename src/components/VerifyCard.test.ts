@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { createElement } from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
@@ -39,6 +40,83 @@ it("says in Korean which blocked code left scripts or phone layout unchecked", (
   const html = render(card({ notChecked: ["phone layout (styles from cdn.tailwindcss.com are blocked in the check)", "scripts (requests to api.site.dev are blocked in the check)"] }));
   expect(html).toContain("확인하지 못함: 휴대폰 레이아웃 (cdn.tailwindcss.com의 스타일이 확인 중 차단됨)");
   expect(html).toContain("확인하지 못함: 스크립트 (api.site.dev로 가는 요청이 확인 중 차단됨)");
+});
+
+it("explains failed checks in both languages without exposing error codes", () => {
+  const codes = ["needs-approval", "denied", "desktop-required", "outside-folders", "not-a-site", "busy", "page-failed", "timeout", "cancelled", "site-changed", "resource-limit", "isolation-failed", "internal", "unknown-error"];
+  for (const locale of ["en", "ko"] as const) {
+    applyLocale(locale);
+    for (const code of codes) {
+      const html = render(card({ status: "blocked", errorCode: code as VerifyCardData["errorCode"] }));
+      expect(html).not.toContain(`: ${code}<`);
+      expect(html).toContain(locale === "en" ? "Not checked: " : "확인하지 못함: ");
+    }
+    expect(render(card({ status: "blocked", errorCode: "page-failed" }))).toContain(locale === "en" ? "page could not load" : "페이지를 불러오지 못했어요");
+    expect(render(card({ status: "blocked", errorCode: "timeout" }))).toContain(locale === "en" ? "check took too long" : "확인 시간이 초과됐어요");
+    expect(render(card({ status: "blocked" }))).toBe(render(card({ status: "blocked", errorCode: "timeout" })));
+    expect(render(card({ status: "blocked", errorCode: "unknown-error" as VerifyCardData["errorCode"] }))).toBe(render(card({ status: "blocked", errorCode: "internal" })));
+  }
+});
+
+it("localizes Korean problem lines by rule while retaining destinations and measurements", () => {
+  const issues: NonNullable<VerifyCardData["issues"]> = [
+    { checker: "LINKS", tile: "desktop", rule: "missing target", where: "a#pricing", measured: "#pricing has no target; click the link" },
+    { checker: "LINKS", tile: "desktop", rule: "local 404", where: "a#about", measured: "/about.html returns 404; click the link" },
+    { checker: "LINKS", tile: "desktop", rule: "self sign-up", where: "a#signup", measured: "Sign-up link \"#\" goes nowhere; click the link" },
+    { checker: "LINKS", tile: "desktop", rule: "self sign-up", where: "a#signup", measured: "#signup points at its own sign-up control or section without a collection destination; click the link" },
+    { checker: "FIT", tile: "phone", rule: "sideways scroll", where: "div.hero-grid", measured: "468 px page at 392 px; scroll sideways on the phone" },
+    { checker: "PAGE_ERRORS", tile: "desktop", rule: "broken image", where: "img#logo", measured: "Image did not load; reload the page" },
+    { checker: "PAGE_ERRORS", tile: "desktop", rule: "page error", where: "/app.js", measured: "HTTP 404; reload the page" },
+    { checker: "PAGE_ERRORS", tile: "desktop", rule: "page error", where: "app.js:7", measured: "Uncaught TypeError; reload the page" },
+    { checker: "NAV", tile: "phone", rule: "phone menu gone", where: "header nav", measured: "#pricing, #faq disappear at 392 px with no menu control; narrow the page" },
+    ...["placeholder contact", "lorem", "TODO", "undefined", "NaN"].map(rule => ({ checker: "TEXT_A" as const, tile: "desktop" as const, rule, where: "footer", measured: `Unfinished copy \"${rule}\"; read this text on the page` })),
+    { checker: "TEXT_A", tile: "desktop", rule: "placeholder contact", where: "a#contact", measured: "Link goes to placeholder \"mailto:hello@example.com\"; open the link" },
+    { checker: "FIT", tile: "phone", rule: "future rule", where: "main", measured: "Future English explanation" },
+  ];
+  applyLocale("ko");
+  const host = document.createElement("div");
+  host.innerHTML = render(card({ issues }));
+  const lines = [...host.querySelectorAll(".verify-card-problems li > div:nth-child(2)")].map(row => row.textContent);
+  expect(lines).toHaveLength(issues.length);
+  for (const line of lines) expect(line).toMatch(/[가-힣]+.*요/);
+  expect(lines[0]).toContain("#pricing");
+  expect(lines[1]).toContain("/about.html");
+  expect(lines[1]).toContain("404");
+  expect(lines[3]).toContain("#signup");
+  expect(lines[4]).toContain("468 px");
+  expect(lines[4]).toContain("392 px");
+  expect(lines[6]).toContain("HTTP 404");
+  expect(lines[7]).toContain("Uncaught TypeError");
+  expect(lines[8]).toContain("#pricing, #faq");
+  expect(lines[14]).toContain("mailto:hello@example.com");
+  applyLocale("en");
+  host.innerHTML = render(card({ issues }));
+  expect([...host.querySelectorAll(".verify-card-problems li > div:nth-child(2)")].map(row => row.textContent)).toEqual(issues.map(issue => issue.measured));
+});
+
+it("keeps the phone Rerun target at least 44 px without enlarging desktop or Watch", () => {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(readFileSync("src/components/VerifyCard.css", "utf8"));
+  const host = document.createElement("div");
+  const height = (width: number, data: VerifyCardData) => {
+    host.innerHTML = render(data);
+    const button = host.querySelector("button")!;
+    let minHeight = 0;
+    const visit = (rules: CSSRuleList) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSMediaRule) {
+          const max = /max-width:\s*(\d+)px/.exec(rule.conditionText);
+          if (max && width <= Number(max[1])) visit(rule.cssRules);
+        } else if (rule instanceof CSSStyleRule && button.matches(rule.selectorText) && rule.style.minHeight) minHeight = parseFloat(rule.style.minHeight);
+      }
+    };
+    visit(sheet.cssRules);
+    return minHeight;
+  };
+  expect(height(360, card())).toBeGreaterThanOrEqual(44);
+  expect(height(392, card())).toBeGreaterThanOrEqual(44);
+  expect(height(1280, card())).toBe(32);
+  expect(height(360, card({ replay: ["a"] }))).toBe(32);
 });
 
 it("shows one button: Watch live while streaming, Watch with kept replays, else Rerun", () => {

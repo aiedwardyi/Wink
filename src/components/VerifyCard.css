@@ -5,10 +5,10 @@
 .verify-card-site { margin: 4px 0 10px 25px; color: var(--color-ink-secondary); font-size: 12px; }
 .verify-card-stages { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-left: 25px; color: var(--color-ink-secondary); }
 .verify-card-problems { list-style: none; margin: 0; padding: 0; }
-.verify-card-problems li { border-top: 1px solid var(--color-hairline); padding: 10px 0; }
-.verify-card-location { display: flex; align-items: flex-start; gap: 6px; color: var(--color-ink-secondary); font-size: 12px; margin-bottom: 3px; }
+.verify-card-problems li { border-top: 1px solid var(--color-hairline); padding: 10px 0 10px 25px; }
+.verify-card-location { display: flex; align-items: flex-start; gap: 11px; color: var(--color-ink-secondary); font-size: 12px; margin: 0 0 3px -25px; }
 .verify-card-location svg { flex-shrink: 0; margin-top: 2px; }
-.verify-card-unchecked { color: var(--color-ink-secondary); font-size: 12px; margin-top: 6px; }
+.verify-card-unchecked { color: var(--color-ink-secondary); font-size: 12px; margin: 6px 0 0 25px; }
 .verify-card-actions { min-height: 28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 6px; }
 .verify-card-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 4px 8px; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; }
 .verify-card-actions button:hover { background: var(--color-raised); color: var(--color-ink); }
@@ -16,3 +16,6 @@
 .verify-card-details-toggle { margin-top: 8px; padding: 0; color: var(--color-ink-secondary); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .verify-card-details { list-style: none; margin: 4px 0 0; padding: 0; color: var(--color-ink-secondary); font-size: 12px; }
 .verify-card-details li { padding: 2px 0; }
+@media (max-width: 767px) {
+  .verify-card-actions .verify-card-rerun { min-height: 44px; }
+}
