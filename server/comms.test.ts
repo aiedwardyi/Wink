@@ -162,7 +162,7 @@ describe("comms e2e (fake ACP fleet)", () => {
             config: { cli: FAKE_CLI, fullAuto: true },
           },
           // a successful peer turn that deliberately emits no assistant
-          // text — the channel still needs a positive terminal record.
+          // text: the channel records it as no reply.
           helperEmpty: {
             driver: "grokAgent",
             environment: { FAKE_ACP_MODE: "empty-reply" },
@@ -590,10 +590,10 @@ describe("comms e2e (fake ACP fleet)", () => {
   // ── delegation terminal-state mirroring ─────────────────────────────
   // A delegated turn is fire-and-forget: nobody waits for B, so the ONLY
   // place a human would ever see how it ended is the A⇄B channel. These
-  // tests pin a successful empty reply plus both non-happy terminal states:
+  // tests pin an ok turn with no reply plus both other non-happy terminal states:
   // the delegated turn crashed, and the delegated turn never started.
   it(
-    "mirrors a successful delegated turn with no reply as a completed terminal chip",
+    "mirrors an ok delegated turn with no reply as a failed terminal chip",
     async () => {
       const seeded = (await api("GET", "/api/bots")).body.bots[0];
       await api("PATCH", `/api/bots/${seeded.id}`, { hidden: true });
@@ -626,13 +626,13 @@ describe("comms e2e (fake ACP fleet)", () => {
           (m: any) =>
             m.from?.botId === helper.id
             && m.kind === "activity"
-            && m.tool?.ok === true
-            && m.tool?.name === "Delegated turn completed",
+            && m.tool?.ok === false
+            && m.tool?.name === "No reply from @Helper",
         );
         if (terminal) break;
         if (Date.now() > deadline) {
           throw new Error(
-            `no completed terminal chip in channel. channel tail: ${JSON.stringify(channel?.messages?.slice(-6))}\n` +
+            `no failed terminal chip in channel. channel tail: ${JSON.stringify(channel?.messages?.slice(-6))}\n` +
               `stderr: ${stderr.slice(-2000)}`,
           );
         }

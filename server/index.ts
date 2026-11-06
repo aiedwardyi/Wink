@@ -104,7 +104,7 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { contextWindowFor, holdWorkerNotes, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -155,7 +155,8 @@ import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from 
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
-import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { hasPeerWatch, onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
   clearSendRunning,
@@ -698,6 +699,7 @@ function askBotAndWait(
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
   const threadId = target.threadId;
   if (peer) peerTurnSource.set(threadId, peer.sourceThreadId);
+  const collected = peer ? peerReplies.start(threadId) : undefined;
   return waitForPeerReply({
     threadId,
     botName: target.name,
@@ -717,7 +719,7 @@ function askBotAndWait(
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
       const taskId = peer.taskId ?? newId();
-      watchDelegatedTurn(threadId, { channelId: peer.channel?.id, toBotId: targetBotId, taskId, sourceThreadId: peer.sourceThreadId, sourceBotId: peer.sender.id, ask: true });
+      watchDelegatedTurn(threadId, { channelId: peer.channel?.id, toBotId: targetBotId, taskId, sourceThreadId: peer.sourceThreadId, sourceBotId: peer.sender.id, ask: true, reply: collected! });
       return taskId;
     },
     fail: (taskId, failureName) => {
@@ -726,7 +728,10 @@ function askBotAndWait(
       finalizeDelegationWatch(threadId, false, "", failureName);
     },
   }).then((reply) => {
-    if (!reply.taskId) peerTurnSource.delete(threadId);
+    if (!reply.taskId) {
+      peerTurnSource.delete(threadId);
+      collected?.release();
+    }
     return reply;
   });
 }
@@ -3295,6 +3300,7 @@ void (async () => {
 const busyResumeThreads = new Set<string>();
 
 bus.subscribe((event: RuntimeEvent) => {
+  peerReplies.observe(event);
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
@@ -3992,7 +3998,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // the request was mirrored there when the delegation drained, and a
       // channel that only ever shows requests is half a record. Mirror the
       // reply on success; mirror a failed/stopped terminal chip otherwise.
-      finalizeDelegationWatch(event.threadId, event.ok, reply);
+      finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? "");
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
@@ -4005,7 +4011,8 @@ bus.subscribe((event: RuntimeEvent) => {
 // (target threadId → channel) lets the main fold mirror the delegated
 // turn's TERMINAL state into the A⇄B channel when it completes — the
 // channel stays the full record of the handoff, not just its request.
-const delegationWatch = new Map<string, DelegatedTurn & { endTakeover?: () => void }>();
+const delegationWatch = new Map<string, DelegatedTurn & { endTakeover?: () => void; reply: PeerTurnReply }>();
+const peerReplies = peerTurnReplies(staleTurnEvent);
 
 /** Consume one delegated-turn watch and mirror exactly one terminal state.
  * Some harness paths settle a busy bot without a provider turn.completed
@@ -4021,21 +4028,23 @@ function finalizeDelegationWatch(
   if (!watched) return false;
   delegationWatch.delete(threadId);
   watched.endTakeover?.();
+  watched.reply.release();
   return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
-function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void }): void {
+function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void; reply: PeerTurnReply }): void {
   delegationWatch.set(targetThreadId, watched);
   peerTurnSource.set(targetThreadId, watched.sourceThreadId);
   watched.endTakeover = onPeerTakeover(targetThreadId, (afterReply) => {
     peerTurnSource.delete(targetThreadId);
+    watched.reply.release();
     // a reply that finished before the read settles now; the turn's later end finds no watch
-    const finished = afterReply ? lastReply.get(targetThreadId)?.text : undefined;
+    const finished = afterReply ? watched.reply.text() : undefined;
     if (finished !== undefined) delegationWatch.delete(targetThreadId);
     settleTakenOverDelegation(commsBus, watched, cfg.profile?.name?.trim() || "User", finished);
   }, () => {
-    watched.answer ??= lastReply.get(targetThreadId)?.text ?? "";
+    watched.answer ??= watched.reply.text() ?? "";
   });
 }
 
@@ -4078,7 +4087,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     const targetThreadId = store.bot(toBotId)?.threadId;
     const ask = findDelegationReceipt(taskId)?.kind === "ask" ? true : undefined;
     updateReceipt(taskId, { state: "running", status: "running" });
-    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask });
+    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask, reply: peerReplies.start(targetThreadId) });
     let failureReported = false;
     const reportStartFailure = (error: unknown) => {
       if (failureReported) return;
@@ -4218,6 +4227,7 @@ function resumePaneWakes(botId: string) {
 const noteSteer = new NoteSteerer({
   enabled: (botId) => store.bot(botId)?.shareTerminalWithChat !== false,
   paused: (botId) => store.bot(botId)?.paneWakePaused === true,
+  holds: hasPeerWatch,
   liveTurn: (botId, threadId) => {
     const bot = store.bot(botId);
     if (!bot?.busy || bot.threadId !== threadId || bot.activeThreadId !== threadId || turnStartClaims.has(botId)) return undefined;
@@ -4719,8 +4729,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
+  // a teammate's turn leaves worker notes pending, for this whole dispatch
+  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
   const modelContextWindow = contextWindowFor(instance.models, model);
   const messagesBeforeSummary = store.activePath(threadId);
+  holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
   let taskRecord = taskPacketForWrite(threadId);
   const selectionChanged = task.lastInstanceId !== undefined && (
@@ -4791,6 +4804,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const summaryWaitMs = await summaryBuild.settle(threadId, instance, 90_000, () => planBeforeSummary.needed, { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
   const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);
+  holdNotes?.(activeMessages);
   // Inline replay carries this turn's notes after the reply marker, so they leave history and claim their room first.
   let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
@@ -5523,6 +5537,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             const messages = store.activePath(threadId);
             const replayedIds = new Set(activeMessages.map((message) => message.id));
             for (const message of messages) if (message.steered && !replayedIds.has(message.id)) skipTranscript.add(message.id);
+            holdNotes?.(messages);
             const refreshedNotes = paneNotesForTurn(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, !replaysNatively, modelContextWindow);
             if (!replaysNatively) inlineNotes = refreshedNotes;
             const compacted = await prepareContext(messages, waitedMs);
@@ -5588,6 +5603,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
       if (reservation) commit(reservation);
+      if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;

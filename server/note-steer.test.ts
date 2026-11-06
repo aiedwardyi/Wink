@@ -20,6 +20,7 @@ interface HarnessState {
   canSteer: boolean;
   enabled: boolean;
   paused: boolean;
+  holds?: boolean;
 }
 
 function harness(overrides: { live?: string; steer?: (text: string) => Promise<boolean>; wake?: () => void } = {}) {
@@ -31,6 +32,7 @@ function harness(overrides: { live?: string; steer?: (text: string) => Promise<b
   const steerer = new NoteSteerer({
     enabled: () => state.enabled,
     paused: () => state.paused,
+    holds: () => state.holds === true,
     liveTurn: () => state.live,
     busy: () => state.busy,
     steer: (_botId, _threadId, text) => (state.canSteer ? steer(text) : undefined),
@@ -70,6 +72,29 @@ describe("steerUntilTaken", () => {
 });
 
 describe("NoteSteerer", () => {
+  it("hands a note to the wake while a teammate's turn waits on the thread, leaving the watermark", async () => {
+    const { store, bot, state, steer, wake, note, delivered, nextPrefix, arrive } = harness();
+    const earlier = note("[pane worker01] DONE: earlier");
+    store.markPaneNotesDelivered(bot.id, bot.threadId, earlier.id);
+    state.holds = true;
+    const stored = note("[pane worker01] DONE: ram gate fixed");
+    await arrive("worker01");
+    expect(steer).not.toHaveBeenCalled();
+    expect(wake).toHaveBeenCalledExactlyOnceWith(bot.id, bot.threadId, "worker01");
+    expect(delivered()).toBe(earlier.id);
+    expect(nextPrefix()).toEqual([paneNoteText(stored.text!)]);
+  });
+
+  it("still steers into the user's live turn when nothing holds", async () => {
+    const { state, steer, wake, note, delivered, arrive } = harness();
+    state.holds = false;
+    const stored = note("[pane worker01] DONE: verified");
+    await arrive("worker01");
+    expect(steer).toHaveBeenCalledExactlyOnceWith(paneNoteText(stored.text!));
+    expect(wake).not.toHaveBeenCalled();
+    expect(delivered()).toBe(stored.id);
+  });
+
   it("steers a note into the busy teacher's live turn with the prefix text and skips the wake", async () => {
     const { steer, wake, note, delivered, nextPrefix, arrive } = harness();
     const stored = note("[pane worker01] DONE: verified");

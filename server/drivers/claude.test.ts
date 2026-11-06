@@ -1932,6 +1932,60 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(done).toMatchObject({ turnId, ok: false });
   });
 
+  describe("API error that ends the turn", () => {
+    const overloaded = "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check https://status.claude.com.";
+    const serverError = "API Error: Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.";
+    const failure = (text: string, status: number) => [
+      { type: "assistant", error: "server_error", is_api_error_message: true, api_error_status: status, parent_tool_use_id: null, message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text }] } },
+      { type: "result", subtype: "success", is_error: true, result: text, api_error_status: status, stop_reason: null, terminal_reason: "api_error", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } },
+    ];
+    const replay = async (threadId: string, messages: unknown[]) => {
+      const fixture = join(scratch, `api-error-${threadId}.json`);
+      writeFileSync(fixture, JSON.stringify(messages));
+      process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+      await create(undefined, { FAKE_CLAUDE_STDIN_LOG: join(scratch, "stdin.log") });
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "hi" });
+      const done = await recorder.until((e) => e.type === "turn.completed");
+      expect(readFileSync(join(scratch, "stdin.log"), "utf8").trim().split("\n").filter((line) => line === "user")).toHaveLength(1);
+      expect(recorder.events.some((e) => e.type === "turn.retrying")).toBe(false);
+      expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(1);
+      expect(done).toMatchObject({ turnId, ok: false });
+      return turnId;
+    };
+
+    it("shows the reason when it comes before any text", async () => {
+      const turnId = await replay("t-api-error", failure(overloaded, 529));
+      expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([expect.objectContaining({ turnId, message: overloaded })]);
+      expect(recorder.events.some((e) => e.type === "item.completed" && e.itemType === "assistant_text")).toBe(false);
+    });
+
+    it("keeps the partial reply and shows the reason under it", async () => {
+      const partial = "Here is the first half of the plan:";
+      const turnId = await replay("t-api-error-partial", [
+        { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: partial } } },
+        { type: "assistant", parent_tool_use_id: null, message: { role: "assistant", content: [{ type: "text", text: partial }] } },
+        ...failure(serverError, 500),
+      ]);
+      const reply = recorder.events.findIndex((e) => e.type === "item.completed" && e.itemType === "assistant_text" && e.text === partial);
+      const error = recorder.events.findIndex((e) => e.type === "runtime.error");
+      expect(reply).toBeGreaterThan(-1);
+      expect(error).toBeGreaterThan(reply);
+      expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([expect.objectContaining({ turnId, message: serverError })]);
+    });
+
+    it("leaves a usage limit on the limit path", async () => {
+      const limit = "API Error: You've hit your session limit · resets 9:20pm (Asia/Seoul) (error type rate_limit, HTTP 429)";
+      await replay("t-api-error-limit", [
+        { type: "assistant", error: "rate_limit", is_api_error_message: true, api_error_status: 429, parent_tool_use_id: null, message: { model: "<synthetic>", role: "assistant", content: [{ type: "text", text: limit }] } },
+        { type: "result", subtype: "success", is_error: true, result: limit, api_error_status: 429, stop_reason: null, terminal_reason: "api_error", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } },
+      ]);
+      const errors = recorder.events.filter((e) => e.type === "runtime.error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({ usageLimit: expect.any(Object) });
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", stopReason: "usage_limit" });
+    });
+  });
+
   it("reloads login after an auth error while resuming the same conversation", async () => {
     const gate = join(scratch, "signed-in");
     process.env.FAKE_CLAUDE_AUTH_GATE = gate;
@@ -2117,6 +2171,49 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await recorder.until((e) => e.type === "turn.completed");
     } finally {
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  });
+
+  it("sends a new account's asks to its own broker while the old account still holds the thread", async () => {
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-main-switch", text: "one" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    process.env.FAKE_CLAUDE_MODE = "hang";
+    const dump = join(scratch, "main-switch.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const next = await ClaudeDriver.create({
+      instanceId: "claude-test-next",
+      displayName: "Claude Test Next",
+      environment: {},
+      enabled: true,
+      config: { cli: FAKE_CLI, permissionMode: "acceptEdits" },
+    });
+    const nextRecorder = recordEvents(next.adapter);
+    let conn: Socket | undefined;
+    try {
+      const second = await next.adapter.sendTurn({ threadId: "t-main-switch", text: "two" });
+      await nextRecorder.until((e) => e.type === "session.started" && e.turnId === second.turnId);
+      const socketPath = JSON.parse(readFileSync(dump, "utf8")).mcpConfig.mcpServers.ogb.args[1];
+
+      conn = await connectSocket(socketPath);
+      const answer = answerQueue(conn)();
+      conn.write(JSON.stringify({ t: "ask", id: "ask-main-switch", tool: "Bash", input: { command: "git status" } }) + "\n");
+      const first = await Promise.race([
+        answer.then((reply) => ({ reply })),
+        nextRecorder.until((e) => e.type === "request.opened" && e.requestId === "ask-main-switch").then((opened) => ({ opened })),
+      ]);
+      expect(first).toMatchObject({ opened: { tool: "Bash" } });
+      await expect(next.adapter.respondToRequest("t-main-switch", "ask-main-switch", { behavior: "allow" })).resolves.toBe(
+        "allowed-once",
+      );
+      await expect(answer).resolves.toMatchObject({ id: "ask-main-switch", behavior: "allow" });
+      await next.adapter.interruptTurn("t-main-switch");
+      await nextRecorder.until((e) => e.type === "turn.completed");
+    } finally {
+      conn?.destroy();
+      nextRecorder.stop();
+      await next.dispose();
     }
   });
 

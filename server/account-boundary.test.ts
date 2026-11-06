@@ -13,6 +13,7 @@ import { ClaudeDriver } from "./drivers/claude.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { readCodexModelCatalog } from "./drivers/codex-catalog.ts";
 import { createCodexText } from "./drivers/codex-text.ts";
+import { readClaudeUsage } from "./claude-usage-probe.ts";
 import { readUsageRpc, createUsageRefresh } from "./usage-refresh.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { recordEvents } from "./testing/events.ts";
@@ -52,6 +53,15 @@ function fixture(kind: "claudeAgent" | "codex") {
     { slug: "unselected", never: "copy" }, { slug: "gpt-6.1-sol", context_window: 200_000, tool_mode: "code_mode_only" },
   ], unrelated: "never copy" }));
   const account = { id: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775", of: kind === "codex" ? "codex" : "claude", home, generation: 1 };
+  const base = join(root, "base");
+  fs.mkdirSync(base, { recursive: true });
+  fs.writeFileSync(join(base, kind === "codex" ? "AGENTS.md" : "CLAUDE.md"), "fixture global rules");
+  fs.mkdirSync(join(base, "rules"), { recursive: true });
+  fs.writeFileSync(join(base, "rules/r1.md"), "fixture rule");
+  fs.mkdirSync(join(base, "skills/my-skill"), { recursive: true });
+  fs.writeFileSync(join(base, "skills/my-skill/SKILL.md"), "fixture skill");
+  const readFile = fs.readFileSync;
+  const readSetup = () => readFile(join(home, kind === "codex" ? "AGENTS.md" : "CLAUDE.md"), "utf8");
   const launches: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
   const forbidden: string[] = [];
   const allowed: string[] = [];
@@ -118,6 +128,7 @@ function fixture(kind: "claudeAgent" | "codex") {
     queueMicrotask(() => { value.emit("close", 0); stopped?.(); });
   });
   vi.spyOn(cp, "spawn").mockImplementation((_file, args, options) => {
+    expect(options).not.toHaveProperty("accountBaseHome");
     const argv = args as string[];
     launches.push({ args: argv, env: options!.env! });
     const catalog = argv.find((arg) => arg.startsWith("model_catalog_json="));
@@ -139,9 +150,9 @@ function fixture(kind: "claudeAgent" | "codex") {
     queueMicrotask(() => callback(null, args.includes("--version") ? "fixture-cli 1.0" : JSON.stringify({ loggedIn: authenticated, email: "fixture@example.test", authMethod: method, configDirectory: directory })));
     return child(args) as unknown as cp.ChildProcess;
   });
-  const environment = { openai_api_key: "fake-key", Anthropic_Api_Key: "fake-key", META_API_KEY: "fake-key", XAI_API_KEY: "fake-key", ANTHROPIC_PROFILE: "console", CLAUDE_CODE_USE_BEDROCK: "1", CODEX_HOME: "wrong-home", CODEX_SQLITE_HOME: "wrong-state" };
+  const environment = { openai_api_key: "fake-key", Anthropic_Api_Key: "fake-key", META_API_KEY: "fake-key", XAI_API_KEY: "fake-key", ANTHROPIC_PROFILE: "console", CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CONFIG_DIR: base, CODEX_HOME: base, CODEX_SQLITE_HOME: "wrong-state" };
   const driver = kind === "codex" ? CodexDriver : ClaudeDriver;
-  return { account, root, launches, forbidden, allowed, catalogs, environment, driver,
+  return { account, root, base, readSetup, launches, forbidden, allowed, catalogs, environment, driver,
     helper: (value: boolean) => { helper = value; }, signedIn: (value: boolean) => { authenticated = value; },
     auth: (value: string) => { method = value; }, directory: (value: string) => { directory = value; },
     login: (value: typeof login) => { login = value; }, loginChild: () => loginChild,
@@ -166,11 +177,24 @@ function checkLaunches(f: ReturnType<typeof fixture>, kind: string) {
       expect(launch.env.CODEX_SQLITE_HOME).toBe(join(f.account.home, "state"));
       expect(launch.args).toContain('forced_login_method="chatgpt"');
     } else if (launch.args[0] === "auth" || launch.args[0] === "--version") expect(launch.args).not.toContain("--setting-sources");
-    else expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+    else expect(launch.args.slice(-2)).toEqual(["--setting-sources", launch.args.includes("--include-partial-messages") ? "user,project,local" : "project,local"]);
   }
 }
 
 describe.each(["claudeAgent", "codex"] as const)("%s account boundaries", (kind) => {
+  it("R4/R5 shares global rules on a recorded real turn without home reads/opens", async () => {
+    const f = fixture(kind);
+    const instance = await f.create();
+    const recorder = recordEvents(instance.adapter);
+    await instance.adapter.sendTurn({ threadId: `shared-${kind}`, text: "fixture", model: instance.models.default });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(f.forbidden).toEqual([]);
+    if (kind === "claudeAgent") expect(f.launches.at(-1)!.args.slice(-2)).toEqual(["--setting-sources", "user,project,local"]);
+    expect(fs.existsSync(join(f.account.home, kind === "codex" ? "AGENTS.md" : "CLAUDE.md"))).toBe(true);
+    expect(f.readSetup()).toBe(kind === "codex" ? "fixture global rules" : `@${f.base.replace(/\\/g, "/").replace(/ /g, "\\ ")}/CLAUDE.md\n`);
+    recorder.stop();
+  });
+
   it("covers creation, catalogs, cached/fresh probes and a recorded turn with zero home reads/opens", async () => {
     const f = fixture(kind);
     const instance = await f.create();
@@ -274,6 +298,49 @@ describe.each(["claudeAgent", "codex"] as const)("%s account boundaries", (kind)
     expect(f.forbidden).toEqual([]);
     checkLaunches(f, kind);
   });
+});
+
+it("keeps a lean Claude turn free of user setup", async () => {
+  const f = fixture("claudeAgent");
+  const instance = await f.create();
+  const recorder = recordEvents(instance.adapter);
+  await instance.adapter.sendTurn({ threadId: "lean-setup", text: "fixture", leanStartup: true });
+  await recorder.until((event) => event.type === "turn.completed");
+  expect(f.launches.at(-1)!.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+  expect(fs.readdirSync(f.account.home).sort()).toEqual(["models_cache.json", "state"]);
+  expect(f.forbidden).toEqual([]);
+  recorder.stop();
+});
+
+it.each([true, false])("keeps Claude helpers free of setup, lean %s", async (lean) => {
+  const f = fixture("claudeAgent");
+  const instance = await f.create();
+  expect(await instance.generateText!("fixture", { lean })).toBe("fixture helper answer");
+  const launch = f.launches.find((entry) => entry.args.includes("claude-haiku-5-5"))!;
+  expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+  expect(fs.readdirSync(f.account.home).sort()).toEqual(["models_cache.json", "state"]);
+  expect(f.forbidden).toEqual([]);
+});
+
+it("keeps the Claude usage probe free of setup", async () => {
+  const f = fixture("claudeAgent");
+  const pending = readClaudeUsage("fixture-cli", f.environment, f.account);
+  expect(f.launches.at(-1)!.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+  expect(fs.readdirSync(f.account.home).sort()).toEqual(["models_cache.json", "state"]);
+  expect(f.forbidden).toEqual([]);
+  vi.mocked(cp.spawn).mock.results.at(-1)!.value.emit("error", new Error("fixture end"));
+  await expect(pending).rejects.toThrow("unavailable");
+});
+
+it("keeps Claude auth and version launches free of setup", async () => {
+  const f = fixture("claudeAgent");
+  const instance = await f.create();
+  await instance.snapshot({ refresh: true });
+  expect(f.launches.some((launch) => launch.args[0] === "auth")).toBe(true);
+  expect(f.launches.some((launch) => launch.args[0] === "--version")).toBe(true);
+  for (const launch of f.launches) expect(launch.args).not.toContain("--setting-sources");
+  expect(fs.readdirSync(f.account.home).sort()).toEqual(["models_cache.json", "state"]);
+  expect(f.forbidden).toEqual([]);
 });
 
 it("gates listeners per engine and cancels only the owning account", async () => {
