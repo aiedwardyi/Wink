@@ -349,6 +349,33 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
+  it.each(["en", "ko"] as const)("shows a connected single-account engine's sign-in email under its name (%s)", async (locale) => {
+    applyLocale(locale);
+    const restores = [
+      stage("grok", { snapshot: { state: "available", authenticated: true, account: "grok.user@example.com" }, install: { logout: ["logout"] } }),
+      stage("muse", { snapshot: { state: "available", authenticated: true, account: "muse.user@example.com" } }),
+      stage("antigravity", { snapshot: { state: "available", authenticated: true } }),
+    ];
+    const { host, root, row } = await renderList();
+    try {
+      for (const [id, email] of [["grok", "grok.user@example.com"], ["muse", "muse.user@example.com"]]) {
+        const line = row(id).querySelector("[data-account-email]")!;
+        expect(line.textContent).toBe(email);
+        expect(line.className).toContain("text-[11px]");
+        expect(line.className).toContain("truncate");
+        expect(row(id).textContent).toContain(email);
+      }
+      expect(row("antigravity").querySelector("[data-account-email]")).toBeNull();
+      expect(row("antigravity").textContent).not.toMatch(/@/);
+      const attributes = [...host.querySelectorAll("*")].flatMap((node) => [...node.attributes].filter((attribute) => attribute.name !== "class").map((attribute) => attribute.value));
+      expect(attributes.filter((value) => value.includes("@"))).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      restores.forEach((restore) => restore());
+      applyLocale("en");
+    }
+  });
+
   it("keeps only Sign In for a signed-out engine", async () => {
     const restore = stage("codex", {
       snapshot: { state: "available", authenticated: false },

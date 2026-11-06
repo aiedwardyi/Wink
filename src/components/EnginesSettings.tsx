@@ -69,7 +69,10 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
             )}
           </div>} />
       ) : isEngineConnected(current) ? (
-        <ConnectionRow mark={mark} label={name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
+        <ConnectionRow mark={mark} label={current.snapshot.account ? <div className="flex min-w-0 flex-1 flex-col items-start py-1">
+          {name}
+          <span data-account-email="" className="block min-w-0 max-w-full truncate text-[11px] text-ink-secondary">{current.snapshot.account}</span>
+        </div> : name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
           className={ROW_BUTTON}>{t("engines.signOut")}</button> : <span>{t("connections.connected")}</span>}>
           {error && <span role="alert">{t("engines.didntFinish")}</span>}
         </ConnectionRow>
