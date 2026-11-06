@@ -45,7 +45,6 @@ import { isMemoryTopicName } from "./workspace.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const url = (file: string) => JSON.stringify(pathToFileURL(join(ROOT, "server", file)).href);
-const scratch = join(tmpdir(), "wink-SEARCH-BACKFILL");
 const NAMES = [SEARCH_CACHE_FILE, `${SEARCH_CACHE_FILE}-wal`, `${SEARCH_CACHE_FILE}-shm`];
 const msg = (id: string, text = id, extra: Partial<Message> = {}): Message => ({ id, role: "user", kind: "text", text, at: 1, parentId: null, ...extra });
 const tool = (id: string, name: string, extra: Partial<Message> = {}): Message => msg(id, "", { kind: "activity", tool: { name, detail: { input: `${name} input`, output: [`${id} output`] } }, ...extra });
@@ -212,8 +211,7 @@ describe("search cache", () => {
 
   it("probes the exact fts5 table in memory, and stays on the scan for the process when it is missing", () => {
     expect(probeSearchFts()).toBe(true);
-    mkdirSync(scratch, { recursive: true });
-    const dir = mkdtempSync(join(scratch, "probe-"));
+    const dir = mkdtempSync(join(tmpdir(), "search-probe-"));
     const preload = join(dir, "no-fts5.mjs");
     writeFileSync(preload, `import { DatabaseSync } from "node:sqlite";
       const exec = DatabaseSync.prototype.exec;

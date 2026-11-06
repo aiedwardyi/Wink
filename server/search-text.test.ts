@@ -13,7 +13,7 @@ import { redactBotAuthored, type Message } from "./store.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = join(root, "server/search-text.ts");
-const scratch = join(tmpdir(), "wink-SEARCH-TEXT");
+const scratch = join(tmpdir(), "search-text");
 const dirs: string[] = [];
 const message = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "user", kind: "text", at: 1, text, ...extra });
 const load = () => import("./search-text.ts");

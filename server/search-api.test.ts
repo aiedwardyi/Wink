@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,6 @@ import type { SearchHit } from "../src/lib/search-hit.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import type { SyncHead, SyncMutation } from "./thread-sync-v2.ts";
 
-const scratch = join(tmpdir(), "wink-SEARCH-API-PROOF");
 let store: Store;
 let routes: ReturnType<typeof import("./thread-routes.ts").createThreadRoutes>;
 let botId: string;
@@ -113,8 +112,7 @@ async function search(path = "/api/search?q=needle&limit=40") {
 }
 
 beforeEach(async () => {
-  mkdirSync(scratch, { recursive: true });
-  dataDir = mkdtempSync(join(scratch, "route-"));
+  dataDir = mkdtempSync(join(tmpdir(), "search-api-"));
   vi.resetModules();
   vi.stubEnv("OMB_DATA_DIR", dataDir);
   const { Store, redactBotAuthored } = await import("./store.ts");
@@ -149,6 +147,7 @@ afterEach(async () => {
   await sync?.close();
   await cache?.stopSearchCache();
   mdb.closeMessageDb();
+  rmSync(dataDir, { recursive: true, force: true });
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
