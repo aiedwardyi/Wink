@@ -325,6 +325,6 @@ describe("toastIconFor", () => {
   it("is what main hands the toast", () => {
     const main = readFileSync(path.join(root, "electron/main.mjs"), "utf8");
     expect(main).toMatch(/icon: toastIconFor\(\{\s*platform: process\.platform,\s*icon: payload\?\.icon,/);
-    expect(main).toContain("appIcon: APP_ICON,");
+    expect(main).toContain("appIcon: WINDOW_ICON,");
   });
 });
