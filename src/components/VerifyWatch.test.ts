@@ -137,6 +137,22 @@ it.each([false, true])("draws reel boxes at the selected screenshot's scroll (li
   expect(strokeRect).toHaveBeenCalledWith(10, 120, 80, 30);
 });
 
+it.each([false, true])("keeps the result pill opposite the scrolled reel target (live=%s)", async live => {
+  const tick = animationClock();
+  vi.spyOn(VerifyWatchShow.prototype, "frame").mockReturnValue({ jpeg: new Uint8Array([1]), ms: 0, scrollY: 500 });
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [
+    { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#bottom", measured: "missing", box: [540, 548, 200, 64], scrollY: 600 },
+    { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#top", measured: "missing", box: [540, 104, 200, 64], scrollY: 400 },
+  ])));
+  await render({ live, hidden: false });
+  await tick(2);
+  expect(host.querySelector(".verify-watch-pill")?.hasAttribute("data-top")).toBe(true);
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
+  await tick(40);
+  expect(host.querySelector(".verify-watch-caption b")?.textContent).toContain("#top");
+  expect(host.querySelector(".verify-watch-pill")?.hasAttribute("data-top")).toBe(false);
+});
+
 it.each(["en", "ko"] as const)("shows a Rerun failure and clears it on retry in %s", async locale => {
   applyLocale(locale);
   const tick = animationClock();

@@ -224,6 +224,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
     return () => { stageHeight.current = stage.getBoundingClientRect().height; animation.cancel(); };
   }, [tile, head]);
   const reel = show.reelIssue();
+  const pillTop = reel?.box && reel.box[1] + (reel.scrollY ?? 0) - (show.frame()?.scrollY ?? 0) + reel.box[3] / 2 > tileSize(show)[1] / 2;
   const caption = reel && <div className="verify-watch-caption"><b>{reel.tile === "phone" ? c.phone : c.desktop} · {reel.where}</b><span>{verifyProblem(reel, locale)}</span></div>;
   const issues = show.end?.issues ?? [];
   const seconds = Math.round(show.ms / 1000);
@@ -258,7 +259,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       <div ref={stageRef} className="verify-watch-stage" data-tile={tile} style={{ aspectRatio: tileSize(show).join(" / ") }} onClick={inline ? () => close.current() : undefined}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
-          <div className="verify-watch-pill">{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>
+          <div className="verify-watch-pill" data-top={pillTop || undefined}>{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>
         )}
         {banner && <div className="verify-watch-banner" role="status">{banner}</div>}
       </div>
