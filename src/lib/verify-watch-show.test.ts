@@ -108,3 +108,29 @@ it("spreads a batched checks mark into outlines on the grid, in document px, wit
   expect(show.checks).toBe(3);
   expect(show.outlines.map(o => [o.box.y, o.issue])).toEqual([[620, false], [0, true], [0, false]]);
 });
+
+it.each([false, true])("never treats a blocked end with no issues as clean (live=%s)", async live => {
+  const show = new VerifyWatchShow(live);
+  show.beginRun();
+  show.feed(head);
+  show.feed({ kind: "end", end: { status: "blocked", ms: 0, issues: [], notChecked: [] } });
+  show.advance(40);
+  expect(show.phase).toBe("failed");
+  await show.settled();
+  expect(show.phase).toBe("failed");
+});
+
+it("redraws and updates the caption when 40 ms frames cross a reel boundary", () => {
+  const show = new VerifyWatchShow(false);
+  show.beginRun();
+  show.feed(head);
+  show.feed(end(0, [issue("first"), issue("second", "desktop")]));
+  show.advance(0);
+  run(show, 1480, 40);
+  const { version, ui } = show;
+  expect(show.advance(40)).toBe(true);
+  expect(show.version).toBeGreaterThan(version);
+  expect(show.ui).toBeGreaterThan(ui);
+  expect(show.reelIssue()?.where).toBe("second");
+  expect(show.tile).toBe("desktop");
+});

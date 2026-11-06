@@ -106,7 +106,7 @@ export function VerifyCard({ card, threadId }: { card: VerifyCardData; threadId:
   };
   const watch = () => {
     if (phone) setInline(!inline);
-    else openVerifyWatch({ threadId, live: action === "live" });
+    else openVerifyWatch({ threadId, owner: card.owner, live: action === "live" });
   };
   return (
     <section className="verify-card" aria-label={title} data-verify-card>
@@ -151,7 +151,7 @@ export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Mes
       aria-pressed={open?.threadId === threadId}
       aria-label={label}
       title={label}
-      onClick={() => toggleVerifyWatch({ threadId, live: verifyCardAction(card, false) === "live" })}
+      onClick={() => toggleVerifyWatch({ threadId, owner: card.owner, live: verifyCardAction(card, false) === "live" })}
       className="relative rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink aria-pressed:text-accent max-md:hidden"
     >
       <AppWindow size={18} />

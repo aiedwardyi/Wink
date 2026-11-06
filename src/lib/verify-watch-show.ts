@@ -71,6 +71,7 @@ export class VerifyWatchShow {
   private lastDue = 0;
   private liveMs = 0;
   private phaseAt = 0;
+  private reelIndex = 0;
   private waits: Array<{ at: number; resolve: () => void }> = [];
 
   constructor(readonly live: boolean) {}
@@ -213,6 +214,7 @@ export class VerifyWatchShow {
   private set(phase: ShowPhase) {
     this.phase = phase;
     this.phaseAt = this.clock;
+    this.reelIndex = 0;
     this.version++;
     this.ui++;
   }
@@ -221,7 +223,7 @@ export class VerifyWatchShow {
     if (this.phase === "reel" && this.clock - this.phaseAt >= this.reel.length * REEL_MS) this.set("after");
     else if (this.phase === "reel") {
       const i = Math.floor((this.clock - this.phaseAt) / REEL_MS);
-      if (i !== Math.floor((this.clock - this.phaseAt - 17) / REEL_MS)) { this.version++; this.ui++; }
+      if (i !== this.reelIndex) { this.reelIndex = i; this.version++; this.ui++; }
     } else if (this.phase === "clean" && this.clock - this.phaseAt >= BANNER_MS) this.set("after");
   }
 
@@ -243,7 +245,7 @@ export class VerifyWatchShow {
       this.outlines = this.outlines.filter(o => o.issue);
       this.cursors.clear();
       this.reel = verifyReel(chunk.end.issues);
-      this.set(this.reel.length ? "reel" : "clean");
+      this.set(chunk.end.status === "blocked" ? "failed" : this.reel.length ? "reel" : "clean");
       return;
     }
     this.mark(chunk.mark, at);

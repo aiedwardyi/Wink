@@ -9,8 +9,8 @@ import { VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
 const copy = {
-  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", expired: "Replay expired", failed: "Could not load the replay", rerun: "Rerun", mute: "Mute", unmute: "Sound on", close: "Close", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone sideways scroll", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
-  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", rerun: "다시 확인", mute: "소리 끄기", unmute: "소리 켜기", close: "닫기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
+  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", mute: "Mute", unmute: "Sound on", close: "Close", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone sideways scroll", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
+  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", mute: "소리 끄기", unmute: "소리 켜기", close: "닫기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
 };
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
 const ROLE: Record<string, string> = { PAGE_ERRORS: "#8c95dc", LINKS: "#8db88a", FIT: "#94a3b8", NAV: "#6aa9d8", TEXT_A: "#5eb5a6" };
@@ -70,8 +70,12 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       const res = await fetch(path, { cache: "no-store", signal: abort.signal });
       if (res.status === 404) { show.expire(); return false; }
       if (!res.ok || !res.body) { show.fail(); return false; }
-      for await (const chunk of readReplay(res.body)) show.feed(chunk);
-      if (!show.end) return false;
+      let ended = false;
+      for await (const chunk of readReplay(res.body)) {
+        show.feed(chunk);
+        if (chunk.kind === "end") ended = true;
+      }
+      if (!ended) return false;
       await show.settled();
       return !abort.signal.aborted && show.phase === "after";
     };
@@ -198,7 +202,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));
   const rules = [...RULES, ...[...show.byChecker.keys()].filter(id => !RULES.includes(id))];
-  const banner = show.phase === "between" ? c.fixed : show.phase === "expired" ? c.expired : show.phase === "failed" ? c.failed : show.phase === "clean" ? c.clean : null;
+  const banner = show.phase === "between" ? c.fixed : show.phase === "expired" ? c.expired : show.phase === "failed" ? show.end?.status === "blocked" ? c.unfinished : c.failed : show.phase === "clean" ? c.clean : null;
   const toggleMute = () => { setBeatMuted(!muted); setMuted(!muted); };
   const rerun = async () => {
     if (rerunning) return;
