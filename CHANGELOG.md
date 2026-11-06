@@ -2,6 +2,18 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.238] - 2026-11-06
+
+### Added
+- Archive a bot from its menu.
+
+### Fixed
+- Keep your place when loading earlier messages.
+- The Usage account button now says Switch.
+- Korean shows 전환 중 while switching accounts.
+- A failed worker shows as working again once it moves on.
+- Text sent to a remote device's terminal arrives whole.
+
 ## [1.0.237] - 2026-11-06
 
 ### Added
@@ -658,6 +670,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.238]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.238
 [1.0.237]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.237
 [1.0.236]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.236
 [1.0.235]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.235
