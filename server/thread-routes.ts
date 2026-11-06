@@ -77,6 +77,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       else pullSyncedThread(threadId);
       const before = url.searchParams.get("before");
       const around = url.searchParams.get("around");
+      const pages = Number(url.searchParams.get("pages") ?? 1);
+      if (!Number.isInteger(pages) || pages < 1 || pages > 5 || (pages > 1 && !before)) return json(res, 400, { error: "invalid page count" });
       if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
       if (around) {
         const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
@@ -88,7 +90,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
         return json(res, 404, { error: "no such message" });
       }
-      return json(res, 200, messagePage(threadId, limit ?? DEFAULT_PAGE, before));
+      return json(res, 200, messagePage(threadId, (limit ?? DEFAULT_PAGE) * pages, before));
     },
     turns: async (res: ServerResponse, m: RegExpMatchArray) => {
       const threadId = m[1];

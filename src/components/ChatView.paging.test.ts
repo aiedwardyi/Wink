@@ -78,10 +78,10 @@ function pagedServer(threadId: string, thread: Message[], snapshot: { bots: Bot[
     const path = String(url);
     calls.push(path);
     if (path === "/api/bots?messages=200") return Response.json({ ...snapshot, computerControl: {} });
-    const page = path.match(new RegExp(`^/api/threads/${threadId}/messages\\?limit=(\\d+)&before=(\\w+)$`));
+    const page = path.match(new RegExp(`^/api/threads/${threadId}/messages\\?limit=(\\d+)&before=(\\w+)(?:&pages=(\\d+))?$`));
     if (page) {
       const stop = thread.findIndex((message) => message.id === page[2]);
-      const start = Math.max(0, stop - Number(page[1]));
+      const start = Math.max(0, stop - Number(page[1]) * Number(page[3] ?? 1));
       return Response.json({ messages: thread.slice(start, stop), hasMore: start > 0 });
     }
     const around = path.match(new RegExp(`^/api/threads/${threadId}/messages\\?around=(\\w+)&limit=(\\d+)$`));
@@ -173,6 +173,31 @@ const button = (host: HTMLElement, label: string) =>
   Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes(label));
 
 describe("paged transcripts", () => {
+  it.each([
+    ["chat", "memory"], ["room", "memory"], ["chat", "worker"], ["room", "worker"],
+  ] as const)("fills a screen in a %s when older pages mostly fold %s rows together", async (view, kind) => {
+    const saves: Message[] = Array.from({ length: 600 }, (_, i) => ({
+      id: `save${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, summary: "Saved a note" },
+    }));
+    const folded = kind === "memory" ? saves : [workerLaunch("launch", 1), ...Array.from({ length: 600 }, (_, i) => workerDone(`note${i}`, 1))];
+    const thread = [...rows(0, 40), ...folded, ...rows(40, 160)];
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    const calls = pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const host = await mount(view);
+    const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => host.querySelectorAll("[data-orbit-message], [data-worker-run], [data-run]").length * 30,
+    });
+    const height = scroller.scrollHeight;
+    await act(async () => button(host, "Show earlier messages")!.click());
+    await vi.waitFor(() => expect(scroller.scrollHeight - height).toBeGreaterThanOrEqual(scroller.clientHeight));
+    expect(calls.filter((call) => call.includes("before="))).toHaveLength(1);
+    expect(button(host, "Show earlier messages")?.textContent ?? "").not.toMatch(/\d+ more/);
+  });
+
   it.each(["chat", "room"] as const)("moves a %s worker to its newest note and keeps it there when paging", async (view) => {
     const messages = [workerLaunch("launch", 0), ...rows(0, 180), workerDone("report", 182)];
     const thread = messages.map((message, i) => ({ ...message, parentId: messages[i - 1]?.id ?? null }));
@@ -288,11 +313,11 @@ describe("paged transcripts", () => {
     expect(host.textContent).not.toContain("row 279;");
     expect(scroller.scrollTop).toBe(1200);
 
-    await act(async () => button(host, "Show earlier messages (80 more)")!.click());
+    await act(async () => button(host, "Show earlier messages")!.click());
     expect(host.textContent).toContain("row 200;");
     await act(async () => button(host, "Show earlier messages")!.click());
     await vi.waitFor(() => expect(store.state.bots[0]!.messages).toHaveLength(500));
-    await act(async () => button(host, "Show earlier messages (80 more)")!.click());
+    await act(async () => button(host, "Show earlier messages")!.click());
     expect(host.textContent).toContain("row 0;");
     expect(button(host, "Show earlier messages")).toBeUndefined();
     expect(calls.filter((call) => call.includes("before="))).toEqual([
@@ -311,7 +336,7 @@ describe("paged transcripts", () => {
     expect(host.textContent).not.toContain("Show earlier");
     await act(async () => button(host, "이전 메시지 더 보기")!.click());
     await vi.waitFor(() => expect(host.textContent).toContain("row 280;"));
-    expect(button(host, "이전 메시지 더 보기 (80개)")).toBeDefined();
+    expect(button(host, "이전 메시지 더 보기")).toBeDefined();
     expect(host.textContent).not.toContain("Show earlier");
   });
 
@@ -420,7 +445,7 @@ describe("paged transcripts", () => {
     const host = await mount("chat");
     await vi.waitFor(() => expect(host.textContent).toContain("row 299;"));
     expect(host.textContent).not.toContain("row 100;");
-    expect(button(host, "Show earlier messages (80 more)")).toBeDefined();
+    expect(button(host, "Show earlier messages")).toBeDefined();
   });
 
   it("regenerates from a prompt older than the loaded page", async () => {
@@ -632,7 +657,7 @@ describe("paged transcripts", () => {
     const scroller = host.querySelector("[data-orbit-transcript]") as HTMLElement;
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => host.querySelectorAll("[data-mid]").length * 10 });
     scroller.scrollTop = 0;
-    await act(async () => button(host, "Show earlier messages (80 more)")!.click());
+    await act(async () => button(host, "Show earlier messages")!.click());
     await act(async () => button(host, "Show earlier messages")!.click());
     await vi.waitFor(() => expect(store.state.bots[0]!.messages).toHaveLength(400));
     expect(host.querySelector('[data-mid="m280"]')).not.toBeNull();
@@ -822,7 +847,7 @@ describe("open window and jump pill", () => {
 
   it.each(["chat", "room"] as const)("re-tails a %s when a skin hides every mounted tool row", async (view) => {
     applySkin("terminal");
-    const thread = toolThread(350, { 0: ["user", "keep this prompt;"], 99: ["bot", "keep this reply;"] });
+    const thread = toolThread(350, { 0: ["user", "keep this prompt;"], 99: ["bot", "keep this reply;"] }).map((message, i) => ({ ...message, at: i * 86_400_000 }));
     pagedServer(view === "chat" ? "thread-a" : "thread-g", thread,
       view === "chat" ? { bots: [bot(thread, false)], groups: [] } : { bots: [], groups: [room(thread, false)] });
     const host = await mount(view);
@@ -1557,7 +1582,7 @@ it.each([
   await edge();
   expect(release).toBeDefined();
   await act(async () => button(host, "Show earlier messages")!.click());
-  if (prepend) await act(async () => button(host, "Show earlier messages")!.click());
+  if (prepend && button(host, "Show earlier messages")) await act(async () => button(host, "Show earlier messages")!.click());
   const ids = () => [...scroller.querySelectorAll("[data-mid]")].map((el) => el.getAttribute("data-mid"));
   const before = ids();
   scroller.scrollTop = 100;
