@@ -35,6 +35,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  document.head.querySelectorAll("[data-fit-test]").forEach((element) => element.remove());
   if (fontProperty) Object.defineProperty(document, "fonts", fontProperty);
   else Reflect.deleteProperty(document, "fonts");
   vi.restoreAllMocks();
@@ -45,6 +46,79 @@ const render = (watchMetrics = false) => act(async () => root.render(createEleme
 const box = () => host.querySelector("textarea")!;
 
 describe("FitTextarea", () => {
+  it("refits a head font override without interaction", async () => {
+    height = 185;
+    vi.spyOn(HTMLTextAreaElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLTextAreaElement) {
+      return parseInt(this.style.height) - 2 || height;
+    });
+    vi.spyOn(HTMLTextAreaElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLTextAreaElement) {
+      return this.clientHeight + 2;
+    });
+    await render(true);
+    await act(async () => loaded());
+    expect(box().clientHeight).toBe(185);
+    height = 206;
+    await act(async () => {
+      const style = document.createElement("style");
+      style.dataset.fitTest = "";
+      style.textContent = "* { font-family: Verdana, sans-serif !important; }";
+      document.head.appendChild(style);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    expect(box().clientHeight).toBe(box().scrollHeight);
+  });
+
+  it.each(["remove", "text", "media", "href", "load"])("refits after a stylesheet %s change", async (change) => {
+    const element = document.createElement(change === "href" || change === "load" ? "link" : "style");
+    element.dataset.fitTest = "";
+    document.head.appendChild(element);
+    await render(true);
+    height = 700;
+    await act(async () => {
+      if (change === "remove") element.remove();
+      else if (change === "text") element.textContent = "textarea { font-size: 18px; }";
+      else if (change === "load") element.dispatchEvent(new Event("load"));
+      else element.setAttribute(change, change === "href" ? "/theme.css" : "screen");
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    expect(box().style.height).toBe("702px");
+  });
+
+  it("shares one observer and one frame across watching boxes", async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, "observe");
+    const frames = vi.spyOn(window, "requestAnimationFrame");
+    let flush: FrameRequestCallback;
+    frames.mockImplementation((callback) => { flush = callback; return 1; });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    await act(async () => root.render(createElement("div", null,
+      createElement(FitTextarea, { value: "Memory", readOnly: true, watchMetrics: true }),
+      createElement(FitTextarea, { value: "Description", readOnly: true, watchMetrics: true }),
+    )));
+    expect(observe).toHaveBeenCalledTimes(2);
+    height = 700;
+    const style = document.createElement("style");
+    style.dataset.fitTest = "";
+    await act(async () => {
+      document.head.appendChild(style);
+      style.textContent = "textarea { font-size: 18px; }";
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(frames).toHaveBeenCalledTimes(1);
+    await act(async () => flush!(0));
+    expect([...host.querySelectorAll("textarea")].map((element) => element.style.height)).toEqual(["702px", "702px"]);
+    await act(async () => {
+      style.remove();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const detached = [...host.querySelectorAll("textarea")];
+    await act(async () => root.unmount());
+    expect(cancel).toHaveBeenCalledWith(1);
+    height = 900;
+    await act(async () => flush!(0));
+    expect(detached.map((element) => element.style.height)).toEqual(["702px", "702px"]);
+    root = createRoot(host);
+  });
+
   it.each(["scroll", "focus", "pointerenter"])("refits a post-open font override on %s", async (event) => {
     await render(true);
     await act(async () => loaded());
@@ -56,13 +130,13 @@ describe("FitTextarea", () => {
     expect(host.scrollTop).toBe(700);
   });
 
-  it.each(["data-skin", "lang"])("refits when %s changes without a font load", async (attribute) => {
+  it.each(["data-skin", "lang", "class", "style"])("refits when %s changes without a font load", async (attribute) => {
     await render(true);
     height = 700;
     const previous = document.documentElement.getAttribute(attribute);
     await act(async () => {
-      document.documentElement.setAttribute(attribute, attribute === "lang" ? "ko" : "terminal");
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      document.documentElement.setAttribute(attribute, attribute === "lang" ? "ko" : attribute === "style" ? "font-family: Verdana" : "terminal");
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     });
     expect(box().style.height).toBe("702px");
     if (previous === null) document.documentElement.removeAttribute(attribute);

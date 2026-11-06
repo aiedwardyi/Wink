@@ -68,6 +68,44 @@ function fit(box: HTMLTextAreaElement) {
   if (scroller) scroller.scrollTop = top;
 }
 
+const metricWatchers = new Set<() => void>();
+let metricObserver: MutationObserver | undefined;
+let metricFrame: number | undefined;
+
+function scheduleMetrics() {
+  if (metricFrame !== undefined) return;
+  metricFrame = requestAnimationFrame(() => {
+    metricFrame = undefined;
+    metricWatchers.forEach((refit) => refit());
+  });
+}
+
+function stylesheetLoaded(event: Event) {
+  if (event.target instanceof HTMLLinkElement) scheduleMetrics();
+}
+
+function watchStyleMetrics(refit: () => void) {
+  metricWatchers.add(refit);
+  if (!metricObserver) {
+    metricObserver = new MutationObserver((records) => {
+      if (records.some((record) => record.type !== "attributes" || record.target === document.documentElement || record.target instanceof HTMLStyleElement || record.target instanceof HTMLLinkElement)) scheduleMetrics();
+    });
+    // Keep textarea height writes outside the observed subtree.
+    metricObserver.observe(document.head, { childList: true, subtree: true, characterData: true, attributes: true });
+    metricObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin", "lang", "style", "class"] });
+    document.head.addEventListener("load", stylesheetLoaded, true);
+  }
+  return () => {
+    metricWatchers.delete(refit);
+    if (metricWatchers.size) return;
+    metricObserver?.disconnect();
+    metricObserver = undefined;
+    document.head.removeEventListener("load", stylesheetLoaded, true);
+    if (metricFrame !== undefined) cancelAnimationFrame(metricFrame);
+    metricFrame = undefined;
+  };
+}
+
 /** A textarea as tall as its text, so the panel stays the one thing that scrolls. */
 export function FitTextarea({ className, watchMetrics = false, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string; watchMetrics?: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -90,14 +128,13 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
     const scroller = box.closest<HTMLElement>(".overflow-y-auto");
     const refit = () => fit(box);
     const check = () => { if (box.scrollHeight > box.clientHeight) fit(box); };
-    const observer = new MutationObserver(refit);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin", "lang", "style", "class"] });
+    const unwatch = watchStyleMetrics(refit);
     scroller?.addEventListener("scroll", check, { passive: true });
     box.addEventListener("focus", check);
     box.addEventListener("pointerenter", check);
     window.addEventListener("resize", check);
     return () => {
-      observer.disconnect();
+      unwatch();
       scroller?.removeEventListener("scroll", check);
       box.removeEventListener("focus", check);
       box.removeEventListener("pointerenter", check);
