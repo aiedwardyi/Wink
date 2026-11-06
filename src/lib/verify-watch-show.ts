@@ -63,7 +63,9 @@ export class VerifyWatchShow {
   version = 0;
   /** bumps when the text around the canvas changes */
   ui = 0;
-  private queue: Array<{ due: number; chunk: VerifyReplayChunk; at: number }> = [];
+  private queue: Array<{ due: number; chunk: VerifyReplayChunk; at: number; scrollY: number }> = [];
+  /** scroll in stream order; marks play later on the grid than the frames shot after them */
+  private fedScroll: Record<VerifyTile, number> = { desktop: 0, phone: 0 };
   private history: Record<VerifyTile, Stored[]> = { desktop: [], phone: [] };
   private runStart = 0;
   private shift = 0;
@@ -83,6 +85,7 @@ export class VerifyWatchShow {
     this.byChecker = new Map();
     this.cursors = new Map();
     this.scroll = { desktop: 0, phone: 0 };
+    this.fedScroll = { desktop: 0, phone: 0 };
     this.frames = { desktop: null, phone: null };
     this.history = { desktop: [], phone: [] };
     this.lastFrame = { desktop: -Infinity, phone: -Infinity };
@@ -109,11 +112,13 @@ export class VerifyWatchShow {
       chunk.mark.checks.forEach((row: unknown, i: number) => this.feed({ kind: "mark", mark: { ms: ms + i * ROW_MS, kind: "result", ev: checkRow(row) } }));
       return;
     }
+    if (chunk.kind === "mark" && chunk.mark.kind === "scroll" && Number.isFinite(chunk.mark.y)) this.fedScroll[tileOf(chunk.mark.tile)] = chunk.mark.y as number;
+    const scrollY = chunk.kind === "frame" ? this.fedScroll[chunk.tile] : 0;
     if (this.live) {
       const ms = chunk.kind === "frame" ? chunk.ms : chunk.kind === "mark" ? chunk.mark.ms : chunk.kind === "end" ? chunk.end.ms : 0;
       this.liveMs = Math.max(this.liveMs, ms);
       const at = this.clock - Math.max(0, this.liveMs - ms);
-      this.queue.push({ due: chunk.kind === "mark" ? this.runStart + up16(this.clock - this.runStart) : this.clock, chunk, at });
+      this.queue.push({ due: chunk.kind === "mark" ? this.runStart + up16(this.clock - this.runStart) : this.clock, chunk, at, scrollY });
       return;
     }
     let due = this.lastDue;
@@ -129,7 +134,7 @@ export class VerifyWatchShow {
     else if (chunk.kind === "end") due = Math.max(this.lastDue, this.runStart + chunk.end.ms + this.shift);
     due = Math.max(due, this.runStart);
     if (chunk.kind !== "frame") this.lastDue = Math.max(this.lastDue, due);
-    this.queue.push({ due, chunk, at: due });
+    this.queue.push({ due, chunk, at: due, scrollY });
   }
 
   expire() { this.set("expired"); }
@@ -141,8 +146,8 @@ export class VerifyWatchShow {
     this.clock += Math.max(0, Math.min(ms, 250));
     this.queue.sort((a, b) => a.due - b.due);
     while (this.queue.length && this.queue[0]!.due <= this.clock) {
-      const { chunk, at } = this.queue.shift()!;
-      this.apply(chunk, at);
+      const { chunk, at, scrollY } = this.queue.shift()!;
+      this.apply(chunk, at, scrollY);
     }
     this.step();
     for (const wait of this.waits.filter(w => w.at <= this.clock)) wait.resolve();
@@ -227,7 +232,7 @@ export class VerifyWatchShow {
     } else if (this.phase === "clean" && this.clock - this.phaseAt >= BANNER_MS) this.set("after");
   }
 
-  private apply(chunk: VerifyReplayChunk, at: number) {
+  private apply(chunk: VerifyReplayChunk, at: number, scrollY: number) {
     this.version++;
     if (chunk.kind !== "frame") this.ui++;
     const ms = chunk.kind === "frame" ? chunk.ms : chunk.kind === "mark" ? chunk.mark.ms : chunk.kind === "end" ? chunk.end.ms : 0;
@@ -235,7 +240,7 @@ export class VerifyWatchShow {
     if (chunk.kind === "head") { this.head = chunk.head; if (this.phase === "loading") this.set("play"); return; }
     if (this.phase === "loading") this.set("play");
     if (chunk.kind === "frame") {
-      const stored = { jpeg: chunk.jpeg, scrollY: this.scroll[chunk.tile], ms: chunk.ms };
+      const stored = { jpeg: chunk.jpeg, scrollY, ms: chunk.ms };
       this.frames[chunk.tile] = stored;
       this.history[chunk.tile].push(stored);
       return;

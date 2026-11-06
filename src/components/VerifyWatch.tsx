@@ -5,7 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import { beatMuted, createBeat, setBeatMuted } from "@/lib/verify-beat";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { closeVerifyWatch, rerunVerify, verifyLiveGate } from "@/lib/verify-watch";
-import { VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
+import { BANNER_MS, VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
 const copy = {
@@ -86,8 +86,11 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
         return;
       }
       for (const [i, runId] of runs.current.entries()) {
-        if (!await play(route(VERIFY_ROUTES.replay, runId))) return;
-        if (i < runs.current.length - 1) await show.between();
+        const last = i === runs.current.length - 1;
+        if (await play(route(VERIFY_ROUTES.replay, runId))) { if (!last) await show.between(); }
+        // a recorded blocked check is one run of the chain; a replay that would not load ends it
+        else if (last || abort.signal.aborted || show.end?.status !== "blocked") return;
+        else await show.waitFor(BANNER_MS);
       }
       if (!abort.signal.aborted) show.finish();
     })().catch(() => { if (!abort.signal.aborted) show.fail(); });

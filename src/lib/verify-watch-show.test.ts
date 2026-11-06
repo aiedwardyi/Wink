@@ -134,3 +134,15 @@ it("redraws and updates the caption when 40 ms frames cross a reel boundary", ()
   expect(show.reelIssue()?.where).toBe("second");
   expect(show.tile).toBe("desktop");
 });
+
+it.each([false, true])("files a frame shot just after a scroll under that scroll, though the mark plays later (live=%s)", live => {
+  const show = new VerifyWatchShow(live);
+  show.beginRun();
+  for (const c of [head, frame(0)]) show.feed(c);
+  run(show, 10);
+  for (const c of [mark(100, "scroll", { tile: "desktop", y: 600 }), frame(130), end(400, [{ ...issue("far", "desktop"), scrollY: 600 }])]) show.feed(c);
+  run(show, 600);
+  expect(show.phase).toBe("reel");
+  expect(show.frame()?.ms).toBe(130);
+  expect(show.frame()?.scrollY).toBe(600);
+});

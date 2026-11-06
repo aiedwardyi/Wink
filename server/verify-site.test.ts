@@ -463,6 +463,21 @@ describe("verify_site Auto", () => {
     await tool({ entry: "site" });
     expect(card()?.fixed).toBeUndefined();
   });
+
+  it("counts a clean check of another page in the turn as no fix", async () => {
+    store.patchBot(botId, { autoApprove: true });
+    writeFileSync(join(work, "site", "other.html"), "<h1>other</h1>");
+    const dead = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "a#x", measured: "#x has no target" } as const;
+    bridge!.states = finalStates(result([dead, { ...dead, where: "a#y" }]));
+    await tool({ entry: "site" });
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site/other.html" });
+    expect(card()).toMatchObject({ issueTotal: 0 });
+    expect(card()?.fixed).toBeUndefined();
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    expect(card()).toMatchObject({ issueTotal: 0, fixed: 2 });
+  });
 });
 
 describe("verify_site cancellation", () => {

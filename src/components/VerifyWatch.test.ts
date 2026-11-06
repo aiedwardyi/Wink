@@ -108,6 +108,18 @@ it.each([false, true])("settles an end received before the next frame and finish
   expect(onClose).toHaveBeenCalledOnce();
 });
 
+it("plays on past a kept run whose check was blocked to the latest run", async () => {
+  const tick = animationClock();
+  const finish = vi.spyOn(VerifyWatchShow.prototype, "finish");
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => { calls.push({ url, signal: new AbortController().signal }); return bufferedRun(url.includes("old-1") ? "blocked" : "completed"); }));
+  await render({ live: false, hidden: false });
+  await tick(5);
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("Could not check this page");
+  await tick(200);
+  expect(calls.map(c => c.url)).toEqual(["/api/verify/runs/old-1/replay", "/api/verify/runs/old-2/replay"]);
+  expect(finish).toHaveBeenCalledOnce();
+});
+
 it.each(["en", "ko"] as const)("uses the card's failed-check wording for blocked playback in %s", async locale => {
   applyLocale(locale);
   const tick = animationClock();

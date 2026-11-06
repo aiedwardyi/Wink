@@ -265,7 +265,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const counts = result?.counts ?? detail.counts ?? undefined;
     const issues = result ? verifyProblems(result.issues) : undefined;
     const details = result ? [...(result.details ?? []), ...result.issues.filter(row => !issues!.includes(row))].slice(0, VERIFY_LIMITS.issues) : undefined;
-    const key = JSON.stringify([run.threadId, run.botId]), prior = found.get(key);
+    const key = JSON.stringify([run.threadId, run.botId, run.root, run.entry]), prior = found.get(key);
     const sameTurn = Boolean(run.turnId) && prior?.turnId === run.turnId;
     const fixed = status === "completed" && issues && !issues.length && sameTurn ? prior!.problems : undefined;
     if (status === "completed" && issues?.length && run.turnId && !sameTurn) found.set(key, { turnId: run.turnId, problems: issues.length });
