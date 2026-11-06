@@ -42,7 +42,7 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
   const { t } = useI18n();
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   const status = waiting ? t(copyFallback ? "engine.pasteAndEnter" : capture.code ? "engines.enterCode" : "engines.finishInBrowser")
-    : failed ? t("engines.didntFinish") : "";
+    : failed ? t(failed) : "";
   const steps = waiting && (copyFallback || capture.code || capture.inputGeneration || failed);
   const elsewhere = computerOnly && !loading && !connected;
   return (
@@ -64,7 +64,7 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
               className="h-8 min-w-0 flex-1 basis-56 rounded border border-hairline bg-control px-2 text-ink [@media(pointer:coarse)]:h-11" />
             <button type="submit" disabled={busy || !loginCode} className={cn(STRONG_BUTTON, "ml-auto")}>{t("accounts.submitCode")}</button>
           </form>}
-          {waiting && failed && <span>{t("engines.didntFinish")}</span>}
+          {waiting && failed && <span>{t(failed)}</span>}
         </>}
       </ConnectionRow>
     </div>

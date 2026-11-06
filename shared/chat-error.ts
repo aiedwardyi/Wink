@@ -1,7 +1,7 @@
 export type ChatError =
   | { kind: "quiet"; site: "chatRace" | "chatQueue" }
   | { kind: "keep"; raw: string }
-  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp"; vars?: Record<string, string | number> }
+  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut"; vars?: Record<string, string | number> }
   | { kind: "unknown"; raw: string };
 
 export function classifyChatError(line: string): ChatError {
@@ -19,6 +19,7 @@ export function classifyChatError(line: string): ChatError {
   if (stopped) return { kind: "known", key: "errors.stopped", vars: { minutes: stopped[1] } };
   if (/^(?:provider|model) instance .*unavailable|model is unavailable|no working engine supports/.test(reason)) return { kind: "known", key: "errors.model" };
   if (/^connected apps are unavailable/.test(reason)) return { kind: "known", key: "errors.apps" };
+  if (reason === "This account is signed out. Sign in again, then send your message.") return { kind: "known", key: "errors.signedOut" };
   if (reason === "Gemini is still busy after 3 tries. Try another model.") return { kind: "known", key: "chat.busyGaveUp" };
   if (/^(?:\w+ exited \d+ before result:|stream disconnected before completion|spawn failed:|Internal error$|Resource exhausted\.)/i.test(reason)) return { kind: "known", key: "errors.engine" };
   return { kind: "unknown", raw };

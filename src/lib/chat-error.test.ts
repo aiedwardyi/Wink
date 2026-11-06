@@ -16,6 +16,19 @@ vi.mock("@/state/store", async (original) => ({
 }));
 
 describe("chat errors", () => {
+  it("localizes a send refused for a signed-out account", async () => {
+    const { classifyChatError } = await import("../../shared/chat-error");
+    const { chatBannerError } = await import("./error-text");
+    const line = "This account is signed out. Sign in again, then send your message.";
+    expect(classifyChatError(line)).toEqual({ kind: "known", key: "errors.signedOut" });
+    try {
+      applyLocale("ko");
+      expect(chatBannerError(new Error(line))).toBe("이 계정이 로그아웃됐어요. 다시 로그인한 뒤 메시지를 보내세요.");
+    } finally {
+      applyLocale("en");
+    }
+  });
+
   it.each(["bot", "channel"])("shows a %s send task switch as a known failure in 1:1 and rooms", async (target) => {
     const { classifyChatError } = await import("../../shared/chat-error");
     const line = `the ${target} switched tasks before it could receive the message`;

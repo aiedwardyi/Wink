@@ -7,7 +7,9 @@ import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } fro
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-catalog";
 import { accountReady } from "@/lib/accounts";
+import { ConnectionError } from "@/lib/error-text";
 
 type Platform = "darwin" | "win32" | "linux";
 
@@ -206,10 +208,18 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
   );
 }
 
+const DIDNT_FINISH: MessageKey = "engines.didntFinish";
+
+function refusal(error: unknown): MessageKey {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "account-busy" ? "engines.signInBusy" : code === "login-busy" ? "engines.signInOther"
+    : code === "host-unknown" ? "engines.signInHostUnknown" : DIDNT_FINISH;
+}
+
 export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
   const [waiting, setWaiting] = useState(instance.loginState === "pending");
-  const [failed, setFailed] = useState(instance.loginState === "failed");
+  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && DIDNT_FINISH);
   const [capture, setCapture] = useState(instance.loginCapture ?? {});
   const [copyFallback, setCopyFallback] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -229,7 +239,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
 
   useEffect(() => {
     setWaiting(instance.loginState === "pending");
-    setFailed(instance.loginState === "failed");
+    setFailed(instance.loginState === "failed" && DIDNT_FINISH);
     setCapture(instance.loginCapture ?? {});
     setCopyFallback(false);
     setBusy(false);
@@ -253,7 +263,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setCapture(next.loginCapture ?? {});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
-    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled"); }
+    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && DIDNT_FINISH); }
   });
 
   const start = async () => {
@@ -264,8 +274,10 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setFailed(false);
     setCapture({});
     setCopyFallback(false);
+    let started = false;
     try {
       const result = await api(path, { method: "POST", body: JSON.stringify({ device: phone }) });
+      started = true;
       if (request !== generation.current) return;
       setCapture(result);
       if (external) {
@@ -278,11 +290,12 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
           }
         }
       }
-    } catch {
+    } catch (error) {
       if (request !== generation.current) return;
       setWaiting(false);
-      setFailed(true);
-      void api(path, { method: "DELETE" }).catch(() => {});
+      setFailed(started ? DIDNT_FINISH : refusal(error));
+      // A refused start never cancels: the sign-in running there may be another surface's.
+      if (started || error instanceof ConnectionError) void api(path, { method: "DELETE" }).catch(() => {});
     }
   };
   const cancel = async () => {
@@ -298,7 +311,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
       if (request !== generation.current) return;
       setWaiting(false);
       setCapture({});
-    } catch { if (request === generation.current) setFailed(true); }
+    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
     finally { if (request === generation.current) setBusy(false); }
   };
   const submitCode = async () => {
@@ -311,7 +324,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
         method: "POST", body: JSON.stringify({ code: loginCode, generation: capture.inputGeneration }),
       });
       if (request === generation.current) setLoginCode("");
-    } catch { if (request === generation.current) setFailed(true); }
+    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
     finally { if (request === generation.current) setBusy(false); }
   };
   const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;
@@ -340,8 +353,8 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className="text-ink underline">{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className="text-ink underline disabled:opacity-50">{t("engines.cancel")}</button>
         </div>
-      </> : <button type="button" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
-      {failed && <span>{t("engines.didntFinish")}</span>}
+      </> : <button type="button" data-sign-in="" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
+      {failed && <span>{t(failed)}</span>}
     </div>
   );
 }
