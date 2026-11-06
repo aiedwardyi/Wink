@@ -14,7 +14,7 @@ const MIN = 60_000;
 const CLAUDE_2 = "acct_00000000-0000-4000-8000-000000000002";
 const CLAUDE_3 = "acct_00000000-0000-4000-8000-000000000003";
 const CODEX_2 = "acct_00000000-0000-4000-8000-000000000012";
-const BOX = ["h-[26px]", "min-w-14", "shrink-0", "border", "px-2.5", "text-[12px]", "rounded-md"];
+const BOX = ["h-[22px]", "min-w-12", "shrink-0", "border", "px-2", "text-[11px]", "rounded-md"];
 const DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "antigravityAgent", muse: "museAgent" };
 const ENGINE: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" };
 
@@ -42,7 +42,11 @@ const matchMedia = window.matchMedia;
 
 const fresh = (): UsageBoard => structuredClone(usageBoardFixture);
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-const text = (node: Element | null | undefined) => (node?.textContent ?? "").replace(/\s+/g, " ").trim();
+const text = (node: Element | null | undefined) => {
+  const clone = node?.cloneNode(true) as Element | undefined;
+  clone?.querySelectorAll(".usage-reset-short").forEach((el) => el.remove());
+  return (clone?.textContent ?? "").replace(/\s+/g, " ").trim();
+};
 const q = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
 const quick = () => q("[data-usage-quick]");
 const meter = () => q<HTMLButtonElement>("[data-usage-meter]");
@@ -84,7 +88,7 @@ function cellsOn(root: Element | null | undefined) {
       expect([...boxes[0]!.children].map((cell) => cell.getAttribute("data-cell")), label).toEqual(Array.from({ length: 10 }, (_, i) => (i < on ? "on" : "off")));
       expect(boxes[0]!.textContent, label).toBe("");
       const left = group.querySelector("[data-left]");
-      expect(on, label).toBe(left ? Math.round(parseInt(text(left), 10) / 10) : 0);
+      expect(on, label).toBe(left ? Math.max(parseInt(text(left), 10) > 0 ? 1 : 0, Math.round(parseInt(text(left), 10) / 10)) : 0);
       return on;
     });
   });
@@ -251,7 +255,8 @@ describe("chat usage meter, quick view and wait card", () => {
       await poke(trigger!);
       await act(async () => { trigger!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })); });
       scan("meter hover, focus and touch");
-      await click(trigger);
+      await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+      await settle();
       expect(quick(), "quick view").not.toBeNull();
       scan("open quick view");
       for (const node of quick()!.querySelectorAll("button, [tabindex]")) await poke(node);
@@ -282,21 +287,22 @@ describe("chat usage meter, quick view and wait card", () => {
     server.read = () => read.promise;
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
     expect(meter(), "meter before the board").not.toBeNull();
-    expect(text(q("[data-meter-name]"))).toBe("Claude");
-    expect(text(q("[data-meter-first]"))).toBe("5h 29%");
-    expect(text(q("[data-meter-second]"))).toBe("7d 54%");
+    expect(q("[data-meter-name]")).toBeNull();
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("29%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[1]?.querySelector("[data-left]"))).toBe("54%");
     const board = fresh();
     board.engines[0]!.accounts[0]!.windows[1]!.usedPercent = 90;
     await act(async () => read.resolve(board));
     await settle();
-    expect(text(q("[data-meter-name]"))).toBe("Claude 1");
-    expect(text(q("[data-meter-first]"))).toBe("7d 10%");
-    expect(text(q("[data-meter-second]"))).toBe("5h 34%");
+    expect(q("[data-meter-name]")).toBeNull();
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("34%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[1]?.querySelector("[data-left]"))).toBe("10%");
   });
 
   it("keeps quick-view document listeners across clock ticks", async () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     expect(quick()).not.toBeNull();
     const add = vi.spyOn(document, "addEventListener");
     const remove = vi.spyOn(document, "removeEventListener");
@@ -313,7 +319,8 @@ describe("chat usage meter, quick view and wait card", () => {
 
   it("closes the old quick view before the next bot renders", async () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     expect(text(quick())).toContain("Claude 1");
     commits = [];
     await show(makeBot("bot-kai", "Kai", "codex"));
@@ -324,7 +331,7 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(commits.filter((commit) => commit.quick.length > 1)).toEqual([]);
     expect(document.querySelectorAll("[data-usage-quick]").length).toBeLessThanOrEqual(1);
     expect(text(quick())).not.toContain("Claude 1");
-    expect(text(q("[data-meter-name]"))).toBe("Codex 1");
+    expect(q("[data-meter-name]")).toBeNull();
   });
 
   it("returns focus to the meter after Escape, Back or an outside tap", async () => {
@@ -334,9 +341,10 @@ describe("chat usage meter, quick view and wait card", () => {
     try {
       await mount(makeBot("bot-atlas", "Atlas", "claude"));
       for (const how of ["Escape", "Back", "outside tap"] as const) {
-        await click(meter());
+        await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
         expect(quick(), how).not.toBeNull();
-        expect(meter()!.getAttribute("aria-expanded"), how).toBe("true");
+        expect(quick(), how).not.toBeNull();
         q<HTMLElement>("[data-quick-close]")?.focus();
         if (how === "Escape") {
           await act(async () => { (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
@@ -350,7 +358,7 @@ describe("chat usage meter, quick view and wait card", () => {
         await settle();
         expect(quick(), how).toBeNull();
         expect(document.activeElement, how).toBe(meter());
-        expect(meter()!.getAttribute("aria-expanded"), how).toBe("false");
+        expect(quick(), how).toBeNull();
       }
     } finally {
       window.removeEventListener("orbit:back-layer", listen);
@@ -377,7 +385,8 @@ describe("chat usage meter, quick view and wait card", () => {
       return { x: 0, y: top, top, bottom: top + 28, left: 0, right: 390, width: 390, height: 28, toJSON: () => ({}) } as DOMRect;
     });
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { phone: true, locale: "ko" });
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     const view = quick();
     expect(view, "quick view").not.toBeNull();
     expect(view!.querySelectorAll("[data-account-row]")).toHaveLength(8);
@@ -409,7 +418,8 @@ describe("chat usage meter, quick view and wait card", () => {
     const vv = viewport(390, 844);
     const meterTop = seatMeter(vv);
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { phone: true });
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     expect(quick(), "quick view").not.toBeNull();
     for (const height of [300, 260]) {
       await vv.resize(height);
@@ -433,7 +443,8 @@ describe("chat usage meter, quick view and wait card", () => {
     };
     for (const engine of server.board.engines.filter((each) => each.accounts.some((account) => account.windows.length > 0))) {
       await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone, locale });
-      await click(meter());
+      await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
       const view = quick();
       expect(view, `${engine.engine} quick view`).not.toBeNull();
       const rows = [...view?.querySelectorAll("[data-account-row]") ?? []];
@@ -447,7 +458,7 @@ describe("chat usage meter, quick view and wait card", () => {
         expect(bars, `${name} bars`).toBeTruthy();
         expect([...bars?.children ?? []].map((bar) => bar.getAttribute("aria-label")?.split(":")[0]), name)
           .toEqual(reported[node.getAttribute("data-account-row") ?? ""]);
-        if (locale === "en") expect(whoLine(node), name).toMatch(/^\d+ bots? · /);
+        expect(whoLine(node), name).toBe("");
         const control = node.querySelector("[data-main-check], button[data-use]");
         expect(boxOf(control), name).toEqual(BOX);
         expect(node.querySelector("svg.lucide-check"), name).toBeNull();
@@ -478,7 +489,8 @@ describe("chat usage meter, quick view and wait card", () => {
     const bars: [string, string | null, string][] = [];
     for (const engine of server.board.engines) {
       await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone, locale });
-      await click(meter());
+      await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
       const view = quick();
       expect(view, `${engine.engine} quick view`).not.toBeNull();
       for (const bar of view?.querySelectorAll('[data-window="session"]') ?? []) {
@@ -500,7 +512,8 @@ describe("chat usage meter, quick view and wait card", () => {
     const on: number[] = [];
     for (const engine of server.board.engines) {
       await mount(makeBot("bot-atlas", "Atlas", engine.base), { phone });
-      await click(meter());
+      await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
       expect(quick(), `${engine.engine} quick view`).not.toBeNull();
       on.push(...cellsOn(quick()));
       expect(said(quick()), engine.engine).not.toMatch(GLYPHS);
@@ -512,11 +525,12 @@ describe("chat usage meter, quick view and wait card", () => {
 
   it("shows the reset of a binding window that keeps no history, with no empty chart fold", async () => {
     await mount(makeBot("bot-juno", "Juno", "gemini"));
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     const view = quick();
     expect(view, "quick view").not.toBeNull();
-    expect(view!.querySelector("[data-window=\"daily\"]")?.getAttribute("aria-label"), "the daily bar").toMatch(/Resets in/);
-    expect(text(view!.querySelector("[data-reset=\"daily\"]")), "the daily reset").toBe("resets in 9h");
+    expect(view!.querySelector("[data-window=\"daily\"]")?.getAttribute("aria-label")).toMatch(/Resets in/);
+    expect(text(view!.querySelector("[data-reset=\"daily\"]"))).toBe("resets in 9h");
     expect(view!.querySelector("[data-chart-fold]"), "no fold over an empty chart").toBeNull();
     expect(view!.querySelector("[data-empty-state]"), "no empty chart message").toBeNull();
   });
@@ -548,13 +562,12 @@ describe("chat usage meter, quick view and wait card", () => {
     vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) { return overflow(this) ? 200 : 0; });
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: Element) { return overflow(this) ? 40 : 0; });
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     const row = quick()!.querySelector("[data-account-row=\"claude\"]");
     expect(row, "row").not.toBeNull();
-    expect(text(row), "counts like the phone").toContain("2 bots");
-    expect([...row!.querySelectorAll("*")].some((node) => overflow(node)), "no cut names").toBe(false);
-    await click(row!.querySelector("[data-bot-count]"));
-    expect(text(row), "the count discloses whole names").toContain("Atlas, Mira");
+    expect(row!.querySelector("[data-account-who], [data-bot-count]")).toBeNull();
+    expect(text(row)).not.toContain("Atlas, Mira");
   });
 
   it.each(["en", "ko"] as const)("says No usage yet for an account with no windows, the same in Settings and the quick view (%s)", async (locale) => {
@@ -563,7 +576,8 @@ describe("chat usage meter, quick view and wait card", () => {
     const expected = locale === "en" ? "No usage yet" : "아직 사용량 없음";
     const settings = q(`[data-usage-desk]:not([data-usage-quick]) [data-account-row="${CLAUDE_2}"] [data-window-empty]`);
     expect(text(settings), "Settings row").toBe(expected);
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     const row = quick()!.querySelector(`[data-account-row="${CLAUDE_2}"]`);
     const empty = row?.querySelector("[data-window-empty]");
     expect(text(empty), "quick view row").toBe(expected);
@@ -574,7 +588,8 @@ describe("chat usage meter, quick view and wait card", () => {
   it.each(["en", "ko"] as const)("offers Sign In for a signed-out account in the quick view, closes it and opens Connections (%s)", async (locale) => {
     server.board.engines[0]!.accounts[2]!.signIn = "signed-out";
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale });
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     const row = quick()!.querySelector(`[data-account-row="${CLAUDE_3}"]`);
     const signIn = row?.querySelector("button[data-sign-in]") ?? null;
     expect(text(signIn)).toBe(locale === "en" ? "Sign In" : "로그인");
@@ -613,17 +628,17 @@ describe("chat usage meter, quick view and wait card", () => {
 
   it("switches bots without a board request", async () => {
     await mount(makeBot("bot-atlas", "Atlas", "claude"));
-    expect(text(q("[data-meter-name]"))).toBe("Claude 1");
+    expect(q("[data-meter-name]")).toBeNull();
     expect(boardGets().length).toBeGreaterThan(0);
     const before = boardGets().length;
     await show(makeBot("bot-kai", "Kai", "codex"));
     await settle();
-    expect(text(q("[data-meter-name]"))).toBe("Codex 1");
-    expect(text(q("[data-meter-first]"))).toBe("7d 62%");
-    expect(text(q("[data-meter-second]"))).toBe("Weekly only");
+    expect(q("[data-meter-name]")).toBeNull();
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("62%");
+    expect(meter()?.querySelectorAll("[data-window]")).toHaveLength(1);
     await show(makeBot("bot-atlas", "Atlas", "claude"));
     await settle();
-    expect(text(q("[data-meter-name]"))).toBe("Claude 1");
+    expect(q("[data-meter-name]")).toBeNull();
     expect(boardGets().length - before).toBe(0);
     await show(makeBot("bot-kai", "Kai", "codex"));
     await settle();
@@ -638,19 +653,20 @@ describe("chat usage meter, quick view and wait card", () => {
     const draining = (phase: "draining" | "failed") => instancesFor(server.board).map((instance) =>
       instance.instanceId === "claude" ? { ...instance, drain: { destinationId: CLAUDE_3, phase } } : instance);
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { instances: draining("draining") });
-    expect(text(q("[data-meter-name]"))).toBe("Studio");
-    expect(text(q("[data-meter-first]"))).toBe("5h 40%");
-    expect(text(q("[data-meter-second]"))).toBe("7d 78%");
+    expect(q("[data-meter-name]")).toBeNull();
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("40%");
+    expect(text(meter()?.querySelectorAll("[data-window]")[1]?.querySelector("[data-left]"))).toBe("78%");
     await act(async () => store.dispatch({ type: "instances", instances: draining("failed") }));
     await settle();
-    expect(text(q("[data-meter-name]"))).toBe("Claude 1");
-    expect(text(q("[data-meter-first]"))).toBe("5h 34%");
+    expect(q("[data-meter-name]")).toBeNull();
+    expect(text(meter()?.querySelectorAll("[data-window]")[0]?.querySelector("[data-left]"))).toBe("34%");
   });
 
   it("shares one pending Main request with Usage", async () => {
     server.post = () => new Promise<Response>(() => {});
     await mount(makeBot("bot-atlas", "Atlas", "claude"), { desk: true });
-    await click(meter());
+    await act(async () => { window.dispatchEvent(new Event("orbit:usage-key", { cancelable: true })); });
+    await settle();
     const use = (id: string) => quick()?.querySelector(`[data-account-row="${id}"] button[data-use]`);
     await click(use(CLAUDE_3));
     await click(use(CLAUDE_3));

@@ -1,18 +1,16 @@
-// One compact usage line above the composer: whose quota, the window that runs out first, then the other.
-// A tap or Alt+U grows the quick view out of it. Hidden when the engine has no live windows.
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RateLimitWindow } from "../../server/contracts.ts";
 import { useI18n, type Translate } from "@/lib/i18n";
-import { cn } from "@/lib/cn";
 import { usageAccount } from "@/lib/accounts";
-import { museReading, planMeterWindows, windowExpired, windowKind } from "@/lib/usage";
+import { planMeterWindows, windowExpired, windowKind } from "@/lib/usage";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardWindow } from "@/lib/usage-board";
-import { pace } from "@/lib/usage-pace";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore, type InstanceInfo } from "@/state/store";
-import { engineName, windowFacts } from "./UsageDesk";
+import { windowFacts } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
+import { barSlots, WindowBar } from "./UsageBars";
+import "./UsageDesk.css";
 
 type ChatPlanMetersProps = {
   windows: RateLimitWindow[] | undefined;
@@ -91,62 +89,40 @@ export function ChatPlanMeters(props: ChatPlanMetersProps) {
   return props.instanceId ? <BoardMeter {...props} instanceId={props.instanceId} /> : <TodayMeter {...props} />;
 }
 
-function TodayMeter({ windows, driverKind, observedAt, now, onOpenUsage }: ChatPlanMetersProps) {
+function TodayMeter({ windows, now, onOpenUsage }: ChatPlanMetersProps) {
   // Decide visibility without the clock; chats without windows never subscribe to a tick.
   if (todayWindows(windows, now ?? Date.now()).length === 0) return null;
-  return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} />;
+  return <MeterLine windows={windows} now={now} onOpen={onOpenUsage} />;
 }
 
-function BoardMeter({ windows, driverKind, observedAt, instanceId, identity = instanceId, hidden, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
+function BoardMeter({ windows, instanceId, identity = instanceId, hidden, now, onOpenUsage }: ChatPlanMetersProps & { instanceId: string }) {
   const { state } = useStore();
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
   const at = now ?? Date.now();
   if (meterWindows(target, windows, at).length === 0) return null;
-  const own = state.instances.find((instance) => instance.instanceId === instanceId);
-  const base = state.instances.find((instance) => instance.instanceId === (own?.accountOf ?? instanceId));
-  return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden}
-    target={target} board={board} engineLabel={base?.displayName} />;
+  return <MeterLine windows={windows} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden} target={target} board={board} />;
 }
 
-function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = "", hidden, target, board, engineLabel }: {
-  windows: RateLimitWindow[] | undefined; driverKind?: string; observedAt?: string; now?: number; onOpen: () => void; identity?: string; hidden?: boolean;
-  target?: MeterTarget | null; board?: ReturnType<typeof useUsageBoard>; engineLabel?: string;
+function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board }: {
+  windows: RateLimitWindow[] | undefined; now?: number; onOpen: () => void; identity?: string; hidden?: boolean;
+  target?: MeterTarget | null; board?: ReturnType<typeof useUsageBoard>;
 }) {
   const { t } = useI18n();
   const tick = useVisibleClock();
   const clock = now ?? tick;
   const button = useRef<HTMLButtonElement>(null);
-  const ageId = useId();
-  const account = target?.account;
   const shown = meterWindows(target ?? null, windows, clock);
-  const facts = lineFacts(shown, account?.coverage ?? "unknown", t);
-  const reading = museReading(driverKind, account ? account.observedAt === null ? undefined : new Date(account.observedAt).toISOString() : observedAt, clock);
-  const runsOut = target && facts.binding ? pace(target.account, facts.binding, target.engine.events, clock).verdict.kind === "runsOut" : false;
-  const name = target && target.engine.accounts.length > 1 ? target.account.name : target ? engineName(target.engine.engine) : engineLabel;
   const quick = Boolean(!hidden && target && board?.board && shown.length > 0);
   const [open, setOpen] = useQuickToggle(quick, identity);
-  const toggle = () => { if (quick) setOpen(!open); else onOpen(); };
   if (shown.length === 0) return null;
   return (
     <div className="px-5 pb-1">
-      <button
-        ref={button}
-        type="button"
-        data-usage-meter=""
-        onClick={toggle}
-        aria-haspopup={quick ? "dialog" : undefined}
-        aria-expanded={quick ? open : undefined}
-        aria-label={name ? t("usage.chat.openAria", { name }) : t("usage.limits.openAria")}
-        aria-describedby={reading?.stale ? ageId : undefined}
-        className={cn("-mx-2 flex min-h-7 max-w-full items-baseline gap-2 rounded-[3px] [corner-shape:bevel] px-2 py-1 text-left text-ink-secondary transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:items-center",
-          open && "bg-raised-hover", reading?.stale && "opacity-70")}
-      >
-        {name && <span data-meter-name="" className="min-w-0 truncate text-[12px]">{name}</span>}
-        <span data-meter-first="" className={cn("usage-num shrink-0 whitespace-nowrap text-[12px]",
-          reading?.stale ? "text-ink-secondary" : facts.binding && facts.binding.usedPercent >= 100 ? "text-danger" : runsOut ? "text-warning" : "text-ink")}>{facts.first}</span>
-        {facts.second && <span data-meter-second="" className="usage-num shrink-0 whitespace-nowrap text-[12px]">{facts.second}</span>}
-        {reading?.stale && <span id={ageId} className="min-w-0 truncate text-[12px]">{reading.label(t)}</span>}
+      <button ref={button} type="button" data-usage-meter="" onClick={onOpen}
+        aria-label={t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
+        <span className="usage-chat-windows" data-windows={shown.length}>
+          {barSlots(target?.engine.engine ?? "", { windows: shown }, t).map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
+        </span>
       </button>
       {open && target && board?.board && (
         <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} />

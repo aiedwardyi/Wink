@@ -13,8 +13,10 @@ import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
+import { useAutoRefresh } from "@/lib/usage-auto-refresh";
 import { ProviderMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
+import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
 
 const HOUR = 3_600_000;
@@ -76,6 +78,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   anchor: RefObject<HTMLElement | null>; onClose: () => void;
 }) {
   const { t, locale } = useI18n();
+  useAutoRefresh();
   const { state: store, dispatch, refreshInstances } = useStore();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
@@ -175,7 +178,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
           {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
-            {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
+            {usageAccounts(engine).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
