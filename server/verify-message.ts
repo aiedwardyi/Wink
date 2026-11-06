@@ -60,6 +60,7 @@ export function redactVerifyCard(value: unknown): VerifyCardData | undefined {
   if (Array.isArray(value.notChecked)) out.notChecked = value.notChecked.slice(0, 20).map(row => text(row, 200)).filter((row): row is string => row !== null);
   if (Array.isArray(value.details)) out.details = value.details.slice(0, VERIFY_LIMITS.issues).map(issue).filter((row): row is VerifyIssue => row !== null);
   if (count(value.issueTotal)) out.issueTotal = value.issueTotal as number;
+  if (count(value.fixed) && (value.fixed as number) > 0) out.fixed = value.fixed as number;
   if (typeof value.errorCode === "string" && Object.hasOwn(VERIFY_REASONS, value.errorCode)) out.errorCode = value.errorCode as VerifyErrorCode;
   if (time(value.startedAt)) out.startedAt = value.startedAt as number;
   if (time(value.endedAt)) out.endedAt = value.endedAt as number;

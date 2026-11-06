@@ -448,6 +448,21 @@ describe("verify_site Auto", () => {
     expect(cards[0]!.verify?.runId).toBe(second);
     expect(second).not.toBe(first);
   });
+
+  it("marks a same-turn recheck that passes after problems as fixed, once", async () => {
+    store.patchBot(botId, { autoApprove: true });
+    const dead = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "a#x", measured: "#x has no target" } as const;
+    bridge!.states = finalStates(result([dead, { ...dead, where: "a#y" }]));
+    await tool({ entry: "site" });
+    expect(card()).toMatchObject({ issueTotal: 2 });
+    expect(card()?.fixed).toBeUndefined();
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    expect(card()).toMatchObject({ issueTotal: 0, fixed: 2 });
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    expect(card()?.fixed).toBeUndefined();
+  });
 });
 
 describe("verify_site cancellation", () => {

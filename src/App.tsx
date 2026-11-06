@@ -7,6 +7,7 @@ import {
   terminalAttentionCount,
   terminalAttentionKey,
   useStore,
+  visibleMessages,
   visibleNotificationThread,
   type Bot,
   type Group,
@@ -28,6 +29,8 @@ import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
+import { useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
 import { altDigitSelectsPane, backquoteTogglesTerminal } from "@/lib/terminal-hotkeys";
@@ -52,6 +55,7 @@ const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
+const VerifyWatchPanel = lazyView(() => import("@/components/VerifyWatch").then((m) => ({ default: m.VerifyWatchPanel })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
 
@@ -221,6 +225,16 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.appSettingsOpen ||
     state.pluginsOpen ||
     state.createBotOpen;
+  const watch = useVerifyWatch();
+  const watchChat = group ?? bot;
+  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
+    ? verifyCardIn(group ? group.messages : visibleMessages(bot!))
+    : undefined;
+  const watchPanel = (hidden: boolean) => watch && watchChat && watchCard && (
+    <LazyView>
+      <VerifyWatchPanel card={watchCard} threadId={watchChat.threadId} live={watch.live} hidden={hidden} />
+    </LazyView>
+  );
 
   // App-wide shortcuts: Alt+T Themes · Alt+Shift+T Cycle theme · Alt+U Usage · Alt+I Model index · Alt+W Workers · Ctrl+1..9 Nth bot · Alt+1..9 Nth pane while the terminal is open, else Nth bot. Esc still closes panels.
   useEffect(() => {
@@ -641,10 +655,17 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <NoEngines />
         </LazyView>
       ) : group ? (
-        <GroupView key={group.id} group={group} />
+        LIVE_VERIFY_V0 ? (
+          <div className={`relative flex min-h-0 min-w-0 flex-1${watchCard ? " verify-watch-dock" : ""}`}>
+            <GroupView key={group.id} group={group} />
+            {watchPanel(nativeViewOverlayOpen)}
+          </div>
+        ) : (
+          <GroupView key={group.id} group={group} />
+        )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">
-          <div ref={swipeStageRef} className="flex min-h-0 flex-1" inert={terminalOpen} aria-hidden={terminalOpen}>
+          <div ref={swipeStageRef} className={`flex min-h-0 flex-1${watchCard ? " verify-watch-dock" : ""}`} inert={terminalOpen} aria-hidden={terminalOpen}>
             <ChatView
               bot={bot}
               hidden={terminalOpen || nativeViewOverlayOpen}
@@ -652,6 +673,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
               onOpenTerminal={openMainTerminal}
               onOpenTerminalPane={openTerminalPane}
             />
+            {watchPanel(terminalOpen || nativeViewOverlayOpen)}
           </div>
           {terminalViews[bot.id] !== undefined && (
             <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" data-open={terminalOpen} inert={!terminalOpen} aria-hidden={!terminalOpen}>

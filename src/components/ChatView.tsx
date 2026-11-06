@@ -1,7 +1,7 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
-import { VerifyCard } from "./VerifyCard";
+import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
@@ -1500,6 +1500,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
               <KeepGoingMark state={keepGoing} size={14} />
             </button>
           )}
+          <VerifyWatchIcon messages={messages} threadId={bot.threadId} />
           <WorkerChip name={bot.name} runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button

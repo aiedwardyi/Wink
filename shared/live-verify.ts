@@ -55,6 +55,7 @@ export interface VerifyIssue {
   measured: string;
   /** Page scroll (CSS px) the element was measured at. */
   scrollY?: number;
+  /** CSS px in the viewport at scrollY. */
   box?: [number, number, number, number];
 }
 
@@ -98,6 +99,8 @@ export interface VerifyCardData {
   endedAt?: number;
   live?: true;
   replay?: string[];
+  /** problems an earlier run of this turn found that this run no longer finds */
+  fixed?: number;
 }
 
 export const VERIFY_ACTIVE_STATUSES: readonly VerifyCardStatus[] = ["offered", "waiting", "preparing", "running"];
@@ -121,7 +124,30 @@ export const VERIFY_ROUTES = {
   tool: "/api/internal/verify-site",
   /** UI -> server. App auth. Body { action, nonce }. 200 { status } | 404 { error: "not-here" }. */
   decision: "/api/verify/runs/:runId/decision",
+  /** UI -> server. App auth. The run's chunk stream while it runs, then its replay file. */
+  live: "/api/verify/runs/:runId/live",
+  /** UI -> server. App auth. The replay file; 404 once pruned. */
+  replay: "/api/verify/runs/:runId/replay",
 } as const;
+
+/** .lvr kind 0 */
+export interface VerifyReplayHead {
+  v: 1;
+  runId: string;
+  site: string;
+  /** entry path relative to the site root */
+  page: string;
+  startedAt: number;
+  tiles: Record<VerifyTile, [number, number]>;
+}
+
+/** .lvr kind 3 */
+export interface VerifyReplayEnd {
+  status: VerifyCardStatus;
+  ms: number;
+  issues: VerifyIssue[];
+  notChecked: string[];
+}
 
 export type VerifyDecision = "watch" | "skip" | "rerun";
 

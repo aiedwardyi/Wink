@@ -13,3 +13,6 @@
 .verify-card-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 4px 8px; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; }
 .verify-card-actions button:hover { background: var(--color-raised); color: var(--color-ink); }
 .verify-card-actions button:disabled { opacity: .5; cursor: default; }
+.verify-card-details-toggle { margin-top: 8px; padding: 0; color: var(--color-ink-secondary); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.verify-card-details { list-style: none; margin: 4px 0 0; padding: 0; color: var(--color-ink-secondary); font-size: 12px; }
+.verify-card-details li { padding: 2px 0; }

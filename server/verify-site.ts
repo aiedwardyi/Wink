@@ -199,6 +199,7 @@ export function verifyDecisionRunId(path: string): string | null {
 export function createVerifySite(deps: VerifySiteDeps) {
   const { store } = deps;
   const runs = new Map<string, Run>();
+  const found = new Map<string, { turnId: string; problems: number }>();
   const queue: Array<() => void> = [];
   let slot: string | null = null;
   const enabled = () => LIVE_VERIFY_V0 && (deps.platform ?? process.platform) === "win32";
@@ -264,6 +265,11 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const counts = result?.counts ?? detail.counts ?? undefined;
     const issues = result ? verifyProblems(result.issues) : undefined;
     const details = result ? [...(result.details ?? []), ...result.issues.filter(row => !issues!.includes(row))].slice(0, VERIFY_LIMITS.issues) : undefined;
+    const key = JSON.stringify([run.threadId, run.botId]), prior = found.get(key);
+    const sameTurn = Boolean(run.turnId) && prior?.turnId === run.turnId;
+    const fixed = status === "completed" && issues && !issues.length && sameTurn ? prior!.problems : undefined;
+    if (status === "completed" && issues?.length && run.turnId && !sameTurn) found.set(key, { turnId: run.turnId, problems: issues.length });
+    else if (fixed || !sameTurn) found.delete(key);
     if (run.recording) {
       run.saved = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
         await run.replySent;
@@ -275,7 +281,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
       }).catch(() => {}).finally(() => { if (runs.get(run.runId) === run) runs.delete(run.runId); });
     }
     try {
-      writeCard(run, { status, counts, issues, issueTotal: issues?.length, notChecked: result?.notChecked, details, errorCode, endedAt: Date.now() });
+      writeCard(run, { status, counts, issues, issueTotal: issues?.length, notChecked: result?.notChecked, details, errorCode, fixed, endedAt: Date.now() });
       if (run.recording) patchCard(run, { live: undefined });
     } catch {
       return blocked("internal", run.site);
@@ -304,7 +310,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const deadline = setTimeout(() => stop("timeout"), Math.max(1, ends - Date.now()));
     const turnCheck = signal ? setInterval(() => { if (!turnLive(run)) stop("cancelled"); }, TURN_CHECK_MS) : undefined;
     try {
-      writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, endedAt: undefined });
+      writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, fixed: undefined, endedAt: undefined });
       const started = await bridge.start(run, watch, aborter.signal);
       if (stopped) return finish(run, "blocked", { errorCode: stopped });
       if (started !== "started") return finish(run, "blocked", { errorCode: started });
