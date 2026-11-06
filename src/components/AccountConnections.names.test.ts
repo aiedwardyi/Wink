@@ -166,6 +166,21 @@ it("renames an account through the names API", async () => {
   expect(calls.some(({ path }) => path === "/api/accounts")).toBe(false);
 });
 
+it.each([false, true])("returns focus to the rename opener after Save, Cancel and Escape (phone=%s)", async (phone) => {
+  await mount({ phone });
+  for (const inline of [true, false]) {
+    for (const action of ["Save", "Cancel", "Escape"]) {
+      if (!inline && phone) await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+      await click(inline ? row()!.querySelector<HTMLElement>("[data-edit-name]") : button("Name", row()!));
+      if (action === "Escape") await act(async () => host.querySelector<HTMLInputElement>("[data-account-name-editor] input")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      else await click(button(action, host.querySelector("[data-account-name-editor]")));
+      const target = inline ? row()!.querySelector("[data-edit-name]") : phone ? row()!.querySelector("[data-connection-menu]") : button("Name", row()!);
+      expect(document.activeElement, `${inline ? "inline" : "Name action"}: ${action}`).toBe(target);
+    }
+  }
+});
+
 it.each(["en", "ko"] as const)("keeps the original number tile beside phone account names in %s", async (locale) => {
   await mount({ phone: true, locale });
   const tile = row()?.querySelector("[data-account-number]");

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion } from "./phone-swipe";
+import type { UsageBoardEngine } from "./usage-board";
 import { useTouchDrag } from "./use-touch-drag";
 
 const KEY = "openmausbot.usageOrder.v1";
@@ -25,7 +26,7 @@ type Drag = {
   node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number;
 };
 
-export function useUsageDrag() {
+export function useUsageDrag(engines: UsageBoardEngine[]) {
   const [orders, setOrders] = useState(load);
   const active = useRef<Drag | null>(null);
   const list = useRef<HTMLElement | null>(null);
@@ -48,7 +49,12 @@ export function useUsageDrag() {
     const ids = drag.items.map(identify);
     ids.splice(drag.to, 0, ids.splice(drag.from, 1)[0]!);
     setOrders((before) => {
-      const next = { ...before, [drag.key]: ids };
+      const accounts = engines.find((engine) => engine.base === drag.key)?.accounts;
+      const visible = new Set(ids);
+      let index = 0;
+      const order = accounts ? ordered(accounts, before[drag.key], (account) => account.id)
+        .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
+      const next = { ...before, [drag.key]: order };
       try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
       return next;
     });

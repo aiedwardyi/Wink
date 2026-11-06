@@ -210,6 +210,23 @@ it("keeps hidden accounts in place when a reorder key hits the list boundary", a
   expect(rows()).toEqual(engine.accounts.map((account) => account.id));
 });
 
+it.each([false, true])("preserves hidden account slots after a collapsed reorder (saved=%s)", async (saved) => {
+  const engine = h.board!.engines[0]!;
+  engine.accounts.push(...[4, 5, 6].map((number) => ({ ...engine.accounts[0]!, id: `claude-${number}`, number, name: `Claude ${number}`, main: false })));
+  engine.mainId = "claude-6";
+  const full = engine.accounts.map((account) => account.id);
+  if (saved) [full[2], full[4]] = [full[4]!, full[2]!];
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: full, codex: ["codex"] }));
+  await mount();
+  expect(rows()).toEqual([full[0], full[1], full[5]]);
+  await key(`[data-account-row="${full[0]}"] [data-usage-grip]`, "ArrowDown");
+  const expected = [full[1], full[0], ...full.slice(2)];
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!)).toEqual({ claude: expected, codex: ["codex"] });
+  await remount();
+  await click('[data-usage-engine="claude"] [data-accounts-cap]');
+  expect(rows()).toEqual(expected);
+});
+
 it("returns focus to the account name after cancelling a rename", async () => {
   await mount();
   await click('[data-account-row="claude"] [data-edit-name]');
@@ -223,6 +240,30 @@ it("refreshes through the existing refresh API, including Muse", async () => {
   await click("[data-usage-refresh]");
   expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/muse", { method: "POST" });
   expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
+});
+
+it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", async (locale) => {
+  persistPreference(locale);
+  const instance = h.instances.find((each) => each.instanceId === "gemini")!;
+  instance.driverKind = "antigravityAgent";
+  const report = { observedAt: new Date(usageBoardNow).toISOString(), windows: [] };
+  h.api.mockResolvedValue({ report });
+  await mount();
+  expect(q('[data-usage-engine="gemini"] [data-account-row="gemini"]')).not.toBeNull();
+  await click("[data-usage-refresh]");
+  expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
+  expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report });
+});
+
+it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh when %s", async (state) => {
+  const instance = h.instances.find((each) => each.instanceId === "gemini")!;
+  instance.driverKind = "antigravityAgent";
+  if (state === "unread") h.board!.engines.find((each) => each.engine === "gemini")!.accounts[0]!.windows = [];
+  if (state === "signed out") instance.snapshot.authenticated = false;
+  if (state === "unsupported") instance.canRefreshUsage = false;
+  await mount();
+  await click("[data-usage-refresh]");
+  expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
 });
 
 it("opens Settings on a chat bar click and preserves both Alt+U presses", async () => {

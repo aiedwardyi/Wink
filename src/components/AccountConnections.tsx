@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Ellipsis } from "lucide-react";
 import { api, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
@@ -92,6 +92,9 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const version = useRef(revision);
   version.current = revision;
   const nameButton = useRef<HTMLButtonElement>(null);
+  const inlineNameButton = useRef<HTMLButtonElement>(null);
+  const inlineEditor = useRef(false);
+  const restoreFocus = useRef(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const actions = useRef<HTMLDivElement>(null);
   const name = named && saved && saved.revision >= revision ? saved : named;
@@ -106,10 +109,16 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     window.addEventListener("pointerdown", outside, true);
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [menu]);
-  const closeEditor = () => { setEditing(false); (phone ? menuButton : nameButton).current?.focus(); };
+  useLayoutEffect(() => {
+    if (!editing && restoreFocus.current) {
+      restoreFocus.current = false;
+      (inlineEditor.current ? inlineNameButton : phone ? menuButton : nameButton).current?.focus();
+    }
+  }, [editing, phone]);
+  const closeEditor = () => { restoreFocus.current = true; setEditing(false); };
   const controls = <>
     {canName && <button ref={nameButton} type="button" disabled={busy} className={ROW_BUTTON}
-      onClick={() => { setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
+      onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
@@ -142,7 +151,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
               {stacked && tile}
               {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
                 onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-                : <button type="button" data-edit-name="" disabled={!canName || busy} onClick={() => setEditing(true)}
+                : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
                   className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
             </div>
             <button type="button" data-connection-identity="" aria-label={name ? `${t("connections.identity")}: ${name.name}` : t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}

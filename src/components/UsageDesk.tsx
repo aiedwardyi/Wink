@@ -427,7 +427,7 @@ export function UsageDesk() {
   const terminal = isTerminalSkin(useSkin());
   const mode = useUsageMode();
   const pending = useRefreshPending();
-  const drag = useUsageDrag();
+  const drag = useUsageDrag(state.board?.engines ?? []);
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [engineId, setEngineId] = useState<string | null>(null);
@@ -448,7 +448,9 @@ export function UsageDesk() {
   const refresh = async () => {
     setRefreshFailed(false);
     const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
-      && ["claudeAgent", "codex", "grokAgent", "museAgent"].includes(each.driverKind)).map((each) => joinRefresh(each.instanceId, async () => {
+      && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
+      && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
+      .map((each) => joinRefresh(each.instanceId, async () => {
         const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
         if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report });
         if (result.error) throw new Error("refresh");
