@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { cn } from "@/lib/cn";
 import type { Translate } from "@/lib/i18n";
 import { resetCompact, resetPhrase, windowExpired, type CompactReset } from "@/lib/usage";
@@ -8,12 +8,10 @@ import { reducedMotion } from "@/lib/phone-swipe";
 import { useUsageMode, type UsageMode } from "@/lib/usage-preferences";
 
 const CELLS = 10;
+/** How far each segment leans right per unit of height, as the old parallelogram glyph did. */
+const SLANT = 0.3;
 /** Engines that report a 5h and a 7d window; the rest show their own windows (Gemini its daily one). */
 const SESSION_WEEK = new Set(["claude", "codex", "grok"]);
-
-export function barTone(usedPercent: number) {
-  return usedPercent >= 90 ? "bg-danger" : usedPercent >= 75 ? "bg-warning" : "bg-accent";
-}
 
 export function windowLabel(window: Pick<UsageBoardWindow, "id" | "kind" | "windowMinutes">, t: Translate) {
   const minutes = window.windowMinutes;
@@ -73,13 +71,54 @@ function useShownPercent(target: number | null, mode: UsageMode) {
   return target === null ? null : last.current.mode === mode && last.current.target !== target ? target : shown;
 }
 
+type DeviceBox = { width: number; height: number; ratio: number };
+
+/** The bar's size in device pixels, so every edge and gap can be drawn on whole pixels at any zoom. */
+function useDeviceBox() {
+  const ref = useRef<SVGSVGElement>(null);
+  const [box, setBox] = useState<DeviceBox>(() => ({ width: 0, height: 0, ratio: typeof window === "undefined" ? 1 : window.devicePixelRatio || 1 }));
+  useLayoutEffect(() => {
+    const svg = ref.current;
+    if (!svg) return;
+    const read = () => {
+      const rect = svg.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.round(rect.width * ratio), height = Math.round(rect.height * ratio);
+      setBox((old) => old.width === width && old.height === height && old.ratio === ratio ? old : { width, height, ratio });
+    };
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    // Device pixels change with browser zoom and screen moves even when CSS pixels do not.
+    const observer = new ResizeObserver(read);
+    try {
+      observer.observe(svg, { box: "device-pixel-content-box" });
+    } catch {
+      observer.observe(svg);
+    }
+    window.addEventListener("resize", read);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", read);
+    };
+  }, []);
+  return [ref, box] as const;
+}
+
 function Cells({ percent, used, mini = false }: { percent: number; used: number; mini?: boolean }) {
   const filled = litCells(percent);
+  const [ref, { width, height, ratio }] = useDeviceBox();
+  // One CSS pixel, but two device pixels at least so neighbours' antialiased slants never touch.
+  const gap = Math.max(2, Math.round(ratio));
+  const lean = height * SLANT;
+  const cell = Math.max(0, (width - gap * (CELLS - 1) - lean) / CELLS);
   return (
-    <span aria-hidden="true" data-cells={filled} className={cn("usage-cells", mini && "usage-cells-mini", used >= 90 ? "text-danger" : used >= 75 ? "text-warning" : "text-accent")}>
-      {Array.from({ length: CELLS }, (_, index) => <span key={index} data-cell={index < filled ? "on" : "off"}
-        className={index < filled ? barTone(used) : "bg-transparent"} />)}
-    </span>
+    <svg ref={ref} aria-hidden="true" data-cells={filled} viewBox={width && height ? `0 0 ${width} ${height}` : undefined} preserveAspectRatio="none"
+      shapeRendering="geometricPrecision" style={{ "--dpr": ratio } as CSSProperties} className={cn("usage-cells", mini && "usage-cells-mini", used >= 90 ? "text-danger" : used >= 75 ? "text-warning" : "text-accent")}>
+      {Array.from({ length: CELLS }, (_, index) => {
+        const x = index * (cell + gap);
+        return <polygon key={index} data-cell={index < filled ? "on" : "off"} points={`${x},${height} ${x + cell},${height} ${x + cell + lean},0 ${x + lean},0`} />;
+      })}
+    </svg>
   );
 }
 
@@ -113,8 +152,8 @@ export function WindowBar({ slot, now, t, compact = false, chat = false }: { slo
       </span>
       <span aria-hidden="true" data-reset={slot.key} className="usage-reset min-w-0 tabular-nums text-ink-secondary">
         {left === null ? t("usage.desk.resetPassed") : <>
-          {reached && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>{reset && " · "}</>}
-          {reset && <><span className="usage-reset-long whitespace-nowrap">{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span><span className="usage-reset-short whitespace-nowrap">({resetTime(reset, t)})</span></>}
+          {reached && <span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>}
+          {reset && <><span className="usage-reset-long whitespace-nowrap">{reached && " · "}{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span><span className="usage-reset-short whitespace-nowrap">{reached && " · "}({resetTime(reset, t)})</span></>}
         </>}
       </span>
       </span>

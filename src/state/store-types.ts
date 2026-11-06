@@ -59,6 +59,7 @@ export interface SecretRequestCardData {
 }
 
 export interface Message {
+  verify?: import("../../shared/live-verify").VerifyCardData;
   id: string;
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";

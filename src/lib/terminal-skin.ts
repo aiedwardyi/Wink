@@ -1,11 +1,8 @@
 // The Terminal skin's reading of a transcript: Claude Code's tool verbs, the
 // one ⎿ line a step settles into, and the status line's meters.
-import type { RateLimitWindow } from "../../server/contracts.ts";
 import type { ToolDetail } from "../../shared/tool-detail";
 import type { MessageKey } from "./i18n-catalog";
 import type { Translate } from "./i18n";
-type UsageMode = "used" | "remaining";
-import { windowFillPercent, windowKind, type WindowKind } from "./usage";
 
 export { termVerb } from "../../shared/tool-verb";
 
@@ -89,20 +86,10 @@ export function termElapsed(ms: number): string {
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 }
 
-export type TermMeter = { id: string; kind: WindowKind; percent: number | null; bar: string };
-
 export function termModelLabel(label: string): string {
   return label.replace(/^(Claude|Meta|Google|OpenAI|xAI)\s+/, "")
     .replace(/\s+· on the box$/, "")
     .replace(/\s+\((Thinking|High|Medium|Low|Codex)\)$/, "");
-}
-
-/** Follows the usage mode like every Wink meter, so by default it shows what's left. */
-export function termMeter(window: RateLimitWindow, now: number, mode: UsageMode): TermMeter {
-  const used = windowFillPercent(window, now);
-  const percent = used === null ? null : mode === "remaining" ? Math.max(0, 100 - used) : used;
-  const filled = percent === null ? 0 : Math.min(5, Math.round(percent / 20));
-  return { id: window.id, kind: windowKind(window.id, window.windowMinutes), percent, bar: "▰".repeat(filled) + "▱".repeat(5 - filled) };
 }
 
 type LogRow = { role: "bot" | "user"; kind: string; tool?: { name: string; ok?: boolean } };

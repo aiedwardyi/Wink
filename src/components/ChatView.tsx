@@ -1,6 +1,7 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
+import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
@@ -794,7 +795,7 @@ const MessagesList = memo(function MessagesList({
             case "note":
             case "launch": {
               const worker = workerAt.get(m.id);
-              if (worker === undefined) return m.kind === "note" ? <NoteMessage message={m} /> : null;
+              if (worker === undefined) return m.verify ? <VerifyCard card={m.verify} threadId={bot.threadId} /> : m.kind === "note" ? <NoteMessage message={m} /> : null;
               if (!worker) return null;
               const live = livePanes && worker.run.sessionId ? livePanes.has(worker.run.sessionId) : null;
               return <WorkerRow {...worker} live={live} onOpenTerminalPane={onOpenTerminalPane} open={open.has(worker.run.id)} onToggle={() => toggle(worker.run.id)} />;
@@ -1505,6 +1506,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
               <KeepGoingMark state={keepGoing} size={14} />
             </button>
           )}
+          <VerifyWatchIcon messages={messages} threadId={bot.threadId} />
           <WorkerChip name={bot.name} runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button
