@@ -8,7 +8,7 @@ export function observe({ all, visible, where }) {
   const textNodes = [];
   for (const node of nodes) {
     const box = geometry(node), text = node.textContent.trim(), style = getComputedStyle(node);
-    if (node.matches("a,button,input,select,textarea,[role=button]")) add(node, "tap size", box[2] < 44 || box[3] < 44, `${Math.round(box[2])} x ${Math.round(box[3])} px; 44 px target`);
+    if (innerWidth < 768 && node.matches("a,button,input,select,textarea,[role=button]")) add(node, "tap size", box[2] < 44 || box[3] < 44, `${Math.round(box[2])} x ${Math.round(box[3])} px; 44 px target`);
     const direct = [...node.childNodes].filter(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
     if (!direct.length || !text || node.closest("script,style,pre,code,[contenteditable=true]")) continue;
     textNodes.push(node);
