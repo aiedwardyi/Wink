@@ -7,6 +7,7 @@ import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard, UsageBoardAccount } from "@/lib/usage-board";
 import type { Bot, InstanceInfo, Message } from "@/state/store";
 import type { UsageWaitView } from "../../server/limit-wait-store";
+import { runtimeErrorTool } from "../../server/chat-error";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -633,8 +634,11 @@ describe("chat usage meter, quick view and wait card", () => {
   });
 
   it.each(["en", "ko"] as const)("binds a sign-out error to the failed account, not the base engine (%s)", async (locale) => {
-    const failed: Message = { id: "signed-out", at: usageBoardNow - MIN, role: "bot", kind: "activity",
-      tool: { name: "error: Claude is not signed in.", signIn: true, accountId: CLAUDE_3 } as NonNullable<Message["tool"]> };
+    const tool = runtimeErrorTool({
+      eventId: "e1", provider: "claudeAgent", providerInstanceId: CLAUDE_3, threadId: "t1", createdAt: new Date(usageBoardNow).toISOString(),
+      type: "runtime.error", message: "Claude is not signed in.", signIn: true,
+    }, (id) => id === CLAUDE_3);
+    const failed: Message = { id: "signed-out", at: usageBoardNow - MIN, role: "bot", kind: "activity", tool: JSON.parse(JSON.stringify(tool)) };
     const instances = signedOut(CLAUDE_3).map((each) => each.instanceId === CLAUDE_3 ? { ...each, displayName: "Studio" } : each);
     await mount(makeBot("bot-atlas", "Atlas", "claude", [failed]), { locale, instances });
     const card = q("[data-sign-in-card]");
