@@ -118,7 +118,7 @@ const summary = (engine = "claude") => {
   return windows.length ? windows.map((window) => `${text(window.firstElementChild)} ${text(window.querySelector("[data-left]"))}`).join(" · ") : text(node);
 };
 const boxOf = (node: Element | null | undefined) => BOX.filter((name) => node?.classList.contains(name));
-const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => [...cell.classList].find((name) => name.startsWith("bg-")));
+const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => cell.getAttribute("data-cell") === "on" ? [...cell.parentElement!.classList].find((name) => name.startsWith("text-")) : "off");
 const said = (root: Element) => [root.textContent ?? "", ...[...root.querySelectorAll("*")].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
 function unused(board: UsageBoard, ...ids: string[]) {
   for (const id of ids) {
@@ -688,8 +688,8 @@ describe("Usage desk", () => {
     const opus = row("claude")?.querySelector('[data-window="seven_day_opus"]');
     expect(opus?.getAttribute("aria-label")).toBe("Opus 7d: 25% left, Resets in 2 days");
     expect(text(opus?.querySelector("[data-left]"))).toBe("25% left");
-    expect(tones(opus)).toEqual([...Array(3).fill("bg-warning"), ...Array(7).fill("bg-transparent")]);
-    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("bg-accent"), ...Array(7).fill("bg-transparent")]);
+    expect(tones(opus)).toEqual([...Array(3).fill("text-warning"), ...Array(7).fill("off")]);
+    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("text-accent"), ...Array(7).fill("off")]);
     expect(slots("gemini")).toEqual(["24h"]);
     expect(left("gemini", "daily")).toBe("82% left");
     expect(row("gemini")?.querySelectorAll("[data-cells]")).toHaveLength(1);
@@ -700,7 +700,7 @@ describe("Usage desk", () => {
     expect(slots("muse")).toEqual(["5h", "7d"]);
     expect(left("muse", "five_hour")).toBe("0% left");
     expect(row("muse")?.querySelector('[data-window="five_hour"] [data-left]')?.className).toMatch(/\btext-danger\b/);
-    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("bg-transparent"));
+    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("off"));
     expect(left("muse", "seven_day")).toBe("39% left");
     expect(row("muse")?.querySelector("[data-reading-age]")).toBeNull();
     expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
@@ -1123,7 +1123,7 @@ describe("Usage desk", () => {
     expect(engines.map((engine) => summary(engine))).toEqual(en
       ? ["5h 34% left · 7d 59% left", "7d 62% left", "No usage yet", "24h 82% left"]
       : ["5시간 34% 남음 · 7일 59% 남음", "7일 62% 남음", "아직 사용량 없음", "24시간 82% 남음"]);
-    expect(engines.map((engine) => section(engine)?.querySelector("[data-engine-summary]")?.childElementCount)).toEqual([2, 1, 0, 1]);
+    expect(engines.map((engine) => section(engine)?.querySelectorAll("[data-engine-summary] .usage-meter-summary").length)).toEqual([2, 1, 0, 1]);
     expect(q("[data-account-row]")).toBeNull();
     expect(q("[data-engine-summary] [data-left].text-danger")).toBeNull();
     const next = fresh();
@@ -1196,11 +1196,11 @@ describe("Usage desk", () => {
     const reset = week?.querySelector('[data-reset="week"]');
     expect(text(reset)).toBe(en ? "Limit reached · resets in 5d 2h" : "한도 도달 · 5일 2시간 후 초기화");
     expect([...reset?.querySelectorAll(".text-danger") ?? []].map(text)).toEqual([en ? "Limit reached" : "한도 도달"]);
-    expect(tones(week)).toEqual(Array(10).fill("bg-transparent"));
+    expect(tones(week)).toEqual(Array(10).fill("off"));
     const low = row(CLAUDE_3)?.querySelector('[data-window="session"]');
     expect(text(low?.querySelector("[data-left].text-danger"))).toBe(en ? "10% left" : "10% 남음");
     expect(text(low?.querySelector('[data-reset="session"]'))).toBe(en ? "resets in 2h 10m" : "2시간 10분 후 초기화");
-    expect(tones(low)).toEqual(["bg-danger", ...Array(9).fill("bg-transparent")]);
+    expect(tones(low)).toEqual(["text-danger", ...Array(9).fill("off")]);
   });
 
   it.each(["en", "ko"] as const)("ends a used-up window with no reset time at Limit reached, with no dot after it (%s)", async (locale) => {
