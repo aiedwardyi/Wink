@@ -434,12 +434,45 @@ export function UsageDesk() {
   const mode = useUsageMode();
   const pending = useRefreshPending();
   const drag = useUsageDrag(state.board?.engines ?? []);
+  const desk = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [engineId, setEngineId] = useState<string | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const now = useVisibleClock();
   const clock: Clock = { t, locale: localeTag(locale), now };
+  useLayoutEffect(() => {
+    const list = desk.current?.querySelector<HTMLElement>("[data-usage-sections]");
+    if (!list) return;
+    const layout = () => {
+      if (window.innerWidth >= 768) {
+        delete list.dataset.phoneColumns;
+        return;
+      }
+      const heads = list.querySelectorAll<HTMLElement>(".usage-engine-head:has(.usage-summary)");
+      // Gap transitions must settle before measuring the natural wrapping height.
+      for (const head of heads) head.style.transitionProperty = "none";
+      delete list.dataset.phoneColumns;
+      if (!heads.length) return;
+      for (const head of heads) head.style.setProperty("--usage-row-height", `${head.getBoundingClientRect().height}px`);
+      list.dataset.phoneColumns = "";
+      for (const head of heads) head.style.removeProperty("transition-property");
+    };
+    let width = list.clientWidth;
+    layout();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      if (list.clientWidth === width) return;
+      width = list.clientWidth;
+      layout();
+    });
+    observer?.observe(list);
+    document.fonts?.addEventListener("loadingdone", layout);
+    return () => {
+      observer?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", layout);
+      delete list.dataset.phoneColumns;
+    };
+  });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
   if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
@@ -465,7 +498,7 @@ export function UsageDesk() {
     setRefreshFailed(results.some((each) => each.status === "rejected"));
   };
   return (
-    <div data-usage-desk="" className="usage-desk min-w-0">
+    <div ref={desk} data-usage-desk="" className="usage-desk min-w-0">
       <div className="usage-toolbar">
         <div className="usage-count-switch" role="group" aria-label={t("usage.limits.direction")}>
           {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}

@@ -72,7 +72,7 @@ it("matches sidebar name and chat meter sizes while keeping emails small", () =>
   expect(rule(".usage-email")).toContain("font-weight: 400");
 });
 
-it("preserves Today's collapsed layout and 70 by 4px bar box", () => {
+it("shares phone label and bar columns while preserving the collapsed box and row heights", () => {
   expect(rule(".usage-summary")).toContain("display: flex");
   expect(rule(".usage-summary")).toContain("gap: 2px 14px");
   expect(rule(".usage-meter-summary")).toContain("flex-wrap: wrap");
@@ -80,7 +80,27 @@ it("preserves Today's collapsed layout and 70 by 4px bar box", () => {
   expect(rule(".usage-meter-summary .usage-figures")).toContain("gap: 6px");
   expect(rule(".usage-cells-mini")).toContain("--cells-w: 70px");
   expect(rule(".usage-cells-mini")).toContain("--cell-h: 4px");
+  expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content 70px minmax(0, 1fr)");
+  expect(rule("[data-phone-columns] .usage-summary")).toContain("grid-template-columns: subgrid");
+  expect(rule("[data-phone-columns] .usage-meter-summary")).toContain("grid-template-columns: subgrid");
+  expect(css).toMatch(/\[data-phone-columns\] \.usage-engine-head:has\(\.usage-summary\) \{[^}]*height: var\(--usage-row-height\)/);
   expect(css).not.toContain("@container usage-summary");
+});
+
+it("measures phone rows before aligning and restores the expanded layout", async () => {
+  vi.stubGlobal("innerWidth", 392);
+  const size = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 302, 45));
+  await mount();
+  expect(q("[data-phone-columns]")).toBeNull();
+  await click("[data-fold-all]");
+  expect(q("[data-phone-columns]")).not.toBeNull();
+  for (const head of host.querySelectorAll<HTMLElement>(".usage-engine-head")) {
+    expect(head.style.getPropertyValue("--usage-row-height")).toBe("45px");
+    expect(head.style.transitionProperty).toBe("");
+  }
+  await click("[data-fold-all]");
+  expect(q("[data-phone-columns]")).toBeNull();
+  size.mockRestore();
 });
 
 it("gives the refresh icon a 44px coarse-pointer hit area", () => {
