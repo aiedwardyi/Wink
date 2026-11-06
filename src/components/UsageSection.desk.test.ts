@@ -1135,6 +1135,22 @@ describe("Usage desk", () => {
     expect(text(section("claude")?.querySelector("[data-engine-summary] [data-left].text-danger"))).toBe(en ? "0% left" : "0% 남음");
   });
 
+  it.each(["en", "ko"] as const)("shows Main as a plain tag and Switch as the button (%s)", async (locale) => {
+    await mount({ locale });
+    const en = locale === "en";
+    const tag = row("claude")?.querySelector("[data-main-check]") ?? null;
+    expect(text(tag)).toBe(en ? "Main" : "기본");
+    expect(tag?.tagName).toBe("SPAN");
+    expect(tag?.closest("button")).toBeNull();
+    expect(tag?.hasAttribute("tabindex")).toBe(false);
+    expect(tag?.className).toMatch(/border-transparent/);
+    expect(tag?.className).not.toMatch(/(?:bg-|hover:|border-accent)/);
+    expect(boxOf(tag)).toEqual(BOX);
+    const button = useButton(CLAUDE_2);
+    expect(text(button)).toBe(en ? "Switch" : "전환");
+    expect(button?.getAttribute("aria-label")).toBe(en ? "Switch to Claude 2" : "Claude 2 전환");
+  });
+
   it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account and opens Connections (%s)", async (locale) => {
     accountOf(server.board, CLAUDE_3).signIn = "signed-out";
     await mount({ locale });
