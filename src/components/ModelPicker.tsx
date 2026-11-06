@@ -77,7 +77,6 @@ export function ModelPickerControl({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const focusComposerAfterCloseRef = useRef(false);
-  const openedWithShortcutRef = useRef(false);
   const switchingRef = useRef(false);
   const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
@@ -124,18 +123,17 @@ export function ModelPickerControl({
   const filteredCustom = filterCustomModels(custom, query);
   const price = pickerPrice(draft.model);
 
-  const show = (viaShortcut = false, switching = false) => {
+  const show = (switching = false) => {
     setDraft(selection);
     setCustomOpen(false);
     setListView(loadModelPickerView() === "list");
     setQuery("");
     focusComposerAfterCloseRef.current = false;
-    openedWithShortcutRef.current = viaShortcut;
     switchingRef.current = switching;
     switchSourceRef.current = switching ? noReplySource(bot)?.id : undefined;
     setOpen(true);
   };
-  useImperativeHandle(switchControl, () => () => show(false, true));
+  useImperativeHandle(switchControl, () => () => show(true));
   const close = () => {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = 0;
@@ -158,7 +156,7 @@ export function ModelPickerControl({
   };
   const save = (candidate: ModelSelection = draft, fromKeyboard = false, closeDelay = 0) => {
     if (saveTimerRef.current || !canCommit(candidate)) return false;
-    focusComposerAfterCloseRef.current = fromKeyboard && (openedWithShortcutRef.current || switchingRef.current) && !contained;
+    focusComposerAfterCloseRef.current = !contained && (fromKeyboard || !switchingRef.current);
     if (switchingRef.current) switchFromNoReply(bot, candidate, switchSourceRef.current, state.instances, () => followUpRef.current, dispatch, onSwitching, onRerunSettled);
     else dispatch({ type: "setModel", botId: bot.id, selection: candidate });
     if (closeDelay) saveTimerRef.current = window.setTimeout(finishSave, closeDelay);
@@ -181,7 +179,7 @@ export function ModelPickerControl({
       if (!shortcutEnabled || (!open && document.querySelector('[data-model-picker-content], [aria-labelledby="team-library-title"]'))) return;
       event.preventDefault();
       if (open) close();
-      else show(true);
+      else show();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
