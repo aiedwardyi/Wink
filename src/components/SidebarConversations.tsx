@@ -226,6 +226,7 @@ function GroupListItem({
         </span>
         <div className={cn("@container/rowtext min-w-0 flex-1", density === "icons" && "hidden")}>
           <div className="flex min-w-0 items-baseline gap-2 overflow-hidden">
+            {group.pinned && <Pin size={12} className="-mr-0.5 shrink-0 self-center text-ink-secondary" />}
             <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">
               {group.name}
               <span className="sr-only" aria-live="polite">{asking ? t(question ? "ask.hasQuestionSuffix" : "routine.rangSuffix") : ""}</span>

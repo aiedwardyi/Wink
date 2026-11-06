@@ -188,7 +188,7 @@ describe("decluttered sidebar menus", () => {
         document.querySelector('[data-sidebar-row-id="team"] button')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 60, clientY: 60 }));
       });
       const room = document.querySelector("[data-room-menu]")!;
-      expect([...room.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Rename Team", "Move to section", "Delete group"]);
+      expect([...room.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Pin", "Rename Team", "Move to section", "Delete group"]);
     } finally {
       await act(async () => root.unmount());
     }
