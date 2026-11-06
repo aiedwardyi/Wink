@@ -683,6 +683,10 @@ export function Sidebar({
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
   }, [backOverlay]);
+  // Desktop never opens the drawer, so only a phone drawer closing reaches this.
+  useEffect(() => {
+    if (!open) setPlusOpen(false);
+  }, [open]);
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const sidebarWidthRef = useRef(sidebarWidth);
   const sidebarCollapsedRef = useRef(sidebarCollapsed);

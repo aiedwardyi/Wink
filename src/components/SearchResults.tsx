@@ -82,7 +82,8 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
             )}
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline gap-1.5 text-[12px] text-ink-secondary">
-                <span className="truncate font-medium text-ink"><Highlighted text={hit.from ?? hit.name} query={q} /></span>
+                {/* with a task, the cap leaves room for the time and a bit of it */}
+                <span className={cn("truncate font-medium text-ink", hit.task && "max-w-[65%] shrink-0")}><Highlighted text={hit.from ?? hit.name} query={q} /></span>
                 {hit.task ? <span className="truncate">· <Highlighted text={hit.task} query={q} /></span> : null}
                 <span className="ml-auto shrink-0 tabular-nums">{formatTime(hit.at, localeTag(locale))}</span>
               </span>
