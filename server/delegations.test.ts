@@ -257,7 +257,7 @@ describe("sender chip status", () => {
   it.each([
     ["the reply lands", true, "Done, see the PR.", ["@Helper replied", "Reply from @Helper"]],
     ["the turn fails", false, "", ["Delegated turn did not finish"]],
-    ["the reply is blank", true, " ", ["@Helper replied"]],
+    ["the reply is blank", true, " ", ["No reply from @Helper"]],
   ])("shows the handoff under its chip and a reply row only when %s", async (_, ok, reply, names) => {
     const turn = await delivered();
     expect(rows()).toMatchObject([{ tool: { name: "Delivered to @Helper" }, text: "do this", comm: { groupId: turn.channelId } }]);
@@ -1288,7 +1288,7 @@ describe("user takeover of a delegated turn", () => {
     expect(store.messagesFor(career.threadId).filter((m) => m.comm?.peer === "reply").map((m) => m.text)).toEqual([answer]);
   });
 
-  it("mirrors only the completed row when a pane note joined before any reply", async () => {
+  it("fails without a reply when a pane note joined before any reply", async () => {
     const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "FYI: NIGHT-PAD is on the shared API key.", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
@@ -1301,9 +1301,50 @@ describe("user takeover of a delegated turn", () => {
 
     const channel = dispatched[0]!.channel!;
     expect(channelTexts(channel)).toEqual(["FYI: NIGHT-PAD is on the shared API key."]);
-    expect(channelRows(channel)).toEqual(["Delegated turn completed"]);
-    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "done", result: "" });
+    expect(channelRows(channel)).toEqual(["No reply from @Wink"]);
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", result: "No reply from @Wink" });
     expect(store.messagesFor(career.threadId).filter((m) => m.comm?.peer === "reply")).toEqual([]);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \n\t"],
+  ])("settles an ok turn with %s text as failed, red and unwoken", async (_, reply) => {
+    const wakeSender = vi.fn();
+    commsBus.wakeSender = wakeSender;
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
+    drain();
+    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
+    const turn = turnOf(dispatched[0]!);
+    expect(finishDelegatedTurn(commsBus, turn, true, reply)).toBe(true);
+    const rows = store.messagesFor(career.threadId).length;
+    expect(finishDelegatedTurn(commsBus, turn, true, reply)).toBe(false);
+
+    expect(store.messagesFor(career.threadId)).toHaveLength(rows);
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", state: "failed", result: "No reply from @Wink" });
+    expect(chip()).toMatchObject({ name: "No reply from @Wink", ok: false });
+    expect(channelRows(dispatched[0]!.channel!)).toEqual(["No reply from @Wink"]);
+    expect(store.messagesFor(career.threadId).filter((m) => m.comm?.peer === "reply")).toEqual([]);
+    expect(store.messagesFor(career.threadId).some((m) => m.tool?.name === "Delegated turn completed")).toBe(false);
+    expect(wakeSender).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed turn's own wording when its text is blank", async () => {
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
+    drain();
+    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
+    finishDelegatedTurn(commsBus, turnOf(dispatched[0]!), false, "", "Delegated turn could not start 2014 spawn failed");
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", result: "Delegated turn could not start 2014 spawn failed" });
+    expect(chip()).toMatchObject({ name: "Delegated turn could not start 2014 spawn failed", ok: false });
+  });
+
+  it("says a turn with no task had no reply", () => {
+    const channel = getOrCreateChannel(store, career, wink);
+    finishDelegatedTurn(commsBus, { channelId: channel.id, toBotId: wink.id }, true, " ");
+    expect(channelRows(channel)).toEqual(["No reply from @Wink"]);
+    expect(store.messagesFor(channel.threadId).find((m) => m.tool?.name === "No reply from @Wink")?.tool?.ok).toBe(false);
+    finishDelegatedTurn(commsBus, { channelId: channel.id, toBotId: wink.id }, false, "", "Delegated turn stalled and was stopped");
+    expect(channelRows(channel)).toEqual(["No reply from @Wink", "Delegated turn stalled and was stopped"]);
   });
 
   it("still reruns on a user takeover after a pane note joined", async () => {

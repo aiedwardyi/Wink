@@ -609,7 +609,7 @@ export interface DelegatedTurn {
   takenOverBy?: string;
   /** An ask that outlived its wait: a takeover fails it, nothing reruns. */
   ask?: true;
-  /** The reply before a pane note joined this turn; later text answers the note. */
+  /** Backstop for a pane note that still reached this turn: the reply before it; later text answers the note. */
   answer?: string;
 }
 
@@ -677,6 +677,11 @@ export function finishDelegatedTurn(
   if (existing?.state && terminalMailState(existing.state)) return false;
   const pointer = ok && turn.takenOverBy !== undefined
     ? `${target?.name ?? turn.toBotId} answered ${turn.takenOverBy} in its own chat instead` : undefined;
+  // tool calls or summaries only: a blank success would read as an answer
+  if (ok && !pointer && !reply.trim()) {
+    ok = false;
+    failureName = `No reply from @${target?.name ?? turn.toBotId}`;
+  }
   const channel = turn.channelId ? bus.store.group(turn.channelId) : undefined;
   const sender = turn.sourceBotId ? bus.store.bot(turn.sourceBotId) : turn.sourceThreadId ? bus.store.botByThread(turn.sourceThreadId) : undefined;
   if (turn.taskId && turn.sourceThreadId) {

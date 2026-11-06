@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { accountLaunch, canonicalAccountHome, type AccountContext } from "./account-policy.ts";
+import { shareUserSetup } from "./account-shared-setup.ts";
 import type { InstanceConfigMap } from "./contracts.ts";
 import type { createSpawnUsage } from "./spawn-usage.ts";
 import type { WorkerTurnResolver } from "./worker-turn.ts";
@@ -163,7 +164,7 @@ export function createWorkerLaunch(deps: {
       return { kind: "unrouted" as const, account: { id: account.id, generation: account.generation }, executable: command.executable, args, workerSettings, session, line: usage.line };
     }
     const managedEngine = ["claudeAgent", "codex"].includes(command.driver);
-    const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source);
+    const policy = accountLaunch(managedEngine ? account : undefined, command.driver, args, source, account.generation > 0);
     if (command.driver === "claudeAgent" && account.generation === 0
       && !Object.entries(baseEnvironment).some(([key, value]) => key.toUpperCase() === "CLAUDE_CONFIG_DIR" && value)) {
       // Setting the default directory moves Claude's config from ~/.claude.json to ~/.claude/.claude.json.
@@ -184,6 +185,7 @@ export function createWorkerLaunch(deps: {
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
     const nowMain = sameEngine ? undefined : deps.mainAccount?.(baseId);
     if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
+    if (managedEngine && account.generation > 0) shareUserSetup(command.driver, account, baseAccount(baseId, command.driver, baseEnvironment).home);
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
       environment: policy.env, workerSettings, session,
       line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line };

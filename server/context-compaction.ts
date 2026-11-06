@@ -1,6 +1,6 @@
 import type { ModelCatalog } from "./contracts.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
-import { isWakeNote } from "./pane-wake.ts";
+import { endsNoteWindow, isWakeNote } from "./pane-wake.ts";
 import { mailReplayText } from "./mail.ts";
 import { delegationContext, delegationRollup } from "./delegation-context.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -303,10 +303,22 @@ function pendingPaneNotes(messages: Message[], excludeIds: ReadonlySet<string>, 
     const message = messages[index]!;
     if (message.id === deliveredId) break;
     if (excludeIds.has(message.id)) continue;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if ((wakeOnly ? isWakeNote(message) : isContextNote(message)) && message.text?.trim()) notes.unshift({ id: message.id, text: wakeNoteText(message), ...(message.comm?.mailKey && message.comm.peer === "reply" ? { mail: true } : {}) });
   }
   return notes;
+}
+
+/** A teammate's turn leaves pending worker notes for the next wake or user turn, so their ids join `skip`.
+ * Waking peer replies are mail and still fold. */
+export function holdWorkerNotes(messages: Message[], skip: Set<string>, deliveredId: string | undefined): void {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.id === deliveredId) break;
+    if (skip.has(message.id)) continue;
+    if (endsNoteWindow(message)) break;
+    if (message.kind === "note") skip.add(message.id);
+  }
 }
 
 /** Routine cards that landed without a turn (missed, cloud results) since the last user turn.
