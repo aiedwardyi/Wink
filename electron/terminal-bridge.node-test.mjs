@@ -5,6 +5,7 @@ import os from "node:os";
 import { createTerminalBridge, paneCountBody, terminalPaneCountsGrant, terminalReadGrant, terminalSendGrant, updateGrant } from "./terminal-bridge.mjs";
 import { BOT_PANE_LIMIT, createTerminalHost } from "./terminal-host.mjs";
 import { closeBotPanes } from "../server/terminal-cleanup.ts";
+import { createWorkerLaunch } from "../server/worker-launch.ts";
 import { terminalPaneCountsGrant as serverTerminalPaneCountsGrant, terminalSendGrant as serverTerminalSendGrant, updateGrant as serverUpdateGrant } from "../server/terminal-grant.ts";
 
 function accountRunFixture(t) {
@@ -380,6 +381,35 @@ test("accepts the send grant on the send route only", async () => {
   }
   assert.equal(calls.length, 1);
   await bridge.close();
+});
+
+test("a person's send types an engine command into the main terminal whole, a bot's stays refused", async (t) => {
+  const children = [];
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({
+    authorize() {}, owner: () => owner, resolveCwd: async () => os.tmpdir(),
+    platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 64 * 1024 ** 3,
+    workerLaunch: createWorkerLaunch({ enabled: () => true }),
+    loadPty: () => ({ spawn: () => {
+      const child = { writes: [], onData(cb) { this.data = cb; }, onExit(cb) { this.exit = cb; }, write(text) { this.writes.push(text); }, resize() {}, kill() {} };
+      children.push(child);
+      return child;
+    } }),
+  });
+  const bridge = createTerminalBridge({ host });
+  t.after(async () => { await bridge.close(); await host.dispose(); });
+  const connection = await bridge.start();
+  const main = await host.openMainForBot("bot-1");
+  const send = (grant, text) => fetch(`${connection.url}/v1/bots/bot-1/terminal/send`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${grant(connection.token, "bot-1")}`, "content-type": "application/json" },
+    body: JSON.stringify({ ...main, text }),
+  });
+  const before = children[0].writes.length;
+  assert.notEqual((await send(terminalReadGrant, "codex\n")).status, 200);
+  assert.deepEqual(children[0].writes.slice(before), []);
+  assert.equal((await send(terminalSendGrant, "codex\n")).status, 200);
+  assert.deepEqual(children[0].writes.slice(before), ["codex\r"]);
 });
 
 test("send grant matches the server's", () => {

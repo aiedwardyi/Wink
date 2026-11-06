@@ -262,7 +262,7 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
           const input = await readJson(req);
           // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Terminal text is untyped HTTP request input.
           if (input && typeof input === "object" && typeof input.text === "string") input.text = normalizeTerminalText(input.text);
-          await host.sendBot(botId, input);
+          await host.sendBot(botId, input, { person: sendOnly });
           return json(res, 200, host.readBot(botId, input?.sessionId ? { sessionId: input.sessionId, observe: true } : undefined));
         }
         return json(res, 405, { error: "Method not allowed" });

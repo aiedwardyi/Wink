@@ -1527,7 +1527,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       return { count, unknown, generations };
     },
-    sendBot(botId, input) {
+    sendBot(botId, input, { person = false } = {}) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Confirmed send payloads cross the local IPC boundary.
@@ -1546,7 +1546,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!session || session.generation !== input.generation) throw new Error("Terminal session is stale; take a fresh snapshot");
       if (session.exitCode !== null) throw new Error("Terminal has exited");
       if (input.text.includes("\x03")) throw new Error("Ctrl+C is not allowed in a confirmed terminal send");
-      if (workerAccountsEnabled && workerLaunch && !session.worker && (!session.workerAccount || session.workerFinished)) {
+      // Only a bot's own send is held to terminal_spawn; a person types here as at the host.
+      if (!person && workerAccountsEnabled && workerLaunch && !session.worker && (!session.workerAccount || session.workerFinished)) {
         return Promise.resolve(workerLaunch({ botId, command: `${session.commandInput}${input.text}`.replace(/\x1b\[(?:200|201)~/g, ""), environment: terminalEnvironment(env), mode: "send" }))
           .then(() => botWrite(session, input.text)).then(() => snapshot(session));
       }
