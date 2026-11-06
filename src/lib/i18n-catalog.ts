@@ -2941,7 +2941,7 @@ export const ko = {
   "usage.limits.used": "{percent}% 사용",
   "usage.desk.expandAll": "모두 펼치기",
   "usage.desk.collapseAll": "모두 접기",
-  "usage.desk.refresh": "새로 고침",
+  "usage.desk.refresh": "새로고침",
   "usage.desk.refreshFailed": "사용량을 새로 고치지 못했습니다. 다시 시도하세요.",
   "usage.desk.reorder": "{name} 순서 변경",
   "usage.limits.empty": "아직 사용량 보고가 없어요.",

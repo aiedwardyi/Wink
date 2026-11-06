@@ -287,8 +287,8 @@ it("draws CSS chat bars without the desktop hover row or mini phone cells", asyn
   expect(q("[data-usage-meter]")!.className).not.toContain("hover:bg");
   expect(host.querySelectorAll("[data-cell]")).toHaveLength(10);
   const css = readFileSync(resolve("src/components/UsageDesk.css"), "utf8");
-  expect(css).toContain("skewX(-12deg)");
-  expect(css).toContain("--cell-w: 9px");
+  expect(css).not.toContain("skewX");
+  expect(css).toContain("--cell-w: 10px");
 });
 
 

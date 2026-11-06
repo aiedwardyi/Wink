@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import { z } from "zod";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
@@ -18,6 +18,7 @@ import { useVisibleClock } from "@/lib/use-visible-clock";
 import { api, useStore } from "@/state/store";
 import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { useUsageSwitch } from "@/lib/use-usage-switch";
 import { Fold } from "./Fold";
 import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
@@ -208,6 +209,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
 } & RowSlots) {
   const { t } = clock;
   const { state: store } = useStore();
+  const highlight = useUsageSwitch(checked);
   const email = settings ? store.instances.find((each) => each.instanceId === account.id)?.snapshot.account : null;
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
@@ -218,12 +220,12 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   else if (account.signIn === "ready") control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
-      onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON, pending && !switching && "opacity-50")}>
+      onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON)}>
       {switching ? t("usage.desk.switching") : t("usage.desk.use")}
     </button>
   );
   return (
-    <div data-account-row={account.id} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
+    <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
       {settings && <UsageGrip label={account.name} />}
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
@@ -465,8 +467,11 @@ export function UsageDesk() {
           {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}
             onClick={() => setUsageMode(value)}>{t(value === "used" ? "usage.limits.countUp" : "usage.limits.countDown")}</button>)}
         </div>
-        <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0} onClick={() => void refresh()}>{t("usage.desk.refresh")}</button>
         <button type="button" data-fold-all="" onClick={() => { for (const each of board.engines) fold(each.base, !allFolded); }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
+        <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
+          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
+          <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
+        </button>
       </div>
       {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.refreshFailed")}</div>}
       <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
