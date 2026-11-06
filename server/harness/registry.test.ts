@@ -410,6 +410,38 @@ describe("ProviderRegistry", () => {
     }
   });
 
+  it.each(["grokAgent", "museAgent", "claudeAgent", "codex"])("keeps %s signed out when the first probe finishes late", async (kind) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let authenticated = true;
+    try {
+      await registry.load({ engine: { driver: kind } });
+      const snapshot = vi.fn(async () => ({ state: "available" as const, authenticated }));
+      snapshot.mockImplementationOnce(async () => {
+        const captured = authenticated;
+        await gate;
+        return { state: "available", authenticated: captured };
+      });
+      registry.get("engine")!.snapshot = snapshot;
+      const first = registry.describe();
+      await vi.waitFor(() => { expect(snapshot).toHaveBeenCalledTimes(1); });
+      expect(registry.describeSaved()).toEqual([]);
+      vi.spyOn(registry.logins, "start").mockImplementation(async () => { authenticated = false; return {}; });
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      expect(await registry.signOut("engine")).toBe(true);
+      release();
+      expect((await first)[0].snapshot.authenticated).toBe(false);
+      expect(registry.describeSaved()[0].snapshot.authenticated).toBe(false);
+      expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
   it("finishes sign-out after the instance is removed", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);

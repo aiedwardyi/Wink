@@ -374,7 +374,11 @@ export class ProviderRegistry {
           this.probing.delete(instanceId);
           const snapshot = await live.snapshot({ refresh: true });
           success = success && (this.accounts.has(instanceId) ? snapshot.accountAuthenticated === false : snapshot.authenticated === false);
-          if (previous && this.get(instanceId) === live) this.probed.set(instanceId, { ...previous, snapshot });
+          if (this.get(instanceId) === live) this.probed.set(instanceId, {
+            ...previous, snapshot,
+            cliCandidates: previous?.cliCandidates ?? this.candidateScan()(this.driversByKind.get(live.driverKind)),
+            models: previous?.models ?? (this.cacheDir ? structuredClone(live.models) : undefined),
+          });
           this.probeVersion += 1;
         }
       }
