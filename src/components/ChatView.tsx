@@ -1367,7 +1367,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     setTranscriptWindow((w) => (w.end === null && !w.expanded ? { ...w, start: Math.min(w.start, tailStart) } : w));
   }, [jump.messages, tailStart, transcriptWindow]);
 
-  const showEarlier = useEarlierPage({
+  const [showEarlier, cancelEarlier] = useEarlierPage({
     key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : bot.hasMore),
     scrollRef, previousScrollTop, expand: expandEarlier,
   });
@@ -1403,6 +1403,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const jumpToLatest = () => {
     closeJump();
     setBottomFollow(true);
+    cancelEarlier();
     setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });

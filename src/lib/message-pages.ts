@@ -2,7 +2,7 @@
 // from the scrollback endpoint one at a time, when the reader reaches the top.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, MESSAGE_PAGE, type Action, type Message } from "@/state/store";
-import { captureTranscriptAnchor, distanceFromTranscriptEdge, restoreTranscriptAnchor, type TranscriptAnchor } from "./bottom-follow";
+import { captureTranscriptAnchor, distanceFromTranscriptEdge, restoreTranscriptAnchor, restoreTranscriptScroll, type TranscriptAnchor } from "./bottom-follow";
 import { TRANSCRIPT_WINDOW_SIZE, advanceWindow, shouldAdvanceWindow } from "./transcript-window";
 import { groupActivityRuns } from "./activity-runs";
 import { workerAnchors, type WorkerRun } from "./worker-runs";
@@ -339,14 +339,16 @@ export function useEarlierPage({
     // A live message changes `shown` too; only the commit measure() armed is the batch.
     if (!page.landed) return;
     page.landed = false;
-    if (page.anchor) restoreTranscriptAnchor(el, page.anchor);
+    // A fold's id comes from its first message, so growing it upward retires the anchor.
+    const anchored = page.anchor !== null && restoreTranscriptAnchor(el, page.anchor);
+    if (page.anchor && !anchored) restoreTranscriptScroll(el, { scrollHeight: page.height, scrollTop: page.top });
     previousScrollTop.current = el.scrollTop;
-    page.added += page.anchor ? el.scrollTop - page.top : el.scrollHeight - page.height;
+    page.added += anchored ? el.scrollTop - page.top : el.scrollHeight - page.height;
     if (!hasMore || page.added >= page.screen) { fail(); return; }
     // Stored pages can fold to nothing; keep going until a screen actually lands.
     latest.current(fail, measure, 5);
   }, [key, shown, startIndex, hasMore, scrollRef, previousScrollTop]);
-  return () => {
+  const show = () => {
     if (pending.current?.key === key) return;
     const el = scrollRef.current;
     pending.current = el && el.clientHeight > 0
@@ -354,6 +356,8 @@ export function useEarlierPage({
       : null;
     expand(fail, measure, pending.current ? 5 : 1);
   };
+  // Jump to latest or a send returns to the live tail; a page still loading must not reopen scrollback.
+  return [show, () => { pending.current = null; }] as const;
 }
 
 /** Loads the page before `oldestId`, one request at a time; a call while one loads joins it.

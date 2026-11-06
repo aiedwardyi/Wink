@@ -198,21 +198,8 @@ describe("paged transcripts", () => {
     expect(button(host, "Show earlier messages")?.textContent ?? "").not.toMatch(/\d+ more/);
   });
 
-  async function chainedLoad(view: "chat" | "room", measured: boolean) {
-    const saves: Message[] = Array.from({ length: 2500 }, (_, i) => ({
-      id: `save${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, summary: "Saved a note" },
-    }));
-    const flat = [...rows(0, 40), ...saves, ...rows(40, 160)];
-    const thread = flat.map((message, i) => ({ ...message, parentId: flat[i - 1]?.id ?? null }));
-    const threadId = view === "chat" ? "thread-a" : "thread-g";
-    const loaded = thread.slice(-200);
-    const calls = pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
-    const served = globalThis.fetch as unknown as (url: string) => Promise<Response>;
-    const held: (() => Promise<void>)[] = [];
-    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).includes("before=")
-      ? new Promise<Response>((resolve) => { held.push(async () => resolve(await served(url))); })
-      : served(url)));
-    const host = await mount(view);
+  /** Lays the transcript out as 30px rows in a 300px pane. */
+  function measureTranscript(host: HTMLElement, measured: boolean) {
     const scroller = host.querySelector<HTMLElement>("[data-orbit-transcript]")!;
     const topRows = () => [...scroller.querySelectorAll<HTMLElement>("[data-mid], [data-run]")].filter((el) => !el.parentElement?.closest("[data-mid], [data-run]"));
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
@@ -228,6 +215,25 @@ describe("paged transcripts", () => {
         return originalBox.call(this);
       });
     }
+    return { scroller, topRows };
+  }
+
+  async function chainedLoad(view: "chat" | "room", measured: boolean) {
+    const saves: Message[] = Array.from({ length: 2500 }, (_, i) => ({
+      id: `save${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, summary: "Saved a note" },
+    }));
+    const flat = [...rows(0, 40), ...saves, ...rows(40, 160)];
+    const thread = flat.map((message, i) => ({ ...message, parentId: flat[i - 1]?.id ?? null }));
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    const loaded = thread.slice(-200);
+    const calls = pagedServer(threadId, thread, { bots: view === "chat" ? [bot(loaded, true)] : [], groups: view === "room" ? [room(loaded, true)] : [] });
+    const served = globalThis.fetch as unknown as (url: string) => Promise<Response>;
+    const held: (() => Promise<void>)[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string) => String(url).includes("before=")
+      ? new Promise<Response>((resolve) => { held.push(async () => resolve(await served(url))); })
+      : served(url)));
+    const host = await mount(view);
+    const { scroller, topRows } = measureTranscript(host, measured);
     scroller.scrollTop = 0;
     await act(async () => button(host, "Show earlier messages")!.click());
     const release = async (n: number) => {
@@ -262,6 +268,33 @@ describe("paged transcripts", () => {
     await release(2);
     await vi.waitFor(() => expect(scroller.scrollHeight).toBeGreaterThan(0));
     expect(host.textContent).toContain("row 0;");
+  });
+
+  it.each(["chat", "room"] as const)("keeps a %s reader on a memory fold that grows into earlier rows", async (view) => {
+    const saves: Message[] = Array.from({ length: 100 }, (_, i) => ({
+      id: `save${i}`, at: 1, role: "bot", kind: "activity", tool: { name: "memory.save", ok: true, summary: "Saved a note" },
+    }));
+    const flat = [...rows(0, 30), ...saves, ...rows(30, 60)];
+    const thread = flat.map((message, i) => ({ ...message, parentId: flat[i - 1]?.id ?? null }));
+    const threadId = view === "chat" ? "thread-a" : "thread-g";
+    pagedServer(threadId, thread, { bots: view === "chat" ? [bot(thread, false)] : [], groups: view === "room" ? [room(thread, false)] : [] });
+    const host = await mount(view);
+    const { scroller, topRows } = measureTranscript(host, true);
+    scroller.scrollTop = 0;
+    const foldTop = () => topRows().findIndex((el) => el.hasAttribute("data-run")) * 30 - scroller.scrollTop;
+    expect(topRows()[0].hasAttribute("data-run")).toBe(true);
+    await act(async () => button(host, "Show earlier messages")!.click());
+    expect(topRows()[0].hasAttribute("data-mid")).toBe(true);
+    expect(foldTop()).toBe(0);
+  });
+
+  it.each(["chat", "room"] as const)("does not reopen scrollback in a %s when Jump to latest comes before the page lands", async (view) => {
+    const { host, held, release } = await chainedLoad(view, false);
+    await act(async () => resizeCallbacks.forEach((callback) => callback()));
+    await act(async () => button(host, "Jump to latest")!.click());
+    await release(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(held).toHaveLength(1);
   });
 
   it.each(["chat", "room"] as const)("moves a %s worker to its newest note and keeps it there when paging", async (view) => {
