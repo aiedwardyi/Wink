@@ -328,6 +328,8 @@ describe("engine sign-in row", () => {
         await click(locale === "en" ? "Sign In" : "로그인");
         expect(host.textContent, code).toContain(locale === "en" ? en : ko);
         expect(host.textContent).not.toContain("Sign-in is busy");
+        // the wrap marker stays so the card puts the reason under the title on narrow screens
+        expect(host.querySelector("[data-sign-in-open]"), code).not.toBeNull();
         expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE"), code).toEqual([]);
         await act(async () => root!.unmount());
       }
