@@ -62,13 +62,36 @@ const css = readFileSync(resolve("src/components/UsageDesk.css"), "utf8");
 const rule = (selector: string) => css.slice(css.indexOf(`${selector} {`)).split("}")[0] ?? "";
 
 it("matches sidebar name and chat meter sizes while keeping emails small", () => {
-  expect(rule(".usage-account-identity")).toContain("font-size: 15px");
-  expect(rule(".usage-name-button")).toContain("font-weight: 600");
+  expect(rule(".usage-account-identity")).toContain("font-size: 13px");
+  expect(rule(".usage-account-identity")).toContain("font-weight: 500");
+  expect(rule(".usage-name-button")).toContain("font-weight: 500");
   expect(rule(".usage-meter")).toContain("font-size: 12.5px");
   expect(rule(".usage-meter-summary")).toContain("font-size: 12.5px");
   expect(rule(".usage-reset")).toContain("font-size: inherit");
   expect(rule(".usage-email")).toContain("font-size: 11px");
   expect(rule(".usage-email")).toContain("font-weight: 400");
+});
+
+it("keeps collapsed figures on one line with shared columns down to 360px", () => {
+  expect(rule(".usage-summary")).toContain("display: grid");
+  expect(rule(".usage-summary")).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
+  expect(rule(".usage-meter-summary")).toContain("flex-wrap: nowrap");
+  expect(rule(".usage-meter-summary .usage-figures")).toContain("white-space: nowrap");
+  expect(rule('.usage-meter-summary[data-window="week"]')).toContain("grid-column: 2");
+  expect(css).toMatch(/@media \(width < 768px\)[\s\S]*\.usage-summary \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+});
+
+it("gives the refresh icon a 44px coarse-pointer hit area", () => {
+  expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*\[data-usage-refresh\] \{[^}]*width: 44px;[^}]*height: 44px;/);
+  expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*\[data-usage-refresh\]::after \{ inset: 0;/);
+});
+
+it("keeps the limit separator with its reset when a narrow meter wraps", async () => {
+  h.board!.engines[0]!.accounts[0]!.windows[0]!.usedPercent = 100;
+  await mount();
+  const reset = q("[data-account-bars] [data-reached] .usage-reset")!;
+  expect(reset.querySelector(".usage-reset-short")!.textContent).toMatch(/^ · \(/);
+  expect([...reset.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join("")).not.toContain("·");
 });
 
 it("uses straight shared box segments in expanded, collapsed and chat meters", async () => {

@@ -113,8 +113,8 @@ export function WindowBar({ slot, now, t, compact = false, chat = false }: { slo
       </span>
       <span aria-hidden="true" data-reset={slot.key} className="usage-reset min-w-0 tabular-nums text-ink-secondary">
         {left === null ? t("usage.desk.resetPassed") : <>
-          {reached && <><span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>{reset && " · "}</>}
-          {reset && <><span className="usage-reset-long whitespace-nowrap">{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span><span className="usage-reset-short whitespace-nowrap">({resetTime(reset, t)})</span></>}
+          {reached && <span className="whitespace-nowrap font-medium text-danger">{t("usage.desk.limitReached")}</span>}
+          {reset && <><span className="usage-reset-long whitespace-nowrap">{reached && " · "}{t("usage.desk.resetsIn", { time: resetTime(reset, t) })}</span><span className="usage-reset-short whitespace-nowrap">{reached && " · "}({resetTime(reset, t)})</span></>}
         </>}
       </span>
       </span>
