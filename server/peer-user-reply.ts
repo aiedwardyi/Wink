@@ -1,13 +1,16 @@
 import type { RuntimeEvent } from "./contracts.ts";
+import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { foldQueuedSends } from "./steer-queue.ts";
 import type { Message, Store } from "./store.ts";
+import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
 
 interface UserInput {
   botId: string;
   prompt: string;
   message?: Message;
   answered: boolean;
+  starting?: boolean;
 }
 
 interface SplitTurn {
@@ -104,9 +107,18 @@ export function settlePeerUserReplies(threadId: string, turnId?: string): void {
   if (!turnId || liveTurns.get(threadId) === turnId) liveTurns.delete(threadId);
 }
 
+export function cancelPeerUserReplies(botId: string): void {
+  for (const [threadId, turn] of turns) {
+    for (const [id, input] of turn.inputs) {
+      if (input.botId === botId) turn.inputs.delete(id);
+    }
+    if (!turn.inputs.size) turns.delete(threadId);
+  }
+}
+
 type ReplyStart = (botId: string, prompt: string, opts: { threadId: string; userMessage: Message; excludeMessageIds: string[] }) => Promise<unknown>;
 
-export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread">, start: ReplyStart, busy: (botId: string, threadId: string) => boolean): void {
+export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread" | "appendMessage">, start: ReplyStart, busy: (botId: string, threadId: string) => boolean, access: TerminalBridgeAccess | null = null): void {
   const started = new Set<string>();
   for (const [threadId, turn] of turns) {
     if (!turn.ready) continue;
@@ -116,12 +128,22 @@ export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread">,
         turn.inputs.delete(id);
         continue;
       }
-      if (started.has(bot.id) || busy(bot.id, threadId)) continue;
-      turn.inputs.delete(id);
+      if (input.starting || started.has(bot.id) || busy(bot.id, threadId)) continue;
+      input.starting = true;
       started.add(bot.id);
-      void start(bot.id, input.prompt, { threadId, userMessage: input.message, excludeMessageIds: [input.message.id] }).catch(() => {
-        turn.inputs.set(id, input);
-        turns.set(threadId, turn);
+      const message = input.message;
+      const cancelled = () => turns.get(threadId) !== turn || !turn.inputs.has(id);
+      void startQueuedTurn(() => start(bot.id, input.prompt, { threadId, userMessage: message, excludeMessageIds: [message.id] }), cancelled, access).catch((error) => {
+        if (cancelled()) return;
+        const line = `queued message could not start - ${error instanceof Error ? error.message : String(error)}`;
+        if (writeChatError(line, access)) store.appendMessage(threadId, {
+          role: "bot", kind: "activity", tool: { name: `error: ${line}`, ok: false },
+        });
+      }).finally(() => {
+        if (cancelled()) return;
+        turn.inputs.delete(id);
+        if (!turn.inputs.size) turns.delete(threadId);
+        queueMicrotask(() => drainPeerUserReplies(store, start, busy, access));
       });
     }
     if (!turn.inputs.size) turns.delete(threadId);

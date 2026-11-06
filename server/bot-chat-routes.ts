@@ -11,7 +11,7 @@ import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
-import { beginPeerUserReply } from "./peer-user-reply.ts";
+import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -453,6 +453,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         }
         const inFlight = Boolean(bot.busy || botHasActiveTurn(bot.id));
         taskResumes.forgetBot(bot.id);
+        cancelPeerUserReplies(bot.id);
         const returned = cancelQueuedSends(bot.id);
         if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
         store.patchBot(bot.id, { paneWakePaused: true });
@@ -480,6 +481,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       if (requireSettled && !inFlight) return json(res, 200, { ok: true, stopped: false, returned: [] });
       if (requireSettled && (!instance || busyGroup)) return json(res, 409, { error: "the waiting turn cannot be interrupted" });
       taskResumes.forgetBot(bot.id);
+      cancelPeerUserReplies(bot.id);
       const returned = cancelQueuedSends(bot.id);
       if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
       store.patchBot(bot.id, { paneWakePaused: true });

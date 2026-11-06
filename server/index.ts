@@ -4243,7 +4243,7 @@ const noteSteer = new NoteSteerer({
 });
 
 function drainQueuedSends() {
-  drainPeerUserReplies(store, startTurn, botHasActiveTurn);
+  drainPeerUserReplies(store, startTurn, botHasActiveTurn, terminalBridgeAccess);
   taskResumes.settled();
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
     // A failed send still frees waiting handoffs.

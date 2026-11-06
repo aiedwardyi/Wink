@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "./contracts.ts";
 import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
-import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
+import { _resetPeerUserReplies, beginPeerUserReply, cancelPeerUserReplies, drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { _resetSteerQueue, drainSteeredMessages, queueMark, queueSteeredMessage } from "./steer-queue.ts";
 import { Store, type BotRecord } from "./store.ts";
 
@@ -18,7 +18,7 @@ describe("peer user replies", () => {
     bot = store.createBot();
     end = watchPeerTurn(bot.threadId);
   });
-  afterEach(() => { end(); _resetPeerUserReplies(); _resetSteerQueue(); });
+  afterEach(() => { end(); _resetPeerUserReplies(); _resetSteerQueue(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
   const event = (patch: Record<string, unknown>): RuntimeEvent => ({
     provider: "claude", eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), threadId: bot.threadId, turnId: "t1", ...patch,
@@ -109,16 +109,61 @@ describe("peer user replies", () => {
     expect(start).toHaveBeenCalledOnce();
   });
 
-  it("retains a follow-up when dispatch fails and retries without another user row", async () => {
+  it("reports a terminal follow-up dispatch error without waiting for another drain", async () => {
+    user();
+    settlePeerUserReplies(bot.threadId, "t1");
+    const start = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+    drainPeerUserReplies(store, start, () => false);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(store.messagesFor(bot.threadId).filter((message) => message.kind === "activity")).toMatchObject([
+      { tool: { name: "error: queued message could not start - provider unavailable", ok: false } },
+    ]);
+    drainPeerUserReplies(store, start, () => false);
+    expect(start).toHaveBeenCalledOnce();
+    expect(texts()).toHaveLength(1);
+  });
+
+  it("retries a busy follow-up without another drain or duplicate user row", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const input = user();
     settlePeerUserReplies(bot.threadId, "t1");
-    const start = vi.fn().mockRejectedValueOnce(new Error("busy")).mockResolvedValue(undefined);
+    const start = vi.fn().mockRejectedValueOnce(new Error("the bot is still stopping its last turn")).mockResolvedValue(undefined);
     drainPeerUserReplies(store, start, () => false);
     await Promise.resolve();
     drainPeerUserReplies(store, start, () => false);
+    expect(start).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(500);
     expect(start).toHaveBeenCalledTimes(2);
     expect(start.mock.calls[1]![2].userMessage).toEqual(input.message);
-    expect(texts()).toHaveLength(1);
+    expect(texts()).toEqual([input.message]);
+  });
+
+  it("does not retry a busy follow-up after Stop", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    user();
+    settlePeerUserReplies(bot.threadId, "t1");
+    const start = vi.fn().mockRejectedValue(new Error("the bot is still stopping its last turn"));
+    drainPeerUserReplies(store, start, () => false);
+    await Promise.resolve();
+    cancelPeerUserReplies(bot.id);
+    await vi.advanceTimersByTimeAsync(500);
+    settlePeerUserReplies(bot.threadId, "t1");
+    drainPeerUserReplies(store, start, () => false);
+    expect(start).toHaveBeenCalledOnce();
+    expect(store.messagesFor(bot.threadId).filter((message) => message.kind === "activity")).toEqual([]);
+  });
+
+  it("starts the next unanswered message after a terminal dispatch error", async () => {
+    user("First question");
+    const second = user("Second question");
+    settlePeerUserReplies(bot.threadId, "t1");
+    const start = vi.fn().mockRejectedValueOnce(new Error("provider unavailable")).mockResolvedValue(undefined);
+    drainPeerUserReplies(store, start, () => false);
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start.mock.calls[1]![2].userMessage).toEqual(second.message);
   });
 
   it("marks preparation-folded user input and retains its own identity", () => {
