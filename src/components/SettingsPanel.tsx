@@ -670,6 +670,7 @@ export function SettingsPanel({
             </Field>
             <Field label={t("bot.description")} status={<SaveStatus botId={bot.id} />}>
               <FitTextarea
+                watchMetrics
                 aria-label={t("bot.description")}
                 className={cn(DETAILS_INPUT, "min-h-[96px]")}
                 maxLength={BOT_PROFILE_LIMITS.description}
