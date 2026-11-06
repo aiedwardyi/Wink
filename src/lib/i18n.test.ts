@@ -541,7 +541,7 @@ describe("sidebar create group and bot/room chrome", () => {
     expect(groupWizard).not.toMatch(/>Create group ·/);
     expect(groupWizard).not.toMatch(/>Add bot</);
     expect(sidebar).toContain('t("chrome.duplicate")');
-    expect(sidebar).not.toContain('t("chrome.archive")');
+    expect(sidebar).toContain('t("chrome.archive")');
     expect(sidebar).toContain('t("chrome.delete")');
     expect(sidebar).toContain('t("chrome.cannotContactTeammates")');
     expect(sidebar).toContain('t("chrome.moveToContext")');
@@ -901,7 +901,7 @@ describe("plan usage", () => {
       expect(source).not.toMatch(/not available at the moment/);
     }
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
-    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name })');
+    expect(chatPlanMeters).not.toContain('t("usage.chat.openAria", { name })');
     expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");

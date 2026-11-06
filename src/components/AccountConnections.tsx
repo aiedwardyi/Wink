@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Ellipsis } from "lucide-react";
 import { api, type InstanceInfo } from "@/state/store";
 import { accountReady, type UsageAccount } from "@/lib/accounts";
@@ -92,6 +92,9 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const version = useRef(revision);
   version.current = revision;
   const nameButton = useRef<HTMLButtonElement>(null);
+  const inlineNameButton = useRef<HTMLButtonElement>(null);
+  const inlineEditor = useRef(false);
+  const restoreFocus = useRef(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const actions = useRef<HTMLDivElement>(null);
   const name = named && saved && saved.revision >= revision ? saved : named;
@@ -106,10 +109,16 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
     window.addEventListener("pointerdown", outside, true);
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [menu]);
-  const closeEditor = () => { setEditing(false); (phone ? menuButton : nameButton).current?.focus(); };
+  useLayoutEffect(() => {
+    if (!editing && restoreFocus.current) {
+      restoreFocus.current = false;
+      (inlineEditor.current ? inlineNameButton : phone ? menuButton : nameButton).current?.focus();
+    }
+  }, [editing, phone]);
+  const closeEditor = () => { restoreFocus.current = true; setEditing(false); };
   const controls = <>
     {canName && <button ref={nameButton} type="button" disabled={busy} className={ROW_BUTTON}
-      onClick={() => { setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
+      onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
   </>;
@@ -129,18 +138,27 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
         {name && <ConnectionRow label={<>
           {tile}
-          <span className="min-w-0 truncate">{name.name}</span>
+          {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name.nickname} inline
+            onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+            : <span className="min-w-0 truncate">{name.name}</span>}
         </>} actions={canName ? phone ? <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu}
           onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
       </> : <ConnectionRow mark={mark}
         label={<>
           {!stacked && tile}
-          <button type="button" data-connection-identity="" aria-label={t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
-            onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("flex min-w-0 flex-1 text-left text-[13px]", stacked ? "flex-col pb-2" : "h-9 items-center gap-2 [@media(pointer:coarse)]:h-11")}>
-            {stacked ? <span className="flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11">{tile}<span className="min-w-0 truncate text-ink">{name.name}</span></span>
-              : name && <span className="max-w-[40%] shrink truncate text-ink">{name.name}</span>}
-            <span className={cn("min-w-0 truncate text-ink-secondary", stacked ? "-mt-1.5" : "flex-1")}>{label}</span>
-          </button>
+          <div className={cn("flex min-w-0 flex-1 flex-col", stacked ? "pb-2" : "items-start py-1")}>
+            <div className={stacked ? "flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11" : "contents"}>
+              {stacked && tile}
+              {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null} inline
+                onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
+                : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
+                  className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
+            </div>
+            <button type="button" data-connection-identity="" aria-label={name ? `${t("connections.identity")}: ${name.name}` : t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
+              onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("min-w-0 max-w-full text-left text-[11px] text-ink-secondary", stacked && "-mt-1.5")}>
+              <span data-account-email="" className="block min-w-0 truncate">{label}</span>
+            </button>
+          </div>
         </>}
         actions={draining ? <span role="status">{t("accounts.removing")}</span> : stacked ? undefined : phone ? more : controls}>
         <Fold open={expanded} id={`${id}-identity`}>
@@ -154,8 +172,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
           {controls}
         </div>
       </Fold>
-      {editing && named && <div className="pl-6"><AccountNameEditor id={account.instanceId} nickname={name?.nickname ?? null}
-        onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} /></div>}
     </div>
   );
 }

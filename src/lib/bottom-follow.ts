@@ -52,10 +52,11 @@ export function captureTranscriptAnchor(el: HTMLElement | null): TranscriptAncho
   return null;
 }
 
-export function restoreTranscriptAnchor(el: HTMLElement, anchor: TranscriptAnchor): void {
+export function restoreTranscriptAnchor(el: HTMLElement, anchor: TranscriptAnchor): boolean {
   const row = Array.from(el.querySelectorAll(`[${anchor.attribute}]`)).find((row) => row.getAttribute(anchor.attribute) === anchor.id);
   const box = row && rowBox(row);
   if (box) el.scrollTop += box.top - anchor.top;
+  return Boolean(box);
 }
 
 export function distanceFromTranscriptEdge(el: HTMLElement): number {

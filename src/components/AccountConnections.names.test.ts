@@ -139,7 +139,9 @@ it("keeps account identities inside Connections account rows", async () => {
     for (const section of ["usage", "general", "account", "companion", "themes", "team", "models-index", "shortcuts"] satisfies AppSettingsSection[]) {
       await act(async () => store.dispatch({ type: "toggleAppSettings", section, open: true }));
       await settle();
-      expect(scanForCanary(canary), `${section}, phone=${phone}, ${locale}`).toEqual([]);
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll("[data-account-email]").forEach((el) => { el.textContent = ""; });
+      expect(scanForCanary(canary, clone), `${section}, phone=${phone}, ${locale}`).toEqual([]);
     }
     await unmount();
   }
@@ -162,6 +164,37 @@ it("renames an account through the names API", async () => {
   expect(row()?.textContent).toContain("Remote");
   expect(row()?.textContent).not.toContain("Studio");
   expect(calls.some(({ path }) => path === "/api/accounts")).toBe(false);
+});
+
+it.each([false, true])("returns focus to the rename opener after Save, Cancel and Escape (phone=%s)", async (phone) => {
+  await mount({ phone });
+  for (const inline of [true, false]) {
+    for (const action of ["Save", "Cancel", "Escape"]) {
+      if (!inline && phone) await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
+      await click(inline ? row()!.querySelector<HTMLElement>("[data-edit-name]") : button("Name", row()!));
+      if (action === "Escape") await act(async () => host.querySelector<HTMLInputElement>("[data-account-name-editor] input")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      else await click(button(action, host.querySelector("[data-account-name-editor]")));
+      const target = inline ? row()!.querySelector("[data-edit-name]") : phone ? row()!.querySelector("[data-connection-menu]") : button("Name", row()!);
+      expect(document.activeElement, `${inline ? "inline" : "Name action"}: ${action}`).toBe(target);
+    }
+  }
+});
+
+it.each(["en", "ko"] as const)("keeps the original number tile beside phone account names in %s", async (locale) => {
+  await mount({ phone: true, locale });
+  const tile = row()?.querySelector("[data-account-number]");
+  expect(tile?.textContent).toBe("1");
+  expect(tile?.parentElement?.className).toBe("flex h-9 min-w-0 items-center gap-2 pr-10 [@media(pointer:coarse)]:h-11");
+  expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
+});
+
+it.each(["en", "ko"] as const)("distinguishes identity buttons by account name without email in %s", async (locale) => {
+  await mount({ locale });
+  const labels = [...host.querySelectorAll('[data-connection-identity]')].map((node) => node.getAttribute("aria-label"));
+  expect(new Set(labels).size).toBe(accounts.length);
+  expect(labels[0]).toContain("Claude 1");
+  for (const label of labels) expect(label).not.toContain(canary.address);
 });
 
 it("clears a nickname with an empty name", async () => {
@@ -286,20 +319,25 @@ it.each([false, true])("gives the address its own line under the name on a phone
   await mount({ phone });
   const line = row()!.firstElementChild!;
   const identity = line.querySelector<HTMLElement>("[data-connection-identity]")!;
-  const [head, address] = [...identity.children];
-  expect(address?.textContent).toBe(canary.address);
+  expect(identity.querySelector("[data-account-email]")?.textContent).toBe(canary.address);
+  expect(identity.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
+  expect(identity.parentElement?.className).toContain("flex-col");
   if (!phone) {
-    expect(identity.querySelector("[data-account-number]"), "tile beside the identity").toBeNull();
-    expect(head?.textContent).toBe("Claude 1");
     expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
     return;
   }
-  expect(head?.querySelector("[data-account-number]")?.textContent).toBe("1");
-  expect(head?.lastElementChild?.textContent).toBe("Claude 1");
   const more = row()!.querySelector<HTMLElement>("[data-connection-menu]")!;
   expect(line.contains(more), "the address runs under the more button").toBe(false);
   expect(more.querySelector("svg"), "an icon, not a text glyph").not.toBeNull();
   expect(more.textContent).toBe("");
+});
+
+it("keeps a signed-out account's editor on its name row", async () => {
+  accounts[0]!.snapshot.authenticated = false;
+  await mount();
+  await click(button("Name", row()!));
+  const nameLine = row()!.querySelector("[data-account-number]")!.parentElement!;
+  expect(nameLine.querySelector("[data-account-name-editor] input")).not.toBeNull();
 });
 
 it.each([

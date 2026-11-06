@@ -75,7 +75,7 @@ import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
-import { screenImageUrl, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
+import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
 import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -90,7 +90,6 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import {
   TRANSCRIPT_WINDOW_SIZE,
-  expandWindowStart,
   focusWindow,
   followedWindow,
   resolveTranscriptWindow,
@@ -1025,6 +1024,9 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   if (rehydrated) setSeenSnapshot(state.snapshots);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
+  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+    terminal, workers: rowWorkers, renders: (message) => messageVisible(message, { showToolCalls, showActivities, transcript: shown }),
+  }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
     setWindowHead(head);
     const prepended = windowHead ? shown.findIndex((message) => message.id === windowHead) : -1;
@@ -1034,7 +1036,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
     } else if (prepended < 0) {
       const { id, index } = windowAnchor.current;
       const at = id ? shown.findIndex((message) => message.id === id) : -1;
@@ -1337,20 +1339,20 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   }, [fillPaging, loadOlder, underfilled]);
 
   const preExpandScroll = useRef<TranscriptScroll | null>(null);
-  const showEarlier = () => {
-    // expanding means reading scrollback — never let a mid-expand stream
+  const expandEarlier = (onFail: () => void, beforeCommit: () => boolean, pages: number) => {
+    // expanding means reading scrollback - never let a mid-expand stream
     // event pin the viewport back to the bottom
     setBottomFollow(false);
     if (startIndex === 0) {
       revealOlder.current = true;
       setTranscriptWindow((w) => ({ ...w, expanded: true }));
       (jump.messages ? jump.older : loadOlder)(() => {
-        preExpandScroll.current = captureTranscriptScroll(scrollRef.current);
-      });
+        preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
+      }, onFail, pages);
       return;
     }
-    preExpandScroll.current = captureTranscriptScroll(scrollRef.current);
-    const start = expandWindowStart(startIndex);
+    preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
+    const start = earlierStart(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1370,6 +1372,11 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     if (!followRef.current) preExpandScroll.current ??= captureTranscriptScroll(scrollRef.current);
     setTranscriptWindow((w) => (w.end === null && !w.expanded ? { ...w, start: Math.min(w.start, tailStart) } : w));
   }, [jump.messages, tailStart, transcriptWindow]);
+
+  const [showEarlier, cancelEarlier] = useEarlierPage({
+    key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : bot.hasMore),
+    scrollRef, previousScrollTop, expand: expandEarlier,
+  });
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1402,6 +1409,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const jumpToLatest = () => {
     closeJump();
     setBottomFollow(true);
+    cancelEarlier();
     setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -1682,7 +1690,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
               >
-                {hiddenCount > 0 ? t("room.showEarlier", { count: hiddenCount }) : t("room.showOlder")}
+                {t("room.showOlder")}
               </button>
             </div>
           )}

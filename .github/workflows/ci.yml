@@ -28,6 +28,20 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Read Electron version
+        id: electron
+        run: |
+          $lock = Get-Content pnpm-lock.yaml -Raw
+          $version = [regex]::Match($lock, '(?m)^      electron:\r?\n        specifier: .+\r?\n        version: ([^\r\n]+)').Groups[1].Value
+          if (-not $version) { throw 'Electron version missing from lockfile' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Cache Electron downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.electron.outputs.version }}-v1
       - run: pnpm install --frozen-lockfile
       - name: Require recorded engine replies
         if: github.event_name == 'pull_request'
@@ -47,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
@@ -55,6 +69,20 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Read Electron version
+        id: electron
+        run: |
+          $lock = Get-Content pnpm-lock.yaml -Raw
+          $version = [regex]::Match($lock, '(?m)^      electron:\r?\n        specifier: .+\r?\n        version: ([^\r\n]+)').Groups[1].Value
+          if (-not $version) { throw 'Electron version missing from lockfile' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Cache Electron downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.electron.outputs.version }}-v1
       - run: pnpm install --frozen-lockfile
       # an empty list would run the whole suite, so a failed split stops here
       - run: |
@@ -81,6 +109,20 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Read Electron version
+        id: electron
+        run: |
+          $lock = Get-Content pnpm-lock.yaml -Raw
+          $version = [regex]::Match($lock, '(?m)^      electron:\r?\n        specifier: .+\r?\n        version: ([^\r\n]+)').Groups[1].Value
+          if (-not $version) { throw 'Electron version missing from lockfile' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Cache Electron downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.electron.outputs.version }}-v1
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:updater
       - run: pnpm test:desktop-viewer

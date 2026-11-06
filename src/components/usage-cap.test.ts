@@ -13,7 +13,7 @@ vi.mock("@/lib/use-phone-swipe", () => ({ useIsPhone: () => true }));
 vi.mock("@/lib/phone-swipe", () => ({ reducedMotion: () => h.reduce }));
 vi.mock("@/lib/skins", () => ({ useSkin: () => "github-dimmed", isTerminalSkin: () => false }));
 vi.mock("@/state/store", () => ({ useStore: () => ({ state: { instances: [] }, dispatch: vi.fn(), refreshInstances: vi.fn() }) }));
-vi.mock("./usage-layout", () => ({ get USAGE_LAYOUT() { return h.layout; } }));
+vi.mock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), get USAGE_LAYOUT() { return h.layout; } }));
 vi.mock("@/lib/usage-board-client", async (original) => ({
   ...await original<typeof import("@/lib/usage-board-client")>(),
   requestMain: vi.fn((base: string, id: string) => { h.state.board!.engines.find((each) => each.base === base)!.mainId = id; }),

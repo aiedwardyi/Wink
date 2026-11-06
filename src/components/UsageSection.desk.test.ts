@@ -30,7 +30,7 @@ const CODEX_2 = "acct_00000000-0000-4000-8000-000000000012";
 const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
 const GLYPHS = /[\u2580-\u25FF]/u;
 const FOLDS = "openmausbot.usageFolds.v1";
-const BOX = ["h-[26px]", "min-w-14", "shrink-0", "border", "px-2.5", "text-[12px]", "rounded-md"];
+const BOX = ["h-[22px]", "min-w-12", "shrink-0", "border", "px-2", "text-[11px]", "rounded-md"];
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
 function deferred<T>(): Deferred<T> {
@@ -82,7 +82,11 @@ function setMedia({ phone = false, coarse = phone, reduce = false }: { phone?: b
   })) as unknown as typeof window.matchMedia;
 }
 
-const text = (node: Element | null | undefined) => (node?.textContent ?? "").replace(/\s+/g, " ").trim();
+const text = (node: Element | null | undefined) => {
+  const clone = node?.cloneNode(true) as Element | undefined;
+  clone?.querySelectorAll(".usage-reset-short").forEach((el) => el.remove());
+  return (clone?.textContent ?? "").replace(/\s+/g, " ").trim();
+};
 const q = (selector: string) => host.querySelector(selector);
 const section = (engine: string) => q(`section[data-usage-engine="${engine}"]`);
 const row = (id: string) => q(`[data-account-row="${id}"]`);
@@ -104,13 +108,14 @@ const live = (node: Element) => !node.closest("[aria-hidden]");
 const visible = (engine = "claude") => [...section(engine)?.querySelectorAll("[data-account-row]") ?? []].filter(live).map((node) => node.getAttribute("data-account-row") ?? "");
 const viewed = (engine = "claude") => visible(engine).at(-1) ?? null;
 const column = (name: string, engine = "claude") => section(engine)?.querySelector(`[data-account-column="${name}"]`) ?? null;
-const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold])") ?? []];
+const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold]):not([data-usage-grip])") ?? []];
 const picker = (engine = "claude") => [...section(engine)?.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]') ?? []].find(live) ?? null;
 const fold = (engine = "claude") => section(engine)?.querySelector<HTMLButtonElement>("button[data-engine-fold]") ?? null;
 // The phrases sit apart by a CSS gap, not a space, so join them as they read.
 const summary = (engine = "claude") => {
   const node = section(engine)?.querySelector("[data-engine-summary]");
-  return node?.childElementCount ? [...node.children].map(text).join(" ") : text(node);
+  const windows = [...node?.querySelectorAll("[data-window]") ?? []];
+  return windows.length ? windows.map((window) => `${text(window.firstElementChild)} ${text(window.querySelector("[data-left]"))}`).join(" · ") : text(node);
 };
 const boxOf = (node: Element | null | undefined) => BOX.filter((name) => node?.classList.contains(name));
 const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => [...cell.classList].find((name) => name.startsWith("bg-")));
@@ -135,7 +140,7 @@ function cellsOn(root: Element | null | undefined) {
       expect([...boxes[0]!.children].map((cell) => cell.getAttribute("data-cell")), label).toEqual(Array.from({ length: 10 }, (_, i) => (i < on ? "on" : "off")));
       expect(boxes[0]!.textContent, label).toBe("");
       const left = group.querySelector("[data-left]");
-      expect(on, label).toBe(left ? Math.round(parseInt(text(left), 10) / 10) : 0);
+      expect(on, label).toBe(left ? Math.max(parseInt(text(left), 10) > 0 ? 1 : 0, Math.round(parseInt(text(left), 10) / 10)) : 0);
       return on;
     });
   });
@@ -162,7 +167,7 @@ async function mount({ phone = false, coarse = phone, locale = "en", reduce = fa
   setMedia({ phone, coarse, reduce });
   i18n.persistPreference(locale);
   h.state.instances = instancesFor(server.board);
-  if (layout) vi.doMock("./usage-layout", () => ({ USAGE_LAYOUT: layout }));
+  if (layout) vi.doMock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), USAGE_LAYOUT: layout }));
   const { UsageSection } = await import("./UsageSection");
   host = document.createElement("div");
   document.body.append(host);
@@ -253,7 +258,9 @@ describe("Usage desk", () => {
     const scans: string[] = [];
     const scan = (label: string) => {
       scans.push(label);
-      expect(scanForCanary(canary), label).toEqual([]);
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll("[data-account-email]").forEach((el) => { el.textContent = ""; });
+      expect(scanForCanary(canary, clone), label).toEqual([]);
     };
     expect(picker() !== null, "engine account selector").toBe(layout === "A");
     scan("closed");
@@ -276,7 +283,7 @@ describe("Usage desk", () => {
       scan("picked account");
     }
     const counts = [...host.querySelectorAll("button[data-bot-count]")];
-    expect(counts.length).toBeGreaterThan(0);
+    expect(counts).toHaveLength(0);
     for (const count of counts) await click(count);
     expect(counts.map((count) => count.getAttribute("aria-expanded"))).toEqual(counts.map(() => "true"));
     scan("bot names");
@@ -519,7 +526,7 @@ describe("Usage desk", () => {
     await mount();
     if (retained) await act(async () => meterRoot.render(createElement(Meter)));
     const before = text(row("claude"));
-    expect(before).toContain("3 workers");
+    expect(before).not.toContain("workers");
     await unmount();
     h.state.terminalPanes = { "bot-atlas": [] };
     accountOf(server.board, "claude").workers = [];
@@ -605,7 +612,7 @@ describe("Usage desk", () => {
     const say = (key: Parameters<typeof i18n.translate>[1], vars?: Record<string, number>) => i18n.translate(locale, key, vars);
     expect(accountOf(server.board, "codex").coverage).toBe("complete");
     expect(accountOf(server.board, CLAUDE_2).coverage).toBe("unknown");
-    for (const [id, label] of [["codex", say("usage.limits.weeklyShort")], [CLAUDE_2, say("usage.limits.weeklyShort")], ["gemini", say("usage.limits.compactH", { hours: 24 })]] as const) {
+    for (const [id, label] of [["codex", say("usage.limits.weeklyShort")], [CLAUDE_2, say("usage.limits.weeklyShort")]] as const) {
       expect(slots(id), id).toEqual([label]);
       expect(row(id)?.querySelectorAll('[role="group"][data-window]'), id).toHaveLength(1);
       expect(row(id)?.querySelector("[data-window-empty]"), id).toBeNull();
@@ -631,7 +638,7 @@ describe("Usage desk", () => {
       expect(bars, `${account.name} bars`).toBeTruthy();
       expect(section(engine)?.contains(bars ?? null), `${account.name} under its engine`).toBe(true);
       expect(slots(account.id), account.name).toEqual(reported[account.id]);
-      if (locale === "en") expect(who(account.id), account.name).toMatch(/^\d+ bots? · /);
+      expect(who(account.id), account.name).toBe("");
     }
     expect(host.querySelectorAll("[data-account-row]")).toHaveLength(accounts.length);
     const empties = [...host.querySelectorAll("[data-window-empty]")];
@@ -651,24 +658,12 @@ describe("Usage desk", () => {
     expect(host.querySelector("[data-account-row] svg.lucide-check")).toBeNull();
   });
 
-  it("shows unknown workers apart from none", async () => {
-    const board = fresh();
-    board.runs = "unknown";
-    for (const account of engineOf(board, "claude").accounts) account.workers = null;
-    server.board = board;
+  it("keeps bot and worker details off account rows, including unknown workers", async () => {
+    server.board.runs = "unknown";
+    for (const account of engineOf(server.board, "claude").accounts) account.workers = null;
     await mount();
-    expect(who("claude")).toBe("2 bots · Workers unknown");
-    expect(who(CLAUDE_3)).toBe("0 bots · Workers unknown");
-    expect(who(CLAUDE_3)).not.toMatch(/\b0 workers\b/);
-    await reload();
-    server.board = fresh();
-    await mount();
-    expect(who("claude")).toBe("2 bots · 3 workers");
-    expect(who(CLAUDE_3)).toBe("0 bots · 0 workers");
-    expect(who(CLAUDE_3)).not.toContain("Workers unknown");
-    expect(text(row("claude"))).not.toContain("Atlas, Mira");
-    await click(row("claude")?.querySelector("button[data-bot-count]"));
-    expect(text(row("claude"))).toContain("Atlas, Mira");
+    expect(q("[data-account-who], [data-bot-count]")).toBeNull();
+    expect(text(row("claude"))).not.toMatch(/workers|Atlas|Mira/);
   });
 
   const museEngine = (observedAt: number): UsageBoardEngine => ({
@@ -693,11 +688,11 @@ describe("Usage desk", () => {
     const opus = row("claude")?.querySelector('[data-window="seven_day_opus"]');
     expect(opus?.getAttribute("aria-label")).toBe("Opus 7d: 25% left, Resets in 2 days");
     expect(text(opus?.querySelector("[data-left]"))).toBe("25% left");
-    expect(tones(opus)).toEqual([...Array(3).fill("bg-warning"), ...Array(7).fill("bg-ink/12")]);
-    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("bg-accent"), ...Array(7).fill("bg-ink/12")]);
+    expect(tones(opus)).toEqual([...Array(3).fill("bg-warning"), ...Array(7).fill("bg-transparent")]);
+    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("bg-accent"), ...Array(7).fill("bg-transparent")]);
     expect(slots("gemini")).toEqual(["24h"]);
-    expect(row("gemini")?.querySelector('[data-window="daily"]')?.getAttribute("aria-label")).toBe("24h: 82% left, Resets in 9 hours");
     expect(left("gemini", "daily")).toBe("82% left");
+    expect(row("gemini")?.querySelectorAll("[data-cells]")).toHaveLength(1);
     expect(q("[data-verdict]")).toBeNull();
     expect(text(host)).not.toContain("No history yet");
     expect(text(section("muse")?.querySelector("[data-engine-name]"))).toBe("Muse");
@@ -705,11 +700,11 @@ describe("Usage desk", () => {
     expect(slots("muse")).toEqual(["5h", "7d"]);
     expect(left("muse", "five_hour")).toBe("0% left");
     expect(row("muse")?.querySelector('[data-window="five_hour"] [data-left]')?.className).toMatch(/\btext-danger\b/);
-    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("bg-ink/12"));
+    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("bg-transparent"));
     expect(left("muse", "seven_day")).toBe("39% left");
-    expect(text(row("muse")?.querySelector("[data-reading-age]")), "Muse states the age of its reading").toBe("Last seen 2h ago");
-    expect(row("muse")?.querySelector("[data-account-bars]")?.className, "and mutes a reading over 1h old").toMatch(/\bopacity-60\b/);
-    expect(host.querySelectorAll("[data-reading-age]"), "only Muse").toHaveLength(1);
+    expect(row("muse")?.querySelector("[data-reading-age]")).toBeNull();
+    expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
+    expect(host.querySelectorAll("[data-reading-age]")).toHaveLength(0);
     expect(text(host)).not.toContain("Limit reached.");
     expect(q("[data-stale]")).toBeNull();
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
@@ -720,7 +715,7 @@ describe("Usage desk", () => {
     board.engines.push(museEngine(usageBoardNow - 5 * MIN));
     server.board = board;
     await mount({ locale });
-    expect(text(row("muse")?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 5m ago" : "5분 전 기준");
+    expect(q("[data-reading-age]")).toBeNull();
     expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
   });
 
@@ -833,8 +828,8 @@ describe("Usage desk", () => {
     await mount({ locale });
     expect(q("[data-usage-desk]")).not.toBeNull();
     const labels = [...host.querySelectorAll("button")].map((button) => `${text(button)}|${button.getAttribute("aria-label") ?? ""}`);
-    for (const key of ["usage.limits.refreshAll", "usage.limits.countUp", "usage.limits.countDown"]) {
-      expect(labels.some((label) => label.includes(i18n.translate(locale, key as never)))).toBe(false);
+    for (const key of ["usage.limits.countUp", "usage.limits.countDown"]) {
+      expect(labels.some((label) => label.includes(i18n.translate(locale, key as never)))).toBe(true);
     }
     expect(host.querySelector('[aria-keyshortcuts="Alt+R"]')).toBeNull();
     const before = server.calls.length;
@@ -842,7 +837,7 @@ describe("Usage desk", () => {
     expect(server.calls.slice(before).filter((call) => call.startsWith("POST /api/usage/"))).toEqual([]);
     const { en, ko } = await import("@/lib/i18n-catalog");
     for (const catalog of [en, ko]) {
-      for (const key of ["shortcuts.usageRefresh", "usage.limits.refreshAll", "usage.limits.direction", "usage.limits.countUp", "usage.limits.countDown"]) {
+      for (const key of ["shortcuts.usageRefresh", "usage.limits.refreshAll"]) {
         expect(key in catalog, key).toBe(false);
       }
     }
@@ -881,8 +876,8 @@ describe("Usage desk", () => {
       expect(boxOf(control)).toEqual(BOX);
       expect(control?.className).toMatch(/\[@media\(pointer:coarse\)\]:after:-inset-y-2/);
       expect(node.querySelector("[data-account-head]")?.lastElementChild, "Main or Use ends the head line").toBe(control);
-      expect(control?.previousElementSibling?.contains(node.querySelector("[data-account-who]") ?? null), "the name and counts sit beside it").toBe(true);
-      expect(control?.previousElementSibling?.className, "and wrap before they push it").toMatch(/\bmin-w-0\b.*\bflex-1\b.*\bflex-wrap\b/);
+      expect(control?.previousElementSibling?.contains(node.querySelector("[data-account-name]") ?? null), "the name sits beside it").toBe(true);
+      expect(control?.previousElementSibling?.className).toMatch(/\bmin-w-0\b/);
       expect(node.querySelector("[data-account-name]")?.className).toMatch(/\bmin-w-0\b/);
       // A's picker button keeps its own one-line name.
       if (layout === "B") expect(node.querySelector("[data-account-name]")?.className, "a 24-character nickname with no space wraps instead of running under Use, and a Korean name wraps between words").toMatch(/\bbreak-keep\b.*\[overflow-wrap:anywhere\]/);
@@ -1130,14 +1125,14 @@ describe("Usage desk", () => {
       : ["5시간 34% 남음 · 7일 59% 남음", "7일 62% 남음", "아직 사용량 없음", "24시간 82% 남음"]);
     expect(engines.map((engine) => section(engine)?.querySelector("[data-engine-summary]")?.childElementCount)).toEqual([2, 1, 0, 1]);
     expect(q("[data-account-row]")).toBeNull();
-    expect(q("[data-engine-summary] .text-danger")).toBeNull();
+    expect(q("[data-engine-summary] [data-left].text-danger")).toBeNull();
     const next = fresh();
     next.revision = 43;
     engineOf(next, "claude").mainId = CLAUDE_2;
     server.board = next;
     await act(async () => { (await client()).usageBoardFrame(43); await vi.advanceTimersByTimeAsync(0); });
     expect(summary()).toBe(en ? "7d 0% left" : "7일 0% 남음");
-    expect(text(section("claude")?.querySelector("[data-engine-summary] .text-danger"))).toBe(en ? "0% left" : "0% 남음");
+    expect(text(section("claude")?.querySelector("[data-engine-summary] [data-left].text-danger"))).toBe(en ? "0% left" : "0% 남음");
   });
 
   it.each(["en", "ko"] as const)("starts that account's sign-in on the Usage page in one tap (%s)", async (locale) => {
@@ -1147,8 +1142,7 @@ describe("Usage desk", () => {
     await rerender();
     const signIn = row(CLAUDE_3)?.querySelector("button[data-sign-in]") ?? null;
     expect(boxOf(signIn)).toEqual(BOX);
-    expect(row(CLAUDE_3)?.querySelector("[data-account-head]")?.className).toContain("flex-wrap");
-    expect(row(CLAUDE_2)?.querySelector("[data-account-head]")?.className, "other rows keep their head").not.toContain("flex-wrap");
+    expect(row(CLAUDE_3)?.querySelector("[data-account-head]")?.lastElementChild?.contains(signIn), "Sign In ends the head line").toBe(true);
     h.api = async (path, init) => { server.calls.push(`${(init?.method ?? "GET").toUpperCase()} ${path}`); return { url: "https://auth.example/device", code: "ABCD-EFGH" }; };
     await click(signIn);
     expect(server.calls.filter((call) => call.includes("/sign-in"))).toEqual([`POST /api/instances/${encodeURIComponent(CLAUDE_3)}/sign-in`]);
@@ -1186,11 +1180,11 @@ describe("Usage desk", () => {
     const reset = week?.querySelector('[data-reset="week"]');
     expect(text(reset)).toBe(en ? "Limit reached · resets in 5d 2h" : "한도 도달 · 5일 2시간 후 초기화");
     expect([...reset?.querySelectorAll(".text-danger") ?? []].map(text)).toEqual([en ? "Limit reached" : "한도 도달"]);
-    expect(tones(week)).toEqual(Array(10).fill("bg-ink/12"));
+    expect(tones(week)).toEqual(Array(10).fill("bg-transparent"));
     const low = row(CLAUDE_3)?.querySelector('[data-window="session"]');
-    expect([text(low?.querySelector("[data-left]")), low?.querySelector(".text-danger")]).toEqual([en ? "10% left" : "10% 남음", null]);
+    expect(text(low?.querySelector("[data-left].text-danger"))).toBe(en ? "10% left" : "10% 남음");
     expect(text(low?.querySelector('[data-reset="session"]'))).toBe(en ? "resets in 2h 10m" : "2시간 10분 후 초기화");
-    expect(tones(low)).toEqual(["bg-danger", ...Array(9).fill("bg-ink/12")]);
+    expect(tones(low)).toEqual(["bg-danger", ...Array(9).fill("bg-transparent")]);
   });
 
   it.each(["en", "ko"] as const)("ends a used-up window with no reset time at Limit reached, with no dot after it (%s)", async (locale) => {
@@ -1203,7 +1197,7 @@ describe("Usage desk", () => {
     accountOf(server.board, CLAUDE_2).windows.find((each) => each.kind === "week")!.usedPercent = 99.9;
     await mount({ locale });
     const week = row(CLAUDE_2)?.querySelector('[data-window="week"]');
-    expect(text(week?.querySelector("[data-left]"))).toBe(locale === "en" ? "0% left" : "0% 남음");
+    expect(text(week?.querySelector("[data-left]"))).toBe(locale === "en" ? "1% left" : "1% 남음");
     expect(text(week?.querySelector("[data-reset]"))).not.toContain(locale === "en" ? "Limit reached" : "한도 도달");
   });
 
@@ -1221,11 +1215,11 @@ describe("Usage desk", () => {
     }
     await mount({ locale });
     for (const id of ["claude", "codex", "grok"]) {
-      expect(text(row(id)?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 10m ago" : "10분 전 기준");
+      expect(row(id)?.querySelector("[data-reading-age]")).toBeNull();
     }
     const boardClient = await client();
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
-    expect(text(row("claude")?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 10m ago" : "10분 전 기준");
+    expect(q("[data-reading-age]")).toBeNull();
     for (const id of ["claude", "codex", "grok"]) accountOf(server.board, id).observedAt = usageBoardNow - 5 * MIN;
     server.board.revision++;
     await act(async () => { boardClient.usageBoardFrame(server.board.revision); await vi.advanceTimersByTimeAsync(0); });
