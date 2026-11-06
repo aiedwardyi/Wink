@@ -1,4 +1,7 @@
 import { expect, it } from "vitest";
+import { chunk } from "../../electron/verify-replay.mjs";
+import { createReplay } from "../../server/verify-replay.ts";
+import { readReplay } from "./verify-replay";
 import type { VerifyIssue } from "../../shared/live-verify";
 import { SIXTEENTH_MS } from "./verify-beat";
 import type { VerifyReplayChunk } from "./verify-replay";
@@ -145,4 +148,30 @@ it.each([false, true])("files a frame shot just after a scroll under that scroll
   expect(show.phase).toBe("reel");
   expect(show.frame()?.ms).toBe(130);
   expect(show.frame()?.scrollY).toBe(600);
+});
+
+it.each([false, true])("keeps snapshot frames at their captured scroll on open and reconnect (ended=%s)", async ended => {
+  const shot = (ms: number, tile = "desktop") => chunk(1, { tile, ms, data: Buffer.alloc(10, 1) });
+  const replay = createReplay({ ...head.head });
+  replay.add(shot(0));
+  replay.add(chunk(2, { kind: "scroll", tile: "desktop", y: 600, ms: 100 }));
+  replay.add(shot(130));
+  replay.add(chunk(2, { kind: "scroll", tile: "phone", y: 300, ms: 140 }));
+  replay.add(shot(150, "phone"));
+  replay.add(chunk(2, { kind: "scroll", tile: "desktop", y: 900, ms: 160 }));
+  const result = { status: "completed", ms: 1000, notChecked: [], issues: [{ checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "m", box: [0, 20, 50, 20], scrollY: 600 }] };
+  if (ended) replay.finish(result);
+  const show = new VerifyWatchShow(true);
+  for (let i = 0; i < 2; i++) {
+    show.beginRun();
+    const seen: Buffer[] = [], close = replay.subscribe(bytes => { seen.push(bytes); return true; });
+    close();
+    const response = new Response(new Blob([Uint8Array.from(Buffer.concat([Buffer.from("LVR1"), ...seen]))]).stream());
+    for await (const value of readReplay(response.body!)) show.feed(value);
+    for (let j = 0; j < 10; j++) show.advance(10);
+    expect(show.frames.desktop?.scrollY).toBe(600);
+    expect(show.frames.phone?.scrollY).toBe(300);
+    expect(show.scroll.desktop).toBe(900);
+    if (ended) expect(show.frame()).toMatchObject({ ms: 130, scrollY: 600 });
+  }
 });

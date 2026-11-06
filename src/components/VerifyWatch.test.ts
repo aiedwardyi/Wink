@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData, VerifyIssue } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
+import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
 import { VerifyWatchFrame } from "./VerifyWatch";
 
@@ -94,6 +95,40 @@ function animationClock() {
     });
   };
 }
+
+it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
+  applyLocale(locale);
+  const tick = animationClock();
+  const problem: VerifyIssue = { checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] };
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [problem])));
+  await render({ live: false, hidden: false });
+  await tick(2);
+  expect(host.querySelector(".verify-watch-caption span")?.textContent).toBe(locale === "ko" ? "#apply 링크의 대상을 찾지 못했어요. 링크를 눌러 확인해 주세요." : problem.measured);
+});
+
+it("puts phone inline captions after the stage", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })));
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "#apply has no target; click the link", box: [10, 20, 80, 30] }])));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  await tick(2);
+  expect(host.querySelector(".verify-watch-stage .verify-watch-caption")).toBeNull();
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
+});
+
+it.each([false, true])("animates measured tile heights unless reduced motion is set (%s)", async reduced => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} })));
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return { height: this.dataset.tile === "phone" ? 358 : 160 } as DOMRect; });
+  const tick = animationClock();
+  await render({ live: true, hidden: false });
+  const stage = host.querySelector<HTMLElement>(".verify-watch-stage")!;
+  const animate = vi.fn(() => ({ cancel: vi.fn() }));
+  stage.animate = animate as unknown as typeof stage.animate;
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  await tick(1);
+  if (reduced) expect(animate).not.toHaveBeenCalled();
+  else expect(animate).toHaveBeenCalledWith([{ height: "160px" }, { height: "358px" }], { duration: MOTION_LARGE_MS, easing: EASE_STANDARD });
+});
 
 it.each([false, true])("settles an end received before the next frame and finishes playback (live=%s)", async live => {
   const tick = animationClock();

@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, RefreshCw, Volume2, VolumeX, X } from "lucide-react";
 import { VERIFY_ROUTES, type VerifyCardData, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
+import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { reducedMotion } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { beatMuted, createBeat, setBeatMuted } from "@/lib/verify-beat";
+import { verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { closeVerifyWatch, rerunVerify, verifyLiveGate } from "@/lib/verify-watch";
 import { BANNER_MS, VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
@@ -48,6 +52,7 @@ const TAG_CHAR = 6.1;
 export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
+  const phone = useIsPhone();
   const visibility = useVisibility();
   const gate = verifyLiveGate(true, hidden, visibility);
   const [show] = useState(() => new VerifyWatchShow(live));
@@ -55,6 +60,8 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   const [muted, setMuted] = useState(beatMuted);
   const [rerunning, setRerunning] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const stageHeight = useRef<number | null>(null);
   const bitmap = useRef<{ jpeg: Uint8Array; image: ImageBitmap } | null>(null);
   const runs = useRef(card.replay ?? []);
   const close = useRef(onClose);
@@ -206,7 +213,17 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
 
   const tile = show.tile;
   const head = show.head;
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const height = stage.getBoundingClientRect().height, previous = stageHeight.current;
+    stageHeight.current = height;
+    if (previous === null || previous === height || reducedMotion() || !stage.animate) return;
+    const animation = stage.animate([{ height: `${previous}px` }, { height: `${height}px` }], { duration: MOTION_LARGE_MS, easing: EASE_STANDARD });
+    return () => { stageHeight.current = stage.getBoundingClientRect().height; animation.cancel(); };
+  }, [tile, head]);
   const reel = show.reelIssue();
+  const caption = reel && <div className="verify-watch-caption"><b>{reel.tile === "phone" ? c.phone : c.desktop} · {reel.where}</b><span>{verifyProblem(reel, locale)}</span></div>;
   const issues = show.end?.issues ?? [];
   const seconds = Math.round(show.ms / 1000);
   const current = PARTS.find(part => !show.parts.has(part));
@@ -236,14 +253,15 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
         <button type="button" className="verify-watch-icon" onClick={rerun} disabled={rerunning || card.status === "running" || card.status === "preparing"} aria-label={c.rerun} title={c.rerun}><RefreshCw size={14} className={rerunning ? "animate-spin" : undefined} /></button>
         <span className="verify-watch-url" title={head?.page}>{head?.site ?? card.site}</span>
       </div>
-      <div className="verify-watch-stage" data-tile={tile} style={{ aspectRatio: tileSize(show).join(" / ") }} onClick={inline ? () => close.current() : undefined}>
+      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} style={{ aspectRatio: tileSize(show).join(" / ") }} onClick={inline ? () => close.current() : undefined}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
           <div className="verify-watch-pill">{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>
         )}
-        {reel && <div className="verify-watch-caption"><b>{reel.tile === "phone" ? c.phone : c.desktop} · {reel.where}</b><span>{reel.measured}</span></div>}
+        {!(inline && phone) && caption}
         {banner && <div className="verify-watch-banner" role="status">{banner}</div>}
       </div>
+      {inline && phone && caption}
       <div className="verify-watch-line">
         {live && <span className="verify-watch-live">{c.live}</span>}
         {PARTS.map(part => (

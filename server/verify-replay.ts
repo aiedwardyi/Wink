@@ -110,7 +110,7 @@ export function createReplay(head: { runId: string; [key: string]: unknown }) {
     file: () => Buffer.concat([Buffer.from("LVR1"), ...rows.map(row => row.bytes)]),
     subscribe(listener: (bytes: Buffer) => boolean) {
       if (listeners.size >= 2) throw new Error("busy");
-      for (const row of [rows[0]!, ...latest.values(), ...rows.filter(row => row.kind === 2 || row.kind === 3)]) listener(row.bytes);
+      for (const row of rows) if (row.kind !== 1 || latest.get(row.tile!) === row) listener(row.bytes);
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },

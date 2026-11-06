@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { AlertTriangle, AppWindow, Check, Clock, Loader2, Monitor, Play, RefreshCw, Smartphone } from "lucide-react";
-import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData, type VerifyErrorCode, type VerifyIssue } from "../../shared/live-verify";
+import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData, type VerifyErrorCode } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
+import { verifyProblem } from "@/lib/verify-copy";
 import { lazyView } from "@/lib/stale-build";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyWatch, verifyCardAction, verifyCardIn } from "@/lib/verify-watch";
@@ -39,31 +40,6 @@ const errors: Record<VerifyErrorCode, { en: string; ko: string }> = {
   "isolation-failed": { en: "a separate browser could not be prepared", ko: "별도의 브라우저를 준비하지 못했어요" },
   internal: { en: "check could not finish", ko: "확인을 마치지 못했어요" },
 };
-
-function problemKo(issue: VerifyIssue): string {
-  const text = issue.measured;
-  switch (issue.rule) {
-    case "missing target": return `${text.split(" has no target")[0]} 링크의 대상을 찾지 못했어요. 링크를 눌러 확인해 주세요.`;
-    case "local 404": return `${text.split(" returns 404")[0]} 링크에서 404 오류가 나요. 링크를 눌러 확인해 주세요.`;
-    case "self sign-up": return `${/^Sign-up link "(.*?)"/.exec(text)?.[1] ?? text.split(" points at")[0]} 가입 링크가 정보를 입력할 곳으로 이어지지 않아요. 링크를 눌러 확인해 주세요.`;
-    case "sideways scroll": {
-      const size = /^(\d+) px page at (\d+) px/.exec(text);
-      return `휴대폰에서 페이지가 옆으로 넘쳐요${size ? ` (페이지 ${size[1]} px / 화면 ${size[2]} px)` : ""}.`;
-    }
-    case "broken image": return "이미지를 불러오지 못했어요. 페이지를 새로고침해 주세요.";
-    case "page error": return `페이지에 오류가 있어요. 새로고침해 주세요: ${text.replace(/; reload the page$/, "")}`;
-    case "phone menu gone": return `${text.split(" disappear at")[0]} 링크가 휴대폰에서 사라지고 메뉴 버튼도 없어요. 페이지 폭을 줄여 확인해 주세요.`;
-    case "placeholder contact":
-    case "lorem":
-    case "TODO":
-    case "undefined":
-    case "NaN": {
-      const value = /"(.*?)"/.exec(text)?.[1];
-      return `임시 문구나 연락처가 남아 있어요${value ? `: ${value}` : ""}. 페이지에서 확인해 주세요.`;
-    }
-    default: return "페이지에서 문제를 발견했어요. 해당 위치를 확인해 주세요.";
-  }
-}
 
 export function VerifyCard({ card, threadId }: { card: VerifyCardData; threadId: string }) {
   const { locale } = useI18n();
@@ -118,7 +94,7 @@ export function VerifyCard({ card, threadId }: { card: VerifyCardData; threadId:
       {running || waiting ? <div className="verify-card-stages">{c.stages.map(stage => <span key={stage}>{stage}</span>)}</div> : <>
         {issues.length > 0 && <ul className="verify-card-problems">{issues.map((issue, i) => <li key={`${issue.checker}-${issue.where}-${i}`}>
           <div className="verify-card-location">{issue.tile === "phone" ? <Smartphone size={14} /> : <Monitor size={14} />}<span>{issue.tile === "phone" ? c.phone : c.desktop} · {issue.where}</span></div>
-          <div>{locale === "ko" ? problemKo(issue) : issue.measured}</div>
+          <div>{verifyProblem(issue, locale)}</div>
         </li>)}</ul>}
         {(card.notChecked ?? []).map(reason => <div className="verify-card-unchecked" key={reason}>{c.unchecked}: {coverage(reason)}</div>)}
         {!complete && <div className="verify-card-unchecked">{c.unchecked}: {(Object.hasOwn(errors, card.errorCode ?? "timeout") ? errors[card.errorCode ?? "timeout"] : errors.internal)[locale]}</div>}
