@@ -376,6 +376,23 @@ describe("EnginesSettings friends Connections list", () => {
     }
   });
 
+  it.each([false, true])("gives a single-account email the Claude and Codex name row and offset on a phone (phone=%s)", async (phone) => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
+    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "rocknblock.official@gmail.com" }, install: { logout: ["logout"] } });
+    const { root, row } = await renderList();
+    try {
+      const email = row("grok").querySelector("[data-account-email]")!;
+      const nameRow = email.previousElementSibling!;
+      expect(nameRow.className).toBe(phone ? "flex h-9 min-w-0 items-center [@media(pointer:coarse)]:h-11" : "contents");
+      expect(email.classList.contains("-mt-1.5")).toBe(phone);
+      expect(email.parentElement!.classList.contains("py-1")).toBe(!phone);
+    } finally {
+      await act(async () => root.unmount());
+      restore();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("keeps only Sign In for a signed-out engine", async () => {
     const restore = stage("codex", {
       snapshot: { state: "available", authenticated: false },
