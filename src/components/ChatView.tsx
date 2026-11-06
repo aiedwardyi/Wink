@@ -1412,7 +1412,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   // Long enough to need the timeline: three screens, or rows outside the mounted window.
   const railShown = tall || hiddenCount > 0 || Boolean(bot.hasMore) || Boolean(jump.messages);
   const keepGoing = keepGoingMarkState(bot);
-  const keepGoingLabel = keepGoing ? t(keepGoing === "on" ? "bot.keepGoingOnMark" : "bot.keepGoingPausedMark") : undefined;
+  const keepGoingLabel = keepGoing ? t(keepGoing === "on" ? "bot.keepGoingOnMarkHint" : "bot.keepGoingPausedMarkHint") : undefined;
 
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
