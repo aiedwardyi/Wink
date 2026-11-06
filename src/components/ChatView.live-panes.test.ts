@@ -101,7 +101,9 @@ describe("useLivePanes", () => {
     }
   });
 
-  it.each(["desktop", "phone"])("reads panes only on the %s beat until a waiting pane moves on", async (path) => {
+  it.each([
+    ["desktop", "STALLED"], ["desktop", "FAIL"], ["phone", "STALLED"], ["phone", "FAIL"],
+  ] as const)("reads panes only on the %s beat until a %s pane moves on", async (path, status) => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const reads: Array<(snapshot: Snapshot & { panes: { changedAt: number }[] }) => void> = [];
     const readBot = vi.fn(() => new Promise((resolve) => { reads.push(resolve); }));
@@ -116,12 +118,13 @@ describe("useLivePanes", () => {
       vi.stubGlobal("fetch", vi.fn(async () => Response.json(await readBot())));
     }
     const pane = "beefbeef-0000-4000-8000-000000000001";
-    const runs = workerRuns([{ id: "n1", at: 200_000, role: "bot", kind: "note", text: "[pane beefbeef] from Wink (beat): STALLED: no screen change for 2 min and no report." }]);
+    const text = status === "FAIL" ? "FAIL A branch=x sha=y dirty=no" : "STALLED: no screen change for 2 min and no report.";
+    const runs = workerRuns([{ id: "n1", at: 200_000, role: "bot", kind: "note", text: `[pane beefbeef] from Wink (beat): ${text}` }]);
     const reply = async (n: number, changedAt: number) => {
       await vi.waitFor(() => expect(reads.length).toBeGreaterThan(n));
       await act(async () => { reads[n]!({ panes: [{ sessionId: pane, main: false, exited: false, changedAt }] }); await sleep(10); });
     };
-    const botId = `beat-${path}`;
+    const botId = `beat-${path}-${status}`;
     const probe = await mountProbe(botId, [], runs);
     try {
       await reply(0, 1_000);
