@@ -1388,8 +1388,8 @@ function createWindow() {
     },
   });
   mainWindow = win;
-  holdBrandTitle(win, BRAND);
   retargetUpdater(win);
+  holdBrandTitle(win, BRAND);
   win.webContents.session.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, callback) => {
     callback({ requestHeaders: appAuthorization.headers(details, mainWindow?.webContents) });
   });
