@@ -502,6 +502,13 @@ function BotContextMenu({
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
   const canCoordinate = engine?.capabilities?.agentsMcp === true;
+  const activeBots = state.bots.filter((candidate) => !candidate.hidden);
+  const archiveBlocked = Boolean(bot.chiefOfStaff) || activeBots.length <= 1;
+  const archiveHint = bot.chiefOfStaff
+    ? t("chrome.chooseAnotherChief")
+    : activeBots.length <= 1
+      ? t("chrome.keepOneBot")
+      : t("chrome.archiveHint");
   // keep the menu on-screen near the click
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - 380));
   const left = Math.min(menu.x, window.innerWidth - 300);
@@ -572,6 +579,16 @@ function BotContextMenu({
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
         divider("d3"),
+        item(
+          <Archive size={16} className="text-ink-secondary" />,
+          t("chrome.archive"),
+          () => {
+            dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } });
+            const next = activeBots.find((candidate) => candidate.id !== bot.id);
+            if (state.selectedId === bot.id && next) dispatch({ type: "select", id: next.id });
+          },
+          { disabled: archiveBlocked, hint: archiveHint },
+        ),
         item(<Trash2 size={16} />, t("chrome.delete"), () => onDeleteRequest(bot), {
           danger: true,
         }),

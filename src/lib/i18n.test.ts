@@ -541,7 +541,7 @@ describe("sidebar create group and bot/room chrome", () => {
     expect(groupWizard).not.toMatch(/>Create group ·/);
     expect(groupWizard).not.toMatch(/>Add bot</);
     expect(sidebar).toContain('t("chrome.duplicate")');
-    expect(sidebar).not.toContain('t("chrome.archive")');
+    expect(sidebar).toContain('t("chrome.archive")');
     expect(sidebar).toContain('t("chrome.delete")');
     expect(sidebar).toContain('t("chrome.cannotContactTeammates")');
     expect(sidebar).toContain('t("chrome.moveToContext")');
