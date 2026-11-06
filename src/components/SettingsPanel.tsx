@@ -425,6 +425,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
                   </div>
                 )}
                 <FitTextarea
+                  watchMetrics
                   className={cn(DETAILS_INPUT, "min-h-[160px]")}
                   value={text}
                   placeholder={t("bot.memoryPlaceholder")}

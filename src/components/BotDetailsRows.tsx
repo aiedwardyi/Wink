@@ -69,7 +69,7 @@ function fit(box: HTMLTextAreaElement) {
 }
 
 /** A textarea as tall as its text, so the panel stays the one thing that scrolls. */
-export function FitTextarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
+export function FitTextarea({ className, watchMetrics = false, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string; watchMetrics?: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     if (ref.current) fit(ref.current);
@@ -84,6 +84,26 @@ export function FitTextarea({ className, ...props }: TextareaHTMLAttributes<HTML
       document.fonts?.removeEventListener("loadingdone", refit);
     };
   }, []);
+  useEffect(() => {
+    if (!watchMetrics || !ref.current) return;
+    const box = ref.current;
+    const scroller = box.closest<HTMLElement>(".overflow-y-auto");
+    const refit = () => fit(box);
+    const check = () => { if (box.scrollHeight > box.clientHeight) fit(box); };
+    const observer = new MutationObserver(refit);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin", "lang", "style", "class"] });
+    scroller?.addEventListener("scroll", check, { passive: true });
+    box.addEventListener("focus", check);
+    box.addEventListener("pointerenter", check);
+    window.addEventListener("resize", check);
+    return () => {
+      observer.disconnect();
+      scroller?.removeEventListener("scroll", check);
+      box.removeEventListener("focus", check);
+      box.removeEventListener("pointerenter", check);
+      window.removeEventListener("resize", check);
+    };
+  }, [watchMetrics]);
   useEffect(() => {
     const box = ref.current;
     if (!box || typeof ResizeObserver === "undefined") return;
