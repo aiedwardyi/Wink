@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { VerifyCardData } from "../../shared/live-verify";
+import type { VerifyCardData, VerifyIssue } from "../../shared/live-verify";
 import { applyLocale } from "@/lib/i18n";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
 import { VerifyWatchFrame } from "./VerifyWatch";
@@ -65,7 +65,7 @@ it("plays the card's kept runs from the replay route and says Replay expired on 
   expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
 });
 
-function bufferedRun(status = "completed") {
+function bufferedRun(status = "completed", issues: VerifyIssue[] = [], site = card.site, page = "index.html") {
   const chunk = (kind: number, value: unknown) => {
     const json = new TextEncoder().encode(JSON.stringify(value));
     const bytes = new Uint8Array(5 + json.length);
@@ -75,8 +75,8 @@ function bufferedRun(status = "completed") {
     return bytes;
   };
   return new Response(new Blob([
-    chunk(0, { runId: "run-1", site: card.site, page: "index.html" }),
-    chunk(3, { status, ms: 0, issues: [], notChecked: [] }),
+    chunk(0, { runId: "run-1", site, page }),
+    chunk(3, { status, ms: 0, issues, notChecked: [] }),
   ]).stream());
 }
 
@@ -129,6 +129,44 @@ it.each(["en", "ko"] as const)("uses the card's failed-check wording for blocked
   expect(host.querySelector('[role="status"]')?.textContent).toBe(locale === "en" ? "Could not check this page" : "페이지를 확인하지 못했어요");
   expect(host.textContent).not.toContain(locale === "en" ? "No problems" : "문제 없음");
 });
+
+const problems: VerifyIssue[] = [{ checker: "NAV", tile: "phone", rule: "phone menu gone", where: "header nav", measured: "No phone menu" }];
+
+for (const locale of ["en", "ko"] as const) {
+  it.each([
+    { name: "fail to fail", first: problems, next: problems, site: card.site, page: "index.html", fixed: false },
+    { name: "clean to clean", first: [], next: [], site: card.site, page: "index.html", fixed: false },
+    { name: "page A fail to page B clean", first: problems, next: [], site: "luna/about.html", page: "about.html", fixed: false },
+    { name: "fail to clean on the same page", first: problems, next: [], site: card.site, page: "index.html", fixed: true },
+  ])("verifies the result before claiming a fix: $name in " + locale, async ({ first, next, site, page, fixed }) => {
+    applyLocale(locale);
+    const tick = animationClock();
+    const wording = locale === "en" ? "Bot fixed it" : "봇이 고쳤어요";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("old-1") ? bufferedRun("completed", first) : bufferedRun("completed", next, site, page)));
+    await render({ live: false, hidden: false });
+    await tick(45);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(locale === "en" ? "Waiting for another check" : "다른 확인을 기다리는 중");
+    const banners: string[] = [];
+    for (let i = 0; i < 180; i++) {
+      await tick(1);
+      banners.push(host.querySelector('[role="status"]')?.textContent ?? "");
+    }
+    expect(banners.includes(wording)).toBe(fixed);
+  });
+
+  it("stays neutral while the next run has not been fetched in " + locale, async () => {
+    applyLocale(locale);
+    const tick = animationClock();
+    const fetch = vi.fn((url: string) => url.includes("old-1") ? Promise.resolve(bufferedRun("completed", problems)) : new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetch);
+    await render({ live: false, hidden: false });
+    await tick(45);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(locale === "en" ? "Waiting for another check" : "다른 확인을 기다리는 중");
+    await tick(100);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain(locale === "en" ? "Bot fixed it" : "봇이 고쳤어요");
+  });
+}
 
 it("keeps the tabs on one line at their own width and the phone controls at least 44 px, desktop unchanged", async () => {
   applyLocale("ko");

@@ -69,7 +69,7 @@ it("closes 3 s after the end when opened live, and shows No problems on a clean 
   expect(show.closeAt - show.clock).toBe(LIVE_CLOSE_MS);
 });
 
-it("shows Bot fixed it between runs and starts the next run fresh", async () => {
+it("holds between runs and starts the next run fresh", async () => {
   const show = new VerifyWatchShow(false);
   show.beginRun();
   for (const c of [head, mark(0, "result", { ev: { tile: "phone", checker: "NAV", result: "issue", box: [0, 0, 5, 5] } }), end(50, [issue("a")])]) show.feed(c);

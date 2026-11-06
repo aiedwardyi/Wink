@@ -45,6 +45,7 @@ export class VerifyWatchShow {
   phase: ShowPhase = "loading";
   head: VerifyReplayHead | null = null;
   end: VerifyReplayEnd | null = null;
+  fixed = false;
   pinned: VerifyTile | null = null;
   parts = new Set<Part>();
   checks = 0;
@@ -169,8 +170,8 @@ export class VerifyWatchShow {
     return new Promise(resolve => this.waits.push({ at: this.clock + ms, resolve }));
   }
 
-  /** "Bot fixed it" between two runs of a replay. */
-  async between() {
+  async between(fixed = false) {
+    this.fixed = fixed;
     this.set("between");
     await this.waitFor(BANNER_MS);
   }
