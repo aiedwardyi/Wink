@@ -68,6 +68,9 @@ let botWakesPaused = false;
 let lastKeepGoingBody: { fromBotId: string; fromThreadId: string; on: boolean; start_after?: string } | null = null;
 let keepGoingResponse: { status: number; body: unknown } = { status: 200, body: { ok: true } };
 let taskStateNotice: string | undefined;
+let lastVerify: { auth?: string; body: unknown } | null = null;
+let verifyResponse: unknown = { status: "completed", text: "Live Verify: site/index.html - 22 checks, 22 passed, 0 issues, 0 blocked, 0 not run (21 s).\nNo issues found." };
+let verifyHold: ((closed: boolean) => void) | null = null;
 
 let child: ChildProcess;
 const pending = new Map<number, (msg: any) => void>();
@@ -269,6 +272,21 @@ beforeAll(async () => {
         lastKeepGoingBody = JSON.parse(data);
         res.writeHead(keepGoingResponse.status, { "content-type": "application/json" });
         res.end(JSON.stringify(keepGoingResponse.body));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/verify-site") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastVerify = { auth: req.headers.authorization, body: JSON.parse(data) };
+        if (verifyHold) {
+          const hold = verifyHold;
+          res.on("close", () => hold(!res.writableEnded));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(verifyResponse));
       });
       return;
     }
@@ -1183,5 +1201,67 @@ describe("agents-proxy identity gate", () => {
   ])("keeps %s callable in a peer turn", async (name, args) => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, name as string, args);
     expect(call.result.isError).toBeFalsy();
+  });});
+
+describe("agents-proxy verify_site", () => {
+  const identity = (depth: number, flags: Record<string, string>) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, ...flags });
+  const names = (list: any): string[] => list.result.tools.map((t: { name: string }) => t.name);
+
+  it.each<[Record<string, string>, number, boolean]>([
+    [{ OMB_TEAM_REPORTS: "0" }, 18, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 19, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 19, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 20, true],
+  ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
+    const { list } = await probeWithIdentity(identity(0, flags));
+    expect(names(list)).toHaveLength(total);
+    expect(names(list).includes("verify_site")).toBe(listed);
+  });
+
+  it.each<Record<string, string>>([{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1" }])("keeps the five peer tools and never lists verify_site at depth > 0 (%o)", async (flags) => {
+    const { list, call } = await probeWithIdentity(identity(1, flags), "verify_site", { entry: "site" });
+    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "list_routines", "update_task_state", "wait_delegation"]);
+    expect(call.result?.isError ?? call.error).toBeTruthy();
+  });
+
+  it("refuses a direct peer call before calling the harness", async () => {
+    lastVerify = null;
+    const { call } = await probeWithIdentity(identity(1, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
+    expect(call.result.isError).toBe(true);
+    expect(call.result.content[0].text).toContain("unavailable in peer turns");
+    expect(lastVerify).toBeNull();
+  });
+
+  it.each([
+    [{ status: "completed", text: "Live Verify: site/index.html - 22 checks, 22 passed, 0 issues, 0 blocked, 0 not run (21 s).\nNo issues found." }, false],
+    [{ status: "offered", errorCode: "needs-approval", text: "Live Verify for site/index.html needs the user's OK and they are away. A card is waiting in the chat; nothing ran." }, false],
+    [{ status: "skipped", text: "The user skipped Live Verify for site/index.html. Nothing ran." }, false],
+    [{ status: "blocked", errorCode: "busy", text: "Live Verify could not finish site: another Live Verify run is going; try again when it finishes." }, true],
+  ])("posts the entry with the bearer and returns the reply text (%o)", async (reply, isError) => {
+    verifyResponse = reply;
+    const { call } = await probeWithIdentity(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site", fromBotId: "bot-other" });
+    expect(lastVerify).toEqual({ auth: `Bearer ${TOKEN}`, body: { entry: "site" } });
+    expect(call.result.content[0].text).toBe(reply.text);
+    expect(Boolean(call.result.isError)).toBe(isError);
+  });
+
+  it("drops the harness request on notifications/cancelled and sends no reply", async () => {
+    lastVerify = null;
+    const dropped = new Promise<boolean>((resolve) => (verifyHold = resolve));
+    const proxy = spawn(process.execPath, [PROXY], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1" }) }, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    proxy.stdout!.on("data", (chunk) => (out += chunk));
+    try {
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "verify_site", arguments: { entry: "site" } } }) + "\n");
+      await vi.waitFor(() => expect(lastVerify).not.toBeNull(), { timeout: 10_000 });
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7 } }) + "\n");
+      expect(await dropped).toBe(true);
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 8, method: "ping" }) + "\n");
+      await vi.waitFor(() => expect(out).toContain('"id":8'), { timeout: 10_000 });
+      expect(out).not.toContain('"id":7');
+    } finally {
+      verifyHold = null;
+      proxy.kill();
+    }
   });
 });

@@ -15,7 +15,7 @@
   "license": "Apache-2.0",
   "desktopName": "com.orbit.agentdesk.desktop",
   "type": "module",
-  "main": "electron/main.mjs",
+  "main": "electron/entry.mjs",
   "engines": {
     "node": ">=24"
   },
