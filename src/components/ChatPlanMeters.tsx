@@ -121,7 +121,7 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
     <div className="px-5 pb-1">
       <button ref={button} type="button" data-usage-meter="" onClick={onOpen}
         aria-label={t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
-        {signedOut && target ? <span className="flex min-w-0 items-center gap-2 text-[12px]">
+        {signedOut && target ? <span className="flex min-w-0 items-center gap-2 px-4 text-[12px]">
           <span data-meter-name="" className="min-w-0 truncate text-ink-secondary">{target.engine.accounts.length > 1 ? target.account.name : engineName(target.engine.engine)}</span>
           <span data-meter-signed-out="" className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-warning">
             <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{t("usage.chat.signedOut")}

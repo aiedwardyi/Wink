@@ -59,3 +59,28 @@ it("keeps a bound sign-out card until that account is ready, then offers Retry",
   expect(ready).toContain("Retry");
   expect(ready).not.toContain("Sign In Again");
 });
+
+it("stacks the computer-only instruction under the text instead of squeezing it beside", () => {
+  const original = window.matchMedia;
+  window.matchMedia = (() => ({ matches: true, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+  const html = renderToStaticMarkup(createElement(I18nProvider, null,
+    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
+      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped" } })));
+  window.matchMedia = original;
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  const card = host.querySelector("[data-sign-in-card]")!;
+  expect(card.textContent).toContain("Sign in on a computer");
+  expect(card.className).toContain("flex-wrap");
+  expect(card.lastElementChild!.className).toContain("basis-full");
+});
+
+it("gives the sign-in code input room for its whole placeholder", () => {
+  const html = renderToStaticMarkup(createElement(I18nProvider, null,
+    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true,
+      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", accountState: "stopped",
+        loginState: "pending", loginCapture: { inputGeneration: 1 } } })));
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  expect(host.querySelector("input[type=password]")!.className).toContain(" w-60 ");
+});

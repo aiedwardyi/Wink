@@ -623,6 +623,15 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(quick(), "Alt+U opens the quick view with no windows").not.toBeNull();
   });
 
+  it("starts the signed-out text where the composer text starts", async () => {
+    const main = server.board.engines[0]!.accounts[0]!;
+    main.signIn = "signed-out";
+    main.windows = [];
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale: "en", instances: signedOut("claude") });
+    // The composer text sits 36px in: frame px-5 + field px-3 + textarea px-1.
+    expect(q("[data-meter-name]")!.parentElement!.className).toContain("px-4");
+  });
+
   it.each(["en", "ko"] as const)("binds a sign-out error to the failed account, not the base engine (%s)", async (locale) => {
     const failed: Message = { id: "signed-out", at: usageBoardNow - MIN, role: "bot", kind: "activity",
       tool: { name: "error: Claude is not signed in.", signIn: true, accountId: CLAUDE_3 } as NonNullable<Message["tool"]> };

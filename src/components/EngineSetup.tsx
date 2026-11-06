@@ -336,7 +336,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
   if (!forceSignIn && loading) return null;
-  if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  if (computerOnly) return <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
   return (
     <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
       {waiting ? <>
@@ -346,7 +346,7 @@ export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName
         {capture.inputGeneration && <form className="flex max-w-full flex-wrap justify-end gap-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
           <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
             aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
-            className="min-h-11 min-w-0 rounded border border-hairline bg-control px-2 text-ink" />
+            className="min-h-11 w-60 min-w-0 max-w-full rounded border border-hairline bg-control px-2 text-ink" />
           <button type="submit" disabled={busy || !loginCode} className="min-h-11 text-ink underline disabled:opacity-50">{t("accounts.submitCode")}</button>
         </form>}
         <div className="flex flex-wrap justify-end gap-3">
