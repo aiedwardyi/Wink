@@ -4,7 +4,6 @@ import { VERIFY_ROUTES, type VerifyCardData, type VerifyTile } from "../../share
 import { useI18n } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
-import { useIsPhone } from "@/lib/use-phone-swipe";
 import { beatMuted, createBeat, setBeatMuted } from "@/lib/verify-beat";
 import { verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
@@ -13,8 +12,8 @@ import { BANNER_MS, VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
 const copy = {
-  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", mute: "Mute", unmute: "Sound on", close: "Close", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone sideways scroll", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
-  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", mute: "소리 끄기", unmute: "소리 켜기", close: "닫기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
+  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", mute: "Mute", unmute: "Sound on", close: "Close", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone sideways scroll", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
+  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", mute: "소리 끄기", unmute: "소리 켜기", close: "닫기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
 };
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
 const ROLE: Record<string, string> = { PAGE_ERRORS: "#8c95dc", LINKS: "#8db88a", FIT: "#94a3b8", NAV: "#6aa9d8", TEXT_A: "#5eb5a6" };
@@ -52,13 +51,13 @@ const TAG_CHAR = 6.1;
 export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
-  const phone = useIsPhone();
   const visibility = useVisibility();
   const gate = verifyLiveGate(true, hidden, visibility);
   const [show] = useState(() => new VerifyWatchShow(live));
   const [, setVersion] = useState(0);
   const [muted, setMuted] = useState(beatMuted);
   const [rerunning, setRerunning] = useState(false);
+  const [error, setError] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const stageHeight = useRef<number | null>(null);
@@ -162,7 +161,9 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
     ctx.lineWidth = px;
     const reel = show.reelIssue();
     if (reel?.box) {
-      const [x, y, bw, bh] = reel.box;
+      if (!stored) return;
+      const [x, by, bw, bh] = reel.box;
+      const y = by + (reel.scrollY ?? 0) - stored.scrollY;
       ctx.fillStyle = "rgba(240, 93, 93, 0.12)";
       ctx.fillRect(x, y, bw, bh);
       ctx.lineWidth = 2 * px;
@@ -232,8 +233,8 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   const toggleMute = () => { setBeatMuted(!muted); setMuted(!muted); };
   const rerun = async () => {
     if (rerunning) return;
-    setRerunning(true);
-    try { await rerunVerify(card, threadId); close.current(); } catch { /* the card shows the retry */ } finally { setRerunning(false); }
+    setRerunning(true); setError(false);
+    try { await rerunVerify(card, threadId); close.current(); } catch { setError(true); } finally { setRerunning(false); }
   };
 
   return (
@@ -253,15 +254,15 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
         <button type="button" className="verify-watch-icon" onClick={rerun} disabled={rerunning || card.status === "running" || card.status === "preparing"} aria-label={c.rerun} title={c.rerun}><RefreshCw size={14} className={rerunning ? "animate-spin" : undefined} /></button>
         <span className="verify-watch-url" title={head?.page}>{head?.site ?? card.site}</span>
       </div>
+      {error && <div className="verify-watch-error" role="alert">{c.retry}</div>}
       <div ref={stageRef} className="verify-watch-stage" data-tile={tile} style={{ aspectRatio: tileSize(show).join(" / ") }} onClick={inline ? () => close.current() : undefined}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
           <div className="verify-watch-pill">{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>
         )}
-        {!(inline && phone) && caption}
         {banner && <div className="verify-watch-banner" role="status">{banner}</div>}
       </div>
-      {inline && phone && caption}
+      {caption}
       <div className="verify-watch-line">
         {live && <span className="verify-watch-live">{c.live}</span>}
         {PARTS.map(part => (

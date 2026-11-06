@@ -116,6 +116,54 @@ it("puts phone inline captions after the stage", async () => {
   expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
 });
 
+it.each([false, true])("keeps docked captions outside the target's stage (live=%s)", async live => {
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "self sign-up", where: "a#apply", measured: 'Sign-up link "#apply" points at itself; click the link', box: [540, 300, 200, 64] }])));
+  await render({ live, hidden: false });
+  await tick(2);
+  expect(host.querySelector(".verify-watch-stage .verify-watch-caption")).toBeNull();
+  expect(host.querySelector(".verify-watch-stage + .verify-watch-caption")).not.toBeNull();
+});
+
+it.each([false, true])("draws reel boxes at the selected screenshot's scroll (live=%s)", async live => {
+  const tick = animationClock();
+  const strokeRect = vi.fn();
+  const context = { fillRect() {}, strokeRect, drawImage() {} };
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  vi.spyOn(VerifyWatchShow.prototype, "frame").mockReturnValue({ jpeg: new Uint8Array([1]), ms: 0, scrollY: 500 });
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun("completed", [{ checker: "LINKS", tile: "desktop", rule: "missing target", where: "#apply", measured: "missing", box: [10, 20, 80, 30], scrollY: 600 }])));
+  await render({ live, hidden: false });
+  await tick(2);
+  expect(strokeRect).toHaveBeenCalledWith(10, 120, 80, 30);
+});
+
+it.each(["en", "ko"] as const)("shows a Rerun failure and clears it on retry in %s", async locale => {
+  applyLocale(locale);
+  const tick = animationClock();
+  const onClose = vi.fn();
+  let attempts = 0;
+  const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method !== "POST") return bufferedRun("blocked");
+    attempts++;
+    if (attempts === 1) return Response.json({ error: "desktop unavailable" }, { status: 409 });
+    if (attempts === 2) throw new TypeError("Failed to fetch");
+    return Response.json({ ok: true });
+  });
+  vi.stubGlobal("fetch", fetch);
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, status: "completed" }, threadId: "t", live: false, hidden: false, onClose })));
+  await tick(2);
+  const rerun = host.querySelector<HTMLButtonElement>(`button[aria-label="${locale === "en" ? "Rerun" : "다시 확인"}"]`)!;
+  for (let i = 0; i < 2; i++) {
+    await act(async () => rerun.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en" ? "Could not rerun. Try again." : "다시 확인하지 못했어요. 다시 시도하세요.");
+    expect(rerun.disabled).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+  }
+  await act(async () => rerun.click());
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
 it.each([false, true])("animates measured tile heights unless reduced motion is set (%s)", async reduced => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: reduced && query.includes("reduced-motion"), addEventListener() {}, removeEventListener() {} })));
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return { height: this.dataset.tile === "phone" ? 358 : 160 } as DOMRect; });
