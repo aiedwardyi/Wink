@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  profile: chill
+  path_filters:
+    - "!CHANGELOG.md"
+    - "!**/*.md"
+    - "!**/*.{png,jpg,jpeg,gif,svg,webp,ico,bmp,avif}"
+  auto_review:
+    enabled: true
+    auto_incremental_review: false
+    drafts: false
+    ignore_title_keywords:
+      - "docs:"
+      - "docs("
+      - "chore: release "
+      - "chore: bump version"
+      - "chore: bump to "
