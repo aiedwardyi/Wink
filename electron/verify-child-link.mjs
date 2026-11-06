@@ -31,6 +31,7 @@ export function validResult(v) {
     issues: (issues) => Array.isArray(issues) && issues.length <= 40 && issues.every((issue) => shape(issue, {
       checker: (c) => ["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"].includes(c),
       tile: (t) => ["desktop", "phone"].includes(t), rule: (s) => text(s, 120), where: (s) => text(s, 120), measured: (s) => text(s, 160), scrollY: optional(Number.isFinite),
+      box: optional(v => Array.isArray(v) && v.length === 4 && v.every(Number.isFinite) && v[2] >= 0 && v[3] >= 0),
     })),
     issueTotal: integer, errorCode: optional(error), durationMs: integer,
     notChecked: optional(v => Array.isArray(v) && v.length <= 20 && v.every(s => text(s, 200))),
@@ -48,10 +49,12 @@ const run = { runId };
 const viewing = { locale, muted: bool, display };
 const parent = {
   hello: { v: (v) => v === 1, nonce: (v) => /^[a-f0-9]{48}$/.test(v), parentPid: (v) => integer(v) && v > 0, probe: bool, probeRoot: nullable(text) },
-  start: { ...run, botId: (v) => typeof v === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v), root: text, entry: text, revision: (v) => /^[a-f0-9]{64}$/.test(v), site: (v) => text(v, 512), watch: bool, ...viewing },
+  start: { ...run, botId: (v) => typeof v === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v), root: text, entry: text, revision: (v) => /^[a-f0-9]{64}$/.test(v), site: (v) => text(v, 512), watch: bool, recording: optional(bool), ...viewing },
   watch: { ...run, ...viewing }, cancel: run, ping: { n: integer }, quit: {}, probe: { q: validProbe },
 };
 const child = {
+  cast: { ...run, tile: v => v === "desktop" || v === "phone", ms: v => integer(v) && v <= 0xffffffff, data: v => typeof v === "string" && v.length > 0 && v.length < 192 * 1024 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(v) },
+  mark: { ...run, event: v => record(v) && ["start", "hold", "load", "scroll", "point", "result", "opened", "finalize", "part", "checks"].includes(v.kind) && integer(v.seq) && Number.isFinite(v.emittedAt) && Buffer.byteLength(JSON.stringify(v)) < 60 * 1024 },
   ready: {
     versions: (v) => record(v) && Object.keys(v).length <= 100 && Object.values(v).every((s) => text(s, 256)),
     rules: (v) => text(v, 256), userDataDir: text,
@@ -139,6 +142,7 @@ export function createChildLink({ nonce, direction, input, output, onFrame, onEr
   return {
     send(frame) {
       if (failed) return false;
+      if (outgoing === "child" && frame.type === "cast" && (queuedBytes >= 256 * 1024 || !validFrame(frame, outgoing))) { dropped++; return false; }
       if (frame.type === "accepted") logs = 0;
       if (frame.type === "log" && typeof frame.msg === "string") frame = { ...frame, msg: Buffer.from(frame.msg).subarray(0, 1800).toString("utf8") };
       if (!validFrame(frame, outgoing)) { fail("Invalid outgoing frame"); return false; }

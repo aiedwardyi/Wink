@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { VerifyRunState } from "../electron/verify-protocol.mjs";
+import { chunk } from "../electron/verify-replay.mjs";
 import type { VerifyCardData, VerifyResult } from "../shared/live-verify.ts";
 import { autoVerdict } from "./auto-approve.ts";
 import { CommsCallers } from "./comms-caller.ts";
@@ -140,12 +142,95 @@ beforeEach(async () => {
     platform: "win32",
   });
   server = createServer((req, res) => {
+    const stream = /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(req.url ?? "");
+    if (stream) return void verify.handleStream(req, res, stream[1]!, stream[2] === "replay", { relay: req.headers["x-relay"] === "1", phoneSession: req.headers["x-phone"] === "1" });
     const id = /^\/decision\/(.+)$/.exec(req.url ?? "")?.[1];
     if (id) return void verify.handleDecision(req, res, id, { relay: req.headers["x-relay"] === "1", phoneSession: req.headers["x-relay"] === "1" });
     void verify.handleTool(req, res).catch(error => { res.writeHead(500); res.end(JSON.stringify({ error: error.message })); });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+});
+
+it("streams only to thread readers, saves after the reply, and serves replay or 404", async () => {
+  let finishRun!: () => void;
+  const done = new Promise<void>(resolve => { finishRun = resolve; });
+  bridge!.cast = async run => new ReadableStream({ start(controller) {
+    controller.enqueue(chunk(0, { v: 1, runId: run.runId, site: run.site, page: run.entry, startedAt: Date.now(), tiles: { desktop: [1280, 720], phone: [392, 800] } }));
+    controller.enqueue(chunk(1, { tile: "desktop", ms: 1, data: Buffer.from([255, 216, 255, 217]) }));
+    controller.enqueue(chunk(2, { kind: "part", part: "loads", ms: 2 }));
+    void done.then(() => { controller.enqueue(chunk(3, { status: "completed", ms: 4, issues: [], notChecked: [] })); controller.close(); });
+  } });
+  bridge!.poll = async run => { await done; return { runId: run.runId, revision: 2, state: "completed", counts: counts(10), result: result([], { runId: run.runId }) }; };
+  const pending = tool({ entry: "site" });
+  const live = await until(() => broadcasts.find(message => message.verify?.live));
+  const runId = live.verify!.runId;
+  const get = (suffix: string, headers: Record<string, string> = { authorization: "Bearer app-token" }) => fetch(`${base}/api/verify/runs/${runId}/${suffix}`, { headers });
+  expect((await get("live", {})).status).toBe(401);
+  expect((await get("live", { authorization: `Bearer ${token}` })).status).toBe(403);
+  expect((await get("live", { "x-relay": "1", authorization: "Bearer app-token" })).status).toBe(401);
+  const first = await get("live"), second = await get("live", { "x-relay": "1", "x-phone": "1" });
+  expect(first.headers.get("cache-control")).toBe("no-store");
+  expect(first.headers.get("x-content-type-options")).toBe("nosniff");
+  expect((await get("live")).status).toBe(429);
+  finishRun();
+  expect((await pending).body.status).toBe("completed");
+  expect((await first.arrayBuffer()).byteLength).toBeGreaterThan(20);
+  await second.arrayBuffer();
+  await until(() => broadcasts.find(message => message.verify?.replay?.includes(runId)));
+  expect(card()?.live).toBeUndefined(); expect(card()?.replay).toBeUndefined();
+  const file = await get("replay"), fileBytes = Buffer.from(await file.arrayBuffer());
+  expect(fileBytes.subarray(0, 4).toString()).toBe("LVR1");
+  expect(Buffer.from(await (await get("live")).arrayBuffer())).toEqual(fileBytes);
+  await unlink(join(DATA_DIR, "verify-replays", threadId, `${runId}.lvr`));
+  expect((await get("replay")).status).toBe(404);
+});
+
+it("bounds waiting runs to two in FIFO order", async () => {
+  const completions: Array<() => void> = [];
+  bridge!.poll = async (run, _since, _wait, signal) => {
+    await new Promise<void>((resolve, reject) => { completions.push(resolve); signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); });
+    return { runId: run.runId, revision: 2, state: "completed", counts: counts(10), result: result([], { runId: run.runId }) };
+  };
+  for (const name of ["second", "third", "fourth"]) writeFileSync(join(work, "site", `${name}.html`), `<h1>${name}</h1>`);
+  const first = tool({ entry: "site" }); await until(() => bridge!.starts.length === 1);
+  const second = tool({ entry: "site/second.html" }); await until(() => card()?.status === "waiting" && card()?.site.includes("second"));
+  const third = tool({ entry: "site/third.html" }); await until(() => card()?.status === "waiting" && card()?.site.includes("third"));
+  expect((await tool({ entry: "site/fourth.html" })).body.errorCode).toBe("busy");
+  completions.shift()!(); await first; await until(() => bridge!.starts.length === 2);
+  expect(bridge!.starts[1]!.entry).toBe("second.html");
+  completions.shift()!(); await second; await until(() => bridge!.starts.length === 3);
+  expect(bridge!.starts[2]!.entry).toBe("third.html");
+  completions.shift()!(); await third;
+});
+
+it("includes waiting inside the tool deadline", async () => {
+  const aborter = new AbortController(), first = tool({ entry: "site" }, { signal: aborter.signal }).catch(() => null);
+  await until(() => bridge!.starts.length === 1);
+  flags.limits.runMs = 100;
+  const started = Date.now(), second = await tool({ entry: "site" });
+  expect(second.body.errorCode).toBe("timeout");
+  expect(Date.now() - started).toBeLessThan(1000);
+  expect(bridge!.starts).toHaveLength(1);
+  aborter.abort(); await first;
+});
+
+it("holds the next run until a cancelled cast retires", async () => {
+  let retire!: () => void;
+  bridge!.cast = async run => new ReadableStream({ start(controller) {
+    controller.enqueue(chunk(0, { v: 1, runId: run.runId, site: run.site, page: run.entry }));
+    retire = () => controller.close();
+  } });
+  const aborter = new AbortController(), first = tool({ entry: "site" }, { signal: aborter.signal }).catch(() => null);
+  await until(() => broadcasts.some(message => message.verify?.live));
+  const second = tool({ entry: "site" }); await until(() => card()?.status === "waiting");
+  aborter.abort(); await first; await until(() => bridge!.cancels === 1);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(bridge!.starts).toHaveLength(1);
+  bridge!.cast = undefined; bridge!.states = finalStates(result());
+  retire();
+  expect((await second).body.status).toBe("completed");
+  expect(bridge!.starts).toHaveLength(2);
 });
 
 afterEach(async () => {
@@ -388,7 +473,7 @@ describe("verify_site cancellation", () => {
   });
 
   it("the run deadline cancels once with timeout and partial counts", async () => {
-    flags.limits.runMs = -9_800;
+    flags.limits.runMs = 200;
     bridge!.states = [{ runId: "x", revision: 1, state: "running", counts: counts(3), result: null }];
     const reply = await tool({ entry: "site" });
     expect(reply.body).toMatchObject({ status: "blocked", errorCode: "timeout" });
@@ -440,6 +525,8 @@ describe("verify_site kill switch", () => {
     flags.on = false;
     expect((await tool({ entry: "site" })).status).toBe(404);
     expect((await decide("abcdefgh-1234", "skip", "n")).status).toBe(404);
+    for (const kind of ["live", "replay"]) expect((await fetch(`${base}/api/verify/runs/abcdefgh-1234/${kind}`, { headers: { authorization: "Bearer app-token" } })).status).toBe(404);
+    expect(existsSync(join(DATA_DIR, "verify-replays"))).toBe(false);
     expect(verifyToolEnv(true, "win32")).toEqual({});
     flags.on = true;
     expect(verifyToolEnv(true, "win32")).toEqual({ OMB_LIVE_VERIFY: "1" });

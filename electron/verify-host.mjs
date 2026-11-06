@@ -11,6 +11,7 @@ import { readPreference, resolveLocale } from "./i18n.mjs";
 import { activeVerifyProbe, registerVerifyProbe } from "./verify-probe-bootstrap.mjs";
 import { CHILD_PATHS, createChildLink, RESOLVER_RULES, SYSTEM_ENV } from "./verify-child-link.mjs";
 import { VERIFY_POLL_MAX_MS } from "./verify-protocol.mjs";
+import { createCastStream } from "./verify-stream.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const zero = () => ({ planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 });
@@ -32,6 +33,7 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
     if (!record || terminal(record.state)) return;
     const counts = record.state.counts ?? zero();
     record.state = { runId: record.input.runId, revision: record.state.revision + 1, state: "blocked", counts, result: { v: 1, runId: record.input.runId, site: record.input.site, counts, issues: [], issueTotal: 0, durationMs: Math.max(0, d.now() - record.started), errorCode }, errorCode };
+    record.cast.finish(record.state.result);
     if (active === record) active = null;
     publish();
   }
@@ -51,6 +53,12 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
     clearTimeout(c.readyTimer); clearTimeout(c.quitTimer); clearInterval(c.pingTimer);
     for (const ack of c.acks.values()) { clearTimeout(ack.timer); ack.reject(fault("internal")); }
     c.acks.clear();
+  }
+  function quit(c) {
+    if (c.quitting) return;
+    c.quitting = true;
+    clearInterval(c.pingTimer);
+    c.link?.send({ type: "quit" });
   }
   async function kill(c, code = "internal") {
     if (c.killing) return c.killing;
@@ -93,7 +101,7 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
     if (frame.type === "pong") { if (frame.n <= c.ping && frame.n > c.lastPong) { c.lastPong = frame.n; c.pongAt = d.now(); } return; }
     if (frame.type === "muted") { muted = frame.muted; return; }
     if (frame.type === "idle") {
-      c.idle = true; c.link.send({ type: "quit" });
+      c.idle = true; quit(c);
       c.quitTimer = setTimeout(() => void kill(c), 1500);
       return;
     }
@@ -105,9 +113,17 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
       const before = { ...record.state }; delete before.revision;
       if (JSON.stringify(before) !== JSON.stringify(value)) {
         record.state = { ...value, revision: record.state.revision + 1 };
+        if (terminal(value)) record.cast.finish(value.result);
         if (terminal(value) && active === record) active = null;
         publish();
       }
+      return;
+    }
+    if (frame.type === "cast" || frame.type === "mark") {
+      const record = runs.get(frame.runId);
+      if (!record || record.child !== c || terminal(record.state)) return;
+      if (frame.type === "cast") record.cast.frame(frame);
+      else record.cast.mark(frame.event);
       return;
     }
     if (frame.type === "timing") { if (probe) log(`verify timing ${frame.name} ${frame.epochMs}`); return; }
@@ -199,17 +215,18 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
     if (active) throw fault("busy", 409);
     for (const [id, record] of runs) if (terminal(record.state) && d.now() - record.started > 230000) runs.delete(id);
     const record = { input, started: d.now(), watched: input.watch, state: { runId: input.runId, revision: 1, state: "preparing", counts: null, result: null } };
+    record.cast = createCastStream(input, record.started);
     runs.set(input.runId, record); active = record;
     record.starting = (async () => {
       try {
         const c = await ensureChild(); record.child = c;
         if (terminal(record.state)) {
           if (!active && ![...runs.values()].some((previous) => previous !== record && previous.child === c && previous.watched && terminal(previous.state))) {
-            c.idle = true; c.link.send({ type: "quit" }); c.quitTimer = setTimeout(() => void kill(c), 1500);
+            c.idle = true; quit(c); c.quitTimer = setTimeout(() => void kill(c), 1500);
           }
           return;
         }
-        await ack(c, { type: "start", ...input, ...inputs() }, "accepted");
+        await ack(c, { type: "start", ...input, ...inputs(), ...(d.recording === false ? { recording: false } : {}) }, "accepted");
       } catch (error) { markBlocked(record, error.error === "isolation-failed" ? "isolation-failed" : "internal"); }
     })();
     return { runId: input.runId };
@@ -246,7 +263,7 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
       closed = true; publish(); markBlocked(active, "cancelled");
       const c = current;
       if (!c) return;
-      c.link?.send({ type: "quit" });
+      quit(c);
       let timer;
       await Promise.race([c.exitPromise ?? Promise.resolve(), new Promise((resolve) => { timer = setTimeout(resolve, 1400); })]);
       clearTimeout(timer);
@@ -258,5 +275,10 @@ export function createVerifyHost({ log = () => {}, probe = activeVerifyProbe(), 
     return (await ack(current, { type: "probe", q }, "probe")).data;
   };
   if (probe) registerVerifyProbe(probeQuery, () => current ? { pid: current.proc?.pid, root: current.root, readyMs: current.readyMs, transport: "pipe" } : null);
-  return { start, poll, watch, cancel, quit: close, close, ...(probe ? { probe: probeQuery, child: () => current ? { pid: current.proc?.pid, root: current.root, readyMs: current.readyMs, transport: "pipe" } : null } : {}) };
+  function cast(runId, res) {
+    const record = runs.get(runId);
+    if (!record) throw fault("not-found", 404);
+    record.cast.open(res);
+  }
+  return { start, poll, cast, watch, cancel, quit: close, close, ...(probe ? { probe: probeQuery, child: () => current ? { pid: current.proc?.pid, root: current.root, readyMs: current.readyMs, transport: "pipe" } : null } : {}) };
 }

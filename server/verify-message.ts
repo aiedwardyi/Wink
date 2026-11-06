@@ -1,7 +1,7 @@
 import { VERIFY_LIMITS, type VerifyCardData, type VerifyCardStatus, type VerifyChecker, type VerifyCounts, type VerifyErrorCode, type VerifyIssue, type VerifyResult, type VerifyTile } from "../shared/live-verify.ts";
 import { redactSecretsInText } from "./redact.ts";
 
-const STATUSES = new Set<VerifyCardStatus>(["offered", "preparing", "running", "completed", "skipped", "blocked", "stale"]);
+const STATUSES = new Set<VerifyCardStatus>(["offered", "waiting", "preparing", "running", "completed", "skipped", "blocked", "stale"]);
 const CHECKERS = new Set<VerifyChecker>(["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"]);
 const TILES = new Set<VerifyTile>(["desktop", "phone"]);
 
@@ -40,6 +40,7 @@ function issue(value: unknown): VerifyIssue | null {
   if (rule === null || where === null || measured === null) return null;
   const out: VerifyIssue = { checker: value.checker as VerifyChecker, tile: value.tile as VerifyTile, rule, where, measured };
   if (typeof value.scrollY === "number" && Number.isFinite(value.scrollY)) out.scrollY = value.scrollY;
+  if (Array.isArray(value.box) && value.box.length === 4 && value.box.every(n => typeof n === "number" && Number.isFinite(n)) && value.box[2] >= 0 && value.box[3] >= 0) out.box = value.box as VerifyIssue["box"];
   return out;
 }
 
@@ -62,6 +63,8 @@ export function redactVerifyCard(value: unknown): VerifyCardData | undefined {
   if (typeof value.errorCode === "string" && Object.hasOwn(VERIFY_REASONS, value.errorCode)) out.errorCode = value.errorCode as VerifyErrorCode;
   if (time(value.startedAt)) out.startedAt = value.startedAt as number;
   if (time(value.endedAt)) out.endedAt = value.endedAt as number;
+  if (value.live === true) out.live = true;
+  if (Array.isArray(value.replay)) out.replay = value.replay.filter((id): id is string => typeof id === "string" && /^[a-z0-9-]{8,64}$/.test(id)).slice(-3);
   return out;
 }
 
@@ -92,6 +95,7 @@ export function verifyReplyText(status: VerifyCardStatus, _site: string, detail:
 
 /** The card's plain-text summary, for transcripts and model context. */
 export function verifyCardText(card: VerifyCardData): string {
+  if (card.status === "waiting") return "Waiting for another check.";
   if (card.status === "offered") return card.errorCode === "needs-approval"
     ? `Live Verify for ${card.site} is waiting for your OK.`
     : `Live Verify for ${card.site} is waiting for Watch or Skip.`;

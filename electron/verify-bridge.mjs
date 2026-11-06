@@ -91,7 +91,7 @@ export function createVerifyBridge({ token, log = () => {}, loadHost = () => imp
       if (!botPattern.test(botId) || runId && !runPattern.test(runId)) throw error(400);
       const scope = grant(req.headers.authorization, botId, runId);
       if (!scope) { json(res, 401, { error: "unauthorized" }); return true; }
-      if (req.method !== (action === "poll" ? "GET" : "POST")) { json(res, 405, { error: "method-not-allowed" }); return true; }
+      if (req.method !== (["poll", "cast"].includes(action) ? "GET" : "POST")) { json(res, 405, { error: "method-not-allowed" }); return true; }
       if (closed) { json(res, 503, { error: "internal" }); return true; }
       for (const [id, previous] of consumed) if (previous.expiry <= now()) consumed.delete(id);
       if (action === "start") {
@@ -108,7 +108,7 @@ export function createVerifyBridge({ token, log = () => {}, loadHost = () => imp
         const reply = await readyHost.start({ ...body, botId });
         json(res, 202, reply);
       } else {
-        if (action !== "poll") {
+        if (!["poll", "cast"].includes(action)) {
           const body = await readBody(req, true);
           if (!record(body) || Object.keys(body).length) throw error(400);
         }
@@ -121,7 +121,8 @@ export function createVerifyBridge({ token, log = () => {}, loadHost = () => imp
           const waitMs = Number(url.searchParams.get("waitMs") ?? 0);
           if (!Number.isSafeInteger(since) || since < -1 || !Number.isSafeInteger(waitMs) || waitMs < 0) throw error(400);
           json(res, 200, await host.poll(runId, { since, waitMs: Math.min(waitMs, VERIFY_POLL_MAX_MS) }));
-        } else json(res, 200, await host[action](runId));
+        } else if (action === "cast") host.cast(runId, res);
+        else json(res, 200, await host[action](runId));
       }
     } catch (err) {
       json(res, err.status ?? 500, { error: err.status === 413 ? "body-too-large" : err.error ?? "invalid-request" });

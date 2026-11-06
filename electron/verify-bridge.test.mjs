@@ -89,3 +89,17 @@ it("closes only a loaded host and awaits shutdown", async () => {
   await new Promise(setImmediate); expect(finished).toBe(false); release(); await pending;
   expect(g.host.close).toHaveBeenCalledTimes(1);
 });
+
+it("authenticates cast GET before streaming with the original scope", async () => {
+  const f = await fixture();
+  expect((await f.call(null, "bad", `/${f.body.runId}/cast`, "GET")).status).toBe(401);
+  expect(f.loadHost).not.toHaveBeenCalled();
+  await f.call();
+  f.host.cast = vi.fn((_runId, res) => { res.writeHead(200, { "cache-control": "no-store" }); res.end(Buffer.from([1, 2, 3])); });
+  const reply = await f.call(null, signed(f.scope), `/${f.body.runId}/cast`, "GET");
+  expect(reply.status).toBe(200);
+  expect(Buffer.from(await reply.arrayBuffer())).toEqual(Buffer.from([1, 2, 3]));
+  expect(f.host.watch).not.toHaveBeenCalled();
+  const other = [...f.scope]; other[5] = "b".repeat(64);
+  expect((await f.call(null, signed(other), `/${f.body.runId}/cast`, "GET")).status).toBe(401);
+});

@@ -2,7 +2,7 @@
 import type { VerifyCounts, VerifyErrorCode, VerifyResult, VerifyTile } from "../shared/live-verify";
 
 export declare const VERIFY_GRANT_PREFIX: "orbit-verify-v1";
-export declare const VERIFY_BRIDGE_ROUTES: { start: string; poll: string; watch: string; cancel: string };
+export declare const VERIFY_BRIDGE_ROUTES: { start: string; poll: string; cast: string; watch: string; cancel: string };
 export declare const VERIFY_BODY_LIMIT: number;
 export declare const VERIFY_POLL_MAX_MS: number;
 export declare const VERIFY_RUN_MS: number;
@@ -55,11 +55,25 @@ export interface VerifySnapshot {
 }
 
 /** main -> wall. They mirror the working checker's stage calls (live/live.mjs -> live/stage.html window.stage). */
+export interface VerifyCheck {
+  tile: VerifyTile;
+  checker: string;
+  rule: string;
+  where: string;
+  box?: [number, number, number, number];
+  scrollY: number;
+  result: "ok" | "issue" | "blocked";
+  detail: boolean;
+  count: number;
+}
+
 export type VerifyWallEvent = (
   | { kind: "start"; seq: number; scan: unknown; clock: VerifyClock }                      // stage.start(scanScore(...))
   | { kind: "hold"; seq: number; text: string }                                             // stage.progress("123 done")
   | { kind: "load"; seq: number; score: unknown; clock: VerifyClock }                       // stage.load(score); clock.holds is final here
   | { kind: "scroll"; seq: number; tile: VerifyTile; y: number }                            // real page scrollY while live input owns the tile
+  | { kind: "part"; seq: number; part: "loads" | "links" | "phone" }
+  | { kind: "checks"; seq: number; checks: VerifyCheck[]; count: number }
   | { kind: "point"; seq: number; inp: unknown; scrollY: number }                           // S.full.point(inp, scrollY): the cursor's real target
   | { kind: "result"; seq: number; key: string; ev: unknown; t: number }                    // stage.result(key, ev), stamped at show time t
   | { kind: "opened"; seq: number; key: string; t: number }                                 // stage.opened(key)
@@ -84,6 +98,7 @@ export interface LiveVerifyCamera {
 /** electron/verify-run.mjs (ENGINE) entry point, called by electron/verify-host.mjs (HOST). */
 export interface VerifyRunInput {
   hidden?: boolean;
+  frame?(frame: { tile: VerifyTile; ms: number; data: string }): void;
   runId: string;
   site: string;
   /** http://127.0.0.1:<port>/<entry> from startSiteServer() */

@@ -1,4 +1,5 @@
 import { attach } from "./verify-cdp.mjs";
+import { startCast } from "./verify-cast.mjs";
 import { VERIFY_GEOMETRY, VERIFY_RUN_MS } from "./verify-protocol.mjs";
 import { pageTools } from "./verify-rules/dom.mjs";
 import * as errorsRule from "./verify-rules/page-errors.mjs";
@@ -6,17 +7,20 @@ import * as linksRule from "./verify-rules/dead-links.mjs";
 import * as scrollRule from "./verify-rules/phone-scroll.mjs";
 import * as menuRule from "./verify-rules/phone-menu.mjs";
 import * as copyRule from "./verify-rules/leftovers.mjs";
+import * as detailsRule from "./verify-rules/details.mjs";
 import { blockedGuard } from "./verify-rules/blocked.mjs";
 
-const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule];
+const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule, detailsRule];
 const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeout"]);
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
 const fault = code => Object.assign(new Error(code), { code });
 
 export function runHiddenVerify(input) {
   const started = Date.now(), adapters = {}, disposers = [], problems = [], notChecked = new Set(), details = [];
-  const counts = { planned: 10, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 10 };
-  let rejectFailure, ended = false, seq = 0, runFailure;
+  const counts = { planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 };
+  const casts = {};
+  let batch = [];
+  let rejectFailure, ended = false, seq = 0, eventBytes = 0, runFailure;
   const failed = new Promise((_, reject) => { rejectFailure = reject; });
   failed.catch(() => {});
   const stop = code => { runFailure ??= code; rejectFailure(fault(code)); };
@@ -24,18 +28,45 @@ export function runHiddenVerify(input) {
   const deadline = setTimeout(() => stop("timeout"), VERIFY_RUN_MS - 2500);
   input.signal.addEventListener("abort", abort, { once: true });
   const race = promise => Promise.race([promise, failed]);
-  const emit = value => input.emit({ ...value, seq: ++seq, emittedAt: performance.timeOrigin + performance.now() });
-  function complete(blocked, count) {
+  const emit = value => {
+    const event = { ...value, seq: seq + 1, emittedAt: performance.timeOrigin + performance.now() }, size = Buffer.byteLength(JSON.stringify(event));
+    if (seq >= 1998 && value.kind !== "end" || eventBytes + size > 2 * 1024 * 1024 - (value.kind === "end" ? 0 : 32768)) return;
+    seq++; eventBytes += size; input.emit(event);
+  };
+  function flushChecks() {
+    if (!batch.length) return;
+    emit({ kind: "checks", checks: batch, count: counts.completed });
+    batch = [];
+  }
+  function complete(blocked, count, event) {
     if (ended) return;
+    counts.planned++;
     counts.completed++;
-    counts.notRun--;
     counts[blocked ? "blocked" : count ? "failed" : "passed"]++;
+    if (event) {
+      batch.push({ ...event, result: blocked ? "blocked" : count ? "issue" : "ok", count: counts.completed });
+      if (batch.length === 32) flushChecks();
+    }
     input.progress({ ...counts });
   }
   async function observe(cdp, rule, tile) {
     if (ended) throw fault("cancelled");
     try {
-      return await race(cdp.ev(`(${rule.observe.toString()})((${pageTools.toString()})())`));
+      return await race(cdp.ev(`(() => {
+        const tools = (${pageTools.toString()})();
+        const data = (${rule.observe.toString()})(tools);
+        const measure = row => {
+          if (!row.where || row.box) return;
+          let node; try { node = row.where === "page" ? document.documentElement : document.querySelector(row.where); } catch {}
+          if (!node?.getClientRects().length && row.where === "header nav") node = document.querySelector("header,[role=banner]");
+          if (!node) return;
+          const r = node.getBoundingClientRect(); row.box = [r.x, r.y, r.width, r.height]; row.scrollY = scrollY;
+        };
+        for (const value of Object.values(data)) if (Array.isArray(value)) for (const row of value) measure(row);
+        measure(data);
+        data.viewport = { height: innerHeight, maxScroll: Math.max(0, document.documentElement.scrollHeight - innerHeight), y: scrollY };
+        return data;
+      })()`));
     } catch (error) {
       if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
       notChecked.add(`${rule.label} (${tile})`);
@@ -70,10 +101,16 @@ export function runHiddenVerify(input) {
     for (const method of ["Page.enable", "Runtime.enable", "Network.enable"]) await race(cdp.send(method));
     try { await race(cdp.send("Page.setInterceptFileChooserDialog", { enabled: true })); }
     catch { throw fault("isolation-failed"); }
+    // Keep capture from changing page visibility.
+    await race(cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }));
     const geometry = VERIFY_GEOMETRY[tile];
     await race(cdp.send("Emulation.setDeviceMetricsOverride", { width: geometry.cssW, height: geometry.cssH, deviceScaleFactor: geometry.dpr, mobile: geometry.mobile, scale: 1 }));
     if (tile === "phone") await race(cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }));
     await race(page.loadURL(input.url));
+    if (input.frame) {
+      casts[tile] = startCast({ cdp, page, tile, started, frame: input.frame });
+      casts[tile].readerStop();
+    }
     try { await race(cdp.ev("(() => { void document.body.offsetWidth; return document.fonts.ready.then(() => true); })()")); }
     catch (error) {
       if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
@@ -96,11 +133,36 @@ export function runHiddenVerify(input) {
     const statuses = await head([...new Set(data.links.filter(a => a.local && !a.missing && !a.samePage).map(a => a.url))]);
     for (const a of data.links) if (statuses.has(a.url)) { a.status = statuses.get(a.url); a.unchecked = a.status === null; }
   }
+  async function interact(cdp, tile) {
+    try {
+      const targets = await race(cdp.ev(`(() => {
+        const { all, visible, where } = (${pageTools.toString()})();
+        const nodes = all("a,button,summary,label,[role=button]").filter(visible);
+        const menu = ${JSON.stringify(tile)} === "phone" && nodes.find(n => n.closest("header,[role=banner],nav") && /menu|navigation|toggle|hamburger|메뉴|탐색/i.test(n.getAttribute("aria-label") || n.id || n.textContent));
+        const signup = nodes.find(n => /sign[ -]?up|register|apply|신청|가입/i.test(n.textContent) && !n.closest("form") && !n.disabled && (n.localName !== "a" || n.origin === location.origin && n.pathname === location.pathname));
+        globalThis.lvWatchTargets = [menu, signup].filter(Boolean);
+        return globalThis.lvWatchTargets.map((n, index) => ({ index, where: where(n), key: n === menu ? "menu" : "signup" }));
+      })()`));
+      if (!Array.isArray(targets)) return;
+      for (const target of targets) {
+        const point = await race(cdp.ev(`(() => { const n = globalThis.lvWatchTargets[${target.index}]; if (!n?.isConnected) return null; n.scrollIntoView({ block: "center", behavior: "instant" }); const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, scrollY }; })()`));
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        emit({ kind: "scroll", tile, y: point.scrollY });
+        emit({ kind: "point", inp: { tile, type: "click", key: target.key, path: target.where, x: point.x, y: point.y, doc: false }, scrollY: point.scrollY });
+        for (const type of ["mousePressed", "mouseReleased"]) await race(cdp.send("Input.dispatchMouseEvent", { type, x: point.x, y: point.y, button: "left", clickCount: 1 }));
+        casts[tile]?.readerStop();
+      }
+    } catch (error) {
+      if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
+      notChecked.add(`visible interactions (${tile})`);
+    }
+  }
   async function execute() {
     input.onTiming?.("run-start", started);
     if (input.signal.aborted) throw fault("cancelled");
     emit({ kind: "start", scan: null, clock: { t0: started, holds: 0 } });
     const tiles = await race(Promise.all([setup("desktop"), setup("phone")]));
+    emit({ kind: "part", part: "loads" });
     const nav = {};
     for (const [i, tile] of ["desktop", "phone"].entries()) {
       const { cdp, events, loads, aborted, blocked, requests } = tiles[i];
@@ -112,11 +174,16 @@ export function runHiddenVerify(input) {
         return false;
       });
       if (forms) notChecked.add("form delivery");
+      let lastY = 0;
       for (const rule of rules) {
-        if (tile === "desktop" && rule === scrollRule) { complete(false, 0); continue; }
-        if (tile === "phone" && guard.layout && (rule === scrollRule || rule === menuRule)) { notChecked.add(`phone layout (${guard.layout})`); complete(true, 0); continue; }
+        if (tile === "desktop" && rule === scrollRule) continue;
+        if (guard.layout && (rule === detailsRule || tile === "phone" && (rule === scrollRule || rule === menuRule))) { notChecked.add(`phone layout (${guard.layout})`); continue; }
+        if (lastY) {
+          await race(cdp.ev('(() => { scrollTo({ top: 0, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()'));
+          emit({ kind: "scroll", tile, y: 0 }); lastY = 0;
+        }
         const data = await observe(cdp, rule, tile);
-        if (!data) { complete(true, 0); continue; }
+        if (!data) continue;
         try {
           if (rule === errorsRule) {
             Object.assign(data, { origin: new URL(input.url).origin, scriptsBlocked: guard.scripts, errors: [...new Map(events.map(e => [e.where, e])).values()] });
@@ -128,30 +195,66 @@ export function runHiddenVerify(input) {
           if (rule === menuRule) nav[tile] = data;
           const checked = rule === menuRule ? tile === "phone" && nav.desktop ? rule.check(data, nav.desktop) : { problems: [], notChecked: [] } : rule.check(data);
           if (rule === menuRule && tile === "phone" && !nav.desktop) notChecked.add("phone menu (desktop navigation unavailable)");
-          for (const row of checked.problems) problems.push({ checker: rule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160) });
+          const candidates = rule === errorsRule ? [...data.images, ...data.errors, ...data.loads] : rule === linksRule ? data.links : rule === copyRule ? checked.checks.map(row => ({ ...data.texts.find(item => item.where === row.where), ...row })) : rule === menuRule ? data.links : rule === detailsRule ? data.rows : [data];
+          const decorate = row => {
+            const element = candidates.find(item => item.where === row.where) ?? (rule === menuRule ? data : null);
+            return { checker: rule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160), ...(element?.box ? { box: element.box, scrollY: element.scrollY ?? 0 } : {}) };
+          };
+          for (const row of checked.problems) problems.push(decorate(row));
           for (const reason of checked.notChecked) notChecked.add(reason);
-          for (const row of checked.details ?? []) details.push({ checker: rule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160) });
-          complete(checked.notChecked.length > 0 && !checked.problems.length, checked.problems.length);
+          for (const row of checked.details ?? []) details.push(decorate(row));
+          const remaining = [...checked.problems];
+          let y = data.viewport?.y ?? 0;
+          let lastTarget = y;
+          candidates.sort((a, b) => (a.box?.[1] ?? 0) + (a.scrollY ?? 0) - (b.box?.[1] ?? 0) - (b.scrollY ?? 0));
+          for (const element of candidates) {
+            if (element.box && data.viewport) {
+              const documentY = element.box[1] + (element.scrollY ?? 0), height = data.viewport.height;
+              const target = Math.min(data.viewport.maxScroll, Math.max(0, Math.floor(Math.max(0, documentY - 80) / Math.max(1, height - 120)) * Math.max(1, height - 120)));
+              if (target !== lastTarget) {
+                flushChecks();
+                y = await race(cdp.ev(`(() => { scrollTo({ top: ${target}, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()`));
+                lastTarget = target;
+                emit({ kind: "scroll", tile, y }); casts[tile]?.readerStop();
+              }
+              element.box = [element.box[0], documentY - y, element.box[2], element.box[3]];
+              element.scrollY = y;
+            }
+            const found = remaining.filter(row => row.where === element.where && (!element.rule || element.rule === row.rule) && element.bad !== false);
+            for (const row of found) remaining.splice(remaining.indexOf(row), 1);
+            complete(element.unchecked === true || element.pending === true, found.length > 0 || element.bad === true, { tile, checker: rule.id, rule: element.rule ?? rule.label, where: element.where ?? "page", ...(element.box ? { box: element.box } : {}), scrollY: element.scrollY ?? 0, detail: rule === detailsRule });
+            if (counts.completed % 64 === 0) await race(new Promise(setImmediate));
+          }
+          for (const row of remaining) complete(false, true, { ...decorate(row), detail: false, scrollY: 0 });
+          lastY = y;
+          for (const row of [...problems, ...details].filter(row => row.tile === tile && row.checker === rule.id)) {
+            const element = candidates.find(item => item.where === row.where && (!item.rule || item.rule === row.rule));
+            if (element?.box) { row.box = element.box; row.scrollY = element.scrollY ?? 0; }
+          }
+          flushChecks(); casts[tile]?.readerStop();
+          if (rule === linksRule && tile === "desktop") emit({ kind: "part", part: "links" });
           input.onTiming?.("first-check", Date.now());
         } catch (error) {
           if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
           notChecked.add(`${rule.label} (${tile})`);
-          complete(true, 0);
         }
       }
+      await interact(cdp, tile);
+      if (tile === "phone") emit({ kind: "part", part: "phone" });
     }
     if (!await race(input.revisionUnchanged())) throw fault("site-changed");
   }
   const done = execute().then(() => undefined, error => fatal.has(error.code) || ["page-failed", "site-changed"].includes(error.code) ? error.code : "page-failed").then(errorCode => {
     ended = true;
+    flushChecks();
+    for (const cast of Object.values(casts)) cast.stop();
     const distinct = new Map();
     for (const row of problems) {
       const key = JSON.stringify([row.checker, row.rule, row.where, row.measured]);
       if (!distinct.has(key)) distinct.set(key, row);
     }
     const unique = [...distinct.values()];
-    const extra = Math.max(0, unique.length - counts.failed);
-    const result = { v: 1, runId: input.runId, site: input.site, counts: { ...counts, failed: counts.failed + extra, planned: counts.planned + extra, completed: counts.completed + extra }, issues: unique.slice(0, 40), issueTotal: unique.length, durationMs: Date.now() - started, notChecked: [...notChecked].sort().slice(0, 20), details: [...new Map(details.map(row => [JSON.stringify([row.checker, row.rule, row.where, row.measured]), row])).values()].slice(0, 40) };
+    const result = { v: 1, runId: input.runId, site: input.site, counts: { ...counts }, issues: unique.slice(0, 40), issueTotal: unique.length, durationMs: Date.now() - started, notChecked: [...notChecked].sort().slice(0, 20), details: [...new Map(details.map(row => [JSON.stringify([row.checker, row.rule, row.where, row.measured]), row])).values()].slice(0, 40) };
     if (errorCode) result.errorCode = errorCode;
     try { emit({ kind: "end", result }); } catch {}
     return result;

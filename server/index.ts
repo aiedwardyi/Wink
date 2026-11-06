@@ -7293,6 +7293,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
     if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
+    const verifyStream = method === "GET" ? /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(path) : null;
+    if (verifyStream) return await verifySite.handleStream(req, res, verifyStream[1]!, verifyStream[2] === "replay", { relay, phoneSession: credentials.phoneSession });
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.
     if (method === "GET" && path === "/remote") {
       const provided = url.searchParams.get("key");

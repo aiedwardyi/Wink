@@ -6,6 +6,18 @@ import { CHILD_PATHS, createChildLink, validCounts, validFrame, validResult } fr
 const nonce = "a".repeat(48);
 const counts = { planned: 1, completed: 1, passed: 1, failed: 0, blocked: 0, notRun: 0 };
 
+it("admits cast and check batches without widening parent frames", () => {
+  const cast = { type: "cast", runId: "run-123456", tile: "phone", ms: 10, data: "/9j/2Q==" };
+  expect(validFrame(cast, "child")).toBe(true);
+  expect(validFrame(cast, "parent")).toBe(false);
+  expect(validFrame({ ...cast, extra: true }, "child")).toBe(false);
+  expect(validFrame({ type: "mark", runId: cast.runId, event: { kind: "checks", seq: 1, emittedAt: 100, checks: [], count: 0 } }, "child")).toBe(true);
+  const issue = { checker: "LINKS", tile: "phone", rule: "missing target", where: "a", measured: "missing", box: [1, 2, 3, 4], scrollY: 200 };
+  const result = { v: 1, runId: cast.runId, site: "index.html", counts: { ...counts, passed: 0, failed: 1 }, issues: [issue], issueTotal: 1, durationMs: 1 };
+  expect(validResult(result)).toBe(true);
+  expect(validResult({ ...result, issues: [{ ...issue, box: [1, 2, -1, 4] }] })).toBe(false);
+});
+
 it("round trips split frames and bounds logs", () => {
   const input = new PassThrough();
   const output = new PassThrough();

@@ -71,7 +71,7 @@ async function connectCdp(url) {
 function copyProbeApp(root, nonce, tcp, udp) {
   const appPath = path.join(root, "app");
   fs.mkdirSync(path.join(appPath, "electron", "resources"), { recursive: true });
-  const files = ["entry.mjs", "verify-child.mjs", "verify-child-host.mjs", "verify-child-link.mjs", "verify-protocol.mjs", "verify-network.mjs", "verify-fonts.mjs", "verify-copy.mjs", "verify-probe-bootstrap.mjs", "verify-stub-run.mjs", "verify-wall-preload.cjs", "desktop-notify.mjs", "i18n.mjs", "verify-run.mjs", "verify-site-server.mjs", "verify-hidden.mjs", "verify-cdp.mjs", "verify-checks.mjs", "verify-conduct.mjs", "verify/camera.js", "verify/probe.js", ...fs.readdirSync(path.join(repo, "electron", "verify-rules")).filter(name => name.endsWith(".mjs") && !name.endsWith(".test.mjs")).map(name => "verify-rules/" + name)];
+  const files = ["entry.mjs", "verify-child.mjs", "verify-child-host.mjs", "verify-child-link.mjs", "verify-protocol.mjs", "verify-network.mjs", "verify-fonts.mjs", "verify-copy.mjs", "verify-probe-bootstrap.mjs", "verify-stub-run.mjs", "verify-wall-preload.cjs", "desktop-notify.mjs", "i18n.mjs", "verify-run.mjs", "verify-site-server.mjs", "verify-hidden.mjs", "verify-cdp.mjs", "verify-cast.mjs", "verify-checks.mjs", "verify-conduct.mjs", "verify/camera.js", "verify/probe.js", ...fs.readdirSync(path.join(repo, "electron", "verify-rules")).filter(name => name.endsWith(".mjs") && !name.endsWith(".test.mjs")).map(name => "verify-rules/" + name)];
   const sourceHashes = {};
   for (const name of files) {
     if (flag("child-exe") && !fs.existsSync(path.join(repo, "electron", name))) continue;

@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS, VERIFY_RUN_STATES, type VerifyRunState } from "../electron/verify-protocol.mjs";
+import { decodeChunks } from "../electron/verify-replay.mjs";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, VERIFY_TOOL_ENV, verifyCardStale, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
 import type { autoVerdict } from "./auto-approve.ts";
 import { callerSnapshot } from "./comms-root.ts";
@@ -12,6 +13,7 @@ import { json, readBody } from "./http-helpers.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { VERIFY_REASONS, verifyCardText, verifyProblems, verifyReplyText } from "./verify-message.ts";
+import { createReplay, readReplay, replayThread, VERIFY_REPLAYS_DIR } from "./verify-replay.ts";
 
 // Same admission rules as ENGINE's site server (electron/verify-site-server.mjs): both sides must reach one revision.
 const SITE_TYPES = new Set([".html", ".htm", ".js", ".mjs", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".wav", ".mp3", ".mp4", ".webm", ".ttf", ".otf", ".woff", ".woff2"]);
@@ -31,6 +33,7 @@ export interface VerifyBridge {
   poll(run: VerifyBridgeRun, since: number, waitMs: number, signal: AbortSignal): Promise<VerifyRunState | null>;
   watch(run: VerifyBridgeRun): Promise<boolean>;
   cancel(run: VerifyBridgeRun): Promise<void>;
+  cast?(run: VerifyBridgeRun, signal: AbortSignal): Promise<ReadableStream<Uint8Array> | null>;
 }
 
 export interface VerifySiteDeps {
@@ -60,6 +63,13 @@ interface Run extends VerifyBridgeRun {
   card: VerifyCardData;
   messageId?: string;
   live?: { stop: (code: VerifyErrorCode) => void };
+  recording?: ReturnType<typeof createReplay>;
+  stream?: Promise<void>;
+  toolDeadline?: number;
+  saved?: Promise<void>;
+  streamEnd?: Record<string, unknown>;
+  cancelled?: boolean;
+  replySent?: Promise<void>;
 }
 
 const within = (root: string, path: string) => {
@@ -170,6 +180,10 @@ export function verifyBridgeClient(access: { url: string; token: string }): Veri
     async cancel(run) {
       await call(VERIFY_BRIDGE_ROUTES.cancel, run, { method: "POST", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
     },
+    async cast(run, signal) {
+      const res = await call(VERIFY_BRIDGE_ROUTES.cast, run, { signal });
+      return res.ok ? res.body : null;
+    },
   };
 }
 
@@ -192,9 +206,10 @@ export function createVerifySite(deps: VerifySiteDeps) {
   const free = (runId: string) => {
     if (slot === runId) { slot = null; queue.shift()?.(); }
   };
-  const acquire = (runId: string, signal?: AbortSignal) => new Promise<boolean>(resolve => {
-    if (signal?.aborted) { resolve(false); return; }
+  const acquire = (runId: string, signal?: AbortSignal, ends = Date.now() + VERIFY_LIMITS.runMs) => new Promise<boolean>(resolve => {
+    if (signal?.aborted || Date.now() >= ends) { resolve(false); return; }
     if (!queue.length && reserve(runId)) { resolve(true); return; }
+    if (queue.length >= 2) { resolve(false); return; }
     const finish = (granted: boolean) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", cancel);
@@ -204,16 +219,18 @@ export function createVerifySite(deps: VerifySiteDeps) {
     };
     const enter = () => finish(reserve(runId));
     const cancel = () => finish(false);
-    const timer = setTimeout(cancel, Math.max(1, VERIFY_LIMITS.toolMs - VERIFY_LIMITS.runMs - 10_000));
+    const timer = setTimeout(cancel, Math.max(1, ends - Date.now()));
     queue.push(enter);
     signal?.addEventListener("abort", cancel, { once: true });
   });
   const turnLive = (run: { threadId: string; turnId: string }) => turnRegistry.current(run.threadId)?.turnId === run.turnId;
   const blocked = (code: VerifyErrorCode, site: string): VerifyToolReply => ({ status: "blocked", errorCode: code, text: verifyReplyText("blocked", site, { errorCode: code }) });
+  const replySent = (res: ServerResponse) => res.writableFinished || res.destroyed ? Promise.resolve() : new Promise<void>(resolve => { res.once("finish", () => resolve()); res.once("close", () => resolve()); });
 
   const drop = (run: Run) => {
-    free(run.runId);
-    if (runs.get(run.runId) === run) runs.delete(run.runId);
+    if (run.cancelled && run.stream) void run.stream.finally(() => free(run.runId));
+    else free(run.runId);
+    if (!run.recording && runs.get(run.runId) === run) runs.delete(run.runId);
   };
 
   const writeCard = (run: Run, patch: Partial<VerifyCardData>) => {
@@ -236,14 +253,30 @@ export function createVerifySite(deps: VerifySiteDeps) {
     }).id;
   };
 
+  const patchCard = (run: Run, patch: Partial<VerifyCardData>) => {
+    const stored = store.messagesFor(run.threadId).find(message => message.id === run.messageId);
+    if (stored?.verify?.runId === run.runId) deps.broadcastPatch(run.threadId, { ...stored, verify: { ...stored.verify, ...patch } });
+  };
+
   const finish = (run: Run, status: VerifyCardStatus, detail: { result?: VerifyResult | null; errorCode?: VerifyErrorCode; counts?: VerifyCounts | null }): VerifyToolReply => {
     const result = detail.result ?? null;
     const errorCode = detail.errorCode ?? result?.errorCode;
     const counts = result?.counts ?? detail.counts ?? undefined;
     const issues = result ? verifyProblems(result.issues) : undefined;
     const details = result ? [...(result.details ?? []), ...result.issues.filter(row => !issues!.includes(row))].slice(0, VERIFY_LIMITS.issues) : undefined;
+    if (run.recording) {
+      run.saved = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
+        await run.replySent;
+        await run.stream;
+        run.recording!.finish({ status, ms: typeof run.streamEnd?.ms === "number" ? run.streamEnd.ms : result?.durationMs ?? Math.max(0, Date.now() - (run.card.startedAt ?? run.card.offeredAt)), issues: issues ?? [], notChecked: result?.notChecked ?? [] });
+        const kept = await run.recording!.save(VERIFY_REPLAYS_DIR, run.threadId, run.messageId!);
+        const replay = kept.get(`${run.threadId}/${run.messageId}`) ?? [];
+        patchCard(run, { replay });
+      }).catch(() => {}).finally(() => { if (runs.get(run.runId) === run) runs.delete(run.runId); });
+    }
     try {
       writeCard(run, { status, counts, issues, issueTotal: issues?.length, notChecked: result?.notChecked, details, errorCode, endedAt: Date.now() });
+      if (run.recording) patchCard(run, { live: undefined });
     } catch {
       return blocked("internal", run.site);
     } finally {
@@ -260,20 +293,32 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const stop = (code: VerifyErrorCode) => {
       if (stopped) return;
       stopped = code;
+      run.cancelled = true;
       aborter.abort();
       void bridge.cancel(run);
     };
     run.live = { stop };
     const onAbort = () => stop("cancelled");
     signal?.addEventListener("abort", onAbort, { once: true });
-    const ends = Date.now() + VERIFY_LIMITS.runMs + 10_000;
-    const deadline = setTimeout(() => stop("timeout"), ends - Date.now());
+    const ends = run.toolDeadline ?? Date.now() + VERIFY_LIMITS.runMs;
+    const deadline = setTimeout(() => stop("timeout"), Math.max(1, ends - Date.now()));
     const turnCheck = signal ? setInterval(() => { if (!turnLive(run)) stop("cancelled"); }, TURN_CHECK_MS) : undefined;
     try {
       writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, endedAt: undefined });
       const started = await bridge.start(run, watch, aborter.signal);
       if (stopped) return finish(run, "blocked", { errorCode: stopped });
       if (started !== "started") return finish(run, "blocked", { errorCode: started });
+      if (bridge.cast) {
+        run.recording = createReplay({ v: 1, runId: run.runId, site: run.site, page: run.entry, startedAt: run.card.startedAt, tiles: { desktop: [1280, 720], phone: [392, 800] } });
+        patchCard(run, { live: true });
+        run.stream = (async () => {
+          const stream = await bridge.cast!(run, AbortSignal.timeout(Math.max(1, ends - Date.now() + 5000)));
+          if (!stream) return;
+          const reader = stream.getReader(), decoder = decodeChunks(value => { if (value.kind < 3) run.recording!.add(value.raw); else run.streamEnd = value.value; });
+          try { for (;;) { const next = await reader.read(); if (next.done) break; decoder.push(next.value); } decoder.end(); }
+          finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+        })().catch(() => {});
+      }
       let since = 0;
       let sentAt = 0;
       while (true) {
@@ -288,9 +333,10 @@ export function createVerifySite(deps: VerifySiteDeps) {
         }
         if (state.state === "running" && run.card.status !== "running") {
           writeCard(run, { status: "running", counts: counts ?? undefined });
+          if (run.recording) patchCard(run, { live: true });
         } else if (counts && Date.now() - sentAt >= COUNTS_EVERY_MS) {
           const stored = store.messagesFor(run.threadId).find((message) => message.id === run.messageId);
-          if (stored) deps.broadcastPatch(run.threadId, { ...stored, verify: { ...run.card, counts } });
+          if (stored) deps.broadcastPatch(run.threadId, { ...stored, verify: { ...run.card, counts, ...(run.recording ? { live: true } : {}) } });
           sentAt = Date.now();
         }
       }
@@ -306,6 +352,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
   };
 
   async function handleTool(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const toolDeadline = Date.now() + VERIFY_LIMITS.runMs;
     if (!enabled()) return json(res, 404, { error: "not found" });
     const scoped = deps.resolveCommsCaller(req.headers.authorization);
     const captured = scoped ? callerSnapshot(scoped.botId, scoped.threadId) : null;
@@ -330,7 +377,6 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const bridge = deps.bridge();
     if (!bridge) return send(blocked("desktop-required", entryText));
     const runId = randomUUID();
-    if (!await acquire(runId, caller.signal)) return send(blocked(caller.signal.aborted ? "cancelled" : "busy", entryText));
     let site: Site | VerifyErrorCode;
     try {
       site = await resolveVerifySite(entryText, deps.botOutputRoots(conversation.bot, captured.threadId, conversation.group?.id));
@@ -343,14 +389,18 @@ export function createVerifySite(deps: VerifySiteDeps) {
     }
     const nonce = randomBytes(16).toString("hex");
     const run: Run = {
-      ...site, runId, botId: captured.botId, threadId: captured.threadId, turnId: captured.turnId, nonce, expiresAt: 0,
+      ...site, runId, botId: captured.botId, threadId: captured.threadId, turnId: captured.turnId, nonce, expiresAt: 0, toolDeadline, replySent: replySent(res),
       card: { v: 1, runId, owner: captured.botId, site: site.site, entry: join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
     };
     runs.set(runId, run);
+    if (slot !== null) writeCard(run, { status: "waiting" });
+    if (!await acquire(runId, caller.signal, toolDeadline)) return send(finish(run, "blocked", { errorCode: caller.signal.aborted ? "cancelled" : Date.now() >= toolDeadline ? "timeout" : "busy" }));
+    if (!turnLive(run)) return send(finish(run, "blocked", { errorCode: "cancelled" }));
     return send(await execute(run, bridge, false, caller.signal));
   }
 
   async function handleDecision(req: IncomingMessage, res: ServerResponse, runId: string, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
+    const toolDeadline = Date.now() + VERIFY_LIMITS.runMs;
     if (!enabled()) return json(res, 404, { error: "not found" });
     const header = req.headers.authorization;
     if (deps.resolveCommsCaller(header)) return json(res, 403, { error: "forbidden" });
@@ -370,11 +420,10 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const conversation = store.conversationForBot(body.owner, body.threadId);
     if (!conversation) return json(res, 404, { error: "not-here" });
     const previous = store.activePath(body.threadId).findLast(message => message.verify?.runId === runId && message.verify.owner === body.owner)?.verify;
-    if (!previous || previous.decisionNonce !== body.nonce || runs.has(runId) || ((previous.status === "running" || previous.status === "preparing") && !verifyCardStale(previous, Date.now()))) return json(res, 404, { error: "not-here" });
+    if (!previous || previous.decisionNonce !== body.nonce || runs.has(runId) || (["running", "preparing", "waiting"].includes(previous.status) && !verifyCardStale(previous, Date.now()))) return json(res, 404, { error: "not-here" });
     const bridge = deps.bridge();
     if (!bridge) return json(res, 409, { error: "desktop-required" });
     const nextId = randomUUID();
-    if (!await acquire(nextId)) return json(res, 409, { error: "busy" });
     try {
       const roots = deps.botOutputRoots(conversation.bot, body.threadId, conversation.group?.id);
       const site = await resolveVerifySite(previous.entry ?? previous.site, roots);
@@ -385,10 +434,15 @@ export function createVerifySite(deps: VerifySiteDeps) {
       }
       const nonce = randomBytes(16).toString("hex");
       const run: Run = {
-        ...site, runId: nextId, botId: body.owner, threadId: body.threadId, turnId: "", nonce, expiresAt: 0,
+        ...site, runId: nextId, botId: body.owner, threadId: body.threadId, turnId: "", nonce, expiresAt: 0, toolDeadline, replySent: replySent(res),
         card: { v: 1, runId: nextId, owner: body.owner, site: site.site, entry: join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
       };
       runs.set(nextId, run);
+      if (slot !== null) writeCard(run, { status: "waiting" });
+      if (!await acquire(nextId, undefined, toolDeadline)) {
+        finish(run, "blocked", { errorCode: Date.now() >= toolDeadline ? "timeout" : "busy" });
+        return json(res, 409, { error: "busy" });
+      }
       void execute(run, bridge, false, null);
       return json(res, 200, { status: "preparing" });
     } catch {
@@ -397,5 +451,34 @@ export function createVerifySite(deps: VerifySiteDeps) {
     }
   }
 
-  return { handleTool, handleDecision };
+  async function handleStream(req: IncomingMessage, res: ServerResponse, runId: string, replay: boolean, from: { relay: boolean; phoneSession: boolean }): Promise<void> {
+    res.setHeader("cache-control", "no-store"); res.setHeader("x-content-type-options", "nosniff");
+    if (!enabled()) return json(res, 404, { error: "not found" });
+    if (deps.resolveCommsCaller(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
+    if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req)) return json(res, 401, { error: "unauthorized" });
+    const run = runs.get(runId), threadId = run?.threadId ?? await replayThread(runId);
+    if (!threadId || !store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not-here" });
+    if (!replay && run?.recording && !run.card.endedAt) {
+      let blocked = false, opened = false;
+      res.on("drain", () => { blocked = false; });
+      try {
+        const close = run.recording.subscribe(bytes => {
+          if (!opened) { opened = true; res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" }); }
+          if (res.destroyed || res.writableEnded || blocked && bytes[4] === 1) return false;
+          if (!res.write(bytes)) blocked = true;
+          if (bytes[4] === 3) res.end();
+          return true;
+        });
+        res.once("close", close);
+      } catch { json(res, 429, { error: "busy" }); }
+      return;
+    }
+    await run?.saved;
+    const bytes = await readReplay(threadId, runId);
+    if (!bytes) return json(res, 404, { error: "not-here" });
+    res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    res.end(bytes);
+  }
+
+  return { handleTool, handleDecision, handleStream };
 }

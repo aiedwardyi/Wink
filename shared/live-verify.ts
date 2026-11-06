@@ -13,6 +13,7 @@ export type VerifyChecker =
 export type VerifyCardStatus =
   | "offered"    // Ask: waiting for Watch / Skip; nothing has loaded
   | "preparing"  // approved; pages loading, scan checks running
+  | "waiting"
   | "running"    // show playing, live clicks and typing
   | "completed"  // result in, counts final
   | "skipped"    // the user tapped Skip on an Ask offer; nothing ran
@@ -54,6 +55,7 @@ export interface VerifyIssue {
   measured: string;
   /** Page scroll (CSS px) the element was measured at. */
   scrollY?: number;
+  box?: [number, number, number, number];
 }
 
 export interface VerifyResult {
@@ -94,9 +96,11 @@ export interface VerifyCardData {
   offeredAt: number;
   startedAt?: number;
   endedAt?: number;
+  live?: true;
+  replay?: string[];
 }
 
-export const VERIFY_ACTIVE_STATUSES: readonly VerifyCardStatus[] = ["offered", "preparing", "running"];
+export const VERIFY_ACTIVE_STATUSES: readonly VerifyCardStatus[] = ["offered", "waiting", "preparing", "running"];
 
 export const VERIFY_LIMITS = {
   /** Ask while attended: Watch / Skip stays open this long, then the card goes stale. */

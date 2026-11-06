@@ -72,6 +72,7 @@ export function createVerifyChildHost({ send, probe = null, log = () => {}, depe
     if (next.events.length > (reserve ? 1999 : 2000) || bytes(nonImage) > 2 * 1024 * 1024 - (reserve ? 32768 : 0)) throw Object.assign(new Error("Verify snapshot cap"), { errorCode: "resource-limit" });
     r.snapshot = next; r.lastTime = ev.emittedAt;
     wallEvent(r, ev);
+    if (ev.kind !== "end" && r.input.recording !== false && bytes(ev) < 60 * 1024) send({ type: "mark", runId: r.input.runId, event: ev });
   }
   function fail(r, errorCode) {
     r.forced ??= errorCode;
@@ -294,7 +295,7 @@ export function createVerifyChildHost({ send, probe = null, log = () => {}, depe
       if (r.input.watch) await watch(r, r.input);
       r.prepareDone();
       if (r.abort.signal.aborted) return;
-      r.handle = d.runVerify({ hidden: !r.input.watch, runId: r.input.runId, site: r.input.site, url: r.server.url, pages: Object.fromEntries(tiles.map((tile) => [tile, r.pages[tile].view.webContents])), scale: (tile) => { const [w, h] = r.win.getContentSize(); return tileRect(tile, w, h).scale; }, emit: (ev) => emit(r, ev), progress: (c) => progress(r, c), blockedUrls: () => tiles.flatMap((tile) => r.pages[tile]?.guard?.blockedUrls() ?? []), revisionUnchanged: r.server.revisionUnchanged, signal: r.abort.signal, ...(probe ? { onTiming: (name, epochMs) => send({ type: "timing", runId: r.input.runId, name, epochMs }) } : {}) });
+      r.handle = d.runVerify({ hidden: !r.input.watch, runId: r.input.runId, site: r.input.site, url: r.server.url, pages: Object.fromEntries(tiles.map((tile) => [tile, r.pages[tile].view.webContents])), scale: (tile) => { const [w, h] = r.win.getContentSize(); return tileRect(tile, w, h).scale; }, ...(r.input.recording === false ? {} : { frame: (frame) => { if (!r.finishing) send({ type: "cast", runId: r.input.runId, ...frame }); } }), emit: (ev) => emit(r, ev), progress: (c) => progress(r, c), blockedUrls: () => tiles.flatMap((tile) => r.pages[tile]?.guard?.blockedUrls() ?? []), revisionUnchanged: r.server.revisionUnchanged, signal: r.abort.signal, ...(probe ? { onTiming: (name, epochMs) => send({ type: "timing", runId: r.input.runId, name, epochMs }) } : {}) });
       const result = await r.handle.done;
       await finish(r, result);
     } catch (err) { fail(r, err.errorCode ?? "internal"); }

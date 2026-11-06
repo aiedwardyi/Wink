@@ -65,6 +65,15 @@ function fixture({ ready = true, respond = true, probe = null, packaged = true }
 
 async function until(check) { for (let n = 0; n < 200; n++) { if (check()) return; await delay(10); } throw new Error("Fixture did not settle"); }
 
+it("sends one quit when close overlaps child idle", async () => {
+  const f = fixture(); f.controls.quit = false;
+  f.host.start(input()); await until(() => f.frames.some(frame => frame.type === "start"));
+  f.send({ type: "state", runId: input().runId, state: "completed", counts, result: { v: 1, runId: input().runId, site: input().site, counts, issues: [], issueTotal: 0, durationMs: 1 } });
+  f.send({ type: "idle" });
+  await f.host.close();
+  expect(f.frames.filter(frame => frame.type === "quit")).toHaveLength(1);
+});
+
 it("reserves before spawn, starts lazily, scrubs env and pins production argv", async () => {
   const f = fixture();
   expect(f.calls).toEqual([]);

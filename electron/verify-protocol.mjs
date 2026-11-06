@@ -10,6 +10,7 @@ export const VERIFY_BRIDGE_ROUTES = {
   start: "/v1/verify/bots/:botId/runs",
   /** GET ?since=<revision>&waitMs=<0..25000> -> 200 VerifyRunState | 404 */
   poll: "/v1/verify/bots/:botId/runs/:runId",
+  cast: "/v1/verify/bots/:botId/runs/:runId/cast",
   /** POST -> 200 { shown: true } | 404 ; opens or focuses the window */
   watch: "/v1/verify/bots/:botId/runs/:runId/watch",
   /** POST -> 200 { cancelled: boolean } */

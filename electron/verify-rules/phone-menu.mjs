@@ -25,7 +25,7 @@ export function observe({ all, visible, where }) {
     });
     return usable(rules);
   });
-  return { links, bars, menu: menu || cssMenu };
+  return { links, bars, menu: menu || cssMenu, where: "header nav" };
 }
 
 export function check(phone, desktop) {
