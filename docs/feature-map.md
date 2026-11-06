@@ -18,7 +18,6 @@ Hidden rows are absence checks. Manual rows need a native app or real device.
 - Desktop shortcuts: Alt+T Themes, Alt+I Model Index, Alt+M model picker, Alt+W workers, Ctrl+backtick terminal, Ctrl+K command palette. Alt+U opens quick Usage first when available, then all Usage. Use Cmd for Ctrl shortcuts on macOS where supported.
 - Base fixture: disposable Map Bot and Map Peer via POST /api/bots; one stub reply; an archived bot via PATCH {hidden:true}; Map Group with memberIds and completed setup; Map Setup without setup or messages. IDs in braces come from fixture responses.
 - Seed only isolated data and stub engines. Row-specific renderer/API fixtures expose UI states; they do not prove live account, sync, relay or native integrations. File assignments use browser setInputFiles, without an OS chooser. Never seed real credentials or change live settings for a screenshot.
-- The original catalog and checker remain outside the repo in `C:/Users/mredw/Desktop/Orbit-extras/Orbit-cards/feature-map/`. Their 1.0.215 results are historical; this source refresh does not update or rerun those scripts.
 
 | Screen | Desktop path (clicks/hotkeys) | Phone path (taps) | Stable selector(s) | State it needs and how to seed it | Source file(s) at d48164e1 |
 | --- | --- | --- | --- | --- | --- |
