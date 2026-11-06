@@ -71,11 +71,12 @@ async function connectCdp(url) {
 function copyProbeApp(root, nonce, tcp, udp) {
   const appPath = path.join(root, "app");
   fs.mkdirSync(path.join(appPath, "electron", "resources"), { recursive: true });
-  const files = ["entry.mjs", "verify-child.mjs", "verify-child-host.mjs", "verify-child-link.mjs", "verify-protocol.mjs", "verify-network.mjs", "verify-fonts.mjs", "verify-copy.mjs", "verify-probe-bootstrap.mjs", "verify-stub-run.mjs", "verify-wall-preload.cjs", "desktop-notify.mjs", "i18n.mjs"];
+  const files = ["entry.mjs", "verify-child.mjs", "verify-child-host.mjs", "verify-child-link.mjs", "verify-protocol.mjs", "verify-network.mjs", "verify-fonts.mjs", "verify-copy.mjs", "verify-probe-bootstrap.mjs", "verify-stub-run.mjs", "verify-wall-preload.cjs", "desktop-notify.mjs", "i18n.mjs", "verify-run.mjs", "verify-site-server.mjs", "verify-hidden.mjs", "verify-cdp.mjs", "verify-checks.mjs", "verify-conduct.mjs", "verify/camera.js", "verify/probe.js", ...fs.readdirSync(path.join(repo, "electron", "verify-rules")).filter(name => name.endsWith(".mjs") && !name.endsWith(".test.mjs")).map(name => "verify-rules/" + name)];
   const sourceHashes = {};
   for (const name of files) {
     if (flag("child-exe") && !fs.existsSync(path.join(repo, "electron", name))) continue;
     const source = fs.readFileSync(path.join(repo, "electron", name));
+    fs.mkdirSync(path.dirname(path.join(appPath, "electron", name)), { recursive: true });
     fs.writeFileSync(path.join(appPath, "electron", name), source); sourceHashes[name] = hash(source);
   }
   fs.copyFileSync(path.join(repo, "electron", "resources", "app-icon.png"), path.join(appPath, "electron", "resources", "app-icon.png"));
@@ -221,7 +222,7 @@ async function runParent(app, dialog) {
       httpStatus(serverUrl, { host: "foreign.invalid" }), httpStatus(serverUrl, { pathname: "/../secret" }), httpStatus(serverUrl, { pathname: "/%2e%2e/secret" }),
       httpStatus(serverUrl, { pathname: "/%252e%252e/secret" }), httpStatus(serverUrl, { pathname: "/hostile.html:secret" }), httpStatus(serverUrl, { pathname: "/.env" }),
     ]);
-    row("S12", staticChecks.length, staticChecks.slice(0, 2).every((status) => status === 200) && staticChecks.slice(2).every((status) => status === 403), staticChecks);
+    row("S12", staticChecks.length, staticChecks.every((status, i) => status === (i < 2 ? 200 : i === 2 ? 405 : 404)), staticChecks);
     const layout = await host.probe("layout"); report.layout = layout;
     const resized = await host.probe({ name: "resize", width: 1600, height: 900 }); report.resized = resized;
     await wall.call("Log.enable");

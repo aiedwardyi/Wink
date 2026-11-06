@@ -9,6 +9,8 @@ import type { VerifyCardData, VerifyResult } from "../shared/live-verify.ts";
 import { autoVerdict } from "./auto-approve.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { DATA_DIR } from "./config.ts";
+import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
+import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
 import { createVerifySite, verifyToolEnv, type VerifyBridge } from "./verify-site.ts";
@@ -140,13 +142,14 @@ beforeEach(async () => {
   server = createServer((req, res) => {
     const id = /^\/decision\/(.+)$/.exec(req.url ?? "")?.[1];
     if (id) return void verify.handleDecision(req, res, id, { relay: req.headers["x-relay"] === "1", phoneSession: req.headers["x-relay"] === "1" });
-    void verify.handleTool(req, res);
+    void verify.handleTool(req, res).catch(error => { res.writeHead(500); res.end(JSON.stringify({ error: error.message })); });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   turnRegistry.settle("turn-1");
   turnRegistry.settle("turn-2");
   server.closeAllConnections();
@@ -224,6 +227,26 @@ describe("verify_site scope", () => {
 });
 
 describe("verify_site hidden checks", () => {
+  it.each(["preparing", "running"] as const)("reruns a stale %s card after restart", async status => {
+    const previous = { v: 1, runId: "old-run-1234", owner: botId, site: "site/index.html", entry: join(work, "site", "index.html"), status, mode: "auto", decisionNonce: "old-nonce", offeredAt: Date.now() - 80_000 } satisfies VerifyCardData;
+    store.appendMessage(threadId, { role: "bot", kind: "note", text: "Live Verify", verify: previous });
+    bridge!.states = finalStates(result());
+    expect((await decide(previous.runId, "rerun", previous.decisionNonce)).status).toBe(200);
+    await until(() => card()?.status === "completed");
+    expect(bridge!.starts).toHaveLength(1);
+  });
+
+  it("refuses a rerun while the original run is live even if its card is stale", async () => {
+    const pending = tool({ entry: "site" });
+    await until(() => bridge!.starts.length === 1);
+    const previous = card()!;
+    const message = store.activePath(threadId).find(message => message.verify)!;
+    store.patchMessage(threadId, message.id, { verify: { ...previous, startedAt: Date.now() - 80_000 } });
+    expect((await decide(previous.runId, "rerun", previous.decisionNonce)).status).toBe(404);
+    turnRegistry.settle("turn-1");
+    expect((await pending).body.errorCode).toBe("cancelled");
+  });
+
   it.each([false, true])("runs without an Ask offer, including unattended=%s", async away => {
     unattended = away;
     bridge!.states = finalStates(result());
@@ -260,6 +283,62 @@ describe("verify_site hidden checks", () => {
 });
 
 describe("verify_site Auto", () => {
+  it("keeps each room owner's card", async () => {
+    const other = store.createBot({}, { seedMessages: false });
+    const room = store.createGroup("Team", [botId, other.id]);
+    threadId = room.threadId;
+    turnRegistry.settle("turn-1");
+    turnRegistry.start("turn-1", { botId, threadId, owner: "user", depth: 0 });
+    token = callers.token(botId, threadId);
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    const first = card()!;
+    turnRegistry.settle("turn-1");
+    botId = other.id;
+    turnRegistry.start("turn-2", { botId, threadId, owner: "user", depth: 0 });
+    token = callers.token(botId, threadId);
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    const cards = store.activePath(threadId).filter(message => message.verify);
+    expect(cards).toHaveLength(2);
+    expect(cards.find(message => message.verify?.owner === first.owner)?.verify?.runId).toBe(first.runId);
+    expect(cards.find(message => message.verify?.owner === botId)?.from?.botId).toBe(botId);
+  });
+
+  it("keeps receipt summaries out of pane notes and startup wakes", async () => {
+    bridge!.states = finalStates(result());
+    await tool({ entry: "site" });
+    const messages = store.activePath(threadId);
+    const receipt = messages.find(message => message.verify)!;
+    expect(isWakeNote(receipt)).toBe(false);
+    expect(hasLocalUndeliveredPaneNote(messages, undefined, "device-1")).toBe(false);
+    expect(paneNotesForTurn(messages, new Set(), undefined, false).notes).toEqual([]);
+    const context = await prepareModelContext({ messages, contextWindow: 32_000, taskRecordText: "", summarize: vi.fn(async () => "") });
+    expect(context.status).toBe("ready");
+    if (context.status !== "ready") return;
+    expect(context.transcript.some(message => message.text.includes(receipt.text!))).toBe(true);
+    expect(JSON.stringify(context.transcript)).not.toContain("Pane note");
+  });
+
+  it.each(["preparing", "running", "completed"])("frees the slot after a %s card persistence failure", async status => {
+    const append = store.appendMessage.bind(store);
+    const patch = store.patchMessage.bind(store);
+    vi.spyOn(store, "appendMessage").mockImplementation((thread, input) => {
+      if (input.verify?.status === status || input.verify?.status === "blocked") throw new Error("disk full");
+      return append(thread, input);
+    });
+    vi.spyOn(store, "patchMessage").mockImplementation((thread, id, input) => {
+      if (input.verify?.status === status || input.verify?.status === "blocked") throw new Error("disk full");
+      return patch(thread, id, input);
+    });
+    bridge!.states = finalStates(result());
+    expect((await tool({ entry: "site" })).body).toMatchObject({ status: "blocked", errorCode: "internal" });
+    vi.mocked(store.appendMessage).mockRestore();
+    vi.mocked(store.patchMessage).mockRestore();
+    bridge!.states = finalStates(result());
+    expect((await tool({ entry: "site" })).body.status).toBe("completed");
+  });
+
   it("moves the card preparing, running, completed with counts, broadcasting counts only in memory", async () => {
     store.patchBot(botId, { autoApprove: true });
     const seen: string[] = [];

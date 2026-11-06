@@ -1,10 +1,12 @@
-import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { request } from "node:http";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { siteRevision, startSiteServer } from "./verify-site-server.mjs";
 
+const scratch = join(await realpath(tmpdir()), "wink-lv0-engine");
 let root, server;
 const get = (path, options = {}) => new Promise((resolve, reject) => {
   const url = new URL(server.origin);
@@ -17,7 +19,6 @@ const get = (path, options = {}) => new Promise((resolve, reject) => {
   req.end();
 });
 beforeEach(async () => {
-  const scratch = join(process.env.TEMP, "wink-lv0-engine");
   await mkdir(scratch, { recursive: true });
   root = await mkdtemp(join(scratch, "site-test-"));
   await writeFile(join(root, "index.html"), "<h1>Trusted fixture</h1>");
@@ -28,12 +29,25 @@ afterEach(async () => {
   await remove(root);
 });
 async function remove(path) {
-  if (!path.startsWith(join(process.env.TEMP, "wink-lv0-engine") + "\\")) throw new Error("Outside scratch");
+  if (!path.startsWith(scratch + sep)) throw new Error("Outside scratch");
   await rm(path, { recursive: true, force: true });
 }
 const start = async () => server = await startSiteServer({ root, entry: "index.html", revision: await siteRevision({ root, entry: "index.html" }) });
 
 describe("verify static server", () => {
+  it("accepts system temp aliases and refuses linked root components", async () => {
+    const alias = join(process.platform === "win32" ? tmpdir() : await realpath(tmpdir()), "wink-lv0-engine", basename(root));
+    expect(await siteRevision({ root: alias, entry: "index.html" })).toBe(await siteRevision({ root, entry: "index.html" }));
+    const linked = join(root, "linked");
+    await mkdir(join(root, "nested"));
+    await writeFile(join(root, "nested", "index.html"), "<h1>Nested</h1>");
+    await symlink(root, linked, "junction");
+    try {
+      await expect(siteRevision({ root: linked, entry: "index.html" })).rejects.toThrow("outside-folders");
+      await expect(siteRevision({ root: join(linked, "nested"), entry: "index.html" })).rejects.toThrow("outside-folders");
+    } finally { await rm(linked); }
+  });
+
   it("serves only admitted GET/HEAD bytes, secure headers and closes", async () => {
     await start();
     expect((await get("/index.html")).body).toContain("Trusted fixture");
@@ -85,7 +99,7 @@ describe("verify static server", () => {
   });
 
   it("rejects junction escapes and link swaps", async () => {
-    const outside = await mkdtemp(join(process.env.TEMP, "wink-lv0-engine/outside-"));
+    const outside = await mkdtemp(join(scratch, "outside-"));
     try {
       await writeFile(join(outside, "asset.css"), "outside");
       await symlink(outside, join(root, "escape"), "junction");

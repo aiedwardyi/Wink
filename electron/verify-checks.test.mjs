@@ -246,6 +246,16 @@ describe("verify contrast math", () => {
 
 describe("verify DOM admission", () => {
   const source = readFileSync(new URL("./verify/probe.js", import.meta.url), "utf8");
+  it("keeps malformed fragment links from aborting the remaining checks", () => {
+    const rect = { left: 0, top: 0, width: 100, height: 44 };
+    const links = ["#50%", "#target"].map((href, i) => ({ id: `link${i}`, localName: "a", tagName: "A", nodeType: 1, textContent: "Link", getBoundingClientRect: () => rect, getAttribute: name => name === "href" ? href : null }));
+    const target = { id: "target", localName: "section", tagName: "SECTION", nodeType: 1, getBoundingClientRect: () => rect };
+    const document = { documentElement: {}, getElementsByTagName: () => links, querySelectorAll: selector => selector === "a[href]" ? links : [target], getElementById: id => id === "target" ? target : null };
+    const context = { document, CSS: { escape: s => s }, getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }), scrollX: 0, scrollY: 0, addEventListener() {} };
+    runInNewContext(source, context);
+    expect(context.lv.links().map(link => ({ href: link.href, ok: link.ok }))).toEqual([{ href: "#50%", ok: false }, { href: "#target", ok: true }]);
+  });
+
   it("rejects excess mapped nodes before enumerating into main", () => {
     const context = { document: { getElementsByTagName: () => ({ length: 5001 }) }, addEventListener() {} };
     runInNewContext(source, context);

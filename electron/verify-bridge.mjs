@@ -17,7 +17,7 @@ function relativeEntry(value) {
 
 function canonicalRoot(root) {
   return typeof root === "string" && path.isAbsolute(root) && !/^[\\/]{2}/.test(root) && !/[\x00-\x1f%]/.test(root) && !root.includes(":", 2)
-    && path.normalize(root) === root && path.parse(root).root !== root && root.slice(path.parse(root).root.length).split(/[\\/]/).every((p) => p && !p.startsWith(".") && !/[. ]$/.test(p));
+    && path.normalize(root) === root && path.parse(root).root !== root && root.slice(path.parse(root).root.length).split(/[\\/]/).every((p) => p && p !== "." && p !== ".." && !/[. ]$/.test(p));
 }
 
 function canonicalSite(root, entry) {

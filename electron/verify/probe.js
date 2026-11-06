@@ -295,10 +295,12 @@
       const href = a.getAttribute("href");
       let target = null;
       if (href.startsWith("#")) {
-        const id = decodeURIComponent(href.slice(1));
-        const t = id ? document.getElementById(id) : document.documentElement;
-        const dup = id ? document.querySelectorAll(`[id="${CSS.escape(id)}"]`).length : 1;
-        if (t) target = { path: cssPath(t), tag: label(t), box: box(t.getBoundingClientRect()), unique: dup === 1 };
+        try {
+          const id = decodeURIComponent(href.slice(1));
+          const t = id ? document.getElementById(id) : document.documentElement;
+          const dup = id ? document.querySelectorAll(`[id="${CSS.escape(id)}"]`).length : 1;
+          if (t) target = { path: cssPath(t), tag: label(t), box: box(t.getBoundingClientRect()), unique: dup === 1 };
+        } catch {}
       }
       const name = (a.getAttribute("aria-label") || a.textContent).replace(/\s+/g, " ").trim();
       return { path: cssPath(a), tag: label(a), href, name, box: box(a.getBoundingClientRect()), pin: pinned(a), target, ok: !!name && (!href.startsWith("#") || (!!target && target.unique)) };

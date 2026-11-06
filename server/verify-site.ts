@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS, VERIFY_RUN_STATES, type VerifyRunState } from "../electron/verify-protocol.mjs";
-import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, VERIFY_TOOL_ENV, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
+import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, VERIFY_TOOL_ENV, verifyCardStale, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
 import type { autoVerdict } from "./auto-approve.ts";
 import { callerSnapshot } from "./comms-root.ts";
 import type { DecisionRow } from "./decision-log.ts";
@@ -138,8 +138,8 @@ export async function resolveVerifySite(entryText: string, roots: string[]): Pro
 
 /** The frozen bridge grant (V0.md "Bridge auth rule"). */
 export function verifyGrant(token: string, run: VerifyBridgeRun): string {
-  const payload = JSON.stringify([VERIFY_GRANT_PREFIX, run.botId, run.runId, run.root, run.entry, run.revision, run.expiresAt]);
-  return `${Buffer.from(payload).toString("base64url")}.${createHmac("sha256", token).update(payload).digest("base64url")}`;
+  const payload = Buffer.from(JSON.stringify([VERIFY_GRANT_PREFIX, run.botId, run.runId, run.root, run.entry, run.revision, run.expiresAt])).toString("base64url");
+  return `${payload}.${createHmac("sha256", token).update(payload).digest("base64url")}`;
 }
 
 export function verifyBridgeClient(access: { url: string; token: string }): VerifyBridge {
@@ -220,9 +220,9 @@ export function createVerifySite(deps: VerifySiteDeps) {
     run.card = { ...run.card, ...patch };
     const bot = store.bot(run.botId);
     const group = store.conversationForBot(run.botId, run.threadId)?.group;
-    const fields = { text: verifyCardText(run.card), verify: run.card, ...(group && bot ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}) };
+    const fields = { text: verifyCardText(run.card), verify: run.card, quiet: true as const, ...(group && bot ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}) };
     if (run.messageId && store.patchMessage(run.threadId, run.messageId, fields)) return;
-    const existing = store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify);
+    const existing = store.activePath(run.threadId).findLast((message) => message.kind === "note" && message.verify?.owner === run.botId);
     if (existing && store.patchMessage(run.threadId, existing.id, fields)) {
       run.messageId = existing.id;
       return;
@@ -242,14 +242,18 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const counts = result?.counts ?? detail.counts ?? undefined;
     const issues = result ? verifyProblems(result.issues) : undefined;
     const details = result ? [...(result.details ?? []), ...result.issues.filter(row => !issues!.includes(row))].slice(0, VERIFY_LIMITS.issues) : undefined;
-    writeCard(run, { status, counts, issues, issueTotal: issues?.length, notChecked: result?.notChecked, details, errorCode, endedAt: Date.now() });
-    drop(run);
+    try {
+      writeCard(run, { status, counts, issues, issueTotal: issues?.length, notChecked: result?.notChecked, details, errorCode, endedAt: Date.now() });
+    } catch {
+      return blocked("internal", run.site);
+    } finally {
+      drop(run);
+    }
     return { status, runId: run.runId, ...(result ? { result } : {}), ...(errorCode ? { errorCode } : {}), text: verifyReplyText(status, run.site, { result, errorCode, counts }) };
   };
 
   const execute = async (run: Run, bridge: VerifyBridge, watch: boolean, signal: AbortSignal | null): Promise<VerifyToolReply> => {
     run.expiresAt = Date.now() + VERIFY_LIMITS.toolMs;
-    writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, endedAt: undefined });
     const aborter = new AbortController();
     let stopped: VerifyErrorCode | null = null;
     let counts: VerifyCounts | null = null;
@@ -266,6 +270,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const deadline = setTimeout(() => stop("timeout"), ends - Date.now());
     const turnCheck = signal ? setInterval(() => { if (!turnLive(run)) stop("cancelled"); }, TURN_CHECK_MS) : undefined;
     try {
+      writeCard(run, { status: "preparing", startedAt: Date.now(), errorCode: undefined, counts: undefined, issues: undefined, issueTotal: undefined, notChecked: undefined, details: undefined, endedAt: undefined });
       const started = await bridge.start(run, watch, aborter.signal);
       if (stopped) return finish(run, "blocked", { errorCode: stopped });
       if (started !== "started") return finish(run, "blocked", { errorCode: started });
@@ -290,6 +295,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
         }
       }
     } catch {
+      stop(stopped ?? "internal");
       return finish(run, "blocked", { errorCode: stopped ?? "internal", counts });
     } finally {
       clearTimeout(deadline);
@@ -364,7 +370,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const conversation = store.conversationForBot(body.owner, body.threadId);
     if (!conversation) return json(res, 404, { error: "not-here" });
     const previous = store.activePath(body.threadId).findLast(message => message.verify?.runId === runId && message.verify.owner === body.owner)?.verify;
-    if (!previous || previous.decisionNonce !== body.nonce || previous.status === "running" || previous.status === "preparing") return json(res, 404, { error: "not-here" });
+    if (!previous || previous.decisionNonce !== body.nonce || runs.has(runId) || ((previous.status === "running" || previous.status === "preparing") && !verifyCardStale(previous, Date.now()))) return json(res, 404, { error: "not-here" });
     const bridge = deps.bridge();
     if (!bridge) return json(res, 409, { error: "desktop-required" });
     const nextId = randomUUID();

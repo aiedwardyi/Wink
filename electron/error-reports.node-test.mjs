@@ -235,7 +235,7 @@ test("missing, malformed and non-object baked config cannot stop startup", async
   const reports = await import("./error-reports.mjs");
   for (const read of [() => { throw new Error("ENOENT"); }, () => JSON.parse("{"), () => null, () => ({}), () => ({ dsn: 4 })]) assert.equal(reports.errorReportDsn(read), "");
   assert.equal(reports.errorReportDsn(() => ({ dsn: "https://public@reports.example/1" })), "https://public@reports.example/1");
-  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
+  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = verifyProbe \? null : errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
 });
 
 test("the server learns the crash host but never the key", async () => {

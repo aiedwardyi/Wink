@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { VERIFY_GRANT_MAX_MS, VERIFY_GRANT_PREFIX } from "./verify-protocol.mjs";
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
+import { verifyBridgeClient } from "../server/verify-site.ts";
 import { createVerifyBridge } from "./verify-bridge.mjs";
 
 const cleanup = [];
@@ -27,8 +28,20 @@ async function fixture() {
   cleanup.push(async () => { await bridge.close(); await new Promise((resolve) => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${server.address().port}/v1/verify/bots/bot-1/runs`;
   const call = (value = body, grant = signed(scope), suffix = "", method = "POST") => fetch(url + suffix, { method, headers: { authorization: `Bearer ${grant}` }, ...(method === "GET" ? {} : { body: typeof value === "string" ? value : JSON.stringify(value) }) });
-  return { body, scope, host, loadHost, bridge, call };
+  return { body, scope, host, loadHost, bridge, call, url };
 }
+
+it.each(["site", ".orbit/workspaces/bot-1/site"])("connects the real bridge client to the host for %s", async folder => {
+  const f = await fixture();
+  const root = path.join(f.body.root, folder);
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, "index.html"), "<h1>Site</h1>");
+  const client = verifyBridgeClient({ url: new URL(f.url).origin, token });
+  const run = { botId: "bot-1", runId: "run-123456", root: fs.realpathSync.native(root), entry: "index.html", revision: "a".repeat(64), site: "site", expiresAt: Date.now() + 200_000 };
+  expect(await client.start(run, false, new AbortController().signal)).toBe("started");
+  const { expiresAt: _expiry, ...input } = run;
+  expect(f.host.start).toHaveBeenCalledWith({ ...input, watch: false });
+});
 
 it("authenticates frozen grants before lazy import and consumes starts once", async () => {
   const f = await fixture(); expect(VERIFY_GRANT_MAX_MS).toBe(VERIFY_LIMITS.toolMs);

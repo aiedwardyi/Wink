@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { open, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { extname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
@@ -27,7 +27,11 @@ async function canonical(root, entry) {
   if (typeof root !== "string" || !isAbsolute(root) || /^[\\/]{2}/.test(root) || /[\x00-\x1f]/.test(root) || root.slice(2).includes(":") || root.split(/[\\/]/).some(p => p === "." || p === "..")) throw error("not-a-site");
   if (!safeRelative(entry) || !/\.html?$/i.test(entry)) throw error("not-a-site");
   const resolved = resolve(root), path = await realpath(root);
-  if (path.toLowerCase() !== resolved.toLowerCase() || !(await stat(path)).isDirectory()) throw error("outside-folders");
+  for (let current = resolved; ; current = dirname(current)) {
+    if ((await lstat(current)).isSymbolicLink()) throw error("outside-folders");
+    if (dirname(current) === current) break;
+  }
+  if (!(await stat(path)).isDirectory()) throw error("outside-folders");
   return { path, entry };
 }
 async function opened(root, path) {
