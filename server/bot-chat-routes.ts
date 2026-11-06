@@ -10,7 +10,8 @@ import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
 import type { ProviderRegistry } from "./harness/registry.ts";
 import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
-import { hasPeerWatch, steerTakeover } from "./peer-takeover.ts";
+import { hasPeerWatch } from "./peer-takeover.ts";
+import { beginPeerUserReply } from "./peer-user-reply.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -227,9 +228,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           // sends race the claim and receive a false busy rejection.
           if (currentAtStart.busy || botHasActiveTurn(bot.id, threadId)) {
             let steered = false;
-            // a steered message takes a peer turn over when the model reads
-            // it; without a read signal, when the route accepts the steer
-            const takeover = steerTakeover(threadId, adapter?.capabilities.steerConsumed === true);
+            let peerInput: ReturnType<typeof beginPeerUserReply>;
             if (steersSend(adapter, currentAtStart.busy, body.deliver === "after")) {
               const turnOpts = {
                 replyTo,
@@ -241,13 +240,14 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               // that cannot tell leaves them to the next turn's prompt.
               const consumable = adapter.capabilities.steerConsumed === true;
               const prompt = consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName);
+              peerInput = beginPeerUserReply(bot.id, threadId, prompt);
               const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];
               steered = await adapter
-                .steer(threadId, prompt, (taken, afterReply) => {
+                .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
                   if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
-                  takeover.consumed(taken, afterReply);
                 }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
                 .catch(() => false);
+              if (!steered) peerInput?.cancel();
             }
             // steer() is awaited adapter work. The turn can settle, the task can
             // switch, or the whole bot can be deleted before its acknowledgement
@@ -276,7 +276,6 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
               }
               clearUnattended(current.id);
               resumePaneWakes(current.id);
-              takeover.accepted();
               // the user joined this turn, so its finish alerts
               paneNoteTurnThreads.delete(threadId);
               const message = store.appendMessage(threadId, {
@@ -287,6 +286,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
                 sendId,
                 steered: true,
               });
+              peerInput?.accept(message);
               cancelUsageWait?.(bot.id, undefined, true);
               markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
               return { ok: true as const, steered: true as const, threadId, message };
