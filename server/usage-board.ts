@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { usageIdentity } from "../shared/usage-identity.ts";
 
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngineId, UsageBoardEvent, UsageBoardFrame, UsageBoardRun, UsageBoardWindow } from "../src/lib/usage-board.ts";
 import { isInstanceId, type AccountDrain } from "./accounts.ts";
@@ -24,7 +25,8 @@ type History = Pick<ReturnType<typeof createUsageHistory>, "record" | "event" | 
 type Deps = {
   accounts: { list(): readonly AccountRow[]; defaultFor(base: string): string | undefined; readonly drains: Readonly<Record<string, AccountDrain>> };
   names: { get(id: string): { id: string; engine: UsageBoardEngineId; number: number; nickname: string | null; name: string } | null };
-  rateLimits: { get(id: string): RateLimitsReport | undefined };
+  rateLimits: { get(id: string): RateLimitsReport | undefined; delete(id: string): boolean };
+  accountChanged?: (id: string, ready: boolean) => void;
   history: History;
   runs(timeoutMs: number): Promise<Runs>;
   bots(): readonly Bot[];
@@ -60,6 +62,7 @@ export function createUsageBoard(deps: Deps) {
   let accountSet = "";
   let epoch = 0;
   let previous = new Map<string, number>();
+  const identities = new Map<string, string | null>();
 
   for (const row of deps.accounts.list()) {
     const report = deps.rateLimits.get(row.id);
@@ -82,7 +85,20 @@ export function createUsageBoard(deps: Deps) {
 
   function accounts() {
     const rows = deps.accounts.list().filter((row) => engines.has(row.driverKind) && isInstanceId(row.id) && isInstanceId(row.of));
-    const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    for (const row of rows) {
+      const identity = usageIdentity(row.status ?? {});
+      if (identity === undefined) continue;
+      if (identities.has(row.id) && identities.get(row.id) !== identity) {
+        deps.rateLimits.delete(row.id);
+        deps.history.purge(row.id);
+        reports.delete(row.id);
+        for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === row.id) queue.splice(i, 1);
+        seenReports.clear();
+        deps.accountChanged?.(row.id, row.status?.authenticated !== false);
+      }
+      identities.set(row.id, identity);
+    }
+    const signature = JSON.stringify(rows.map((row) => [row.id, row.of, row.generation, identities.get(row.id)]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     if (signature !== accountSet) {
       const current = new Map(rows.map((row) => [row.id, row.generation]));
       const saved = deps.history.snapshot().accounts;
@@ -265,5 +281,5 @@ export function createUsageBoard(deps: Deps) {
     return () => { listeners.delete(callback); if (!listeners.size) { clearTimeout(frameTimer); frameTimer = undefined; } };
   }
 
-  return { read, handle, touch, turnStarted, turnSettled, recordReport, recordMain, onFrame };
+  return { read, handle, touch, sync: accounts, turnStarted, turnSettled, recordReport, recordMain, onFrame };
 }

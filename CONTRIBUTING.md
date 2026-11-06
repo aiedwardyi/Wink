@@ -47,6 +47,8 @@ New server behavior comes with a test. Driver changes keep the contract tests in
 
 To prove a UI feature or fix on desktop and phone the way a user drives it, use the verify-wink skill (`.claude/skills/verify-wink/SKILL.md`) instead of a one-off kit.
 
+Use the [feature map](docs/feature-map.md) to reach a screen in tests or QA.
+
 ## House rules
 
 - **Spawn with argv, never a shell string.** No `shell: true`, no `cmd.exe` string building. Model names, personas and MCP config travel through argv. On Windows, resolve `.cmd` shims to their JS entry and spawn `process.execPath`.

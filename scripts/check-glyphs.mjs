@@ -4,8 +4,6 @@ import { location, parseSource, readSource, runCheck, testFile, trackedFiles, wa
 const glyphPattern = /[\u2500-\u259f\u25b0\u25b1]/u;
 const allowlist = [
   { file: "src/components/UsageChart.tsx", text: "▁▂▃▄▅▆▇█", count: 1, reason: "Existing terminal chart fallback alphabet; app changes are outside this gate." },
-  { file: "src/lib/terminal-skin.ts", text: "▰", count: 1, reason: "Existing terminal meter fill; replace in a separate UI fix." },
-  { file: "src/lib/terminal-skin.ts", text: "▱", count: 1, reason: "Existing terminal meter remainder; replace in a separate UI fix." },
   { file: "src/components/TermStatusLine.tsx", text: " │ ", count: 2, reason: "Existing terminal status separators; app changes are outside this gate." },
   { file: "electron/terminal-host.mjs", text: "▰", count: 1, reason: "Recognizes an external CLI footer; does not draw a UI shape." },
 ];
