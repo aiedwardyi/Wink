@@ -3,10 +3,41 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, MESSAGE_PAGE, type Action, type Message } from "@/state/store";
 import { captureTranscriptAnchor, distanceFromTranscriptEdge, restoreTranscriptAnchor, type TranscriptAnchor } from "./bottom-follow";
-import { advanceWindow, shouldAdvanceWindow } from "./transcript-window";
+import { TRANSCRIPT_WINDOW_SIZE, advanceWindow, shouldAdvanceWindow } from "./transcript-window";
+import { groupActivityRuns } from "./activity-runs";
+import { workerAnchors, type WorkerRun } from "./worker-runs";
 
-export async function fetchOlderPage(threadId: string, before: string): Promise<{ messages: Message[]; hasMore: boolean }> {
-  const page = await api(`/api/threads/${threadId}/messages?limit=${MESSAGE_PAGE}&before=${encodeURIComponent(before)}`);
+export function createEarlierWindow(messages: Message[], {
+  terminal, renders, workers,
+}: { terminal: boolean; renders: (message: Message) => boolean; workers: readonly { run: WorkerRun }[] }) {
+  let rows: { first: number; last: number }[] | undefined;
+  return (before: number, viewport: HTMLElement | null): number => {
+    if (!rows) {
+      const anchors = workerAnchors(workers, messages);
+      const visible = (message: Message) => anchors.has(message.id)
+        ? Boolean(anchors.get(message.id))
+        : message.kind !== "launch" && renders(message);
+      const indices = new Map(messages.map((message, index) => [message.id, index]));
+      rows = groupActivityRuns(messages, terminal, visible).flatMap((item) => {
+        const first = item.kind === "message" ? item.message : item.messages[0];
+        const last = item.kind === "message" ? first : item.messages.at(-1)!;
+        return visible(first) ? [{ first: indices.get(first.id)!, last: indices.get(last.id)! }] : [];
+      });
+    }
+    let size = TRANSCRIPT_WINDOW_SIZE;
+    if (viewport && viewport.clientHeight > 0) {
+      const mounted = [...viewport.querySelectorAll("[data-mid], [data-run]")].filter((row) =>
+        !row.parentElement?.closest("[data-mid], [data-run]") && row.lastElementChild && row.lastElementChild.getBoundingClientRect().height > 0);
+      if (mounted.length) size = Math.max(1, Math.ceil(2 * viewport.clientHeight * mounted.length / viewport.scrollHeight));
+    }
+    let counted = 0;
+    for (let i = rows.length - 1; i >= 0; i--) if (rows[i].last < before && ++counted >= size) return rows[i].first;
+    return 0;
+  };
+}
+
+export async function fetchOlderPage(threadId: string, before: string, pages = 1): Promise<{ messages: Message[]; hasMore: boolean }> {
+  const page = await api(`/api/threads/${threadId}/messages?limit=${MESSAGE_PAGE}&before=${encodeURIComponent(before)}${pages > 1 ? `&pages=${pages}` : ""}`);
   return { messages: Array.isArray(page?.messages) ? page.messages : [], hasMore: page?.hasMore === true };
 }
 
@@ -161,12 +192,13 @@ export function useJumpWindow(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot]);
   const older = useCallback(
-    (beforeCommit?: () => void) => {
+    (beforeCommit?: () => void, onFail?: () => void, pages = 1) => {
       const before = current?.messages[0]?.id;
       if (!current?.hasMore || !before || inflight.current) return;
       inflight.current = true;
-      fetchOlderPage(threadId, before)
+      fetchOlderPage(threadId, before, pages)
         .then((page) => {
+          inflight.current = false;
           beforeCommit?.();
           setHeld((w) => {
             if (!w || w.key !== key || w.messages[0]?.id !== before) return w;
@@ -174,8 +206,7 @@ export function useJumpWindow(
             return { ...w, messages: [...page.messages.filter((message) => !ids.has(message.id)), ...w.messages], hasMore: page.hasMore };
           });
         })
-        .catch(() => {})
-        .finally(() => (inflight.current = false));
+        .catch(() => { inflight.current = false; onFail?.(); });
     },
     [current, key, threadId],
   );
@@ -274,6 +305,57 @@ export function useForwardWindow<W extends { key: string; start: number; end: nu
   };
 }
 
+export function useEarlierPage({
+  key, shown, startIndex, hasMore, scrollRef, previousScrollTop, expand,
+}: {
+  key: string;
+  shown: Message[];
+  startIndex: number;
+  hasMore: boolean;
+  scrollRef: React.RefObject<HTMLElement | null>;
+  previousScrollTop: React.RefObject<number>;
+  expand: (onFail: () => void, beforeCommit: () => boolean, pages: number) => void;
+}) {
+  const pending = useRef<{ key: string; landed: boolean; height: number; screen: number; added: number; anchor: TranscriptAnchor | null; top: number } | null>(null);
+  const latest = useRef(expand);
+  useLayoutEffect(() => { latest.current = expand; });
+  const fail = () => { if (pending.current?.key === key) pending.current = null; };
+  const measure = () => {
+    const page = pending.current;
+    const el = scrollRef.current;
+    if (!page || !el || page.key !== key) return false;
+    // Fresh per batch: the reader may have scrolled since the last one landed.
+    page.anchor = captureTranscriptAnchor(el);
+    page.height = el.scrollHeight;
+    page.top = el.scrollTop;
+    page.landed = true;
+    return page.anchor !== null;
+  };
+  useLayoutEffect(() => {
+    const page = pending.current;
+    const el = scrollRef.current;
+    if (!page || !el) return;
+    if (page.key !== key) { pending.current = null; return; }
+    // A live message changes `shown` too; only the commit measure() armed is the batch.
+    if (!page.landed) return;
+    page.landed = false;
+    if (page.anchor) restoreTranscriptAnchor(el, page.anchor);
+    previousScrollTop.current = el.scrollTop;
+    page.added += page.anchor ? el.scrollTop - page.top : el.scrollHeight - page.height;
+    if (!hasMore || page.added >= page.screen) { fail(); return; }
+    // Stored pages can fold to nothing; keep going until a screen actually lands.
+    latest.current(fail, measure, 5);
+  }, [key, shown, startIndex, hasMore, scrollRef, previousScrollTop]);
+  return () => {
+    if (pending.current?.key === key) return;
+    const el = scrollRef.current;
+    pending.current = el && el.clientHeight > 0
+      ? { key, landed: false, height: el.scrollHeight, screen: el.clientHeight, added: 0, anchor: null, top: el.scrollTop }
+      : null;
+    expand(fail, measure, pending.current ? 5 : 1);
+  };
+}
+
 /** Loads the page before `oldestId`, one request at a time; a call while one loads joins it.
  * `beforeCommit` runs just before the page lands, so a caller can measure the old layout. */
 export function useOlderMessages(
@@ -285,7 +367,7 @@ export function useOlderMessages(
   // One view serves many threads; a page still loading for one must not block another.
   const inflight = useRef(new Map<string, { measures: (() => void)[]; fails: (() => void)[] }>());
   return useCallback(
-    (beforeCommit?: () => void, onFail?: () => void) => {
+    (beforeCommit?: () => void, onFail?: () => void, pages = 1) => {
       if (!hasMore || !oldestId) return;
       const joined = inflight.current.get(threadId);
       const waiting = joined ?? { measures: [], fails: [] };
@@ -293,15 +375,16 @@ export function useOlderMessages(
       if (onFail) waiting.fails.push(onFail);
       if (joined) return;
       inflight.current.set(threadId, waiting);
-      fetchOlderPage(threadId, oldestId)
+      fetchOlderPage(threadId, oldestId, pages)
         .then((page) => {
+          inflight.current.delete(threadId);
           for (const measure of waiting.measures) measure();
           dispatch({ type: "olderMessages", threadId, before: oldestId, ...page });
         })
         .catch(() => {
+          inflight.current.delete(threadId);
           for (const fail of waiting.fails) fail();
-        })
-        .finally(() => inflight.current.delete(threadId));
+        });
     },
     [dispatch, threadId, oldestId, hasMore],
   );
