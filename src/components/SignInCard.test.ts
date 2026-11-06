@@ -45,3 +45,17 @@ it("keeps the install card in the error box while the CLI is missing", () => {
   expect(html).not.toContain("data-sign-in-card");
   expect(html).toContain("border-hairline/50 bg-inset");
 });
+
+it("keeps a bound sign-out card until that account is ready, then offers Retry", () => {
+  const bound = (partial: Partial<InstanceInfo>) => renderToStaticMarkup(createElement(I18nProvider, null,
+    createElement(ErrorRow, { botId: "bot", message: "Claude is not signed in.", signIn: true, bound: true, onRetry: () => {},
+      setupInstance: { ...instance({ state: "available", authenticated: true }), instanceId: "acct_3", displayName: "Studio", ...partial } })));
+  const stopped = bound({ accountState: "stopped" });
+  expect(stopped).toContain("Studio is signed out");
+  expect(stopped).toContain(">Sign In Again<");
+  expect(stopped).not.toContain("Retry");
+  const ready = bound({ accountState: "ready" });
+  expect(ready).toContain("Studio is ready");
+  expect(ready).toContain("Retry");
+  expect(ready).not.toContain("Sign In Again");
+});

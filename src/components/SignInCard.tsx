@@ -3,6 +3,7 @@
 import { Check, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import type { InstanceInfo } from "@/state/store";
+import { accountReady } from "@/lib/accounts";
 import { useI18n } from "@/lib/i18n";
 import { EngineSignIn } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
@@ -24,17 +25,24 @@ function Row({ instance, title, help, children }: { instance: InstanceInfo; titl
   );
 }
 
-export function SignInCard({ instance, help, onRetry }: { instance: InstanceInfo; help: string; onRetry?: () => void }) {
+export function SignInCard({ instance, help, onRetry, title, buttonLabel }: { instance: InstanceInfo; help: string; onRetry?: () => void; title?: string; buttonLabel?: string }) {
   const { t } = useI18n();
   return (
-    <Row instance={instance} title={t("engine.signInTo", { name: instance.displayName })} help={help}>
+    <Row instance={instance} title={title ?? t("engine.signInTo", { name: instance.displayName })} help={help}>
       <div className="flex flex-col items-end gap-1.5">
-        <EngineSignIn instance={instance} buttonClassName={BUTTON} forceSignIn />
+        <EngineSignIn instance={instance} buttonClassName={BUTTON} buttonLabel={buttonLabel} forceSignIn />
         {/* agy never reports signed-in, so this card can't flip to Retry */}
         {onRetry && <button type="button" onClick={onRetry} className="text-[12px] text-ink-secondary underline hover:text-ink">{t("composer.retry")}</button>}
       </div>
     </Row>
   );
+}
+
+/** A turn that failed because its account signed out: Sign In Again until that account is ready, then Retry. */
+export function AccountSignInCard({ instance, onRetry }: { instance: InstanceInfo; onRetry?: () => void }) {
+  const { t } = useI18n();
+  if (accountReady(instance)) return <SignedInCard instance={instance} onRetry={onRetry} />;
+  return <SignInCard instance={instance} title={t("chat.accountSignedOut", { name: instance.displayName })} help={t("chat.signInRetryHelp")} buttonLabel={t("engines.signInAgain")} />;
 }
 
 /** The same row once the engine is ready: the failed turn can go again. */

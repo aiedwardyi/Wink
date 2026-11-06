@@ -152,6 +152,8 @@ function instancesFor(board: UsageBoard): InstanceInfo[] {
   })));
 }
 
+const signedOut = (id: string) => instancesFor(server.board).map((each) => each.instanceId === id ? { ...each, accountState: "stopped" as const } : each);
+
 function makeBot(id: string, name: string, instanceId: string, messages: Message[] = []): Bot {
   return {
     id, threadId: `thread-${id}`, name, title: "", description: "", color: "blue",
@@ -210,6 +212,7 @@ beforeEach(async () => {
     server.calls.push(`${(init?.method ?? "GET").toUpperCase()} ${path}`);
     if (path.startsWith("/api/usage/board")) return json(server.read ? await server.read() : structuredClone(server.board));
     if (/^\/api\/accounts\/[^/]+\/default$/.test(path)) return server.post ? server.post() : json({});
+    if (/^\/api\/instances\/[^/]+\/sign-in$/.test(path)) return json({ url: "https://auth.example/device", code: "ABCD-EFGH" });
     return new Promise<Response>(() => {});
   }));
   vi.stubGlobal("EventSource", class { close() {} });
@@ -571,22 +574,54 @@ describe("chat usage meter, quick view and wait card", () => {
     expect(empty?.outerHTML, "one empty state on both surfaces").toBe(settings?.outerHTML);
   });
 
-  it.each(["en", "ko"] as const)("offers Sign In for a signed-out account in the quick view, closes it and opens Connections (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("starts that account's sign-in from the quick view in one tap (%s)", async (locale) => {
     server.board.engines[0]!.accounts[2]!.signIn = "signed-out";
-    await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale });
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale, instances: signedOut(CLAUDE_3) });
     await click(meter());
-    const row = quick()!.querySelector(`[data-account-row="${CLAUDE_3}"]`);
-    const signIn = row?.querySelector("button[data-sign-in]") ?? null;
+    const row = () => quick()?.querySelector(`[data-account-row="${CLAUDE_3}"]`);
+    const signIn = row()?.querySelector("button[data-sign-in]") ?? null;
     expect(text(signIn)).toBe(locale === "en" ? "Sign In" : "로그인");
-    expect(row?.querySelector("[data-account-head]")?.lastElementChild, "Sign In ends the head line").toBe(signIn);
+    expect(row()?.querySelector("[data-account-head]")?.lastElementChild?.contains(signIn), "Sign In ends the head line").toBe(true);
     expect(boxOf(signIn)).toEqual(BOX);
-    expect(text(row?.querySelector("[data-row-status]"))).toBe(locale === "en" ? "Not signed in" : "로그인되지 않음");
-    expect(row?.querySelector("[data-window], button[data-use], [data-main-check]")).toBeNull();
+    expect(text(row()?.querySelector("[data-row-status]"))).toBe(locale === "en" ? "Not signed in" : "로그인되지 않음");
+    expect(row()?.querySelector("[data-window], button[data-use], [data-main-check]")).toBeNull();
     await click(signIn);
-    expect(quick(), "the quick view closes").toBeNull();
-    expect(store.state.appSettingsOpen).toBe(true);
-    expect(store.state.appSettingsSection).toBe("connections");
+    expect(quick(), "the quick view stays open").not.toBeNull();
+    expect(store.state.appSettingsOpen).toBeFalsy();
+    expect(server.calls.filter((call) => call.includes("/sign-in"))).toEqual([`POST /api/instances/${encodeURIComponent(CLAUDE_3)}/sign-in`]);
+    expect(text(row())).toContain("ABCD-EFGH");
+    expect(text(row()?.querySelector("[data-account-name]"))).toBe("Studio");
     expect(mainPosts()).toEqual([]);
+  });
+
+  it.each(["en", "ko"] as const)("shows Signed out on the chat bar for a signed-out Main with no live windows (%s)", async (locale) => {
+    const main = server.board.engines[0]!.accounts[0]!;
+    main.signIn = "signed-out";
+    main.windows = [];
+    await mount(makeBot("bot-atlas", "Atlas", "claude"), { locale, instances: signedOut("claude") });
+    expect(meter(), "the bar stays").not.toBeNull();
+    expect(text(q("[data-meter-name]"))).toBe("Claude 1");
+    expect(text(q("[data-meter-signed-out]"))).toBe(locale === "en" ? "Signed out" : "로그아웃됨");
+    expect(q("[data-meter-first], [data-meter-second]"), "no percentages").toBeNull();
+    await click(meter());
+    expect(quick(), "a tap opens the quick view").not.toBeNull();
+  });
+
+  it.each(["en", "ko"] as const)("binds a sign-out error to the failed account, not the base engine (%s)", async (locale) => {
+    const failed: Message = { id: "signed-out", at: usageBoardNow - MIN, role: "bot", kind: "activity",
+      tool: { name: "error: Claude is not signed in.", signIn: true, accountId: CLAUDE_3 } as NonNullable<Message["tool"]> };
+    const instances = signedOut(CLAUDE_3).map((each) => each.instanceId === CLAUDE_3 ? { ...each, displayName: "Studio" } : each);
+    await mount(makeBot("bot-atlas", "Atlas", "claude", [failed]), { locale, instances });
+    const card = q("[data-sign-in-card]");
+    expect(text(card)).toContain(locale === "en" ? "Studio is signed out" : "Studio 계정이 로그아웃됐어요");
+    expect(text(card?.querySelector("button"))).toBe(locale === "en" ? "Sign In Again" : "다시 로그인");
+    expect(text(card)).not.toContain(locale === "en" ? "Retry" : "다시 시도");
+    await click(card?.querySelector("button"));
+    expect(server.calls.filter((call) => call.includes("/sign-in"))).toEqual([`POST /api/instances/${encodeURIComponent(CLAUDE_3)}/sign-in`]);
+    await act(async () => store.dispatch({ type: "instances", instances: instances.filter((each) => each.instanceId !== CLAUDE_3) }));
+    await settle();
+    expect(q("[data-sign-in-card]"), "an account that is gone gets the plain error").toBeNull();
+    expect(text(q("[data-orbit-transcript]"))).toContain("Claude is not signed in.");
   });
 
   it("keeps the board quiet through an equal pane poll", async () => {

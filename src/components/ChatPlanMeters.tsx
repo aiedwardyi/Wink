@@ -1,5 +1,5 @@
 // One compact usage line above the composer: whose quota, the window that runs out first, then the other.
-// A tap or Alt+U grows the quick view out of it. Hidden when the engine has no live windows.
+// A tap or Alt+U grows the quick view out of it. Hidden when the engine has no live windows, unless its Main is signed out.
 import { useEffect, useId, useRef, useState } from "react";
 import type { RateLimitWindow } from "../../server/contracts.ts";
 import { useI18n, type Translate } from "@/lib/i18n";
@@ -102,7 +102,7 @@ function BoardMeter({ windows, driverKind, observedAt, instanceId, identity = in
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
   const at = now ?? Date.now();
-  if (meterWindows(target, windows, at).length === 0) return null;
+  if (meterWindows(target, windows, at).length === 0 && target?.account.signIn !== "signed-out") return null;
   const own = state.instances.find((instance) => instance.instanceId === instanceId);
   const base = state.instances.find((instance) => instance.instanceId === (own?.accountOf ?? instanceId));
   return <MeterLine windows={windows} driverKind={driverKind} observedAt={observedAt} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden}
@@ -119,15 +119,16 @@ function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = ""
   const button = useRef<HTMLButtonElement>(null);
   const ageId = useId();
   const account = target?.account;
+  const signedOut = account?.signIn === "signed-out";
   const shown = meterWindows(target ?? null, windows, clock);
   const facts = lineFacts(shown, account?.coverage ?? "unknown", t);
   const reading = museReading(driverKind, account ? account.observedAt === null ? undefined : new Date(account.observedAt).toISOString() : observedAt, clock);
   const runsOut = target && facts.binding ? pace(target.account, facts.binding, target.engine.events, clock).verdict.kind === "runsOut" : false;
   const name = target && target.engine.accounts.length > 1 ? target.account.name : target ? engineName(target.engine.engine) : engineLabel;
-  const quick = Boolean(!hidden && target && board?.board && shown.length > 0);
+  const quick = Boolean(!hidden && target && board?.board && (shown.length > 0 || signedOut));
   const [open, setOpen] = useQuickToggle(quick, identity);
   const toggle = () => { if (quick) setOpen(!open); else onOpen(); };
-  if (shown.length === 0) return null;
+  if (shown.length === 0 && !signedOut) return null;
   return (
     <div className="px-5 pb-1">
       <button
@@ -143,10 +144,12 @@ function MeterLine({ windows, driverKind, observedAt, now, onOpen, identity = ""
           open && "bg-raised-hover", reading?.stale && "opacity-70")}
       >
         {name && <span data-meter-name="" className="min-w-0 truncate text-[12px]">{name}</span>}
-        <span data-meter-first="" className={cn("usage-num shrink-0 whitespace-nowrap text-[12px]",
+        {signedOut ? <span data-meter-signed-out="" className="flex shrink-0 items-center gap-1.5 self-center whitespace-nowrap text-[12px] text-warning">
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{t("usage.chat.signedOut")}
+        </span> : <><span data-meter-first="" className={cn("usage-num shrink-0 whitespace-nowrap text-[12px]",
           reading?.stale ? "text-ink-secondary" : facts.binding && facts.binding.usedPercent >= 100 ? "text-danger" : runsOut ? "text-warning" : "text-ink")}>{facts.first}</span>
         {facts.second && <span data-meter-second="" className="usage-num shrink-0 whitespace-nowrap text-[12px]">{facts.second}</span>}
-        {reading?.stale && <span id={ageId} className="min-w-0 truncate text-[12px]">{reading.label(t)}</span>}
+        {reading?.stale && <span id={ageId} className="min-w-0 truncate text-[12px]">{reading.label(t)}</span>}</>}
       </button>
       {open && target && board?.board && (
         <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} />

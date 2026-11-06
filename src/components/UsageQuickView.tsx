@@ -176,7 +176,8 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
             {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
-              terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
+              terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")}
+              instance={store.instances.find((instance) => instance.instanceId === each.id)} />)}
           </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
         </div>
