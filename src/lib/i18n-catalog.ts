@@ -637,6 +637,10 @@ export const en = {
   "connectedApps.unavailable":
     "Connected apps are temporarily unavailable. You can retry after restarting, or configure your own connection service.",
   "chrome.appSettings": "App settings",
+  "chrome.archive": "Archive",
+  "chrome.archiveHint": "Hide from the list. The chat is kept.",
+  "chrome.chooseAnotherChief": "Choose another Chief of Staff first",
+  "chrome.keepOneBot": "Keep at least one active bot",
   "chrome.archiveKept": "Conversations are kept until you choose to delete a bot.",
   "chrome.archivedBots": "Archived bots",
   "chrome.closeArchived": "Close archived bots",
@@ -2152,6 +2156,10 @@ export const ko = {
   "connectedApps.unavailable":
     "연결 앱을 일시적으로 사용할 수 없습니다. 다시 시작한 뒤 다시 시도하거나, 직접 연결 서비스를 구성하세요.",
   "chrome.appSettings": "앱 설정",
+  "chrome.archive": "보관",
+  "chrome.archiveHint": "목록에서 숨겨요. 대화는 그대로 남아요.",
+  "chrome.chooseAnotherChief": "먼저 다른 비서실장을 지정하세요",
+  "chrome.keepOneBot": "활성 봇을 하나 이상 유지하세요",
   "chrome.archiveKept": "봇을 삭제하기 전까지 대화가 보관됩니다.",
   "chrome.archivedBots": "보관한 봇",
   "chrome.closeArchived": "보관한 봇 닫기",
