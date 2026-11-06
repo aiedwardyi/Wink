@@ -11,6 +11,7 @@ import { ProviderMark } from "./ProviderIcons";
 const BUTTON = "rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-semibold text-accent-ink hover:brightness-110";
 
 function Row({ instance, title, help, children }: { instance: InstanceInfo; title: string; help: string; children: ReactNode }) {
+  const { t } = useI18n();
   return (
     <div data-sign-in-card="" className="group/card flex w-full items-center gap-3 has-[[data-computer-only],[data-sign-in-open]]:flex-wrap rounded-xl border border-hairline/30 bg-panel/70 px-3 py-2.5">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-inset">
@@ -18,7 +19,8 @@ function Row({ instance, title, help, children }: { instance: InstanceInfo; titl
       </span>
       <div className="min-w-0 flex-1 group-has-[[data-sign-in-open]]/card:basis-52">
         <div className="text-[13px] font-semibold text-ink">{title}</div>
-        <p className="mt-0.5 text-[12px] leading-snug text-ink-secondary">{help}</p>
+        <p className="mt-0.5 text-[12px] leading-snug text-ink-secondary group-has-[[data-sign-in-code]]/card:hidden">{help}</p>
+        <p className="mt-0.5 hidden text-[12px] leading-snug text-ink-secondary group-has-[[data-sign-in-code]]/card:block">{t("engines.finishInBrowser")}</p>
       </div>
       <div className="shrink-0 has-[[data-computer-only]]:basis-full has-[[data-sign-in-open]]:ml-auto has-[[data-sign-in-open]]:max-w-full">{children}</div>
     </div>
@@ -30,7 +32,7 @@ export function SignInCard({ instance, help, onRetry, title, buttonLabel }: { in
   return (
     <Row instance={instance} title={title ?? t("engine.signInTo", { name: instance.displayName })} help={help}>
       <div className="flex flex-col items-end gap-1.5">
-        <EngineSignIn instance={instance} buttonClassName={BUTTON} buttonLabel={buttonLabel} forceSignIn />
+        <EngineSignIn instance={instance} buttonClassName={BUTTON} buttonLabel={buttonLabel} forceSignIn lineInTitle />
         {/* agy never reports signed-in, so this card can't flip to Retry */}
         {onRetry && <button type="button" onClick={onRetry} className="text-[12px] text-ink-secondary underline hover:text-ink">{t("composer.retry")}</button>}
       </div>
