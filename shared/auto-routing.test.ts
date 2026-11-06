@@ -185,10 +185,10 @@ describe("precedence, fallback and review", () => {
     expect(selectAutoRoute(input("antigravityAgent", "chat", { rules: { max: false, preferences: [{ target: "worker", taskClass: "chat", engine: "antigravityAgent", model: A[5] }] } }))).toMatchObject({ kind: "selected", reason: "rule", route: { model: A[5], effort: "high" } });
   });
 
-  it("keeps Grok xhigh and opt-in Luna max as unordered fallback alternatives", () => {
+  it("uses the approved tie criteria between Grok xhigh and opt-in Luna max alternatives", () => {
     const result = selectAutoRoute(input("codex", "bug", { rules: { max: true, preferences: [] }, candidates: [autoCandidate("codex", { models: [X[3]] }), autoCandidate("grokAgent")] }));
-    expect(result).toMatchObject({ kind: "pending", reason: "equivalent-arms" });
-    if (result.kind === "pending") expect(result.choices.map((route) => [route.model, route.effort])).toEqual([[X[3], "max"], [G[0], "xhigh"]]);
+    expect(result).toMatchObject({ kind: "selected", route: { model: X[3], effort: "max" } });
+    expect(selectAutoRoute(input("codex", "bug", { rules: { max: true, preferences: [] }, chatEngine: "grokAgent", candidates: [autoCandidate("codex", { models: [X[3]] }), autoCandidate("grokAgent")] }))).toMatchObject({ kind: "selected", route: { model: G[0], effort: "xhigh" } });
     const duplicated = autoCandidate("codex");
     expect(selectAutoRoute(input("codex", "bug", { rules: { max: true, preferences: [] }, candidates: [duplicated, duplicated] }))).toMatchObject({ kind: "selected", route: { model: X[0], effort: "high" } });
   });
@@ -201,11 +201,10 @@ describe("precedence, fallback and review", () => {
 
   it("never turns coding tie order into a cheap-task order", () => {
     const result = selectAutoRoute(input("claudeAgent", "quick", { candidates: [autoCandidate("claudeAgent"), autoCandidate("codex")] }));
-    expect(result).toMatchObject({ kind: "pending", reason: "equivalent-arms" });
-    if (result.kind === "pending") expect(result.choices.map((route) => route.model)).toEqual([C[4], X[3]]);
+    expect(result).toMatchObject({ kind: "selected", route: { model: C[4], effort: "low" } });
     const duplicate = autoCandidate("claudeAgent");
     const deduped = selectAutoRoute(input("claudeAgent", "quick", { candidates: [duplicate, duplicate, autoCandidate("codex")] }));
-    if (deduped.kind === "pending") expect(deduped.choices).toHaveLength(2);
+    expect(deduped).toMatchObject({ kind: "selected", route: { model: C[4] } });
   });
 
   it.each(AUTO_ENGINES)("labels a same-family fresh review for %s", (engine) => {
@@ -229,6 +228,61 @@ describe("precedence, fallback and review", () => {
     expect(selectAutoRoute(input("codex", "build", { candidates: [autoCandidate("codex", { models: [X[1]] })], task: { kind: "build", risk: "low", scope: "bounded", reviewOf: maker } }))).toMatchObject({ kind: "selected", route: { model: X[1], reviewLabel: "same model, fresh look" } });
     expect(selectAutoRoute(input("antigravityAgent", "architecture", { task: { kind: "architecture", risk: "high", scope: "large", reviewOf: { ...reviewOf, model: A[2] } } }))).toMatchObject({ kind: "selected", route: { model: A[5], reviewLabel: "same family" } });
     expect(selectAutoRoute(input("antigravityAgent", "quick", { task: { kind: "quick", risk: "low", scope: "bounded", reviewOf: { ...reviewOf, model: A[3], effort: "low" } } }))).toMatchObject({ kind: "selected", route: { model: A[5], reviewLabel: "same model, fresh look" } });
+  });
+});
+
+describe("approved cross-engine ties", () => {
+  function quota(engine: AutoEngine, session: number | null, weekly: number | null): AutoCandidate {
+    const windows = [];
+    if (session !== null) windows.push({ id: "five_hour", usedPercent: 100 - session, resetsAt: null });
+    if (weekly !== null) windows.push({ id: "seven_day", usedPercent: 100 - weekly, resetsAt: null });
+    return autoCandidate(engine, { usage: { observedAt: new Date(NOW).toISOString(), windows } });
+  }
+
+  it("prefers a matching verified habit's engine before chat continuity and quota", () => {
+    const habit = { target: "worker" as const, taskClass: "quick" as const, engine: "codex" as const, model: X[2], effort: "medium" as const };
+    const candidates = [quota("claudeAgent", 90, 90), { ...quota("codex", 30, 10), models: [X[3]] }];
+    expect(selectAutoRoute(input("claudeAgent", "quick", { habit, chatEngine: "claudeAgent", candidates }))).toMatchObject({ kind: "selected", reason: "habit", route: { engine: "codex", model: X[3] } });
+    for (const unrelated of [{ ...habit, taskClass: "build" as const }, { ...habit, target: "chat" as const }]) expect(selectAutoRoute(input("claudeAgent", "quick", { habit: unrelated, candidates }))).toMatchObject({ kind: "selected", route: { engine: "claudeAgent" } });
+  });
+
+  it("prefers the existing chat engine before more quota or engine ID", () => {
+    const candidates = [quota("claudeAgent", 90, 90), quota("codex", 30, 10)];
+    expect(selectAutoRoute(input("codex", "quick", { chatEngine: "codex", candidates }))).toMatchObject({ kind: "selected", route: { engine: "codex" } });
+    const current = { engine: "codex" as const, model: X[1], effort: "medium" as const, account: "local-codex", tier: "mid" as const };
+    expect(selectAutoRoute(input("codex", "quick", { current, candidates }))).toMatchObject({ kind: "selected", route: { engine: "codex" } });
+  });
+
+  it("compares 5h room before 7d room", () => {
+    expect(selectAutoRoute(input("codex", "quick", { candidates: [quota("claudeAgent", 70, 90), quota("codex", 80, 10)] }))).toMatchObject({ kind: "selected", route: { engine: "codex" } });
+  });
+
+  it("compares 7d room when 5h room ties or is missing", () => {
+    for (const session of [80, null]) expect(selectAutoRoute(input("codex", "quick", { candidates: [quota("claudeAgent", session, 70), quota("codex", session, 80)] }))).toMatchObject({ kind: "selected", route: { engine: "codex" } });
+  });
+
+  it("uses stable engine IDs for new strong arms, independent of input order", () => {
+    const candidates = AUTO_ENGINES.map((engine) => quota(engine, 70, 70));
+    for (const ordered of [candidates, [...candidates].reverse(), [...candidates.slice(2), ...candidates.slice(0, 2)]]) expect(selectAutoRoute(input("codex", "bug", { candidates: ordered }))).toMatchObject({ kind: "selected", route: { engine: "antigravityAgent", model: A[5] } });
+  });
+
+  it("uses binding applicable caps rather than unrelated model buckets or cached scores", () => {
+    const codex = quota("codex", 80, 80);
+    codex.usage!.windows = [...codex.usage!.windows, { id: "spark:five_hour", usedPercent: 100, resetsAt: null }];
+    expect(selectAutoRoute(input("codex", "quick", { candidates: [quota("claudeAgent", 70, 70), codex] }))).toMatchObject({ kind: "selected", route: { engine: "codex" } });
+    codex.usage!.windows = [...codex.usage!.windows, { id: "gpt-6-luna:five_hour", usedPercent: 40, resetsAt: null }];
+    expect(selectAutoRoute(input("codex", "quick", { candidates: [quota("claudeAgent", 70, 70), codex] }))).toMatchObject({ kind: "selected", route: { engine: "claudeAgent" } });
+  });
+
+  it("does not treat stale or missing quota as healthy headroom", () => {
+    const stale = quota("claudeAgent", 99, 99);
+    stale.usage!.observedAt = new Date(NOW - 300001).toISOString();
+    for (const usage of [stale.usage, undefined, { observedAt: "invalid", windows: stale.usage!.windows }]) expect(selectAutoRoute(input("codex", "quick", { candidates: [{ ...stale, usage, headroom: 100 }, quota("codex", 40, 10)] }))).toMatchObject({ kind: "selected", route: { engine: "codex" } });
+  });
+
+  it("keeps hard gates and the existing coding grid ahead of tie preferences", () => {
+    expect(selectAutoRoute(input("codex", "quick", { chatEngine: "codex", candidates: [quota("claudeAgent", 70, 70), quota("codex", 24, 90)] }))).toMatchObject({ kind: "selected", route: { engine: "claudeAgent" } });
+    expect(selectAutoRoute(input("codex", "audit", { chatEngine: "codex", candidates: [quota("claudeAgent", 30, 10), quota("codex", 90, 90)] }))).toMatchObject({ kind: "selected", route: { engine: "claudeAgent", model: C[2] } });
   });
 });
 

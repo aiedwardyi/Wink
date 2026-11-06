@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { EffortLevel } from "../server/contracts.ts";
 import { isEffortOffered } from "./model-effort.ts";
-import { assessUsage, type UsageEvidence } from "./usage-windows.ts";
+import { applicableWindows, assessUsage, windowKind, type UsageEvidence } from "./usage-windows.ts";
 
 export const AUTO_ENGINES = ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"] as const;
 export const AUTO_TASKS = ["quick", "chat", "writing", "creative", "research", "edit", "build", "bug", "architecture", "design", "audit"] as const;
@@ -177,7 +177,7 @@ export type AutoCandidate = {
 // Admission and pinVerified are controller evidence, never model-supplied flags.
 export type AutoSelectionInput = {
   target: AutoTarget; task?: TaskData; now: number; candidates: readonly AutoCandidate[];
-  rules: AutoRules; rulesVersion: number; habit?: AutoPreference;
+  rules: AutoRules; rulesVersion: number; habit?: AutoPreference; chatEngine?: AutoEngine;
   pin?: AutoDimensions; pinVerified?: boolean; current?: AutoArm & { account: string; tier: AutoTier };
 };
 export type AutoRoute = AutoArm & { account: string; generation: number; tier: AutoTier; reviewLabel?: "second family" | "same family" | "same model, fresh look"; freshReview?: boolean; independentCheck?: boolean };
@@ -190,6 +190,36 @@ export type AutoDecision = {
 const BIG_JOBS = new Set<AutoTask>(["architecture", "audit", "design"]);
 const CODING = new Set<AutoTask>(["edit", "build", "bug", "architecture", "design", "audit", "protected"]);
 const CODE_ORDER = ["claude-opus-5-5", "gpt-6.1-sol", "claude-sonnet-5-5", "gpt-6.1-terra"];
+export const AUTO_TIE_ORDER = ["habit", "chat-engine", "five-hour", "seven-day", "engine-id"] as const;
+
+function breakAutoTie(routes: AutoRoute[], input: AutoSelectionInput, habit: AutoPreference | undefined): AutoRoute[] {
+  let choices = routes;
+  for (const step of AUTO_TIE_ORDER) {
+    if (new Set(choices.map((route) => route.engine)).size < 2) break;
+    if (step === "engine-id") {
+      const engine = choices.map((route) => route.engine).sort()[0];
+      choices = choices.filter((route) => route.engine === engine);
+      continue;
+    }
+    const scores = new Map<AutoEngine, number>();
+    for (const route of choices) {
+      let score: number;
+      if (step === "habit") score = Number(route.engine === habit?.engine);
+      else if (step === "chat-engine") score = Number(route.engine === (input.chatEngine ?? input.current?.engine));
+      else {
+        const candidate = input.candidates.find((item) => item.engine === route.engine && item.account === route.account)!;
+        const windows = applicableWindows(route.engine, route.model, candidate.usage?.windows ?? [])
+          .filter((window) => windowKind(window) === (step === "five-hour" ? "session" : "weekly"));
+        score = windows.length && assessUsage(route.engine, route.model, candidate.usage, input.now, candidate.priorUsage) === "ready"
+          ? 100 - Math.max(...windows.map((window) => window.usedPercent)) : -Infinity;
+      }
+      scores.set(route.engine, Math.max(scores.get(route.engine) ?? -Infinity, score));
+    }
+    const best = Math.max(...scores.values());
+    choices = choices.filter((route) => scores.get(route.engine) === best);
+  }
+  return choices;
+}
 
 function reviewArm(engine: AutoEngine, taskClass: AutoTask, maker: AutoArm, tier: AutoTier): AutoArm {
   if (engine === maker.engine) {
@@ -317,7 +347,13 @@ export function selectAutoRoute(input: AutoSelectionInput): AutoDecision {
     const best = Math.min(...choices.map(rank));
     choices = choices.filter((route) => rank(route) === best);
   }
-  if (new Set(choices.map((route) => `${route.engine}:${route.model}:${route.effort}`)).size > 1) return { ...result, kind: "pending", reason: maker ? "review-choice" : "equivalent-arms", choices };
+  let usedHabitTie = false;
+  if (new Set(choices.map((route) => `${route.engine}:${route.model}:${route.effort}`)).size > 1) {
+    const engines = new Set(choices.map((route) => route.engine));
+    usedHabitTie = engines.size > 1 && habit?.engine !== undefined && engines.has(habit.engine);
+    choices = breakAutoTie(choices, input, habit);
+    if (new Set(choices.map((route) => `${route.engine}:${route.model}:${route.effort}`)).size > 1) return { ...result, kind: "pending", reason: maker ? "review-choice" : "equivalent-arms", choices };
+  }
   const score = (route: AutoRoute) => {
     const candidate = input.candidates.find((item) => item.account === route.account && item.engine === route.engine)!;
     return candidate.loadKnown && Number.isFinite(candidate.headroom) && assessUsage(route.engine, route.model, candidate.usage, input.now, candidate.priorUsage) === "ready"
@@ -325,7 +361,7 @@ export function selectAutoRoute(input: AutoSelectionInput): AutoDecision {
   };
   choices.sort((a, b) => (score(b) - score(a) || Number(input.candidates.find((item) => item.account === b.account)?.main) - Number(input.candidates.find((item) => item.account === a.account)?.main) || a.account.localeCompare(b.account)));
   const usedPreference = choices[0].engine === preference?.engine && (!preference.model || choices[0].model === preference.model) && (!preference.effort || choices[0].effort === preference.effort);
-  return { ...result, kind: "selected", route: choices[0], reason: exact ? "pin" : usedPreference && rule ? "rule" : usedPreference && habit ? "habit" : "grid" };
+  return { ...result, kind: "selected", route: choices[0], reason: exact ? "pin" : usedPreference && rule ? "rule" : (usedPreference && habit) || usedHabitTie ? "habit" : "grid" };
 }
 
 const eventBase = { routeId: opaqueId, at: time };
