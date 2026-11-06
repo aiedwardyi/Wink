@@ -48,6 +48,7 @@ import {
   withToastCapability,
 } from "./desktop-notify.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
+import { brandForRenderer, brandWindowOptions, holdBrandTitle, readBrandOverride } from "./brand-override.mjs";
 import { crashReportsEnv, createErrorReports, errorReportDsn } from "./error-reports.mjs";
 import { installErrorReportCapture, registerErrorReportIpc } from "./error-report-capture.mjs";
 import { spoolTeamSnag } from "./team-snags.mjs";
@@ -124,6 +125,8 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 if (!app.isPackaged && process.env.OMB_USER_DATA) app.setPath("userData", process.env.OMB_USER_DATA);
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
+const BRAND = readBrandOverride(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit"));
+const WINDOW_ICON = BRAND?.iconPath ?? APP_ICON;
 const deviceWindows = new Map();
 const deviceLinkPages = new WeakMap();
 const deviceLoads = new WeakMap();
@@ -1181,7 +1184,7 @@ async function openDeviceWindow(rawHost, rawName) {
       ...desktopViewerWindowOptions(),
       backgroundColor: chrome.color,
       title,
-      icon: APP_ICON,
+      icon: WINDOW_ICON,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -1315,7 +1318,7 @@ ipcMain.on("desktop:notify", (event, payload) => {
       platform: process.platform,
       icon: payload?.icon,
       pageUrl: sender.webContents.getURL(),
-      appIcon: APP_ICON,
+      appIcon: WINDOW_ICON,
       nativeImage,
     }),
     activate: (win) => activateExistingWindow([win]),
@@ -1374,7 +1377,7 @@ function createWindow() {
     // Waiting for the renderer IPC races a 5s fallback and hides a ready
     // Ledger window until the page loads.
     show: false,
-    icon: APP_ICON,
+    ...brandWindowOptions(BRAND, APP_ICON),
     backgroundColor: chrome.color,
     autoHideMenuBar: process.platform !== "darwin",
     ...windowChromeOptions(process.platform, chrome),
@@ -1384,6 +1387,7 @@ function createWindow() {
     },
   });
   mainWindow = win;
+  holdBrandTitle(win, BRAND);
   retargetUpdater(win);
   win.webContents.session.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, callback) => {
     callback({ requestHeaders: appAuthorization.headers(details, mainWindow?.webContents) });
@@ -1850,6 +1854,8 @@ ipcMain.handle("companion-account:verify-code", (_event, email, code) =>
 );
 ipcMain.handle("companion-account:retry", () => ensureCompanionAccountService().retry());
 ipcMain.handle("companion-account:sign-out", () => ensureCompanionAccountService().signOut());
+
+ipcMain.handle("desktop:brand", () => brandForRenderer(BRAND));
 
 ipcMain.handle("desktop:capabilities", async () =>
   withToastCapability(

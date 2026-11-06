@@ -102,6 +102,7 @@ declare global {
         onAttention?: (cb: (event: { id: string; botId: string; reason: "bell" | "activity" | "exit" | "error" }) => void) => () => void;
       };
       getCapabilities(): Promise<DesktopCapabilities>;
+      getBrand?(): Promise<{ name: string; icon: string } | null>;
       onCapabilitiesChanged(cb: (capabilities: DesktopCapabilities) => void): () => void;
       companionAccount?: {
         state(): Promise<CompanionAccountState>;
