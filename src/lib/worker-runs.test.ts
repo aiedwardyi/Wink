@@ -366,9 +366,35 @@ describe("shownState", () => {
     expect(listed([launch("l1", 1_000, label), note("n1", 200_000, report("BLOCKED", "A", "Which skin?"), label)], 300_000)).toEqual(["waiting"]);
   });
 
-  it("leaves done and failed runs as they are when their pane's screen moves", () => {
+  it("leaves done runs as they are when their pane's screen moves", () => {
     expect(listed([launch("l1", 1_000, label), note("n1", 200_000, report("DONE", "A"), label)], 300_000)).toEqual(["done"]);
-    expect(listed([launch("l1", 1_000, label), note("n1", 200_000, report("FAIL", "A"), label)], 300_000)).toEqual(["failed"]);
+  });
+
+  it("lists a failed run working once its live pane's screen moves on", () => {
+    const failed = note("n1", 200_000, report("FAIL", "A"), label);
+    for (const messages of [[failed], [launch("l1", 1_000, label), failed]]) {
+      expect(listed(messages, 300_000)).toEqual(["working"]);
+    }
+  });
+
+  it("keeps a quiet live pane failed, including changes within the note settle time", () => {
+    const messages = [launch("l1", 1_000, label), note("n1", 200_000, report("FAIL", "A"), label)];
+    for (const changedAt of [1_000, 200_000, 210_000, 230_000]) {
+      expect(listed(messages, changedAt)).toEqual(["failed"]);
+    }
+    expect(shownState(workerRuns(messages)[0]!, new Set([PANE]))).toBe("failed");
+  });
+
+  it("keeps a failed report when its pane is closed or its liveness is unknown", () => {
+    const [failed] = workerRuns([launch("l1", 1_000, label), note("n1", 200_000, report("FAIL", "A"), label)]);
+    const changed = new Map([[PANE, 300_000]]);
+    expect(shownState(failed!, new Set(), changed)).toBe("failed");
+    expect(shownState(failed!, null, changed)).toBe("failed");
+  });
+
+  it.each([["DONE", "done"], ["FAIL", "failed"], ["BLOCKED", "waiting"]] as const)("lets a newer %s report replace a failed run that moved on", (status, state) => {
+    const messages = [launch("l1", 1_000, label), note("n1", 200_000, report("FAIL", "A"), label)];
+    expect(listed([...messages, note("n2", 400_000, report(status, "A"), label)], 300_000)).toEqual([state]);
   });
 
   it("goes back to waiting when a resumed pane stalls again", () => {
