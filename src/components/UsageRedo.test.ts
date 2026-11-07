@@ -162,6 +162,46 @@ it("reorders accounts with Alt+Down and keeps the order after remount", async ()
   expect(rows()).toEqual([before[1], before[0], before[2]]);
 });
 
+it("rereads Usage order whenever the mounted chat line opens its quick view", async () => {
+  await mount(createElement("div", null, createElement(UsageDesk), createElement(ChatPlanMeters, {
+    instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {},
+  })));
+  const quickRows = () => [...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"));
+  const before = rows();
+  await click("[data-usage-meter]");
+  expect(quickRows()).toEqual(before);
+  await click("[data-usage-meter]");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await click("[data-usage-meter]");
+  expect(quickRows()).toEqual(rows());
+  expect(quickRows()).toEqual([before[1], before[0], before[2]]);
+  await click("[data-usage-meter]");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await click("[data-usage-meter]");
+  expect(quickRows()).toEqual([before[1], before[2], before[0]]);
+});
+
+it.each(["claude", "codex"])("uses the %s engine base's partial order and leaves unknown accounts last", async (kind) => {
+  const engine = h.board!.engines.find((each) => each.engine === kind)!;
+  const before = engine.accounts.map((account) => account.id);
+  engine.base = `${kind}-other`;
+  h.instances.filter((each) => each.accountOf === kind).forEach((each) => { each.accountOf = engine.base; });
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ [kind]: before, [engine.base]: ["removed-account", before.at(-1)] }));
+  await mount(createElement(ChatPlanMeters, { instanceId: engine.mainId, windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  const actual = [...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"));
+  expect(actual).toEqual([before.at(-1), ...before.slice(0, -1)]);
+  expect(engine.accounts.map((account) => account.id)).toEqual(before);
+});
+
+it.each([null, "{", "[]", '{"claude":[1]}', '{"codex":["codex"]}'])("keeps quick-view default order without a valid engine order (%s)", async (saved) => {
+  if (saved !== null) localStorage.setItem("openmausbot.usageOrder.v1", saved);
+  const before = h.board!.engines[0]!.accounts.map((account) => account.id);
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  expect([...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"))).toEqual(before);
+});
+
 it("shares order between mounted Connections and Usage without losing other engines", async () => {
   const before = h.board!.engines[0]!.accounts.map((account) => account.id);
   const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
