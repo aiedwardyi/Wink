@@ -311,11 +311,18 @@ it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh wh
   expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
 });
 
-it("opens Settings on a chat bar click and preserves both Alt+U presses", async () => {
+it.each(["en", "ko"] as const)("toggles the chat card on click and preserves both Alt+U presses (%s)", async (locale) => {
+  persistPreference(locale);
   const open = vi.fn();
   await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: open }));
+  expect(q("[data-usage-meter]")!.getAttribute("aria-label")).toBe(locale === "en" ? "Usage for Claude. Open quick view" : "Claude 사용량. 빠른 보기 열기");
+  expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("false");
   await click("[data-usage-meter]");
-  expect(open).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-usage-quick]")).not.toBeNull();
+  expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("true");
+  expect(document.querySelector("[data-usage-quick] [data-usage-refresh]")).toBeNull();
+  await click("[data-usage-meter]");
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
   const first = new Event("orbit:usage-key", { cancelable: true });
   await act(async () => { window.dispatchEvent(first); });
@@ -325,6 +332,19 @@ it("opens Settings on a chat bar click and preserves both Alt+U presses", async 
   await act(async () => { window.dispatchEvent(second); });
   expect(second.defaultPrevented).toBe(false);
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
+});
+
+it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a signed-out account in the chat card (%s)", async (locale) => {
+  persistPreference(locale);
+  h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  const row = document.querySelector('[data-usage-quick] [data-account-row="claude"]')!;
+  expect(row.querySelector("[data-sign-in]")!.textContent).toBe(locale === "en" ? "Sign In" : "로그인");
+  expect(row.textContent).not.toContain(locale === "en" ? "Connected" : "연결됨");
+  expect(row.querySelector("[data-row-status]")!.textContent).toBe(locale === "en" ? "Not signed in" : "로그인되지 않음");
+  await act(async () => row.querySelector<HTMLElement>("[data-sign-in]")!.click());
+  expect(h.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "connections" });
 });
 
 it("draws chat bars as shared shapes without the desktop hover row or mini phone cells", async () => {

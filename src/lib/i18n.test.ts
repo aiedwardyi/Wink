@@ -906,7 +906,7 @@ describe("plan usage", () => {
       expect(source).not.toMatch(/not available at the moment/);
     }
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
-    expect(chatPlanMeters).not.toContain('t("usage.chat.openAria", { name })');
+    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name: engineName(target.engine.engine) })');
     expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");

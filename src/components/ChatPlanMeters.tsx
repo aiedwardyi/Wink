@@ -119,8 +119,9 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
   if (shown.length === 0 && !signedOut) return null;
   return (
     <div className="px-5 pb-1">
-      <button ref={button} type="button" data-usage-meter="" onClick={onOpen}
-        aria-label={t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
+      <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => setOpen(!open) : onOpen}
+        aria-expanded={quick ? open : undefined} aria-haspopup={quick ? "dialog" : undefined}
+        aria-label={quick && target ? t("usage.chat.openAria", { name: engineName(target.engine.engine) }) : t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
         {signedOut && target ? <span className="flex min-w-0 items-center gap-2 px-4 text-[12px]">
           <span data-meter-name="" className="min-w-0 truncate text-ink-secondary">{target.engine.accounts.length > 1 ? target.account.name : engineName(target.engine.engine)}</span>
           <span data-meter-signed-out="" className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-warning">
