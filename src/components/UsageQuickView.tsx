@@ -78,7 +78,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   anchor: RefObject<HTMLElement | null>; onClose: () => void;
 }) {
   const { t, locale } = useI18n();
-  useAutoRefresh();
+  useAutoRefresh(board);
   const { state: store, dispatch, refreshInstances } = useStore();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());

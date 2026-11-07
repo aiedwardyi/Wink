@@ -87,9 +87,16 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
   expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar')).toContain("min-height: 44px; margin-bottom: 16px");
   expect(rule("[data-phone-columns] .usage-meter-summary .usage-figures")).toContain("row-gap: 6px");
   expect(rule("[data-phone-columns] .usage-meter-summary .usage-figures")).not.toContain("display: grid");
-  expect(css).not.toContain(".usage-meter-summary [data-left]:empty");
+  expect(rule(".usage-meter-summary [data-left]:empty")).toContain("display: none");
   expect(css).toMatch(/\[data-phone-columns\] \.usage-engine-head:has\(\.usage-summary\) \{[^}]*min-height: var\(--usage-row-height\)/);
   expect(css).not.toContain("@container usage-summary");
+});
+
+it("grows the chat bar's coarse-pointer hit area to 44px without moving its bars", () => {
+  const coarse = css.slice(css.indexOf("@media (pointer: coarse)"));
+  expect(coarse).toContain(".usage-chat-button { position: relative; }");
+  expect(coarse).toMatch(/\.usage-chat-button::after \{[^}]*inset-inline: 0;[^}]*top: calc\(50% - 22px\);[^}]*height: 44px;/);
+  expect(rule(".usage-chat-button")).not.toContain("min-height");
 });
 
 it("keeps account spacing out of the chat meter above the composer", () => {

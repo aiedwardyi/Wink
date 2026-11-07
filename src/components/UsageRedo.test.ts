@@ -289,6 +289,19 @@ it.each(["en", "ko"] as const)("toggles the chat card on click and preserves bot
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
 });
 
+it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a signed-out account in the chat card (%s)", async (locale) => {
+  persistPreference(locale);
+  h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  const row = document.querySelector('[data-usage-quick] [data-account-row="claude"]')!;
+  expect(row.querySelector("[data-sign-in]")!.textContent).toBe(locale === "en" ? "Sign In" : "로그인");
+  expect(row.textContent).not.toContain(locale === "en" ? "Connected" : "연결됨");
+  expect(row.querySelector("[data-row-status]")!.textContent).toBe(locale === "en" ? "Not signed in" : "로그인되지 않음");
+  await act(async () => row.querySelector<HTMLElement>("[data-sign-in]")!.click());
+  expect(h.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "connections" });
+});
+
 it("draws chat bars as shared shapes without the desktop hover row or mini phone cells", async () => {
   await mount(createElement(ChatPlanMeters, { windows: [{ id: "five_hour", usedPercent: 20, resetsAt: usageBoardNow + 60_000 }], now: usageBoardNow, onOpenUsage: () => {} }));
   expect(q("[data-usage-meter]")!.className).not.toContain("hover:bg");

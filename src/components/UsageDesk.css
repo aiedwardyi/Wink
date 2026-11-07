@@ -62,6 +62,7 @@
 .usage-meter-summary .usage-figures { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .usage-meter-summary .usage-reset-long { display: none; }
 .usage-meter-summary .usage-reset-short { display: inline; }
+.usage-meter-summary [data-left]:empty { display: none; }
 .usage-control[data-use] { animation: none; transform: none; transition: none; -webkit-tap-highlight-color: transparent; }
 [data-usage-switched] { animation: usage-switch-highlight 600ms ease-out; }
 [data-usage-switched] [data-main-check] { animation: usage-main-in 200ms ease-out; }
@@ -136,6 +137,8 @@
   .usage-toolbar { flex-wrap: wrap; }
   .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar { height: 22px; }
   .account-name-inline input { height: 32px; }
+  .usage-chat-button { position: relative; }
+  .usage-chat-button::after { content: ""; position: absolute; inset-inline: 0; top: calc(50% - 22px); height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   [data-usage-lifted] { transition: none; }
