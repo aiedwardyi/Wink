@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { cleanFileSchema, isHistory, lineHash } from "./memory-clean-format.ts";
 import type { ArchiveEntry, ChangeList, CleanFile, RejectReason, SleepLine, ValidateInput, ValidateResult } from "./memory-clean-types.ts";
-import { secretLike } from "./memory-pass.ts";
+import { day, secretLike } from "./memory-pass.ts";
 import { withSystemChanges } from "./turn-context.ts";
 import { isMemoryTopicName } from "./workspace.ts";
 
@@ -24,6 +24,27 @@ const changeSchema = z.discriminatedUnion("op", [
 const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const bullet = (text: string) => `- ${text.replace(/\s+/g, " ").trim().replace(/^[-*+]\s+/, "")}`;
 const lessonsHeading = (line: string) => /^#{1,6}\s+(?:lessons?|교훈)\s*$/i.test(line.replace(/\r$/, ""));
+const openLine = (line: string) => /pending|parked|awaits?|awaiting|대기|보류/i.test(line);
+const negated = (text: string) => /\b(?:not|never|cannot)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text);
+const STOPWORDS = new Set(["about", "also", "been", "could", "does", "each", "from", "have", "here", "into", "just", "more", "most", "noted", "only", "said", "says",
+  "should", "some", "than", "that", "their", "them", "then", "there", "they", "this", "user", "users", "very", "were", "what", "when", "which", "will", "with", "would", "your"]);
+
+/** Stems of the content words: Latin words of 4+ letters (only those written in lowercase if asked) and Korean words, stopwords dropped. */
+export function contentWords(text: string, writtenLowercase = false): Set<string> {
+  const words = new Set<string>();
+  for (const [word] of text.matchAll(/[A-Za-z]+|[가-힣]+/g)) {
+    if (/^[가-힣]/.test(word)) {
+      // first syllable plus the next one's initial consonant, so 마셔 and 마심 or 좋아해 and 좋아한다 share a stem
+      if (word.length >= 2 && !word.startsWith("사용자")) words.add(word[0]! + Math.floor((word.charCodeAt(1) - 0xac00) / 588));
+      continue;
+    }
+    const lower = word.toLowerCase();
+    if (word.length < 4 || (writtenLowercase && word !== lower) || STOPWORDS.has(lower)) continue;
+    const stem = lower.replace(/(?:ing|ed|s)$/, "");
+    words.add((stem.length < 3 ? lower : stem).replace(/e$/, ""));
+  }
+  return words;
+}
 
 /** The user line a quote sits in, verbatim apart from case and spacing. */
 export function quotedLine(quote: string, user: readonly SleepLine[], kind?: SleepLine["kind"]): SleepLine | undefined {
@@ -31,10 +52,30 @@ export function quotedLine(quote: string, user: readonly SleepLine[], kind?: Sle
   return said.length < 4 ? undefined : user.find((line) => (!kind || line.kind === kind) && squash(line.text).includes(said));
 }
 
-/** A remember line counts as kept when every fact token, or else its whole text, is in the file. */
+/** A remember line counts as kept when one line holds every fact token, or else the file holds its whole text. */
 export function rememberCovered(line: string, text: string): boolean {
   const tokens = factTokens(bullet(line));
-  return tokens.length ? tokens.every((token) => text.includes(token)) : squash(text).includes(squash(line));
+  return tokens.length ? text.split("\n").some((row) => tokens.every((token) => row.includes(token))) : squash(text).includes(squash(line));
+}
+
+/** Within 24 KB and 200 lines, and no bigger than max(old, 16 KB) before forced remember appends; a file already past a limit only shrinks. */
+export function sizeFits(old: string, text: string, forced = 0): boolean {
+  const before = Buffer.byteLength(old);
+  const after = Buffer.byteLength(text);
+  const bytes = before > 24000 ? after < before : after - forced <= Math.max(before, FILE_FLOOR) && after <= 24000;
+  return bytes && text.split("\n").length <= Math.max(200, old.split("\n").length);
+}
+
+// a replace stays on one subject: a shared fact token (not a small number, year or date), or shared content words (two, or all of a one-word line); open work needs a fact token
+function sameSubject(older: string, newer: string, base: string): boolean {
+  const plain = (line: string) => line.replace(/\(noted \d{4}-\d{2}-\d{2}\)/gi, "");
+  const facts = (line: string) => new Set(factTokens(plain(line), base).filter((token) => !/^(?:\d{1,2}|(?:19|20)\d\d|\d{4}-\d\d-\d\d)$/.test(token)).map((token) => token.toLowerCase()));
+  const newFacts = facts(newer);
+  if ([...facts(older)].some((token) => newFacts.has(token))) return true;
+  if (openLine(older)) return false;
+  const a = contentWords(plain(older));
+  const b = contentWords(plain(newer));
+  return [...a].filter((word) => b.has(word)).length >= Math.max(1, Math.min(2, a.size, b.size));
 }
 
 // new plain lines go last but stay out of a trailing Lessons section; null lessons means the heading is missing
@@ -117,6 +158,13 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   const user = input.user ?? [];
   const cr = input.text.includes("\r\n") ? "\r" : "";
   const slots = sleepSlots(lines);
+  // a new Lessons section opens after a leading title, never at the end, and is closed unless a heading follows
+  const first = lines.findIndex((line) => line.trim());
+  const top = first >= 0 && /^#\s/.test(lines[first]!) ? first + 1 : 0;
+  const closeLessons = !/^#{1,2}\s/.test(lines.slice(top).find((line) => line.trim()) ?? "");
+  let opened = false;
+  let lastLesson: ArchiveEntry | undefined;
+  let forced = 0;
   let lessonsAt = slots.lessons;
   let learned = 0;
   let filedBytes = 0;
@@ -145,13 +193,19 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       if (secretLike(change.text) || secretLike(change.quote)) fail("secret", index);
       const said = source?.text.toLowerCase() ?? "";
       if (!source || factTokens(bullet(change.text)).some((token) => !said.includes(token.toLowerCase()))) { fail("not-quoted", index); return; }
+      const words = [...contentWords(change.text)];
+      const heard = contentWords(source.text);
+      if (words.filter((word) => heard.has(word)).length < 0.6 * words.length || negated(change.text) !== negated(change.quote)) { fail("not-quoted", index); return; }
       const lesson = change.lesson === true;
-      const line = bullet(change.text) + cr;
-      const wrote = lesson && lessonsAt === null ? [...(slots.end ? [cr] : []), `## Lessons${cr}`, line] : [line];
-      const after = lesson ? lessonsAt ?? slots.end : slots.plain;
+      const line = `${bullet(change.text)} (noted ${day(source.at)})${cr}`;
+      const wrote = lesson && lessonsAt === null ? [`## Lessons${cr}`, line] : [line];
+      opened ||= wrote.length > 1;
+      const after = lesson ? lessonsAt ?? top : slots.plain;
       if (lesson) lessonsAt = after;
       wrote.forEach((item) => insert(after, item, lesson));
-      entries.push({ header: { file: input.file, op: "learn", at: [], prev: [], wrote, after, quote: change.quote, lesson }, reason: change.reason, lines: [] });
+      const entry: ArchiveEntry = { header: { file: input.file, op: "learn", at: [], prev: [], wrote, after, quote: change.quote, lesson }, reason: change.reason, lines: [] };
+      entries.push(entry);
+      if (lesson) lastLesson = entry;
       return;
     }
     if (change.op === "own") {
@@ -165,6 +219,8 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       if (Buffer.byteLength(input.text) <= FILE_FLOOR && lines.length <= 140) fail("op-not-allowed", index);
       if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(change.topic) || !isMemoryTopicName(`${change.topic}.md`) || isHistory(topic) || /^memory-history/.test(change.topic) || topic === input.side) fail("op-not-allowed", index);
       if (/[\r\n]/.test(change.pointer) || Buffer.byteLength(bullet(change.pointer)) > 300 || !change.pointer.includes(topic) || secretLike(change.pointer)) fail("pointer", index);
+      const held = [...new Set(ids.flatMap((n) => factTokens(lines[n - 1]!, input.text)))];
+      if (held.filter((token) => change.pointer.toLowerCase().includes(token.toLowerCase())).length < Math.min(3, held.length)) fail("pointer", index);
       filedBytes += ids.reduce((n, id) => n + Buffer.byteLength(lines[id - 1]!.replace(/\r$/, "")) + 1, 0);
       if (filedBytes > FILE_MAX_BYTES) fail("cap-file", index);
       const known = topics.find((item) => item.file === topic);
@@ -174,7 +230,7 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
     }
     for (const n of ids) {
       const line = lines[n - 1]!;
-      if ((change.op === "retire" || change.op === "file") && /pending|parked|awaits?|awaiting|대기|보류/i.test(line)) fail("protected", index);
+      if ((change.op === "retire" || change.op === "file") && openLine(line)) fail("protected", index);
       const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => changedIds(op).includes(i + 1)));
       if (pointerLine(line) && !exactCopy) fail("pointer", index);
       if (!protectedIds.has(n)) continue;
@@ -184,11 +240,14 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
     let wrote: string[] = [];
     if (change.op === "merge") {
       const kept = factTokens(change.text, input.text);
-      if (ids.some((n) => factTokens(lines[n - 1]!, input.text).some((token) => !kept.includes(token)))) fail("fact-lost", index);
+      const words = contentWords(change.text);
+      const lost = (line: string) => [...contentWords(line, true)].filter((word) => !words.has(word)).length > 1;
+      if (ids.some((n) => factTokens(lines[n - 1]!, input.text).some((token) => !kept.includes(token)) || lost(lines[n - 1]!))) fail("fact-lost", index);
       wrote = [change.text + (lines[ids[0]! - 1]!.endsWith("\r") ? "\r" : "")];
       counts.merged += ids.length;
     } else if (change.op === "replace") {
-      if (!newer(lines[change.id - 1]!, lines[change.newer - 1]!, change.id, change.newer)) fail("not-newer", index);
+      const [older, current] = [lines[change.id - 1]!, lines[change.newer - 1]!];
+      if (!newer(older, current, change.id, change.newer) || !sameSubject(older, current, input.text)) fail("not-newer", index);
       counts.replaced++;
     } else if (change.op === "split") {
       const line = lines[change.id - 1]!;
@@ -214,12 +273,17 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   const assemble = () => [...(inserts.get(0)?.plain ?? []), ...(inserts.get(0)?.lessons ?? []), ...lines.flatMap((line, i) => [
     ...(edits.get(i + 1) ?? (removed.has(i + 1) ? [] : [line])), ...(inserts.get(i + 1)?.plain ?? []), ...(inserts.get(i + 1)?.lessons ?? []),
   ])].join("\n");
+  if (opened && lastLesson && closeLessons) {
+    lastLesson.header.wrote.push(`## Notes${cr}`);
+    insert(lastLesson.header.after!, `## Notes${cr}`, true);
+  }
   let text = assemble();
   if (!errors.length && input.file === "MEMORY.md") {
     for (const line of user.filter((item) => item.kind === "remember")) {
       if (rememberCovered(line.text, text) || secretLike(line.text)) continue;
       const wrote = [bullet(line.text) + cr];
       insert(slots.plain, wrote[0]!, false);
+      forced += Buffer.byteLength(wrote[0]!) + 1;
       entries.push({ header: { file: input.file, op: "own", at: [], prev: [], wrote, after: slots.plain, quote: line.text, owned: [lineHash(wrote[0]!)] }, reason: "Asked to remember", lines: [] });
       text = assemble();
     }
@@ -227,6 +291,6 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   const added = entries.reduce((n, entry) => n + (entry.header.after === undefined ? 0 : entry.header.wrote.length), 0);
   if (touched.size + added > 40) fail("cap-lines");
   if (withSystemChanges("", input.text, text, 8000) === null) fail("cap-chars");
-  if (input.file === "MEMORY.md" && (Buffer.byteLength(text) > Math.min(24000, Math.max(Buffer.byteLength(input.text), FILE_FLOOR)) || text.split("\n").length > 200)) fail("budget");
-  return errors.length ? { ok: false, errors } : { ok: true, text, entries, counts, topics };
+  if (input.file === "MEMORY.md" && !sizeFits(input.text, text, forced)) fail("budget");
+  return errors.length ? { ok: false, errors } : { ok: true, text, entries, counts, topics, forced };
 }

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { cleanFiles } from "./memory-clean-engine.ts";
-import { appendBlock, cleanFileSchema, hashText, HISTORY_FILE, isHistory, legacyCounts, lineHash, parseHistory, undoBlock } from "./memory-clean-format.ts";
+import { appendBlock, cleanFileSchema, hashText, HISTORY_FILE, isHistory, legacyCounts, lineHash, parseHistory, undoBlock, voidBlock } from "./memory-clean-format.ts";
 import { memoryCleanHome, type HomeInput } from "./memory-clean-home.ts";
 import { sleepInput } from "./memory-clean-input.ts";
 import type { BotCleanState, CleanFile, HistoryRun, MemoryCleanState, MemoryCleanSummary, MemoryCleanUndoResult, TextCall } from "./memory-clean-types.ts";
@@ -44,14 +44,29 @@ function saveState(dataDir: string, state: MemoryCleanState): void {
   writeFileAtomic(join(dataDir, STATE_FILE), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 }
 
+// past 2,000, hashes of lines no memory file holds go first; hashes being added stay
+function capTyped(botId: string, hashes: string[], added: ReadonlySet<string>): string[] {
+  if (hashes.length <= 2000) return hashes;
+  try {
+    const dir = workspaceDir(botId);
+    let names: string[] = [];
+    try { names = readdirSync(join(dir, "memory")).filter((name) => name.endsWith(".md") && !isHistory(`memory/${name}`)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const live = new Set([readFile(join(dir, "MEMORY.md")), ...names.map((name) => readFile(join(dir, "memory", name)))].flatMap((text) => text?.split("\n").filter((line) => line.trim()).map(lineHash) ?? []));
+    return hashes.filter((hash) => live.has(hash) || added.has(hash)).slice(-2000);
+  } catch { return hashes.slice(-2000); }
+}
+
 export function recordTypedLines(botId: string, before: string, after: string, dataDir = DATA_DIR): void {
   try {
     const state = readState(dataDir);
     const bot = state.bots[botId] ??= {};
     const previous = new Set(before.split("\n").map((line) => line.trim()));
     const hashes = new Set(bot.typed ?? []);
-    after.split("\n").forEach((line) => { if (line.trim() && !previous.has(line.trim())) hashes.add(lineHash(line)); });
-    bot.typed = [...hashes].slice(-2000);
+    const added = new Set(after.split("\n").flatMap((line) => line.trim() && !previous.has(line.trim()) ? [lineHash(line)] : []));
+    added.forEach((hash) => hashes.add(hash));
+    bot.typed = capTyped(botId, [...hashes], added);
     saveState(dataDir, state);
   } catch { console.warn("[memory-clean] typed lines could not be saved"); }
 }
@@ -65,7 +80,7 @@ export function ownLines(botId: string, add: readonly string[], remove: readonly
   const state = readState(dataDir);
   const bot = state.bots[botId] ??= {};
   const drop = new Set(remove);
-  bot.typed = [...new Set([...(bot.typed ?? []).filter((hash) => !drop.has(hash)), ...add])].slice(-2000);
+  bot.typed = capTyped(botId, [...new Set([...(bot.typed ?? []).filter((hash) => !drop.has(hash)), ...add])], new Set(add));
   saveState(dataDir, state);
 }
 
@@ -183,16 +198,31 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     backup(deps.dataDir, botId, result.runId, result.header.at, [["MEMORY.md", memory], [historyFile, history], ...(side ? [[side.file, side.text] as const] : []), ...result.topics.map((topic) => [topic.file, topic.before] as const)]);
     mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 });
     const archived = appendBlock(targetText, result.block);
-    writeFileAtomic(targetPath, archived, { mode: 0o600 });
-    if (readMemoryFile(botId).revision !== base.revision || readFile(targetPath) !== archived || (side && readFile(join(workspaceDir(botId), side.file)) !== side.text)) return;
-    if (result.side) writeFileAtomic(join(workspaceDir(botId), result.side.file), result.side.text, { mode: 0o600 });
-    if (readFile(targetPath) !== archived || (result.side && readFile(join(workspaceDir(botId), result.side.file)) !== result.side.text)) return;
-    for (const topic of result.topics) {
-      if (topicText(topic.file) !== topic.before) return;
-      writeFileAtomic(join(workspaceDir(botId), topic.file), topic.text, { mode: 0o600 });
+    // a night that does not land takes back its archive, side and topic writes, or voids its run when one changed since
+    const wrote: Array<{ path: string; before: string | null; text: string }> = [];
+    const put = (path: string, before: string | null, text: string) => { writeFileAtomic(path, text, { mode: 0o600 }); wrote.push({ path, before, text }); };
+    let landed = false;
+    try {
+      put(targetPath, target === historyFile ? history : null, archived);
+      if (readMemoryFile(botId).revision !== base.revision || readFile(targetPath) !== archived || (side && readFile(join(workspaceDir(botId), side.file)) !== side.text)) return;
+      if (result.side) put(join(workspaceDir(botId), result.side.file), side!.text, result.side.text);
+      if (readFile(targetPath) !== archived || (result.side && readFile(join(workspaceDir(botId), result.side.file)) !== result.side.text)) return;
+      for (const topic of result.topics) {
+        if (topicText(topic.file) !== topic.before) return;
+        put(join(workspaceDir(botId), topic.file), topic.before, topic.text);
+      }
+      landed = !saveMemoryFile(botId, result.memory, base.revision, true).conflict;
+    } finally {
+      for (const file of landed ? [] : wrote.reverse()) {
+        const current = readFile(file.path);
+        if (current === file.text) {
+          if (file.before === null) rmSync(file.path, { force: true });
+          else writeFileAtomic(file.path, file.before, { mode: 0o600 });
+        } else if (file.path === targetPath && current !== null) writeFileAtomic(targetPath, appendBlock(current, voidBlock(result.runId, now())), { mode: 0o600 });
+      }
     }
+    if (!landed) return;
     ownLines(botId, result.owned, [], deps.dataDir);
-    if (saveMemoryFile(botId, result.memory, base.revision, true).conflict) return;
     const bot = deps.store.bot(botId);
     if (bot) deps.store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: "Tidied memory, nothing lost", tidy: { runId: result.runId } } });
     update(botId, (state) => {

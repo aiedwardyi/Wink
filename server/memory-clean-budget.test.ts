@@ -12,7 +12,7 @@ const list = JSON.stringify({ version: 1, file: "MEMORY.md", changes: Array.from
 const used = [18_908, 17_184, 9_717, 12_280];
 
 function run(tokens: Array<number | undefined> = used, grade = true, legacy = false, exact = false) {
-  const replies = [list, JSON.stringify(questions), JSON.stringify(questions.map((q, i) => exact ? q.answer : i === 0 ? "5" : i === 1 ? "6" : q.answer)), JSON.stringify([grade, grade])];
+  const replies = [list, JSON.stringify(questions), JSON.stringify([...questions.map((q, i) => exact ? q.answer : i === 0 ? "5" : i === 1 ? "6" : q.answer), ...Array(30).fill("superseded")]), JSON.stringify([grade, grade])];
   let calls = 0;
   const call = vi.fn<TextCall>(async () => {
     const at = calls++;
@@ -36,7 +36,7 @@ describe("memory cleanup usage budget", () => {
 
   it("stops before the next call when actual usage plus its bound exceeds the cap", async () => {
     const engine = run([59_000]);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(1);
   });
 
@@ -46,33 +46,33 @@ describe("memory cleanup usage budget", () => {
     const bound = callTokens(probe.call.mock.calls[3]![0]);
     for (const extra of [0, 1]) {
       const engine = run([18_908, 17_184, 60_000 - bound - 36_092 + extra, bound]);
-      expect(await engine.result).toMatchObject(extra ? { ok: false, stage: "nothing", detail: "budget" } : { ok: true });
+      expect(await engine.result).toMatchObject(extra ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
       expect(engine.call).toHaveBeenCalledTimes(extra ? 3 : 4);
     }
   });
 
   it.each([false, true])("rejects an actual overrun on the final call, exact answers %s", async (exact) => {
     const engine = run(exact ? [18_908, 17_184, 30_000] : [18_908, 17_184, 9_717, 14_192], true, false, exact);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(exact ? 3 : 4);
   });
 
   it.each([false, true])("enforces the unchanged hard cap on a no-change reply, side %s", async (side) => {
     const call = vi.fn<TextCall>(async (prompt) => ({ text: JSON.stringify({ version: 1, file: /"file":"([^"]+)"/.exec(prompt)![1], changes: [] }), tokens: (side ? 120_000 : 60_000) + 1 }));
-    expect(await cleanFiles({ memory: "- kept\n", side: side ? { file: "memory/topic.md", text: "- topic\n" } : undefined, history: null, typed: new Set(), propose: call, recall: call })).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await cleanFiles({ memory: "- kept\n", side: side ? { file: "memory/topic.md", text: "- topic\n" } : undefined, history: null, typed: new Set(), propose: call, recall: call })).toMatchObject({ ok: false, stage: "propose", detail: "budget" });
     expect(call).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, 0, -1, NaN, Infinity, 0.5])("falls back to the existing estimate for unusable usage %s", async (tokens) => {
     const engine = run(Array(4).fill(tokens));
-    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(3);
     expect(engine.call.mock.calls.reduce((sum, [prompt]) => sum + callTokens(prompt), 0)).toBeLessThanOrEqual(60_000);
   });
 
   it("keeps text-only engines bounded", async () => {
     const engine = run([], true, true);
-    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(3);
   });
 

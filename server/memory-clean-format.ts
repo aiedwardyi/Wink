@@ -26,6 +26,7 @@ const entrySchema = z.object({
   topic: cleanFileSchema.optional(), owned: z.array(z.string().regex(/^[0-9a-f]{16}$/)).optional(),
 }).refine((entry) => entry.at.length === entry.prev.length && (entry.at.length > 0 || ["learn", "own", "file"].includes(entry.op)));
 const undoSchema = z.object({ v: z.literal(1), runId: z.string(), at: time, restored: time, skipped: time });
+const voidSchema = z.object({ v: z.literal(1), runId: z.string(), at: time });
 
 function marker(line: string, kind: string): unknown {
   const prefix = `<!-- mc-${kind} `;
@@ -33,8 +34,15 @@ function marker(line: string, kind: string): unknown {
   try { return JSON.parse(line.slice(prefix.length, -4)); } catch { return null; }
 }
 
+/** Runs in the archive, minus runs voided because their night never landed. */
 export function parseHistory(text: string): HistoryRun[] {
+  const { runs, voided } = readHistory(text);
+  return runs.filter((run) => !voided.has(run.header.runId));
+}
+
+function readHistory(text: string): { runs: HistoryRun[]; voided: Set<string> } {
   const runs: HistoryRun[] = [];
+  const voided = new Set<string>();
   const lines = text.split("\n");
   let current: HistoryRun | undefined;
   for (let i = 0; i < lines.length; i++) {
@@ -57,9 +65,12 @@ export function parseHistory(text: string): HistoryRun[] {
       const parsed = undoSchema.safeParse(marker(line, "undo"));
       const run = parsed.success && runs.find((run) => run.header.runId === parsed.data.runId);
       if (run && parsed.success) run.undo = parsed.data;
+    } else if (line.startsWith("<!-- mc-void ")) {
+      const parsed = voidSchema.safeParse(marker(line, "void"));
+      if (parsed.success) voided.add(parsed.data.runId);
     }
   }
-  return runs.sort((a, b) => a.header.at - b.header.at || a.header.runId.localeCompare(b.header.runId));
+  return { runs: runs.sort((a, b) => a.header.at - b.header.at || a.header.runId.localeCompare(b.header.runId)), voided };
 }
 
 export function archiveBlock(header: RunHeader, entries: ArchiveEntry[]): string {
@@ -94,6 +105,10 @@ export function undoBlock(record: UndoRecord): string {
   return `<!-- mc-undo ${JSON.stringify(record)} -->\n## Memory cleanup undone ${new Date(record.at).toISOString().slice(0, 10)} (${record.runId})\n\n`;
 }
 
+export function voidBlock(runId: string, at: number): string {
+  return `<!-- mc-void ${JSON.stringify({ v: 1, runId, at })} -->\n`;
+}
+
 export function appendBlock(text: string, block: string): string {
   return text + (text && !text.endsWith("\n") ? "\n" : "") + block;
 }
@@ -114,7 +129,8 @@ function historyBlocks(text: string): string[] {
 
 export function mergeParkedCopy({ file, kept, parked, history }: MergeParkedInput): string | null {
   if (isHistory(file)) {
-    const known = new Set(parseHistory(kept).map((run) => run.header.runId));
+    const read = readHistory(kept);
+    const known = new Set([...read.runs.map((run) => run.header.runId), ...read.voided]);
     const blocks = historyBlocks(parked);
     let result = kept;
     for (const block of blocks) {

@@ -8,6 +8,7 @@ import { callTokens } from "./memory-clean-engine.ts";
 import type { HomeInput } from "./memory-clean-home.ts";
 import { Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
 import { memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
 const temps = createTempDirs();
@@ -26,7 +27,7 @@ function calls(changes: Change[] = [retire(2)]) {
     const file = /"file":"([^"]+)"/.exec(prompt)?.[1] ?? "MEMORY.md";
     return JSON.stringify({ version: 1, file, changes });
   });
-  const recall = vi.fn<TextCall>(async () => JSON.stringify(questions().map((q) => q.answer)));
+  const recall = vi.fn<TextCall>(async (prompt) => JSON.stringify([...questions().map((q) => q.answer), ...sleepVerdicts(prompt)]));
   return { propose, recall };
 }
 
@@ -41,8 +42,10 @@ describe("cleanFiles recall", () => {
     const answers: Array<string | number | boolean | null> = questions().map((q) => q.answer);
     if (kind === "numeric") answers[0] = 792;
     if (kind === "boolean") answers[0] = false;
-    const json = JSON.stringify(answers);
-    engine.recall.mockResolvedValue(kind === "fenced" ? `\`\`\`json\n${json}\n\`\`\`` : kind === "plain-fence" ? `\`\`\`\n${json}\n\`\`\`` : kind === "prose" ? `Here are the answers:\n${json}\nEnd of answers.` : json);
+    engine.recall.mockImplementation(async (prompt) => {
+      const json = JSON.stringify([...answers, ...sleepVerdicts(prompt)]);
+      return kind === "fenced" ? `\`\`\`json\n${json}\n\`\`\`` : kind === "plain-fence" ? `\`\`\`\n${json}\n\`\`\`` : kind === "prose" ? `Here are the answers:\n${json}\nEnd of answers.` : json;
+    });
     expect(await cleanFiles(input)).toMatchObject({ ok: true });
     const grade = engine.propose.mock.calls.findLast(([prompt]) => prompt.startsWith("[memory-clean:grade]"))?.[0];
     expect(grade && JSON.parse(grade.slice(grade.indexOf("\n\n") + 2))[0].actual).toBe(kind === "numeric" || kind === "boolean" ? String(answers[0]) : undefined);
@@ -55,7 +58,7 @@ describe("cleanFiles recall", () => {
     const engine = calls();
     const reply = engine.propose.getMockImplementation()!;
     engine.propose.mockImplementation(async (prompt, options) => prompt.startsWith(`[memory-clean:${tag}]`) ? shape(await reply(prompt, options) as string) : reply(prompt, options));
-    engine.recall.mockResolvedValue(JSON.stringify(["it is value 0", ...questions().slice(1).map((q) => q.answer)]));
+    engine.recall.mockImplementation(async (prompt) => JSON.stringify(["it is value 0", ...questions().slice(1).map((q) => q.answer), ...sleepVerdicts(prompt)]));
     expect(await cleanFiles({ memory: "- kept\n- old\n", history: null, typed: new Set(), ...engine })).toMatchObject({ ok: true });
     expect(engine.propose.mock.calls.filter(([prompt]) => prompt.startsWith("[memory-clean:grade]"))).toHaveLength(1);
   });
@@ -71,10 +74,10 @@ describe("cleanFiles recall", () => {
     const engine = calls();
     const memory = stage === "propose" ? "x".repeat(240_000) : "- kept\n- old\n";
     const side = stage === "side" || stage === "questions" ? { file: "memory/topic.md" as const, text: `- kept\n- old\n${"x".repeat(stage === "side" ? 480_000 : 245_000)}` } : undefined;
-    if (stage === "grade") engine.recall.mockResolvedValue(JSON.stringify(["x".repeat(240_000), ...questions().slice(1).map((q) => q.answer)]));
+    if (stage === "grade") engine.recall.mockImplementation(async (prompt) => JSON.stringify(["x".repeat(240_000), ...questions().slice(1).map((q) => q.answer), ...sleepVerdicts(prompt)]));
     if (stage === "answers") engine.propose.mockImplementation(async (prompt) => prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(questions().map((q) => ({ ...q, question: q.question + "x".repeat(10_000) }))) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] }));
     const result = await cleanFiles({ memory, side, history: null, typed: new Set(), ...engine });
-    expect(result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(result).toMatchObject({ ok: false, stage: stage === "propose" || stage === "side" ? "propose" : "recall", detail: "budget" });
     expect(engine.propose.mock.calls.length + engine.recall.mock.calls.length).toBe({ propose: 0, side: 1, questions: 2, answers: 2, grade: 3 }[stage]);
     expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + callTokens(prompt), 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
   });
@@ -118,7 +121,7 @@ describe("cleanFiles recall", () => {
     ["- old\r\n", [retire(1)]],
     ["- before\n- one\n- two\n- after", [{ op: "merge", ids: [2, 3], text: "- one two", reason: "Duplicate" }]],
     ["- before\n- one\n- middle\n- two\n- after", [{ op: "merge", ids: [4, 2], text: "- one two", reason: "Duplicate" }]],
-    ["- old\n- new\n", [{ op: "replace", id: 1, newer: 2, reason: "Current" }]],
+    ["- port 8443\n- port 9443\n", [{ op: "replace", id: 1, newer: 2, reason: "Current" }]],
     [`- before\n- old\n${POINTER_LINE}\n`, [retire(2)]],
   ] as Array<[string, Change[]]>)("undo recovers exact original bytes: %s", async (memory, changes) => {
     const { undoText } = await import("./memory-clean-undo.ts");

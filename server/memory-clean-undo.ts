@@ -84,6 +84,7 @@ export function undoText(file: CleanFile, text: string, run: HistoryRun): { text
     entry.lines.forEach((line, i) => sources.push({ line, at: entry.header.at[i]!, prev: entry.header.prev[i]! }));
   }
   for (const source of sources.sort((a, b) => a.at - b.at)) {
+    if (lines.some((line) => line.replace(/\r$/, "") === source.line.replace(/\r$/, ""))) { skipped++; continue; }
     const anchors = lines.flatMap((value, at) => value.trim() && lineHash(value) === source.prev ? [at] : []);
     const expected = source.at - 2;
     const anchor = anchors.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected))[0];

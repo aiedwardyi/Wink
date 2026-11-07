@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { cleanFiles } from "./memory-clean-engine.ts";
 import type { Change, ChangeList, CleanFile, TextCall } from "./memory-clean-types.ts";
 import { pointerLine, protectedLines, validateChangeList } from "./memory-clean-validate.ts";
+import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
 
 const load = () => import("./memory-clean-recall.ts");
 const retire = (id: number): Change => ({ op: "retire", id, reason: "Completed" });
@@ -17,7 +18,7 @@ function calls(lists: Partial<Record<CleanFile, Change[]>>, answers: unknown[] =
     const file = /"file":"([^"]+)"/.exec(prompt)![1] as CleanFile;
     return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
   });
-  const recall = vi.fn<TextCall>(async () => JSON.stringify(answers));
+  const recall = vi.fn<TextCall>(async (prompt) => JSON.stringify([...answers, ...sleepVerdicts(prompt)]));
   const prompts = (tag: string) => [...propose.mock.calls, ...recall.mock.calls].map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));
   return { propose, recall, prompts };
 }
@@ -170,13 +171,13 @@ describe("recall grading", () => {
   it("stops a 300 KB side file on budget before its propose call", async () => {
     const engine = calls({ "MEMORY.md": [retire(2)], "memory/queued.md": [retire(2)] });
     const side = { file: "memory/queued.md" as const, text: `- kept\n- old\n${"- task line\n".repeat(25_000)}` };
-    expect(await cleanFiles({ ...input(engine), side })).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await cleanFiles({ ...input(engine), side })).toMatchObject({ ok: false, stage: "propose", detail: "budget" });
     expect(engine.prompts("propose").map((prompt) => /"file":"([^"]+)"/.exec(prompt)?.[1])).toEqual(["MEMORY.md"]);
   });
 
   it("fails a filed fact the answerer cannot find from MEMORY.md alone", async () => {
     const trips = Array.from({ length: 150 }, (_, i) => `- trip ${i} stop at harbor ${i}`).join("\n") + "\n";
-    const filed = [{ op: "file", ids: [1, 2, 3], topic: "trips", pointer: "- memory/trips.md: the first three trip stops", reason: "Detail" }] as unknown as Change[];
+    const filed = [{ op: "file", ids: [1, 2, 3], topic: "trips", pointer: "- memory/trips.md: trip stops 0, 1 and 2", reason: "Detail" }] as unknown as Change[];
     const asked = questions().map((q, i) => i === 0 ? { ...q, file: "memory/trips.md", answer: "memory/trips.md" } : q);
     const run = async (first: string | null) => {
       const engine = calls({ "MEMORY.md": filed }, [first, ...keys.slice(1)]);
@@ -187,7 +188,7 @@ describe("recall grading", () => {
     const missed = await run("harbor 0");
     expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
     const [answers] = missed.engine.prompts("answers");
-    expect(answers).toContain("- memory/trips.md: the first three trip stops");
+    expect(answers).toContain("- memory/trips.md: trip stops 0, 1 and 2");
     expect(answers).not.toContain("trip 1 stop at harbor 1");
     expect(missed.engine.prompts("grade")).toEqual([]);
     const found = await run("memory/trips.md");
@@ -217,8 +218,8 @@ describe("pair.mjs sabotaged merge", () => {
       return JSON.stringify({ version: 1, file, changes: lists[file] ?? [] });
     });
     const recall = vi.fn<TextCall>(async (prompt) => {
-      const files = prompt.slice(prompt.indexOf("\n\n", prompt.indexOf("Questions: ")));
-      return JSON.stringify(cues.map(([cue]) => cue === "q138 ticket" || cue === "m100 key" ? null : [...files.matchAll(new RegExp(`${cue} (\\S+)`, "g"))].at(-1)?.[1] ?? null));
+      const files = prompt.slice(prompt.indexOf("\n\n", prompt.indexOf("Questions: "))).split("\n\nChecks: ")[0]!;
+      return JSON.stringify([...cues.map(([cue]) => cue === "q138 ticket" || cue === "m100 key" ? null : [...files.matchAll(new RegExp(`${cue} (\\S+)`, "g"))].at(-1)?.[1] ?? null), ...sleepVerdicts(prompt)]);
     });
     const result = await cleanFiles({ memory, side: { file: "memory/queued.md", text: side }, history: null, typed: new Set(), propose, recall });
     const sent = (tag: string) => propose.mock.calls.map(([prompt]) => prompt).filter((prompt) => prompt.startsWith(`[memory-clean:${tag}]`));

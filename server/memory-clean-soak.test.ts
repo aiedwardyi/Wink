@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { appendBlock } from "./memory-clean-format.ts";
 import { cleanFiles, lineHash, parseHistory, sleepInput, type CleanFile, type CleanInput, type SleepLine, type TextCall } from "./memory-clean.ts";
 import { undoText } from "./memory-clean-undo.ts";
+import { day } from "./memory-pass.ts";
+import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
 
 const FLOOR = 16 * 1024;
 const quiz = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
@@ -16,9 +18,11 @@ const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) =>
 });
 const answerer = () => vi.fn<TextCall>(async (prompt) => {
   const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
-  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
+  return JSON.stringify([...quiz.map((q, i) => i === 0 && topic ? topic : q.answer), ...sleepVerdicts(prompt)]);
 });
 const detail = (i: number) => `- detail ${i} ${"y".repeat(260)}`;
+const filed = (text: string, ids: number[]) => ({ op: "file", ids, topic: "details", reason: "Detail",
+  pointer: `- memory/details.md: details ${ids.map((id) => text.split("\n")[id - 1]!.split(" ")[2]).join(", ")}` });
 const planted = [
   "## Pinned", "- pinned: the car is the blue Kia", "", "# Memory", "- Correction: the gym is on 5th St, not 4th", "- Never share the Wi-Fi name",
   "- tax form pending signature", "- typed by hand in the editor", "- Mom's birthday is March 3",
@@ -44,14 +48,14 @@ describe("sleep soak", () => {
         { op: "merge", ids: ids(text, (line) => line.startsWith(`- dup ${night - 1} alpha`)), text: `- dup ${night - 1} alpha beta`, reason: "Same subject" },
         { op: "learn", text: `- Jun likes route ${night}`, quote: `Jun likes route ${night}`, lesson: false, reason: "User said it" },
         ...(night === 2 ? [{ op: "learn", text: "- Dentist is on Tuesday", quote: "the dentist is on Tuesday", lesson: true, reason: "Correction" }] : []),
-        ...(Buffer.byteLength(text) > FLOOR ? [{ op: "file", ids: ids(text, (line) => line.startsWith("- detail ")).slice(0, 6), topic: "details", pointer: "- memory/details.md: older detail lines", reason: "Detail" }] : []),
+        ...(Buffer.byteLength(text) > FLOOR ? [filed(text, ids(text, (line) => line.startsWith("- detail ")).slice(0, 6))] : []),
       ];
       const input: CleanInput = { memory, history, typed, user, through: night, topic: (file) => topics.get(file) ?? null, propose: proposer(changes), recall: answerer(), now: Date.UTC(2026, 10, night) };
       const result = await cleanFiles(input);
       if (!result.ok) throw new Error(`night ${night}: ${result.stage} ${result.detail}`);
       tokens.push(result.tokens);
       const after = result.memory.split("\n").map((line) => line.replace(/\r$/, ""));
-      kept.push(`- Jun likes route ${night}`, ...(night === 2 ? ["## Lessons", "- Dentist is on Tuesday"] : []), ...(night === 3 ? ["- Remember that the plumber is named Dae"] : []));
+      kept.push(`- Jun likes route ${night} (noted ${day(night)})`, ...(night === 2 ? ["## Lessons", `- Dentist is on Tuesday (noted ${day(night)})`] : []), ...(night === 3 ? ["- Remember that the plumber is named Dae"] : []));
       expect(kept.filter((line) => !after.includes(line))).toEqual([]);
       const nextHistory = appendBlock(history, result.block);
       const run = parseHistory(nextHistory).at(-1)!;
@@ -82,7 +86,7 @@ describe("sleep soak", () => {
     const user = Array.from({ length: 40 }, (_, i): SleepLine => ({ text: `I moved the standup to slot ${i} this week`, at: i, kind: "said" }));
     const result = await cleanFiles({ memory, history: null, typed: new Set(), user, propose: proposer(() => [
       { op: "retire", id: memory.split("\n").indexOf("- stale 0 done") + 1, reason: "Done" },
-      { op: "file", ids: [10, 11, 12, 13], topic: "details", pointer: "- memory/details.md: detail lines", reason: "Detail" },
+      filed(memory, [10, 11, 12, 13]),
     ]), recall: answerer() });
     expect(result).toMatchObject({ ok: true });
     expect(result.tokens).toBeLessThan(65_000);
@@ -92,7 +96,7 @@ describe("sleep soak", () => {
 
 describe("sleep sabotage", () => {
   const memory = ["- kept", "- Eddie has 9 cats", "- Eddie has 2 dogs", "- headcount 9 (noted 2026-11-04)", "- headcount 8 (noted 2026-10-01)", "- owned line typed", "- Never deploy on Fridays",
-    ...Array.from({ length: 60 }, (_, i) => detail(i))].join("\n") + "\n";
+    ...Array.from({ length: 55 }, (_, i) => detail(i)), "- dentist visit on Monday", "- gym opens at 6am", "- staging deploys on friday", "- prod deploys on monday", "- 스테이징 배포는 금요일 오후", "- 운영 배포는 월요일"].join("\n") + "\n";
   const typed = new Set([lineHash("- owned line typed")]);
   const bot = sleepInput([{ id: "1", role: "bot", kind: "text", text: "Jun likes coffee", at: 5 }, { id: "2", role: "user", kind: "text", text: "thanks", at: 6 }] as never, 0, 10).user;
   it.each([
@@ -103,6 +107,11 @@ describe("sleep sabotage", () => {
     ["retiring an owned line", { op: "retire", id: 6, reason: "Old" }, [], "protected"],
     ["a merge that drops a number", { op: "merge", ids: [2, 3], text: "- Eddie has cats and dogs", reason: "Pets" }, [], "fact-lost"],
     ["a replace that is not newer", { op: "replace", id: 4, newer: 5, reason: "Newer" }, [], "not-newer"],
+    ["a replace across different subjects", { op: "replace", id: 63, newer: 64, reason: "Newer" }, [], "not-newer"],
+    ["a learned line with flipped negation", { op: "learn", text: "- Drinks coffee", quote: "I do not drink coffee", lesson: false, reason: "User said it" }, [{ text: "I do not drink coffee", at: 1, kind: "said" }], "not-quoted"],
+    ["a Korean learned line that does not match its quote", { op: "learn", text: "- 녹차를 싫어함", quote: "커피를 좋아해", lesson: false, reason: "User said it" }, [{ text: "나는 커피를 좋아해", at: 1, kind: "said" }], "not-quoted"],
+    ["a merge that drops lowercase content words", { op: "merge", ids: [65, 66], text: "- deploys on monday", reason: "Deploys" }, [], "fact-lost"],
+    ["a merge that drops Korean content words", { op: "merge", ids: [67, 68], text: "- 배포는 월요일", reason: "배포" }, [], "fact-lost"],
   ])("rejects %s after one repair retry and writes nothing", async (_, change, user, reason) => {
     const propose = proposer(() => [change]);
     const result = await cleanFiles({ memory, history: null, typed, user: user as SleepLine[], propose, recall: answerer() });

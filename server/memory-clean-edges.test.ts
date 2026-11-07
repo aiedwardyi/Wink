@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { cleanFiles, mergeParkedCopy, parseHistory, POINTER_LINE, validateChangeList, type Change, type CleanFile, type CleanInput } from "./memory-clean.ts";
 import { undoText } from "./memory-clean-undo.ts";
+import { day } from "./memory-pass.ts";
+import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
 
 const retire = (id: number): Change => ({ op: "retire", id, reason: "Completed" });
 
@@ -15,7 +17,7 @@ function fixture(memory: string, changes: Change[] = [retire(2)], side?: { text:
       const file: CleanFile = prompt.includes('"file":"memory/topic.md"') ? "memory/topic.md" : "MEMORY.md";
       return JSON.stringify({ version: 1, file, changes: file === "MEMORY.md" ? changes : side?.changes ?? [] });
     },
-    recall: async () => JSON.stringify(questions.map((q) => q.answer)),
+    recall: async (prompt) => JSON.stringify([...questions.map((q) => q.answer), ...sleepVerdicts(prompt)]),
   };
 }
 
@@ -68,7 +70,7 @@ describe("memory cleanup edges", () => {
   });
 
   it.each(["November 4, 2026", "2026/11/04", "2026년 11월 4일"])("uses explicit dates before position: %s", (date) => {
-    const result = validateChangeList({ file: "MEMORY.md", text: `- new ${date}\n- old 2026-10-01`, list: { version: 1, file: "MEMORY.md", changes: [{ op: "replace", id: 2, newer: 1, reason: "Current" }] }, typed: new Set() });
+    const result = validateChangeList({ file: "MEMORY.md", text: `- port 9443 ${date}\n- port 8443 2026-10-01`, list: { version: 1, file: "MEMORY.md", changes: [{ op: "replace", id: 2, newer: 1, reason: "Current" }] }, typed: new Set() });
     expect(result).toMatchObject({ ok: true });
   });
 
@@ -121,7 +123,7 @@ describe("memory cleanup edges", () => {
     const learn = (quote: string, text = `- ${quote}`) => ({ op: "learn", text, quote, lesson: false, reason: "User said it" });
     const check = (change: unknown, user: unknown[]) => validateChangeList({ file: "MEMORY.md", text: "- kept\n", typed: new Set(), user: user as never, list: { version: 1, file: "MEMORY.md", changes: [change] } });
     const typed = [{ text: "My sister Mina lives in Busan", at: 13, kind: "said" }];
-    expect(check(learn("sister Mina lives in Busan", "- Sister Mina lives in Busan"), typed)).toMatchObject({ ok: true, text: "- kept\n- Sister Mina lives in Busan\n" });
+    expect(check(learn("sister Mina lives in Busan", "- Sister Mina lives in Busan"), typed)).toMatchObject({ ok: true, text: `- kept\n- Sister Mina lives in Busan (noted ${day(13)})\n` });
     const { sleepInput } = await import("./memory-clean.ts");
     const rows = [
       { id: "1", role: "bot", kind: "text", text: "Your sister Jiwoo lives in Seoul", at: 10 },
@@ -142,11 +144,11 @@ describe("memory cleanup edges", () => {
     const detail = (i: number) => `- detail ${i} ${"x".repeat(280)}`;
     const big = ["- Never deploy on Fridays", "- deploy pending review", ...Array.from({ length: 58 }, (_, i) => detail(i))].join("\n") + "\n";
     const small = ["- Never deploy on Fridays", "- deploy pending review", ...Array.from({ length: 8 }, (_, i) => detail(i))].join("\n") + "\n";
-    const file = (ids: number[], topic = "details") => ({ op: "file", ids, topic, pointer: `- memory/${topic}.md: early details`, reason: "Detail" });
+    const file = (ids: number[], topic = "details") => ({ op: "file", ids, topic, pointer: `- memory/${topic}.md: early details 0 and 1`, reason: "Detail" });
     const check = (text: string, change: unknown) => validateChangeList({ file: "MEMORY.md", text, typed: new Set(), list: { version: 1, file: "MEMORY.md", changes: [change] } });
     const filed = check(big, file([3, 4]));
     expect(filed).toMatchObject({ ok: true, topics: [{ file: "memory/details.md", lines: [detail(0), detail(1)] }] });
-    expect(filed.ok && filed.text.split("\n").slice(0, 4)).toEqual(["- Never deploy on Fridays", "- deploy pending review", "- memory/details.md: early details", detail(2)]);
+    expect(filed.ok && filed.text.split("\n").slice(0, 4)).toEqual(["- Never deploy on Fridays", "- deploy pending review", "- memory/details.md: early details 0 and 1", detail(2)]);
     expect(check(small, file([3, 4]))).toMatchObject({ ok: false, errors: [{ reason: "op-not-allowed" }] });
     for (const id of [1, 2]) expect(check(big, file([id, 3]))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "protected" })]) });
     expect(check(big, file([3], "memory-history"))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "op-not-allowed" })]) });

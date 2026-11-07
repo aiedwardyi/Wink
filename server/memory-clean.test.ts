@@ -5,12 +5,22 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 import type { CleanInput, TextCall } from "./memory-clean.ts";
 import type { HomeInput } from "./memory-clean-home.ts";
+import { day } from "./memory-pass.ts";
 import { Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
+import { sleepVerdicts } from "./testing/sleep-verdicts.ts";
 import { withSystemChanges } from "./turn-context.ts";
 import { memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
 
 const sabotage = vi.hoisted(() => ({ undo: false }));
+const race = vi.hoisted(() => ({ after: null as null | ((path: string) => void) }));
+vi.mock("./atomic.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./atomic.ts")>();
+  return { ...real, writeFileAtomic: (...args: Parameters<typeof real.writeFileAtomic>) => {
+    real.writeFileAtomic(...args);
+    race.after?.(String(args[0]));
+  } };
+});
 vi.mock("./memory-clean-undo.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./memory-clean-undo.ts")>();
   return { ...real, undoText: (...args: Parameters<typeof real.undoText>) => {
@@ -54,7 +64,7 @@ describe("change list validation", () => {
     ["pointer", "- memory/topic.md: details", list([retire(1)]), "MEMORY.md"],
     ["cap-lines", Array.from({ length: 41 }, () => "- done").join("\n"), list(Array.from({ length: 41 }, (_, i) => retire(i + 1))), "MEMORY.md"],
     ["cap-chars", `- ${"x".repeat(8001)}\n- kept`, list([retire(1)]), "MEMORY.md"],
-    ["budget", `- done\n${"x".repeat(24001)}`, list([retire(1)]), "MEMORY.md"],
+    ["budget", `- a b\n- c d\n${"x".repeat(23990)}`, list([{ op: "merge", ids: [1, 2], text: `- a b c d ${"e".repeat(250)}`, reason: "Same subject" }]), "MEMORY.md"],
   ])("rejects %s", async (reason, text, proposal, file) => {
     const result = (await load()).validateChangeList({ text: text as string, list: proposal, file: file as "MEMORY.md", typed: new Set() });
     expect(result).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason })]) });
@@ -84,14 +94,14 @@ describe("change list validation", () => {
   });
 
   it("uses inline dates before file position and allows protected newer lines", async () => {
-    expect(await validate("- old 9\n- Always use 11", [{ op: "replace", id: 1, newer: 2, reason: "Current" }])).toMatchObject({ ok: true });
-    expect(await validate("- new (noted 2026-11-04)\n- old (noted 2026-10-01)", [{ op: "replace", id: 2, newer: 1, reason: "Current" }])).toMatchObject({ ok: true });
+    expect(await validate("- port 9\n- Always use port 11", [{ op: "replace", id: 1, newer: 2, reason: "Current" }])).toMatchObject({ ok: true });
+    expect(await validate("- port 11 (noted 2026-11-04)\n- port 9 (noted 2026-10-01)", [{ op: "replace", id: 2, newer: 1, reason: "Current" }])).toMatchObject({ ok: true });
   });
 
   it.each(["pending", "PARKED", "await", "awaits", "awaiting", "대기", "보류"])("protects %s from retire but allows replacement", async (marker) => {
-    const text = `- task ${marker}\n- task completed`;
+    const text = `- task T-1128 ${marker}\n- task T-1128 completed`;
     expect(await validate(text, [retire(1)])).toMatchObject({ ok: false, errors: [{ reason: "protected", change: 0 }] });
-    expect(await validate(text, [{ op: "replace", id: 1, newer: 2, reason: "Current" }])).toMatchObject({ ok: true, text: "- task completed" });
+    expect(await validate(text, [{ op: "replace", id: 1, newer: 2, reason: "Current" }])).toMatchObject({ ok: true, text: "- task T-1128 completed" });
     expect(await validate(`${text}\n- task ${marker}`, [retire(1)])).toMatchObject({ ok: false, errors: [{ reason: "protected", change: 0 }] });
   });
 
@@ -125,12 +135,14 @@ const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) =>
 });
 const answerer = () => vi.fn<TextCall>(async (prompt) => {
   const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
-  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
+  return JSON.stringify([...quiz.map((q, i) => i === 0 && topic ? topic : q.answer), ...sleepVerdicts(prompt)]);
 });
 const night = (memory: string, changes: unknown[], extra: Partial<CleanInput> = {}): CleanInput =>
   ({ memory, history: null, typed: new Set(), now: Date.UTC(2026, 10, 7), propose: proposer(() => changes), recall: answerer(), ...extra });
 const learn = (quote: string, text: string, lesson = false) => ({ op: "learn", text, quote, lesson, reason: "User said it" });
 const said = (text: string, kind: "said" | "remember" | "correction" = "said", at = 150) => ({ text, at, kind });
+const local = (ms: number) => { const date = new Date(ms); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; };
+const rejects = (reason: string) => ({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason })]) });
 
 describe("sleep", () => {
   it("learns a fact only when it quotes a user line from this night", async () => {
@@ -138,7 +150,7 @@ describe("sleep", () => {
     const user = [said("Jun moved to Jeju in May")];
     const result = await cleanFiles(night("- kept\n", [learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], { user, through: 150 }));
     expect(result).toMatchObject({ ok: true, header: { v: 2, through: 150, counts: { learned: 1 } } });
-    expect(result.ok && result.memory.split("\n").slice(0, 2)).toEqual(["- kept", "- Jun moved to Jeju in May"]);
+    expect(result.ok && result.memory.split("\n").slice(0, 2)).toEqual(["- kept", `- Jun moved to Jeju in May (noted ${day(150)})`]);
     const check = (changes: unknown[], lines = user) => validateChangeList({ file: "MEMORY.md", text: "- kept\n", typed: new Set(), user: lines, list: list(changes) });
     expect(check([learn("Jun moved to Jeju", "- Jun moved to Jeju in June")])).toMatchObject({ ok: false, errors: [{ reason: "not-quoted" }] });
     expect(check([learn("Mina lives in Busan", "- Mina lives in Busan")])).toMatchObject({ ok: false, errors: [{ reason: "not-quoted" }] });
@@ -176,6 +188,111 @@ describe("sleep", () => {
     expect(parseHistory(historyBlock())[0]!.header).toMatchObject({ v: 1, moved: 1 });
   });
 
+  describe("fix-up from the DREAM-AUDIT", () => {
+    const check = async (text: string, changes: unknown[], user: Array<ReturnType<typeof said>> = []) =>
+      (await load()).validateChangeList({ file: "MEMORY.md", text, typed: new Set(), user, list: list(changes) });
+    const replace = (id: number, newer: number) => ({ op: "replace", id, newer, reason: "Current" });
+    const filler = (count: number, width: number) => Array.from({ length: count }, (_, i) => `- note ${i} ${"z".repeat(width)}`).join("\n") + "\n";
+
+    it("replaces a line only with a newer line about the same subject", async () => {
+      expect(await check("- dentist visit on Monday\n- gym opens at 6am\n", [replace(1, 2)])).toMatchObject(rejects("not-newer"));
+      expect(await check("- task pending signature\n- task completed\n", [replace(1, 2)])).toMatchObject(rejects("not-newer"));
+      expect(await check("- headcount 8\n- headcount 9\n", [replace(1, 2)])).toMatchObject({ ok: true });
+      expect(await check("- PR 1128 pending review\n- PR 1128 merged\n", [replace(1, 2)])).toMatchObject({ ok: true });
+      expect(await check("- 회의는 3시\n- 회의는 4시\n", [replace(1, 2)])).toMatchObject({ ok: true });
+    });
+
+    it("learns only a line that keeps its quote's words and negation", async () => {
+      expect(await check("- kept\n", [learn("I do not drink coffee", "- Drinks coffee")], [said("I do not drink coffee")])).toMatchObject(rejects("not-quoted"));
+      expect(await check("- kept\n", [learn("커피를 좋아해", "- 녹차를 싫어함")], [said("나는 커피를 좋아해")])).toMatchObject(rejects("not-quoted"));
+      expect(await check("- kept\n", [learn("I do not drink coffee", "- Does not drink coffee")], [said("I do not drink coffee")])).toMatchObject({ ok: true });
+      expect(await check("- kept\n", [learn("커피를 안 마셔", "- 커피를 안 마심")], [said("요즘 커피를 안 마셔")])).toMatchObject({ ok: true });
+    });
+
+    it("fails the night unless the answerer finds each removed line superseded and each learned line supported", async () => {
+      const { cleanFiles } = await load();
+      for (const [verdicts, ok] of [[["superseded", "supported"], true], [["live", "supported"], false], [["superseded", "unsupported"], false]] as const) {
+        const recall = vi.fn<TextCall>(async () => JSON.stringify([...quiz.map((q) => q.answer), ...verdicts]));
+        const result = await cleanFiles(night("- kept\n- old plan done\n", [retire(2), learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], { user: [said("Jun moved to Jeju in May")], recall }));
+        expect(result).toMatchObject(ok ? { ok: true } : { ok: false, stage: "recall", detail: "Verify 1/2" });
+        expect(recall.mock.calls[0]![0]).toContain(`Checks: [{"removed":"- old plan done","reason":"Completed"},{"line":"- Jun moved to Jeju in May (noted ${local(150)})","quote":"Jun moved to Jeju"}]`);
+      }
+    });
+
+    it("keeps lowercase and Korean content words in a merge", async () => {
+      const merge = (text: string) => [{ op: "merge", ids: [1, 2], text, reason: "Same subject" }];
+      expect(await check("- staging deploys on friday\n- prod deploys on monday\n", merge("- deploys on monday"))).toMatchObject(rejects("fact-lost"));
+      expect(await check("- 스테이징 배포는 금요일 오후\n- 운영 배포는 월요일\n", merge("- 배포는 월요일"))).toMatchObject(rejects("fact-lost"));
+      expect(await check("- staging deploys on friday\n- prod deploys on monday\n", merge("- staging deploys friday, prod deploys monday"))).toMatchObject({ ok: true });
+    });
+
+    it("dates a learned line with the day its user line was said", async () => {
+      const { cleanFiles } = await load();
+      const at = Date.UTC(2026, 10, 3, 12);
+      const result = await cleanFiles(night("- kept\n", [learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], { user: [said("Jun moved to Jeju in May", "said", at)] }));
+      expect(result.ok && result.memory).toContain(`\n- Jun moved to Jeju in May (noted ${local(at)})\n`);
+    });
+
+    it("files lines only behind a pointer that names their key facts", async () => {
+      const text = Array.from({ length: 60 }, (_, i) => `- trip ${i} stop at Harbor${i} ${"x".repeat(280)}`).join("\n") + "\n";
+      const file = (pointer: string) => [{ op: "file", ids: [1, 2], topic: "trips", pointer, reason: "Detail" }];
+      expect(await check(text, file("- memory/trips.md: early trips"))).toMatchObject(rejects("pointer"));
+      expect(await check(text, file("- memory/trips.md: trips 0 and 1 via Harbor0, Harbor1"))).toMatchObject({ ok: true });
+    });
+
+    it("opens a new Lessons section after the title and closes it so later appends stay out", async () => {
+      const user = [said("No, the dentist is on Tuesday", "correction")];
+      const lesson = [learn("the dentist is on Tuesday", "- Dentist is on Tuesday", true)];
+      const shape = async (text: string) => {
+        const result = await check(text, lesson, user);
+        return result.ok && result.text.split("\n").map((line) => line.replace(/ \(noted [^)]*\)$/, ""));
+      };
+      expect(await shape("# Memory\n- a\n- b\n")).toEqual(["# Memory", "## Lessons", "- Dentist is on Tuesday", "## Notes", "- a", "- b", ""]);
+      expect(await shape("- a\n## Work\n- b\n")).toEqual(["## Lessons", "- Dentist is on Tuesday", "## Notes", "- a", "## Work", "- b", ""]);
+      expect(await shape("## Pinned\n- a\n")).toEqual(["## Lessons", "- Dentist is on Tuesday", "## Pinned", "- a", ""]);
+    });
+
+    it("treats a question or I don't remember as a plain line, not a remember request", async () => {
+      const { sleepInput } = await load();
+      const rows = ["Do you remember my sister's name?", "I don't remember the gate code", "그거 기억해?", "Remember the gate code is 4417"].map((text, i) => ({ id: `${i}`, role: "user", kind: "text", text, at: 10 + i }));
+      expect(Object.fromEntries(sleepInput(rows as never, 0, 100).user.map((line) => [line.text, line.kind]))).toEqual({
+        "Do you remember my sister's name?": "said", "I don't remember the gate code": "said", "그거 기억해?": "said", "Remember the gate code is 4417": "remember",
+      });
+    });
+
+    it("counts a remember line kept only when one line holds all its facts", async () => {
+      const result = await check("- Mina likes tea\n- locker 4417 is broken\n", [], [said("Remember Mina's locker is 4417", "remember")]);
+      expect(result.ok && result.text).toContain("\n- Remember Mina's locker is 4417\n");
+    });
+
+    it("lets a forced remember append grow a full file within 24 KB", async () => {
+      const text = `${filler(70, 280)}- old plan done\n`;
+      expect(Buffer.byteLength(text)).toBeGreaterThan(16 * 1024);
+      expect(await check(text, [retire(71)], [said("Remember the gate code is 4417", "remember")])).toMatchObject({ ok: true });
+    });
+
+    it("accepts a night that shrinks a file already over 24 KB, never one that grows it", async () => {
+      const text = `${filler(84, 280)}- old plan done\n`;
+      expect(Buffer.byteLength(text)).toBeGreaterThan(24_000);
+      expect(await check(text, [retire(85)])).toMatchObject({ ok: true });
+      expect(await check(text, [learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], [said("Jun moved to Jeju in May")])).toMatchObject(rejects("budget"));
+    });
+
+    it("does not restore a line that is already back", async () => {
+      const { cleanFiles, parseHistory } = await load();
+      const { undoText } = await import("./memory-clean-undo.ts");
+      const result = await cleanFiles(night("- before\n- old plan done\n- after\n", [retire(2)]));
+      if (!result.ok) throw new Error(result.detail);
+      const undone = undoText("MEMORY.md", `${result.memory}- old plan done\n`, parseHistory(result.block)[0]!);
+      expect(undone.text.split("\n").filter((line) => line === "- old plan done")).toHaveLength(1);
+    });
+
+    it("reports a budget stop as a failed night, not a quiet one", async () => {
+      const { cleanFiles } = await load();
+      expect(await cleanFiles(night("x".repeat(240_000), [retire(1)]))).toMatchObject({ ok: false, stage: "propose", detail: "budget" });
+    });
+  });
+
   describe("service", () => {
     let clock: number;
     let dataDir: string;
@@ -200,21 +317,38 @@ describe("sleep", () => {
       store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Remember Mom's birthday is March 3" });
       changes = [
         learn("Jun moved to Jeju", "- Jun moved to Jeju in May"), { op: "own", id: 4, quote: "Mom's birthday is March 3", reason: "Asked to remember" },
-        { op: "file", ids: [2, 3], topic: "details", pointer: "- memory/details.md: the first two details", reason: "Detail" },
+        { op: "file", ids: [2, 3], topic: "details", pointer: "- memory/details.md: details 0 and 1", reason: "Detail" },
       ];
       const engine = { propose: proposer(() => changes), recall: answerer(), key: "own" };
       const home: HomeInput = { device: "000000000001" };
       service = createMemoryClean({ store, dataDir, engine: async () => engine, busy: () => false, pending: () => false, home: () => home, now: () => clock });
     });
 
-    afterEach(() => { service.dispose(); sabotage.undo = false; });
+    afterEach(() => { service.dispose(); sabotage.undo = false; race.after = null; });
+
+    it.each(["restore", "void"])("takes back a night whose memory write loses a race after the archive: %s", async (mode) => {
+      const { parseHistory } = await load();
+      const path = join(workspaceDir(bot.id), "memory/memory-history.md");
+      race.after = (file) => {
+        if (!file.endsWith("memory-history.md")) return;
+        race.after = null;
+        writeMemoryFile(bot.id, `${original}- concurrent\n`);
+        if (mode === "void") writeFileSync(path, `${readFileSync(path, "utf8")}- synced in\n`);
+      };
+      clock += 600_000; await service.run(bot.id);
+      expect(memoryFileRaw(bot.id)).toBe(`${original}- concurrent\n`);
+      expect(service.summary(bot.id)).toEqual({ run: null });
+      expect(existsSync(path)).toBe(mode === "void");
+      if (mode === "void") expect(parseHistory(readFileSync(path, "utf8"))).toEqual([]);
+      expect(existsSync(join(workspaceDir(bot.id), "memory/details.md"))).toBe(false);
+    });
 
     it("undoes learned owned and filed changes byte for byte and owns restored lines", async () => {
       const { lineHash } = await load();
       clock += 600_000; await service.run(bot.id);
       const memory = memoryFileRaw(bot.id);
-      expect(memory).toContain("\n- Jun moved to Jeju in May\n");
-      expect(memory).toContain("- memory/details.md: the first two details\n");
+      expect(memory).toMatch(/\n- Jun moved to Jeju in May \(noted \d{4}-\d{2}-\d{2}\)\n/);
+      expect(memory).toContain("- memory/details.md: details 0 and 1\n");
       expect(readFileSync(join(workspaceDir(bot.id), "memory/details.md"), "utf8")).toBe(`${detail(0)}\n${detail(1)}\n`);
       expect(await typed()).toContain(lineHash("- Mom's birthday is March 3"));
       const runId = service.summary(bot.id).run!.runId;
@@ -255,6 +389,16 @@ describe("history and parked copies", () => {
     expect(() => recordTypedLines("b", "", "- safe", dir)).not.toThrow();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("drops typed hashes of lines no memory file holds before the 2,000 cap", async () => {
+    const { lineHash, recordTypedLines, typedHashes } = await load();
+    const dir = temps.make(join(scratch, "typed-prune-"));
+    writeMemoryFile("sleep-prune", "- typed and still here\n");
+    const stale = Array.from({ length: 1999 }, (_, i) => lineHash(`- deleted ${i}`));
+    writeFileSync(join(dir, "memory-clean.json"), JSON.stringify({ version: 1, bots: { "sleep-prune": { typed: [lineHash("- typed and still here"), ...stale] } } }));
+    recordTypedLines("sleep-prune", "", "- newly typed", dir);
+    expect(typedHashes("sleep-prune", dir)).toEqual([lineHash("- typed and still here"), lineHash("- newly typed")]);
   });
 
   it("caps typed hashes at the newest 2000 in their original order", async () => {
