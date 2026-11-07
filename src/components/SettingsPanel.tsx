@@ -21,6 +21,9 @@ import {
 } from "@/lib/memory-drafts";
 import { requestNotificationPermission } from "@/lib/notify";
 import { shortPath } from "@/lib/short-path";
+import { hapticTick } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
@@ -469,6 +472,7 @@ export function SettingsPanel({
   const { state, dispatch } = useStore();
   const { t } = useI18n();
   const panelRef = useRef<HTMLElement>(null);
+  const phone = useIsPhone();
   const [slideIn] = useState(() => panelsUp === 0);
   useEffect(() => {
     panelsUp += 1;
@@ -542,9 +546,18 @@ export function SettingsPanel({
     restoreFocusOnClose.current = true;
     dispatch({ type: "toggleSettings", open: false });
   };
+  useSettingsSwipe(panelRef, phone && !closing, false, () => {
+    hapticTick();
+    // The swipe already settled offscreen; do not replay the panel exit.
+    if (panelRef.current) panelRef.current.style.animation = "none";
+    closeSettings();
+  });
 
   useEffect(() => {
     if (closing) return;
+    for (const key of ["animation", "transform", "opacity", "transition", "will-change"]) {
+      panelRef.current?.style.removeProperty(key);
+    }
     restoreFocusOnClose.current = false;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const closeOnEscape = (event: KeyboardEvent) => {
