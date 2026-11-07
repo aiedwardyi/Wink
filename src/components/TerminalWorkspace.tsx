@@ -54,12 +54,14 @@ export function TerminalWorkspace({
   focusBlocked,
   visible,
   paneFocus,
+  onPaneOrder,
 }: {
   bot: Pick<Bot, "id" | "name" | "busy" | "cwd"> & Partial<Pick<Bot, "messages" | "activeLeafId" | "hasMore">>;
   onClose: () => void;
   focusBlocked: boolean;
   visible: boolean;
   paneFocus?: { sessionId: string | null } | null;
+  onPaneOrder?: (botId: string, order: string[] | null) => void;
 }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
@@ -720,6 +722,11 @@ export function TerminalWorkspace({
   const roster = panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited, changedAt: item.changedAt }));
   const chip = rosterChip(workers, roster);
   const paneOrder = workerPaneOrder(roster, workers);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    onPaneOrder?.(bot.id, paneOrder);
+    return () => onPaneOrder?.(bot.id, null);
+  }, [bot.id, visible, onPaneOrder, paneOrder]);
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
   const hotkeyOf = (sessionId: string | null) => {
     if (sessionId === null) return undefined;

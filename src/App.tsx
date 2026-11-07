@@ -126,6 +126,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const [terminalViews, setTerminalViews] = useState<Record<string, boolean>>({});
   const [paneFocus, setPaneFocus] = useState<{ sessionId: string | null; botId?: string } | null>(null);
   const paneRequest = useRef(0);
+  const shownPaneOrder = useRef<{ botId: string; order: string[] } | null>(null);
+  const onPaneOrder = useCallback((botId: string, order: string[] | null) => {
+    if (order) shownPaneOrder.current = { botId, order };
+    else if (shownPaneOrder.current?.botId === botId) shownPaneOrder.current = null;
+  }, []);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -309,6 +314,12 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           e.preventDefault();
           e.stopPropagation();
           const request = ++paneRequest.current;
+          const shown = shownPaneOrder.current;
+          if (shown?.botId === bot.id) {
+            const sessionId = shown.order[n - 1];
+            if (sessionId) openTerminalPane(sessionId);
+            return;
+          }
           const roster = window.ogb?.terminal
             ? window.ogb.terminal.readBot?.(bot.id)
             : api(`/api/bots/${encodeURIComponent(bot.id)}/terminal`);
@@ -692,9 +703,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
             <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" data-open={terminalOpen} inert={!terminalOpen} aria-hidden={!terminalOpen}>
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (
-                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} />
+                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
                 ) : (
-                  <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneFocus={botPaneFocus} onClose={closeTerminal} />
+                  <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
                 )}
               </LazyView>
             </div>

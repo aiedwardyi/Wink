@@ -90,11 +90,13 @@ export function RemoteTerminalView({
   onClose,
   visible,
   paneFocus,
+  onPaneOrder,
 }: {
   bot: Pick<Bot, "id" | "name"> & Partial<Pick<Bot, "messages" | "activeLeafId" | "hasMore">>;
   onClose: () => void;
   visible: boolean;
   paneFocus?: { sessionId: string | null } | null;
+  onPaneOrder?: (botId: string, order: string[] | null) => void;
 }) {
   const { t } = useI18n();
   const workers = useMemo(
@@ -330,6 +332,11 @@ export function RemoteTerminalView({
     "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50";
   const chip = rosterChip(workers, panes.filter((pane) => !pane.main));
   const paneOrder = workerPaneOrder(panes, workers);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    onPaneOrder?.(bot.id, paneOrder);
+    return () => onPaneOrder?.(bot.id, null);
+  }, [bot.id, visible, onPaneOrder, paneOrder]);
   const watched = onMainTab ? undefined : panes.find((pane) => pane.sessionId === activePaneId && !pane.main);
   const watchedName = watched ? parseWorkerLabel(watched.label).nick ?? watched.sessionId.slice(0, 8) : bot.name;
   const pick = (sessionId: string | null) => {
