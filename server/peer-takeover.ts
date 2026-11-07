@@ -1,18 +1,7 @@
+import { peerReplyText, settlePeerUserReplies } from "./peer-user-reply.ts";
 import type { Message } from "./store.ts";
 
-// A turn a teammate started (delegate_bot, ask_bot) becomes the user's the
-// moment the user's own message joins it. From then on nothing that turn says
-// is the teammate's answer: an ask settles with what came before, and a
-// delegation runs again as its own turn (delegations.ts).
-//
-// Only user words take a turn over: the send route's steer and the queued
-// sends a starting turn folds in. Pane notes, narration notices and other
-// control-plane steers never call takeOverPeerTurn. Pane notes wait for the
-// wake after a teammate's turn; as a backstop, one the turn still reads ends
-// the teammate's answer instead (peerInputJoined).
-
 interface PeerWatch {
-  takeOver: (afterReply: boolean) => void;
   joined?: () => void;
 }
 
@@ -37,27 +26,18 @@ export function takePeerReplyStamp(
   return comm;
 }
 
-/** Watch one peer-started turn on `threadId` for a user takeover. Call the
- * returned function when that turn ends; other watches on the thread stay. */
-export function onPeerTakeover(threadId: string, handler: (afterReply: boolean) => void, joined?: () => void): () => void {
+export function watchPeerTurn(threadId: string, joined?: () => void): () => void {
   const handlers = peerTurns.get(threadId) ?? new Set();
-  const watch = { takeOver: handler, joined };
+  const watch = { joined };
   handlers.add(watch);
   peerTurns.set(threadId, handlers);
   return () => {
     handlers.delete(watch);
-    if (!handlers.size && peerTurns.get(threadId) === handlers) peerTurns.delete(threadId);
+    if (!handlers.size && peerTurns.get(threadId) === handlers) {
+      peerTurns.delete(threadId);
+      settlePeerUserReplies(threadId);
+    }
   };
-}
-
-/** The user's message joined the running turn on `threadId`. True when that
- * turn was a teammate's. `afterReply` means its reply had already finished. */
-export function takeOverPeerTurn(threadId: string, afterReply = false): boolean {
-  const handlers = peerTurns.get(threadId);
-  if (!handlers) return false;
-  peerTurns.delete(threadId);
-  for (const watch of handlers) watch.takeOver(afterReply);
-  return true;
 }
 
 /** Backstop: the running turn on `threadId` read an input that is not the
@@ -66,44 +46,14 @@ export function peerInputJoined(threadId: string): void {
   for (const watch of [...(peerTurns.get(threadId) ?? [])]) watch.joined?.();
 }
 
-/** One mid-turn steer's takeover: when the model reads it and the route
- * accepts it, in either order. Without a read signal it takes over at accept. */
-export function steerTakeover(threadId: string, signaled: boolean): {
-  consumed: (taken: boolean, afterReply?: boolean) => void;
-  accepted: () => void;
-} {
-  let signal: { taken: boolean; afterReply: boolean } | null = null;
-  let accepted = false;
-  let fired = false;
-  const fire = () => {
-    if (fired || !accepted) return;
-    if (signaled && !signal) return;
-    fired = true;
-    takeOverPeerTurn(threadId, signal?.taken ? signal.afterReply : false);
-  };
-  return {
-    consumed: (taken, afterReply) => {
-      signal = { taken, afterReply: afterReply === true };
-      fire();
-    },
-    accepted: () => {
-      accepted = true;
-      fire();
-    },
-  };
-}
-
-export const askSwitchedText = (botName: string, userName: string) =>
-  `${botName} switched to ${userName}'s message before answering. Ask again later.`;
-
 const askJoinedText = (botName: string) =>
   `${botName} took in a worker's note before answering. Ask again later.`;
 
-/** ask_bot's answer: the turn's text until it ends, the user takes it over, or a pane note joins. */
+/** ask_bot's answer until the turn ends or a pane note joins. */
 export function peerAnswer(
   threadId: string,
   botName: string,
-  userName: () => string,
+  _userName: () => string,
   resolve: (text: string, replied: boolean) => void,
 ) {
   let text = "";
@@ -111,17 +61,16 @@ export function peerAnswer(
   const finish = (out: string, replied = true) => {
     if (done) return;
     done = true;
-    endTakeover();
+    endWatch();
     resolve(out, replied && Boolean(text.trim()));
   };
-  const endTakeover = onPeerTakeover(
-    threadId,
-    () => finish(text || askSwitchedText(botName, userName())),
-    () => finish(text || askJoinedText(botName)),
-  );
+  const endWatch = watchPeerTurn(threadId, () => finish(text || askJoinedText(botName)));
   return {
     add: (step: string, replace = false) => {
-      if (!done) text = replace ? step : text + (text ? "\n" : "") + step;
+      if (done) return;
+      const peer = peerReplyText(step);
+      if (replace) text = peer;
+      else if (peer.trim()) text += (text ? "\n" : "") + peer;
     },
     end: (fallback: string, replied = true) => finish(text || fallback, replied),
   };

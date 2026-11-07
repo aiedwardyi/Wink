@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { accountReady } from "@/lib/accounts";
 import { usageIdentity } from "../../shared/usage-identity";
+import type { UsageBoard } from "@/lib/usage-board";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 
 export const AUTO_REFRESH_MS = 5 * 60_000;
@@ -15,7 +16,11 @@ export const canRefresh = (instance: InstanceInfo) => REFRESH_DRIVERS.has(instan
   && instance.canRefreshUsage !== false;
 export const refreshReady = (instance: InstanceInfo) => instance.snapshot.authenticated !== false
   && (!instance.accountState || accountReady(instance));
-const eligible = (instance: InstanceInfo) => canRefresh(instance) && refreshReady(instance)
+// The open quick view also refreshes what the Refresh button does: Muse, and Gemini once the board shows it.
+const refreshable = (instance: InstanceInfo, board?: UsageBoard) => canRefresh(instance) || Boolean(board && instance.canRefreshUsage !== false
+  && (instance.driverKind === "museAgent" || (instance.driverKind === "antigravityAgent"
+    && board.engines.some((engine) => engine.accounts.some((account) => account.id === instance.instanceId)))));
+const eligible = (instance: InstanceInfo, board?: UsageBoard) => refreshable(instance, board) && refreshReady(instance)
   && (instance.snapshot.state === "available" || Boolean(instance.rateLimits));
 
 const pending = new Map<string, Promise<any>>();
@@ -50,8 +55,8 @@ export function joinRefresh(instanceId: string, start: () => Promise<any>): Prom
   return call;
 }
 
-export function staleAccounts(instances: InstanceInfo[], now = Date.now()): InstanceInfo[] {
-  return instances.filter((instance) => eligible(instance)
+export function staleAccounts(instances: InstanceInfo[], now = Date.now(), board?: UsageBoard): InstanceInfo[] {
+  return instances.filter((instance) => eligible(instance, board)
     && !pending.has(instance.instanceId)
     && (retryAfter.get(instance.instanceId) ?? 0) <= now
     && !(instance.rateLimits && now - Date.parse(instance.rateLimits.observedAt) <= AUTO_REFRESH_MS));
@@ -59,14 +64,14 @@ export function staleAccounts(instances: InstanceInfo[], now = Date.now()): Inst
 
 /** Refreshes every account whose reading is older than 5 minutes when it mounts, when account data
  * changes, and when the tab returns. Pending, fresh and cooling-down accounts are skipped; a failure keeps the old reading. */
-export function useAutoRefresh() {
+export function useAutoRefresh(board?: UsageBoard) {
   const { state, dispatch } = useStore();
-  const latest = useRef({ instances: state.instances, dispatch });
-  latest.current = { instances: state.instances, dispatch };
+  const latest = useRef({ instances: state.instances, dispatch, board });
+  latest.current = { instances: state.instances, dispatch, board };
   useEffect(() => {
     const run = () => {
       if (document.visibilityState === "hidden") return;
-      for (const { instanceId, snapshot } of staleAccounts(latest.current.instances)) {
+      for (const { instanceId, snapshot } of staleAccounts(latest.current.instances, Date.now(), latest.current.board)) {
         const current = () => usageIdentity(latest.current.instances.find((instance) => instance.instanceId === instanceId)?.snapshot ?? {}) === usageIdentity(snapshot);
         const cooldown = (retryAt = 0) => retryAfter.set(instanceId, Math.max(retryAt, Date.now() + AUTO_RETRY_MS));
         joinRefresh(instanceId, () => api(`/api/usage/refresh/${instanceId}`, { method: "POST" }).then((result) => {

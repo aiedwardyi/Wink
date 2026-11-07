@@ -30,7 +30,7 @@ describe("pane-note quiet finish", () => {
     const paneNoteTurnThreads = new Set(["thread"]);
     const late: string[] = [];
     const foldQueuedSends = vi.fn((): string[] => []);
-    const scope = { store: { activePath: () => [{ id: "human" }] }, bot: { id: "bot" }, threadId: "thread", claimMark: 0, rootId: null, late, foldQueuedSends, adoptHumanRoot: vi.fn(() => "root"), clearUnattended: vi.fn(), resumePaneWakes: vi.fn(), takeOverPeerTurn: vi.fn(), paneNoteTurnThreads };
+    const scope = { store: { activePath: () => [{ id: "human" }] }, bot: { id: "bot" }, threadId: "thread", claimMark: 0, rootId: null, late, foldPeerQueuedSends: foldQueuedSends, live: { adapter: { capabilities: { queueing: true } } }, adoptHumanRoot: vi.fn(() => "root"), clearUnattended: vi.fn(), resumePaneWakes: vi.fn(), paneNoteTurnThreads };
     run(scope);
     expect(paneNoteTurnThreads.has("thread")).toBe(true);
     foldQueuedSends.mockReturnValue(["late send"]);

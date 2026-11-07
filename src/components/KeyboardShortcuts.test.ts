@@ -57,6 +57,21 @@ describe("KeyboardShortcuts", () => {
     expect(html).not.toContain("Shift + M");
   });
 
+  it.each([
+    ["en", "Win32", "Alt", "Switch to bot 1–9", "Open worker terminal 1–9"],
+    ["ko", "Win32", "Alt", "1–9번째 봇으로 이동", "1–9번째 작업자 터미널 열기"],
+    ["en", "MacIntel", "Option", "Switch to bot 1–9", "Open worker terminal 1–9"],
+    ["ko", "MacIntel", "Option", "1–9번째 봇으로 이동", "1–9번째 작업자 터미널 열기"],
+  ] as const)("lists separate bot and worker keys in %s on %s", (locale, platform, alt, bot, worker) => {
+    persistPreference(locale);
+    vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(createElement(I18nProvider, null, createElement(KeyboardShortcuts)));
+    const combo = (label: string) => [...host.querySelectorAll("dl > div")].find((row) => row.querySelector("dt")?.textContent === label)?.querySelector("dd")?.getAttribute("aria-label");
+    expect(combo(bot)).toBe("Ctrl + 1–9");
+    expect(combo(worker)).toBe(`${alt} + 1–9`);
+  });
+
   it("names the page-scoped shortcuts and drops the terminal note", () => {
     const win = window as unknown as { ogb?: unknown };
     win.ogb = { terminal: {} };
@@ -99,7 +114,7 @@ describe("KeyboardShortcuts", () => {
     expect(html).not.toContain(">Refresh Usage");
     expect(html).not.toContain('aria-label="Alt + R"');
     expect(html).not.toContain("New bot");
-    expect(html).not.toContain("Switch to bot 1");
+    expect(html).toContain("Switch to bot 1–9");
     expect(html).not.toContain("Previous bot");
     expect(html).not.toContain("Next bot");
     expect(html).not.toContain("Find in conversation");

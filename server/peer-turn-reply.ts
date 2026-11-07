@@ -2,6 +2,7 @@
 // Collection starts before dispatch, so an ask adopted at its time limit keeps
 // what it wrote before; engine summaries are not the bot's words and stay out.
 import type { RuntimeEvent } from "./contracts.ts";
+import { peerReplyText } from "./peer-user-reply.ts";
 import { ownTurnReply } from "./turn-reply.ts";
 
 export interface PeerTurnReply {
@@ -25,7 +26,9 @@ export function peerTurnReplies(stale: (threadId: string, turnId: string | undef
       };
       const observe = (event: RuntimeEvent) => {
         if (done || (event.type === "item.completed" && event.itemType === "assistant_text" && event.summarized)) return;
-        const step = reply.fold(event);
+        const peer = event.type === "item.completed" && event.itemType === "assistant_text" ? peerReplyText(event.text) : undefined;
+        if (peer !== undefined && !peer.trim()) return;
+        const step = reply.fold(peer === undefined ? event : { ...event, text: peer } as RuntimeEvent);
         if (step === "completed") {
           done = true;
           release();
