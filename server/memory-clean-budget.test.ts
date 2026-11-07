@@ -18,7 +18,7 @@ function run(tokens: Array<number | undefined> = used, grade = true, legacy = fa
     const at = calls++;
     return legacy ? replies[at]! : { text: replies[at]!, tokens: tokens[at] };
   });
-  return { call, result: cleanFiles({ memory, history: null, typed: new Set(), propose: call, recall: call }) };
+  return { call, result: cleanFiles({ memory, history: null, typed: new Set(), propose: call, recall: (prompt, opts) => call(prompt, opts) }) };
 }
 
 describe("memory cleanup usage budget", () => {
@@ -45,7 +45,8 @@ describe("memory cleanup usage budget", () => {
     expect(await probe.result).toMatchObject({ ok: true });
     const bound = callTokens(probe.call.mock.calls[3]![0]);
     for (const extra of [0, 1]) {
-      const engine = run([18_908, 17_184, 60_000 - bound - 36_092 + extra, bound]);
+      const [first, second] = probe.call.mock.calls.map(([prompt]) => callTokens(prompt));
+      const engine = run([first!, second!, 60_000 - bound - first! - second! + extra, bound]);
       expect(await engine.result).toMatchObject(extra ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
       expect(engine.call).toHaveBeenCalledTimes(extra ? 3 : 4);
     }
@@ -80,5 +81,20 @@ describe("memory cleanup usage budget", () => {
     const engine = run(used, false);
     expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
     expect(engine.call).toHaveBeenCalledTimes(4);
+  });
+
+  it("bounds each call by the smallest overhead its own engine has shown", async () => {
+    const probe = run();
+    await probe.result;
+    const prompts = probe.call.mock.calls.map(([prompt]) => prompt);
+    const measured = (prompt: string) => Math.ceil(Buffer.byteLength(prompt) / 3) + 3_000;
+    const answers = 60_000 - measured(prompts[0]!) - measured(prompts[1]!) - measured(prompts[3]!);
+    for (const over of [0, 1]) {
+      let at = 0;
+      const claude = vi.fn<TextCall>(async (prompt) => ({ text: [list, JSON.stringify(questions), "", JSON.stringify([true, true])][at++]!, tokens: measured(prompt) + (at === 1 ? 9_000 : 0) }));
+      const codex = vi.fn<TextCall>(async () => { at++; return { text: JSON.stringify([...questions.map((q, i) => i === 0 ? "5" : i === 1 ? "6" : q.answer), ...Array(30).fill("superseded")]), tokens: answers - 9_000 + over }; });
+      expect(await cleanFiles({ memory, history: null, typed: new Set(), propose: claude, recall: codex })).toMatchObject(over ? { ok: false, stage: "recall", detail: "budget" } : { ok: true });
+      expect(claude).toHaveBeenCalledTimes(over ? 2 : 3);
+    }
   });
 });

@@ -99,6 +99,8 @@ describe("recall grading", () => {
     expect(gradeByCode(null, "2.3", question)).toBe(false);
     expect(gradeByCode("Tern, version", "", question)).not.toBe(true);
     expect(gradeByCode("Tern, version", "on", question)).not.toBe(true);
+    expect(gradeByCode("delete only what I made, by exact path", "only what I made, by exact path", "After a verified task, what may be deleted?")).toBe(true);
+    expect(gradeByCode("deleted the cache", "the cache", "What gets deleting?")).not.toBe(true);
   });
 
   it("passes a key quoted with the words of its own source line, and nothing that could hide a swap", async () => {
@@ -187,6 +189,9 @@ describe("recall grading", () => {
     };
     const missed = await run("harbor 0");
     expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
+    const [asking] = missed.engine.prompts("questions");
+    expect(asking).toContain('"filedTo":"memory/trips.md","pointer":"- memory/trips.md: trip stops 0, 1 and 2"');
+    expect(asking).toContain("never ask their values; ask which file holds one of their facts, naming it as the pointer does");
     const [answers] = missed.engine.prompts("answers");
     expect(answers).toContain("- memory/trips.md: trip stops 0, 1 and 2");
     expect(answers).not.toContain("trip 1 stop at harbor 1");

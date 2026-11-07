@@ -51,7 +51,7 @@ export type MergeParkedInput = { file: string; kept: string; parked: string; his
 export type ValidateInput = { file: CleanFile; text: string; list: unknown; typed: ReadonlySet<string>; user?: readonly SleepLine[]; side?: CleanFile };
 export type ValidateResult =
   | { ok: true; text: string; entries: ArchiveEntry[]; counts: { merged: number; replaced: number; moved: number }; topics: Array<{ file: CleanFile; lines: string[]; reason: string }>; forced: number }
-  | { ok: false; errors: Array<{ reason: RejectReason; change?: number }> };
+  | { ok: false; errors: Array<{ reason: RejectReason; change?: number; over?: number }> };
 export type TextCall = (prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<string | { text: string; tokens?: number }>;
 export type CleanInput = {
   memory: string;

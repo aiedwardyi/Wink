@@ -26,7 +26,15 @@ const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 const bullet = (text: string) => `- ${text.replace(/\s+/g, " ").trim().replace(/^[-*+]\s+/, "")}`;
 const lessonsHeading = (line: string) => /^#{1,6}\s+(?:lessons?|교훈)\s*$/i.test(line.replace(/\r$/, ""));
 const openLine = (line: string) => /pending|parked|awaits?|awaiting|대기|보류/i.test(line);
-const negated = (text: string) => /\b(?:not|never|cannot)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text);
+// "don't forget" asks to remember; it negates nothing
+const negated = (text: string) => /\b(?:not|never|cannot)\b|n['’]t\b|(?<![가-힣])(?:안|못)(?=\s)|않/i.test(text.replace(/\b(?:don['’]t|do not) forget\b/gi, ""));
+const NOTED = /\s*\(noted (\d{4}-\d{2}-\d{2})\)/gi;
+const undated = (text: string) => text.replace(NOTED, "");
+// a merge carries its sources' newest stamp; the archive keeps the older ones
+const dated = (text: string, sources: string[]) => {
+  const newest = sources.flatMap((line) => [...line.matchAll(NOTED)].map((match) => match[1]!)).sort().at(-1);
+  return undated(text).trimEnd() + (newest ? ` (noted ${newest})` : "");
+};
 const STOPWORDS = new Set(["about", "also", "been", "could", "does", "each", "from", "have", "here", "into", "just", "more", "most", "noted", "only", "said", "says",
   "should", "some", "than", "that", "their", "them", "then", "there", "they", "this", "user", "users", "very", "were", "what", "when", "which", "will", "with", "would", "your"]);
 
@@ -60,6 +68,9 @@ export function rememberCovered(line: string, text: string): boolean {
 }
 
 /** Within 24 KB and 200 lines, and no bigger than max(old, 16 KB) before forced remember appends; a file already past a limit only shrinks. */
+// remember appends are owed to the user, so like the growth cap the line cap skips them
+export const forcedEntry = (entry: ArchiveEntry) => entry.header.op === "own" && !entry.header.at.length && entry.reason === "Asked to remember";
+
 export function sizeFits(old: string, text: string, forced = 0): boolean {
   const before = Buffer.byteLength(old);
   const after = Buffer.byteLength(text);
@@ -116,7 +127,7 @@ export function protectedLines(text: string, typed: ReadonlySet<string>, include
 }
 
 export function factTokens(text: string, base = text): string[] {
-  const pattern = /"[^"\n]+"|“[^”\n]+”|'[^'\n]+'|`[^`\n]+`|(?:[A-Za-z]:[\\/]|\.{0,2}\/|https?:\/\/)[^\s,;<>"`]+|\d{4}-\d{2}-\d{2}|\d+(?:[.,:/%-]\d+)*(?:%|[A-Za-z]+)?|[\p{L}\p{N}_-]+\.(?:md|ts|json|py|txt|com|org)\b|(?<![\p{L}\p{N}_-])[\p{L}_]*[\p{Lu}][\p{L}\p{N}_-]*/gu;
+  const pattern = /"[^"\n]+"|“[^”\n]+”|(?<![\p{L}\p{N}])'[^'\n]+'(?![\p{L}\p{N}])|`[^`\n]+`|(?:[A-Za-z]:[\\/]|\.{0,2}\/|https?:\/\/)[^\s,;<>"`]+|\d{4}-\d{2}-\d{2}|\d+(?:[.,:/%-]\d+)*(?:%|[A-Za-z]+)?|[\p{L}\p{N}_-]+\.(?:md|ts|json|py|txt|com|org)\b|(?<![\p{L}\p{N}_-])[\p{L}_]*[\p{Lu}][\p{L}\p{N}_-]*/gu;
   const initial = (source: string, at: number) => /(?:^|\n|[.!?]\s+)[ \t>*#+\-\d.)]*$/u.test(source.slice(0, at));
   const midSentence = new Set([...base.matchAll(pattern)].filter((match) => !initial(base, match.index)).map((match) => match[0]));
   const matches = [...text.matchAll(pattern)].filter((match) => {
@@ -159,7 +170,7 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   const entries: ArchiveEntry[] = [];
   const topics: Array<{ file: CleanFile; lines: string[]; reason: string }> = [];
   const counts = { merged: 0, replaced: 0, moved: 0 };
-  const errors: Array<{ reason: RejectReason; change?: number }> = [];
+  const errors: Array<{ reason: RejectReason; change?: number; over?: number }> = [];
   const fail = (reason: RejectReason, change?: number) => errors.push({ reason, ...(change === undefined ? {} : { change }) });
   const user = input.user ?? [];
   const cr = input.text.includes("\r\n") ? "\r" : "";
@@ -184,6 +195,8 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
     const ids = changedIds(change);
     const refs = change.op === "replace" ? [...ids, change.newer] : change.op === "own" ? [change.id] : ids;
     if (refs.some((n) => !lines[n - 1]?.trim())) { fail("unknown-id", index); return; }
+    if (change.op === "merge") change.text = dated(change.text, ids.map((n) => lines[n - 1]!));
+    if (change.op === "learn") change.text = undated(change.text);
     if (refs.some((n, i) => used.has(n) || refs.indexOf(n) !== i)) fail("reused-id", index);
     refs.forEach((n) => used.add(n));
     ids.forEach((n) => touched.add(n));
@@ -226,7 +239,11 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(change.topic) || !isMemoryTopicName(`${change.topic}.md`) || isHistory(topic) || /^memory-history/.test(change.topic) || topic === input.side) fail("op-not-allowed", index);
       if (/[\r\n]/.test(change.pointer) || Buffer.byteLength(bullet(change.pointer)) > 300 || !change.pointer.includes(topic) || secretLike(change.pointer)) fail("pointer", index);
       const held = [...new Set(ids.flatMap((n) => factTokens(lines[n - 1]!, input.text)))];
-      if (held.filter((token) => change.pointer.toLowerCase().includes(token.toLowerCase())).length < Math.min(3, held.length)) fail("pointer", index);
+      const pointed = change.pointer.toLowerCase();
+      const words = contentWords(change.pointer);
+      // every filed line needs its subject in the pointer, or MEMORY.md alone can't find it
+      const named = (line: string) => factTokens(undated(line), input.text).some((token) => pointed.includes(token.toLowerCase())) || [...contentWords(undated(line))].some((word) => words.has(word));
+      if (held.filter((token) => pointed.includes(token.toLowerCase())).length < Math.min(3, held.length) || ids.some((n) => !named(lines[n - 1]!))) fail("pointer", index);
       filedBytes += ids.reduce((n, id) => n + Buffer.byteLength(lines[id - 1]!.replace(/\r$/, "")) + 1, 0);
       if (filedBytes > FILE_MAX_BYTES) fail("cap-file", index);
       const known = topics.find((item) => item.file === topic);
@@ -251,7 +268,7 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       const kept = factTokens(change.text, input.text);
       const words = contentWords(change.text);
       const lost = (line: string) => [...contentWords(line, true)].filter((word) => !words.has(word)).length > 1;
-      if (ids.some((n) => factTokens(lines[n - 1]!, input.text).some((token) => !kept.includes(token)) || lost(lines[n - 1]!))) fail("fact-lost", index);
+      if (ids.some((n) => factTokens(undated(lines[n - 1]!), input.text).some((token) => !kept.includes(token)) || lost(lines[n - 1]!))) fail("fact-lost", index);
       wrote = [change.text + (lines[ids[0]! - 1]!.endsWith("\r") ? "\r" : "")];
       counts.merged += ids.length;
     } else if (change.op === "replace") {
@@ -297,10 +314,14 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       text = assemble();
     }
   }
-  const added = entries.reduce((n, entry) => n + (entry.header.after === undefined ? 0 : entry.header.wrote.length), 0);
+  const added = entries.reduce((n, entry) => n + (entry.header.after === undefined || forcedEntry(entry) ? 0 : entry.header.wrote.length), 0);
   if (touched.size + added > 40) fail("cap-lines");
   if (withSystemChanges("", input.text, text, 8000) === null) fail("cap-chars");
-  if (input.file === "MEMORY.md" && !sizeFits(input.text, text, forced)) fail("budget");
+  if (input.file === "MEMORY.md" && !sizeFits(input.text, text, forced)) {
+    const before = Buffer.byteLength(input.text);
+    const over = Buffer.byteLength(text) - (before > 24000 ? before - 1 : Math.min(24000, Math.max(before, FILE_FLOOR) + forced));
+    errors.push({ reason: "budget", ...(over > 0 ? { over } : {}) });
+  }
   if (Buffer.byteLength(text) - Buffer.byteLength(input.text) - forced > GROWTH_MAX) fail("cap-growth");
   return errors.length ? { ok: false, errors } : { ok: true, text, entries, counts, topics, forced };
 }

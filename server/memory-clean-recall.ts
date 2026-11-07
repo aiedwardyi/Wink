@@ -62,8 +62,10 @@ const within = (text: string, part: string) => !!part && ` ${words(text).join(" 
 export function gradeByCode(key: string | null, answer: string | null, question = "", original: string[] = [], merged: string[] = []): boolean | undefined {
   if (key === null) return answer === null;
   const asked = new Set(words(question));
-  const bare = words(key).filter((word) => !asked.has(word)).join(" ");
+  // "delete" is named by a question that says "deleted"
+  const unasked = (text: string) => words(text).filter((word) => !["", "s", "es", "d", "ed", "ing"].some((suffix) => asked.has(word + suffix))).join(" ");
+  const bare = unasked(key);
   if (answer === null) return original.some((line) => within(line, bare)) && !merged.some((line) => within(line, bare));
   const said = words(answer).join(" ");
-  return normalize(key) === normalize(answer) || (!!bare && bare === said) || (within(answer, bare) && original.some((line) => within(line, said))) || undefined;
+  return normalize(key) === normalize(answer) || (!!bare && (bare === said || bare === unasked(answer))) || (within(answer, bare) && original.some((line) => within(line, said))) || undefined;
 }
