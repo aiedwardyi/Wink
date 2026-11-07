@@ -8,8 +8,8 @@ import { resolveVerifySite } from "./verify-site.ts";
 
 const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico"]);
 const SKIP = new Set(["node_modules", "coverage"]);
-const OPT_OUT = /(?:^|[.!?,;:\n])\s*(?:please\s+)?(?:don['’]?t|do\s+not|never)\s+(?:(?:check|verify|test)(?:\s*[/,]\s*(?:check|verify|test))*|run\s+(?:checks?|verification|tests?))\b|\bskip\s+(?:checks?|verification|tests?|testing)\b|(?:확인|검사|검증|테스트)\s*(?:하지\s*마|하지\s*말|빼고|없이)/i;
-const SHELL = /^(?:bash|shell|exec(?:_command)?|execute(?:_command)?|powershell|terminal|run_(?:shell_)?command)$/i;
+const OPT_OUT = /(?:^|[.!?,;:\n]|\b(?:but|and|then)\b)\s*(?:please\s+)?(?:(?:don['’]?t|do\s+not|never)\s+(?:(?:check|verify|test)(?:\s*[/,]\s*(?:check|verify|test))*|run\s+(?:checks?|verification|tests?))|(?:skip|no)\s+(?:checks?|verification|tests?|testing))\b|(?:확인|검사|검증|테스트)\s*(?:하지\s*마|하지\s*말|빼고|없이|안\s*해도\s*(?:돼|되))/i;
+const READ_ONLY = /^(?:Read|Grep|Glob|LS|WebFetch|WebSearch|TodoWrite|verify_site)$|^mcp__/i;
 
 export interface VerifyAutoTurn {
   botId: string;
@@ -36,7 +36,7 @@ interface VerifyAutoDeps {
   freeMemory?(): number;
   scan?: typeof scanVerifyWrites;
 }
-interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequence: number; checked?: number; names: Map<string, { title: string; shell: boolean }> }
+interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequence: number; checked?: number; names: Map<string, { title: string; readOnly: boolean }> }
 
 export async function scanVerifyWrites(root: string, since: number): Promise<string[]> {
   const paths: string[] = [];
@@ -115,7 +115,8 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     if (!turn) { turn = { tools: 0, opaque: false, writes: new Set(), sequence: 0, names: new Map() }; turns.set(id, turn); }
     if (event.type === "item.started") {
       turn.tools++;
-      if (event.itemId) turn.names.set(event.itemId, { title: event.title ?? "", shell: SHELL.test(event.verb ?? event.title ?? "") });
+      // Only MCP calls omit a verb in this driver.
+      if (event.itemId) turn.names.set(event.itemId, { title: event.title ?? "", readOnly: READ_ONLY.test(event.verb ?? event.title ?? "") || event.provider === "codex" && !event.verb });
       return;
     }
     const name = event.itemId ? turn.names.get(event.itemId) : undefined;
@@ -123,7 +124,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     if (name === undefined) turn.tools++;
     if (!event.ok || name?.title.includes("verify_site")) return;
     turn.sequence++;
-    if (!event.writes?.length && (name?.shell || event.provider === "antigravityAgent" || event.provider === "museAgent")) turn.opaque = true;
+    if (!event.writes?.length && !name?.readOnly) turn.opaque = true;
     for (const path of event.writes?.slice(0, 32) ?? []) turn.writes.add(path);
   };
   const checkStarted = (threadId: string, turnId: string) => {
@@ -133,12 +134,14 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
   const settled = async (input: VerifyAutoTurn) => {
     const id = key(input.threadId, input.turnId), turn = turns.get(id);
     turns.delete(id);
-    if (!turn?.tools || !turn.writes.size && !turn.opaque || !deps.enabled() || !input.ok || input.depth !== 0 || input.routine || input.interrupted || input.superseded || !input.roots[0] || OPT_OUT.test(input.humanText) || turn.checked !== undefined && turn.checked >= turn.sequence) return;
+    if (!turn?.tools || !turn.writes.size && !turn.opaque) return;
+    latest.delete(input.threadId);
+    deps.cancelQueued?.(input.threadId);
+    if (!deps.enabled() || !input.ok || input.depth !== 0 || input.routine || input.interrupted || input.superseded || !input.roots[0] || OPT_OUT.test(input.humanText) || turn.checked !== undefined && turn.checked >= turn.sequence) return;
     const free = (deps.freeMemory ?? freemem)();
     if (free < VERIFY_LIMITS.autoFreeBytes) { deps.log(`Live Verify: skipped, low memory ${Math.floor(free / 1024 ** 2)} MiB`); return; }
     const token = {};
     latest.set(input.threadId, token);
-    deps.cancelQueued?.(input.threadId);
     try {
       const paths = [...turn.writes];
       if (turn.opaque) paths.push(...await (deps.scan ?? scanVerifyWrites)(input.roots[0], input.startedAt));

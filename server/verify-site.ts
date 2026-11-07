@@ -172,10 +172,9 @@ export async function resolveVerifySite(entryText: string, roots: string[], sign
   const [root, entry] = info.isDirectory() ? [real, "index.html"] : info.isFile() && /\.html?$/i.test(real) ? [dirname(real), basename(real)] : [null, null];
   if (!root || !entry) return "not-a-site";
   const owner = owned.find((candidate) => within(candidate, root));
-  if (!owner) return "outside-folders";
   try {
     const revision = await siteRevision(root, entry);
-    return { root, entry, revision, site: relative(owner, join(root, entry)).split(sep).join("/") };
+    return { root, entry, revision, site: owner ? relative(owner, join(root, entry)).split(sep).join("/") : entry };
   } catch (error) {
     const code = (error as { code?: string }).code;
     return code === "resource-limit" || code === "outside-folders" ? code : "not-a-site";
@@ -454,8 +453,10 @@ export function createVerifySite(deps: VerifySiteDeps) {
     pending.set(input.threadId, controller);
     const runId = randomUUID(), toolDeadline = Date.now() + VERIFY_LIMITS.runMs;
     try {
-      const site = await resolveVerifySite(input.entry, deps.botOutputRoots(conversation.bot, input.threadId, conversation.group?.id), controller.signal);
+      const roots = deps.botOutputRoots(conversation.bot, input.threadId, conversation.group?.id);
+      const site = await resolveVerifySite(input.entry, roots, controller.signal);
       if (typeof site === "string" || controller.signal.aborted) return false;
+      if (!verifyLoopbackUrl(site.root) && !(await Promise.all(roots.map(root => realpath(root).catch(() => null)))).some(root => root && within(root, site.root))) return false;
       if (!await acquire(runId, controller.signal, toolDeadline)) return false;
       if (controller.signal.aborted) { free(runId); return false; }
       if (pending.get(input.threadId) === controller) pending.delete(input.threadId);

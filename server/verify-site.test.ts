@@ -301,13 +301,12 @@ describe("verify_site scope", () => {
     expect(bridge!.starts).toHaveLength(1);
   });
 
-  it.each(["path", "file", "relative", "junction"])("refuses a site outside workspace folders via %s without a card or replay", async kind => {
+  it.each(["path", "file", "relative", "junction"])("accepts a site outside workspace folders via %s", async kind => {
     bridge!.states = finalStates(result());
     const entry = kind === "file" ? pathToFileURL(join(tmp, "outside", "index.html")).href : kind === "relative" ? "../outside" : kind === "junction" ? "link" : join(tmp, "outside", "index.html");
-    expect((await tool({ entry })).body).toMatchObject({ status: "blocked", errorCode: "outside-folders" });
-    expect(bridge!.starts).toEqual([]);
-    expect(card()).toBeUndefined();
-    expect(existsSync(join(DATA_DIR, "verify-replays", threadId))).toBe(false);
+    expect((await tool({ entry })).body.status).toBe("completed");
+    expect(bridge!.starts[0]).toMatchObject({ root: await realpath(join(tmp, "outside")), entry: "index.html" });
+    expect(card()?.status).toBe("completed");
   });
 
   it.each(["localhost", "127.0.0.1", "[::1]"])("accepts loopback dev servers on %s", async host => {

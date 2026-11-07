@@ -43,7 +43,7 @@ it("does no filesystem work for a chat-only turn", async () => {
   expect(opendir).not.toHaveBeenCalled();
 });
 
-it.each(["don't check", "do not verify", "don't test", "skip verification", "확인하지 마", "검사 빼고", "테스트 없이"])("skips task opt-out: %s", async humanText => {
+it.each(["don't check", "do not verify", "don't test", "skip verification", "확인하지 마", "검사 빼고", "테스트 없이", "Make the page but don't check it", "build it and do not verify", "확인 안 해도 돼", "No testing please", "don't check this"])("skips task opt-out: %s", async humanText => {
   shell();
   await auto.settled({ ...turn, humanText });
   expect(scan).not.toHaveBeenCalled();
@@ -192,9 +192,15 @@ it("does not use a linked package outside the owned root", async () => {
   } finally { await new Promise<void>(done => local.close(() => done())); }
 });
 
-it.each(["Read", "Grep", "Glob", "mcp__react", "update_task_state", "WebSearch", "unknown"])("does no scan or filesystem work for read-only %s", async title => {
-  auto.event(event({ type: "item.started", itemType: "tool", itemId: "read", title }));
-  auto.event(event({ type: "item.completed", itemType: "tool", itemId: "read", ok: true }));
+it.each([
+  ...["Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "verify_site", "mcp__react", "mcp__agents__update_task_state"].map(title => ({ provider: "claudeAgent", title })),
+  { provider: "codex", title: "update_task_state" },
+  { provider: "codex", title: "web_search", verb: "WebSearch" },
+  ...["grokAgent", "museAgent"].flatMap(provider => ["Read", "Grep", "WebFetch"].map(verb => ({ provider, title: "index.html", verb }))),
+  { provider: "antigravityAgent", title: "Read" },
+])("does no scan or filesystem work for read-only %o", async fields => {
+  auto.event(event({ ...fields, type: "item.started", itemType: "tool", itemId: "read" }));
+  auto.event(event({ provider: fields.provider, type: "item.completed", itemType: "tool", itemId: "read", ok: true }));
   await auto.settled(turn);
   expect(scan).not.toHaveBeenCalled();
   expect(start).not.toHaveBeenCalled();
@@ -221,6 +227,26 @@ it.each(["chat", "room-chat", "read-only"])("preserves a pending decision and qu
   expect(start).toHaveBeenCalledOnce();
 });
 
+it.each([
+  { humanText: "don't check this" }, { ok: false }, { interrupted: true }, { superseded: true }, { routine: true },
+].flatMap(patch => [false, true].map(opaque => ({ patch, opaque }))))("cancels a pending decision and queued check after an ineligible write: %o", async ({ patch, opaque }) => {
+  const cancelQueued = vi.fn();
+  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, scan, cancelQueued, log: vi.fn() });
+  let finish!: (paths: string[]) => void;
+  scan.mockImplementationOnce(() => new Promise(done => { finish = done; }));
+  shell();
+  const first = auto.settled(turn);
+  expect(cancelQueued).toHaveBeenCalledOnce();
+  if (opaque) auto.event(event({ turnId: "new", type: "item.started", itemType: "tool", itemId: "shell", title: "Bash" }));
+  auto.event(event({ turnId: "new", type: "item.completed", itemType: "tool", itemId: "shell", ok: true, ...(opaque ? {} : { writes: ["index.html"] }) }));
+  await auto.settled({ ...turn, turnId: "new", ...patch });
+  finish(["index.html"]);
+  await first;
+  expect(cancelQueued).toHaveBeenCalledTimes(2);
+  expect(scan).toHaveBeenCalledOnce();
+  expect(start).not.toHaveBeenCalled();
+});
+
 it("logs one low-memory skip with free MiB and does no scan", async () => {
   const log = vi.fn();
   auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 2_655 * 1024 ** 2, startAuto: start, scan, log });
@@ -231,7 +257,7 @@ it("logs one low-memory skip with free MiB and does no scan", async () => {
   expect(start).not.toHaveBeenCalled();
 });
 
-it.each(["this repo has no tests yet", "I don't test on Safari"])("does not treat a statement as an opt-out: %s", async humanText => {
+it.each(["this repo has no tests yet", "I don't test on Safari", "I usually skip tests on CI"])("does not treat a statement as an opt-out: %s", async humanText => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
   await auto.settled({ ...turn, humanText });
   expect(start).toHaveBeenCalledOnce();
@@ -246,6 +272,21 @@ it.each([
   auto.event(event({ provider: fields.provider ?? "claudeAgent", type: "item.completed", itemType: "tool", itemId: "exec", ok: true }));
   await auto.settled(turn);
   expect(scan).toHaveBeenCalledOnce();
+  expect(start).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { provider: "claudeAgent", title: "unknown" },
+  { provider: "codex", title: "edit", verb: "Edit" },
+  ...["grokAgent", "museAgent"].flatMap(provider => [
+    { provider, title: "move index.html" }, { provider, title: "other" }, { provider, title: "edit", verb: "Edit" },
+  ]),
+  { provider: "antigravityAgent", title: "replace_file_content" },
+])("scans successful opaque tools without write paths: %o", async fields => {
+  auto.event(event({ ...fields, type: "item.started", itemType: "tool", itemId: "opaque" }));
+  auto.event(event({ provider: fields.provider, type: "item.completed", itemType: "tool", itemId: "opaque", ok: true }));
+  await auto.settled(turn);
+  expect(scan).toHaveBeenCalledExactlyOnceWith(root, turn.startedAt);
   expect(start).toHaveBeenCalledOnce();
 });
 
