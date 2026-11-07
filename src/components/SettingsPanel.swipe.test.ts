@@ -43,6 +43,7 @@ let host: HTMLDivElement;
 let root: Root;
 let reduced: boolean;
 let time: number;
+let media: EventTarget;
 const vibrate = vi.fn();
 const panel = () => host.querySelector<HTMLElement>("[data-settings-panel]")!;
 
@@ -77,13 +78,14 @@ beforeEach(() => {
   vi.useFakeTimers();
   reduced = false;
   time = 0;
+  media = new window.EventTarget();
   dispatch.mockReset();
   vibrate.mockReset();
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
     matches: query.includes("reduced-motion") ? reduced : window.innerWidth < 768,
     media: query, onchange: null,
     addListener: () => undefined, removeListener: () => undefined, dispatchEvent: () => true,
-    addEventListener: () => undefined, removeEventListener: () => undefined,
+    addEventListener: media.addEventListener.bind(media), removeEventListener: media.removeEventListener.bind(media),
   }));
   vi.spyOn(window, "innerWidth", "get").mockReturnValue(392);
   Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
@@ -183,13 +185,22 @@ describe("Bot details swipe", () => {
     expect(panel().style.cssText).toBe("");
   });
 
-  it("clears the completed swipe when reopened before the exit unmounts", async () => {
+  it.each([392, 1440])("clears the completed swipe when reopened at %i before the exit unmounts", async (width) => {
     await act(async () => root.render(createElement(Harness)));
     touch("touchstart", 40);
     touch("touchmove", 240);
     await release();
+    const closed = panel();
+    expect(panel().style.animation).toBe("none");
+    await act(async () => {
+      vi.spyOn(window, "innerWidth", "get").mockReturnValue(width);
+      media.dispatchEvent(new Event("change"));
+    });
+    expect(panel().hasAttribute("data-closing")).toBe(true);
+    expect(panel().style.transform).toBe("translate3d(392px, 0, 0)");
     expect(panel().style.animation).toBe("none");
     await act(async () => host.querySelector<HTMLButtonElement>("[data-reopen]")!.click());
+    expect(panel()).toBe(closed);
     expect(panel().style.cssText).toBe("");
     expect(panel().hasAttribute("data-closing")).toBe(false);
     await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS));

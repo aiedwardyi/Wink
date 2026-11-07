@@ -555,7 +555,9 @@ export function SettingsPanel({
 
   useEffect(() => {
     if (closing) return;
-    panelRef.current?.style.removeProperty("animation");
+    for (const key of ["animation", "transform", "opacity", "transition", "will-change"]) {
+      panelRef.current?.style.removeProperty(key);
+    }
     restoreFocusOnClose.current = false;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const closeOnEscape = (event: KeyboardEvent) => {
