@@ -3,6 +3,7 @@
 @container verify-watch (max-width: 659px) {
   .verify-watch { position: absolute; top: 0; right: 0; bottom: 0; z-index: 15; width: min(380px, calc(100cqi - 56px)); box-shadow: -12px 0 28px rgb(0 0 0 / .28); }
 }
+.verify-watch:has(> .verify-watch-frame[data-maximized]) { position: absolute; inset: 0; z-index: 15; width: 100%; align-items: stretch; border-left: 0; }
 
 .verify-watch-frame { flex: 1; min-width: 0; min-height: 0; max-height: calc(100% - 24px); display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--color-hairline); border-radius: 10px; overflow: hidden; background: var(--color-panel); color: var(--color-ink); font-size: 12px; }
 .verify-watch-frame[data-inline] { margin: 8px 0 0; }
@@ -18,6 +19,8 @@
 .verify-watch-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; flex-shrink: 0; }
 .verify-watch-icon:hover { background: var(--color-inset); color: var(--color-ink); }
 .verify-watch-icon:disabled { opacity: .45; cursor: default; }
+.verify-watch-again { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; align-self: center; gap: 6px; min-height: 32px; margin: 0 12px 12px; padding: 6px 12px; border: 1px solid var(--color-hairline); border-radius: 6px; background: var(--color-raised); cursor: pointer; }
+.verify-watch-again:hover { background: var(--color-inset); }
 .verify-watch-address { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--color-hairline); }
 .verify-watch-url { flex: 1; min-width: 0; padding: 4px 10px; border-radius: 999px; background: var(--color-inset); color: var(--color-ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .verify-watch-error { padding: 6px 12px; color: var(--color-ink-secondary); }
@@ -56,4 +59,5 @@
   .verify-watch-tabs button { height: 44px; }
   .verify-watch-address { padding: 0 8px 0 0; }
   .verify-watch-icon { width: 44px; height: 44px; }
+  .verify-watch-again { min-height: 44px; }
 }

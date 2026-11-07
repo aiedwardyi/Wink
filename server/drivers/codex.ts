@@ -599,6 +599,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               };
               const detail = parsed.success ? codexToolDetail(parsed.data, !ok) : undefined;
               if (detail) event.detail = detail;
+              if (ok && parsed.success && parsed.data.type === "fileChange") event.writes = parsed.data.changes?.filter(change => change.kind.type !== "delete").map(change => change.path).slice(0, 32);
               emit(event);
             } else if (item.type === "reasoning") {
               emit({ ...base(threadId, turnId), type: "item.updated", itemType: "reasoning", tokens: null });

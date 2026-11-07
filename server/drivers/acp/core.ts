@@ -1157,6 +1157,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             ok,
           };
           if (detail) event.detail = detail;
+          if (ok && call?.kind === "edit") {
+            const args = toolInputSchema.safeParse(call.rawInput);
+            event.writes = [...new Set([...(call.locations ?? []).map(location => location.path), ...(call.content ?? []).flatMap(block => block.type === "diff" ? [block.path] : []), ...(args.success ? Object.values(args.data).filter((path): path is string => path !== undefined) : typeof call.rawInput === "string" ? [call.rawInput] : [])])].slice(0, 32);
+          }
           emit(event);
         };
 

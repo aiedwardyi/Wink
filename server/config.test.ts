@@ -27,6 +27,14 @@ import {
 } from "./config.ts";
 
 describe("configuration boundaries", () => {
+  it("keeps the automatic verification opt-out across feature updates", () => {
+    expect(parseStoredConfig({}).features?.liveVerifyAuto).toBeUndefined();
+    saveConfig(parseConfigPatch({ features: { liveVerifyAuto: false } }));
+    saveConfig(parseConfigPatch({ features: { showToolCalls: false } }));
+    expect(loadConfig().features?.liveVerifyAuto).toBe(false);
+    expect(() => parseConfigPatch({ features: { liveVerifyAuto: "yes" } })).toThrow("features.liveVerifyAuto");
+  });
+
   it("drops retired browser settings on read and patch", () => {
     const legacy = {
       browserProfiles: [{ id: "work", name: "Work" }],
