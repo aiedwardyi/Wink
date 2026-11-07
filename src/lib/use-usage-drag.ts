@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { reducedMotion } from "./phone-swipe";
-import type { UsageBoardEngine } from "./usage-board";
 import { useTouchDrag } from "./use-touch-drag";
 
 const KEY = "openmausbot.usageOrder.v1";
+const CHANGE = "usage-order";
 type Orders = Record<string, string[]>;
 const ROW = "[data-account-row]";
 const SECTION = "[data-usage-engine]";
@@ -26,8 +26,17 @@ type Drag = {
   node: HTMLElement; items: HTMLElement[]; rects: DOMRect[]; from: number; to: number; key: string; y: number; dy: number;
 };
 
-export function useUsageDrag(engines: UsageBoardEngine[]) {
+export function useUsageDrag(engines: { base: string; accounts: { id: string }[] }[]) {
   const [orders, setOrders] = useState(load);
+  const latest = useRef(orders);
+  latest.current = orders;
+  useEffect(() => {
+    const changed = (event: Event) => { if (event instanceof CustomEvent) setOrders(event.detail); };
+    const stored = (event: StorageEvent) => { if (event.key === KEY || event.key === null) setOrders(load()); };
+    window.addEventListener(CHANGE, changed);
+    window.addEventListener("storage", stored);
+    return () => { window.removeEventListener(CHANGE, changed); window.removeEventListener("storage", stored); };
+  }, []);
   const active = useRef<Drag | null>(null);
   const list = useRef<HTMLElement | null>(null);
   const unbind = useRef(() => {});
@@ -48,16 +57,16 @@ export function useUsageDrag(engines: UsageBoardEngine[]) {
     if (drag.from === drag.to) return;
     const ids = drag.items.map(identify);
     ids.splice(drag.to, 0, ids.splice(drag.from, 1)[0]!);
-    setOrders((before) => {
-      const accounts = engines.find((engine) => engine.base === drag.key)?.accounts;
-      const visible = new Set(ids);
-      let index = 0;
-      const order = accounts ? ordered(accounts, before[drag.key], (account) => account.id)
-        .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
-      const next = { ...before, [drag.key]: order };
-      try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
-      return next;
-    });
+    const accounts = engines.find((engine) => engine.base === drag.key)?.accounts;
+    const before = latest.current;
+    const visible = new Set(ids);
+    let index = 0;
+    const order = accounts ? ordered(accounts, before[drag.key], (account) => account.id)
+      .map((account) => visible.has(account.id) ? ids[index++]! : account.id) : ids;
+    const next = { ...before, [drag.key]: order };
+    setOrders(next);
+    try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* Keep the session order. */ }
+    window.dispatchEvent(new CustomEvent(CHANGE, { detail: next }));
   };
   const focus = (drag: Drag) => {
     const selector = drag.node.matches(ROW) ? ROW : SECTION;

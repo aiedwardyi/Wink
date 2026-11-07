@@ -11,12 +11,14 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
 import { useEngineSignIn } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { Tile } from "./UsageDesk";
+import { UsageGrip } from "./UsageAccounts";
 
 const LINE = "flex min-h-9 items-center [@media(pointer:coarse)]:min-h-11";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
@@ -91,7 +93,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const [saved, setSaved] = useState<(SavedAccountName & { revision: number }) | null>(null);
   const version = useRef(revision);
   version.current = revision;
-  const nameButton = useRef<HTMLButtonElement>(null);
   const inlineNameButton = useRef<HTMLButtonElement>(null);
   const inlineEditor = useRef(false);
   const restoreFocus = useRef(false);
@@ -112,12 +113,12 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   useLayoutEffect(() => {
     if (!editing && restoreFocus.current) {
       restoreFocus.current = false;
-      (inlineEditor.current ? inlineNameButton : phone ? menuButton : nameButton).current?.focus();
+      (inlineEditor.current ? inlineNameButton : menuButton).current?.focus();
     }
   }, [editing, phone]);
   const closeEditor = () => { restoreFocus.current = true; setEditing(false); };
   const controls = <>
-    {canName && <button ref={nameButton} type="button" disabled={busy} className={ROW_BUTTON}
+    {phone && canName && <button type="button" disabled={busy} className={ROW_BUTTON}
       onClick={() => { inlineEditor.current = false; setMenu(false); setEditing(true); }}>{t("accounts.name.edit")}</button>}
     {(ready || account.drain?.phase === "failed") && <button type="button" disabled={busy || disabled} onClick={() => { setMenu(false); signOut(); }}
       className={ROW_BUTTON}>{t(account.drain ? "accounts.retrySignOut" : "engines.signOut")}</button>}
@@ -133,14 +134,16 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   // Connected rows only: the sign-in row keeps its menu on its name row, so an overlay there would cover Sign In.
   const stacked = phone && name && !draining && !signInRow;
   return (
-    <div data-connection-account={account.instanceId} className="relative min-w-0">
+    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} className="relative min-w-0 pl-5">
+      <UsageGrip label={name?.name ?? account.displayName} />
       {signInRow ? <>
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
         {name && <ConnectionRow label={<>
           {tile}
           {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name.nickname} inline
             onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
-            : <span className="min-w-0 truncate">{name.name}</span>}
+            : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
+              className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name.name}</button>}
         </>} actions={canName ? phone ? <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu}
           onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
       </> : <ConnectionRow mark={mark}
@@ -186,6 +189,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
       && signInPending(account))) setError(null);
   }, [accounts, error]);
   const base = accounts[0]!.accountOf ?? accounts[0]!.instanceId;
+  const drag = useUsageDrag([{ base, accounts: accounts.map((account) => ({ id: account.instanceId })) }]);
   const login = accounts[0]!.install?.login;
   const computerOnly = !window.ogb && isPhone() && !login?.deviceArgs;
   const mutate = async (path: string, body: object, sourceId?: string) => {
@@ -209,12 +213,12 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
   const add = addable && !computerOnly && <button type="button" disabled={busy} onClick={() => void mutate("/api/accounts", { of: base, device: !window.ogb && Boolean(login?.deviceArgs) })}
     className={STRONG_BUTTON}>{t("accounts.add")}</button>;
   return (
-    <div data-engine-row={base} className="min-w-0 py-1.5">
+    <div data-engine-row={base} data-usage-engine="" data-usage-base={base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="min-w-0 py-1.5">
       <ConnectionRow mark={<ProviderMark driverKind={accounts[0]!.driverKind} size={16} />}
         label={<span className="min-w-0 truncate text-[13px] text-ink">{accounts[0]!.displayName}</span>} actions={add || undefined}>
         {addable && computerOnly && <span>{t("engines.signInFromComputer")}</span>}
       </ConnectionRow>
-      {accounts.map((account) => {
+      {ordered(accounts, drag.orders[base], (account) => account.instanceId).map((account) => {
         const drain = account.drain;
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
         const hasDestination = accounts.some((other) => other !== account && accountReady(other));
