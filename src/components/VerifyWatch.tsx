@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, RefreshCw, X } from "lucide-react";
+import { Check, Maximize2, Minimize2, Play, RefreshCw, X } from "lucide-react";
 import { VERIFY_ROUTES, type VerifyCardData, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { closeVerifyWatch, rerunVerify, verifyLiveGate } from "@/lib/verify-watch";
@@ -11,8 +12,8 @@ import { BANNER_MS, VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
 const copy = {
-  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", close: "Close", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone sideways scroll", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
-  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
+  en: { desktop: "Desktop", phone: "Phone", live: "Live", parts: { loads: "Loads", links: "Links", phone: "Phone" }, s: " s", checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"}`, clean: "No problems", fixed: "Bot fixed it", waiting: "Waiting for another check", expired: "Replay expired", failed: "Could not load the replay", unfinished: "Could not check this page", rerun: "Rerun", retry: "Could not rerun. Try again.", close: "Close", maximize: "Maximize", restore: "Restore", again: "Watch again", watch: "Watch the check", rules: { PAGE_ERRORS: "Page errors", LINKS: "Links", FIT: "Phone sideways scroll", NAV: "Phone menu", TEXT_A: "Leftovers" } as Record<string, string> },
+  ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
 };
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
 const ROLE: Record<string, string> = { PAGE_ERRORS: "#8c95dc", LINKS: "#8db88a", FIT: "#94a3b8", NAV: "#6aa9d8", TEXT_A: "#5eb5a6" };
@@ -50,9 +51,12 @@ const TAG_CHAR = 6.1;
 export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
+  const phone = useIsPhone();
   const visibility = useVisibility();
   const gate = verifyLiveGate(true, hidden, visibility);
-  const [show] = useState(() => new VerifyWatchShow(live));
+  const [show, setShow] = useState(() => new VerifyWatchShow(live));
+  const [maximized, setMaximized] = useState(false);
+  const expanded = maximized && !inline && !phone;
   const [, setVersion] = useState(0);
   const [rerunning, setRerunning] = useState(false);
   const [error, setError] = useState(false);
@@ -112,23 +116,26 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       last = now;
       if (show.version !== drawn) { drawn = show.version; draw(); }
       if (show.ui !== shown) { shown = show.ui; setVersion(shown); }
-      if (show.clock >= show.closeAt) { close.current(); return; }
+      if (show.clock >= show.closeAt) { if (live) close.current(); return; }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(frame); };
-  }, [gate, show]);
+  }, [gate, live, show]);
 
   useEffect(() => {
     if (inline) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) close.current();
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (expanded) { event.preventDefault(); setMaximized(false); }
+      else close.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inline]);
+  }, [inline, expanded]);
 
   useEffect(() => () => bitmap.current?.image.close(), []);
+  useLayoutEffect(() => { draw(); }, [expanded, show]);
 
   function draw() {
     const canvas = canvasRef.current, ctx = canvas?.getContext("2d");
@@ -230,7 +237,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   };
 
   return (
-    <div className="verify-watch-frame" data-inline={inline || undefined}>
+    <div className="verify-watch-frame" data-inline={inline || undefined} data-maximized={expanded || undefined}>
       <div className="verify-watch-bar">
         <span className="verify-watch-dots" aria-hidden="true"><i /><i /><i /></span>
         <div role="tablist" className="verify-watch-tabs">
@@ -239,6 +246,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
           ))}
         </div>
         <span className="verify-watch-grow" />
+        {!inline && !phone && <button type="button" className="verify-watch-icon" onClick={() => setMaximized(!maximized)} aria-label={expanded ? c.restore : c.maximize} title={expanded ? c.restore : c.maximize}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>}
         <button type="button" className="verify-watch-icon" onClick={() => close.current()} aria-label={c.close} title={c.close}><X size={15} /></button>
       </div>
       <div className="verify-watch-address">
@@ -279,6 +287,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
           })}
         </ul>
       </div>
+      {!live && (show.phase === "done" || show.phase === "failed" && show.end) && <button type="button" className="verify-watch-again" onClick={() => { setError(false); setShow(new VerifyWatchShow(false)); }}><Play size={14} />{c.again}</button>}
     </div>
   );
 }

@@ -96,6 +96,65 @@ function animationClock() {
   };
 }
 
+it.each(["en", "ko"] as const)("maximizes and restores with the button and Escape in %s", async locale => {
+  applyLocale(locale);
+  const onClose = vi.fn();
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: true, hidden: false, onClose })));
+  const frame = host.querySelector(".verify-watch-frame")!;
+  const maximize = locale === "en" ? "Maximize" : "크게 보기";
+  const restore = locale === "en" ? "Restore" : "원래 크기";
+  const button = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${frame.hasAttribute("data-maximized") ? restore : maximize}"]`)!;
+  expect(button()?.title).toBe(maximize);
+  await act(async () => button().click());
+  expect(frame.hasAttribute("data-maximized")).toBe(true);
+  expect(button().title).toBe(restore);
+  await act(async () => button().click());
+  expect(frame.hasAttribute("data-maximized")).toBe(false);
+  await act(async () => button().click());
+  const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+  await act(async () => window.dispatchEvent(escape));
+  expect(escape.defaultPrevented).toBe(true);
+  expect(frame.hasAttribute("data-maximized")).toBe(false);
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("keeps phone playback inline without a maximize button", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  expect(host.querySelector('[data-inline="true"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-label="Maximize"]')).toBeNull();
+});
+
+it.each(["en", "ko"] as const)("watches the same replay again from zero without rerunning in %s", async locale => {
+  applyLocale(locale);
+  const tick = animationClock();
+  const onClose = vi.fn();
+  const shows: VerifyWatchShow[] = [];
+  const begin = VerifyWatchShow.prototype.beginRun;
+  vi.spyOn(VerifyWatchShow.prototype, "beginRun").mockImplementation(function (this: VerifyWatchShow) { shows.push(this); begin.call(this); });
+  const fetch = vi.fn(async (_url: string) => bufferedRun());
+  vi.stubGlobal("fetch", fetch);
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose })));
+  await tick(60);
+  expect(shows[0]!.phase).toBe("done");
+  expect(onClose).not.toHaveBeenCalled();
+  const again = host.querySelector<HTMLButtonElement>(".verify-watch-again")!;
+  expect(again?.textContent).toBe(locale === "en" ? "Watch again" : "다시 보기");
+  await act(async () => again.click());
+  expect(shows).toHaveLength(2);
+  expect(shows[1]).not.toBe(shows[0]);
+  expect(shows[1]!.clock).toBe(0);
+  expect(shows[1]!.ms).toBe(0);
+  expect(host.querySelector(".verify-watch-again")).toBeNull();
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/verify/runs/old-1/replay", "/api/verify/runs/old-1/replay"]);
+  await tick(60);
+  expect(shows[1]!.phase).toBe("done");
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
 it.each(["en", "ko"] as const)("plays silently without sound controls in %s", async locale => {
   applyLocale(locale);
   const audio = vi.fn();
@@ -105,7 +164,7 @@ it.each(["en", "ko"] as const)("plays silently without sound controls in %s", as
   await render({ live: false, hidden: false });
   await tick(5);
   expect(audio).not.toHaveBeenCalled();
-  expect(host.querySelectorAll(".verify-watch-icon")).toHaveLength(2);
+  expect(host.querySelectorAll(".verify-watch-icon")).toHaveLength(3);
   expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Mute" : "소리 끄기"]));
   expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Sound on" : "소리 켜기"]));
 });
@@ -218,7 +277,7 @@ it.each([false, true])("settles an end received before the next frame and finish
   await tick(200);
   expect(calls.map(c => c.url)).toEqual(live ? ["/api/verify/runs/run-1/live"] : ["/api/verify/runs/old-1/replay", "/api/verify/runs/old-2/replay"]);
   expect(finish).toHaveBeenCalledOnce();
-  expect(onClose).toHaveBeenCalledOnce();
+  expect(onClose).toHaveBeenCalledTimes(live ? 1 : 0);
 });
 
 it("plays on past a kept run whose check was blocked to the latest run", async () => {
@@ -302,7 +361,7 @@ it("keeps the tabs on one line at their own width and the phone controls at leas
   const tabs = [...host.querySelectorAll(".verify-watch-tabs button")];
   const icons = [...host.querySelectorAll(".verify-watch-icon")];
   expect(tabs.map(tab => tab.textContent)).toEqual(["데스크톱", "휴대폰"]);
-  expect(icons).toHaveLength(2);
+  expect(icons).toHaveLength(3);
   for (const width of [360, 392, 1280]) {
     for (const tab of tabs) expect([style(tab, width, "white-space"), style(tab, width, "overflow-wrap"), style(tab, width, "flex-shrink")]).toEqual(["nowrap", "normal", "0"]);
     expect(style(host.querySelector(".verify-watch-tabs")!, width, "flex-shrink")).toBe("0");
