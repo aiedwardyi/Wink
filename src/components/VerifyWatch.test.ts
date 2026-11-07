@@ -96,6 +96,20 @@ function animationClock() {
   };
 }
 
+it.each(["en", "ko"] as const)("plays silently without sound controls in %s", async locale => {
+  applyLocale(locale);
+  const audio = vi.fn();
+  vi.stubGlobal("AudioContext", audio);
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun()));
+  await render({ live: false, hidden: false });
+  await tick(5);
+  expect(audio).not.toHaveBeenCalled();
+  expect(host.querySelectorAll(".verify-watch-icon")).toHaveLength(2);
+  expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Mute" : "소리 끄기"]));
+  expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Sound on" : "소리 켜기"]));
+});
+
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
   applyLocale(locale);
   const tick = animationClock();
@@ -288,7 +302,7 @@ it("keeps the tabs on one line at their own width and the phone controls at leas
   const tabs = [...host.querySelectorAll(".verify-watch-tabs button")];
   const icons = [...host.querySelectorAll(".verify-watch-icon")];
   expect(tabs.map(tab => tab.textContent)).toEqual(["데스크톱", "휴대폰"]);
-  expect(icons).toHaveLength(3);
+  expect(icons).toHaveLength(2);
   for (const width of [360, 392, 1280]) {
     for (const tab of tabs) expect([style(tab, width, "white-space"), style(tab, width, "overflow-wrap"), style(tab, width, "flex-shrink")]).toEqual(["nowrap", "normal", "0"]);
     expect(style(host.querySelector(".verify-watch-tabs")!, width, "flex-shrink")).toBe("0");
