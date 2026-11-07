@@ -440,6 +440,7 @@ export function UsageDesk() {
   const desk = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
+  const [museAuthFailed, setMuseAuthFailed] = useState(false);
   const [engineId, setEngineId] = useState<string | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const now = useVisibleClock();
@@ -512,12 +513,17 @@ export function UsageDesk() {
   };
   const refresh = async () => {
     setRefreshFailed(false);
+    setMuseAuthFailed(false);
     const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
       && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
       && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
       .map((each) => joinRefresh(each.instanceId, async () => {
-        const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
+          result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
+        }
         if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+        if (each.driverKind === "museAgent" && result.status === "auth_error") setMuseAuthFailed(true);
         if (result.error) throw new Error("refresh");
         return result;
       })));
@@ -536,7 +542,7 @@ export function UsageDesk() {
           <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
         </button>
       </div>
-      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.refreshFailed")}</div>}
+      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
       <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
       {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
