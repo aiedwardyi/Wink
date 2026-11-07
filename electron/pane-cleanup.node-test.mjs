@@ -306,6 +306,89 @@ test("natural exit starts retention without removing a visible pane's scratch", 
   assert.equal(fs.existsSync(target), false);
 });
 
+test("scratch reopened during a throttled walk retains its files and links", async (t) => {
+  const f = fixture(t);
+  const marker = path.join(f.scratch, "next");
+  const link = path.join(f.scratch, "z-link");
+  fs.writeFileSync(marker, "keep");
+  fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  let time = Date.now();
+  t.mock.method(Date, "now", () => time);
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  let reopened = false;
+  t.mock.method(promises.default, "lstat", async (...args) => {
+    const stat = await lstat(...args);
+    if (args[0] === marker) {
+      reopened = true;
+      f.open([{ id: "other", label: "OTHER", cwd: f.scratch }]);
+      time += 250;
+    }
+    if (args[0] === link) f.open([]);
+    return stat;
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(reopened, true);
+  assert.equal(fs.readFileSync(marker, "utf8"), "keep");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("scratch reopened inside the throttle window keeps its links", async (t) => {
+  const f = fixture(t);
+  const marker = path.join(f.scratch, "next");
+  const link = path.join(f.scratch, "z-link");
+  fs.writeFileSync(marker, "keep");
+  fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  let reopened = false;
+  t.mock.method(promises.default, "lstat", async (...args) => {
+    const stat = await lstat(...args);
+    if (args[0] === marker && !reopened) {
+      reopened = true;
+      f.open([{ id: "other", label: "OTHER", cwd: f.scratch }]);
+    }
+    return stat;
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(reopened, true);
+  assert.equal(fs.readFileSync(marker, "utf8"), "keep");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("large scratch cleanup bounds synchronous filesystem calls with a full ledger", async (t) => {
+  const f = fixture(t);
+  for (let index = 0; index < 20_000; index++) fs.writeFileSync(path.join(f.scratch, `file-${index}`), "");
+  f.cleanup.opened(f.session);
+  const entries = f.ledger();
+  for (let index = 0; index < 999; index++) entries.push({ ...entries[0], id: `old-${index}`, scratch: path.join(f.tempRoot, `wink-OLD-${index}`) });
+  fs.writeFileSync(path.join(f.home, ".orbit", "pane-ledger.json"), JSON.stringify(entries));
+  const cleanup = createPaneCleanup(f.options);
+  cleanup.start(() => [{ id: "other", label: "OTHER", cwd: f.home }]);
+  t.after(() => cleanup.dispose());
+  let calls = 0;
+  const lstatSync = fs.lstatSync;
+  const realpathSync = fs.realpathSync.native;
+  t.after(() => { fs.lstatSync = lstatSync; fs.realpathSync.native = realpathSync; });
+  fs.lstatSync = (...args) => { calls++; return lstatSync(...args); };
+  fs.realpathSync.native = (...args) => { calls++; return realpathSync(...args); };
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (calls > 500_000) throw new Error("cleanup sync filesystem budget exceeded");
+    return lstat(...args);
+  });
+  await cleanup.closed(f.session);
+  t.diagnostic(`sync filesystem calls: ${calls}`);
+  assert.ok(calls < 500_000, `${calls} sync filesystem calls`);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.deepEqual(f.warnings, []);
+});
+
 test("reported scratch is removed and its junction target survives", async (t) => {
   const f = fixture(t);
   const target = path.join(f.home, "user-files");
