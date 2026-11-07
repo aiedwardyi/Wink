@@ -148,7 +148,7 @@ export function GroupWizard({
             className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
 
-          <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="" />
+          <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="" ordered />
 
           {rows.map((row, rowIndex) => (
             <NewBotRow

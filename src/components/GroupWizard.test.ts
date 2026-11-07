@@ -310,6 +310,47 @@ describe("GroupWizard members", () => {
     }
   });
 
+  it("answers in tick order, shows 1st 2nd 3rd and renumbers on untick", async () => {
+    // SAFETY: same picker-only fields as defaultBots.
+    bots = [...defaultBots, { id: "b3", name: "Cy", hidden: false, modelSelection: { instanceId: "codex-1", model: "m" } } as Bot];
+    const { host, root } = await renderWizard();
+    const order = () => ["Ada", "Bo", "Cy"].map((name) => pickRow(host, name).textContent?.match(/\d+(?:st|nd|rd|th|번째)$/)?.[0] ?? "");
+    const tick = (name: string) => act(async () => pickRow(host, name).click());
+    try {
+      await tick("Cy");
+      await tick("Ada");
+      await tick("Bo");
+      expect(order()).toEqual(["2nd", "3rd", "1st"]);
+      await tick("Ada");
+      expect(order()).toEqual(["", "2nd", "1st"]);
+      await tick("Ada");
+      expect(order()).toEqual(["3rd", "2nd", "1st"]);
+      await act(async () => {
+        button(host, "Create").click();
+      });
+      expect(findCreate()).toMatchObject({ memberIds: ["b3", "b2", "b1"] });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("shows the tick order in Korean", async () => {
+    applyLocale("ko");
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => pickRow(host, "Bo").click());
+      await act(async () => pickRow(host, "Ada").click());
+      expect(pickRow(host, "Bo").textContent).toMatch(/Bo1번째$/);
+      expect(pickRow(host, "Ada").textContent).toMatch(/Ada2번째$/);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
   it("disables create with no members and allows a single bot", async () => {
     const { host, root } = await renderWizard();
     try {
