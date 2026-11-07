@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider } from "@/lib/i18n";
+import { usageBoardFixture } from "@/lib/usage-board.fixture";
 import type { InstanceInfo } from "@/state/store";
 
 const { mockState, mockApi, settle, pendingPaths } = vi.hoisted(() => {
@@ -48,6 +49,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 
 import { UsageSection } from "./UsageSection";
 import { SettingsModal } from "./SettingsModal";
+import { UsageQuickView } from "./UsageQuickView";
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const reading = (observedAt: string, usedPercent = 90) => ({
@@ -174,6 +176,27 @@ describe("Usage auto refresh", () => {
     root = createRoot(host);
     await open();
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);
+  });
+
+  it("refreshes Muse and a shown Gemini when the quick view opens, once within the throttle", async () => {
+    const board = structuredClone(usageBoardFixture);
+    const anchor = document.body.appendChild(document.createElement("button"));
+    mockState.instances = [
+      engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(6)) }),
+      engine("muse", "museAgent", "Meta Muse", { rateLimits: reading(minutesAgo(24 * 60)) }),
+      engine("gemini", "antigravityAgent", "Gemini"),
+      engine("hidden-gemini", "antigravityAgent", "Gemini 2"),
+    ];
+    const quick = () => createElement(UsageQuickView, { engine: board.engines[0]!, account: board.engines[0]!.accounts[0]!, board,
+      state: { board, status: "ready", pending: {}, failed: new Set<string>() }, anchor: { current: anchor }, onClose: () => {} });
+    await open(quick());
+    expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/gemini", "/api/usage/refresh/muse"]);
+    await act(async () => { settle("/api/usage/refresh/claude", "ok"); settle("/api/usage/refresh/gemini", "ok"); settle("/api/usage/refresh/muse", "ok"); });
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await open(quick());
+    expect(refreshed()).toHaveLength(3);
+    anchor.remove();
   });
 
   it("checks again when accounts hydrate late and when the tab becomes visible, never while hidden", async () => {
