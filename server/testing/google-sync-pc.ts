@@ -10,7 +10,8 @@ import {
   applySyncOperations, bindSyncId, createSyncOperation, emptyProfileSyncState, loadOrCreateSyncWorkspace, loadProfileSyncSettings,
   markImported, markSynced, planProfileImport, readSyncOperations, saveProfileSyncSettings, unsyncedChanges, writeSyncOperation,
 } from "../profile-sync.ts";
-import { ensureMemorySyncDevice, loadMemorySyncLedger, saveMemorySyncLedger, syncBotMemory } from "../memory-sync.ts";
+import { createMemoryClean, mergeParkedCopy, recordTypedLines, typedHashes, type TextCall } from "../memory-clean.ts";
+import { ensureMemorySyncDevice, loadMemorySyncLedger, markTalked, saveMemorySyncLedger, syncBotMemory } from "../memory-sync.ts";
 import { pullSyncedPicture, pruneSyncedPictures } from "../picture-sync.ts";
 import { Store } from "../store.ts";
 import { ensureSyncV2Identity } from "../thread-sync-v2-engine.ts";
@@ -20,10 +21,14 @@ import { workspaceDir } from "../workspace.ts";
 export interface ChatSpec { title: string; rows: number; pictureAges?: number[] }
 export interface BotSpec { name: string; memory?: string; chats?: ChatSpec[] }
 export interface ReportBot { name: string; syncId: string | null; chats: string[]; rows: string[]; memory: string | null; pictures: string }
-export interface TestArgs { bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean }
-export type TestResult = ReportBot[] | boolean | undefined;
+export interface TestArgs {
+  bots?: BotSpec[]; bot?: string; to?: string; text?: string; chat?: ChatSpec; folder?: string | null; thread?: string; busy?: boolean;
+  typed?: boolean; retire?: string[]; days?: number; hold?: boolean;
+}
+export type TestResult = ReportBot[] | boolean | string | null | undefined;
 
-const { dataDir } = z.object({ dataDir: z.string() }).parse(workerData);
+// An old build runs the same memory sync without the cleanup options and never runs a cleanup.
+const { dataDir, oldBuild } = z.object({ dataDir: z.string(), oldBuild: z.boolean().optional() }).parse(workerData);
 const DAY = 86_400_000;
 const store = new Store(() => ({ instanceId: "test", model: "test" }));
 const attachments = join(dataDir, "attachments");
@@ -34,6 +39,29 @@ ensureMemorySyncDevice(ledger);
 save();
 let v2: ReturnType<typeof createThreadSyncV2Store> = null;
 let busy = false;
+let skew = 0;
+let retire: string[] = [];
+let hold: Promise<void> | null = null;
+let release = () => {};
+const QUIET_MS = 11 * 60_000;
+const questions = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
+/** Retires every numbered line that equals one of the test's retire lines, and passes the recall check. */
+const propose: TextCall = async (prompt) => {
+  if (prompt.startsWith("[memory-clean:questions]")) return JSON.stringify(questions);
+  if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(Array(18).fill(true));
+  await hold;
+  const ids = [...prompt.matchAll(/^(\d+)\| (.*)$/gm)].filter(([, , line]) => retire.includes(line!)).map(([, id]) => Number(id));
+  return JSON.stringify({ version: 1, file: /"file":"([^"]+)"/.exec(prompt)?.[1], changes: ids.map((id) => ({ op: "retire", id, reason: "Done" })) });
+};
+const recall: TextCall = async () => JSON.stringify(questions.map((q) => q.answer));
+const clean = oldBuild ? null : createMemoryClean({
+  store, dataDir,
+  engine: async () => ({ propose, recall, key: "fake" }),
+  busy: () => busy, pending: () => false, dropped: () => false,
+  home: (botId) => ({ folder: settings.folder ?? undefined, botSyncId: settings.botMap[botId], device: ledger.device ?? "", talkedAt: ledger.talked?.[settings.botMap[botId] ?? ""] }),
+  now: () => Date.now() + skew,
+});
+clean?.start();
 
 function save(): void {
   settings = saveProfileSyncSettings(dataDir, settings);
@@ -90,7 +118,7 @@ function publishProfile(folder: string): void {
 function syncProfile(folder: string): void {
   importProfile(folder);
   publishProfile(folder);
-  for (const bot of store.bots) if (settings.botMap[bot.id]) syncBotMemory(folder, settings.botMap[bot.id]!, workspaceDir(bot.id), ledger);
+  for (const bot of store.bots) if (settings.botMap[bot.id]) syncBotMemory(folder, settings.botMap[bot.id]!, workspaceDir(bot.id), ledger, oldBuild ? {} : { typed: typedHashes(bot.id), mergeParked: mergeParkedCopy });
   writeDeviceRecord(folder, { deviceId: settings.deviceId, name: "Test PC", host: "test.example.ts.net", chatSync: 2 }, Date.now());
   save();
 }
@@ -157,9 +185,38 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
       return;
     case "memory": {
       const bot = store.bots.find((bot) => bot.name === args.bot)!;
+      const path = join(workspaceDir(bot.id), "MEMORY.md");
       mkdirSync(workspaceDir(bot.id), { recursive: true });
-      writeFileSync(join(workspaceDir(bot.id), "MEMORY.md"), args.text!);
+      if (args.typed && !oldBuild) recordTypedLines(bot.id, existsSync(path) ? readFileSync(path, "utf8") : "", args.text!);
+      writeFileSync(path, args.text!);
       return;
+    }
+    case "talk":
+      markTalked(ledger, settings.botMap[store.bots.find((bot) => bot.name === args.bot)!.id]!);
+      save();
+      return;
+    case "clean": {
+      // A cleanup on this PC once it is quiet, the way the idle timer starts one. `hold` parks it at propose until "release".
+      const bot = store.bots.find((bot) => bot.name === args.bot)!;
+      if (!clean) throw new Error("old builds never run a cleanup");
+      skew += (args.days ?? 0) * DAY + QUIET_MS;
+      retire = args.retire ?? [];
+      if (args.hold) hold = new Promise((done) => { release = done; });
+      clean.check(bot.id);
+      clean.tick();
+      if (!args.hold) await clean.idle();
+      return clean.summary(bot.id).run?.runId ?? null;
+    }
+    case "release": {
+      release();
+      hold = null;
+      await clean!.idle();
+      return clean!.summary(store.bots.find((bot) => bot.name === args.bot)!.id).run?.runId ?? null;
+    }
+    case "undo": {
+      const bot = store.bots.find((bot) => bot.name === args.bot)!;
+      const runId = clean!.summary(bot.id).run?.runId;
+      return runId ? (await clean!.undo(bot.id, runId)).ok : false;
     }
     case "append": {
       const bot = store.bots.find((bot) => bot.name === args.bot)!;
@@ -223,6 +280,7 @@ async function run(method: string, args: TestArgs): Promise<TestResult> {
     case "report":
       return report();
     case "close":
+      clean?.dispose();
       await v2?.close();
       closeMessageDb();
       return;
