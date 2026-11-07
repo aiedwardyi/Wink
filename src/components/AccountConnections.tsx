@@ -73,7 +73,7 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
   );
 }
 
-function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload }: {
+function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, grip }: {
   account: UsageAccount;
   label: string;
   named?: UsageBoardAccount;
@@ -82,6 +82,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   disabled: boolean;
   signOut: () => void;
   reload: () => Promise<void>;
+  grip: boolean;
 }) {
   const { t } = useI18n();
   const phone = useIsPhone();
@@ -135,7 +136,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const stacked = phone && name && !draining && !signInRow;
   return (
     <div data-connection-account={account.instanceId} data-account-row={account.instanceId} className="relative min-w-0">
-      <UsageGrip label={name?.name ?? account.displayName} />
+      {grip && <UsageGrip label={name?.name ?? account.displayName} />}
       {signInRow ? <>
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
         {name && <ConnectionRow label={<>
@@ -223,7 +224,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
         const hasDestination = accounts.some((other) => other !== account && accountReady(other));
         return (
-          <ConnectionAccount key={account.instanceId} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+          <ConnectionAccount key={account.instanceId} grip={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
             named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
             reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
         );
