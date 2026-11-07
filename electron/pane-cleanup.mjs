@@ -388,7 +388,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (now() - changed < DAY_MS || await busy() || await isPinned()) return;
     if (await linkedInto(target, links)) { retained.add(normalize(target)); return; }
     const tracked = new Set((await git(target, ["ls-files", "-z"])).split("\0").filter(Boolean).map((file) => normalize(path.resolve(target, file))));
-    await unlinkLinks(target, tracked);
+    await unlinkLinks(target, tracked, async () => !await busy() && !await isPinned());
     if (await busy() || !await directory(target) || await isPinned() || await git(target, ["status", "--porcelain"])) return;
     // Git can traverse tracked Windows junctions while removing the worktree.
     for (const file of tracked) if ((await fsp.lstat(file)).isSymbolicLink()) return;
@@ -397,7 +397,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (!save()) { for (const other of owned) other.worktreeDone = false; return; }
     try {
       const removed = await removeWithBackup(target, gitdir, async () => {
-        if (!await directory(target) || !await directory(worktreeRoot) || await git(target, ["status", "--porcelain"]) || await isPinned() || await busy() || await recent() || await linkedInto(target, links)) return false;
+        if (await linkedInto(target, links) || !await directory(target) || !await directory(worktreeRoot) || await git(target, ["status", "--porcelain"]) || await isPinned() || await busy() || await recent()) return false;
         return git(common, ["worktree", "remove", target]);
       }, warn);
       if (removed === false) {
