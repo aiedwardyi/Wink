@@ -24,14 +24,16 @@ import { shortPath } from "@/lib/short-path";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryHeading, MemoryTask, NotedLines, TopicFiles, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, TopicFiles, type MemoryTopic } from "./MemoryGroups";
+import { MemoryMap } from "./MemoryMap";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsLabel, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
 import { useMemoryClean } from "@/lib/memory-clean";
-import { recentLines, memoryTargetLine } from "@/lib/memory-recent";
+import { memoryTargetLine } from "@/lib/memory-recent";
+import { useCoverChat } from "@/lib/cover-chat";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
@@ -388,14 +390,8 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
-      {empty && <MemoryEmpty />}
+      {empty ? <MemoryEmpty /> : !loading && <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} />}
       <MemoryGroup>
-        {recentLines(text, bot.messages).length > 0 && (
-          <div className={DETAILS_ROW}>
-            <MemoryHeading title={t("bot.memoryRecent")} />
-            <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} />
-          </div>
-        )}
         <SwitchRow
           label={t("settings.memoryNotes.toggle")}
           hint={t("settings.memoryNotes.help")}
@@ -403,7 +399,6 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryTask bot={bot} />
       <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={expanded}>
@@ -493,6 +488,7 @@ export function SettingsPanel({
     setMemoryAt(keepGoingRequest);
     setSeenMemoryRequest(memoryRequest);
   }, [memoryRequest, keepGoingRequest]);
+  const cover = useCoverChat(panelRef, memoryTab, closing);
   const showTab = (memory: boolean) => {
     if (memory === memoryTab) return;
     setMemoryAt(memory ? keepGoingRequest : null);
@@ -577,7 +573,7 @@ export function SettingsPanel({
     {/* Below md the sidebar is already a drawer, so docking here would leave a
         ~200px chat column at the window floor. Take the content area instead,
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
-    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} className={cn(slideIn && "animate-panel-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
+    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "animate-panel-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full", cover && "md:absolute md:inset-y-0 md:w-auto")}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <button
@@ -599,7 +595,7 @@ export function SettingsPanel({
         </button>
       </div>
 
-      <div role="tablist" aria-label={t("bot.details")} className="mx-5 flex gap-1 rounded-xl bg-inset p-1">
+      <div role="tablist" aria-label={t("bot.details")} className={cn("mx-5 flex gap-1 rounded-xl bg-inset p-1", cover && "md:w-[360px] md:self-center")}>
         {([false, true] as const).map((memory) => (
           <button
             key={String(memory)}
