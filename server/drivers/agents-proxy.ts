@@ -37,6 +37,7 @@
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
+import { AUTO_RULE_TOOL } from "./auto-rule-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
@@ -213,6 +214,7 @@ const ROUTINE_FIELDS_SCHEMA = {
 } as const;
 
 const TOOLS = [
+  ...(process.env.OMB_AUTO_ROUTING === "1" ? [AUTO_RULE_TOOL] : []),
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   {
@@ -647,6 +649,10 @@ function confirmationResult(r: Json, fallback: string): { text: string } {
 }
 
 async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: AbortSignal): Promise<{ text: string; isError?: boolean }> {
+  if (name === "auto_rule") {
+    const result = await api("/api/internal/auto-rule", { method: "POST", body: JSON.stringify(args) });
+    return { text: result.applied ? "Saved." : String(result.hint ?? JSON.stringify(result)) };
+  }
   if (name === VERIFY_SITE_TOOL.name) {
     const r = await api(VERIFY_ROUTES.tool, { method: "POST", body: JSON.stringify({ entry: args.entry }), signal });
     return { text: String(r.text ?? ""), ...(r.status === "blocked" ? { isError: true } : {}) };

@@ -102,6 +102,7 @@ import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, u
 import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
+import { createAutoRoutingService } from "./auto-routing-service.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
@@ -604,18 +605,20 @@ let terminalBridgeAccess =
     : null;
 
 function agentsIntegration(botId: string, threadId: string, depth: number) {
+  const env = {
+    ...AGENTS_NODE_FLAG,
+    OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+    OMB_BOT_ID: botId,
+    OMB_THREAD_ID: threadId,
+    OMB_COMMS_TOKEN: commsCallers.token(botId, threadId),
+    OMB_TURN_DEPTH: String(depth),
+    OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
+  };
+  if (autoRouting.state.get(botId)?.enabled) Object.assign(env, { OMB_AUTO_ROUTING: "1" });
   return {
     command: process.execPath,
     args: [agentsProxyPath],
-    env: {
-      ...AGENTS_NODE_FLAG,
-      OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
-      OMB_BOT_ID: botId,
-      OMB_THREAD_ID: threadId,
-      OMB_COMMS_TOKEN: commsCallers.token(botId, threadId),
-      OMB_TURN_DEPTH: String(depth),
-      OMB_TEAM_REPORTS: teamReports.prompt() ? "1" : "0",
-    },
+    env,
   };
 }
 
@@ -960,6 +963,7 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = startupTiming.measure("store", () => new Store(() => bootSelection));
+const autoRouting = createAutoRoutingService(DATA_DIR, store);
 const botAccounts = new BotAccounts(accounts, registry, store, {
   captured: (threadId) => providerReload.current(threadId),
 });
@@ -4704,6 +4708,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     : opts?.commsRoot !== undefined || commsDepth > 0
       ? { kind: "inherit", rootId: opts?.commsRoot }
       : { kind: "automatic" });
+  const userKeys = turnStartedByUser(opts) ? [userMessage.sendId ?? userMessage.id] : [];
   // the running turn's stamp source; an ordinary turn clears a failed peer start's leftover
   if (opts?.peerComm) peerReplyComm.set(threadId, opts.peerComm);
   else peerReplyComm.delete(threadId);
@@ -4998,7 +5003,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
-    for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
+    for (const message of store.activePath(threadId).slice(-folded.length)) {
+      const key = message.sendId ?? message.id;
+      rootId = adoptHumanRoot(threadId, key);
+      if (!userKeys.includes(key)) userKeys.push(key);
+    }
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
   }
@@ -5430,7 +5439,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, userKeys });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -7102,6 +7111,7 @@ const groupRoutes = createGroupRoutes({
   releaseInterruptedBot,
 });
 const internalRoutes = createInternalRoutes({
+  autoRouting,
   runDelegatedTurn,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
   cfg,
@@ -7179,6 +7189,7 @@ applyBrandLeadBot({
   applyProfile: botRoutes.applyProfile,
 });
 const botChatRoutes = createBotChatRoutes({
+  autoRouting,
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,
@@ -7366,6 +7377,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/keep-going") {
         return await internalRoutes.setKeepGoing(req, res);
       }
+      if (method === "POST" && path === "/api/internal/auto-rule") return await internalRoutes.autoRule(req, res);
       // The ask_user tool: pins a question for the user without pausing the
       // bot. Never sets waiting-on-you; the answer is the user's next message.
       if (method === "POST" && path === "/api/internal/ask-user") {
@@ -8014,6 +8026,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/auto-routing(\/undo)?$/);
+    if (m && method === "POST") return botChatRoutes.autoRouting(req, res, m, Boolean(m[2]));
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/queue\/([\w-]+)$/);
     if (m && method === "DELETE") {

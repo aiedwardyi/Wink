@@ -297,7 +297,7 @@ export function selectAutoRoute(input: AutoSelectionInput): AutoDecision {
         if (chosen.model.startsWith("claude-fable-") && (!dimensions.model || !exact || taskClass !== "audit" || !task.codeAudit)) continue;
         const argon = chosen.model.startsWith("gemini-4-argon-");
         if (argon && !(exact && dimensions.model && (BIG_JOBS.has(taskClass) || task.scope === "large"))) continue;
-        if (chosen.effort === "max" && (!input.rules.max || tier !== "strong" || !["bug", "audit"].includes(taskClass))) continue;
+        if (chosen.effort === "max" && !(input.pinVerified && input.pin?.effort === "max") && (!input.rules.max || tier !== "strong" || !["bug", "audit"].includes(taskClass))) continue;
         if ((taskClass === "protected" || taskClass === "unknown") && gridClass !== "chat" && !maker && ![
           "claude-opus-5-5", "gpt-6-astra", "gpt-6.1-sol", "grok-4.7", "gemini-3.8-flash-high", "gemini-4-argon-high", "muse-spark-1.3-contributor",
         ].includes(chosen.model)) continue;

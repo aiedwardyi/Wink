@@ -24,6 +24,7 @@ import { appendDecision } from "./decision-log.ts";
 import { acceptPeerTask, drainWaitingOn, finishDelegatedTurn, pollDelegation, queueDelegation, resolveDelegationId, type DelegatedTurn, type QueueResult, type drainDelegations } from "./delegations.ts";
 import { handMail, recentDelegations, toolMailResult } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
+import type { createAutoRoutingService } from "./auto-routing-service.ts";
 import { generateImageFile, generateImageRequestSchema } from "./generate-image.ts";
 import { googleAccountRoute, type GoogleAccount } from "./google-account.ts";
 import { json, readBody } from "./http-helpers.ts";
@@ -40,6 +41,7 @@ import { assignTaskNextAction, groundTaskArtifacts, taskStateNotice, taskStateUp
 import { workspaceDir } from "./workspace.ts";
 
 type InternalRouteDeps = {
+  autoRouting?: ReturnType<typeof createAutoRoutingService>;
   cfg: AppConfig;
   utilityParentPort: object | undefined;
   googleAccount: GoogleAccount;
@@ -128,6 +130,11 @@ export function createInternalRoutes(deps: InternalRouteDeps) {
     ),
   ]);
   return {
+    autoRule: async (req: IncomingMessage, res: ServerResponse) => {
+      const identity = caller(req, "", "");
+      if (!identity || !deps.autoRouting || !store.conversationForBot(identity.botId, identity.threadId)) return json(res, 403, { error: "Auto caller is unavailable" });
+      return json(res, 200, deps.autoRouting.tool(identity.botId, identity.threadId, await readBody(req)));
+    },
     googleAccountChange: async (req: IncomingMessage, res: ServerResponse, method: "PUT" | "DELETE") => {
       const result = await googleAccountRoute(method, Boolean(utilityParentPort), () => readBody(req), googleAccount);
       return json(res, result.status, result.body);

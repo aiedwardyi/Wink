@@ -9,7 +9,7 @@ export function teamReportPrompt(status: PhoneRelayStatus, owner: string | null)
   return status.state === "connected" && owner && REPORT_OWNER.test(owner) && status.reportOwner === owner ? TEAM_REPORT_RULE : "";
 }
 
-function requestText(raw: string): string {
+export function requestText(raw: string): string {
   return raw.replace(/<pasted-text\b[^>]*>[\s\S]*?(?:<\/pasted-text>|$)/gi, "")
     .replace(/<attached-(?:image|file)\b[^>]*>/gi, "")
     .replace(/```[\s\S]*?(?:```|$)/g, "").replace(/^\s*>.*$/gm, "")

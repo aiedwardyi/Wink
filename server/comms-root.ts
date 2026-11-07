@@ -66,7 +66,7 @@ export function rootForStart(threadId: string, start: RootStart): string | null 
 
 export function adoptHumanRoot(threadId: string, messageKey: string): string {
   const rootId = rootForStart(threadId, { kind: "human", messageKey })!;
-  turnRegistry.adoptRoot(threadId, rootId);
+  turnRegistry.adoptRoot(threadId, rootId, messageKey);
   return rootId;
 }
 

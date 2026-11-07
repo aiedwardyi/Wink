@@ -5,7 +5,7 @@ it("binds a prepared user turn before its tools run", () => {
   const registry = new TurnRegistry();
   registry.prepare({ botId: "a", threadId: "t", owner: "user", depth: 0 });
   registry.started("one", "t");
-  expect(registry.current("t")).toEqual({ turnId: "one", botId: "a", threadId: "t", owner: "user", depth: 0, rootId: null, nowWatch: [] });
+  expect(registry.current("t")).toEqual({ turnId: "one", botId: "a", threadId: "t", owner: "user", depth: 0, rootId: null, userKeys: [], nowWatch: [] });
 });
 
 it("keeps a replacement turn when the previous turn settles late", () => {

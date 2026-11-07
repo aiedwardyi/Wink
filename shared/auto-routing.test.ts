@@ -127,11 +127,12 @@ describe("effort coverage and hard admission", () => {
     expect(selectAutoRoute(input("antigravityAgent", "bug", { candidates: [autoCandidate("antigravityAgent", { models: [A[2]] })] })).kind).toBe("hold");
   });
 
-  it("gates Max independently of Grok xhigh and rejects effort/encoded-id mismatch", () => {
+  it("honors verified Max independently of Grok xhigh and rejects effort/encoded-id mismatch", () => {
     const pin = { model: X[0], effort: "max" as const };
-    expect(selectAutoRoute(input("codex", "bug", { pin, pinVerified: true })).kind).toBe("hold");
+    expect(selectAutoRoute(input("codex", "bug", { pin, pinVerified: true }))).toMatchObject({ kind: "selected", route: { effort: "max" } });
     expect(selectAutoRoute(input("codex", "bug", { pin, pinVerified: true, rules: { max: true, preferences: [] } }))).toMatchObject({ kind: "selected", route: { effort: "max" } });
-    expect(selectAutoRoute(input("codex", "quick", { pin, pinVerified: true, rules: { max: true, preferences: [] } })).kind).toBe("hold");
+    expect(selectAutoRoute(input("codex", "quick", { pin, pinVerified: true, rules: { max: true, preferences: [] } }))).toMatchObject({ kind: "selected", route: { effort: "max" } });
+    expect(selectAutoRoute(input("codex", "bug", { pin, pinVerified: false })).kind).toBe("hold");
     expect(selectAutoRoute(input("grokAgent", "bug"))).toMatchObject({ kind: "selected", route: { effort: "xhigh" } });
     expect(selectAutoRoute(input("antigravityAgent", "bug", { pin: { model: A[3], effort: "high" }, pinVerified: true })).kind).toBe("hold");
     expect(autoPairReason("antigravityAgent", A[3], "high")).toBe("encoded-effort-mismatch");

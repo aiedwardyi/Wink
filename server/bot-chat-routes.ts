@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { z } from "zod";
 
 import { credentialIsConfigured, credentialResumeOutcome } from "../shared/credential-request.ts";
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
@@ -25,11 +26,15 @@ import { stampTaskResumePacket } from "./task-state-fold.ts";
 import type { TaskResumePacket } from "./task-state.ts";
 import type { createThreadSyncV2Gate } from "./thread-sync-v2-gate.ts";
 import { TASK_RESUME_PROMPT } from "./turn-context.ts";
+import type { createAutoRoutingService } from "./auto-routing-service.ts";
 
 // A stopped thread stays held through the driver's cancel grace (ACP and MSP: 5 s), and an edit inside it is refused.
 const STOP_RELEASE_MS = 6_000;
+const autoEnabledSchema = z.object({ enabled: z.boolean() }).strict();
+const autoUndoSchema = z.object({ id: z.string().regex(/^[a-f0-9]{32}$/), threadId: z.string().min(1) }).strict();
 
 type BotChatRouteDeps = {
+  autoRouting?: ReturnType<typeof createAutoRoutingService>;
   cancelUsageWait?: (botId: string, waitId?: string, preserveTurn?: boolean) => void;
   cfg: AppConfig;
   threadSyncGate: ReturnType<typeof createThreadSyncV2Gate>;
@@ -125,6 +130,21 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     return true;
   };
   return {
+    autoRouting: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray, undo = false) => {
+      const bot = store.bot(m[1]);
+      if (!bot || !deps.autoRouting) return json(res, 404, { error: "Auto bot is unavailable" });
+      const body = await readBody(req);
+      if (!undo) {
+        const parsed = autoEnabledSchema.safeParse(body);
+        if (!parsed.success) return json(res, 400, { error: "enabled must be boolean" });
+        deps.autoRouting.setEnabled(bot.id, parsed.data.enabled);
+        return json(res, 200, parsed.data);
+      }
+      const parsed = autoUndoSchema.safeParse(body);
+      if (!parsed.success || !store.taskByThread(bot.id, parsed.data.threadId)) return json(res, 400, { error: "Invalid Auto change" });
+      try { return json(res, 200, deps.autoRouting.undo(bot.id, parsed.data.threadId, parsed.data.id)); }
+      catch { return json(res, 409, { error: "Auto change is no longer undoable" }); }
+    },
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       cancelUsageWait?.(m[1]!, m[2]);

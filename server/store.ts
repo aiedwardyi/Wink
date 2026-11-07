@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } 
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import type { AutoChangePayload } from "./auto-routing-operations.ts";
 import type { BotHooks } from "./bot-hooks.ts";
 import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
@@ -138,6 +139,7 @@ export interface Message {
   routineRun?: RoutineRunCardData;
   /** note messages: the bot's current Live Verify card. */
   verify?: VerifyCardData;
+  autoChange?: AutoChangePayload;
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent

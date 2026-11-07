@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
-import { autoArmSchema, autoEffortSchema, autoEngineSchema } from "../shared/auto-routing.ts";
+import { autoArmSchema, autoEffortSchema, autoEngineSchema, type AutoDimensions } from "../shared/auto-routing.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { engineIsFresh } from "./turn-context.ts";
 
@@ -65,9 +65,15 @@ const localRouteSchema = z.object({
   account: z.string().min(1), generation: z.number().int().nonnegative(),
   tier: z.enum(["cheap", "mid", "strong"]).optional(),
 }).strict().refine((value) => autoArmSchema.safeParse({ engine: value.engine, model: value.model, effort: value.effort }).success);
+export const autoPickSchema = z.object({ engine: autoEngineSchema.optional(), model: z.string().optional(), effort: autoEffortSchema.optional() }).strict()
+  .refine((pick) => Object.keys(pick).length > 0 && (!pick.model || Boolean(pick.engine)));
+const taskPickSchema = z.object({ threadId: z.string().min(1), taskId: z.string().min(1), dimensions: autoPickSchema, choiceId: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
+const pickChangeSchema = z.object({ id: z.string().regex(/^[a-f0-9]{32}$/), at: time, threadId: z.string().min(1), taskId: z.string().min(1),
+  prior: taskPickSchema.optional(), undone: z.boolean() }).strict();
 const botSchema = z.object({
   enabled: z.boolean(), budget: autoBudgetSchema, current: localRouteSchema.optional(), previous: localRouteSchema.optional(),
   acceptedRequestId: z.string().min(1).optional(),
+  taskPicks: z.record(z.string().min(1), taskPickSchema).optional(), pickChanges: z.record(z.string().min(1), pickChangeSchema).optional(), pickVersion: z.number().int().nonnegative().optional(),
 }).strict();
 const stateSchema = z.object({ v: z.literal(1), bots: z.record(z.string().min(1), botSchema) }).strict();
 export type LocalAutoBot = z.infer<typeof botSchema>;
@@ -84,6 +90,30 @@ export class AutoRoutingState {
   }
 
   get(botId: string): LocalAutoBot | undefined { return Object.hasOwn(this.state.bots, botId) ? structuredClone(this.state.bots[botId]) : undefined; }
+
+  pick(botId: string, threadId: string, taskId: string): AutoDimensions | undefined {
+    const pick = this.get(botId)?.taskPicks?.[threadId];
+    return pick?.threadId === threadId && pick.taskId === taskId ? pick.dimensions : undefined;
+  }
+
+  keepPick(botId: string, threadId: string, taskId: string, dimensions: AutoDimensions, id: string, at: number): void {
+    const bot = this.get(botId) ?? { enabled: false, budget: structuredClone(EMPTY_AUTO_BUDGET) };
+    const previous = bot.taskPicks?.[threadId];
+    const prior = previous?.taskId === taskId ? previous : undefined;
+    this.set(botId, { ...bot, taskPicks: { ...bot.taskPicks, [threadId]: { threadId, taskId, dimensions: autoPickSchema.parse(dimensions), choiceId: id } },
+      pickChanges: { ...bot.pickChanges, [threadId]: { id, at, threadId, taskId, prior, undone: false } }, pickVersion: (bot.pickVersion ?? 0) + 1 });
+  }
+
+  undoPick(botId: string, threadId: string, taskId: string, id: string): AutoDimensions | undefined {
+    const bot = this.get(botId);
+    const change = bot?.pickChanges?.[threadId];
+    if (!bot || !change || change.undone || change.id !== id || change.threadId !== threadId || change.taskId !== taskId) throw new Error("Auto change is no longer undoable");
+    const taskPicks = { ...bot.taskPicks };
+    if (change.prior) taskPicks[threadId] = change.prior;
+    else delete taskPicks[threadId];
+    this.set(botId, { ...bot, taskPicks, pickChanges: { ...bot.pickChanges, [threadId]: { ...change, undone: true } }, pickVersion: (bot.pickVersion ?? 0) + 1 });
+    return change.prior?.dimensions;
+  }
 
   set(botId: string, value: LocalAutoBot): void {
     const previous = this.get(botId)?.budget;

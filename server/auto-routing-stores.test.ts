@@ -16,7 +16,7 @@ const DAY = 24 * 60 * 60_000;
 let serial = 0;
 function directory() { const dir = join(DATA_DIR, `auto-routing-${++serial}`); mkdirSync(dir, { recursive: true }); return dir; }
 function authorization(operation: AutoRuleOperation, patch: Partial<RuleAuthorization> = {}): RuleAuthorization {
-  return { authenticatedUserId: "owner", actorId: "owner", authorized: true, actionId: "current", currentActionId: "current", directUserText: "Set my Auto rule", userQuote: "Set my Auto rule", origin: "direct-user", attributedOperation: operation, ...patch };
+  return { authenticatedUserId: "owner", actorId: "owner", authorized: true, actionId: "current", currentActionId: "current", directUserText: "Set my Auto rule", userQuote: "Set my Auto rule", origin: "direct-user", attributed: operation.op === "setPreference" ? operation.preference ?? (operation.max ? { effort: "max" } : {}) : {}, ...patch };
 }
 const preference = { target: "worker" as const, taskClass: "build" as const, engine: "codex" as const, model: "gpt-6.1-sol", effort: "high" as const };
 const set: AutoRuleOperation = { op: "setPreference", preference };
@@ -63,7 +63,7 @@ describe("local versioned Auto rules", () => {
     const saved = readFileSync(rules.file, "utf8");
     const current = rules.current();
     const reset: AutoRuleOperation = { op: "reset" };
-    const invalid: Partial<RuleAuthorization>[] = [{ origin: "quoted" }, { actorId: "peer" }, { authorized: false }, { actionId: "old" }, { userQuote: "" }, { directUserText: "a mention of Sol" }, { attributedOperation: reset }];
+    const invalid: Partial<RuleAuthorization>[] = [{ origin: "quoted" }, { actorId: "peer" }, { authorized: false }, { actionId: "old" }, { userQuote: "" }, { directUserText: "a mention of Sol" }, { attributed: {} }];
     for (const patch of invalid) expect(() => rules.apply(set, authorization(set, patch))).toThrow();
     for (const bad of [{ op: "setPreference", max: true, preference }, { op: "setPreference" }, { op: "reset", protectedDowngrade: true }, { op: "setPreference", preference: { ...preference, model: "custom" } }, { op: "setPreference", preference: { ...preference, effort: "minimal" } }]) expect(() => {
       // @ts-expect-error Invalid serialized operations must fail without changing storage.

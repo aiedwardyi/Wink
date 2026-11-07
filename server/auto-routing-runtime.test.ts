@@ -3,15 +3,17 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { SHIPPED_AUTO_RULES, type AutoEngine, type ChoiceContext } from "../shared/auto-routing.ts";
+import { SHIPPED_AUTO_RULES, type AutoEngine } from "../shared/auto-routing.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { AutoRoutingEvents } from "./auto-routing-events.ts";
 import { AutoRoutingRuntime, type AutoWorkerCandidate, type AutoWorkerRow, type AutoWorkerTurn } from "./auto-routing-runtime.ts";
 import { DATA_DIR } from "./config.ts";
+import type { AttributionSource } from "./auto-routing-attrib.ts";
 
 let serial = 0;
 const now = Date.now();
 const task = { kind: "build" as const, risk: "low" as const, scope: "bounded" as const, source: "declared" as const };
+type FixtureState = { turn: AutoWorkerTurn; candidates: AutoWorkerCandidate[]; enabled: boolean; valid: boolean; at: number; source?: AttributionSource };
 function directory() { const dir = join(DATA_DIR, `auto-workers-${++serial}`); mkdirSync(dir, { recursive: true }); return dir; }
 function candidate(account = "codex", patch: Partial<AutoWorkerCandidate> = {}): AutoWorkerCandidate {
   return { engine: "codex", account, generation: 0, currentGeneration: 0, authorized: true, signedIn: true,
@@ -23,10 +25,11 @@ function candidate(account = "codex", patch: Partial<AutoWorkerCandidate> = {}):
 function fixture(write = writeFileAtomic) {
   const dir = directory();
   const turn: AutoWorkerTurn = { id: "action" };
-  const state = { turn, candidates: [candidate()], enabled: true, valid: true, at: now };
+  const state: FixtureState = { turn, candidates: [candidate()], enabled: true, valid: true, at: now };
   const events = { decision: vi.fn(() => true), outcome: vi.fn(() => true) };
   const deps = { enabled: () => state.enabled, turn: () => state.turn, rules: () => ({ id: 0, content: structuredClone(SHIPPED_AUTO_RULES) }),
-    candidates: () => state.candidates, valid: () => state.valid, refresh: vi.fn(async () => {}), events, now: () => state.at };
+    candidates: () => state.candidates, valid: () => state.valid, refresh: vi.fn(async () => {}), events, now: () => state.at,
+    source: () => state.source! };
   const runtime = new AutoRoutingRuntime(dir, deps, write);
   const request = () => ({ requestId: randomUUID(), botId: "bot", task });
   return { dir, state, events, deps, runtime, request };
@@ -258,16 +261,21 @@ describe("Auto worker reservations", () => {
 
   it("checks pins against controller attribution and preserves unspecified dimensions", async () => {
     const f = fixture();
-    const dimensions = { engine: "codex" as const };
-    const choice = { actorId: "owner", actionId: "action", target: "worker" as const, taskClass: "build" as const,
-      origin: "chat" as const, dimensions, userQuote: "Use Codex" };
-    const request = { ...f.request(), choice };
+    const request = { ...f.request(), pin: { model: "gpt-6.1-sol", userQuote: "Sol" } };
     expect(await f.runtime.prepare(request, async () => "argv")).toEqual({ kind: "hold", reason: "unverified-pin" });
-    f.state.turn.choice = { authenticatedUserId: "owner", currentActionId: "action", authorized: true,
-      target: "worker", taskClass: "build", directUserText: "Use Codex", intent: "choice", attributed: dimensions } satisfies ChoiceContext;
-    expect((await f.runtime.prepare({ ...request, choice: { ...choice, origin: "bot" } }, async () => "argv")).kind).toBe("hold");
+    f.state.source = { botId: "bot", threadId: "thread", ownerId: "owner", authorized: true,
+      turn: { botId: "bot", threadId: "thread", turnId: "action", owner: "user", depth: 0, rootId: null, userKeys: ["typed"], nowWatch: [] },
+      messages: [{ id: "typed", role: "user", kind: "text", text: "Use Sol", at: now }] };
+    expect((await f.runtime.prepare({ ...request, pin: { ...request.pin, userQuote: "Opus" } }, async () => "argv")).kind).toBe("hold");
     const result = await f.runtime.prepare(request, async () => "argv");
     expect(result.kind === "ready" && result.row.route).toMatchObject({ engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  });
+
+  it("uses the task's kept pick when a later spawn supplies no pin", async () => {
+    const f = fixture();
+    const runtime = new AutoRoutingRuntime(f.dir, { ...f.deps, kept: () => ({ engine: "codex", model: "gpt-6.1-terra" }) });
+    const result = await runtime.prepare(f.request(), async () => "argv");
+    expect(result.kind === "ready" && result.row.route).toMatchObject({ engine: "codex", model: "gpt-6.1-terra", effort: "high" });
   });
 
   it("bypasses young-cache LIMIT, persists exhaustion and coalesces refresh", async () => {

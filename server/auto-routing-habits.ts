@@ -53,6 +53,8 @@ export class AutoRoutingHabits {
 
   forget(): void { this.commit({ v: 1, rows: [] }); }
 
+  drop(choiceId: string): void { this.commit({ v: 1, rows: this.state.rows.filter((row) => row.choiceId !== choiceId) }); }
+
   private commit(value: AutoHabitState): void {
     const next = stateSchema.parse(value);
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });

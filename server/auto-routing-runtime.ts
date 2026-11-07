@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
-import { autoEffortSchema, autoEngineSchema, classifyAutoTask, selectAutoRoute, validAutoArm, verifiedChoice, type AutoCandidate, type AutoRoute, type AutoRules, type ChoiceContext, type ChoiceProvenance, type TaskData } from "../shared/auto-routing.ts";
+import { autoEffortSchema, autoEngineSchema, classifyAutoTask, selectAutoRoute, validAutoArm, type AutoCandidate, type AutoDimensions, type AutoRoute, type AutoRules, type ChoiceContext, type ChoiceProvenance, type TaskData } from "../shared/auto-routing.ts";
 import { applicableWindows, assessUsage } from "../shared/usage-windows.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AutoRoutingEvents } from "./auto-routing-events.ts";
+import { names, userChoice, type AttributionSource } from "./auto-routing-attrib.ts";
 
 const routeSchema = z.object({ engine: autoEngineSchema, model: z.string(), effort: autoEffortSchema,
     account: z.string().min(1), generation: z.number().int().nonnegative(), tier: z.enum(["cheap", "mid", "strong"]),
@@ -26,12 +27,15 @@ const stateSchema = z.object({ v: z.literal(1), rows: z.array(rowSchema), limits
   && new Set(state.rows.map((row) => row.routeId)).size === state.rows.length);
 export type AutoWorkerRow = z.infer<typeof rowSchema>;
 export type AutoWorkerCandidate = Omit<AutoCandidate, "pending" | "active"> & { externalActive: number };
-export type AutoWorkerTurn = { id: string; choice?: ChoiceContext };
-type Request = { requestId: string; botId: string; task: TaskData; choice?: ChoiceProvenance };
+export type AutoWorkerTurn = { id: string; threadId?: string };
+type Request = { requestId: string; botId: string; task: TaskData; pin?: { model?: string; effort?: AutoDimensions["effort"]; userQuote: string } };
 type Preparation<T> = { kind: "ready"; row: AutoWorkerRow; prepared: T } | { kind: "hold"; reason: string } | { kind: "existing"; row: AutoWorkerRow };
 type Deps = {
   enabled(botId: string): boolean;
   turn(botId: string): AutoWorkerTurn | undefined;
+  source?(botId: string, turn: AutoWorkerTurn): AttributionSource;
+  kept?(botId: string, turn: AutoWorkerTurn): AutoDimensions | undefined;
+  keep?(botId: string, turn: AutoWorkerTurn, choice: ChoiceProvenance, context: ChoiceContext): void;
   rules(): { id: number; content: AutoRules };
   candidates(): readonly AutoWorkerCandidate[];
   valid(route: AutoRoute, turn: AutoWorkerTurn): boolean;
@@ -93,14 +97,20 @@ export class AutoRoutingRuntime {
     }
     const turn = this.deps.turn(request.botId);
     if (!turn || !this.deps.enabled(request.botId)) return { kind: "hold", reason: "auto-unavailable" };
-    const pin = request.choice;
-    if (pin && (!turn.choice || turn.choice.currentActionId !== turn.id || turn.choice.target !== "worker"
-      || turn.choice.taskClass !== classifyAutoTask(request.task).taskClass || !verifiedChoice(pin, turn.choice))) return { kind: "hold", reason: "unverified-pin" };
+    const source = this.deps.source?.(request.botId, turn);
+    const dimensions: AutoDimensions = {};
+    if (request.pin?.model) { dimensions.model = request.pin.model; dimensions.engine = names(request.pin.userQuote).engine; }
+    if (request.pin?.effort) dimensions.effort = request.pin.effort;
+    const attributed = request.pin && source && source.turn?.turnId === turn.id
+      ? userChoice(source, "worker", classifyAutoTask(request.task).taskClass, request.pin.userQuote, dimensions) : undefined;
+    if (request.pin && !attributed) return { kind: "hold", reason: "unverified-pin" };
+    if (attributed) this.deps.keep?.(request.botId, turn, attributed.choice, attributed.context);
+    const pin = attributed?.choice.dimensions ?? this.deps.kept?.(request.botId, turn);
     const select = () => {
       const rules = this.deps.rules();
       return selectAutoRoute({ target: "worker", task: request.task, now: this.now(),
         candidates: this.candidates(), rules: rules.content, rulesVersion: rules.id,
-        pin: pin?.dimensions, pinVerified: Boolean(pin) });
+        pin, pinVerified: Boolean(pin) });
     };
     let decision = select();
     if (decision.kind !== "selected") return { kind: "hold", reason: decision.reason };
@@ -113,7 +123,7 @@ export class AutoRoutingRuntime {
       for (;;) {
         const prepared = await prepare(structuredClone(row));
         if (this.current(row, turn)) {
-          const pinned = (["engine", "model", "effort", "account"] as const).filter((key) => pin?.dimensions[key] !== undefined);
+          const pinned = (["engine", "model", "effort", "account"] as const).filter((key) => pin?.[key] !== undefined);
           row = { ...row, stage: "ready", coverageMissing: !this.deps.events.decision(row, decision, request.task, pinned) };
           this.put(row);
           return { kind: "ready", row: structuredClone(row), prepared };
