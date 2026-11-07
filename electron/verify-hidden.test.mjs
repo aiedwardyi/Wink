@@ -98,6 +98,20 @@ it.each([false, true])("keeps page visibility identical before load with recordi
   expect(f.commands).not.toContain("Page.bringToFront");
 });
 
+it.each([true, false])("keeps runtime errors reliable with a blocked socket from the Vite client=%s", async hmr => {
+  const i = input(), socket = "ws://127.0.0.1:1234/?token=dev";
+  i.blockedUrls = () => [socket];
+  for (const tile of ["desktop", "phone"]) i.pages[tile].loadURL = async url => {
+    const on = f.events[tile];
+    on["Network.webSocketCreated"]?.({ requestId: "socket", url: socket, initiator: { type: "script", stack: { callFrames: [{ url: new URL(hmr ? "/@vite/client" : "/app.js", url).href }] } } });
+    on["Runtime.exceptionThrown"]({ exceptionDetails: { url, text: "Error: real page failure" } });
+  };
+  const result = await runHiddenVerify(i).done;
+  expect(result.errorCode).toBeUndefined();
+  expect(result.issues.filter(row => row.rule === "page error")).toHaveLength(hmr ? 1 : 0);
+  expect(result.notChecked.some(reason => /requests to .*blocked/.test(reason))).toBe(!hmr);
+});
+
 it("finishes at full speed without timed show work or input", async () => {
   vi.useFakeTimers();
   const i = input(), result = await runHiddenVerify(i).done;

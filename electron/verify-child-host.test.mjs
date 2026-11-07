@@ -74,6 +74,7 @@ it("attests both partitions before ENGINE and creates the inactive shape with ta
   expect(f.windows[0].options).toMatchObject({ opacity: 0, x: -32000, y: -32000, focusable: false, skipTaskbar: true, minWidth: 960, minHeight: 540 });
   expect(f.sessions.slice(0, 2).map((s) => s.resolveHost.mock.calls.length)).toEqual([1, 1]);
   expect(f.dependencies.isolatePage).toHaveBeenCalledTimes(2);
+  expect(f.dependencies.startSiteServer).toHaveBeenCalledWith({ root: start().root, entry: start().entry, revision: start().revision, site: start().site });
   expect(f.dependencies.isolatePage.mock.calls[0][2].fonts).toBe(f.dependencies.isolatePage.mock.calls[1][2].fonts);
   expect(f.input().revisionUnchanged).toBeTypeOf("function");
   expect(f.calls.find((c) => c[0] === "setAppDetails")[1]).toEqual({ appId: "com.orbit.agentdesk", appIconPath: process.execPath, appIconIndex: 0, relaunchCommand: `"${process.execPath}"`, relaunchDisplayName: "Wink" });

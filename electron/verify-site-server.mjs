@@ -95,10 +95,10 @@ function fontStylesheets(bytes) {
   return [...fonts];
 }
 
-export async function startSiteServer({ root, entry, revision }) {
+export async function startSiteServer({ root, entry, revision, site }) {
   if (verifyLoopbackUrl(root)?.href === root && entry === "index.html") {
     if (revision !== digest(root)) throw error("site-changed");
-    return startLoopbackServer(root);
+    return startLoopbackServer(root, site);
   }
   const pinned = await manifest(root, entry);
   if (!/^[a-f0-9]{64}$/.test(revision) || pinned.revision !== revision) throw error("site-changed");
@@ -162,8 +162,10 @@ export async function startSiteServer({ root, entry, revision }) {
   };
 }
 
-async function startLoopbackServer(root) {
+async function startLoopbackServer(root, site) {
   const target = new URL(root), files = new Map(), fontUrls = [], aborter = new AbortController(), sockets = new Set();
+  const requested = verifyLoopbackUrl(site ?? root);
+  const original = requested?.hostname === "localhost" && requested.port === target.port ? requested.origin : target.origin;
   if (target.hostname === "localhost") target.hostname = "127.0.0.1";
   let host, origin, closing, failure, total = 0;
   async function load(path, method, requestHeaders) {
@@ -182,7 +184,7 @@ async function startLoopbackServer(root) {
     let status = response.status;
     if (response.headers.has("location")) {
       const next = new URL(response.headers.get("location"), url);
-      if (next.origin !== target.origin || next.username || next.password) status = 403;
+      if (next.origin !== target.origin && next.origin !== original || next.username || next.password) status = 403;
       else headers.location = origin + next.pathname + next.search + next.hash;
     }
     if (status === 200 && /^(?:text\/(?:html|css)|application\/xhtml\+xml)(?:;|$)/i.test(headers["content-type"])) {

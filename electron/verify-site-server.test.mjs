@@ -34,6 +34,19 @@ async function remove(path) {
 }
 const start = async () => server = await startSiteServer({ root, entry: "index.html", revision: await siteRevision({ root, entry: "index.html" }) });
 
+it("rewrites redirects to the original localhost authority without admitting other services", async () => {
+  const upstream = createServer((req, res) => res.writeHead(302, { location: req.url === "/foreign" ? `http://localhost:${upstream.address().port + 1}/dashboard` : `http://localhost:${upstream.address().port}/dashboard` }).end());
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html", site = root.replace("127.0.0.1", "localhost");
+    server = await startSiteServer({ root, entry, site, revision: await siteRevision({ root, entry }) });
+    const redirect = await get("/");
+    expect(redirect.status).toBe(302);
+    expect(redirect.headers.location).toBe(server.origin + "/dashboard");
+    expect((await get("/foreign")).status).toBe(403);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
 it("forwards negotiating headers without credentials and pins each response variant", async () => {
   const requests = [];
   const upstream = createServer((req, res) => {
