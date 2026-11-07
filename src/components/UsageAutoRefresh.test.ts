@@ -124,6 +124,15 @@ describe("Usage auto refresh", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it("ignores a refresh response for the previous signed-in identity", async () => {
+    mockState.instances = [engine("grok", "grokAgent", "Grok", { snapshot: { state: "available", authenticated: true, account: "old@example.test" } })];
+    await open();
+    mockState.instances = mockState.instances.map((instance) => ({ ...instance, snapshot: { ...instance.snapshot, account: "new@example.test" } }));
+    await open();
+    await act(async () => { settle("/api/usage/refresh/grok", { report: reading(minutesAgo(0), 100) }); });
+    expect(mockState.instances[0].rateLimits).toBeUndefined();
+  });
+
   it("starts the refresh when Settings opens on another tab", async () => {
     await open(createElement(SettingsModal));
     expect(refreshed()).toEqual(["/api/usage/refresh/claude", "/api/usage/refresh/grok"]);

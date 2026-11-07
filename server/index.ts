@@ -99,6 +99,7 @@ import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
+import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
@@ -277,6 +278,7 @@ import {
   hostMatchesRemote,
   initRemoteAccess,
   originAllowedByRemote,
+  remoteCookieAuthorized,
   remoteCookieRefresh,
   remoteKeyMatches,
   remoteLinkUrl,
@@ -396,6 +398,8 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
+import { VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
@@ -2918,6 +2922,7 @@ const usageBoard = createUsageBoard({
     get drains() { return accounts.drains; },
   },
   names: accountNames, rateLimits: rateLimitsByInstance, history: createUsageHistory(DATA_DIR),
+  accountChanged: (id, ready) => { checkMuseUsage.invalidate(id); void refreshSwappedUsage(id, ready); },
   runs: async (timeoutMs) => {
     const result = await liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs);
     return result.known ? { known: true, runs: result.runs.map((run) => ({ ...run, label: run.label ?? "" })) } : result;
@@ -2934,6 +2939,9 @@ const refreshUsage = createUsageRefresh({
   accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
 });
 const checkMuseUsage = createMuseCheck();
+const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+});
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
   save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); },
@@ -2951,6 +2959,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
@@ -2978,7 +2987,9 @@ const accountUpdates = createAccountUpdates({
     rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
 
-function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
+function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[number]>(instances: T[]) {
+  rememberAutomaticAvailability(instances);
+  usageBoard.sync();
   return instances.map((instance) => {
     const rateLimits = rateLimitsByInstance.get(instance.instanceId);
     return rateLimits ? { ...instance, rateLimits } : instance;
@@ -5371,6 +5382,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
+      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -6315,6 +6327,7 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
+  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7124,6 +7137,19 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifySite = createVerifySite({
+  store,
+  resolveCommsCaller: (header) => commsCallers.resolve(header),
+  botOutputRoots,
+  autoVerdict,
+  isUnattended,
+  bridge: () => terminalBridgeAccess && verifyBridgeClient(terminalBridgeAccess),
+  broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
+  logDecision: (row) => appendDecision(DATA_DIR, row),
+  deviceId: () => profileSyncSettings.deviceId,
+  appToken: authorizedComms,
+  remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+});
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
@@ -7277,6 +7303,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)) {
       return json(res, 401, { error: "unauthorized" });
     }
+    const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
+    if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
+    const verifyStream = method === "GET" ? /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(path) : null;
+    if (verifyStream) return await verifySite.handleStream(req, res, verifyStream[1]!, verifyStream[2] === "replay", { relay, phoneSession: credentials.phoneSession });
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.
     if (method === "GET" && path === "/remote") {
       const provided = url.searchParams.get("key");
@@ -7293,6 +7323,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/team-report") {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
+      if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { accountReady } from "@/lib/accounts";
+import { usageIdentity } from "../../shared/usage-identity";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 
 export const AUTO_REFRESH_MS = 5 * 60_000;
@@ -65,13 +66,15 @@ export function useAutoRefresh() {
   useEffect(() => {
     const run = () => {
       if (document.visibilityState === "hidden") return;
-      for (const { instanceId } of staleAccounts(latest.current.instances)) {
+      for (const { instanceId, snapshot } of staleAccounts(latest.current.instances)) {
+        const current = () => usageIdentity(latest.current.instances.find((instance) => instance.instanceId === instanceId)?.snapshot ?? {}) === usageIdentity(snapshot);
         const cooldown = (retryAt = 0) => retryAfter.set(instanceId, Math.max(retryAt, Date.now() + AUTO_RETRY_MS));
         joinRefresh(instanceId, () => api(`/api/usage/refresh/${instanceId}`, { method: "POST" }).then((result) => {
+          if (!current()) return result;
           if (result.report) latest.current.dispatch({ type: "rateLimits", instanceId, report: result.report });
           if (!result.report || result.error || result.status === "retained" || result.status === "no_observation") cooldown(result.retryAt);
           return result;
-        }, (error) => { cooldown(); throw error; })).catch(() => cooldown());
+        }, (error) => { if (current()) cooldown(); throw error; })).catch(() => { if (current()) cooldown(); });
       }
     };
     run();

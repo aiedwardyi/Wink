@@ -78,7 +78,7 @@ export function createClaudeUsageProbe(deps: {
   const now = deps.now ?? Date.now;
   const reads = new Map<string, { generation: number; retryAt: number; pending: Promise<Report | undefined> }>();
   let queue: Promise<unknown> = Promise.resolve();
-  return (cli: string, env: NodeJS.ProcessEnv, account: AccountContext) => {
+  const probe = (cli: string, env: NodeJS.ProcessEnv, account: AccountContext) => {
     const cached = reads.get(account.id);
     if (cached && now() < cached.retryAt) return cached.generation === account.generation ? cached.pending : Promise.resolve(undefined);
     const entry = { generation: account.generation, retryAt: Infinity, pending: Promise.resolve<Report | undefined>(undefined) };
@@ -93,4 +93,5 @@ export function createClaudeUsageProbe(deps: {
     queue = entry.pending;
     return entry.pending;
   };
+  return Object.assign(probe, { invalidate: (id: string) => { reads.delete(id); } });
 }

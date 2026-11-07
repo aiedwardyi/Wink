@@ -375,6 +375,73 @@ describe("ProviderRegistry", () => {
     }
   });
 
+  it.each(["grokAgent", "museAgent", "claudeAgent", "codex"].flatMap((kind) => [false, true].map((lateSnapshot) => [kind, lateSnapshot] as const)))("keeps %s signed out when an older refresh finishes late (snapshot: %s)", async (kind, lateSnapshot) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let authenticated = true;
+    try {
+      await registry.load({ engine: { driver: kind }, slow: { driver: kind } });
+      const live = registry.get("engine")!;
+      live.snapshot = async () => ({ state: "available", authenticated });
+      await registry.describe();
+      const snapshot = vi.fn(async () => ({ state: "available" as const, authenticated }));
+      snapshot.mockImplementationOnce(async () => {
+        const captured = authenticated;
+        if (lateSnapshot) await gate;
+        return { state: "available", authenticated: captured };
+      });
+      live.snapshot = snapshot;
+      const slow = vi.fn(async () => { await gate; return { state: "available" as const }; });
+      registry.get("slow")!.snapshot = slow;
+      const refresh = registry.describe({ refresh: true });
+      await vi.waitFor(() => { expect(snapshot).toHaveBeenCalledTimes(1); expect(slow).toHaveBeenCalledTimes(1); });
+      vi.spyOn(registry.logins, "start").mockImplementation(async () => { authenticated = false; return {}; });
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      expect(await registry.signOut("engine")).toBe(true);
+      release();
+      expect((await refresh).find((row) => row.instanceId === "engine")!.snapshot.authenticated).toBe(false);
+      expect(registry.describeSaved().find((row) => row.instanceId === "engine")!.snapshot.authenticated).toBe(false);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it.each(["grokAgent", "museAgent", "claudeAgent", "codex"])("keeps %s signed out when the first probe finishes late", async (kind) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let authenticated = true;
+    try {
+      await registry.load({ engine: { driver: kind } });
+      const snapshot = vi.fn(async () => ({ state: "available" as const, authenticated }));
+      snapshot.mockImplementationOnce(async () => {
+        const captured = authenticated;
+        await gate;
+        return { state: "available", authenticated: captured };
+      });
+      registry.get("engine")!.snapshot = snapshot;
+      const first = registry.describe();
+      await vi.waitFor(() => { expect(snapshot).toHaveBeenCalledTimes(1); });
+      expect(registry.describeSaved()).toEqual([]);
+      vi.spyOn(registry.logins, "start").mockImplementation(async () => { authenticated = false; return {}; });
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      expect(await registry.signOut("engine")).toBe(true);
+      release();
+      expect((await first)[0].snapshot.authenticated).toBe(false);
+      expect(registry.describeSaved()[0].snapshot.authenticated).toBe(false);
+      expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
   it("finishes sign-out after the instance is removed", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
@@ -422,7 +489,10 @@ describe("ProviderRegistry", () => {
         if (process.env.MUSE_LOGIN !== '0') process.exit(1);
         fs.writeFileSync(marker, 'yes');
         process.stderr.write('https://auth.example/device\\nCode: ABCD-EFGH\\n');
-      } else if (mode === 'logout') fs.unlinkSync(marker);
+      } else if (mode === 'logout') {
+        process.stdout.write('https://auth.example/device\\nCode: ABCD-EFGH\\n');
+        setTimeout(() => fs.unlinkSync(marker), 100);
+      }
       else process.exit(1);
     `);
     const fake = makeFakeDriver();

@@ -24,7 +24,8 @@ const normalize = (file) => {
   }
   return current.toLowerCase();
 };
-const inside = (root, file) => normalize(file) === normalize(root) || normalize(file).startsWith(`${normalize(root)}${path.sep}`);
+const contains = (root, file) => file === root || file.startsWith(`${root}${path.sep}`);
+const inside = (root, file) => contains(normalize(root), normalize(file));
 const nick = (label) => {
   const first = label?.split("|")[0].trim();
   return NICK_RE.test(first ?? "") ? first : null;
@@ -73,12 +74,25 @@ async function walk(root, visit, depth = Infinity) {
 }
 
 async function unlinkLinks(root, tracked = new Set(), current = () => true) {
+  let checkedAt = -Infinity;
+  let active = true;
+  const check = async (fresh) => {
+    if (active && (fresh || Date.now() - checkedAt >= 250)) {
+      active = await current();
+      checkedAt = Date.now();
+    }
+    return active;
+  };
+  const owned = (file, stat) => stat.isSymbolicLink() && !tracked.has(normalize(file));
   await walk(root, async (file, stat) => {
-    if (await current() && stat.isSymbolicLink() && !tracked.has(normalize(file))) await fsp.unlink(file);
+    const link = owned(file, stat);
+    if (await check(link) && link) await fsp.unlink(file);
   });
   await walk(root, async (file, stat) => {
-    if (await current() && stat.isSymbolicLink() && !tracked.has(normalize(file))) throw new Error("link appeared during cleanup");
+    const link = owned(file, stat);
+    if (await check(link) && link) throw new Error("link appeared during cleanup");
   });
+  return active;
 }
 
 async function linkTree(root, copy) {
@@ -198,18 +212,23 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     return normalize(path.dirname(target)) === normalize(entry.tempRoot) && target === entry.scratch ? target : null;
   };
   const scratchBusy = async (entry, target) => {
-    for (const pane of panes()) if (nick(pane.label) === nick(entry.label) || inside(target, pane.cwd) || inside(target, await resolvePin(pane.cwd))) return true;
+    const label = nick(entry.label);
+    for (const pane of panes()) if (nick(pane.label) === label || contains(target, normalize(pane.cwd)) || contains(target, normalize(await resolvePin(pane.cwd)))) return true;
     return false;
   };
   const finishScratch = (target, owner) => {
-    for (const entry of entries.slice(0, entries.indexOf(owner) + 1)) if (entry.scratch && normalize(entry.scratch) === normalize(target)) entry.scratchDone = true;
+    const normalized = normalize(target);
+    for (const entry of entries.slice(0, entries.indexOf(owner) + 1)) if (entry.scratch && normalize(entry.scratch) === normalized) entry.scratchDone = true;
     save();
   };
   const removeScratch = async (entry, retry = true) => {
     if (entry.scratchDone) return;
     const target = scratchFor(entry);
     if (!target) { entry.scratchDone = true; return; }
-    const current = async () => !await scratchBusy(entry, target) && entries.findLast((other) => other.scratch && normalize(other.scratch) === normalize(target)) === entry;
+    const current = async () => {
+      const normalized = normalize(target);
+      return !await scratchBusy(entry, normalized) && entries.findLast((other) => other.scratch && normalize(other.scratch) === normalized) === entry;
+    };
     try {
       if (!await current()) return;
       try { await fsp.lstat(target); } catch (error) {
@@ -218,7 +237,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         return;
       }
       if (!await directory(target)) return;
-      await unlinkLinks(target, new Set(), current);
+      if (!await unlinkLinks(target, new Set(), current)) return;
       if (!await directory(target) || !await current()) return;
       await fsp.rm(target, { recursive: true });
       finishScratch(target, entry);
