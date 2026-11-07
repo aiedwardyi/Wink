@@ -145,6 +145,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     if (botId) setPaneFocus({ sessionId: null, botId });
   }, [botId, openTerminal]);
   const botPaneFocus = paneFocus?.botId && paneFocus.botId !== botId ? null : paneFocus;
+  useEffect(() => {
+    setPaneFocus((focus) => focus?.botId && focus.botId !== botId ? null : focus);
+  }, [botId]);
   const clearTerminalAttention = (attention: Pick<TerminalAttention, "botId" | "sessionId">) => {
     const key = terminalAttentionKey(attention.botId, attention.sessionId);
     const sessions = pendingTerminalAcknowledgements.current.get(attention.botId);
@@ -501,6 +504,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [bot?.id, bot?.cwd, chatShown]);
 
   const closeTerminal = () => {
+    paneRequest.current++;
     if (bot) setTerminalViews((views) => ({ ...views, [bot.id]: false }));
     requestAnimationFrame(() => {
       if (!composerNeedsTap()) conversationRef.current?.querySelector<HTMLTextAreaElement>("[data-orbit-composer]")?.focus();

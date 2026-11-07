@@ -20,7 +20,7 @@ import "@xterm/xterm/css/xterm.css";
 type SessionInfo = { cwd: string; shell: string };
 type OutputEvent = { id: string; data: string; seq: number };
 type TerminalSnapshot = { id: string; cwd: string; shell: string; output: string; exitCode: number | null; seq: number; launchProject?: string | null; label?: string; cols?: number; rows?: number; alternate?: boolean; modes?: number[]; resetModes?: number[] };
-type BotPane = { id: string; label: string | null; exited?: boolean };
+type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?: number };
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
 const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text";
@@ -136,7 +136,7 @@ export function TerminalWorkspace({
     const closed = new Set<string>();
     void Promise.resolve().then(() => bridge.readBot?.(bot.id)).then((snapshot) => {
       if (!alive || !snapshot?.panes) return;
-      const seeded = snapshot.panes.filter((item) => !item.main && !closed.has(item.sessionId)).map((item) => ({ id: item.sessionId, label: item.label, exited: item.exited }));
+      const seeded = snapshot.panes.filter((item) => !item.main && !closed.has(item.sessionId)).map((item) => ({ id: item.sessionId, label: item.label, exited: item.exited, changedAt: item.changedAt }));
       setPanes((list) => [...seeded, ...list.filter((item) => !seeded.some((seed) => seed.id === item.id))]);
     }).catch(() => {}).finally(() => { if (alive) setSeeded(true); });
     const offOpened = bridge.onOpened?.((event) => {
@@ -717,7 +717,7 @@ export function TerminalWorkspace({
       setConfirmClose(true);
     }
   };
-  const roster = panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited }));
+  const roster = panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited, changedAt: item.changedAt }));
   const chip = rosterChip(workers, roster);
   const paneOrder = workerPaneOrder(roster, workers);
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
