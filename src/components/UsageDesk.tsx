@@ -447,22 +447,27 @@ export function UsageDesk() {
     if (!list) return;
     const layout = () => {
       delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
       if (window.innerWidth >= 768) {
         delete list.dataset.phoneColumns;
         const summaries = list.querySelectorAll<HTMLElement>(".usage-summary");
-        const widths: number[] = [];
-        // Ignore the entrance scale and round up to keep fractional widths from wrapping.
-        for (const summary of summaries) {
-          [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
-            const index = meter.dataset.window === "week" ? 1 : slot;
-            widths[0] ??= 0;
-            widths[index] = Math.max(widths[index] ?? 0, Math.ceil(parseFloat(getComputedStyle(meter).width)));
-          });
-        }
         const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => Math.ceil(parseFloat(getComputedStyle(name).width))));
-        if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
-          list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
-          list.dataset.desktopColumns = "";
+        for (const size of ["large", "medium", "small"]) {
+          list.dataset.summarySize = size;
+          const widths: number[] = [];
+          // Ignore the entrance scale and round up to keep fractional widths from wrapping.
+          for (const summary of summaries) {
+            [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
+              const index = meter.dataset.window === "week" ? 1 : slot;
+              widths[0] ??= 0;
+              widths[index] = Math.max(widths[index] ?? 0, Math.ceil(parseFloat(getComputedStyle(meter).width)));
+            });
+          }
+          if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
+            list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
+            list.dataset.desktopColumns = "";
+            break;
+          }
         }
         return;
       }
@@ -489,6 +494,7 @@ export function UsageDesk() {
       document.fonts?.removeEventListener("loadingdone", layout);
       delete list.dataset.phoneColumns;
       delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
     };
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };

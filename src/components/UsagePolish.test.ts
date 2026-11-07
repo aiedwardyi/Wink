@@ -162,6 +162,34 @@ it("keeps layout widths while the Settings entrance scales the painted meters", 
   vi.restoreAllMocks();
 });
 
+it("steps every collapsed bar down with its container width and leaves phones unchanged", async () => {
+  vi.stubGlobal("innerWidth", 1280);
+  h.board!.engines = [h.board!.engines[0]!];
+  localStorage.setItem("openmausbot.usageFolds.v1", JSON.stringify({ claude: true }));
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => {
+    const size = element.closest<HTMLElement>("[data-summary-size]")?.dataset.summarySize;
+    const bar = size === "large" ? 120 : size === "medium" ? 95 : 70;
+    return Object.assign(document.createElement("div").style, {
+      width: `${element.matches("[data-engine-fold]") ? 100 : bar + (element.dataset.window === "week" ? 100 : 80)}px`,
+    });
+  });
+  let width = 560;
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
+  for (const [available, size, columns] of [[560, "large", "200px 220px"], [510, "medium", "175px 195px"], [460, "small", "150px 170px"], [560, "large", "200px 220px"]] as const) {
+    width = available;
+    await mount();
+    expect(q("[data-usage-sections]")!.dataset.summarySize).toBe(size);
+    expect(q("[data-desktop-columns]")!.style.getPropertyValue("--usage-summary-columns")).toBe(columns);
+  }
+  vi.stubGlobal("innerWidth", 392);
+  await mount();
+  expect(q("[data-summary-size]")).toBeNull();
+  expect(rule(".usage-sections .usage-cells-mini")).toContain("transition-property: none");
+  expect(rule('.usage-sections[data-summary-size="large"] .usage-cells-mini')).toContain("--cells-w: 120px; --cell-h: 7px");
+  expect(rule('.usage-sections[data-summary-size="medium"] .usage-cells-mini')).toContain("--cells-w: 95px; --cell-h: 5.5px");
+  vi.restoreAllMocks();
+});
+
 it("gives the refresh icon a 44px coarse-pointer hit area", () => {
   expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*\[data-usage-refresh\] \{[^}]*width: 44px;[^}]*height: 44px;/);
   expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*\[data-usage-refresh\]::after \{ inset: 0;/);

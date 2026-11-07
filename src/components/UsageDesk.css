@@ -119,6 +119,9 @@
   .usage-desk .usage-reset, [data-usage-quick] .usage-reset { display: flex; flex-wrap: wrap; row-gap: 4px; }
 }
 @media (width >= 768px) {
+  .usage-sections .usage-cells-mini { transition-property: none; }
+  .usage-sections[data-summary-size="large"] .usage-cells-mini { --cells-w: 120px; --cell-h: 7px; }
+  .usage-sections[data-summary-size="medium"] .usage-cells-mini { --cells-w: 95px; --cell-h: 5.5px; }
   @container usage-group (width < 344px) {
     .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-figures { display: contents; }
     .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-reset { grid-column: 2 / 4; }
