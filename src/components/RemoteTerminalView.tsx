@@ -6,6 +6,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { paintRun, runPaint, type RunPaint } from "@/lib/ansi-palette";
 import { composerEnterIntent } from "@/lib/composer-enter";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
+import { workerPaneOrder } from "@/lib/terminal-hotkeys";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
@@ -84,29 +85,16 @@ function runStyle(run: TerminalRun, paint: RunPaint): CSSProperties {
   };
 }
 
-function paneSelection(pane: RemoteTerminalPane): string | null {
-  return pane.main && pane.sessionId !== MAIN_TAB ? null : pane.sessionId;
-}
-
-/** Alt+n picks the nth pane in this view's order, Main first. Null is the live main pane. Undefined is past the end. */
-export function remotePaneHotkey(panes: RemoteTerminalPane[], n: number): string | null | undefined {
-  const pane = panes[n - 1];
-  if (!pane) return undefined;
-  return paneSelection(pane);
-}
-
 export function RemoteTerminalView({
   bot,
   onClose,
   visible,
-  paneHotkey,
   paneFocus,
 }: {
   bot: Pick<Bot, "id" | "name"> & Partial<Pick<Bot, "messages" | "activeLeafId" | "hasMore">>;
   onClose: () => void;
   visible: boolean;
-  paneHotkey?: { n: number } | null;
-  paneFocus?: { sessionId: string } | null;
+  paneFocus?: { sessionId: string | null } | null;
 }) {
   const { t } = useI18n();
   const workers = useMemo(
@@ -139,10 +127,6 @@ export function RemoteTerminalView({
     : mainPane
       ? [mainPane, ...panes.filter((pane) => pane !== mainPane)]
       : [{ sessionId: MAIN_TAB, main: true, exited: true }, ...panes];
-  const orderRef = useRef(order);
-  orderRef.current = order;
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
   const fallbackPane = mainPane ? undefined : panes[0]?.sessionId;
   // Main picked before Main started follows the live Main pane.
   const picked = selectedPane === MAIN_TAB && order[0]?.sessionId !== MAIN_TAB ? null : selectedPane;
@@ -196,16 +180,15 @@ export function RemoteTerminalView({
     setRefreshing(false);
   }, [refresh]);
 
-  useEffect(() => {
-    if (!visibleRef.current || !paneHotkey) return;
-    const next = remotePaneHotkey(orderRef.current, paneHotkey.n);
-    if (next !== undefined) setSelectedPane(next);
-  }, [paneHotkey]);
-
   // A stale roster must not consume the tap. Apply it once that pane is listed.
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
+    if (paneFocus.sessionId === null) {
+      focusedRef.current = paneFocus;
+      setSelectedPane(mainPane ? null : MAIN_TAB);
+      return;
+    }
     const match = panes.find((pane) => pane.sessionId === paneFocus.sessionId);
     if (!match) return;
     focusedRef.current = paneFocus;
@@ -346,6 +329,7 @@ export function RemoteTerminalView({
   const buttonClass =
     "flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text disabled:opacity-50";
   const chip = rosterChip(workers, panes.filter((pane) => !pane.main));
+  const paneOrder = workerPaneOrder(panes, workers);
   const watched = onMainTab ? undefined : panes.find((pane) => pane.sessionId === activePaneId && !pane.main);
   const watchedName = watched ? parseWorkerLabel(watched.label).nick ?? watched.sessionId.slice(0, 8) : bot.name;
   const pick = (sessionId: string | null) => {
@@ -367,7 +351,11 @@ export function RemoteTerminalView({
           name={bot.name}
           {...chip}
           onOpenTerminalPane={pick}
-          onOpenTerminal={() => pick(remotePaneHotkey(order, 1) ?? null)}
+          onOpenTerminal={() => pick(mainPane ? null : MAIN_TAB)}
+          hotkeyOf={(sessionId) => {
+            const index = sessionId === null ? -1 : paneOrder.indexOf(sessionId);
+            return index >= 0 && index < 9 ? index + 1 : undefined;
+          }}
         />
         <button type="button" onClick={() => void refreshNow()} disabled={refreshing} aria-label={t("terminal.refresh")} className={buttonClass}>
           <RotateCcw size={16} className={refreshing ? "animate-spin motion-reduce:animate-none" : undefined} /> <span className="max-sm:sr-only">{t("terminal.refresh")}</span>

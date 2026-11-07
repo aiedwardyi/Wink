@@ -8,6 +8,7 @@ import { api, useStore, visibleMessages } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { readTerminalMatch, terminalTheme, TERMINAL_APPEARANCE_EVENT } from "@/lib/terminal-appearance";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
+import { workerPaneOrder } from "@/lib/terminal-hotkeys";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
@@ -52,15 +53,13 @@ export function TerminalWorkspace({
   onClose,
   focusBlocked,
   visible,
-  paneHotkey,
   paneFocus,
 }: {
   bot: Pick<Bot, "id" | "name" | "busy" | "cwd"> & Partial<Pick<Bot, "messages" | "activeLeafId" | "hasMore">>;
   onClose: () => void;
   focusBlocked: boolean;
   visible: boolean;
-  paneHotkey?: { n: number } | null;
-  paneFocus?: { sessionId: string } | null;
+  paneFocus?: { sessionId: string | null } | null;
 }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
@@ -636,15 +635,6 @@ export function TerminalWorkspace({
     if (visible && !focusBlocked) terminalRef.current?.focus();
   }, [visible, focusBlocked]);
 
-  useEffect(() => {
-    if (!paneHotkey) return;
-    if (paneHotkey.n === 1) selectPane(null);
-    else {
-      const target = panesRef.current[paneHotkey.n - 2];
-      if (target) selectPane(target.id);
-    }
-  }, [paneHotkey]);
-
   // Each open lands on the last picked pane or Main. Waits for the seed.
   useEffect(() => {
     if (!visible) pickedRef.current = false;
@@ -661,7 +651,7 @@ export function TerminalWorkspace({
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
-    if (!panes.some((item) => item.id === paneFocus.sessionId)) return;
+    if (paneFocus.sessionId !== null && !panes.some((item) => item.id === paneFocus.sessionId)) return;
     focusedRef.current = paneFocus;
     selectPane(paneFocus.sessionId);
   }, [paneFocus, panes]);
@@ -727,12 +717,14 @@ export function TerminalWorkspace({
       setConfirmClose(true);
     }
   };
-  const chip = rosterChip(workers, panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited })));
+  const roster = panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited }));
+  const chip = rosterChip(workers, roster);
+  const paneOrder = workerPaneOrder(roster, workers);
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
   const hotkeyOf = (sessionId: string | null) => {
-    if (sessionId === null) return 1;
-    const index = panes.findIndex((item) => item.id === sessionId);
-    return index >= 0 && index < 8 ? index + 2 : undefined;
+    if (sessionId === null) return undefined;
+    const index = paneOrder.indexOf(sessionId);
+    return index >= 0 && index < 9 ? index + 1 : undefined;
   };
 
   return (
