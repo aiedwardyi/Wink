@@ -20,6 +20,7 @@ import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
+import { AccountConnections } from "./AccountConnections";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -161,6 +162,90 @@ it("reorders accounts with Alt+Down and keeps the order after remount", async ()
   expect(rows()).toEqual([before[1], before[0], before[2]]);
 });
 
+it("rereads Usage order whenever the mounted chat line opens its quick view", async () => {
+  await mount(createElement("div", null, createElement(UsageDesk), createElement(ChatPlanMeters, {
+    instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {},
+  })));
+  const quickRows = () => [...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"));
+  const before = rows();
+  await click("[data-usage-meter]");
+  expect(quickRows()).toEqual(before);
+  await click("[data-usage-meter]");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await click("[data-usage-meter]");
+  expect(quickRows()).toEqual(rows());
+  expect(quickRows()).toEqual([before[1], before[0], before[2]]);
+  await click("[data-usage-meter]");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await click("[data-usage-meter]");
+  expect(quickRows()).toEqual([before[1], before[2], before[0]]);
+});
+
+it.each(["claude", "codex"])("uses the %s engine base's partial order and leaves unknown accounts last", async (kind) => {
+  const engine = h.board!.engines.find((each) => each.engine === kind)!;
+  const before = engine.accounts.map((account) => account.id);
+  engine.base = `${kind}-other`;
+  h.instances.filter((each) => each.accountOf === kind).forEach((each) => { each.accountOf = engine.base; });
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ [kind]: before, [engine.base]: ["removed-account", before.at(-1)] }));
+  await mount(createElement(ChatPlanMeters, { instanceId: engine.mainId, windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  const actual = [...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"));
+  expect(actual).toEqual([before.at(-1), ...before.slice(0, -1)]);
+  expect(engine.accounts.map((account) => account.id)).toEqual(before);
+});
+
+it.each([null, "{", "[]", '{"claude":[1]}', '{"codex":["codex"]}'])("keeps quick-view default order without a valid engine order (%s)", async (saved) => {
+  if (saved !== null) localStorage.setItem("openmausbot.usageOrder.v1", saved);
+  const before = h.board!.engines[0]!.accounts.map((account) => account.id);
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  expect([...document.querySelectorAll("[data-usage-quick] [data-account-row]")].map((node) => node.getAttribute("data-account-row"))).toEqual(before);
+});
+
+it("shares order between mounted Connections and Usage without losing other engines", async () => {
+  const before = h.board!.engines[0]!.accounts.map((account) => account.id);
+  const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
+  await mount(createElement("div", null, createElement(UsageDesk), createElement(AccountConnections, {
+    accounts: h.instances.filter((account) => account.accountOf === "claude"), reload: async () => {},
+  })));
+  const connections = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount);
+  await key('[data-connection-account="claude"] [data-usage-grip]', "ArrowDown");
+  expect(rows()).toEqual([before[1], before[0], before[2]]);
+  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowUp");
+  expect(connections()).toEqual(before);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
+});
+
+it("reads order changes from another window", async () => {
+  await mount();
+  const next = rows().reverse();
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: next }));
+  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
+  expect(rows()).toEqual(next);
+});
+
+it("keeps another window's engine order when dropping an in-flight drag", async () => {
+  await mount();
+  const before = rows();
+  const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
+  for (const [index, row] of [...host.querySelectorAll<HTMLElement>('[data-usage-engine="claude"] [data-account-row]')].entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, index * 80, 400, 80));
+  }
+  Object.defineProperty(q('[data-account-row="claude"]'), "animate", { configurable: true, value: undefined });
+  await act(async () => q('[data-account-row="claude"] [data-usage-grip]')!.dispatchEvent(new PointerEvent("pointerdown", {
+    pointerType: "mouse", button: 0, clientY: 40, bubbles: true,
+  })));
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
+  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { clientY: 130, bubbles: true }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  expect(rows()).toEqual([before[1], before[0], before[2]]);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
+});
+
 it("reorders sections with Alt+Down and keeps the order after remount", async () => {
   await mount();
   const before = engines();
@@ -252,7 +337,7 @@ it.each(["en", "ko"] as const)("refreshes a displayed Gemini reading in %s", asy
   expect(q('[data-usage-engine="gemini"] [data-account-row="gemini"]')).not.toBeNull();
   await click("[data-usage-refresh]");
   expect(h.api).toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
-  expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report });
+  expect(h.dispatch).toHaveBeenCalledWith({ type: "rateLimits", instanceId: "gemini", report, identity: instance.snapshot.account });
 });
 
 it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh when %s", async (state) => {
@@ -266,11 +351,18 @@ it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh wh
   expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
 });
 
-it("opens Settings on a chat bar click and preserves both Alt+U presses", async () => {
+it.each(["en", "ko"] as const)("toggles the chat card on click and preserves both Alt+U presses (%s)", async (locale) => {
+  persistPreference(locale);
   const open = vi.fn();
   await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: open }));
+  expect(q("[data-usage-meter]")!.getAttribute("aria-label")).toBe(locale === "en" ? "Usage for Claude. Open quick view" : "Claude 사용량. 빠른 보기 열기");
+  expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("false");
   await click("[data-usage-meter]");
-  expect(open).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-usage-quick]")).not.toBeNull();
+  expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("true");
+  expect(document.querySelector("[data-usage-quick] [data-usage-refresh]")).toBeNull();
+  await click("[data-usage-meter]");
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
   const first = new Event("orbit:usage-key", { cancelable: true });
   await act(async () => { window.dispatchEvent(first); });
@@ -282,13 +374,29 @@ it("opens Settings on a chat bar click and preserves both Alt+U presses", async 
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
 });
 
-it("draws CSS chat bars without the desktop hover row or mini phone cells", async () => {
+it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a signed-out account in the chat card (%s)", async (locale) => {
+  persistPreference(locale);
+  h.board!.engines[0]!.accounts[0]!.signIn = "signed-out";
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+  const row = document.querySelector('[data-usage-quick] [data-account-row="claude"]')!;
+  expect(row.querySelector("[data-sign-in]")!.textContent).toBe(locale === "en" ? "Sign In" : "로그인");
+  expect(row.textContent).not.toContain(locale === "en" ? "Connected" : "연결됨");
+  expect(row.querySelector("[data-row-status]")!.textContent).toBe(locale === "en" ? "Not signed in" : "로그인되지 않음");
+  await act(async () => row.querySelector<HTMLElement>("[data-sign-in]")!.click());
+  expect(h.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "connections" });
+});
+
+it("draws chat bars as shared shapes without the desktop hover row or mini phone cells", async () => {
   await mount(createElement(ChatPlanMeters, { windows: [{ id: "five_hour", usedPercent: 20, resetsAt: usageBoardNow + 60_000 }], now: usageBoardNow, onOpenUsage: () => {} }));
   expect(q("[data-usage-meter]")!.className).not.toContain("hover:bg");
-  expect(host.querySelectorAll("[data-cell]")).toHaveLength(10);
+  expect(q("[data-cells]")!.tagName.toLowerCase()).toBe("svg");
+  expect(q("[data-cells]")!.classList).not.toContain("usage-cells-mini");
+  expect([...host.querySelectorAll("[data-cell]")].map((cell) => cell.tagName.toLowerCase())).toEqual(Array(10).fill("polygon"));
+  expect(host.textContent).not.toMatch(/[─-▟▰▱]/u);
   const css = readFileSync(resolve("src/components/UsageDesk.css"), "utf8");
-  expect(css).toContain("skewX(-12deg)");
-  expect(css).toContain("--cell-w: 9px");
+  expect(css).not.toContain("skew");
+  expect(css).toContain("--cells-w: 120px");
 });
 
 

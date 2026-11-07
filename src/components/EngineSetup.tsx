@@ -7,7 +7,9 @@ import { api, useEngineLoginRefresh, type EngineInstall, type InstanceInfo } fro
 import { isPhone } from "@/lib/phone-swipe";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-catalog";
 import { accountReady } from "@/lib/accounts";
+import { ConnectionError } from "@/lib/error-text";
 
 type Platform = "darwin" | "win32" | "linux";
 
@@ -206,10 +208,18 @@ export function CommandRow({ command, actionLabel, signInInstanceId, installInst
   );
 }
 
+const DIDNT_FINISH: MessageKey = "engines.didntFinish";
+
+function refusal(error: unknown): MessageKey {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "account-busy" ? "engines.signInBusy" : code === "login-busy" ? "engines.signInOther"
+    : code === "host-unknown" ? "engines.signInHostUnknown" : DIDNT_FINISH;
+}
+
 export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: InstanceInfo) => void) {
   const [current, setCurrent] = useState(instance);
   const [waiting, setWaiting] = useState(instance.loginState === "pending");
-  const [failed, setFailed] = useState(instance.loginState === "failed");
+  const [failed, setFailed] = useState<MessageKey | false>(instance.loginState === "failed" && DIDNT_FINISH);
   const [capture, setCapture] = useState(instance.loginCapture ?? {});
   const [copyFallback, setCopyFallback] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -229,7 +239,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
 
   useEffect(() => {
     setWaiting(instance.loginState === "pending");
-    setFailed(instance.loginState === "failed");
+    setFailed(instance.loginState === "failed" && DIDNT_FINISH);
     setCapture(instance.loginCapture ?? {});
     setCopyFallback(false);
     setBusy(false);
@@ -253,7 +263,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setCapture(next.loginCapture ?? {});
     onUpdated?.(next);
     if (accountReady(next)) { setWaiting(false); setFailed(false); }
-    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled"); }
+    else if (next.loginState !== "pending") { setWaiting(false); setFailed(next.loginState !== "cancelled" && DIDNT_FINISH); }
   });
 
   const start = async () => {
@@ -264,8 +274,10 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
     setFailed(false);
     setCapture({});
     setCopyFallback(false);
+    let started = false;
     try {
       const result = await api(path, { method: "POST", body: JSON.stringify({ device: phone }) });
+      started = true;
       if (request !== generation.current) return;
       setCapture(result);
       if (external) {
@@ -278,11 +290,12 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
           }
         }
       }
-    } catch {
+    } catch (error) {
       if (request !== generation.current) return;
       setWaiting(false);
-      setFailed(true);
-      void api(path, { method: "DELETE" }).catch(() => {});
+      setFailed(started ? DIDNT_FINISH : refusal(error));
+      // A refused start never cancels: the sign-in running there may be another surface's.
+      if (started || error instanceof ConnectionError) void api(path, { method: "DELETE" }).catch(() => {});
     }
   };
   const cancel = async () => {
@@ -298,7 +311,7 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
       if (request !== generation.current) return;
       setWaiting(false);
       setCapture({});
-    } catch { if (request === generation.current) setFailed(true); }
+    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
     finally { if (request === generation.current) setBusy(false); }
   };
   const submitCode = async () => {
@@ -311,37 +324,39 @@ export function useEngineSignIn(instance: InstanceInfo, onUpdated?: (instance: I
         method: "POST", body: JSON.stringify({ code: loginCode, generation: capture.inputGeneration }),
       });
       if (request === generation.current) setLoginCode("");
-    } catch { if (request === generation.current) setFailed(true); }
+    } catch { if (request === generation.current) setFailed(DIDNT_FINISH); }
     finally { if (request === generation.current) setBusy(false); }
   };
   const loading = !waiting && current.snapshot.authenticated === undefined && !current.snapshot.authChecked && !current.loginState;
   return { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode };
 }
 
-export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean }) {
+export function EngineSignIn({ instance, onUpdated, buttonLabel, buttonClassName, forceSignIn = false, lineInTitle = false }: { instance: InstanceInfo; onUpdated?: (instance: InstanceInfo) => void; buttonLabel?: string; buttonClassName?: string; forceSignIn?: boolean; lineInTitle?: boolean }) {
   const { t } = useI18n();
   const { connected, loading, computerOnly, deviceFlow, waiting, failed, capture, copyFallback, busy, loginCode, setLoginCode, start, cancel, submitCode } = useEngineSignIn(instance, onUpdated);
   if (connected) return <span className="text-[12px] text-ink-secondary">{t("connections.connected")}</span>;
   if (!forceSignIn && loading) return null;
-  if (computerOnly) return <span className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  if (computerOnly) return <span data-computer-only="" className="break-keep text-[12px] text-ink-secondary">{t("engines.signInFromComputer")}</span>;
+  // The card shows this line under its title while the code row is open.
+  const browserLine = lineInTitle && waiting && !copyFallback && !capture.code && Boolean(capture.inputGeneration);
   return (
-    <div aria-live="polite" className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
+    <div aria-live="polite" data-sign-in-open={waiting || failed ? "" : undefined} data-sign-in-code={browserLine ? "" : undefined} className="flex min-w-0 flex-col items-end gap-1.5 break-keep text-[12px] text-ink-secondary">
       {waiting ? <>
-        <span>{copyFallback ? t("engine.pasteAndEnter") : capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>
+        {!browserLine && <span>{copyFallback ? t("engine.pasteAndEnter") : capture.code ? t("engines.enterCode") : t("engines.finishInBrowser")}</span>}
         {copyFallback && <code className="select-all break-all font-mono text-ink">{instance.install?.signInCommand}</code>}
         {capture.code && <code className="select-all break-all font-mono text-[14px] text-ink">{capture.code}</code>}
         {capture.inputGeneration && <form className="flex max-w-full flex-wrap justify-end gap-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
           <input type="password" value={loginCode} onInput={(event) => setLoginCode(event.currentTarget.value)}
             aria-label={t("accounts.loginCode")} placeholder={t("accounts.loginCode")} autoComplete="off" maxLength={4096}
-            className="min-h-11 min-w-0 rounded border border-hairline bg-control px-2 text-ink" />
+            className="min-h-11 w-60 min-w-0 max-w-full rounded border border-hairline bg-control px-2 text-ink" />
           <button type="submit" disabled={busy || !loginCode} className="min-h-11 text-ink underline disabled:opacity-50">{t("accounts.submitCode")}</button>
         </form>}
         <div className="flex flex-wrap justify-end gap-3">
           {capture.url && <a href={capture.url} target="_blank" rel="noreferrer" className="text-ink underline">{deviceFlow ? t("engines.openLink") : t("engines.openAgain")}</a>}
           <button type="button" onClick={() => void cancel()} disabled={busy} className="text-ink underline disabled:opacity-50">{t("engines.cancel")}</button>
         </div>
-      </> : <button type="button" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
-      {failed && <span>{t("engines.didntFinish")}</span>}
+      </> : <button type="button" data-sign-in="" disabled={busy} onClick={() => void start()} className={buttonClassName ?? "rounded-lg bg-control px-3 py-2 font-medium text-ink hover:bg-raised-hover"}>{buttonLabel ?? t("engines.signIn")}</button>}
+      {failed && <span>{t(failed)}</span>}
     </div>
   );
 }

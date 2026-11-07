@@ -837,6 +837,7 @@ export function createUsageRefresh(deps: {
   const claudeProbe = createClaudeUsageProbe({ read: deps.claude, now: clock, random: deps.random });
   const cache = new Map<string, { retryAt: number; settled: boolean; pending: Promise<Result> }>();
   const claudeReads = new Map<string, { retryAt: number; settled: boolean; limited: number; pending: Promise<Report> }>();
+  const credentials = new Map<string, string>();
   const skipped = new Set<string>();
   const epochs = new Map<string, number>();
   const active = new Map<string, number>();
@@ -921,6 +922,7 @@ export function createUsageRefresh(deps: {
           const credentialsPath = join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), ".credentials.json");
           // One read per account, not per instance: every instance on a credential shares it and its 429 backoff.
           const credential = envToken ? `env:${envToken}` : credentialsPath;
+          credentials.set(options.instanceId, credential);
           let shared = claudeReads.get(credential);
           if (!shared || (shared.settled && clock() >= shared.retryAt)) {
             const limited = shared?.limited ?? 0;
@@ -977,7 +979,7 @@ export function createUsageRefresh(deps: {
         };
       }
     })();
-    const guarded = pending.then((result) => options.account && epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result)
+    const guarded = pending.then((result) => epochs.get(options.instanceId) !== epoch ? { retryAt: 0 } : result)
       .finally(release);
     if (driver !== "claudeAgent") {
       const entry = { retryAt, settled: false, pending: guarded };
@@ -989,6 +991,9 @@ export function createUsageRefresh(deps: {
   };
   return Object.assign(refresh, { busy: (instanceId: string) => active.has(instanceId), invalidate: (instanceId: string) => {
     epochs.set(instanceId, (epochs.get(instanceId) ?? 0) + 1);
+    claudeProbe.invalidate(instanceId);
+    const credential = credentials.get(instanceId);
+    if (credential) claudeReads.delete(credential);
     for (const key of cache.keys()) if (key === instanceId || key.startsWith(`${instanceId}:`)) cache.delete(key);
   } });
 }
@@ -1000,5 +1005,5 @@ export function createMuseCheck(deps: Parameters<typeof createUsageRefresh>[0] =
     ...deps,
     throttleMs: MUSE_CHECK_THROTTLE_MS,
   });
-  return (options: Options, previous?: Report) => refresh("museAgent", options, previous);
+  return Object.assign((options: Options, previous?: Report) => refresh("museAgent", options, previous), { invalidate: refresh.invalidate });
 }

@@ -49,6 +49,9 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-real-fixtures.mjs "$env:PR_BASE_SHA"
       - run: pnpm typecheck
+      - run: pnpm check:glyphs
+      - run: pnpm check:ko-keys
+      - run: pnpm check:fixture-dates
       - run: pnpm build
       - run: pnpm check:electron
       - run: node scripts/check-skin-contrast.mjs

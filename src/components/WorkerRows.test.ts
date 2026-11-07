@@ -353,7 +353,7 @@ describe("WorkerChip", () => {
 
   it("puts each pane's Alt+n in its desktop row tooltip only", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const keys = new Map<string | null, number>([[null, 1], ["work-1", 2]]);
+    const keys = new Map<string | null, number>([["work-1", 1]]);
     const { host, chip, unmount } = await mount([shown("WORK", "working", "work-1", 1), shown("LATE", "working", "late-1", 2)], {
       onOpenTerminalPane: vi.fn(),
       onOpenTerminal: vi.fn(),
@@ -364,10 +364,10 @@ describe("WorkerChip", () => {
       await act(async () => chip()!.click());
       const list = host.querySelector("[data-worker-list]")!;
       const [work, late] = [...list.querySelectorAll("li button")];
-      expect(work.getAttribute("title")).toBe("WORK (Alt+2)");
+      expect(work.getAttribute("title")).toBe("WORK (Alt+1)");
       expect(work.textContent).not.toContain("Alt");
       expect(late.hasAttribute("title")).toBe(false);
-      expect(list.querySelector("[data-worker-terminal]")?.getAttribute("title")).toBe("Open terminal (Alt+1)");
+      expect(list.querySelector("[data-worker-terminal]")?.hasAttribute("title")).toBe(false);
     } finally {
       await unmount();
     }

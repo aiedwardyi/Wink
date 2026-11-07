@@ -254,17 +254,12 @@ describe("delegated ask-back", () => {
     expect(wake).not.toHaveBeenCalled();
   });
 
-  it("does not wake for a taken-over rerun's pointer", async () => {
-    turn.takenOverBy = "User";
-    finishDelegatedTurn(bus, turn, true, "@Sender, which branch?");
-    drainDelegations(bus, bus, sender.threadId, (toBotId, _text, _depth, sourceThreadId, channel, taskId, sourceBotId) => {
-      turn = { toBotId, sourceThreadId, channelId: channel?.id, taskId, sourceBotId, takenOverBy: "User" };
-    });
-    await vi.advanceTimersByTimeAsync(0);
+  it("wakes once for the peer question after a short user reply", async () => {
+    finishDelegatedTurn(bus, turn, true, "<user1>Got it.</user1>@Sender, which branch?");
     finishDelegatedTurn(bus, turn, true, "@Sender, which branch?");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).not.toHaveBeenCalled();
-    expect(store.messagesFor(sender.threadId).some(isWakeNote)).toBe(false);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(store.messagesFor(sender.threadId).filter((message) => message.comm?.peer === "reply")).toHaveLength(1);
   });
 
   it.each([false, true])("does not wake for a room reply (ask: %s)", async (ask) => {

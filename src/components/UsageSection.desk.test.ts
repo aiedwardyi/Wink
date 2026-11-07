@@ -118,7 +118,7 @@ const summary = (engine = "claude") => {
   return windows.length ? windows.map((window) => `${text(window.firstElementChild)} ${text(window.querySelector("[data-left]"))}`).join(" · ") : text(node);
 };
 const boxOf = (node: Element | null | undefined) => BOX.filter((name) => node?.classList.contains(name));
-const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => [...cell.classList].find((name) => name.startsWith("bg-")));
+const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => cell.getAttribute("data-cell") === "on" ? [...cell.parentElement!.classList].find((name) => name.startsWith("text-")) : "off");
 const said = (root: Element) => [root.textContent ?? "", ...[...root.querySelectorAll("*")].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
 function unused(board: UsageBoard, ...ids: string[]) {
   for (const id of ids) {
@@ -557,7 +557,7 @@ describe("Usage desk", () => {
     const empty = () => ({ version: 1 as const, accounts: {}, events: {}, seq: 0, counter: 0 });
     const board = createUsageBoard({
       accounts: { list: () => [{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }], defaultFor: () => "codex", drains: {} },
-      names: { get: () => null }, rateLimits: { get: () => report },
+      names: { get: () => null }, rateLimits: { get: () => report, delete: vi.fn() },
       history: { snapshot: empty, since: empty, record: vi.fn(), event: vi.fn(), purge: vi.fn() },
       runs: async () => ({ known: true, runs: [] }), bots: () => [], now: () => usageBoardNow,
     });
@@ -688,8 +688,8 @@ describe("Usage desk", () => {
     const opus = row("claude")?.querySelector('[data-window="seven_day_opus"]');
     expect(opus?.getAttribute("aria-label")).toBe("Opus 7d: 25% left, Resets in 2 days");
     expect(text(opus?.querySelector("[data-left]"))).toBe("25% left");
-    expect(tones(opus)).toEqual([...Array(3).fill("bg-warning"), ...Array(7).fill("bg-transparent")]);
-    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("bg-accent"), ...Array(7).fill("bg-transparent")]);
+    expect(tones(opus)).toEqual([...Array(3).fill("text-warning"), ...Array(7).fill("off")]);
+    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("text-accent"), ...Array(7).fill("off")]);
     expect(slots("gemini")).toEqual(["24h"]);
     expect(left("gemini", "daily")).toBe("82% left");
     expect(row("gemini")?.querySelectorAll("[data-cells]")).toHaveLength(1);
@@ -700,7 +700,7 @@ describe("Usage desk", () => {
     expect(slots("muse")).toEqual(["5h", "7d"]);
     expect(left("muse", "five_hour")).toBe("0% left");
     expect(row("muse")?.querySelector('[data-window="five_hour"] [data-left]')?.className).toMatch(/\btext-danger\b/);
-    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("bg-transparent"));
+    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("off"));
     expect(left("muse", "seven_day")).toBe("39% left");
     expect(row("muse")?.querySelector("[data-reading-age]")).toBeNull();
     expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
@@ -1123,7 +1123,7 @@ describe("Usage desk", () => {
     expect(engines.map((engine) => summary(engine))).toEqual(en
       ? ["5h 34% left · 7d 59% left", "7d 62% left", "No usage yet", "24h 82% left"]
       : ["5시간 34% 남음 · 7일 59% 남음", "7일 62% 남음", "아직 사용량 없음", "24시간 82% 남음"]);
-    expect(engines.map((engine) => section(engine)?.querySelector("[data-engine-summary]")?.childElementCount)).toEqual([2, 1, 0, 1]);
+    expect(engines.map((engine) => section(engine)?.querySelectorAll("[data-engine-summary] .usage-meter-summary").length)).toEqual([2, 1, 0, 1]);
     expect(q("[data-account-row]")).toBeNull();
     expect(q("[data-engine-summary] [data-left].text-danger")).toBeNull();
     const next = fresh();
@@ -1151,9 +1151,26 @@ describe("Usage desk", () => {
     expect(button?.getAttribute("aria-label")).toBe(en ? "Switch to Claude 2" : "Claude 2 전환");
   });
 
-  it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account and opens Connections (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("starts that account's sign-in on the Usage page in one tap (%s)", async (locale) => {
     accountOf(server.board, CLAUDE_3).signIn = "signed-out";
     await mount({ locale });
+    h.state.instances = h.state.instances.map((each) => (each as { instanceId: string }).instanceId === CLAUDE_3 ? { ...each as object, accountState: "stopped" } : each);
+    await rerender();
+    const signIn = row(CLAUDE_3)?.querySelector("button[data-sign-in]") ?? null;
+    expect(boxOf(signIn)).toEqual(BOX);
+    expect(row(CLAUDE_3)?.querySelector("[data-account-head]")?.lastElementChild?.contains(signIn), "Sign In ends the head line").toBe(true);
+    h.api = async (path, init) => { server.calls.push(`${(init?.method ?? "GET").toUpperCase()} ${path}`); return { url: "https://auth.example/device", code: "ABCD-EFGH" }; };
+    await click(signIn);
+    expect(server.calls.filter((call) => call.includes("/sign-in"))).toEqual([`POST /api/instances/${encodeURIComponent(CLAUDE_3)}/sign-in`]);
+    expect(text(row(CLAUDE_3))).toContain("ABCD-EFGH");
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account Wink has no record of and opens Connections (%s)", async (locale) => {
+    accountOf(server.board, CLAUDE_3).signIn = "signed-out";
+    await mount({ locale });
+    h.state.instances = h.state.instances.filter((each) => (each as { instanceId: string }).instanceId !== CLAUDE_3);
+    await rerender();
     const en = locale === "en";
     const account = row(CLAUDE_3);
     const signIn = account?.querySelector("button[data-sign-in]") ?? null;
@@ -1179,11 +1196,11 @@ describe("Usage desk", () => {
     const reset = week?.querySelector('[data-reset="week"]');
     expect(text(reset)).toBe(en ? "Limit reached · resets in 5d 2h" : "한도 도달 · 5일 2시간 후 초기화");
     expect([...reset?.querySelectorAll(".text-danger") ?? []].map(text)).toEqual([en ? "Limit reached" : "한도 도달"]);
-    expect(tones(week)).toEqual(Array(10).fill("bg-transparent"));
+    expect(tones(week)).toEqual(Array(10).fill("off"));
     const low = row(CLAUDE_3)?.querySelector('[data-window="session"]');
     expect(text(low?.querySelector("[data-left].text-danger"))).toBe(en ? "10% left" : "10% 남음");
     expect(text(low?.querySelector('[data-reset="session"]'))).toBe(en ? "resets in 2h 10m" : "2시간 10분 후 초기화");
-    expect(tones(low)).toEqual(["bg-danger", ...Array(9).fill("bg-transparent")]);
+    expect(tones(low)).toEqual(["text-danger", ...Array(9).fill("off")]);
   });
 
   it.each(["en", "ko"] as const)("ends a used-up window with no reset time at Limit reached, with no dot after it (%s)", async (locale) => {
@@ -1230,12 +1247,42 @@ describe("Usage desk", () => {
     await mount({ locale });
     const boardClient = await client();
     accountOf(server.board, "muse").signIn = "signed-out";
+    h.state.instances = h.state.instances.map((each) => (each as { instanceId: string }).instanceId === "muse" ? { ...each as object, accountState: "stopped" } : each);
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
     expect(row("muse")?.querySelector("[data-account-bars], [data-main-check]")).toBeNull();
     expect(text(row("muse"))).toContain(locale === "en" ? "Sign In" : "로그인");
     accountOf(server.board, "muse").signIn = "ready";
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
     expect(row("muse")?.querySelector("[data-account-bars]")).not.toBeNull();
+  });
+
+  it.each(["en", "ko"] as const)("clears swapped usage and pace before painting the new email (%s)", async (locale) => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    const ids = ["claude", "codex", "grok", "gemini", "muse"];
+    for (const id of ids) accountOf(server.board, id).windows = structuredClone(accountOf(server.board, "claude").windows);
+    await mount({ locale });
+    for (const id of ids) expect(row(id)?.querySelector("[data-account-bars]")).not.toBeNull();
+    const reply = deferred<UsageBoard>();
+    server.reply = () => reply.promise;
+    h.state.instances = h.state.instances.map((instance) => ({ ...instance as object,
+      snapshot: { state: "available", authenticated: true, account: "new@example.test" },
+    }));
+    await rerender();
+    for (const id of ids) {
+      if (id === "gemini") { expect(row(id)).toBeNull(); continue; }
+      expect(text(row(id))).toContain("new@example.test");
+      expect(row(id)?.querySelector("[data-account-bars], [data-window], [data-pace]")).toBeNull();
+      expect(text(row(id)?.querySelector("[data-window-empty]"))).toBe(locale === "en" ? "No usage yet" : "아직 사용량 없음");
+    }
+    const next = fresh();
+    next.engines.push(museEngine(usageBoardNow));
+    next.revision++;
+    for (const id of ids) {
+      accountOf(next, id).windows = [{ ...UNUSED, usedPercent: 40 }];
+      accountOf(next, id).history = { fine: [], coarse: [] };
+    }
+    await act(async () => { reply.resolve(next); await vi.advanceTimersByTimeAsync(0); });
+    for (const id of ids) expect(text(row(id)?.querySelector("[data-left]"))).toBe(locale === "en" ? "60% left" : "60% 남음");
   });
 
   it.each(["en", "ko"] as const)("says No usage yet, the same on every engine, for an account with no windows (%s)", async (locale) => {

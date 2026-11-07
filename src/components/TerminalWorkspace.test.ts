@@ -1350,7 +1350,7 @@ async function pickMain() {
   await act(async () => { row.click(); });
 }
 
-it("switches panes on the Alt+digit hotkey and names the watched pane in a one-line header title", async () => {
+it("switches panes on a focus request and names the watched pane in a one-line header title", async () => {
   const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
   const panes = ["worker-one-with-a-long-label", "worker-two-with-a-long-label"].map((label, index) => ({ sessionId: `pane-${index + 1}`, generation: 1, label, cwd: "C:\\work", main: false, exited: false }));
   const readBot = vi.fn(async () => ({ botId: "bot-1", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes }));
@@ -1360,12 +1360,12 @@ it("switches panes on the Alt+digit hotkey and names the watched pane in a one-l
   await act(async () => { await Promise.resolve(); });
 
   expect(host.querySelector("header h1")?.className).toContain("truncate");
-  expect((await paneRows()).map((row) => row.title)).toEqual(["worker-one-with-a-long-label (Alt+2)", "worker-two-with-a-long-label (Alt+3)"]);
-  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 3 } })));
+  expect((await paneRows()).map((row) => row.title)).toEqual(["worker-one-with-a-long-label (Alt+1)", "worker-two-with-a-long-label (Alt+2)"]);
+  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: "pane-2" } })));
   expect(shownPane()).toBe("worker-two-with-a-long-label");
-  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 9 } })));
+  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: "missing" } })));
   expect(shownPane()).toBe("worker-two-with-a-long-label");
-  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 1 } })));
+  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: null } })));
   expect(shownPane()).toBe("Desk");
 });
 
@@ -1394,7 +1394,7 @@ it("activates the pane a notification names, once it is listed, and ignores unkn
   await act(async () => { await Promise.resolve(); });
   expect(shownPane()).toBe("two");
 
-  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 1 } })));
+  await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: null } })));
   expect(shownPane()).toBe("Desk");
   await act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: "pane-gone" } })));
   expect(shownPane()).toBe("Desk");
@@ -1509,12 +1509,12 @@ it("switches clicked rows and sends input only to the selected pane", async () =
   }
 });
 
-it("returns to the main shell from the Open terminal row, which carries the Alt+1 hint", async () => {
+it("returns to the main shell from the Open terminal row, without an Alt+1 hint", async () => {
   const f = paneFixture();
   await f.render();
   await f.select("two");
   expect(shownPane()).toBe("two");
-  expect((await openList()).querySelector<HTMLButtonElement>("[data-worker-terminal]")?.title).toBe("Open terminal (Alt+1)");
+  expect((await openList()).querySelector<HTMLButtonElement>("[data-worker-terminal]")?.title).toBe("");
   f.open.mockClear();
   await pickMain();
   expect(shownPane()).toBe("Desk");
@@ -2168,7 +2168,7 @@ it("drops a snapshot that settles while hidden and reopens on show", async () =>
   expect(terminal.write.mock.calls.map(([text]) => text)).toEqual(["FRESH"]);
 });
 
-it("shows Alt+N row titles only for the terminal row and panes 1 to 8 with 16 workers", async () => {
+it("shows Alt+N row titles only for workers 1 to 9 with 16 workers", async () => {
   const open = vi.fn(async (input: { sessionId?: string }) => ({ id: input.sessionId ?? "session-main", cwd: "C:\work", shell: "pwsh.exe", output: "", seq: 0, exitCode: null }));
   const panes = Array.from({ length: 16 }, (_, index) => ({ sessionId: `pane-${index + 1}`, generation: 1, label: `worker-${index + 1}`, cwd: "C:\work", main: false, exited: false }));
   const readBot = vi.fn(async () => ({ botId: "bot-1", seq: 0, capturedAt: 0, exitCode: null, exited: false, screenText: "", recentText: "", truncated: false, panes }));
@@ -2177,11 +2177,11 @@ it("shows Alt+N row titles only for the terminal row and panes 1 to 8 with 16 wo
   await act(async () => { await Promise.resolve(); });
 
   const list = await openList();
-  expect(list.querySelector<HTMLButtonElement>("[data-worker-terminal]")?.title).toBe("Open terminal (Alt+1)");
+  expect(list.querySelector<HTMLButtonElement>("[data-worker-terminal]")?.title).toBe("");
   const rows = [...list.querySelectorAll<HTMLButtonElement>("li button")];
   expect(rows).toHaveLength(16);
-  expect(rows[0].title).toBe("worker-1 (Alt+2)");
-  expect(rows[7].title).toBe("worker-8 (Alt+9)");
-  expect(rows[8].title).toBe("");
+  expect(rows[0].title).toBe("worker-1 (Alt+1)");
+  expect(rows[8].title).toBe("worker-9 (Alt+9)");
+  expect(rows[9].title).toBe("");
   expect(rows[15].title).toBe("");
 });

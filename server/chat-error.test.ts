@@ -44,3 +44,28 @@ it("stops waiting when a queued send is cancelled", async () => {
   await expect(result).resolves.toBeUndefined();
   expect(run).toHaveBeenCalledTimes(1);
 });
+
+it("tags a sign-in error with the added account that failed, through the bus", async () => {
+  const { runtimeErrorTool } = await import("./chat-error.ts");
+  const { EventBus } = await import("./harness/bus.ts");
+  const { makeFakeDriver } = await import("./testing/fake-driver.ts");
+  const fake = makeFakeDriver();
+  for (const instanceId of ["fake", "acct_00000000-0000-4000-8000-000000000002"]) {
+    await fake.driver.create({ instanceId, displayName: undefined, environment: {}, enabled: true, config: {} });
+  }
+  const bus = new EventBus(() => {});
+  bus.attach([...fake.created.values()].map(({ instance }) => instance));
+  const seen: ReturnType<typeof runtimeErrorTool>[] = [];
+  bus.subscribe((event) => { if (event.type === "runtime.error") seen.push(runtimeErrorTool(event, (id) => id.startsWith("acct_"))); });
+  const fail = (instanceId: string, signIn?: boolean) => fake.created.get(instanceId)!.emit({
+    eventId: "e", provider: "fake", threadId: "t", createdAt: new Date().toISOString(), type: "runtime.error", message: "Claude is not signed in.", signIn,
+  });
+  fail("acct_00000000-0000-4000-8000-000000000002", true);
+  fail("acct_00000000-0000-4000-8000-000000000002");
+  fail("fake", true);
+  expect(seen.map((tool) => JSON.parse(JSON.stringify(tool)))).toEqual([
+    { name: "error: Claude is not signed in.", ok: false, signIn: true, accountId: "acct_00000000-0000-4000-8000-000000000002" },
+    { name: "error: Claude is not signed in.", ok: false },
+    { name: "error: Claude is not signed in.", ok: false, signIn: true },
+  ]);
+});

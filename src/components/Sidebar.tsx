@@ -104,6 +104,7 @@ import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { DeviceSwitcher } from "./DeviceSwitcher";
+import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
@@ -1548,8 +1549,10 @@ export function Sidebar({
           <div className={cn("min-w-0", density === "icons" ? "flex w-full justify-center" : "flex-1")}>
             <DeviceSwitcher labeled iconOnly={density === "icons"} drawerOpen={open} />
           </div>
-        ) : (
+        ) : density === "icons" ? (
           <div />
+        ) : (
+          <BrandMark />
         )}
         <div
           className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
