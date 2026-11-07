@@ -265,6 +265,7 @@ import {
   supportsWorkspaceFiles,
 } from "./workspace.ts";
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
+import { mergeParkedCopy, recordTypedLines, typedHashes } from "./memory-clean.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
@@ -2213,7 +2214,7 @@ function syncMemory(botId: string): void {
   const botSyncId = chatSyncBotId(profileSyncSettings, botId);
   if (!folder || !botSyncId || !existsSync(folder)) return;
   try {
-    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger });
+    const results = syncBotMemory(folder, botSyncId, workspaceDir(botId), memorySyncLedger, { legacy: legacyMemoryLedger, typed: typedHashes(botId), mergeParked: mergeParkedCopy });
     // the poll runs for every idle bot, so only changed files refresh the check
     if (Object.values(results).some((result) => result === "pulled" || result === "conflict")) memoryHealthCheck.refresh(botId);
   } catch (error) {
@@ -3464,7 +3465,7 @@ bus.subscribe((event: RuntimeEvent) => {
             pushMessage({
               role: "bot",
               kind: "activity",
-              tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: note },
+              tool: { name: MEMORY_SAVE_TOOL, ok: true, ...note },
             });
           }
         }
@@ -7167,6 +7168,7 @@ const botRoutes = createBotRoutes({
   memoryHealthCheck,
   activeVpsThreads,
   resumePaneWakes,
+  recordTypedLines,
 });
 applyBrandLeadBot({
   dataDir: DATA_DIR,

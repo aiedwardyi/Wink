@@ -66,6 +66,7 @@ import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
+import { claudeText } from "./text-usage.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 
@@ -1990,14 +1991,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       effort?: "low",
       ephemeral = false,
       lean = false,
+      onUsage?: (tokens: number) => void,
     ): Promise<string> =>
-      new Promise((resolve, reject) => {
+      new Promise<string>((resolve, reject) => {
         if (!admitted || accountBlocked) return reject(new Error("Sign in to this Claude account before using helpers"));
         if (lean) mkdirSync(HELPER_DIR, { recursive: true });
         const child = spawnCli(
           config.cli,
           [
-            "-p", "--model", "claude-haiku-5-5", "--output-format", "text",
+            "-p", "--model", "claude-haiku-5-5", "--output-format", onUsage ? "json" : "text",
             ...(lean ? ["--safe-mode", "--tools", "", "--strict-mcp-config"] : []),
             ...(effort ? ["--effort", effort] : []),
             ...(ephemeral ? ["--no-session-persistence"] : []),
@@ -2053,7 +2055,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           signal?.addEventListener("abort", onAbort, { once: true });
           child.stdin.end(prompt);
         }
-      });
+      }).then((text) => onUsage ? claudeText(text, onUsage) : text);
 
     // a CLI before 2.1.169 has no --safe-mode: helpers then run as they did before lean
     let leanRejected = false;
@@ -2064,15 +2066,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       effort?: "low",
       ephemeral = false,
       lean = false,
+      onUsage?: (tokens: number) => void,
     ): Promise<string> => {
-      if (!lean || leanRejected) return runHelper(prompt, signal, timeoutMs, effort, ephemeral, false);
+      if (!lean || leanRejected) return runHelper(prompt, signal, timeoutMs, effort, ephemeral, false, onUsage);
       const deadline = Date.now() + timeoutMs;
-      return runHelper(prompt, signal, timeoutMs, effort, ephemeral, true).catch((error: unknown) => {
+      return runHelper(prompt, signal, timeoutMs, effort, ephemeral, true, onUsage).catch((error: unknown) => {
         const flag = error instanceof Error ? /unknown option '(--safe-mode|--tools|--strict-mcp-config)'/.exec(error.message)?.[1] : undefined;
         if (!flag) throw error;
         if (!leanRejected) console.warn(`${config.cli} rejects ${flag}; running notes and approval reviews without lean flags`);
         leanRejected = true;
-        return runHelper(prompt, signal, Math.max(0, deadline - Date.now()), effort, ephemeral, false);
+        return runHelper(prompt, signal, Math.max(0, deadline - Date.now()), effort, ephemeral, false, onUsage);
       });
     };
 
@@ -2147,7 +2150,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         },
       },
       generateText: (prompt, opts) =>
-        generateReview(prompt, opts?.signal, opts?.timeoutMs ?? SUMMARY_TIMEOUT_MS, "low", opts?.ephemeral, opts?.lean),
+        generateReview(prompt, opts?.signal, opts?.timeoutMs ?? SUMMARY_TIMEOUT_MS, "low", opts?.ephemeral, opts?.lean, opts?.onUsage),
       textModel: "claude-haiku-5-5",
       textTimeoutMs: SUMMARY_TIMEOUT_MS,
       reviewPermission: (prompt, signal) => generateReview(prompt, signal, undefined, undefined, true, true),

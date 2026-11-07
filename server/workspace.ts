@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
@@ -123,12 +124,15 @@ export function writeMemoryFile(botId: string, text: string): void {
 
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never
  * overwrites notes it has not seen. No base writes as before, for older clients. */
-export function saveMemoryFile(botId: string, text: string, baseRevision?: string) {
+export function saveMemoryFile(botId: string, text: string, baseRevision?: string, atomic = false) {
   const current = readMemoryFile(botId);
   if (baseRevision !== undefined && baseRevision !== current.revision) {
     return { conflict: true as const, text: current.text, revision: current.revision };
   }
-  writeMemoryFile(botId, text);
+  if (atomic) {
+    ensureWorkspace(botId);
+    writeFileAtomic(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
+  } else writeMemoryFile(botId, text);
   return { conflict: false as const, ...readMemoryFile(botId) };
 }
 
