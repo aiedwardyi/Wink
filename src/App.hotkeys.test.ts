@@ -317,7 +317,7 @@ describe("bot number shortcuts", () => {
   const handler = () =>
     app.slice(app.indexOf("const onKey = (e: KeyboardEvent)"), app.indexOf("window.addEventListener(\"keydown\", onKey)"));
 
-  it("jumps to the Nth visible bot with Alt+1..Alt+9 in sidebar display order", () => {
+  it("jumps to the Nth visible bot with Ctrl+1..Ctrl+9 in sidebar display order", () => {
     expect(handler()).toContain('e.altKey && !mod && !e.shiftKey');
     expect(handler()).toContain('data-sidebar-row-kind');
     expect(handler()).toContain('data-sidebar-row-id');
@@ -326,7 +326,7 @@ describe("bot number shortcuts", () => {
     expect(handler()).toContain("Digit9");
   });
 
-  it("also jumps with Ctrl+1..Ctrl+9, never with Shift or Ctrl+Alt", () => {
+  it("jumps with Ctrl+1..Ctrl+9, never with Shift or Ctrl+Alt", () => {
     expect(handler()).toContain("e.ctrlKey && !e.metaKey && !e.altKey");
     expect(handler()).toContain("!e.shiftKey && (");
   });
@@ -345,10 +345,141 @@ describe("bot number shortcuts", () => {
     expect(handler()).toContain("stopPropagation");
   });
 
-  it("no-ops past the end with no last-item magic for Alt+9", () => {
+  it("no-ops past the end with no last-item magic for Ctrl+9", () => {
     expect(handler()).toMatch(/\[n - 1\]|\[digit - 1\]/);
     expect(handler()).toMatch(/if \(!id\) return/);
     expect(handler()).not.toContain("length - 1");
+  });
+});
+
+describe("split number shortcuts", () => {
+  const mount = async (workers = 2) => {
+    localStorage.setItem("omb-onboarding-done", "true");
+    localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+      bots: ["Scout", "Map"].map((name, index) => ({ id: `b${index + 1}`, threadId: `t${index + 1}`, name, messages: [], modelSelection: { instanceId: "inst", model: "m" } })),
+      groups: [],
+      selectedId: "b1",
+    }));
+    const panes = [
+      { sessionId: "main", main: true },
+      ...Array.from({ length: workers }, (_, index) => ({ sessionId: `worker-${index + 1}`, label: `WORK-${index + 1}`, main: false })),
+    ];
+    const roster = vi.fn(async (path: string) => {
+      const sessionId = new URL(path, "http://localhost").searchParams.get("sessionId") ?? "main";
+      return new Response(JSON.stringify({ sessionId, generation: 1, screenText: sessionId, panes }));
+    });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("fetch", vi.fn((input: string) => {
+      const path = String(input);
+      if (path.includes("/terminal") && !path.includes("pane-counts")) {
+        return roster(path);
+      }
+      return new Promise<Response>(() => {});
+    }));
+    vi.stubGlobal("EventSource", class { onmessage = null; close = vi.fn(); });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(App)));
+    return {
+      host,
+      roster,
+      panes,
+      press: async (code: string, init: KeyboardEventInit = {}) => {
+        const event = new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true, ...init });
+        await act(async () => {
+          const input = host.querySelector<HTMLTextAreaElement>(".orbit-terminal-overlay[data-open=true] textarea");
+          input?.focus();
+          (input ?? window).dispatchEvent(event);
+        });
+        return event;
+      },
+      terminal: () => host.querySelector('.orbit-terminal-overlay[data-open="true"]'),
+      unmount: async () => {
+        await act(async () => root.unmount());
+        host.remove();
+        vi.unstubAllGlobals();
+        localStorage.clear();
+      },
+    };
+  };
+
+  it("switches bots with Ctrl+number from a focused terminal", async () => {
+    const f = await mount();
+    try {
+      await f.press("Backquote", { ctrlKey: true });
+      await vi.waitFor(() => expect(f.terminal()?.querySelector("textarea")).toBeTruthy());
+      expect((await f.press("Digit2", { ctrlKey: true })).defaultPrevented).toBe(true);
+      expect(f.host.querySelector('button[aria-label="Open Map\'s profile"]')).not.toBeNull();
+      expect(f.terminal()).toBeNull();
+    } finally { await f.unmount(); }
+  });
+
+  it("opens worker 2 of the current bot from chat with Alt+2", async () => {
+    const f = await mount();
+    try {
+      await f.press("Digit2", { altKey: true });
+      await vi.waitFor(() => expect(f.terminal()?.querySelector("pre")?.textContent).toBe("worker-2"));
+      expect(f.host.querySelector('button[aria-label="Open Scout\'s profile"]')).not.toBeNull();
+    } finally { await f.unmount(); }
+  });
+
+  it("selects worker 1 instead of Main with Alt+1", async () => {
+    const f = await mount();
+    try {
+      await f.press("Backquote", { ctrlKey: true });
+      await vi.waitFor(() => expect(f.terminal()?.querySelector("pre")?.textContent).toBe("main"));
+      await f.press("Digit1", { altKey: true });
+      await vi.waitFor(() => expect(f.terminal()?.querySelector("pre")?.textContent).toBe("worker-1"));
+    } finally { await f.unmount(); }
+  });
+
+  it.each([0, 1])("leaves chat and the bot unchanged when worker 2 is missing (%s workers)", async (workers) => {
+    const f = await mount(workers);
+    try {
+      await f.press("Digit2", { altKey: true });
+      expect(f.terminal()).toBeNull();
+      expect(f.host.querySelector('button[aria-label="Open Scout\'s profile"]')).not.toBeNull();
+    } finally { await f.unmount(); }
+  });
+
+  it("opens a worker with the numpad and ignores extra modifiers", async () => {
+    const f = await mount();
+    try {
+      for (const init of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+        expect((await f.press("Digit2", { altKey: true, ...init })).defaultPrevented).toBe(false);
+        expect(f.terminal()).toBeNull();
+      }
+      await f.press("Numpad2", { altKey: true });
+      await vi.waitFor(() => expect(f.terminal()?.querySelector("pre")?.textContent).toBe("worker-2"));
+      await f.press("Digit9", { altKey: true });
+      expect(f.terminal()?.querySelector("pre")?.textContent).toBe("worker-2");
+    } finally { await f.unmount(); }
+  });
+
+  it("ignores a roster that arrives after switching bots", async () => {
+    const f = await mount();
+    try {
+      let resolve!: (response: Response) => void;
+      f.roster.mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done; }));
+      await f.press("Digit1", { altKey: true });
+      await f.press("Digit2", { ctrlKey: true });
+      await act(async () => { resolve(new Response(JSON.stringify({ panes: f.panes }))); });
+      expect(f.terminal()).toBeNull();
+      expect(f.host.querySelector('button[aria-label="Open Map\'s profile"]')).not.toBeNull();
+    } finally { await f.unmount(); }
+  });
+
+  it("keeps the latest worker shortcut when roster replies arrive out of order", async () => {
+    const f = await mount();
+    try {
+      let resolve!: (response: Response) => void;
+      f.roster.mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done; }));
+      await f.press("Digit2", { altKey: true });
+      await f.press("Digit1", { altKey: true });
+      await vi.waitFor(() => expect(f.terminal()?.querySelector("pre")?.textContent).toBe("worker-1"));
+      await act(async () => { resolve(new Response(JSON.stringify({ panes: f.panes }))); });
+      expect(f.terminal()?.querySelector("pre")?.textContent).toBe("worker-1");
+    } finally { await f.unmount(); }
   });
 });
 
@@ -423,14 +554,14 @@ describe("terminal pane shortcuts", () => {
   const handler = () =>
     app.slice(app.indexOf("const onKey = (e: KeyboardEvent)"), app.indexOf("window.addEventListener(\"keydown\", onKey)"));
 
-  it("routes Alt+digit to the Nth pane while the terminal is open and swallows it", () => {
-    const pane = handler().slice(handler().indexOf("if (n !== null && e.altKey && terminalOpen && altDigitSelectsPane"), handler().indexOf('data-sidebar-row-kind'));
+  it("routes Alt+digit to a worker roster lookup before bot selection", () => {
+    const pane = handler().slice(handler().indexOf("if (n !== null && e.altKey)"), handler().indexOf('data-sidebar-row-kind'));
     expect(pane).toContain("e.preventDefault()");
     expect(pane).toContain("e.stopPropagation()");
-    expect(pane).toContain("setPaneHotkey({ n })");
+    expect(pane).toContain("workerPaneOrder(snapshot?.panes ?? [], workerRuns(visibleMessages(bot)))[n - 1]");
     expect(pane).toContain("return;");
-    expect(app).toContain("paneHotkey={botPaneHotkey}");
-    expect(app).toContain("terminalOpen, dispatch]);");
+    expect(app).toContain("paneFocus={botPaneFocus}");
+    expect(pane).toContain("openTerminalPane(sessionId)");
   });
 
   it("focuses the notifying pane from both toast clicks and the in-app attention", () => {
@@ -440,12 +571,12 @@ describe("terminal pane shortcuts", () => {
     expect(notification).toContain("setPaneFocus({ sessionId: target.terminalSessionId })");
     expect(attention).toContain("setPaneFocus({ sessionId: attention.sessionId })");
     expect(click).toContain("setPaneFocus({ sessionId: target.terminalSessionId })");
-    expect(app).toContain("paneFocus={paneFocus}");
+    expect(app).toContain("paneFocus={botPaneFocus}");
   });
 
-  it("keeps Alt+digit on bots with the terminal closed and Ctrl+digit on bots everywhere", () => {
+  it("keeps Alt+digit on workers and Ctrl+digit on bots everywhere", () => {
     const h = handler();
-    expect(h.indexOf("e.altKey && terminalOpen")).toBeLessThan(h.indexOf('type: "select"'));
+    expect(h.indexOf("n !== null && e.altKey")).toBeLessThan(h.indexOf('type: "select"'));
     expect(h).not.toMatch(/e\.ctrlKey && terminalOpen/);
     expect(h).toContain("e.ctrlKey && !e.metaKey && !e.altKey");
     expect(h).toContain('type: "select", id');

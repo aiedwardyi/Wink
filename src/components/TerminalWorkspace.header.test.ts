@@ -74,7 +74,7 @@ async function mount(exited = false) {
       await act(async () => row.click());
     },
     exit: async () => act(async () => listeners.forEach((cb) => cb({ id: "worker-1", exitCode: 0 }))),
-    main: async () => act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneHotkey: { n: 1 } }))),
+    main: async () => act(async () => root.render(createElement(TerminalWorkspace, { ...props, paneFocus: { sessionId: null } }))),
   };
 }
 
