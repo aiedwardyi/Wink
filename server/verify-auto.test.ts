@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, opendir, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, opendir, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,7 @@ const shell = () => {
 };
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "wink-verify-auto-"));
+  root = await realpath(await mkdtemp(join(tmpdir(), "wink-verify-auto-")));
   await writeFile(join(root, "index.html"), "<h1>Hi</h1>");
   start = vi.fn().mockResolvedValue(undefined);
   scan = vi.fn(scanVerifyWrites);
