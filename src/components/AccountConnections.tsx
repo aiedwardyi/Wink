@@ -134,7 +134,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   // Connected rows only: the sign-in row keeps its menu on its name row, so an overlay there would cover Sign In.
   const stacked = phone && name && !draining && !signInRow;
   return (
-    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} className="relative min-w-0 pl-5">
+    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} className="relative min-w-0">
       <UsageGrip label={name?.name ?? account.displayName} />
       {signInRow ? <>
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
@@ -143,7 +143,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
           {editing && named ? <AccountNameEditor id={account.instanceId} nickname={name.nickname} inline
             onSaved={(next) => setSaved({ ...next, revision: version.current })} onClose={closeEditor} />
             : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
-              className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name.name}</button>}
+              className="min-w-0 truncate text-left font-normal">{name.name}</button>}
         </>} actions={canName ? phone ? <button ref={menuButton} type="button" data-connection-menu="" aria-label={t("connections.actions")} aria-expanded={menu}
           onClick={toggleMenu} className={ROW_BUTTON}><Ellipsis size={14} aria-hidden="true" /></button> : controls : undefined} />}
       </> : <ConnectionRow mark={mark}
