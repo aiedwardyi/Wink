@@ -1,0 +1,13 @@
+{
+  "source": "real headless muted Playwright checker, scratch copy",
+  "siteSha256": "3aa5209e940deea8763ceee5fd7a28c12a80c6bc932db1e1a6ec198af62204e7",
+  "checkerSha256": "450f6423cf7ce8a3854f135247f6d5b1baaa8e73f153e2ec55613cfc309a184b",
+  "checks": 278,
+  "scoredChecks": 287,
+  "issues": 2,
+  "referenceLfSha256": {
+    "reference-conduct.mjs": "9ad8c6ad95725db1ed3d3550b82ad2c7d6fa4a9c1487dec74e2c1fa4cb1874ce",
+    "reference-probe.js": "0ad9073553ecb81787952d8659e625e14e43bfccdf9773204c31d3194243f301"
+  },
+  "runLog": "%TEMP%/wink-lv0-engine/reference-run.log"
+}

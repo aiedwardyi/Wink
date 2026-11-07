@@ -56,6 +56,7 @@ for (const [name, channel, args] of [
   ["errorReportConsent", "error-reports:get", []],
   ["setErrorReportConsent", "error-reports:set", [true]],
   ["setCredential", "credential:set", ["provider", "value"]],
+  ["getBrand", "desktop:brand", []],
 ]) {
   const call = (api) => name.split(".").reduce((value, key) => value[key], api)(...args);
   test(`${name} strips the IPC wrapper`, async () => {

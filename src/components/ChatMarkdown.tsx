@@ -555,6 +555,13 @@ function PhoneFile({
       controls
       preload="metadata"
       playsInline
+      // Chromium keeps focus in the seek bar after a scrub and it swallows Space; refocusing the video restores play/pause.
+      onSeeked={(e) => {
+        const video = e.currentTarget;
+        if (document.activeElement !== video) return;
+        video.blur();
+        video.focus({ preventScroll: true });
+      }}
       data-phone-media="video"
       className="max-h-96 max-w-full rounded-lg border border-hairline/30"
     />

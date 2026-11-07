@@ -66,6 +66,6 @@ export function createAccountRuntime(deps: {
 
 export async function accountPanesBusy(terminal: TerminalBridgeAccess | null, id: string): Promise<boolean> {
   const panes = await livePanesForAccount(terminal, id);
-  if (panes.unknown) throw new AccountError("Terminal host is unreachable or account pane state is unknown; try signing out again when the host is available");
+  if (panes.unknown) throw new AccountError("Terminal host is unreachable or account pane state is unknown; try signing out again when the host is available", 409, "host-unknown");
   return panes.count > 0;
 }

@@ -258,7 +258,7 @@ it.each(["askBot", "delegateBot"] as const)("refuses %s without a live caller an
   expect(callerSnapshot(target.id, target.threadId)).toBeNull();
 });
 
-it("keeps roots through pending reload and takeover reruns", async () => {
+it("keeps the original root through reload and a mid-turn user reply", async () => {
   const root = start()!;
   const queued = queueDelegation(bus(), from, { toBotId: target.id, message: "work", depth: 0, root }, 1);
   _loadPending();
@@ -267,11 +267,10 @@ it("keeps roots through pending reload and takeover reruns", async () => {
   await flush();
   expect(run.mock.calls[0][8]).toBe(root);
   adoptHumanRoot(from.threadId, "later");
-  finishDelegatedTurn(bus(), { taskId: queued.id, toBotId: target.id, sourceThreadId: from.threadId, sourceBotId: from.id, takenOverBy: "User" }, true, "answer");
+  finishDelegatedTurn(bus(), { taskId: queued.id, toBotId: target.id, sourceThreadId: from.threadId, sourceBotId: from.id }, true, "<user1>Got it.</user1>answer");
   drainWaitingOn(bus(), bus(), run);
   await flush();
-  expect(run).toHaveBeenCalledTimes(2);
-  expect(run.mock.calls[1][8]).toBe(root);
+  expect(run).toHaveBeenCalledTimes(1);
   expect(findDelegationReceipt(queued.id!)?.root).toBe(root);
 });
 

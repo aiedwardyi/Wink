@@ -25,7 +25,9 @@ export async function request(path: string, init?: RequestInit): Promise<any> {
   if (!res.ok) {
     if (body?.code === "INTERNAL_ERROR") throw new Error(t("errors.request"));
     if (body?.code === "NOT_FOUND") throw new Error(t("errors.notFound"));
-    throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+    const error: Error & { code?: string } = new Error(body?.error ?? `${res.status} ${res.statusText}`);
+    if (typeof body?.code === "string") error.code = body.code;
+    throw error;
   }
   return body;
 }

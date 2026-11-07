@@ -41,6 +41,7 @@ import { StartFreshRow } from "./StartFreshRow";
 import { ErrorReportsRow } from "./ErrorReportsRow";
 import { AnalyticsRow } from "./AnalyticsRow";
 import { Fold } from "./Fold";
+import { ActivityCard } from "./ActivityCard";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -607,6 +608,7 @@ export function SettingsModal({
                   <ProfileFields />
                 </Card>
                 {!phone && <SyncPanel onAccountEmail={setAccountEmail} />}
+                <ActivityCard />
               </>
             )}
 

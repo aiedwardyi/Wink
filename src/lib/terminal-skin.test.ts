@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TERM_STEP_WORD, logLine, termBlock, termElapsed, termHeaderArgs, termMeter, termModelLabel, termResultLine, termStepAria, termUpdatedLine, termVerb } from "./terminal-skin";
+import { TERM_STEP_WORD, logLine, termBlock, termElapsed, termHeaderArgs, termModelLabel, termResultLine, termStepAria, termUpdatedLine, termVerb } from "./terminal-skin";
 import { termVerb as sharedTermVerb } from "../../shared/tool-verb";
 import { en, ko } from "./i18n-catalog";
 import { applyLocale, t } from "./i18n";
@@ -164,23 +164,6 @@ describe("termElapsed", () => {
     expect(termElapsed(12_400)).toBe("12s");
     expect(termElapsed(158_000)).toBe("2m 38s");
     expect(termElapsed(-5)).toBe("0s");
-  });
-});
-
-describe("termMeter", () => {
-  const now = 1_000_000;
-  const window = { id: "five_hour", usedPercent: 71, resetsAt: now + 60_000, windowMinutes: 300 };
-
-  it("shows what's left by default", () => {
-    expect(termMeter(window, now, "remaining")).toEqual({ id: "five_hour", kind: "session", percent: 29, bar: "▰▱▱▱▱" });
-  });
-
-  it("follows the used mode", () => {
-    expect(termMeter(window, now, "used")).toMatchObject({ percent: 71, bar: "▰▰▰▰▱" });
-  });
-
-  it("empties the bar once the window has reset", () => {
-    expect(termMeter({ ...window, resetsAt: now - 1 }, now, "remaining")).toMatchObject({ percent: null, bar: "▱▱▱▱▱" });
   });
 });
 

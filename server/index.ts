@@ -39,7 +39,8 @@ import {
   projectPathsFromRecords,
   userProjectTexts,
 } from "./project-folder.ts";
-import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage } from "./attachments.ts";
+import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage, sniffImageMime } from "./attachments.ts";
+import { applyBrandLeadBot } from "./brand-lead-bot.ts";
 import { cloudSyncRoots, createUploads, uploadTargetDir } from "./uploads.ts";
 import "./avatar-image.ts";
 import "./bot-profile.ts";
@@ -98,6 +99,7 @@ import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
+import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
@@ -149,20 +151,21 @@ import type { CommsBus } from "./comms-visibility.ts";
 import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { replyActivity } from "./reply-activity.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
-import { hasPeerWatch, onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
+import { hasPeerWatch, watchPeerTurn, peerInputJoined, takePeerReplyStamp } from "./peer-takeover.ts";
+import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
   clearSendRunning,
   continueQueuedDrainIfIdle,
   drainSteeredMessages,
-  foldQueuedSends,
   hasQueuedSendBefore,
   hasQueuedSends,
   initializeSteerQueue,
@@ -276,6 +279,7 @@ import {
   hostMatchesRemote,
   initRemoteAccess,
   originAllowedByRemote,
+  remoteCookieAuthorized,
   remoteCookieRefresh,
   remoteKeyMatches,
   remoteLinkUrl,
@@ -395,8 +399,10 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
+import { VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
-import { writeChatError, usageError, startQueuedTurn } from "./chat-error.ts";
+import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
@@ -2917,6 +2923,7 @@ const usageBoard = createUsageBoard({
     get drains() { return accounts.drains; },
   },
   names: accountNames, rateLimits: rateLimitsByInstance, history: createUsageHistory(DATA_DIR),
+  accountChanged: (id, ready) => { checkMuseUsage.invalidate(id); void refreshSwappedUsage(id, ready); },
   runs: async (timeoutMs) => {
     const result = await liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs);
     return result.known ? { known: true, runs: result.runs.map((run) => ({ ...run, label: run.label ?? "" })) } : result;
@@ -2933,6 +2940,9 @@ const refreshUsage = createUsageRefresh({
   accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
 });
 const checkMuseUsage = createMuseCheck();
+const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+});
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
   save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); },
@@ -2950,6 +2960,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
@@ -2977,7 +2988,9 @@ const accountUpdates = createAccountUpdates({
     rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
 
-function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
+function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[number]>(instances: T[]) {
+  rememberAutomaticAvailability(instances);
+  usageBoard.sync();
   return instances.map((instance) => {
     const rateLimits = rateLimitsByInstance.get(instance.instanceId);
     return rateLimits ? { ...instance, rateLimits } : instance;
@@ -3319,7 +3332,8 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
-  broadcast({ kind: "runtime", event });
+  const visibleEvent = peerUserRuntime(event);
+  if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
@@ -3389,6 +3403,7 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
+        if (persistPeerUserReply(store, event, lastReply)) break;
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
@@ -3819,14 +3834,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
       const previousId = event.usageLimit ? limitWaits.messageId(event.threadId) : undefined;
-      const tool = {
-        name: `error: ${event.message}`,
-        ok: false,
-        setup: event.setup,
-        usageLimit: event.usageLimit,
-        signIn: event.signIn,
-        folder: event.folder,
-      };
+      const tool = runtimeErrorTool(event, (id) => Boolean(accounts.get(id)));
       const row = previousId
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
@@ -4011,7 +4019,7 @@ bus.subscribe((event: RuntimeEvent) => {
 // (target threadId → channel) lets the main fold mirror the delegated
 // turn's TERMINAL state into the A⇄B channel when it completes — the
 // channel stays the full record of the handoff, not just its request.
-const delegationWatch = new Map<string, DelegatedTurn & { endTakeover?: () => void; reply: PeerTurnReply }>();
+const delegationWatch = new Map<string, DelegatedTurn & { endPeerWatch?: () => void; reply: PeerTurnReply }>();
 const peerReplies = peerTurnReplies(staleTurnEvent);
 
 /** Consume one delegated-turn watch and mirror exactly one terminal state.
@@ -4027,23 +4035,17 @@ function finalizeDelegationWatch(
   const watched = delegationWatch.get(threadId);
   if (!watched) return false;
   delegationWatch.delete(threadId);
-  watched.endTakeover?.();
+  watched.endPeerWatch?.();
   watched.reply.release();
+  settlePeerUserReplies(threadId);
   return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
-function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void; reply: PeerTurnReply }): void {
+function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endPeerWatch?: () => void; reply: PeerTurnReply }): void {
   delegationWatch.set(targetThreadId, watched);
   peerTurnSource.set(targetThreadId, watched.sourceThreadId);
-  watched.endTakeover = onPeerTakeover(targetThreadId, (afterReply) => {
-    peerTurnSource.delete(targetThreadId);
-    watched.reply.release();
-    // a reply that finished before the read settles now; the turn's later end finds no watch
-    const finished = afterReply ? watched.reply.text() : undefined;
-    if (finished !== undefined) delegationWatch.delete(targetThreadId);
-    settleTakenOverDelegation(commsBus, watched, cfg.profile?.name?.trim() || "User", finished);
-  }, () => {
+  watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {
     watched.answer ??= watched.reply.text() ?? "";
   });
 }
@@ -4140,6 +4142,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   peerTurnSource.delete(event.threadId);
+  settlePeerUserReplies(event.threadId, event.turnId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
@@ -4249,9 +4252,10 @@ const noteSteer = new NoteSteerer({
 });
 
 function drainQueuedSends() {
+  drainPeerUserReplies(store, startTurn, botHasActiveTurn, terminalBridgeAccess);
   taskResumes.settled();
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
-    // a send that never runs leaves no turn.completed to rerun a taken-over handoff
+    // A failed send still frees waiting handoffs.
     const rerunIfIdle = () =>
       continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, runDelegatedTurn), botHasActiveTurn);
     if (room) {
@@ -4991,13 +4995,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
-    ? foldQueuedSends(store, bot.id, threadId, claimMark)
+    ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
     for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
-    takeOverPeerTurn(threadId);
   }
   const turnOpts = {
     replyTo: opts?.replyTo,
@@ -5377,6 +5380,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
+      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -5437,13 +5441,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
-          const queued = foldQueuedSends(store, bot.id, threadId, claimMark);
+          const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
           for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
-          takeOverPeerTurn(threadId);
           // the user joined this turn, so its finish alerts
           paneNoteTurnThreads.delete(threadId);
         };
@@ -6321,6 +6324,7 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
+  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7130,6 +7134,19 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifySite = createVerifySite({
+  store,
+  resolveCommsCaller: (header) => commsCallers.resolve(header),
+  botOutputRoots,
+  autoVerdict,
+  isUnattended,
+  bridge: () => terminalBridgeAccess && verifyBridgeClient(terminalBridgeAccess),
+  broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
+  logDecision: (row) => appendDecision(DATA_DIR, row),
+  deviceId: () => profileSyncSettings.deviceId,
+  appToken: authorizedComms,
+  remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+});
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
@@ -7150,6 +7167,16 @@ const botRoutes = createBotRoutes({
   memoryHealthCheck,
   activeVpsThreads,
   resumePaneWakes,
+});
+applyBrandLeadBot({
+  dataDir: DATA_DIR,
+  leadBot: process.env.OMB_BRAND_LEAD_BOT,
+  chiefId: () => store.bots.find((bot) => bot.chiefOfStaff)?.id,
+  saveAvatar: (bytes) => {
+    const mime = sniffImageMime(bytes);
+    return mime ? botAvatarUrlFromStoredPath(saveImage(bytes, mime).path) : null;
+  },
+  applyProfile: botRoutes.applyProfile,
 });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
@@ -7273,6 +7300,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)) {
       return json(res, 401, { error: "unauthorized" });
     }
+    const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
+    if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
+    const verifyStream = method === "GET" ? /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(path) : null;
+    if (verifyStream) return await verifySite.handleStream(req, res, verifyStream[1]!, verifyStream[2] === "replay", { relay, phoneSession: credentials.phoneSession });
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.
     if (method === "GET" && path === "/remote") {
       const provided = url.searchParams.get("key");
@@ -7289,6 +7320,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/team-report") {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
+      if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";
@@ -7576,6 +7608,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (method === "GET" && path === "/api/key-uses") {
       return json(res, 200, { uses: loadKeyUses(DATA_DIR) });
+    }
+
+    if (method === "GET" && path === "/api/activity") {
+      return json(res, 200, replyActivity());
     }
 
     if (method === "GET" && path === "/api/analytics") {

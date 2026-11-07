@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { runtimeErrorTool } from "./chat-error.ts";
 import type { Message } from "./store.ts";
 import * as turnReply from "./turn-reply.ts";
 
@@ -59,6 +60,7 @@ function rig(target: "bot" | "group") {
   const roomFallback = find(roomTurn, (node) => ts.isIfStatement(node)
     && node.expression.getText(parsed) === "store.group(group.id)?.busyBotId === bot.id")!;
   const deps: Record<string, unknown> = {
+    runtimeErrorTool, accounts: new Map(),
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },

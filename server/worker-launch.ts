@@ -67,25 +67,28 @@ export function workerCommand(command: string, unmanaged = false) {
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(command)) throw new Error("Ambiguous worker launch control input");
   let rest = command.trim();
   const environment: Record<string, string> = {};
+  let home: { selector: string; value: string } | undefined;
   for (let match = ENV_PREFIX.exec(rest); match; match = ENV_PREFIX.exec(rest)) {
     if (HOME_SELECTOR.test(match[1])) {
       if (unmanaged) return { kind: "unmanaged" as const };
-      throw new Error("Conflicting worker home override");
-    }
-    environment[match[1].toUpperCase()] = match[2].replace(/^['"]|['"]$/g, "");
+      if (home || !/^(?:CODEX_HOME|CLAUDE_CONFIG_DIR)$/i.test(match[1])) throw new Error("Conflicting worker home override");
+      home = { selector: match[1].toUpperCase(), value: match[2].startsWith("'") ? match[2].slice(1, -1).replace(/''/g, "'") : match[2].replace(/^"|"$/g, "") };
+    } else environment[match[1].toUpperCase()] = match[2].replace(/^['"]|['"]$/g, "");
     rest = rest.slice(match[0].length);
   }
   const first = /^\s*([^\s]+)/.exec(rest)?.[1] ?? "";
   const engine = ENGINES.get(first.toLowerCase());
   if (!engine) {
+    if (home) throw new Error("Worker account prefix requires a direct engine command");
     if ((WRAPPER.test(first) && [/["'`^]/g, /["'`^\\]/g].some((escapes) => rest.replace(escapes, "").split(/[\s;&|(){}<>=]+/).some((token) => [token, token.replace(/^-+\w/, "")].some((name) => ENGINES.has(engineToken(name)))))) || /(?:^|[;&|(){}\r\n])\s*&?\s*["']?(?:[^\s"']*[\\/])?(?:claude|codex|grok|muse|agy)(?:\.(?:exe|cmd|ps1))?(?=[\s"';&|(){}<>]|$)/i.test(rest)
       || /^(?:pnpm|npm|npx|bunx)\s+(?:exec\s+)?(?:claude|codex|grok|muse|agy)\b/i.test(rest)) throw new Error("Ambiguous worker launch; use a direct engine command");
     return { kind: "shell" as const };
   }
+  if (home && home.selector !== (engine.driver === "codex" ? "CODEX_HOME" : engine.driver === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : "")) throw new Error("Worker account prefix must match the engine");
   if (Object.keys(environment).some((name) => name !== "AGY_CLI_DISABLE_AUTO_UPDATE")) throw new Error("Conflicting worker environment override");
   const [executable, ...args] = tokens(rest);
   if (engineToken(executable) !== first.toLowerCase()) throw new Error("Ambiguous worker executable");
-  return { kind: "managed" as const, executable, args, environment, ...engine };
+  return { kind: "managed" as const, executable, args, environment, home, ...engine };
 }
 
 function withoutWorkerSettings(args: string[]) {
@@ -103,7 +106,7 @@ function withoutWorkerSettings(args: string[]) {
 function unroutedLaunch(text: string) {
   try {
     const command = workerCommand(text);
-    if (command.kind !== "managed" || command.args.some((arg) => arg === "--" || arg === "--%")) return null;
+    if (command.kind !== "managed" || command.home || command.args.some((arg) => arg === "--" || arg === "--%")) return null;
     const { args, workerSettings } = command.driver === "claudeAgent" ? withoutWorkerSettings(command.args) : { args: [...command.args], workerSettings: false };
     if (command.driver === "claudeAgent" && !workerSettings && args.some((arg) => /^--settings(?:=|$)/.test(arg))) return null;
     const typed = args.length;
@@ -120,6 +123,7 @@ export function createWorkerLaunch(deps: {
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
   mainAccount?(of: string): AccountContext | undefined | null;
   nameOf?(id: string, engine: string): string;
+  accounts?(): readonly AccountContext[];
 }) {
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
@@ -134,13 +138,27 @@ export function createWorkerLaunch(deps: {
     if (!turn) throw new Error("No captured active turn for this worker launch");
     const bases = deps.bases();
     const sameEngine = turn.driverKind === command.driver;
-    const baseId = sameEngine ? turn.account?.of ?? turn.instanceId : command.base;
+    const candidates = () => [
+      ...Object.entries(deps.bases()).filter(([, base]) => base.enabled !== false && base.driver === command.driver)
+        .map(([id, base]) => baseAccount(id, command.driver, { ...process.env, ...base.environment })),
+      ...(deps.accounts?.() ?? []).filter((account) => bases[account.of]?.enabled !== false && bases[account.of]?.driver === command.driver),
+    ];
+    let selected: AccountContext | undefined;
+    if (command.home) {
+      const value = command.home.value;
+      const matches = candidates().filter((account) => deps.available(account.id, account.generation)
+        && (canonicalAccountHome(account.home) === canonicalAccountHome(value)
+          || deps.nameOf?.(account.id, command.name).normalize("NFC").toLowerCase() === value.trim().normalize("NFC").toLowerCase()));
+      if (matches.length !== 1) throw new Error(`Unknown or unavailable worker account; choose ${candidates().filter((account) => deps.available(account.id, account.generation)).map((account) => deps.nameOf?.(account.id, command.name) ?? command.name).join(", ") || "a signed-in account in Usage"}`);
+      selected = matches[0];
+    }
+    const baseId = selected?.of ?? (sameEngine ? turn.account?.of ?? turn.instanceId : command.base);
     const base = Object.hasOwn(bases, baseId) ? bases[baseId] : undefined;
     if (!base || base.enabled === false || base.driver !== command.driver) throw new Error("Worker base account is unavailable");
     const baseEnvironment = { ...process.env, ...base.environment };
-    const main = sameEngine ? undefined : deps.mainAccount?.(baseId);
+    const main = sameEngine || selected ? undefined : deps.mainAccount?.(baseId);
     const mainDown = main === null || (main !== undefined && !deps.available(main.id, main.generation));
-    const account = sameEngine && turn.account ? turn.account : main && !mainDown ? main : baseAccount(baseId, command.driver, baseEnvironment);
+    const account = selected ?? (sameEngine && turn.account ? turn.account : main && !mainDown ? main : baseAccount(baseId, command.driver, baseEnvironment));
     if (!deps.available(account.id, account.generation)) throw new Error("Worker account is unavailable");
     let args = command.args;
     if (args.includes("--")) throw new Error("Conflicting worker account selector");
@@ -179,15 +197,17 @@ export function createWorkerLaunch(deps: {
       for (const name of ["GROK_HOME", "MUSE_AUTH_PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]) if (base.environment?.[name]) policy.env[name] = base.environment[name];
       if (command.executable === "grok") policy.env.GROK_HOME ??= join(policy.env.HOME, ".grok");
     }
-    const captured = Object.freeze({ id: account.id, generation: account.generation, name: command.name });
+    const captured = Object.freeze({ id: account.id, generation: account.generation, name: selected ? deps.nameOf?.(account.id, command.name) ?? command.name : command.name });
     const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
-    const nowMain = sameEngine ? undefined : deps.mainAccount?.(baseId);
-    if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation) || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
+    const nowMain = sameEngine || selected ? undefined : deps.mainAccount?.(baseId);
+    if (nowMain?.id !== main?.id || nowMain?.generation !== main?.generation || !deps.available(account.id, account.generation)
+      || (selected && !candidates().some((row) => row.id === selected.id && row.generation === selected.generation && row.home === selected.home))
+      || (resume ? !current || current.id !== account.id || current.generation !== account.generation : deps.resolveWorkerTurn(input.botId) !== turn)) throw new Error("Worker account changed before launch");
     if (managedEngine && account.generation > 0) shareUserSetup(command.driver, account, baseAccount(baseId, command.driver, baseEnvironment).home);
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
       environment: policy.env, workerSettings, session,
-      line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line };
+      line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line ?? (selected ? `Worker account: ${captured.name}.` : undefined) };
   };
 }

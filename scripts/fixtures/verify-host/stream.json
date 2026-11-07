@@ -1,0 +1,9 @@
+[
+  {"at":0,"kind":"start","scan":{"checks":[]}},
+  {"at":500,"kind":"hold","text":"Preparing fixture"},
+  {"at":2759,"kind":"load","score":{"checks":[],"events":[]}},
+  {"at":4500,"kind":"scroll","tile":"desktop","y":120},
+  {"at":6000,"kind":"point","inp":{"tile":"desktop","x":40,"y":40},"scrollY":120},
+  {"at":17000,"kind":"finalize","fin":{"checks":[],"issues":[]},"t":17000},
+  {"at":22069,"kind":"end"}
+]

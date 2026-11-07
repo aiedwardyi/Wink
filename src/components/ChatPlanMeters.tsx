@@ -7,7 +7,7 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardWindow 
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore, type InstanceInfo } from "@/state/store";
-import { windowFacts } from "./UsageDesk";
+import { engineName, windowFacts } from "./UsageDesk";
 import { UsageQuickView } from "./UsageQuickView";
 import { barSlots, WindowBar } from "./UsageBars";
 import "./UsageDesk.css";
@@ -100,7 +100,7 @@ function BoardMeter({ windows, instanceId, identity = instanceId, hidden, now, o
   const board = useUsageBoard();
   const target = meterTarget(board.board, state.instances, instanceId);
   const at = now ?? Date.now();
-  if (meterWindows(target, windows, at).length === 0) return null;
+  if (meterWindows(target, windows, at).length === 0 && target?.account.signIn !== "signed-out") return null;
   return <MeterLine windows={windows} now={now} onOpen={onOpenUsage} identity={identity} hidden={hidden} target={target} board={board} />;
 }
 
@@ -112,17 +112,24 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
   const tick = useVisibleClock();
   const clock = now ?? tick;
   const button = useRef<HTMLButtonElement>(null);
+  const signedOut = target?.account.signIn === "signed-out";
   const shown = meterWindows(target ?? null, windows, clock);
-  const quick = Boolean(!hidden && target && board?.board && shown.length > 0);
+  const quick = Boolean(!hidden && target && board?.board && (shown.length > 0 || signedOut));
   const [open, setOpen] = useQuickToggle(quick, identity);
-  if (shown.length === 0) return null;
+  if (shown.length === 0 && !signedOut) return null;
   return (
     <div className="px-5 pb-1">
-      <button ref={button} type="button" data-usage-meter="" onClick={onOpen}
-        aria-label={t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
-        <span className="usage-chat-windows" data-windows={shown.length}>
+      <button ref={button} type="button" data-usage-meter="" onClick={quick ? () => setOpen(!open) : onOpen}
+        aria-expanded={quick ? open : undefined} aria-haspopup={quick ? "dialog" : undefined}
+        aria-label={quick && target ? t("usage.chat.openAria", { name: engineName(target.engine.engine) }) : t("usage.limits.openAria")} className="usage-chat-button w-full cursor-pointer text-left">
+        {signedOut && target ? <span className="flex min-w-0 items-center gap-2 px-4 text-[12px]">
+          <span data-meter-name="" className="min-w-0 truncate text-ink-secondary">{target.engine.accounts.length > 1 ? target.account.name : engineName(target.engine.engine)}</span>
+          <span data-meter-signed-out="" className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-warning">
+            <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />{t("usage.chat.signedOut")}
+          </span>
+        </span> : <span className="usage-chat-windows" data-windows={shown.length}>
           {barSlots(target?.engine.engine ?? "", { windows: shown }, t).map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
-        </span>
+        </span>}
       </button>
       {open && target && board?.board && (
         <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} />
