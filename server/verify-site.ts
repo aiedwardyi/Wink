@@ -172,9 +172,10 @@ export async function resolveVerifySite(entryText: string, roots: string[], sign
   const [root, entry] = info.isDirectory() ? [real, "index.html"] : info.isFile() && /\.html?$/i.test(real) ? [dirname(real), basename(real)] : [null, null];
   if (!root || !entry) return "not-a-site";
   const owner = owned.find((candidate) => within(candidate, root));
+  if (!owner) return "outside-folders";
   try {
     const revision = await siteRevision(root, entry);
-    return { root, entry, revision, site: owner ? relative(owner, join(root, entry)).split(sep).join("/") : entry };
+    return { root, entry, revision, site: relative(owner, join(root, entry)).split(sep).join("/") };
   } catch (error) {
     const code = (error as { code?: string }).code;
     return code === "resource-limit" || code === "outside-folders" ? code : "not-a-site";

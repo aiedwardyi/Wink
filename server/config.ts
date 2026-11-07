@@ -186,7 +186,7 @@ export interface AppConfig {
   /** Shared preserves the historical singleton. Per-bot gives every bot a
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
-  /** Product switches. Every flag defaults to off except memoryNotes. */
+  /** Product switches. Every flag defaults to off except memoryNotes and liveVerifyAuto. */
   features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;

@@ -13,8 +13,8 @@ import "./VerifyCard.css";
 const VerifyWatchFrame = lazyView(() => import("./VerifyWatch").then(m => ({ default: m.VerifyWatchFrame })));
 
 const copy = {
-  en: { running: "Checking in a real browser", stages: ["Loads", "Links", "Phone"], clean: "Desktop and phone · no problems", cleanCounted: "desktop + phone · no problems", problems: (n: number) => `${n} ${n === 1 ? "problem" : "problems"} · bot is fixing`, checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, fixed: (n: number, checks?: number) => `Fixed ${n} ${n === 1 ? "problem" : "problems"} · ${checks === undefined ? "desktop and phone clean" : `${checks} ${checks === 1 ? "check" : "checks"} clean`}`, waiting: "Waiting for another check", details: (n: number) => `${n} ${n === 1 ? "detail" : "details"}`, unchecked: "Not checked", delivery: "form delivery", rerun: "Rerun", watch: "Watch", watchLive: "Watch live", watchCheck: "Watch the check", failed: "Could not check this page", retry: "Could not rerun. Try again.", desktop: "Desktop", phone: "Phone", s: " s" },
-  ko: { running: "실제 브라우저에서 확인 중", stages: ["페이지 로드", "링크", "휴대폰"], clean: "데스크톱과 휴대폰 · 문제 없음", cleanCounted: "데스크톱 + 휴대폰 · 문제 없음", problems: (n: number) => `문제 ${n}개 · 봇이 수정 중`, checks: (n: number) => `확인 ${n}개`, fixed: (n: number, checks?: number) => `문제 ${n}개 해결 · ${checks === undefined ? "데스크톱과 휴대폰 문제 없음" : `확인 ${checks}개 통과`}`, waiting: "다른 확인을 기다리는 중", details: (n: number) => `참고 ${n}개`, unchecked: "확인하지 못함", delivery: "폼 전송", rerun: "다시 확인", watch: "보기", watchLive: "실시간 보기", watchCheck: "확인 과정 보기", failed: "페이지를 확인하지 못했어요", retry: "다시 확인하지 못했어요. 다시 시도하세요.", desktop: "데스크톱", phone: "휴대폰", s: "초" },
+  en: { running: "Checking in a real browser", stages: ["Loads", "Links", "Phone"], clean: "Desktop and phone · no problems", cleanCounted: "desktop + phone · no problems", problems: (n: number, fixing: boolean) => `${n} ${n === 1 ? "problem" : "problems"}${fixing ? " · bot is fixing" : ""}`, checks: (n: number) => `${n} ${n === 1 ? "check" : "checks"}`, fixed: (n: number, checks?: number) => `Fixed ${n} ${n === 1 ? "problem" : "problems"} · ${checks === undefined ? "desktop and phone clean" : `${checks} ${checks === 1 ? "check" : "checks"} clean`}`, waiting: "Waiting for another check", details: (n: number) => `${n} ${n === 1 ? "detail" : "details"}`, unchecked: "Not checked", delivery: "form delivery", rerun: "Rerun", watch: "Watch", watchLive: "Watch live", watchCheck: "Watch the check", failed: "Could not check this page", retry: "Could not rerun. Try again.", desktop: "Desktop", phone: "Phone", s: " s" },
+  ko: { running: "실제 브라우저에서 확인 중", stages: ["페이지 로드", "링크", "휴대폰"], clean: "데스크톱과 휴대폰 · 문제 없음", cleanCounted: "데스크톱 + 휴대폰 · 문제 없음", problems: (n: number, fixing: boolean) => `문제 ${n}개${fixing ? " · 봇이 수정 중" : ""}`, checks: (n: number) => `확인 ${n}개`, fixed: (n: number, checks?: number) => `문제 ${n}개 해결 · ${checks === undefined ? "데스크톱과 휴대폰 문제 없음" : `확인 ${checks}개 통과`}`, waiting: "다른 확인을 기다리는 중", details: (n: number) => `참고 ${n}개`, unchecked: "확인하지 못함", delivery: "폼 전송", rerun: "다시 확인", watch: "보기", watchLive: "실시간 보기", watchCheck: "확인 과정 보기", failed: "페이지를 확인하지 못했어요", retry: "다시 확인하지 못했어요. 다시 시도하세요.", desktop: "데스크톱", phone: "휴대폰", s: "초" },
 };
 
 const coverageKo: Record<string, string> = {
@@ -41,7 +41,7 @@ const errors: Record<VerifyErrorCode, { en: string; ko: string }> = {
   internal: { en: "check could not finish", ko: "확인을 마치지 못했어요" },
 };
 
-export function VerifyCard({ card, threadId }: { card: VerifyCardData; threadId: string }) {
+export function VerifyCard({ card, threadId, fixerRunning = false }: { card: VerifyCardData; threadId: string; fixerRunning?: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
   const [pending, setPending] = useState(false);
@@ -62,7 +62,7 @@ export function VerifyCard({ card, threadId }: { card: VerifyCardData; threadId:
   const title = waiting ? c.waiting
     : running ? checks === undefined ? c.running : `${c.running} · ${c.checks(checks)}`
     : !complete ? c.failed
-    : issues.length ? counted(c.problems(issues.length))
+    : issues.length ? counted(c.problems(issues.length, fixerRunning))
     : card.fixed ? `${c.fixed(card.fixed, checks === undefined ? undefined : card.counts?.passed ?? checks)} · ${seconds}`
     : `${checks === undefined ? c.clean : counted(c.cleanCounted)} · ${seconds}`;
   const action = verifyCardAction(card, phone);

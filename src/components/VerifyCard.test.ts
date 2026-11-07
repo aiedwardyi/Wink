@@ -29,10 +29,21 @@ it("renders running, clean, problems and coverage in both languages without chec
     expect(clean).toContain(locale === "en" ? "Not checked: form delivery" : "확인하지 못함: 폼 전송");
     expect(clean).toContain(locale === "en" ? "Rerun" : "다시 확인");
     const problems = render(card({ issues: [{ checker: "LINKS", tile: "phone", rule: "missing target", where: "a#missing", measured: "#missing has no target" }] }));
-    expect(problems).toContain(locale === "en" ? "bot is fixing" : "봇이 수정 중");
+    expect(problems).toContain(locale === "en" ? "1 problem" : "문제 1개");
+    expect(problems).not.toContain(locale === "en" ? "bot is fixing" : "봇이 수정 중");
     expect(problems).toContain("a#missing");
     expect(problems).not.toMatch(/checks|passed|blocked|not run/);
   }
+});
+
+it.each(["en", "ko"] as const)("reports problems without claiming a fix in %s", locale => {
+  applyLocale(locale);
+  const issue = { checker: "LINKS" as const, tile: "phone" as const, rule: "missing target", where: "a#missing", measured: "No target" };
+  const html = render(card({ issues: [issue, issue] }));
+  expect(html).toContain(locale === "en" ? "2 problems" : "문제 2개");
+  expect(html).not.toContain(locale === "en" ? "bot is fixing" : "봇이 수정 중");
+  const fixing = renderToStaticMarkup(createElement(VerifyCard, { card: card({ issues: [issue] }), threadId: "thread", fixerRunning: true }));
+  expect(fixing).toContain(locale === "en" ? "bot is fixing" : "봇이 수정 중");
 });
 
 it("says in Korean which blocked code left scripts or phone layout unchecked", () => {

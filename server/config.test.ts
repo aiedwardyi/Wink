@@ -27,6 +27,12 @@ import {
 } from "./config.ts";
 
 describe("configuration boundaries", () => {
+  it("documents both default-on product switches", () => {
+    const comment = readFileSync("server/config.ts", "utf8").match(/\/\*\* Product switches\.[^\n]+/)?.[0];
+    expect(comment).toContain("memoryNotes");
+    expect(comment).toContain("liveVerifyAuto");
+  });
+
   it("keeps the automatic verification opt-out across feature updates", () => {
     expect(parseStoredConfig({}).features?.liveVerifyAuto).toBeUndefined();
     saveConfig(parseConfigPatch({ features: { liveVerifyAuto: false } }));

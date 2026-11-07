@@ -19,6 +19,10 @@ let scan: ReturnType<typeof vi.fn<typeof scanVerifyWrites>>;
 let auto: ReturnType<typeof createVerifyAuto>;
 let turn: VerifyAutoTurn;
 const event = (fields: Partial<RuntimeEvent>) => ({ eventId: "e", provider: "claude", threadId: "thread", turnId: "turn", createdAt: new Date().toISOString(), ...fields }) as RuntimeEvent;
+const shell = () => {
+  auto.event(event({ type: "item.started", itemType: "tool", itemId: "shell", title: "Bash" }));
+  auto.event(event({ type: "item.completed", itemType: "tool", itemId: "shell", ok: true }));
+};
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "wink-verify-auto-"));
@@ -40,7 +44,7 @@ it("does no filesystem work for a chat-only turn", async () => {
 });
 
 it.each(["don't check", "do not verify", "don't test", "skip verification", "확인하지 마", "검사 빼고", "테스트 없이"])("skips task opt-out: %s", async humanText => {
-  auto.event(event({ type: "item.completed", itemType: "tool", ok: true }));
+  shell();
   await auto.settled({ ...turn, humanText });
   expect(scan).not.toHaveBeenCalled();
   expect(start).not.toHaveBeenCalled();
@@ -61,7 +65,7 @@ it.each([{ depth: 1 }, { routine: true }, { interrupted: true }, { superseded: t
 
 it.each(["switch", "ram"])("does no scan when blocked by %s", async guard => {
   auto = createVerifyAuto({ enabled: () => guard !== "switch", freeMemory: () => guard === "ram" ? VERIFY_LIMITS.autoFreeBytes - 1 : VERIFY_LIMITS.autoFreeBytes, startAuto: start, scan, log: vi.fn() });
-  auto.event(event({ type: "item.completed", itemType: "tool", ok: true }));
+  shell();
   await auto.settled(turn);
   expect(scan).not.toHaveBeenCalled();
   expect(start).not.toHaveBeenCalled();
@@ -82,7 +86,7 @@ it("skips a manual check after the last write and rechecks a later write", async
 
 it("scans once for an opaque shell alongside native writes", async () => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
-  auto.event(event({ type: "item.completed", itemType: "tool", ok: true }));
+  shell();
   await auto.settled(turn);
   expect(scan).toHaveBeenCalledOnce();
   expect(start).toHaveBeenCalledOnce();
@@ -136,7 +140,7 @@ it("ignores URLs without a package candidate and ignores non-web writes", async 
 it("replaces an older pending decision in the same thread", async () => {
   let finish!: (paths: string[]) => void;
   scan.mockImplementationOnce(() => new Promise(done => { finish = done; }));
-  auto.event(event({ type: "item.completed", itemType: "tool", ok: true }));
+  shell();
   const first = auto.settled(turn);
   auto.event(event({ turnId: "new", type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
   await auto.settled({ ...turn, turnId: "new", humanId: "new-human" });
@@ -144,6 +148,105 @@ it("replaces an older pending decision in the same thread", async () => {
   await first;
   expect(start).toHaveBeenCalledOnce();
   expect(start.mock.calls[0]![0].episode).toContain("new-human");
+});
+
+it.each(["ancestor", "absolute", "relative", "sibling-prefix"])("never checks an unowned static %s", async kind => {
+  const owned = join(root, "owned");
+  await mkdir(owned);
+  await writeFile(join(owned, "a.css"), "h1{color:red}");
+  await mkdir(join(root, "owned-other"));
+  await writeFile(join(root, "owned-other", "index.html"), "<h1>Other</h1>");
+  const path = kind === "ancestor" ? "a.css" : kind === "relative" ? "../index.html" : kind === "sibling-prefix" ? join(root, "owned-other", "index.html") : join(root, "index.html");
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [path] }));
+  await auto.settled({ ...turn, roots: [owned] });
+  expect(start).not.toHaveBeenCalled();
+});
+
+it("does not use a package ancestor outside the owned root", async () => {
+  await writeFile(join(root, "package.json"), "{}");
+  const owned = join(root, "owned");
+  await mkdir(owned);
+  await writeFile(join(owned, "a.css"), "h1{color:red}");
+  const local = createServer(socket => socket.end());
+  await new Promise<void>(done => local.listen(0, "127.0.0.1", done));
+  try {
+    auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["a.css"] }));
+    await auto.settled({ ...turn, roots: [owned], reply: `http://127.0.0.1:${(local.address() as { port: number }).port}/` });
+    expect(start).not.toHaveBeenCalled();
+  } finally { await new Promise<void>(done => local.close(() => done())); }
+});
+
+it("does not use a linked package outside the owned root", async () => {
+  const owned = join(root, "owned"), outside = join(root, "outside");
+  await mkdir(owned);
+  await mkdir(outside);
+  await writeFile(join(outside, "package.json"), "{}");
+  await writeFile(join(outside, "a.css"), "h1{color:red}");
+  await symlink(outside, join(owned, "linked"), process.platform === "win32" ? "junction" : "dir");
+  const local = createServer(socket => socket.end());
+  await new Promise<void>(done => local.listen(0, "127.0.0.1", done));
+  try {
+    auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["linked/a.css"] }));
+    await auto.settled({ ...turn, roots: [owned], reply: `http://127.0.0.1:${(local.address() as { port: number }).port}/` });
+    expect(start).not.toHaveBeenCalled();
+  } finally { await new Promise<void>(done => local.close(() => done())); }
+});
+
+it.each(["Read", "Grep", "Glob", "mcp__react", "update_task_state", "WebSearch", "unknown"])("does no scan or filesystem work for read-only %s", async title => {
+  auto.event(event({ type: "item.started", itemType: "tool", itemId: "read", title }));
+  auto.event(event({ type: "item.completed", itemType: "tool", itemId: "read", ok: true }));
+  await auto.settled(turn);
+  expect(scan).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+  expect(stat).not.toHaveBeenCalled();
+  expect(opendir).not.toHaveBeenCalled();
+});
+
+it.each(["chat", "room-chat", "read-only"])("preserves a pending decision and queued check after %s", async kind => {
+  const cancelQueued = vi.fn();
+  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, scan, cancelQueued, log: vi.fn() });
+  let finish!: (paths: string[]) => void;
+  scan.mockImplementationOnce(() => new Promise(done => { finish = done; }));
+  shell();
+  const first = auto.settled(turn);
+  expect(cancelQueued).toHaveBeenCalledOnce();
+  if (kind === "read-only") {
+    auto.event(event({ turnId: "new", type: "item.started", itemType: "tool", itemId: "read", title: "Read" }));
+    auto.event(event({ turnId: "new", type: "item.completed", itemType: "tool", itemId: "read", ok: true }));
+  }
+  await auto.settled({ ...turn, turnId: "new", botId: kind === "room-chat" ? "other-bot" : "bot" });
+  finish(["index.html"]);
+  await first;
+  expect(cancelQueued).toHaveBeenCalledOnce();
+  expect(start).toHaveBeenCalledOnce();
+});
+
+it("logs one low-memory skip with free MiB and does no scan", async () => {
+  const log = vi.fn();
+  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 2_655 * 1024 ** 2, startAuto: start, scan, log });
+  shell();
+  await auto.settled(turn);
+  expect(log).toHaveBeenCalledExactlyOnceWith("Live Verify: skipped, low memory 2655 MiB");
+  expect(scan).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});
+
+it.each(["this repo has no tests yet", "I don't test on Safari"])("does not treat a statement as an opt-out: %s", async humanText => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
+  await auto.settled({ ...turn, humanText });
+  expect(start).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { title: "Bash" }, { title: "Shell" }, { title: "exec_command" },
+  { provider: "codex", title: "npm run build", verb: "Bash" },
+  { provider: "grok", title: "npm run build", verb: "Bash" },
+])("scans successful shell tools: %o", async fields => {
+  auto.event(event({ ...fields, type: "item.started", itemType: "tool", itemId: "exec" }));
+  auto.event(event({ provider: fields.provider ?? "claude", type: "item.completed", itemType: "tool", itemId: "exec", ok: true }));
+  await auto.settled(turn);
+  expect(scan).toHaveBeenCalledOnce();
+  expect(start).toHaveBeenCalledOnce();
 });
 
 it("scans recent web files in output folders but skips hidden, dependency, coverage and linked folders", async () => {
