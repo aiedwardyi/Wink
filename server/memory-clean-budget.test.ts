@@ -36,7 +36,7 @@ describe("memory cleanup usage budget", () => {
 
   it("stops before the next call when actual usage plus its bound exceeds the cap", async () => {
     const engine = run([59_000]);
-    expect(await engine.result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(1);
   });
 
@@ -53,32 +53,32 @@ describe("memory cleanup usage budget", () => {
 
   it.each([false, true])("rejects an actual overrun on the final call, exact answers %s", async (exact) => {
     const engine = run(exact ? [18_908, 17_184, 30_000] : [18_908, 17_184, 9_717, 14_192], true, false, exact);
-    expect(await engine.result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(exact ? 3 : 4);
   });
 
   it.each([false, true])("enforces the unchanged hard cap on a no-change reply, side %s", async (side) => {
     const call = vi.fn<TextCall>(async (prompt) => ({ text: JSON.stringify({ version: 1, file: /"file":"([^"]+)"/.exec(prompt)![1], changes: [] }), tokens: (side ? 120_000 : 60_000) + 1 }));
-    expect(await cleanFiles({ memory: "- kept\n", side: side ? { file: "memory/topic.md", text: "- topic\n" } : undefined, history: null, typed: new Set(), propose: call, recall: call })).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await cleanFiles({ memory: "- kept\n", side: side ? { file: "memory/topic.md", text: "- topic\n" } : undefined, history: null, typed: new Set(), propose: call, recall: call })).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(call).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, 0, -1, NaN, Infinity, 0.5])("falls back to the existing estimate for unusable usage %s", async (tokens) => {
     const engine = run(Array(4).fill(tokens));
-    expect(await engine.result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(3);
     expect(engine.call.mock.calls.reduce((sum, [prompt]) => sum + callTokens(prompt), 0)).toBeLessThanOrEqual(60_000);
   });
 
   it("keeps text-only engines bounded", async () => {
     const engine = run([], true, true);
-    expect(await engine.result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.call).toHaveBeenCalledTimes(3);
   });
 
   it("still rejects a bad grade after admitting the call", async () => {
     const engine = run(used, false);
-    expect(await engine.result).toEqual({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
+    expect(await engine.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
     expect(engine.call).toHaveBeenCalledTimes(4);
   });
 });

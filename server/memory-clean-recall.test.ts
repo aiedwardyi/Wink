@@ -170,8 +170,28 @@ describe("recall grading", () => {
   it("stops a 300 KB side file on budget before its propose call", async () => {
     const engine = calls({ "MEMORY.md": [retire(2)], "memory/queued.md": [retire(2)] });
     const side = { file: "memory/queued.md" as const, text: `- kept\n- old\n${"- task line\n".repeat(25_000)}` };
-    expect(await cleanFiles({ ...input(engine), side })).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(await cleanFiles({ ...input(engine), side })).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.prompts("propose").map((prompt) => /"file":"([^"]+)"/.exec(prompt)?.[1])).toEqual(["MEMORY.md"]);
+  });
+
+  it("fails a filed fact the answerer cannot find from MEMORY.md alone", async () => {
+    const trips = Array.from({ length: 150 }, (_, i) => `- trip ${i} stop at harbor ${i}`).join("\n") + "\n";
+    const filed = [{ op: "file", ids: [1, 2, 3], topic: "trips", pointer: "- memory/trips.md: the first three trip stops", reason: "Detail" }] as unknown as Change[];
+    const asked = questions().map((q, i) => i === 0 ? { ...q, file: "memory/trips.md", answer: "memory/trips.md" } : q);
+    const run = async (first: string | null) => {
+      const engine = calls({ "MEMORY.md": filed }, [first, ...keys.slice(1)]);
+      engine.propose.mockImplementation(async (prompt) => prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(asked)
+        : prompt.startsWith("[memory-clean:grade]") ? JSON.stringify(pairs(prompt).map(() => true)) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: filed }));
+      return { result: await cleanFiles({ memory: trips, history: null, typed: new Set(), propose: engine.propose, recall: engine.recall }), engine };
+    };
+    const missed = await run("harbor 0");
+    expect(missed.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 17/18; wrong 1" });
+    const [answers] = missed.engine.prompts("answers");
+    expect(answers).toContain("- memory/trips.md: the first three trip stops");
+    expect(answers).not.toContain("trip 1 stop at harbor 1");
+    expect(missed.engine.prompts("grade")).toEqual([]);
+    const found = await run("memory/trips.md");
+    expect(found.result).toMatchObject({ ok: true, topics: [{ file: "memory/trips.md", before: null, text: "- trip 0 stop at harbor 0\n- trip 1 stop at harbor 1\n- trip 2 stop at harbor 2\n" }] });
   });
 });
 
@@ -211,7 +231,7 @@ describe("pair.mjs sabotaged merge", () => {
     expect(good.questions).toContain('"op":"merge"');
     expect(good.questions).toContain("Give every distinct number in merge lines its own changed question first.");
     const bad = await run(sabotaged);
-    expect(bad.result).toEqual({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
+    expect(bad.result).toMatchObject({ ok: false, stage: "recall", detail: "Recall 16/18; wrong 2" });
     expect(bad.graded).toEqual(['What comes after "beta"?', 'What comes after "build"?']);
   });
 });

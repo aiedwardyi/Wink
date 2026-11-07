@@ -14,7 +14,6 @@ const temps = createTempDirs();
 const scratch = join(tmpdir(), "wink-CLEAN-CORE");
 mkdirSync(scratch, { recursive: true });
 afterAll(() => temps.remove());
-const DAY = 86_400_000;
 const QUIET = 600_000;
 const NOW = Date.UTC(2026, 10, 4);
 const retire = (id: number): Change => ({ op: "retire", id, reason: "Completed" });
@@ -75,7 +74,7 @@ describe("cleanFiles recall", () => {
     if (stage === "grade") engine.recall.mockResolvedValue(JSON.stringify(["x".repeat(240_000), ...questions().slice(1).map((q) => q.answer)]));
     if (stage === "answers") engine.propose.mockImplementation(async (prompt) => prompt.startsWith("[memory-clean:questions]") ? JSON.stringify(questions().map((q) => ({ ...q, question: q.question + "x".repeat(10_000) }))) : JSON.stringify({ version: 1, file: "MEMORY.md", changes: [retire(2)] }));
     const result = await cleanFiles({ memory, side, history: null, typed: new Set(), ...engine });
-    expect(result).toEqual({ ok: false, stage: "nothing", detail: "budget" });
+    expect(result).toMatchObject({ ok: false, stage: "nothing", detail: "budget" });
     expect(engine.propose.mock.calls.length + engine.recall.mock.calls.length).toBe({ propose: 0, side: 1, questions: 2, answers: 2, grade: 3 }[stage]);
     expect([...engine.propose.mock.calls, ...engine.recall.mock.calls].reduce((sum, [prompt]) => sum + callTokens(prompt), 0)).toBeLessThanOrEqual(side ? 120_000 : 60_000);
   });
@@ -173,15 +172,13 @@ describe("memory cleanup service", () => {
 
   afterEach(() => { service.dispose(); vi.useRealTimers(); });
 
-  it("waits for changed content after validate", async () => {
+  it("retries a rejected change list once with its reasons, then writes nothing", async () => {
     engine = calls([retire(1)]);
     await run();
-    expect(engine.propose).toHaveBeenCalledTimes(1);
-    await run();
-    expect(engine.propose).toHaveBeenCalledTimes(1);
-    writeMemoryFile(bot.id, original + "- edit\n");
-    await run();
     expect(engine.propose).toHaveBeenCalledTimes(2);
+    expect(engine.propose.mock.calls[1]![0]).toContain('"reason":"protected"');
+    expect(memoryFileRaw(bot.id)).toBe(original);
+    expect(existsSync(join(workspaceDir(bot.id), "memory/memory-history.md"))).toBe(false);
   });
 
   it.each(["abort", "timeout"])("discards a late signal-ignoring call after %s", async (kind) => {
@@ -275,17 +272,6 @@ describe("memory cleanup service", () => {
     expect(row()).toBeDefined();
   });
 
-  it("backs off failed recall for 14 days", async () => {
-    engine.recall.mockResolvedValue("bad");
-    await run();
-    expect(state().backoff["MEMORY.md"]).toBe(clock + 14 * DAY);
-    const count = engine.propose.mock.calls.length;
-    clock += DAY; await run();
-    expect(engine.propose).toHaveBeenCalledTimes(count);
-    clock += 14 * DAY; await run();
-    expect(engine.propose.mock.calls.length).toBeGreaterThan(count);
-  });
-
   it("cleans only the largest pointed, changed side file per run", async () => {
     const small = `- head\n- completed\n${"s".repeat(49000)}\n`;
     const large = `- head\n- completed\n${"l".repeat(51000)}\n`;
@@ -309,20 +295,6 @@ describe("memory cleanup service", () => {
     writeFileSync(join(workspaceDir(bot.id), "memory/queued.md"), `- head\n- completed\n${"q".repeat(49000)}\n`);
     await run();
     expect(service.summary(bot.id).run?.files).toEqual(["MEMORY.md", "memory/queued.md"]);
-  });
-
-  it("re-arms after nothing only on 2 KB growth or seven days", async () => {
-    engine = calls([]);
-    await run();
-    expect(engine.propose).toHaveBeenCalledTimes(1);
-    writeMemoryFile(bot.id, original + `- ${"a".repeat(1024)}\n`);
-    await run();
-    expect(engine.propose).toHaveBeenCalledTimes(1);
-    writeMemoryFile(bot.id, original + `- ${"a".repeat(2048)}\n`);
-    await run();
-    expect(engine.propose).toHaveBeenCalledTimes(2);
-    clock += 7 * DAY; await run();
-    expect(engine.propose).toHaveBeenCalledTimes(3);
   });
 
   it("fences a concurrent side-file write", async () => {

@@ -1,9 +1,14 @@
 import { z } from "zod";
 
-import { cleanFileSchema, lineHash } from "./memory-clean-format.ts";
-import type { ArchiveEntry, ChangeList, RejectReason, ValidateInput, ValidateResult } from "./memory-clean-types.ts";
+import { cleanFileSchema, isHistory, lineHash } from "./memory-clean-format.ts";
+import type { ArchiveEntry, ChangeList, CleanFile, RejectReason, SleepLine, ValidateInput, ValidateResult } from "./memory-clean-types.ts";
+import { secretLike } from "./memory-pass.ts";
 import { withSystemChanges } from "./turn-context.ts";
+import { isMemoryTopicName } from "./workspace.ts";
 
+export const FILE_FLOOR = 16 * 1024;
+const LEARN_MAX = 8;
+const FILE_MAX_BYTES = 4096;
 const id = z.number().int().positive();
 const reason = z.string();
 const changeSchema = z.discriminatedUnion("op", [
@@ -12,7 +17,39 @@ const changeSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("retire"), id, reason }).strict(),
   z.object({ op: z.literal("split"), id, keep: z.array(z.string().min(1)).min(1), reason }).strict(),
   z.object({ op: z.literal("remind"), id, text: z.string(), reason }).strict(),
+  z.object({ op: z.literal("learn"), text: z.string(), quote: z.string(), lesson: z.boolean().optional(), reason }).strict(),
+  z.object({ op: z.literal("own"), id, quote: z.string(), reason }).strict(),
+  z.object({ op: z.literal("file"), ids: z.array(id).min(1).max(20), topic: z.string(), pointer: z.string(), reason }).strict(),
 ]);
+const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+const bullet = (text: string) => `- ${text.replace(/\s+/g, " ").trim().replace(/^[-*+]\s+/, "")}`;
+const lessonsHeading = (line: string) => /^#{1,6}\s+(?:lessons?|교훈)\s*$/i.test(line.replace(/\r$/, ""));
+
+/** The user line a quote sits in, verbatim apart from case and spacing. */
+export function quotedLine(quote: string, user: readonly SleepLine[], kind?: SleepLine["kind"]): SleepLine | undefined {
+  const said = squash(quote);
+  return said.length < 4 ? undefined : user.find((line) => (!kind || line.kind === kind) && squash(line.text).includes(said));
+}
+
+/** A remember line counts as kept when every fact token, or else its whole text, is in the file. */
+export function rememberCovered(line: string, text: string): boolean {
+  const tokens = factTokens(bullet(line));
+  return tokens.length ? tokens.every((token) => text.includes(token)) : squash(text).includes(squash(line));
+}
+
+// new plain lines go last but stay out of a trailing Lessons section; null lessons means the heading is missing
+function sleepSlots(lines: string[]): { plain: number; lessons: number | null; end: number } {
+  const filled = (from: number, to: number) => {
+    for (let at = to; at >= from; at--) if (lines[at - 1]?.trim()) return at;
+    return 0;
+  };
+  const end = filled(1, lines.length);
+  const heading = lines.findIndex(lessonsHeading) + 1;
+  if (!heading) return { plain: end, lessons: null, end };
+  const depth = /^#+/.exec(lines[heading - 1]!)![0].length;
+  const next = lines.findIndex((line, i) => i >= heading && (/^#{1,6}(?=\s)/.exec(line)?.[0].length ?? 7) <= depth) + 1;
+  return { plain: next ? end : filled(1, heading - 1), lessons: filled(heading, next ? next - 1 : lines.length), end };
+}
 const listSchema = z.object({ version: z.literal(1), file: cleanFileSchema, changes: z.array(changeSchema) }).strict();
 export const pointerLine = (line: string) => /\bmemory\/[\w][\w .-]*\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/.test(line);
 export const declinedLine = (line: string) => /\b(declined?|rejected?|ruled out|turned down|chose against)\b|거절|사양|선택하지|하지 않기로/i.test(line);
@@ -24,7 +61,7 @@ export function protectedLines(text: string, typed: ReadonlySet<string>, include
     const heading = /^(#{1,6})\s+(.+)/.exec(line);
     if (heading) {
       if (pinnedDepth && heading[1]!.length <= pinnedDepth) pinnedDepth = 0;
-      if (/\bpinned\b|고정/i.test(heading[2]!)) pinnedDepth = heading[1]!.length;
+      if (/\bpinned\b|고정/i.test(heading[2]!) || lessonsHeading(line)) pinnedDepth = heading[1]!.length;
     }
     if (pinnedDepth || /\(pinned\)\s*$/i.test(line) || typed.has(lineHash(line)) || pointerLine(line) || includeDeclined && declinedLine(line) ||
       /\b(corrections?|corrected|lessons?|rules?|preferences?|prefer(?:s|red)?|always|never|don['’]t|do not|must|should)\b|항상|절대|하지\s*마|교정|정정|교훈|규칙|선호/i.test(line)) protectedIds.add(i + 1);
@@ -71,13 +108,27 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   const touched = new Set<number>();
   const removed = new Set<number>();
   const edits = new Map<number, string[]>();
+  const inserts = new Map<number, { plain: string[]; lessons: string[] }>();
   const entries: ArchiveEntry[] = [];
+  const topics: Array<{ file: CleanFile; lines: string[]; reason: string }> = [];
   const counts = { merged: 0, replaced: 0, moved: 0 };
   const errors: Array<{ reason: RejectReason; change?: number }> = [];
   const fail = (reason: RejectReason, change?: number) => errors.push({ reason, ...(change === undefined ? {} : { change }) });
+  const user = input.user ?? [];
+  const cr = input.text.includes("\r\n") ? "\r" : "";
+  const slots = sleepSlots(lines);
+  let lessonsAt = slots.lessons;
+  let learned = 0;
+  let filedBytes = 0;
+  const insert = (after: number, line: string, lesson: boolean) => {
+    const slot = inserts.get(after) ?? { plain: [], lessons: [] };
+    inserts.set(after, slot);
+    (lesson ? slot.lessons : slot.plain).push(line);
+  };
+  const changedIds = (op: ChangeList["changes"][number]) => op.op === "merge" || op.op === "file" ? op.ids : op.op === "learn" || op.op === "own" ? [] : [op.id];
   list.changes.forEach((change, index) => {
-    const ids = change.op === "merge" ? change.ids : [change.id];
-    const refs = change.op === "replace" ? [...ids, change.newer] : ids;
+    const ids = changedIds(change);
+    const refs = change.op === "replace" ? [...ids, change.newer] : change.op === "own" ? [change.id] : ids;
     if (refs.some((n) => !lines[n - 1]?.trim())) { fail("unknown-id", index); return; }
     if (refs.some((n, i) => used.has(n) || refs.indexOf(n) !== i)) fail("reused-id", index);
     refs.forEach((n) => used.add(n));
@@ -85,11 +136,46 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
     if (/[\r\n]/.test(change.reason) || change.reason.length > 120) fail("too-long", index);
     if ((change.op === "merge" || change.op === "remind") && (/[\r\n]/.test(change.text) || Buffer.byteLength(change.text) > (change.op === "merge" ? 300 : 200) || !change.text.trim())) fail("too-long", index);
     if ((change.op === "split" || change.op === "remind") && input.file === "MEMORY.md") fail("op-not-allowed", index);
+    if ((change.op === "learn" || change.op === "own" || change.op === "file") && input.file !== "MEMORY.md") { fail("op-not-allowed", index); return; }
     if (change.op === "remind" && !declinedLine(lines[change.id - 1]!)) fail("op-not-allowed", index);
+    if (change.op === "learn") {
+      const source = quotedLine(change.quote, user);
+      if (/[\r\n]/.test(change.text) || !change.text.trim() || Buffer.byteLength(bullet(change.text)) > 300) fail("too-long", index);
+      if (++learned > LEARN_MAX) fail("cap-learn", index);
+      if (secretLike(change.text) || secretLike(change.quote)) fail("secret", index);
+      const said = source?.text.toLowerCase() ?? "";
+      if (!source || factTokens(bullet(change.text)).some((token) => !said.includes(token.toLowerCase()))) { fail("not-quoted", index); return; }
+      const lesson = change.lesson === true;
+      const line = bullet(change.text) + cr;
+      const wrote = lesson && lessonsAt === null ? [...(slots.end ? [cr] : []), `## Lessons${cr}`, line] : [line];
+      const after = lesson ? lessonsAt ?? slots.end : slots.plain;
+      if (lesson) lessonsAt = after;
+      wrote.forEach((item) => insert(after, item, lesson));
+      entries.push({ header: { file: input.file, op: "learn", at: [], prev: [], wrote, after, quote: change.quote, lesson }, reason: change.reason, lines: [] });
+      return;
+    }
+    if (change.op === "own") {
+      if (!quotedLine(change.quote, user, "remember")) fail("not-quoted", index);
+      const hash = lineHash(lines[change.id - 1]!);
+      entries.push({ header: { file: input.file, op: "own", at: [], prev: [], wrote: [], quote: change.quote, owned: input.typed.has(hash) ? [] : [hash] }, reason: change.reason, lines: [] });
+      return;
+    }
+    if (change.op === "file") {
+      const topic = `memory/${change.topic}.md` as CleanFile;
+      if (Buffer.byteLength(input.text) <= FILE_FLOOR && lines.length <= 140) fail("op-not-allowed", index);
+      if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(change.topic) || !isMemoryTopicName(`${change.topic}.md`) || isHistory(topic) || /^memory-history/.test(change.topic) || topic === input.side) fail("op-not-allowed", index);
+      if (/[\r\n]/.test(change.pointer) || Buffer.byteLength(bullet(change.pointer)) > 300 || !change.pointer.includes(topic) || secretLike(change.pointer)) fail("pointer", index);
+      filedBytes += ids.reduce((n, id) => n + Buffer.byteLength(lines[id - 1]!.replace(/\r$/, "")) + 1, 0);
+      if (filedBytes > FILE_MAX_BYTES) fail("cap-file", index);
+      const known = topics.find((item) => item.file === topic);
+      const moved = ids.map((n) => lines[n - 1]!.replace(/\r$/, ""));
+      if (known) known.lines.push(...moved);
+      else topics.push({ file: topic, lines: moved, reason: change.reason });
+    }
     for (const n of ids) {
       const line = lines[n - 1]!;
-      if (change.op === "retire" && /pending|parked|awaits?|awaiting|대기|보류/i.test(line)) fail("protected", index);
-      const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => (op.op === "merge" ? op.ids : [op.id]).includes(i + 1)));
+      if ((change.op === "retire" || change.op === "file") && /pending|parked|awaits?|awaiting|대기|보류/i.test(line)) fail("protected", index);
+      const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => changedIds(op).includes(i + 1)));
       if (pointerLine(line) && !exactCopy) fail("pointer", index);
       if (!protectedIds.has(n)) continue;
       const reminder = change.op === "remind" && input.file !== "MEMORY.md" && declinedLine(line) && !otherProtection.has(n);
@@ -116,17 +202,31 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       wrote = [marker + change.keep.join(" ") + (line.endsWith("\r") ? "\r" : "")];
       counts.moved++;
     } else if (change.op === "remind") { wrote = [change.text + (lines[change.id - 1]!.endsWith("\r") ? "\r" : "")]; counts.moved++; }
+    else if (change.op === "file") wrote = [bullet(change.pointer) + (lines[ids[0]! - 1]!.endsWith("\r") ? "\r" : "")];
     else counts.moved++;
     for (const n of ids) removed.add(n);
     edits.set(ids[0]!, wrote);
     entries.push({ header: { file: input.file, op: change.op, at: ids, prev: ids.map((n) => {
       for (let i = n - 2; i >= 0; i--) if (lines[i]!.trim()) return lineHash(lines[i]!);
       return "";
-    }), wrote }, reason: change.reason, lines: ids.map((n) => lines[n - 1]!) });
+    }), wrote, ...(change.op === "file" ? { topic: `memory/${change.topic}.md` as CleanFile } : {}) }, reason: change.reason, lines: ids.map((n) => lines[n - 1]!) });
   });
-  const text = lines.flatMap((line, i) => edits.get(i + 1) ?? (removed.has(i + 1) ? [] : [line])).join("\n");
-  if (touched.size > 40) fail("cap-lines");
+  const assemble = () => [...(inserts.get(0)?.plain ?? []), ...(inserts.get(0)?.lessons ?? []), ...lines.flatMap((line, i) => [
+    ...(edits.get(i + 1) ?? (removed.has(i + 1) ? [] : [line])), ...(inserts.get(i + 1)?.plain ?? []), ...(inserts.get(i + 1)?.lessons ?? []),
+  ])].join("\n");
+  let text = assemble();
+  if (!errors.length && input.file === "MEMORY.md") {
+    for (const line of user.filter((item) => item.kind === "remember")) {
+      if (rememberCovered(line.text, text) || secretLike(line.text)) continue;
+      const wrote = [bullet(line.text) + cr];
+      insert(slots.plain, wrote[0]!, false);
+      entries.push({ header: { file: input.file, op: "own", at: [], prev: [], wrote, after: slots.plain, quote: line.text, owned: [lineHash(wrote[0]!)] }, reason: "Asked to remember", lines: [] });
+      text = assemble();
+    }
+  }
+  const added = entries.reduce((n, entry) => n + (entry.header.after === undefined ? 0 : entry.header.wrote.length), 0);
+  if (touched.size + added > 40) fail("cap-lines");
   if (withSystemChanges("", input.text, text, 8000) === null) fail("cap-chars");
-  if (input.file === "MEMORY.md" && (Buffer.byteLength(text) > 24000 || text.split("\n").length > 200)) fail("budget");
-  return errors.length ? { ok: false, errors } : { ok: true, text, entries, counts };
+  if (input.file === "MEMORY.md" && (Buffer.byteLength(text) > Math.min(24000, Math.max(Buffer.byteLength(input.text), FILE_FLOOR)) || text.split("\n").length > 200)) fail("budget");
+  return errors.length ? { ok: false, errors } : { ok: true, text, entries, counts, topics };
 }

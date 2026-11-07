@@ -1,10 +1,23 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CleanInput, TextCall } from "./memory-clean.ts";
+import type { HomeInput } from "./memory-clean-home.ts";
+import { Store } from "./store.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 import { withSystemChanges } from "./turn-context.ts";
+import { memoryFileRaw, workspaceDir, writeMemoryFile } from "./workspace.ts";
+
+const sabotage = vi.hoisted(() => ({ undo: false }));
+vi.mock("./memory-clean-undo.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./memory-clean-undo.ts")>();
+  return { ...real, undoText: (...args: Parameters<typeof real.undoText>) => {
+    const result = real.undoText(...args);
+    return sabotage.undo ? { ...result, text: `${result.text}x` } : result;
+  } };
+});
 
 const temps = createTempDirs();
 const scratch = join(tmpdir(), "wink-CLEAN-CORE");
@@ -98,6 +111,130 @@ describe("change list validation", () => {
 
   it.each(["before {}", "```json\n{}\n```", { version: 1, file: "../MEMORY.md", changes: [] }, list([{ op: "merge", ids: [1], text: "x", reason: "x" }])])("rejects malformed proposal %s", async (proposal) => {
     expect((await load()).validateChangeList({ file: "MEMORY.md", text: "- done", list: proposal, typed: new Set() })).toMatchObject({ ok: false });
+  });
+});
+
+const quiz = Array.from({ length: 18 }, (_, i) => ({ kind: i < 12 ? "changed" : i < 16 ? "protected" : "absent", question: `Fact ${i}?`, answer: i < 16 ? `value ${i}` : null }));
+const proposer = (changes: () => unknown[]) => vi.fn<TextCall>(async (prompt) => {
+  if (prompt.startsWith("[memory-clean:questions]")) {
+    const topic = /"filedTo":"([^"]+)"/.exec(prompt)?.[1];
+    return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? { ...q, file: topic, answer: topic } : q));
+  }
+  if (prompt.startsWith("[memory-clean:grade]")) return JSON.stringify(JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2)).map(() => true));
+  return JSON.stringify(list(changes()));
+});
+const answerer = () => vi.fn<TextCall>(async (prompt) => {
+  const topic = /^- (memory\/(?!memory-history)[a-z0-9-]+\.md):/m.exec(prompt)?.[1];
+  return JSON.stringify(quiz.map((q, i) => i === 0 && topic ? topic : q.answer));
+});
+const night = (memory: string, changes: unknown[], extra: Partial<CleanInput> = {}): CleanInput =>
+  ({ memory, history: null, typed: new Set(), now: Date.UTC(2026, 10, 7), propose: proposer(() => changes), recall: answerer(), ...extra });
+const learn = (quote: string, text: string, lesson = false) => ({ op: "learn", text, quote, lesson, reason: "User said it" });
+const said = (text: string, kind: "said" | "remember" | "correction" = "said", at = 150) => ({ text, at, kind });
+
+describe("sleep", () => {
+  it("learns a fact only when it quotes a user line from this night", async () => {
+    const { cleanFiles, validateChangeList } = await load();
+    const user = [said("Jun moved to Jeju in May")];
+    const result = await cleanFiles(night("- kept\n", [learn("Jun moved to Jeju", "- Jun moved to Jeju in May")], { user, through: 150 }));
+    expect(result).toMatchObject({ ok: true, header: { v: 2, through: 150, counts: { learned: 1 } } });
+    expect(result.ok && result.memory.split("\n").slice(0, 2)).toEqual(["- kept", "- Jun moved to Jeju in May"]);
+    const check = (changes: unknown[], lines = user) => validateChangeList({ file: "MEMORY.md", text: "- kept\n", typed: new Set(), user: lines, list: list(changes) });
+    expect(check([learn("Jun moved to Jeju", "- Jun moved to Jeju in June")])).toMatchObject({ ok: false, errors: [{ reason: "not-quoted" }] });
+    expect(check([learn("Mina lives in Busan", "- Mina lives in Busan")])).toMatchObject({ ok: false, errors: [{ reason: "not-quoted" }] });
+    const { sleepInput } = await load();
+    const rows = [{ id: "a", role: "user", kind: "text", text: "Mina lives in Busan", at: 50 }, { id: "b", role: "user", kind: "text", text: "Jun moved to Jeju in May", at: 150 }];
+    const tonight = sleepInput(rows as never, 100, 200);
+    expect(tonight).toEqual({ user: [said("Jun moved to Jeju in May")], through: 150 });
+    expect(check([learn("Mina lives in Busan", "- Mina lives in Busan")], tonight.user)).toMatchObject({ ok: false, errors: [{ reason: "not-quoted" }] });
+    expect(sleepInput(rows as never, null, 200 + 7 * 86_400_000).user).toEqual([]);
+  });
+
+  it("appends a missed remember line verbatim and owns it", async () => {
+    const { cleanFiles, lineHash } = await load();
+    const user = [said("Remember that Mom's birthday is March 3", "remember")];
+    const result = await cleanFiles(night("- kept\n", [], { user }));
+    expect(result).toMatchObject({ ok: true, owned: [lineHash("- Remember that Mom's birthday is March 3")], header: { counts: { kept: 1, learned: 1 } } });
+    expect(result.ok && result.memory.split("\n")[1]).toBe("- Remember that Mom's birthday is March 3");
+    const owned = await cleanFiles(night("- Mom's birthday is March 3\n", [{ op: "own", id: 1, quote: "Mom's birthday is March 3", reason: "Asked to remember" }], { user }));
+    expect(owned).toMatchObject({ ok: true, owned: [lineHash("- Mom's birthday is March 3")], header: { counts: { kept: 1, learned: 0 } } });
+    expect(owned.ok && owned.memory.split("\n")[0]).toBe("- Mom's birthday is March 3");
+  });
+
+  it("counts kept merged forgot and learned so old lines add up", async () => {
+    const { cleanFiles, parseHistory } = await load();
+    const memory = "- tea at 9\n- tea at 9 daily\n- shipped v1 done\n- headcount 8 (noted 2026-10-01)\n- headcount 9 (noted 2026-11-04)\n- kept line\n";
+    const result = await cleanFiles(night(memory, [
+      { op: "merge", ids: [1, 2], text: "- tea at 9 daily", reason: "Same subject" }, retire(3), { op: "replace", id: 4, newer: 5, reason: "Newer" },
+      learn("tea with Jun", "- tea with Jun"),
+    ], { user: [said("I had tea with Jun")] }));
+    expect(result).toMatchObject({ ok: true, header: { v: 2, counts: { kept: 2, merged: 2, forgot: 2, learned: 1, filed: 0 } } });
+    if (!result.ok || result.header.v !== 2) return;
+    const { kept, merged, forgot } = result.header.counts;
+    expect(kept + merged + forgot).toBe(memory.split("\n").filter(Boolean).length);
+    expect(parseHistory(result.block)[0]!.header).toEqual(result.header);
+    expect(parseHistory(historyBlock())[0]!.header).toMatchObject({ v: 1, moved: 1 });
+  });
+
+  describe("service", () => {
+    let clock: number;
+    let dataDir: string;
+    let store: Store;
+    let bot: ReturnType<Store["createBot"]>;
+    let changes: unknown[];
+    let service: ReturnType<Awaited<ReturnType<typeof load>>["createMemoryClean"]>;
+    const detail = (i: number) => `- detail ${i} ${"x".repeat(280)}`;
+    const original = ["- Never delete", detail(0), detail(1), "- Mom's birthday is March 3", ...Array.from({ length: 56 }, (_, i) => detail(i + 2))].join("\n") + "\n";
+    const typed = async () => (await load()).typedHashes(bot.id, dataDir);
+
+    beforeEach(async () => {
+      const { createMemoryClean } = await load();
+      clock = Date.UTC(2026, 10, 4);
+      dataDir = temps.make(join(scratch, "sleep-"));
+      store = new Store(() => ({ instanceId: "codex", model: "gpt-6.1" }));
+      for (const old of store.bots) store.deleteBot(old.id);
+      bot = store.createBot();
+      bot.memoryNotes = false;
+      writeMemoryFile(bot.id, original);
+      store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Jun moved to Jeju in May" });
+      store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Remember Mom's birthday is March 3" });
+      changes = [
+        learn("Jun moved to Jeju", "- Jun moved to Jeju in May"), { op: "own", id: 4, quote: "Mom's birthday is March 3", reason: "Asked to remember" },
+        { op: "file", ids: [2, 3], topic: "details", pointer: "- memory/details.md: the first two details", reason: "Detail" },
+      ];
+      const engine = { propose: proposer(() => changes), recall: answerer(), key: "own" };
+      const home: HomeInput = { device: "000000000001" };
+      service = createMemoryClean({ store, dataDir, engine: async () => engine, busy: () => false, pending: () => false, home: () => home, now: () => clock });
+    });
+
+    afterEach(() => { service.dispose(); sabotage.undo = false; });
+
+    it("undoes learned owned and filed changes byte for byte and owns restored lines", async () => {
+      const { lineHash } = await load();
+      clock += 600_000; await service.run(bot.id);
+      const memory = memoryFileRaw(bot.id);
+      expect(memory).toContain("\n- Jun moved to Jeju in May\n");
+      expect(memory).toContain("- memory/details.md: the first two details\n");
+      expect(readFileSync(join(workspaceDir(bot.id), "memory/details.md"), "utf8")).toBe(`${detail(0)}\n${detail(1)}\n`);
+      expect(await typed()).toContain(lineHash("- Mom's birthday is March 3"));
+      const runId = service.summary(bot.id).run!.runId;
+      expect(readFileSync(join(dataDir, "sleep", bot.id, runId, "MEMORY.md"), "utf8")).toBe(original);
+      expect(await service.undo(bot.id, runId)).toMatchObject({ ok: true });
+      expect(memoryFileRaw(bot.id)).toBe(original);
+      expect(existsSync(join(workspaceDir(bot.id), "memory/details.md"))).toBe(false);
+      expect(await typed()).not.toContain(lineHash("- Mom's birthday is March 3"));
+      expect(await typed()).toEqual(expect.arrayContaining([lineHash(detail(0)), lineHash(detail(1))]));
+    });
+
+    it("aborts the write when undo cannot rebuild the old file", async () => {
+      const { cleanFiles } = await load();
+      sabotage.undo = true;
+      expect(await cleanFiles(night("- kept\n- old done\n", [retire(2)]))).toMatchObject({ ok: false, stage: "validate", detail: "undo-proof" });
+      clock += 600_000; await service.run(bot.id);
+      expect(memoryFileRaw(bot.id)).toBe(original);
+      expect(existsSync(join(workspaceDir(bot.id), "memory/memory-history.md"))).toBe(false);
+      expect(existsSync(join(dataDir, "sleep"))).toBe(false);
+    });
   });
 });
 

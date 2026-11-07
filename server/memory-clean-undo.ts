@@ -1,4 +1,4 @@
-import { hashText, lineHash, POINTER_LINE, HISTORY_FILE } from "./memory-clean-format.ts";
+import { hashText, lineHash, POINTER_LINES, HISTORY_FILE } from "./memory-clean-format.ts";
 import type { ArchiveEntry, CleanFile, HistoryRun } from "./memory-clean-types.ts";
 
 function pointerBefore(text: string, run: HistoryRun, entries: ArchiveEntry[]): string {
@@ -9,7 +9,8 @@ function pointerBefore(text: string, run: HistoryRun, entries: ArchiveEntry[]): 
   const lines = text.split("\n");
   const index = lines.findIndex((line) => /memory\/memory-history(?:-\d+)?\.md/.test(line));
   if (index < 0) return text;
-  if (pointerDelta > 80 && lines[index]!.replace(/\r$/, "") === POINTER_LINE.replace(HISTORY_FILE, /memory\/memory-history(?:-\d+)?\.md/.exec(lines[index]!)![0])) lines.splice(index, 1);
+  const target = /memory\/memory-history(?:-\d+)?\.md/.exec(lines[index]!)![0];
+  if (pointerDelta > 80 && POINTER_LINES.some((line) => lines[index]!.replace(/\r$/, "") === line.replace(HISTORY_FILE, target))) lines.splice(index, 1);
   else if (pointerDelta !== 0) {
     const number = Number(/memory-history-(\d+)\.md/.exec(lines[index]!)?.[1]);
     if (number >= 2) lines[index] = lines[index]!.replace(`memory-history-${number}.md`, number === 2 ? "memory-history.md" : `memory-history-${number - 1}.md`);
@@ -20,20 +21,25 @@ function pointerBefore(text: string, run: HistoryRun, entries: ArchiveEntry[]): 
 function exactInverse(text: string, entries: ArchiveEntry[]): string {
   const lines = text.split("\n");
   const sources = new Map<number, { line: string; skip: number }>();
-  for (const entry of entries) entry.header.at.forEach((at, i) => sources.set(at, { line: entry.lines[i]!, skip: i === 0 ? entry.header.wrote.length : 0 }));
-  const last = Math.max(0, ...sources.keys());
+  const inserted = new Map<number, number>();
+  for (const entry of entries) {
+    entry.header.at.forEach((at, i) => sources.set(at, { line: entry.lines[i]!, skip: i === 0 ? entry.header.wrote.length : 0 }));
+    if (entry.header.after !== undefined) inserted.set(entry.header.after, (inserted.get(entry.header.after) ?? 0) + entry.header.wrote.length);
+  }
+  const last = Math.max(0, ...sources.keys(), ...inserted.keys());
   const restored: string[] = [];
-  let cursor = 0;
+  let cursor = inserted.get(0) ?? 0;
   for (let at = 1; at <= last || cursor < lines.length; at++) {
     const source = sources.get(at);
     if (source) { restored.push(source.line); cursor += source.skip; }
     else if (cursor < lines.length) restored.push(lines[cursor++]!);
+    cursor += inserted.get(at) ?? 0;
   }
   return restored.join("\n");
 }
 
 export function undoText(file: CleanFile, text: string, run: HistoryRun): { text: string; restored: number; skipped: number } {
-  const entries = run.entries.filter((entry) => entry.header.file === file).sort((a, b) => a.header.at[0]! - b.header.at[0]!);
+  const entries = run.entries.filter((entry) => entry.header.file === file).sort((a, b) => (a.header.at[0] ?? Infinity) - (b.header.at[0] ?? Infinity));
   const total = entries.reduce((n, entry) => n + entry.lines.length, 0);
   const base = file === "MEMORY.md" ? pointerBefore(text, run, entries) : text;
   const info = run.header.files[file]!;
@@ -48,7 +54,16 @@ export function undoText(file: CleanFile, text: string, run: HistoryRun): { text
   let restored = 0;
   let skipped = 0;
   const sources: Array<{ line: string; at: number; prev: string }> = [];
-  for (const entry of entries) {
+  const find = (wrote: string[]) => lines.findLastIndex((_, at) => wrote.every((line, i) => lines[at + i] === line));
+  for (const entry of entries.filter((item) => item.header.after !== undefined)) {
+    const wrote = entry.header.wrote;
+    const whole = find(wrote);
+    const line = whole < 0 ? find(wrote.slice(-1)) : -1;
+    if (whole >= 0) lines.splice(whole, wrote.length);
+    else if (line >= 0) lines.splice(line, 1);
+    else skipped++;
+  }
+  for (const entry of entries.filter((item) => item.header.at.length)) {
     const wrote = entry.header.wrote;
     if (wrote.length) {
       const prev = entry.header.prev[0]!;

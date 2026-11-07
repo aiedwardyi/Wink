@@ -1,12 +1,13 @@
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { cleanFiles } from "./memory-clean-engine.ts";
-import { appendBlock, cleanFileSchema, hashText, HISTORY_FILE, isHistory, lineHash, parseHistory, undoBlock } from "./memory-clean-format.ts";
+import { appendBlock, cleanFileSchema, hashText, HISTORY_FILE, isHistory, legacyCounts, lineHash, parseHistory, undoBlock } from "./memory-clean-format.ts";
 import { memoryCleanHome, type HomeInput } from "./memory-clean-home.ts";
+import { sleepInput } from "./memory-clean-input.ts";
 import type { BotCleanState, CleanFile, HistoryRun, MemoryCleanState, MemoryCleanSummary, MemoryCleanUndoResult, TextCall } from "./memory-clean-types.ts";
 import { undoText } from "./memory-clean-undo.ts";
 import { MEMORY_SAVE_TOOL } from "./memory-save.ts";
@@ -15,7 +16,8 @@ import { isMemoryTopicName, readMemoryFile, saveMemoryFile, workspaceDir } from 
 
 export type * from "./memory-clean-types.ts";
 export { cleanFiles } from "./memory-clean-engine.ts";
-export { HISTORY_FILE, POINTER_LINE, lineHash, mergeParkedCopy, parseHistory } from "./memory-clean-format.ts";
+export { HISTORY_FILE, POINTER_LINE, legacyCounts, lineHash, mergeParkedCopy, parseHistory, runItems } from "./memory-clean-format.ts";
+export { sleepInput } from "./memory-clean-input.ts";
 export { factTokens, validateChangeList } from "./memory-clean-validate.ts";
 
 const DAY = 86_400_000;
@@ -25,12 +27,9 @@ const time = z.number().finite().nonnegative();
 const stateSchema = z.object({
   version: z.literal(1), bots: z.record(z.string(), z.object({
     lastRun: z.object({ runId: z.string(), at: time, files: z.array(cleanFileSchema) }).optional(),
-    backoff: z.record(cleanFileSchema, time).optional(), unchangedHash: z.string().optional(),
     sideHashes: z.record(cleanFileSchema, z.string()).optional(), typed: z.array(z.string().regex(/^[0-9a-f]{16}$/)).max(2000).optional(),
-    nothing: z.object({ at: time, bytes: time }).optional(),
   })),
 });
-type RunState = BotCleanState & { nothing?: { at: number; bytes: number } };
 
 function readState(dataDir: string): MemoryCleanState {
   try { return stateSchema.parse(JSON.parse(readFileSync(join(dataDir, STATE_FILE), "utf8"))) as MemoryCleanState; }
@@ -59,6 +58,29 @@ export function recordTypedLines(botId: string, before: string, after: string, d
 
 export function typedHashes(botId: string, dataDir = DATA_DIR): string[] {
   return [...(readState(dataDir).bots[botId]?.typed ?? [])];
+}
+
+export function ownLines(botId: string, add: readonly string[], remove: readonly string[] = [], dataDir = DATA_DIR): void {
+  if (!add.length && !remove.length) return;
+  const state = readState(dataDir);
+  const bot = state.bots[botId] ??= {};
+  const drop = new Set(remove);
+  bot.typed = [...new Set([...(bot.typed ?? []).filter((hash) => !drop.has(hash)), ...add])].slice(-2000);
+  saveState(dataDir, state);
+}
+
+function backup(dataDir: string, botId: string, runId: string, at: number, files: ReadonlyArray<readonly [string, string | null]>): void {
+  const root = join(dataDir, "sleep", botId);
+  for (const [file, text] of files) {
+    if (text === null) continue;
+    const path = join(root, runId, file);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileAtomic(path, text, { mode: 0o600 });
+  }
+  for (const name of readdirSync(root)) {
+    const day = /^mc-(\d{4})(\d{2})(\d{2})-[0-9a-f]{8}$/.exec(name);
+    if (day && at - Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3])) > 14 * DAY) rmSync(join(root, name), { recursive: true, force: true });
+  }
 }
 
 type CleanStore = Pick<Store, "bots" | "bot" | "onChange" | "messagesFor" | "appendMessage" | "patchMessage">;
@@ -100,8 +122,8 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
   const touched = new Map<string, number>();
   let active: { botId: string; controller: AbortController; done: Promise<void> } | null = null;
   let undoing = false;
-  const stateFor = (botId: string): RunState => readState(deps.dataDir).bots[botId] ?? {};
-  const update = (botId: string, apply: (state: RunState) => void) => {
+  const stateFor = (botId: string): BotCleanState => readState(deps.dataDir).bots[botId] ?? {};
+  const update = (botId: string, apply: (state: BotCleanState) => void) => {
     const state = readState(deps.dataDir);
     apply(state.bots[botId] ??= {});
     saveState(deps.dataDir, state);
@@ -122,32 +144,25 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     if (!home.home || !quiet(botId)) return;
     const base = readMemoryFile(botId);
     const memory = readFile(join(workspaceDir(botId), "MEMORY.md"));
-    if (memory === null || (state.backoff?.["MEMORY.md"] ?? 0) > now()) return;
+    if (memory === null) return;
     const historyFile = (/memory\/memory-history(?:-\d+)?\.md/.exec(memory)?.[0] ?? HISTORY_FILE) as CleanFile;
     const history = readFile(join(workspaceDir(botId), historyFile));
     const named = memory.match(/memory\/[\w][\w .-]*?\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/g) ?? [];
     const side = [...new Set(named.map((name) => name.startsWith("memory/") ? name : `memory/${name}`))].flatMap((file) => {
-      if (!isMemoryTopicName(file.slice(7)) || isHistory(file) || /\.conflict-/.test(file) || (state.backoff?.[file as CleanFile] ?? 0) > now()) return [];
+      if (!isMemoryTopicName(file.slice(7)) || isHistory(file) || /\.conflict-/.test(file)) return [];
       const text = readFile(join(workspaceDir(botId), file));
       return text !== null && Buffer.byteLength(text) >= 48000 && state.sideHashes?.[file as CleanFile] !== hashText(text) ? [{ file: file as CleanFile, text }] : [];
     }).sort((a, b) => Buffer.byteLength(b.text) - Buffer.byteLength(a.text))[0];
-    const sourceHash = hashText(JSON.stringify([memory, side?.file, side?.text]));
-    const bytes = Buffer.byteLength(memory) + Buffer.byteLength(side?.text ?? "");
-    if (state.unchangedHash === sourceHash || state.nothing && bytes < state.nothing.bytes + 2048 && now() - state.nothing.at < 7 * DAY) return;
     const engine = await deps.engine(botId);
     if (!engine || controller.signal.aborted || epoch !== runEpoch || !quiet(botId)) return;
     const localTyped = typedHashes(botId, deps.dataDir);
-    update(botId, (state) => { delete state.nothing; });
-    const result = await cleanFiles({ memory, side, history, typed: new Set([...localTyped, ...home.typed]), ...engine, now: now(), signal: controller.signal });
-    if (!result.ok) {
-      if (result.stage === "nothing") update(botId, (state) => { state.nothing = { at: now(), bytes }; });
-      if (result.stage === "validate") update(botId, (state) => { state.unchangedHash = sourceHash; });
-      if (result.stage === "recall") update(botId, (state) => {
-        (state.backoff ??= {})["MEMORY.md"] = now() + 14 * DAY;
-        if (side) state.backoff[side.file] = now() + 14 * DAY;
-      });
-      return;
-    }
+    const newest = histories(botId).at(-1)?.run.header;
+    const thread = deps.store.bot(botId);
+    const input = sleepInput(thread ? deps.store.messagesFor(thread.threadId) : [], newest ? newest.v === 2 ? newest.through : newest.at : null, now());
+    const topicText = (file: CleanFile) => readFile(join(workspaceDir(botId), file));
+    const result = await cleanFiles({ memory, side, history, typed: new Set([...localTyped, ...home.typed]), user: input.user, through: input.through, topic: topicText, ...engine, now: now(), signal: controller.signal });
+    console.info(`[memory-clean] ${botId} ${result.ok ? "slept" : result.stage} tokens ${result.tokens ?? 0}`);
+    if (!result.ok) return;
     if (controller.signal.aborted || runEpoch !== epoch || !quiet(botId)) return;
     const currentEngine = await deps.engine(botId);
     if (!currentEngine || currentEngine.key !== engine.key) return;
@@ -155,7 +170,7 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     if (controller.signal.aborted || runEpoch !== epoch || !quiet(botId) || !currentHome.home || currentHome.fence !== home.fence ||
       readMemoryFile(botId).revision !== base.revision || readFile(join(workspaceDir(botId), "MEMORY.md")) !== memory ||
       readFile(join(workspaceDir(botId), historyFile)) !== history || (side && readFile(join(workspaceDir(botId), side.file)) !== side.text) ||
-      typedHashes(botId, deps.dataDir).some((hash) => !localTyped.includes(hash))) return;
+      result.topics.some((topic) => topicText(topic.file) !== topic.before) || typedHashes(botId, deps.dataDir).some((hash) => !localTyped.includes(hash))) return;
     const target = /memory\/memory-history(?:-\d+)?\.md/.exec(result.memory)?.[0] as CleanFile;
     const targetPath = join(workspaceDir(botId), target);
     let targetText = history ?? "";
@@ -165,17 +180,22 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
       targetText = `Previous history: ${historyFile}\n\n`;
     }
     if (parseHistory(targetText).some((item) => item.header.runId === result.runId)) return;
+    backup(deps.dataDir, botId, result.runId, result.header.at, [["MEMORY.md", memory], [historyFile, history], ...(side ? [[side.file, side.text] as const] : []), ...result.topics.map((topic) => [topic.file, topic.before] as const)]);
     mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 });
     const archived = appendBlock(targetText, result.block);
     writeFileAtomic(targetPath, archived, { mode: 0o600 });
     if (readMemoryFile(botId).revision !== base.revision || readFile(targetPath) !== archived || (side && readFile(join(workspaceDir(botId), side.file)) !== side.text)) return;
     if (result.side) writeFileAtomic(join(workspaceDir(botId), result.side.file), result.side.text, { mode: 0o600 });
     if (readFile(targetPath) !== archived || (result.side && readFile(join(workspaceDir(botId), result.side.file)) !== result.side.text)) return;
+    for (const topic of result.topics) {
+      if (topicText(topic.file) !== topic.before) return;
+      writeFileAtomic(join(workspaceDir(botId), topic.file), topic.text, { mode: 0o600 });
+    }
+    ownLines(botId, result.owned, [], deps.dataDir);
     if (saveMemoryFile(botId, result.memory, base.revision, true).conflict) return;
     const bot = deps.store.bot(botId);
     if (bot) deps.store.appendMessage(bot.threadId, { role: "bot", kind: "activity", tool: { name: MEMORY_SAVE_TOOL, ok: true, spoken: "Tidied memory, nothing lost", tidy: { runId: result.runId } } });
     update(botId, (state) => {
-      delete state.unchangedHash;
       state.lastRun = { runId: result.runId, at: result.header.at, files: Object.keys(result.header.files) as CleanFile[] };
       if (result.side) (state.sideHashes ??= {})[result.side.file] = hashText(result.side.text);
     });
@@ -195,7 +215,7 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
     const info = newest?.header.files["MEMORY.md"];
     if (!newest || !info) return { run: null };
     return { run: { runId: newest.header.runId, at: newest.header.at, files: Object.keys(newest.header.files) as CleanFile[], beforeBytes: info.beforeBytes, afterBytes: info.afterBytes,
-      merged: newest.header.merged, replaced: newest.header.replaced, moved: newest.header.moved, undoneAt: newest.undo?.at ?? null, undoable: !newest.undo && !active && !undoing } };
+      ...legacyCounts(newest), undoneAt: newest.undo?.at ?? null, undoable: !newest.undo && !active && !undoing } };
   };
 
   const undo = async (botId: string, runId: string): Promise<MemoryCleanUndoResult> => {
@@ -223,8 +243,10 @@ export function createMemoryClean(deps: MemoryCleanDeps) {
       for (const file of changes) {
         if (readFile(file.path) !== file.before || readFile(join(workspaceDir(botId), found.file)) !== archived) return { ok: false, error: "busy" };
         if (file.file === "MEMORY.md") {
+          ownLines(botId, found.run.entries.flatMap((entry) => entry.lines.filter((line) => line.trim()).map(lineHash)), found.run.entries.flatMap((entry) => entry.header.owned ?? []), deps.dataDir);
           if (saveMemoryFile(botId, file.text, baseRevision, true).conflict) return { ok: false, error: "busy" };
-        } else writeFileAtomic(file.path, file.text, { mode: 0o600 });
+        } else if (!file.text && found.run.header.files[file.file as CleanFile]?.beforeBytes === 0) rmSync(file.path, { force: true });
+        else writeFileAtomic(file.path, file.text, { mode: 0o600 });
       }
       const bot = deps.store.bot(botId);
       const row = bot && deps.store.messagesFor(bot.threadId).find((message) => message.tool?.tidy?.runId === runId);

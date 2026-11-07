@@ -1,24 +1,30 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-import type { ArchiveEntry, CleanFile, HistoryRun, MergeParkedInput, RunHeader, UndoRecord } from "./memory-clean-types.ts";
+import type { ArchiveEntry, CleanFile, HistoryRun, MergeParkedInput, RunHeader, SleepItem, UndoRecord } from "./memory-clean-types.ts";
 
 export const HISTORY_FILE = "memory/memory-history.md";
-export const POINTER_LINE = "- memory/memory-history.md: lines memory cleanup retired; search it only for history questions.";
+export const POINTER_LINE = "- memory/memory-history.md: lines Sleep retired; search it only for history questions.";
+export const POINTER_LINES = [POINTER_LINE, "- memory/memory-history.md: lines memory cleanup retired; search it only for history questions."];
 export const hashText = (text: string) => createHash("sha256").update(text).digest("hex");
 export const lineHash = (line: string) => hashText(line.trim()).slice(0, 16);
 export const isHistory = (file: string) => /^memory\/memory-history(?:-[2-9]\d*|-1\d+)?\.md$/.test(file);
 export const cleanFileSchema = z.string().refine((file): file is CleanFile => file === "MEMORY.md" || /^memory\/[\w][\w .-]{0,199}\.md$/.test(file));
 const time = z.number().finite().nonnegative();
-const runSchema = z.object({
-  v: z.literal(1), runId: z.string().regex(/^mc-\d{8}-[0-9a-f]{8}$/), at: time,
+const runBase = {
+  runId: z.string().regex(/^mc-\d{8}-[0-9a-f]{8}$/), at: time,
   files: z.record(cleanFileSchema, z.object({ beforeBytes: time, afterBytes: time, beforeHash: z.string(), afterHash: z.string() })),
-  merged: time, replaced: time, moved: time,
-});
+};
+const runSchema = z.union([
+  z.object({ v: z.literal(1), ...runBase, merged: time, replaced: time, moved: time }),
+  z.object({ v: z.literal(2), ...runBase, through: time, counts: z.object({ kept: time, merged: time, forgot: time, learned: time, filed: time }) }),
+]);
 const entrySchema = z.object({
-  file: cleanFileSchema, op: z.enum(["merge", "replace", "retire", "split", "remind"]),
-  at: z.array(z.number().int().positive()).min(1).max(40), prev: z.array(z.string()), wrote: z.array(z.string()),
-}).refine((entry) => entry.at.length === entry.prev.length);
+  file: cleanFileSchema, op: z.enum(["merge", "replace", "retire", "split", "remind", "learn", "own", "file"]),
+  at: z.array(z.number().int().positive()).max(40), prev: z.array(z.string()), wrote: z.array(z.string()),
+  after: z.number().int().nonnegative().optional(), quote: z.string().optional(), lesson: z.boolean().optional(),
+  topic: cleanFileSchema.optional(), owned: z.array(z.string().regex(/^[0-9a-f]{16}$/)).optional(),
+}).refine((entry) => entry.at.length === entry.prev.length && (entry.at.length > 0 || ["learn", "own", "file"].includes(entry.op)));
 const undoSchema = z.object({ v: z.literal(1), runId: z.string(), at: time, restored: time, skipped: time });
 
 function marker(line: string, kind: string): unknown {
@@ -60,9 +66,28 @@ export function archiveBlock(header: RunHeader, entries: ArchiveEntry[]): string
   const sizes = Object.entries(header.files).flatMap(([file, info]) => info ? [`${file} ${info.beforeBytes} to ${info.afterBytes} bytes`] : []).join(", ");
   return [
     `<!-- mc-run ${JSON.stringify(header)} -->`,
-    `## Memory cleanup ${new Date(header.at).toISOString().slice(0, 10)} (${header.runId}): ${sizes}`, "",
+    `## ${header.v === 2 ? "Sleep" : "Memory cleanup"} ${new Date(header.at).toISOString().slice(0, 10)} (${header.runId}): ${sizes}`, "",
     ...entries.flatMap((entry) => [`<!-- mc-entry ${JSON.stringify(entry.header)} -->`, entry.reason, ...entry.lines, ""]), "",
   ].join("\n");
+}
+
+// the topic side of a file move repeats the MEMORY.md entry, so items skip it
+export function runItems(run: HistoryRun): SleepItem[] {
+  const plain = (line: string) => line.replace(/\r$/, "");
+  return run.entries.filter((entry) => !(entry.header.op === "file" && !entry.header.at.length)).map(({ header, reason, lines }) => {
+    const wrote = header.wrote.map(plain).filter((line) => line.trim() && !/^#{1,6}\s/.test(line));
+    return { op: header.op, file: header.file, old: lines.map(plain), new: wrote.at(-1) ?? null, reason, ...(header.quote ? { quote: header.quote } : {}) };
+  });
+}
+
+export function legacyCounts(run: HistoryRun): { merged: number; replaced: number; moved: number } {
+  if (run.header.v === 1) return run.header;
+  const lines = (...ops: string[]) => run.entries.filter((entry) => ops.includes(entry.header.op));
+  return {
+    merged: lines("merge").reduce((n, entry) => n + entry.lines.length, 0),
+    replaced: lines("replace").length,
+    moved: lines("retire", "split", "remind").length,
+  };
 }
 
 export function undoBlock(record: UndoRecord): string {

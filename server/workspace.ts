@@ -227,7 +227,7 @@ export function readMemoryTopic(botId: string, name: string): string | null {
 
 // direct file writes skip memory-pass's secret filter, so the rule names the exclusion itself
 const LESSON_RULE =
-  " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn" +
+  " When the user corrects you or a memory note, or you catch your own mistake, save the lesson as one line in that same turn under ## Lessons" +
   " without being asked, replacing any wrong line; never save passwords, keys, tokens or account numbers.";
 
 /** The memory block appended to a bot's system prompt. A short starter block

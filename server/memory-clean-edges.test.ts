@@ -116,4 +116,39 @@ describe("memory cleanup edges", () => {
     const current = result.memory.replace("- red blue", "- user edit");
     expect(undoText("MEMORY.md", current, parseHistory(result.block)[0]!)).toMatchObject({ text: "- before\n- user edit\n- after\n- red blue\n", restored: 0, skipped: 2 });
   });
+
+  it("learns from a typed user line but refuses bot, pasted or secret-like text", async () => {
+    const learn = (quote: string, text = `- ${quote}`) => ({ op: "learn", text, quote, lesson: false, reason: "User said it" });
+    const check = (change: unknown, user: unknown[]) => validateChangeList({ file: "MEMORY.md", text: "- kept\n", typed: new Set(), user: user as never, list: { version: 1, file: "MEMORY.md", changes: [change] } });
+    const typed = [{ text: "My sister Mina lives in Busan", at: 13, kind: "said" }];
+    expect(check(learn("sister Mina lives in Busan", "- Sister Mina lives in Busan"), typed)).toMatchObject({ ok: true, text: "- kept\n- Sister Mina lives in Busan\n" });
+    const { sleepInput } = await import("./memory-clean.ts");
+    const rows = [
+      { id: "1", role: "bot", kind: "text", text: "Your sister Jiwoo lives in Seoul", at: 10 },
+      { id: "2", role: "user", kind: "text", text: "<pasted-text>My brother Tae lives in Daegu</pasted-text>", at: 11 },
+      { id: "3", role: "user", kind: "text", text: "my password is hunter2 for the bank", at: 12 },
+      { id: "4", role: "user", kind: "text", text: "My sister Mina lives in Busan", at: 13 },
+      { id: "5", role: "user", kind: "text", text: "Jo lives in Ulsan", at: 14, from: { botId: "peer" } },
+    ];
+    const tonight = sleepInput(rows as never, 0, 20);
+    expect(tonight).toEqual({ user: typed, through: 13 });
+    for (const quote of ["Your sister Jiwoo lives in Seoul", "My brother Tae lives in Daegu", "Jo lives in Ulsan", "my password is hunter2"]) {
+      expect(check(learn(quote), tonight.user)).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "not-quoted" })]) });
+    }
+    expect(check(learn("password is hunter2"), [{ text: "my password is hunter2", at: 1, kind: "said" }])).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "secret" })]) });
+  });
+
+  it("files detail lines into Knowledge only above 16 KB and never a protected line", () => {
+    const detail = (i: number) => `- detail ${i} ${"x".repeat(280)}`;
+    const big = ["- Never deploy on Fridays", "- deploy pending review", ...Array.from({ length: 58 }, (_, i) => detail(i))].join("\n") + "\n";
+    const small = ["- Never deploy on Fridays", "- deploy pending review", ...Array.from({ length: 8 }, (_, i) => detail(i))].join("\n") + "\n";
+    const file = (ids: number[], topic = "details") => ({ op: "file", ids, topic, pointer: `- memory/${topic}.md: early details`, reason: "Detail" });
+    const check = (text: string, change: unknown) => validateChangeList({ file: "MEMORY.md", text, typed: new Set(), list: { version: 1, file: "MEMORY.md", changes: [change] } });
+    const filed = check(big, file([3, 4]));
+    expect(filed).toMatchObject({ ok: true, topics: [{ file: "memory/details.md", lines: [detail(0), detail(1)] }] });
+    expect(filed.ok && filed.text.split("\n").slice(0, 4)).toEqual(["- Never deploy on Fridays", "- deploy pending review", "- memory/details.md: early details", detail(2)]);
+    expect(check(small, file([3, 4]))).toMatchObject({ ok: false, errors: [{ reason: "op-not-allowed" }] });
+    for (const id of [1, 2]) expect(check(big, file([id, 3]))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "protected" })]) });
+    expect(check(big, file([3], "memory-history"))).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ reason: "op-not-allowed" })]) });
+  });
 });

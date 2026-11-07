@@ -273,6 +273,13 @@ describe("workspace", () => {
     expect(prompt).toContain("never save passwords, keys, tokens or account numbers");
   });
 
+  it("tells the bot to save lessons under the Lessons heading", () => {
+    const dir = ensureWorkspace(BOT);
+    expect(memorySystemPrompt(BOT)).toContain("save the lesson as one line in that same turn under ## Lessons");
+    writeFileSync(join(dir, "MEMORY.md"), "# Memory\n- one fact\n");
+    expect(memorySystemPrompt(BOT)).toContain("save the lesson as one line in that same turn under ## Lessons");
+  });
+
   it("names both load budgets in the guidance, with no size notice for a small file", () => {
     const dir = ensureWorkspace(BOT);
     writeFileSync(join(dir, "MEMORY.md"), "# Memory\n- one fact\n");

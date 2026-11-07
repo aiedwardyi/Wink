@@ -1,15 +1,16 @@
 import type { ArchiveEntry, ChangeList } from "./memory-clean-types.ts";
 import { protectedLines } from "./memory-clean-validate.ts";
 
-export function recallScope(text: string, list: ChangeList, typed: ReadonlySet<string>): number[] {
+export function recallScope(text: string, list: ChangeList, typed: ReadonlySet<string>, inserted: number[] = []): number[] {
   const lines = text.split("\n");
   const filled = (id: number) => !!lines[id - 1]?.trim();
-  const core = new Set(list.changes.flatMap((change) => {
-    if (change.op === "merge") return change.ids;
+  const core = new Set([...inserted.filter(filled), ...list.changes.flatMap((change) => {
+    if (change.op === "merge" || change.op === "file") return change.ids;
+    if (change.op === "learn" || change.op === "own") return [];
     if (change.op === "replace") return [change.id, change.newer];
     const twin = change.op === "retire" ? lines.findIndex((line, i) => i + 1 !== change.id && line === lines[change.id - 1]) + 1 : 0;
     return twin ? [change.id, twin] : [change.id];
-  }));
+  })]);
   const scope = new Set(core);
   for (const id of core) {
     for (const step of [-1, 1]) {
@@ -46,7 +47,8 @@ export function afterExcerpt(text: string, ids: number[], entries: ArchiveEntry[
   const lines = text.split("\n");
   return render(lines, ids.map((id) => {
     const entry = entries.find((item) => item.header.at.includes(id));
-    return [id, !entry ? [lines[id - 1]!] : entry.header.at[0] === id ? entry.header.wrote : []];
+    const added = entries.flatMap((item) => item.header.after === id ? item.header.wrote : []);
+    return [id, [...(!entry ? [lines[id - 1]!] : entry.header.at[0] === id ? entry.header.wrote : []), ...added]];
   }));
 }
 
