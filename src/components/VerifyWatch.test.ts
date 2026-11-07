@@ -169,6 +169,22 @@ it.each(["en", "ko"] as const)("plays silently without sound controls in %s", as
   expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Sound on" : "소리 켜기"]));
 });
 
+it("switches both viewport tabs after recorded playback finishes", async () => {
+  const tick = animationClock();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {} } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun()));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(100);
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  for (const index of [1, 0]) {
+    await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]!.click());
+    await tick(1);
+    expect(host.querySelectorAll('[role="tab"]')[index]!.getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector(".verify-watch-stage")?.getAttribute("data-tile")).toBe(index ? "phone" : "desktop");
+    expect(host.querySelector("canvas")?.width).toBe(index ? 392 : 1280);
+  }
+});
+
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
   applyLocale(locale);
   const tick = animationClock();

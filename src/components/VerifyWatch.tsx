@@ -116,7 +116,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       last = now;
       if (show.version !== drawn) { drawn = show.version; draw(); }
       if (show.ui !== shown) { shown = show.ui; setVersion(shown); }
-      if (show.clock >= show.closeAt) { if (live) close.current(); return; }
+      if (live && show.clock >= show.closeAt) { close.current(); return; }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
