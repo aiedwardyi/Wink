@@ -738,7 +738,7 @@ describe("automatic bot sync", () => {
   });
 
   it.each([
-    [false, "icon-36"], [true, "icon-36"], [false, "icon-49"], [true, "icon-49"],
+    [false, "icon-36"], [true, "icon-36"], [false, "icon-49"], [true, "icon-49"], [false, "icon-50"], [true, "icon-50"], [false, "icon-51"], [true, "icon-52"],
   ])("isolates extended avatars from older readers (new bot: %s, style: %s)", (fresh, mascotStyle) => {
     const folder = mkdtempSync(join(tmpdir(), "orbit-profile-sync-style-"));
     roots.push(folder);

@@ -114,17 +114,15 @@ describe("app icon assets", () => {
     }
   });
 
-  it("paints the vector sources in the Wink prompt artwork", () => {
+  it("paints the vector sources in the Wink M4 artwork", () => {
     for (const relative of ["build/icon.svg", "public/app-icon.svg"]) {
       const svg = readFileSync(join(ROOT, relative), "utf8").toLowerCase();
-      expect(svg, `${relative} tile top`).toContain("#1f2747");
-      expect(svg, `${relative} tile bottom`).toContain("#0a0e19");
-      expect(svg, `${relative} chevron`).toContain("#ff4d9d");
-      expect(svg, `${relative} cursor`).toContain("#ffd447");
-      expect(svg, `${relative} rim`).toContain("#323b5c");
+      expect(svg, `${relative} tile`).toContain('rx="54" fill="#000000"');
+      expect(svg, `${relative} chevron`).toContain('stroke="#ffffff"');
+      expect(svg, `${relative} cursor`).toContain("#74a7ff");
+      expect(svg, `${relative} rim`).toContain("#333333");
       expect(svg, `${relative} title`).toContain("<title id=\"title\">wink</title>");
-      expect(svg, `${relative} stale base`).not.toContain("#2b1d1a");
-      expect(svg, `${relative} stale ring`).not.toContain("#ff9e64");
+      expect(svg, `${relative} stale prompt art`).not.toMatch(/#ff4d9d|#ffd447|filter/);
       expect(svg, `${relative} inset tile`).toContain('x="12"');
     }
   });
@@ -172,6 +170,6 @@ describe("app icon assets", () => {
       [...text.matchAll(/\/app-icon[\w-]*\.(?:png|svg)(\?v=\w+)?/g)].map((match) => match[1]),
     );
     expect(versions.length).toBe(6);
-    expect(new Set(versions)).toEqual(new Set(["?v=2"]));
+    expect(new Set(versions)).toEqual(new Set(["?v=3"]));
   });
 });

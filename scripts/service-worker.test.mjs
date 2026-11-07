@@ -94,8 +94,8 @@ describe("service worker", () => {
     const { listeners, shown } = worker("home.tail1234.ts.net");
     await push(listeners, { title: "Scout has a question", body: "which branch?", tag: "openmausbot:b", url: "/", icon: "/notify-icons/pill-orange.png" });
     await push(listeners, { title: "Wink", body: "older server" });
-    expect(shown.map(({ options }) => options.icon)).toEqual(["/notify-icons/pill-orange.png", "/app-icon-192.png?v=2"]);
-    expect(shown.map(({ options }) => options.badge)).toEqual(["/app-icon-192.png?v=2", "/app-icon-192.png?v=2"]);
+    expect(shown.map(({ options }) => options.icon)).toEqual(["/notify-icons/pill-orange.png", "/app-icon-192.png?v=3"]);
+    expect(shown.map(({ options }) => options.badge)).toEqual(["/app-icon-192.png?v=3", "/app-icon-192.png?v=3"]);
   });
 
   it("adds the tap time to the url when it opens a window", async () => {
