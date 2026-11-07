@@ -28,7 +28,8 @@ import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryHeading, MemoryTask, NotedLines, TopicFiles, type MemoryTopic } from "./MemoryGroups";
-import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsLabel, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
+import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
+import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
@@ -95,7 +96,7 @@ const KEEP_GOING_PAUSED = {
   "usage-stale": "bot.keepGoingUsageStale",
 } as const;
 
-function KeepGoingRow({ bot }: { bot: Bot }) {
+function KeepGoingCard({ bot }: { bot: Bot }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const rowRef = useRef<HTMLDivElement>(null);
@@ -126,15 +127,20 @@ function KeepGoingRow({ bot }: { bot: Bot }) {
   }, [request]);
 
   return (
-    <div ref={rowRef} data-settings-keep-going className={DETAILS_ROW}>
-      <div className="flex items-center justify-between gap-4">
-        <DetailsLabel
-          label={t("bot.keepGoing")}
-          hint={paused ? t("bot.keepGoingPaused", { reason: t(KEEP_GOING_PAUSED[paused]) }) : t("bot.keepGoingHelp")}
-        />
-        <DetailsSwitch on={on} label={t("bot.keepGoing")} disabled={saving} className="disabled:cursor-wait" onToggle={() => void toggle()} />
+    <div ref={rowRef} data-settings-keep-going className={DETAILS_BOX}>
+      <div className={DETAILS_ROW}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <KeepGoingMark state={keepGoingMarkState(bot) ?? "off"} size={14} />
+            <div className="truncate text-[14px] font-medium text-ink">{t("bot.keepGoing")}</div>
+          </div>
+          <DetailsSwitch on={on} label={t("bot.keepGoing")} disabled={saving} className="disabled:cursor-wait" onToggle={() => void toggle()} />
+        </div>
+        <div className="mt-1 whitespace-pre-line break-keep text-[12px] leading-relaxed text-ink-secondary">
+          {paused ? t("bot.keepGoingPaused", { reason: t(KEEP_GOING_PAUSED[paused]) }) : t("bot.keepGoingHelp")}
+        </div>
+        {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
       </div>
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
 }
@@ -633,6 +639,7 @@ export function SettingsPanel({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 pb-5">
         <div hidden={memoryTab} className="flex flex-col gap-3 pt-4">
+          <KeepGoingCard bot={bot} />
           <div className={DETAILS_BOX}>
             <div ref={avatarSectionRef} className={DETAILS_ROW}>
               <div className="flex items-center gap-3">
@@ -733,7 +740,6 @@ export function SettingsPanel({
                 onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
               />
             )}
-            <KeepGoingRow bot={bot} />
             {showBotVoiceAndStartupSettings() && engine?.driverKind === "claudeAgent" && (
               <SwitchRow
                 label={t("bot.leanStartup")}
