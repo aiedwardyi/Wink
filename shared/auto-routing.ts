@@ -232,7 +232,7 @@ function reviewArm(engine: AutoEngine, taskClass: AutoTask, maker: AutoArm, tier
       return arm(engine, maker.model === preferred ? preferred === "gpt-6.1-sol" ? "gpt-6.1-terra" : "gpt-6.1-sol" : preferred, "high");
     }
     if (engine === "grokAgent") return arm(engine, maker.model === "grok-4.7" ? "grok-4.6" : "grok-4.7", "high");
-    if (engine === "antigravityAgent") return arm(engine, BIG_JOBS.has(taskClass) && baseAutoModel(engine, maker.model) !== "gemini-4-argon" ? "gemini-4-argon" : "gemini-3.8-flash", "high");
+    if (engine === "antigravityAgent") return arm(engine, "gemini-3.8-flash", "high");
     return arm(engine, maker.model === "muse-spark-1.3-contributor" ? "muse-spark-1.3" : "muse-spark-1.3-contributor", "high");
   }
   if (taskClass === "writing" && engine === "grokAgent") return arm(engine, "grok-4.7", "high");
@@ -296,7 +296,7 @@ export function selectAutoRoute(input: AutoSelectionInput): AutoDecision {
         if (candidate.engine !== "antigravityAgent" && !isEffortOffered(candidate.engine, chosen.model, chosen.effort, candidate.effortLevels)) continue;
         if (chosen.model.startsWith("claude-fable-") && (!dimensions.model || !exact || taskClass !== "audit" || !task.codeAudit)) continue;
         const argon = chosen.model.startsWith("gemini-4-argon-");
-        if (argon && !(maker && BIG_JOBS.has(taskClass)) && !(exact && dimensions.model && (BIG_JOBS.has(taskClass) || task.scope === "large"))) continue;
+        if (argon && !(exact && dimensions.model && (BIG_JOBS.has(taskClass) || task.scope === "large"))) continue;
         if (chosen.effort === "max" && (!input.rules.max || tier !== "strong" || !["bug", "audit"].includes(taskClass))) continue;
         if ((taskClass === "protected" || taskClass === "unknown") && gridClass !== "chat" && !maker && ![
           "claude-opus-5-5", "gpt-6-astra", "gpt-6.1-sol", "grok-4.7", "gemini-3.8-flash-high", "gemini-4-argon-high", "muse-spark-1.3-contributor",
@@ -381,7 +381,7 @@ export const autoDecisionEventSchema = z.discriminatedUnion("target", [
 const outcomeBase = { ...eventBase, kind: z.enum(["report", "limit", "stalled", "closed", "override"]), status: z.enum(["done", "failed", "blocked"]).nullable(), durationSec: z.number().nonnegative().nullable() };
 const measurement = z.number().nonnegative().nullable();
 export const autoOutcomeEventSchema = z.discriminatedUnion("target", [
-  z.object({ ...outcomeBase, target: z.literal("worker") }).strict(),
+  z.object({ ...outcomeBase, target: z.literal("worker"), botRef: opaqueId.optional(), pane8: z.string().regex(/^[a-f0-9]{8}$/).optional() }).strict(),
   z.object({ ...outcomeBase, target: z.literal("chat"), inputTokens: measurement, cachedTokens: measurement, outputTokens: measurement, firstAnswerMs: measurement }).strict(),
 ]);
 export type AutoDecisionEvent = z.infer<typeof autoDecisionEventSchema>;

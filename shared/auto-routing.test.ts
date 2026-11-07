@@ -37,7 +37,7 @@ const SAME_FAMILY = {
   claudeAgent: [C[3], C[2], C[2], C[2], C[2], C[2], C[2], C[3], C[3], C[3], C[3]],
   codex: [X[2], X[2], X[2], X[1], X[1], X[1], X[2], X[1], X[1], X[2], X[0]],
   grokAgent: [G[0], G[0], G[1], G[1], G[1], G[0], G[1], G[1], G[1], G[1], G[1]],
-  antigravityAgent: [A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[2], A[2], A[2]],
+  antigravityAgent: [A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5]],
   museAgent: [M[1], M[1], M[1], M[1], M[1], M[0], M[0], M[0], M[0], M[0], M[0]],
 };
 const CROSS_FAMILY = {
@@ -221,9 +221,9 @@ describe("precedence, fallback and review", () => {
     expect(selectAutoRoute(input("claudeAgent", "audit", { task: { ...task, requireSecondFamily: true } })).kind).toBe("hold");
   });
 
-  it("applies Q3 big Gemini review and Q6 same-model fallback explicitly", () => {
+  it("keeps Gemini second eyes on Flash and labels same-model fallback", () => {
     const reviewOf: AutoArm = { engine: "antigravityAgent", model: A[5], effort: "high" };
-    expect(selectAutoRoute(input("antigravityAgent", "architecture", { task: { kind: "architecture", risk: "high", scope: "large", reviewOf } }))).toMatchObject({ kind: "selected", route: { model: A[2], reviewLabel: "same family", independentCheck: true } });
+    expect(selectAutoRoute(input("antigravityAgent", "architecture", { task: { kind: "architecture", risk: "high", scope: "large", reviewOf } }))).toMatchObject({ kind: "selected", route: { model: A[5], reviewLabel: "same model, fresh look" } });
     const maker: AutoArm = { engine: "codex", model: X[1], effort: "high" };
     expect(selectAutoRoute(input("codex", "build", { candidates: [autoCandidate("codex", { models: [X[1]] })], task: { kind: "build", risk: "low", scope: "bounded", reviewOf: maker } }))).toMatchObject({ kind: "selected", route: { model: X[1], reviewLabel: "same model, fresh look" } });
     expect(selectAutoRoute(input("antigravityAgent", "architecture", { task: { kind: "architecture", risk: "high", scope: "large", reviewOf: { ...reviewOf, model: A[2] } } }))).toMatchObject({ kind: "selected", route: { model: A[5], reviewLabel: "same family" } });

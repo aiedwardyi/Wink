@@ -37,7 +37,7 @@ describe("applicable windows", () => {
 
   it.each([
     ["five_hour", 75, false], ["five_hour", 75.00001, true], ["seven_day", 90, false], ["seven_day", 90.00001, true],
-    ["daily", 90, false], ["daily", 90.00001, true], ["primary", 90.1, true], ["five_hour", NaN, false], ["five_hour", -1, false],
+    ["daily", 75, false], ["daily", 75.00001, true], ["primary", 90.1, true], ["five_hour", NaN, false], ["five_hour", -1, false],
   ] as const)("uses exact thresholds for %s at %s", (id, used, low) => expect(workerWindowLow(window(id, used))).toBe(low));
 
   it("uses normalized durations for named and nonstandard windows", () => {

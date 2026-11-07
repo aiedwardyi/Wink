@@ -57,7 +57,7 @@ export function applicableWindows<T extends Pick<RateLimitWindow, "id">>(engine:
 
 export function workerWindowLow(window: RateLimitWindow): boolean {
   return Number.isFinite(window.usedPercent) && window.usedPercent >= 0
-    && 100 - window.usedPercent < (windowKind(window) === "session" ? 25 : 10);
+    && 100 - window.usedPercent < (windowKind(window) === "weekly" ? 10 : 25);
 }
 
 export function assessUsage(engine: string, model: string, evidence: UsageEvidence | undefined, now: number, prior?: UsageEvidence): "low" | "unknown" | "ready" {
