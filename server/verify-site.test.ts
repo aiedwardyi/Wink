@@ -16,7 +16,7 @@ import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { createVerifySite, verifyToolEnv, type VerifyBridge } from "./verify-site.ts";
+import { createVerifySite, type VerifyBridge } from "./verify-site.ts";
 
 const flags = vi.hoisted(() => ({ on: true, limits: {} as Record<string, number>, original: {} as Record<string, number> }));
 vi.mock("../shared/live-verify.ts", async (importOriginal) => {
@@ -44,6 +44,7 @@ let decisions: unknown[];
 let botId: string;
 let threadId: string;
 let token: string;
+let verify: ReturnType<typeof createVerifySite>;
 
 type FakeBridge = VerifyBridge & { starts: Array<{ watch: boolean; root: string; entry: string; revision: string }>; cancels: number; watches: number; states: VerifyRunState[]; startReply: string };
 
@@ -128,7 +129,7 @@ beforeEach(async () => {
   broadcasts = [];
   decisions = [];
   verdict = vi.fn(autoVerdict);
-  const verify = createVerifySite({
+  verify = createVerifySite({
     store,
     resolveCommsCaller: (header) => callers.resolve(header),
     botOutputRoots: () => [work],
@@ -424,6 +425,68 @@ describe("verify_site hidden checks", () => {
 });
 
 describe("verify_site Auto", () => {
+  it("runs after settlement, creates task cards and patches episode rechecks with fixed counts", async () => {
+    turnRegistry.settle("turn-1");
+    const input = { botId, threadId, entry: join(work, "site"), episode: "task-one" };
+    bridge!.states = finalStates(result([{ tile: "desktop", checker: "LINKS", rule: "missing target", where: "a#missing", measured: "No target" }]));
+    await verify.startAuto(input);
+    expect(card()?.issueTotal).toBe(1);
+    const first = store.activePath(threadId).findLast(message => message.verify)!;
+    bridge!.states = finalStates(result());
+    await verify.startAuto(input);
+    expect(card()?.fixed).toBe(1);
+    expect(store.activePath(threadId).filter(message => message.verify)).toHaveLength(1);
+    expect(store.activePath(threadId).findLast(message => message.verify)!.id).toBe(first.id);
+    bridge!.states = finalStates(result());
+    await verify.startAuto({ ...input, episode: "task-two" });
+    expect(store.activePath(threadId).filter(message => message.verify)).toHaveLength(2);
+    expect(card()?.fixed).toBeUndefined();
+  });
+
+  it("queues behind a tool run and replaces an older auto run for the same thread", async () => {
+    const toolRun = tool({ entry: "site" });
+    await until(() => bridge!.starts.length === 1);
+    const input = { botId, threadId, entry: join(work, "site"), episode: "old-task" };
+    const old = verify.startAuto(input);
+    await new Promise<void>(done => setTimeout(done, 40));
+    const latest = verify.startAuto({ ...input, episode: "new-task" });
+    await old;
+    expect(bridge!.starts).toHaveLength(1);
+    bridge!.states = finalStates(result());
+    bridge!.poll = async () => ({ runId: "x", revision: 3, state: "completed", counts: counts(10), result: result() });
+    turnRegistry.settle("turn-1");
+    await toolRun;
+    await latest;
+    expect(bridge!.starts).toHaveLength(2);
+  });
+
+  it("silently skips auto starts without a bridge or an admitted entry", async () => {
+    await verify.startAuto({ botId, threadId, entry: join(work, "notes"), episode: "notes" });
+    expect(card()).toBeUndefined();
+    bridge = null;
+    await verify.startAuto({ botId, threadId, entry: join(work, "site"), episode: "site" });
+    expect(card()).toBeUndefined();
+  });
+
+  it("reruns an earlier task card after a newer task and keeps its episode count", async () => {
+    turnRegistry.settle("turn-1");
+    const issue = { tile: "desktop" as const, checker: "LINKS" as const, rule: "missing target", where: "a#missing", measured: "No target" };
+    const input = { botId, threadId, entry: join(work, "site"), episode: "first" };
+    bridge!.states = finalStates(result([issue]));
+    await verify.startAuto(input);
+    const first = card()!;
+    bridge!.states = finalStates(result());
+    await verify.startAuto({ ...input, episode: "second" });
+    const second = card()!;
+    bridge!.states = finalStates(result());
+    expect((await decide(first.runId, "rerun", first.decisionNonce)).status).toBe(200);
+    await until(() => store.activePath(threadId).some(message => message.verify?.fixed === 1));
+    const cards = store.activePath(threadId).filter(message => message.verify);
+    expect(cards).toHaveLength(2);
+    expect(cards[1]!.verify!.runId).toBe(second.runId);
+    expect(cards[0]!.verify!.fixed).toBe(1);
+  });
+
   it("keeps each room owner's card", async () => {
     const other = store.createBot({}, { seedMessages: false });
     const room = store.createGroup("Team", [botId, other.id]);
@@ -613,10 +676,5 @@ describe("verify_site kill switch", () => {
     expect((await decide("abcdefgh-1234", "skip", "n")).status).toBe(404);
     for (const kind of ["live", "replay"]) expect((await fetch(`${base}/api/verify/runs/abcdefgh-1234/${kind}`, { headers: { authorization: "Bearer app-token" } })).status).toBe(404);
     expect(existsSync(join(DATA_DIR, "verify-replays"))).toBe(false);
-    expect(verifyToolEnv(true, "win32")).toEqual({});
-    flags.on = true;
-    expect(verifyToolEnv(true, "win32")).toEqual({ OMB_LIVE_VERIFY: "1" });
-    expect(verifyToolEnv(false, "win32")).toEqual({});
-    expect(verifyToolEnv(true, "darwin")).toEqual({});
   });
 });

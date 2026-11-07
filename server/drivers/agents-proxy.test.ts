@@ -1238,6 +1238,15 @@ describe("agents-proxy verify_site", () => {
   const identity = (depth: number, flags: Record<string, string>) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, ...flags });
   const names = (list: any): string[] => list.result.tools.map((t: { name: string }) => t.name);
 
+  it("adds zero tools/list bytes on production turns", async () => {
+    const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    const verify = await import("../verify-site.ts") as { verifyToolEnv?: (desktop: boolean, platform: NodeJS.Platform) => Record<string, string> };
+    const { list } = await probe(identity(0, verify.verifyToolEnv?.(true, "win32") ?? {}));
+    expect(names(list)).not.toContain("verify_site");
+    expect(Buffer.byteLength(JSON.stringify(list.result.tools.filter((tool: { name: string }) => tool.name === "verify_site"))) - 2).toBe(0);
+    expect(source.includes("verifyToolEnv")).toBe(false);
+  });
+
   it.each<[Record<string, string>, number, boolean]>([
     [{ OMB_TEAM_REPORTS: "0" }, 18, false],
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 19, true],

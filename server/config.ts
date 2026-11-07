@@ -76,6 +76,7 @@ const featureConfigSchema = z.object({
   /** Show each tool run in the transcript. Off unless explicitly enabled. */
   showToolCalls: z.boolean().optional(),
   toolDetailCapture: z.boolean().optional(),
+  liveVerifyAuto: z.boolean().optional(),
   detailedReplies: z.boolean().optional(),
   /** Background notes from chat into MEMORY.md. On unless switched off. */
   memoryNotes: z.boolean().optional(),
@@ -186,7 +187,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Product switches. Every flag defaults to off except memoryNotes. */
-  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
+  features?: { showToolCalls?: boolean; toolDetailCapture?: boolean; liveVerifyAuto?: boolean; detailedReplies?: boolean; memoryNotes?: boolean; modelDial?: boolean };
   instances?: InstanceConfigMap;
   phoneRelay?: PhoneRelayConfig;
 }

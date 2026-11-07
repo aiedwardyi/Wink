@@ -1616,12 +1616,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                 const detail = call
                   ? claudeToolDetail(call.name, call.input, firstText(b.content), Boolean(b.is_error))
                   : undefined;
+                const input = call?.input && typeof call.input === "object" ? call.input as Record<string, unknown> : {};
+                const path = input.file_path ?? input.notebook_path;
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.completed",
                   itemType: "tool",
                   itemId: b.tool_use_id,
                   ok: !b.is_error,
+                  ...(!b.is_error && call && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(call.name) && typeof path === "string" ? { writes: [path] } : {}),
                   ...(summary && summary !== call?.summary ? { summary } : {}),
                   ...(call ? { durationMs: Date.now() - call.at } : {}),
                   ...(detail ? { detail } : {}),

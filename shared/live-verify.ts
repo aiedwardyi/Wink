@@ -116,6 +116,9 @@ export const VERIFY_LIMITS = {
   issues: 40,
   resultTextChars: 1_200,
   entryChars: 1_024,
+  scanEntries: 2_000,
+  scanMs: 250,
+  autoFreeBytes: 2_656 * 1024 * 1024,
 } as const;
 
 export const VERIFY_ROUTES = {
