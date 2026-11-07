@@ -76,18 +76,21 @@ async function walk(root, visit, depth = Infinity) {
 async function unlinkLinks(root, tracked = new Set(), current = () => true) {
   let checkedAt = -Infinity;
   let active = true;
-  const check = async () => {
-    if (active && Date.now() - checkedAt >= 250) {
+  const check = async (fresh) => {
+    if (active && (fresh || Date.now() - checkedAt >= 250)) {
       active = await current();
       checkedAt = Date.now();
     }
     return active;
   };
+  const owned = (file, stat) => stat.isSymbolicLink() && !tracked.has(normalize(file));
   await walk(root, async (file, stat) => {
-    if (await check() && stat.isSymbolicLink() && !tracked.has(normalize(file))) await fsp.unlink(file);
+    const link = owned(file, stat);
+    if (await check(link) && link) await fsp.unlink(file);
   });
   await walk(root, async (file, stat) => {
-    if (await check() && stat.isSymbolicLink() && !tracked.has(normalize(file))) throw new Error("link appeared during cleanup");
+    const link = owned(file, stat);
+    if (await check(link) && link) throw new Error("link appeared during cleanup");
   });
   return active;
 }

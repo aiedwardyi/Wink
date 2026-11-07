@@ -335,6 +335,31 @@ test("scratch reopened during a throttled walk retains its files and links", asy
   assert.deepEqual(f.warnings, []);
 });
 
+test("scratch reopened inside the throttle window keeps its links", async (t) => {
+  const f = fixture(t);
+  const marker = path.join(f.scratch, "next");
+  const link = path.join(f.scratch, "z-link");
+  fs.writeFileSync(marker, "keep");
+  fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  let reopened = false;
+  t.mock.method(promises.default, "lstat", async (...args) => {
+    const stat = await lstat(...args);
+    if (args[0] === marker && !reopened) {
+      reopened = true;
+      f.open([{ id: "other", label: "OTHER", cwd: f.scratch }]);
+    }
+    return stat;
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(reopened, true);
+  assert.equal(fs.readFileSync(marker, "utf8"), "keep");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+});
+
 test("large scratch cleanup bounds synchronous filesystem calls with a full ledger", async (t) => {
   const f = fixture(t);
   for (let index = 0; index < 20_000; index++) fs.writeFileSync(path.join(f.scratch, `file-${index}`), "");
