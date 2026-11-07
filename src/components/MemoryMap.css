@@ -33,6 +33,9 @@
 .mm-sleep-stats b { margin-left: 4px; color: var(--color-ink); font-weight: 600; }
 .mm-undo { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line); }
 .mm-undo:hover { background: var(--color-raised-hover); }
+.mm-failed { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 4px 10px; font-size: 13px; line-height: 18px; color: var(--color-danger); }
+.mm-retry { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line); white-space: nowrap; }
+.mm-retry:hover { background: var(--color-raised-hover); }
 
 .mm-grid { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 18px; margin-top: 16px; perspective: 1400px; }
 .mm-slot { display: flex; flex-direction: column; min-height: 0; min-width: 0; }

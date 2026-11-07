@@ -86,6 +86,10 @@ const memoryRow = (host: HTMLElement) =>
 const tab = (host: HTMLElement, label: string) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === label)!;
 const shown = (node: Element | null | undefined) => Boolean(node && !node.closest("[hidden]"));
+async function until(found: () => Element | null | undefined) {
+  for (let tries = 0; tries < 100 && !found(); tries++) await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
+  return found();
+}
 const topicsRow = (host: HTMLElement) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.startsWith("Topic Files"))!;
 
@@ -340,6 +344,23 @@ describe("SettingsPanel memory groups", () => {
     host.remove();
     localStorage.removeItem("omb-locale");
     vi.unstubAllGlobals();
+  });
+
+  it("shows a failed read with Retry, never as empty memory", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
+    });
+    await act(async () => tab(host, "Memory").click());
+    const alert = await until(() => host.querySelector(".mm [role=\"alert\"]"));
+    expect(alert?.textContent).toBe("Couldn't load memory.Retry");
+    const counts = () => Array.from(host.querySelectorAll(".mm-count")).map((count) => count.textContent);
+    expect(counts()).toEqual(["–", "–", "–"]);
+    expect(host.querySelector(".mm")?.textContent).not.toContain("Nothing yet.");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: memory, truncated: false, topics: [{ name: "phone.md", bytes: 900 }] }))));
+    await act(async () => alert!.querySelector("button")!.click());
+    await until(() => (host.querySelector(".mm [role=\"alert\"]") ? null : host.querySelector(".mm")));
+    expect(counts()).toEqual(["4facts", "1file", "0lessons"]);
   });
 
   it("puts the memory map first, then auto notes and the memory file", async () => {
@@ -1106,12 +1127,13 @@ describe("SettingsPanel memory autosave", () => {
     });
     await render("bot-offline");
     expect(box().readOnly).toBe(true);
-    expect(host.querySelector(".text-danger")?.firstChild?.textContent).toBe("Couldn't load memory.");
+    await act(async () => tab(host, "Memory").click());
+    expect((await until(() => host.querySelector(".mm-failed")))?.firstChild?.textContent).toBe("Couldn't load memory.");
     vi.mocked(fetch).mockImplementation(serve);
     await act(async () => button("Retry").click());
     expect(box().readOnly).toBe(false);
     expect(box().value).toBe("important synced notes");
-    expect(host.querySelector(".text-danger")).toBeNull();
+    expect(host.querySelector(".mm-failed")).toBeNull();
     expect(readMemoryFile("bot-offline").text).toBe("important synced notes");
   });
 

@@ -34,12 +34,13 @@ let seed = 7;
 const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
 const SPECKS = Array.from({ length: 26 }, () => ({ left: `${rnd() * 100}%`, top: `${rnd() * 100}%`, opacity: 0.35 + rnd() * 0.5, scale: 0.6 + rnd() }));
 
-function Count({ kind, count }: { kind: keyof typeof UNITS; count: number }) {
+// null is an unread count: a dash, never a 0 that reads as empty memory
+function Count({ kind, count }: { kind: keyof typeof UNITS; count: number | null }) {
   const { t } = useI18n();
   return (
     <span className="mm-count">
-      <b>{count}</b>
-      <span>{t(UNITS[kind][count === 1 ? 0 : 1])}</span>
+      <b>{count ?? "–"}</b>
+      {count !== null && <span>{t(UNITS[kind][count === 1 ? 0 : 1])}</span>}
     </span>
   );
 }
@@ -86,13 +87,15 @@ function TopicList({ topics }: { topics: MemoryTopic[] }) {
   );
 }
 
-export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
+export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry }: {
   bot: Bot;
   text: string;
   topics: MemoryTopic[];
   target?: AppState["settingsMemoryTarget"];
   active: boolean;
   sleep?: SleepReadout | null;
+  failed?: boolean;
+  onRetry?: () => void;
 }) {
   const { t, locale } = useI18n();
   const gradient = `mm${useId().replace(/[^\w-]/g, "")}`;
@@ -170,9 +173,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
 
   useEffect(() => { if (!active) { setOpen(null); setClosing(false); } }, [active]);
 
-  const panel = (kind: Kind, icon: ReactNode, name: string, hint: string, count: number, foot: ReactNode, viz: ReactNode, list: ReactNode) => (
+  const panel = (kind: Kind, icon: ReactNode, name: string, hint: string, count: number | null, foot: ReactNode, viz: ReactNode, list: ReactNode) => (
     <div className={cn("mm-slot", kind === "long" ? "mm-left" : "mm-right")}>
-      <button ref={panels[kind]} type="button" aria-expanded={open === kind} className="mm-panel" data-kind={kind} onClick={() => toggle(kind)}>
+      <button ref={panels[kind]} type="button" aria-expanded={open === kind} disabled={failed} className="mm-panel" data-kind={kind} onClick={() => toggle(kind)}>
         <span className="mm-panel-top">
           <span className="mm-icon">{icon}</span>
           {stacked
@@ -191,7 +194,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
     </div>
   );
 
-  const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : t("bot.memoryNone"));
+  const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed ? null : t("bot.memoryNone"));
+  const count = (value: number) => (failed ? null : value);
   const longList = <FactList facts={map.longTerm} day={day} />;
   const topicList = <TopicList topics={topics} />;
   const shown = open && !stacked;
@@ -215,10 +219,16 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
           <span className="mm-orbit mm-orbit-far" />
           <Brain size={28} strokeWidth={1.6} stroke={`url(#${gradient})`} />
         </div>
-        {sleep && <SleepLine sleep={sleep} />}
+        {failed && (
+          <div role="alert" className="mm-failed">
+            {t("bot.memoryLoadFailed")}
+            <button type="button" className="mm-retry" onClick={onRetry}>{t("bot.memoryRetry")}</button>
+          </div>
+        )}
+        {sleep && !failed && <SleepLine sleep={sleep} />}
       </header>
       <div className="mm-grid">
-        {panel("long", <Archive size={16} aria-hidden="true" />, t("bot.memoryLongTerm"), t("bot.memoryLongTermHint"), map.longTerm.length, newest(map.longTerm[0]?.fact),
+        {panel("long", <Archive size={16} aria-hidden="true" />, t("bot.memoryLongTerm"), t("bot.memoryLongTermHint"), count(map.longTerm.length), newest(map.longTerm[0]?.fact),
           <span className="mm-dots" aria-hidden="true">
             {map.longTerm.slice(0, DOTS).map((each, index) => <i key={each.line} data-glow={index < 3 ? 3 : index < 10 ? 2 : each.at ? 1 : 0} />)}
           </span>, longList)}
@@ -241,12 +251,12 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
           </div>
           <div className="mm-learned">
             <div className="mm-sec-head"><Sparkle size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryLearned")}</span><span className="mm-sec-hint">{t("bot.memoryLearnedHint")}</span></div>
-            {map.learned.length
+            {failed ? null : map.learned.length
               ? <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} limit={LEARNED_SHOWN} />
               : <div className="mm-empty">{t("bot.memoryNone")}</div>}
           </div>
         </section>
-        {panel("knowledge", <BookOpen size={16} aria-hidden="true" />, t("bot.memoryKnowledge"), t("bot.memoryKnowledgeHint"), topics.length, topics.length ? topics.map((each) => each.name.replace(/\.md$/, "")).join(" · ") : t("bot.memoryNone"),
+        {panel("knowledge", <BookOpen size={16} aria-hidden="true" />, t("bot.memoryKnowledge"), t("bot.memoryKnowledgeHint"), count(topics.length), topics.length ? topics.map((each) => each.name.replace(/\.md$/, "")).join(" · ") : newest(),
           <span className="mm-bars" aria-hidden="true">
             {topics.slice(0, 12).map((each) => <i key={each.name} style={{ height: `${Math.max(14, Math.round((each.bytes / biggest) * 100))}%` }} />)}
           </span>, topicList)}
@@ -258,7 +268,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
               <span className="mm-hint">{t("bot.memoryMuscleHint")}</span>
             </span>
             <span className="mm-newest">{newest(map.muscle[0]?.fact)}</span>
-            <Count kind="muscle" count={map.muscle.length} />
+            <Count kind="muscle" count={count(map.muscle.length)} />
           </div>
         </div>
         {shown && (

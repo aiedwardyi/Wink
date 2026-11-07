@@ -390,7 +390,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
-      {empty ? <MemoryEmpty /> : !loading && <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} />}
+      {empty ? <MemoryEmpty /> : (!loading || loadFailed) && <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} />}
       <MemoryGroup>
         <SwitchRow
           label={t("settings.memoryNotes.toggle")}
@@ -435,19 +435,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
             )}
           </div>
         </Fold>
-        {(loadFailed || error) && (
-          <div className="px-4 pb-4">
-            {loadFailed && (
-              <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-danger">
-                {t("bot.memoryLoadFailed")}
-                <button onClick={() => void load()} className={ROW_BUTTON}>
-                  {t("bot.memoryRetry")}
-                </button>
-              </div>
-            )}
-            {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-          </div>
-        )}
+        {error && <div className="px-4 pb-4 pt-2 text-[12px] text-danger">{error}</div>}
       </MemoryFile>
       <TopicFiles topics={topics} shown={topic} error={topicError} onOpen={(name) => void openTopic(name)} />
     </div>
