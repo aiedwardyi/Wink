@@ -19,7 +19,7 @@ export function ActivityCard() {
   useEffect(() => {
     let gone = false;
     void api("/api/activity").then((body: ReplyActivity) => {
-      if (!gone) setActivity(body);
+      if (!gone && Array.isArray(body?.counts)) setActivity(body);
     }).catch(() => {});
     return () => { gone = true; };
   }, []);
