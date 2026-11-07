@@ -128,9 +128,9 @@ it.each(["unknown", "signed-out", "ready"] as const)("keeps %s status text out o
 it("shares desktop window widths and drops them when expanded or too narrow", async () => {
   vi.stubGlobal("innerWidth", 1280);
   h.board!.engines.find((engine) => engine.engine === "codex")!.accounts[0]!.windows = structuredClone(h.board!.engines[0]!.accounts[0]!.windows);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    return new DOMRect(0, 0, this.matches("[data-engine-fold]") ? 100 : this.matches('[data-window="session"]') ? this.closest('[data-usage-engine="codex"]') ? 210 : 180 : 190, 17);
-  });
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => Object.assign(document.createElement("div").style, {
+    width: `${element.matches("[data-engine-fold]") ? 100 : element.matches('[data-window="session"]') ? element.closest('[data-usage-engine="codex"]') ? 210 : 180 : 190}px`,
+  }));
   let width = 628;
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
   await mount();
@@ -144,6 +144,21 @@ it("shares desktop window widths and drops them when expanded or too narrow", as
   width = 628;
   await click("[data-fold-all]");
   expect(q("[data-desktop-columns]")).toBeNull();
+  vi.restoreAllMocks();
+});
+
+it("keeps layout widths while the Settings entrance scales the painted meters", async () => {
+  vi.stubGlobal("innerWidth", 1200);
+  localStorage.setItem("openmausbot.usageFolds.v1", JSON.stringify(Object.fromEntries(h.board!.engines.map((engine) => [engine.base, true]))));
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => Object.assign(document.createElement("div").style, {
+    width: element.matches("[data-engine-fold]") ? "100px" : "184.390625px",
+  }));
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(628);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return new DOMRect(0, 0, (this.matches("[data-engine-fold]") ? 100 : 184.390625) * 0.96, 20 * 0.96);
+  });
+  await mount();
+  expect(q("[data-desktop-columns]")!.style.getPropertyValue("--usage-summary-columns")).toBe("185px 185px");
   vi.restoreAllMocks();
 });
 

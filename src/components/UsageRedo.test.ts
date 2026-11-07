@@ -266,11 +266,18 @@ it.each(["unread", "signed out", "unsupported"])("skips manual Gemini refresh wh
   expect(h.api).not.toHaveBeenCalledWith("/api/usage/refresh/gemini", { method: "POST" });
 });
 
-it("opens Settings on a chat bar click and preserves both Alt+U presses", async () => {
+it.each(["en", "ko"] as const)("toggles the chat card on click and preserves both Alt+U presses (%s)", async (locale) => {
+  persistPreference(locale);
   const open = vi.fn();
   await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: open }));
+  expect(q("[data-usage-meter]")!.getAttribute("aria-label")).toBe(locale === "en" ? "Usage for Claude. Open quick view" : "Claude 사용량. 빠른 보기 열기");
+  expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("false");
   await click("[data-usage-meter]");
-  expect(open).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-usage-quick]")).not.toBeNull();
+  expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("true");
+  expect(document.querySelector("[data-usage-quick] [data-usage-refresh]")).toBeNull();
+  await click("[data-usage-meter]");
   expect(document.querySelector("[data-usage-quick]")).toBeNull();
   const first = new Event("orbit:usage-key", { cancelable: true });
   await act(async () => { window.dispatchEvent(first); });
