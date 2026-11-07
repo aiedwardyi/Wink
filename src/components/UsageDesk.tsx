@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
+import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
@@ -219,7 +220,8 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
   let control: ReactNode = null;
   // While it waits, the sign-in's steps take their own line under the name.
-  if (account.signIn === "signed-out" && instance) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
+  // The small card keeps a Sign In button where the account already reads connected, never a stray "Connected".
+  if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
   else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
   else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
   else if (account.signIn === "ready") control = (
@@ -438,6 +440,7 @@ export function UsageDesk() {
   const desk = useRef<HTMLDivElement>(null);
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
+  const [museAuthFailed, setMuseAuthFailed] = useState(false);
   const [engineId, setEngineId] = useState<string | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const now = useVisibleClock();
@@ -447,21 +450,27 @@ export function UsageDesk() {
     if (!list) return;
     const layout = () => {
       delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
       if (window.innerWidth >= 768) {
         delete list.dataset.phoneColumns;
         const summaries = list.querySelectorAll<HTMLElement>(".usage-summary");
-        const widths: number[] = [];
-        for (const summary of summaries) {
-          [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
-            const index = meter.dataset.window === "week" ? 1 : slot;
-            widths[0] ??= 0;
-            widths[index] = Math.max(widths[index] ?? 0, meter.getBoundingClientRect().width);
-          });
-        }
-        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => name.getBoundingClientRect().width));
-        if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
-          list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
-          list.dataset.desktopColumns = "";
+        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => Math.ceil(parseFloat(getComputedStyle(name).width))));
+        for (const size of ["large", "medium", "small"]) {
+          list.dataset.summarySize = size;
+          const widths: number[] = [];
+          // Ignore the entrance scale and round up to keep fractional widths from wrapping.
+          for (const summary of summaries) {
+            [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
+              const index = meter.dataset.window === "week" ? 1 : slot;
+              widths[0] ??= 0;
+              widths[index] = Math.max(widths[index] ?? 0, Math.ceil(parseFloat(getComputedStyle(meter).width)));
+            });
+          }
+          if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
+            list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
+            list.dataset.desktopColumns = "";
+            break;
+          }
         }
         return;
       }
@@ -488,6 +497,7 @@ export function UsageDesk() {
       document.fonts?.removeEventListener("loadingdone", layout);
       delete list.dataset.phoneColumns;
       delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
     };
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
@@ -503,12 +513,17 @@ export function UsageDesk() {
   };
   const refresh = async () => {
     setRefreshFailed(false);
+    setMuseAuthFailed(false);
     const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
       && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
       && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
       .map((each) => joinRefresh(each.instanceId, async () => {
-        const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
+          result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
+        }
         if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+        if (each.driverKind === "museAgent" && result.status === "auth_error") setMuseAuthFailed(true);
         if (result.error) throw new Error("refresh");
         return result;
       })));
@@ -527,7 +542,7 @@ export function UsageDesk() {
           <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
         </button>
       </div>
-      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.refreshFailed")}</div>}
+      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
       <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
       {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}

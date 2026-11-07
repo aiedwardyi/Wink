@@ -62,6 +62,7 @@
 .usage-meter-summary .usage-figures { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .usage-meter-summary .usage-reset-long { display: none; }
 .usage-meter-summary .usage-reset-short { display: inline; }
+.usage-meter-summary [data-left]:empty { display: none; }
 .usage-control[data-use] { animation: none; transform: none; transition: none; -webkit-tap-highlight-color: transparent; }
 [data-usage-switched] { animation: usage-switch-highlight 600ms ease-out; }
 [data-usage-switched] [data-main-check] { animation: usage-main-in 200ms ease-out; }
@@ -107,6 +108,8 @@
 @media (width < 768px) {
   .usage-desk { margin-inline: -8px; }
   .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) { margin-inline: 0; }
+  .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar { min-height: 44px; margin-bottom: 16px; }
+  .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-sections { row-gap: 30px; }
   .usage-sections[data-phone-columns] { display: grid; grid-template-columns: max-content max-content 70px minmax(0, 1fr); column-gap: 6px; }
   [data-phone-columns] > [data-usage-engine] { grid-column: 1 / -1; }
   [data-phone-columns] [data-usage-engine]:has(.usage-summary), [data-phone-columns] .usage-engine-head:has(.usage-summary) { display: grid; grid-template-columns: subgrid; }
@@ -119,6 +122,9 @@
   .usage-desk .usage-reset, [data-usage-quick] .usage-reset { display: flex; flex-wrap: wrap; row-gap: 4px; }
 }
 @media (width >= 768px) {
+  .usage-sections .usage-cells-mini { transition-property: none; }
+  .usage-sections[data-summary-size="large"] .usage-cells-mini { --cells-w: 120px; --cell-h: 7px; }
+  .usage-sections[data-summary-size="medium"] .usage-cells-mini { --cells-w: 95px; --cell-h: 5.5px; }
   @container usage-group (width < 344px) {
     .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-figures { display: contents; }
     .usage-meter:not(.usage-meter-summary):not(.usage-meter-chat) .usage-reset { grid-column: 2 / 4; }
@@ -131,6 +137,8 @@
   .usage-toolbar { flex-wrap: wrap; }
   .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar { height: 22px; }
   .account-name-inline input { height: 32px; }
+  .usage-chat-button { position: relative; }
+  .usage-chat-button::after { content: ""; position: absolute; inset-inline: 0; top: calc(50% - 22px); height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   [data-usage-lifted] { transition: none; }
