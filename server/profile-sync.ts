@@ -384,11 +384,12 @@ export function syncOperationFileName(operation: ProfileSyncOperation): string {
   const safe = (value: string) => value.replace(/[^A-Za-z0-9._-]/g, "_");
   // Keep the extension lists in Drive mirror and Google sync aligned with this reader.
   const own = operation.entity === "bot" ? ownOpFields(operation.changes ?? {})[0] : undefined;
-  const ext = own?.[1] ?? "json";
+  const laterAvatar = own?.[0] === "mascotStyle" && Number(String(operation.changes?.mascotStyle).slice(5)) > 49;
+  const ext = laterAvatar ? "avatar" : own?.[1] ?? "json";
   return `${String(operation.sequence).padStart(12, "0")}-${safe(operation.deviceId)}-${safe(operation.operationId)}.${ext}`;
 }
 
-const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style)$/.test(name);
+const isSyncOperationFile = (name: string) => /\.(?:json|notes|paths|pin|style|avatar)$/.test(name);
 
 export function writeSyncOperation(folder: string, operation: ProfileSyncOperation): string {
   const parsed = parseSyncOperation(operation);

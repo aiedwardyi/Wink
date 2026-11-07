@@ -4,8 +4,13 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { Bot } from "@/state/store";
+import { I18nProvider } from "@/lib/i18n";
 import { BotAvatar, MausAvatar, type MausAvatarHandle } from "./Avatar";
 import { BotPickerList } from "./BotPickerList";
+import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
+
+// jsdom exposes localStorage on window but not as a bare global; wire it up once here.
+Object.defineProperty(globalThis, "localStorage", { configurable: true, value: window.localStorage });
 
 async function renderInto(node: ReactNode) {
   const host = document.createElement("div");
@@ -129,6 +134,10 @@ describe("mascot idle motion mount", () => {
     ["icon-47", "icon-47-engine-gemini.png"],
     ["icon-48", "icon-48-engine-grok.png"],
     ["icon-49", "icon-49-engine-muse.png"],
+    ["icon-50", "icon-50-wink-black.png"],
+    ["icon-51", "icon-51-wink-white.png"],
+    ["icon-52", "icon-52-wink-graphite.png"],
+    ["icon-53", "icon-53-wink-blue.png"],
   ])("renders %s as its chosen artwork in a picker list row", async (mascotStyle, asset) => {
     const { host, root } = await renderInto(createElement(BotPickerList, {
       bots: [{ id: "atlas", name: "Atlas", color: "white", mascotStyle } as Bot],
@@ -142,6 +151,33 @@ describe("mascot idle motion mount", () => {
       expect(image?.getAttribute("alt")).toBe("Atlas avatar");
     } finally {
       await act(async () => root.unmount());
+    }
+  });
+
+  it.each([
+    ["en", ["Wink black", "Wink white", "Wink graphite", "Wink blue"]],
+    ["ko", ["블랙 윙크", "화이트 윙크", "그라파이트 윙크", "블루 윙크"]],
+  ] as const)("offers and selects all mono avatars in %s", async (locale, labels) => {
+    localStorage.setItem("omb-locale", locale);
+    const patches: unknown[] = [];
+    const { host, root } = await renderInto(createElement(I18nProvider, null,
+      createElement(BotProfileAvatarCard, {
+        bot: { id: "atlas", name: "Atlas", color: "white", mascotStyle: "icon-31" } as Bot,
+        activeState: "idle",
+        mascotMotion: null,
+        onPatch: (patch) => patches.push(patch),
+      }),
+    ));
+    try {
+      for (const [index, label] of labels.entries()) {
+        const button = host.querySelector<HTMLButtonElement>(`button[title="${label}"]`);
+        expect(button, label).toBeTruthy();
+        await act(async () => button!.click());
+        expect(patches.at(-1)).toEqual({ mascotStyle: `icon-${50 + index}` });
+      }
+    } finally {
+      await act(async () => root.unmount());
+      localStorage.setItem("omb-locale", "en");
     }
   });
 

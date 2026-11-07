@@ -81,9 +81,9 @@ describe("mascot style ids", () => {
     expect(mascotStyleSchema.safeParse("cursor").success).toBe(false);
   });
 
-  it("keeps forty-nine stable artwork ids and offers Wink, job, then engine icons", () => {
-    expect(BOT_AVATAR_IDS).toEqual(Array.from({ length: 49 }, (_, index) => `icon-${String(index + 1).padStart(2, "0")}`));
-    expect(BOT_AVATAR_PICKER_ORDER).toEqual(BOT_AVATAR_IDS.slice(30));
+  it("keeps fifty-three stable artwork ids and offers Wink, job, then engine icons", () => {
+    expect(BOT_AVATAR_IDS).toEqual(Array.from({ length: 53 }, (_, index) => `icon-${String(index + 1).padStart(2, "0")}`));
+    expect(BOT_AVATAR_PICKER_ORDER).toEqual([...BOT_AVATAR_IDS.slice(30, 36), ...BOT_AVATAR_IDS.slice(49), ...BOT_AVATAR_IDS.slice(36, 49)]);
     expect([...EXTENDED_BOT_AVATAR_IDS]).toEqual(BOT_AVATAR_IDS.slice(35));
     for (const id of BOT_AVATAR_IDS) {
       expect(botAvatarChoiceSchema.parse(id)).toBe(id);

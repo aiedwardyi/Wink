@@ -331,10 +331,10 @@ describe("Store", () => {
     expect(bot).toMatchObject({ color: "purple", mascotStyle: "lavender" });
   });
 
-  it("persists a fixed pack avatar across reload", () => {
+  it.each(["icon-11", "icon-50", "icon-51", "icon-52", "icon-53"] as const)("persists fixed pack avatar %s across reload", (mascotStyle) => {
     const store = new Store(selection);
-    const bot = store.createBot({ mascotStyle: "icon-11" });
-    expect(new Store(selection).bot(bot.id)?.mascotStyle).toBe("icon-11");
+    const bot = store.createBot({ mascotStyle });
+    expect(new Store(selection).bot(bot.id)?.mascotStyle).toBe(mascotStyle);
   });
 
   it("does not rotate colors across created bots", () => {

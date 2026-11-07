@@ -28,6 +28,12 @@ it.each(["signIn", "finishInBrowser", "openAgain", "openLink", "enterCode", "not
   expect(ko[key]).toMatch(/[가-힣]/);
 });
 
+it.each(["Black", "White", "Graphite", "Blue"])("translates Wink avatar label %s", (name) => {
+  const key = `bot.avatar${name}` as MessageKey;
+  expect(en[key]).toBe(`Wink ${name.toLowerCase()}`);
+  expect(ko[key]).toMatch(/[가-힣]/);
+});
+
 const css = readFileSync(join(here, "../styles.css"), "utf8");
 const updateBanner = readFileSync(join(here, "../components/UpdateBanner.tsx"), "utf8");
 const chatView = ["ChatView.tsx", "ChatBubble.tsx"]
