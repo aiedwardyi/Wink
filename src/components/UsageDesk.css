@@ -137,7 +137,7 @@
   .usage-toolbar { flex-wrap: wrap; }
   .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar { height: 22px; }
   .account-name-inline input { height: 32px; }
-  .usage-chat-button { position: relative; }
+  .usage-chat-button { position: relative; z-index: 1; }
   .usage-chat-button::after { content: ""; position: absolute; inset-inline: 0; top: calc(50% - 22px); height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
