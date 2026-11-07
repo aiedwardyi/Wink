@@ -1,5 +1,4 @@
-// Keep the build switch off until the eval passes.
-export const LIVE_VERIFY_V0: boolean = false;
+export const LIVE_VERIFY_V0: boolean = true;
 
 export const VERIFY_TOOL = "verify_site";
 /** agents-proxy lists verify_site only when this env var is "1". */

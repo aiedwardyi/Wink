@@ -1214,18 +1214,25 @@ describe("agents-proxy verify_site", () => {
     mkdirSync(root, { recursive: true });
     enabledRoot = mkdtempSync(join(root, "proxy-"));
     verifyProxy = join(enabledRoot, "agents-proxy.mjs");
-    await build({ entryPoints: [PROXY], outfile: verifyProxy, bundle: true, platform: "node", format: "esm", plugins: [{ name: "verify-enabled-fixture", setup(builder) {
-      builder.onLoad({ filter: /shared[\\/]live-verify\.ts$/ }, ({ path }) => ({ contents: readFileSync(path, "utf8").replace("LIVE_VERIFY_V0: boolean = false", "LIVE_VERIFY_V0: boolean = true"), loader: "ts" }));
-    } }] });
+    await build({ entryPoints: [PROXY], outfile: verifyProxy, bundle: true, platform: "node", format: "esm" });
   });
   afterAll(() => rmSync(enabledRoot, { recursive: true, force: true }));
 
-  it("keeps the shipped flag off even when the tool env is set", async () => {
+  it("ships the done-check for browser changes unless the user opts out", async () => {
     lastVerify = null;
     const { list, call } = await probeWithIdentity(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
-    expect(names(list)).not.toContain("verify_site");
-    expect(call.error).toBeTruthy();
-    expect(lastVerify).toBeNull();
+    expect(names(list)).toContain("verify_site");
+    expect(call.error).toBeUndefined();
+    expect(lastVerify).not.toBeNull();
+  });
+
+  it("describes every browser change in any folder", async () => {
+    const { list } = await probe(identity(0, { OMB_LIVE_VERIFY: "1" }));
+    const tool = list.result.tools.find((row: { name: string }) => row.name === "verify_site");
+    expect(tool.description).toContain("every change that renders in a browser");
+    expect(tool.description).toContain("unless the user says not to");
+    expect(tool.description).toContain("any folder");
+    expect(tool.inputSchema.properties.entry.description).toContain("loopback");
   });
 
   const identity = (depth: number, flags: Record<string, string>) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, ...flags });

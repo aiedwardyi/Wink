@@ -75,7 +75,7 @@ export function runHiddenVerify(input) {
   }
   async function setup(tile) {
     const page = input.pages[tile], cdp = adapters[tile] = attach(page), events = [], loads = [], aborted = [], requests = new Map();
-    const blocked = [], origin = new URL(input.url).origin;
+    const blocked = [], hmr = new Set(), origin = new URL(input.url).origin;
     for (const event of ["render-process-gone", "destroyed", "unresponsive"]) {
       const handler = () => { if (!ended) stop("page-failed"); };
       page.on(event, handler);
@@ -86,6 +86,14 @@ export function runHiddenVerify(input) {
       events.push({ where: plain(`${e.url?.replace(origin, "") || "page"}:${(e.lineNumber ?? 0) + 1}`, 120), measured: plain(`${message}; reload the page`.replaceAll(origin, ""), 160) });
     }));
     disposers.push(cdp.on("Network.requestWillBeSent", e => requests.set(e.requestId, { url: e.request.url, type: e.type })));
+    disposers.push(cdp.on("Network.webSocketCreated", e => {
+      for (let stack = e.initiator?.stack; stack; stack = stack.parent) {
+        if (stack.callFrames.some(frame => {
+          try { const url = new URL(frame.url); return url.origin === origin && url.pathname === "/@vite/client"; }
+          catch { return false; }
+        })) { hmr.add(e.url); break; }
+      }
+    }));
     disposers.push(cdp.on("Network.responseReceived", e => {
       if (errorsRule.failedLoad({ url: e.response.url, type: e.type, status: e.response.status, blocked: input.blockedUrls().includes(e.response.url) }, origin)) loads.push({ where: plain(new URL(e.response.url).pathname, 120), measured: `HTTP ${e.response.status}; reload the page` });
     }));
@@ -116,7 +124,7 @@ export function runHiddenVerify(input) {
       if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
       notChecked.add(`fonts (${tile})`);
     }
-    return { cdp, events, loads, aborted, blocked, requests };
+    return { cdp, events, loads, aborted, blocked, requests, hmr };
   }
   async function head(urls) {
     const statuses = new Map();
@@ -135,6 +143,11 @@ export function runHiddenVerify(input) {
   }
   async function pageErrors(data, state, scriptsBlocked) {
     const origin = new URL(input.url).origin, aborted = state.aborted.splice(0);
+    const blocked = new Set(input.blockedUrls());
+    data.images = data.images.filter(img => {
+      if (!blocked.has(img.src) || !img.src.startsWith(origin + "/")) return true;
+      notChecked.add("images blocked in the check"); return false;
+    });
     const statuses = await head([...new Set(aborted.map(r => r.url))]);
     for (const r of aborted) if (errorsRule.failedLoad({ ...r, status: statuses.get(r.url) ?? 0 }, origin)) state.loads.push({ where: plain(new URL(r.url).pathname, 120), measured: `HTTP ${statuses.get(r.url)}; reload the page` });
     Object.assign(data, { origin, scriptsBlocked, errors: [...new Map(state.events.splice(0).map(e => [e.where, e])).values()] });
@@ -175,9 +188,9 @@ export function runHiddenVerify(input) {
     emit({ kind: "part", part: "loads" });
     const nav = {};
     for (const [i, tile] of ["desktop", "phone"].entries()) {
-      const { cdp, blocked, requests } = tiles[i];
+      const { cdp, blocked, requests, hmr } = tiles[i];
       const types = new Map([...requests.values()].map(r => [r.url, r.type]));
-      const guard = blockedGuard([...blocked, ...input.blockedUrls().map(url => ({ url, type: types.get(url) }))]);
+      const guard = blockedGuard([...blocked, ...input.blockedUrls().map(url => ({ url, type: types.get(url) }))].filter(row => !hmr.has(row.url)));
       const forms = await race(cdp.ev("!!document.querySelector('form,input:not([type=hidden]):not([type=checkbox]):not([type=radio]),textarea,button[type=submit]') || [...document.querySelectorAll('a,button')].some(n => /sign[ -]?up|register|신청|가입/i.test(n.textContent))")).catch(error => {
         if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
         notChecked.add(`form delivery (${tile})`);
@@ -246,7 +259,7 @@ export function runHiddenVerify(input) {
       }
       await interact(cdp, tile);
       const data = { images: [] };
-      await pageErrors(data, tiles[i], blockedGuard(blocked).scripts || guard.scripts);
+      await pageErrors(data, tiles[i], blockedGuard(blocked.filter(row => !hmr.has(row.url))).scripts || guard.scripts);
       const checked = errorsRule.check(data);
       for (const row of checked.problems) {
         const issue = { checker: errorsRule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160) };

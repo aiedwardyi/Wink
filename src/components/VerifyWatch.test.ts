@@ -96,6 +96,95 @@ function animationClock() {
   };
 }
 
+it.each(["en", "ko"] as const)("maximizes and restores with the button and Escape in %s", async locale => {
+  applyLocale(locale);
+  const onClose = vi.fn();
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: true, hidden: false, onClose })));
+  const frame = host.querySelector(".verify-watch-frame")!;
+  const maximize = locale === "en" ? "Maximize" : "크게 보기";
+  const restore = locale === "en" ? "Restore" : "원래 크기";
+  const button = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${frame.hasAttribute("data-maximized") ? restore : maximize}"]`)!;
+  expect(button()?.title).toBe(maximize);
+  await act(async () => button().click());
+  expect(frame.hasAttribute("data-maximized")).toBe(true);
+  expect(button().title).toBe(restore);
+  await act(async () => button().click());
+  expect(frame.hasAttribute("data-maximized")).toBe(false);
+  await act(async () => button().click());
+  const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+  await act(async () => window.dispatchEvent(escape));
+  expect(escape.defaultPrevented).toBe(true);
+  expect(frame.hasAttribute("data-maximized")).toBe(false);
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("keeps phone playback inline without a maximize button", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  expect(host.querySelector('[data-inline="true"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-label="Maximize"]')).toBeNull();
+});
+
+it.each(["en", "ko"] as const)("watches the same replay again from zero without rerunning in %s", async locale => {
+  applyLocale(locale);
+  const tick = animationClock();
+  const onClose = vi.fn();
+  const shows: VerifyWatchShow[] = [];
+  const begin = VerifyWatchShow.prototype.beginRun;
+  vi.spyOn(VerifyWatchShow.prototype, "beginRun").mockImplementation(function (this: VerifyWatchShow) { shows.push(this); begin.call(this); });
+  const fetch = vi.fn(async (_url: string) => bufferedRun());
+  vi.stubGlobal("fetch", fetch);
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose })));
+  await tick(60);
+  expect(shows[0]!.phase).toBe("done");
+  expect(onClose).not.toHaveBeenCalled();
+  const again = host.querySelector<HTMLButtonElement>(".verify-watch-again")!;
+  expect(again?.textContent).toBe(locale === "en" ? "Watch again" : "다시 보기");
+  await act(async () => again.click());
+  expect(shows).toHaveLength(2);
+  expect(shows[1]).not.toBe(shows[0]);
+  expect(shows[1]!.clock).toBe(0);
+  expect(shows[1]!.ms).toBe(0);
+  expect(host.querySelector(".verify-watch-again")).toBeNull();
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/verify/runs/old-1/replay", "/api/verify/runs/old-1/replay"]);
+  await tick(60);
+  expect(shows[1]!.phase).toBe("done");
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it.each(["en", "ko"] as const)("plays silently without sound controls in %s", async locale => {
+  applyLocale(locale);
+  const audio = vi.fn();
+  vi.stubGlobal("AudioContext", audio);
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun()));
+  await render({ live: false, hidden: false });
+  await tick(5);
+  expect(audio).not.toHaveBeenCalled();
+  expect(host.querySelectorAll(".verify-watch-icon")).toHaveLength(3);
+  expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Mute" : "소리 끄기"]));
+  expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Sound on" : "소리 켜기"]));
+});
+
+it("switches both viewport tabs after recorded playback finishes", async () => {
+  const tick = animationClock();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {} } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun()));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(100);
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  for (const index of [1, 0]) {
+    await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]!.click());
+    await tick(1);
+    expect(host.querySelectorAll('[role="tab"]')[index]!.getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector(".verify-watch-stage")?.getAttribute("data-tile")).toBe(index ? "phone" : "desktop");
+    expect(host.querySelector("canvas")?.width).toBe(index ? 392 : 1280);
+  }
+});
+
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
   applyLocale(locale);
   const tick = animationClock();
@@ -204,7 +293,7 @@ it.each([false, true])("settles an end received before the next frame and finish
   await tick(200);
   expect(calls.map(c => c.url)).toEqual(live ? ["/api/verify/runs/run-1/live"] : ["/api/verify/runs/old-1/replay", "/api/verify/runs/old-2/replay"]);
   expect(finish).toHaveBeenCalledOnce();
-  expect(onClose).toHaveBeenCalledOnce();
+  expect(onClose).toHaveBeenCalledTimes(live ? 1 : 0);
 });
 
 it("plays on past a kept run whose check was blocked to the latest run", async () => {
