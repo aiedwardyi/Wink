@@ -26,6 +26,27 @@ const normalize = (file) => {
 };
 const contains = (root, file) => file === root || file.startsWith(`${root}${path.sep}`);
 const inside = (root, file) => contains(normalize(root), normalize(file));
+const canonical = (file) => process.platform === "win32" ? file.toLowerCase() : file;
+async function normalizeAsync(file, parents = null) {
+  const resolved = path.resolve(file);
+  if (process.platform !== "win32") return resolved;
+  let current = path.parse(resolved).root;
+  const parts = resolved.slice(current.length).split(path.sep);
+  for (let index = 0; index < parts.length; index++) {
+    current = path.join(current, parts[index]);
+    const cached = parents?.get(current);
+    if (cached) { current = cached; continue; }
+    try {
+      if ((await fsp.lstat(current)).isSymbolicLink()) return path.join(current, ...parts.slice(index + 1)).toLowerCase();
+      const real = await fsp.realpath(current);
+      parents?.set(current, real);
+      current = real;
+    } catch {
+      return path.join(current, ...parts.slice(index + 1)).toLowerCase();
+    }
+  }
+  return current.toLowerCase();
+}
 const nick = (label) => {
   const first = label?.split("|")[0].trim();
   return NICK_RE.test(first ?? "") ? first : null;
@@ -42,7 +63,7 @@ async function runGit(cwd, args, setPriority) {
 
 async function directory(root) {
   const stat = await fsp.lstat(root);
-  return stat.isDirectory() && !stat.isSymbolicLink() && normalize(await fsp.realpath(root)) === normalize(root);
+  return stat.isDirectory() && !stat.isSymbolicLink() && canonical(await fsp.realpath(root)) === await normalizeAsync(root);
 }
 
 function resolveTempRoot(root) {
@@ -64,11 +85,13 @@ async function resolvePin(file) {
   return parent === file ? file : path.join(await resolvePin(parent), path.basename(file));
 }
 
-async function walk(root, visit, depth = Infinity) {
+async function walk(root, visit, depth = Infinity, normalized = null) {
+  normalized ??= await normalizeAsync(root);
   for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
     const file = path.join(root, entry.name);
     const stat = await fsp.lstat(file);
-    if (await visit(file, stat, depth) !== false && stat.isDirectory() && !stat.isSymbolicLink() && depth > 1) await walk(file, visit, depth - 1);
+    const name = canonical(path.join(normalized, entry.name));
+    if (await visit(file, stat, depth, name) !== false && stat.isDirectory() && !stat.isSymbolicLink() && depth > 1) await walk(file, visit, depth - 1, name);
   }
   await new Promise((resolve) => setImmediate(resolve));
 }
@@ -83,13 +106,13 @@ async function unlinkLinks(root, tracked = new Set(), current = () => true) {
     }
     return active;
   };
-  const owned = (file, stat) => stat.isSymbolicLink() && !tracked.has(normalize(file));
-  await walk(root, async (file, stat) => {
-    const link = owned(file, stat);
+  const owned = (file, stat) => stat.isSymbolicLink() && !tracked.has(file);
+  await walk(root, async (file, stat, _depth, normalized) => {
+    const link = owned(normalized, stat);
     if (await check(link) && link) await fsp.unlink(file);
   });
-  await walk(root, async (file, stat) => {
-    const link = owned(file, stat);
+  await walk(root, async (file, stat, _depth, normalized) => {
+    const link = owned(normalized, stat);
     if (await check(link) && link) throw new Error("link appeared during cleanup");
   });
   return active;
@@ -213,21 +236,34 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   const scratchBusy = async (entry, target) => {
     const label = nick(entry.label);
-    for (const pane of panes()) if (nick(pane.label) === label || contains(target, normalize(pane.cwd)) || contains(target, normalize(await resolvePin(pane.cwd)))) return true;
+    for (const pane of panes()) if (nick(pane.label) === label || contains(target, await normalizeAsync(pane.cwd)) || contains(target, await normalizeAsync(await resolvePin(pane.cwd)))) return true;
     return false;
   };
   const finishScratch = (target, owner) => {
     const normalized = normalize(target);
-    for (const entry of entries.slice(0, entries.indexOf(owner) + 1)) if (entry.scratch && normalize(entry.scratch) === normalized) entry.scratchDone = true;
+    for (const entry of entries.slice(0, entries.indexOf(owner) + 1)) if (!entry.scratchDone && entry.scratch && normalize(entry.scratch) === normalized) entry.scratchDone = true;
     save();
   };
-  const removeScratch = async (entry, retry = true) => {
+  const removeScratch = async (entry, retry = true, links = new Map()) => {
     if (entry.scratchDone) return;
     const target = scratchFor(entry);
     if (!target) { entry.scratchDone = true; return; }
+    const normalized = normalize(target);
+    const name = path.basename(normalized);
     const current = async () => {
-      const normalized = normalize(target);
-      return !await scratchBusy(entry, normalized) && entries.findLast((other) => other.scratch && normalize(other.scratch) === normalized) === entry;
+      if (await scratchBusy(entry, normalized)) return false;
+      const count = entries.length;
+      const parents = new Map();
+      for (const other of entries.toReversed()) {
+        if (!other.scratch) continue;
+        const file = path.resolve(other.scratch);
+        const leaf = canonical(path.basename(file));
+        // Only a short alias can change a valid scratch basename.
+        const alias = process.platform === "win32" && (leaf.length <= 12 || !/^wink-[a-z0-9-]+$/.test(leaf));
+        if (leaf !== name && !alias) continue;
+        if (await normalizeAsync(file, parents) === normalized) return other === entry && !await scratchBusy(entry, normalized) && entries.length === count;
+      }
+      return false;
     };
     try {
       if (!await current()) return;
@@ -238,7 +274,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       }
       if (!await directory(target)) return;
       if (!await unlinkLinks(target, new Set(), current)) return;
-      if (!await directory(target) || !await current()) return;
+      if (!await directory(target) || !await current() || await linkedInto(target, links) || !await current()) return;
       await fsp.rm(target, { recursive: true });
       finishScratch(target, entry);
       await record("scratch", target);
@@ -254,17 +290,37 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       } else warn(error);
     }
   };
-  const linkedInto = async (target) => {
+  const linkedInto = async (target, cache) => {
+    const normalized = await normalizeAsync(target);
     let linked = false;
-    const inspect = async (file, stat) => {
-      if (linked || inside(target, file)) return false;
-      if (!stat.isSymbolicLink()) return;
-      const destination = path.resolve(path.dirname(file), await fsp.readlink(file));
-      let real = destination;
-      try { real = await fsp.realpath(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
-      if (inside(target, destination) || inside(target, real)) linked = true;
+    const inspect = async (file, name, temp = false) => {
+      if (contains(normalized, name)) return;
+      let stat;
+      try { stat = await fsp.lstat(file); } catch (error) {
+        if (error.code === "ENOENT") return;
+        throw error;
+      }
+      if (stat.isSymbolicLink()) {
+        const destination = path.resolve(path.dirname(file), await fsp.readlink(file));
+        let real = destination;
+        try { real = await fsp.realpath(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
+        if (contains(normalized, await normalizeAsync(destination)) || contains(normalized, await normalizeAsync(real))) linked = true;
+        return;
+      }
+      if (!stat.isDirectory()) return;
+      let saved = cache.get(name);
+      if (!saved || ["dev", "ino", "mtimeMs", "ctimeMs"].some((key) => saved.stat[key] !== stat[key])) {
+        const children = (await fsp.readdir(file, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() || entry.isSymbolicLink());
+        saved = { stat, children };
+        cache.set(name, saved);
+      }
+      for (const entry of saved.children) if (!temp || entry.name.startsWith("wink-")) await inspect(path.join(file, entry.name), canonical(path.join(name, entry.name)));
     };
-    await walk(worktreeRoot, inspect);
+    try {
+      if (!await directory(worktreeRoot)) return true;
+      await inspect(worktreeRoot, await normalizeAsync(worktreeRoot));
+    } catch (error) { if (error.code !== "ENOENT") throw error; }
     const roots = new Set([tempRoot, ...entries.map((entry) => entry.tempRoot)]);
     for (const root of roots) {
       try {
@@ -273,19 +329,16 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         if (error.code === "ENOENT") continue;
         throw error;
       }
-      for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
-        if (!entry.name.startsWith("wink-")) continue;
-        const folder = path.join(root, entry.name);
-        const stat = await fsp.lstat(folder);
-        if (stat.isSymbolicLink()) {
-          await inspect(folder, stat);
-        } else if (stat.isDirectory()) await walk(folder, inspect);
-      }
+      await inspect(root, await normalizeAsync(root), true);
     }
     return linked;
   };
-  const removeWorktree = async (entry) => {
+  const removeWorktree = async (entry, links, retained) => {
     if (entry.worktreeDone) return;
+    if (retained.size) {
+      const cwd = normalize(entry.cwd);
+      if ([...retained].some((target) => contains(target, cwd))) return;
+    }
     if (!inside(worktreeRoot, entry.cwd) || normalize(entry.cwd) === normalize(worktreeRoot)) { entry.worktreeDone = true; return; }
     try { await fsp.lstat(entry.cwd); } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -332,9 +385,10 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (normalize(gitdir) === normalize(common)) return;
     let changed = (await fsp.lstat(target)).mtimeMs;
     await walk(target, (_file, stat) => { changed = Math.max(changed, stat.mtimeMs); });
-    if (now() - changed < DAY_MS || await linkedInto(target) || await busy() || await isPinned()) return;
+    if (now() - changed < DAY_MS || await busy() || await isPinned()) return;
+    if (await linkedInto(target, links)) { retained.add(normalize(target)); return; }
     const tracked = new Set((await git(target, ["ls-files", "-z"])).split("\0").filter(Boolean).map((file) => normalize(path.resolve(target, file))));
-    await unlinkLinks(target, tracked);
+    await unlinkLinks(target, tracked, async () => !await busy() && !await isPinned());
     if (await busy() || !await directory(target) || await isPinned() || await git(target, ["status", "--porcelain"])) return;
     // Git can traverse tracked Windows junctions while removing the worktree.
     for (const file of tracked) if ((await fsp.lstat(file)).isSymbolicLink()) return;
@@ -343,7 +397,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (!save()) { for (const other of owned) other.worktreeDone = false; return; }
     try {
       const removed = await removeWithBackup(target, gitdir, async () => {
-        if (!await directory(target) || !await directory(worktreeRoot) || await git(target, ["status", "--porcelain"]) || await isPinned() || await busy() || await recent()) return false;
+        if (await linkedInto(target, links) || !await directory(target) || !await directory(worktreeRoot) || await git(target, ["status", "--porcelain"]) || await isPinned() || await busy() || await recent()) return false;
         return git(common, ["worktree", "remove", target]);
       }, warn);
       if (removed === false) {
@@ -360,10 +414,12 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     await git(common, ["worktree", "prune"]);
   };
   const sweep = () => enqueue(async () => {
+    const links = new Map();
+    const retained = new Set();
     for (const entry of entries) {
       if (!entry.closedAt || now() - entry.closedAt < DAY_MS || panes().some((pane) => pane.id === entry.id)) continue;
-      if (now() - entry.closedAt >= (entry.keep ? 3 : 1) * DAY_MS) await removeScratch(entry);
-      try { await removeWorktree(entry); } catch (error) { if (error.code !== "ENOENT") warn(error); }
+      if (now() - entry.closedAt >= (entry.keep ? 3 : 1) * DAY_MS) await removeScratch(entry, true, links);
+      try { await removeWorktree(entry, links, retained); } catch (error) { if (error.code !== "ENOENT") warn(error); }
     }
     entries = entries.filter((entry) => !entry.closedAt || !entry.scratchDone || !entry.worktreeDone);
     save();
