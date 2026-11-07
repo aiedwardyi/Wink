@@ -47,10 +47,27 @@ const MOTIONS = { light: { open: light, mist: false }, full: { open: full, mist:
 // the one switch between the two opens: MOTIONS.light is 2A
 const MOTION = MOTIONS.full;
 
-export const openMist = () => MOTION.mist && !reducedMemoryMotion();
+let software: boolean | undefined;
+/** True without a GPU, where the 2B swing drops frames: there the map opens the 2A way and the glow holds still. */
+export function softwareRender() {
+  if (software !== undefined) return software;
+  try {
+    const gl = document.createElement("canvas").getContext("webgl");
+    const info = gl?.getExtension("WEBGL_debug_renderer_info");
+    const name = gl && info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    software = !gl || /swiftshader|llvmpipe|basic render|software/i.test(name);
+  } catch {
+    software = true;
+  }
+  return software;
+}
+const motion = () => (softwareRender() ? MOTIONS.light : MOTION);
+
+export const openMist = () => motion().mist && !reducedMemoryMotion();
 
 export function openPanel(parts: OpenParts) {
-  if (!reducedMemoryMotion()) MOTION.open(parts);
+  if (!reducedMemoryMotion()) motion().open(parts);
 }
 
 // a sheet that takes over from another one, or from the editor, has nothing to swing out of

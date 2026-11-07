@@ -9,10 +9,11 @@
 .mm:not([data-stacked]) { height: clamp(540px, calc(100dvh - 200px), 800px); }
 .mm-glow { position: absolute; z-index: -1; pointer-events: none; left: 50%; top: 0; width: min(980px, 100%); height: 760px; max-height: 100%; transform: translateX(-50%);
   background: radial-gradient(closest-side at 50% 22%, rgb(var(--mm-cyan) / calc(0.2 * var(--mem-glow))), rgb(var(--mm-blue) / calc(0.17 * var(--mem-glow))) 30%, rgb(var(--mm-purple) / calc(0.12 * var(--mem-glow))) 58%, transparent 100%);
-  animation: mm-breathe 5.5s ease-in-out infinite; transition: filter var(--motion-large) var(--ease-standard); }
+  animation: mm-breathe 5.5s ease-in-out infinite; }
+.mm-glow::after { content: ""; position: absolute; inset: 0; background: inherit; opacity: 0; transition: opacity var(--motion-large) var(--ease-standard); }
 .mm-ray { position: absolute; z-index: -1; pointer-events: none; left: 50%; top: 70px; bottom: 120px; width: 420px; transform: translateX(-50%); filter: blur(10px);
   background: radial-gradient(closest-side, rgb(var(--mm-indigo) / calc(0.22 * var(--mem-glow))), rgb(var(--mm-purple) / calc(0.08 * var(--mem-glow))) 60%, transparent); }
-.mm[data-open] .mm-glow { filter: brightness(1.7); }
+.mm[data-open] .mm-glow::after { opacity: 0.7; }
 @keyframes mm-breathe { 0%, 100% { opacity: 0.8; } 50% { opacity: 1; } }
 
 .mm-core { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 14px; }
@@ -135,7 +136,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-date { font-size: 12px; color: var(--color-ink-secondary); white-space: nowrap; }
 .mm-list li[data-fresh] { position: relative; }
 .mm-list li[data-fresh]::before { content: ""; position: absolute; z-index: -1; inset: 1px -8px; border-radius: 7px; background: rgb(var(--mm-cyan) / calc(0.14 * var(--mem-glow))); border-left: 2px solid rgb(var(--mm-cyan)); }
-.mm-mist { position: absolute; z-index: 6; pointer-events: none; top: -10%; left: 0; width: 70%; height: 120%; opacity: 0; filter: blur(18px);
+.mm-mist { position: absolute; z-index: 6; pointer-events: none; top: -10%; left: 0; width: 70%; height: 120%; opacity: 0;
   background: radial-gradient(closest-side at 40% 50%, rgb(var(--mm-violet) / calc(0.75 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.35 * var(--mem-glow))) 55%, transparent),
     radial-gradient(closest-side at 70% 40%, rgb(var(--mm-cyan) / calc(0.35 * var(--mem-glow))), transparent 70%); }
 .mm-specks { position: absolute; z-index: 7; inset: 0; pointer-events: none; opacity: 0; }
@@ -158,6 +159,8 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm[data-stacked] .mm-panel[aria-expanded="true"] { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); box-shadow: 0 0 40px rgb(99 102 241 / calc(0.3 * var(--mem-glow))); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .mm-fold { margin-top: -1px; padding: 4px 14px 10px; border: 1px solid rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); border-top-color: var(--mm-line); border-radius: 0 0 14px 14px; background: var(--mm-card); }
 
+.mm[data-still] .mm-glow, .mm[data-still] .mm-live-dot { animation: none; }
+.mm[data-still] .mm-glow::after { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .mm-glow, .mm-live-dot { animation: none; }
 }

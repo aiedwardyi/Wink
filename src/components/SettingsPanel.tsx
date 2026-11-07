@@ -25,7 +25,6 @@ import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, TopicFiles, type MemoryTopic } from "./MemoryGroups";
-import { MemoryMap } from "./MemoryMap";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsLabel, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
@@ -34,8 +33,10 @@ import { MemoryCleanIcon } from "./MemoryCleanMotion";
 import { useMemoryClean } from "@/lib/memory-clean";
 import { memoryTargetLine } from "@/lib/memory-recent";
 import { useCoverChat } from "@/lib/cover-chat";
+import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
+import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
 import { SaveStatus } from "./SaveStatus";
@@ -219,6 +220,9 @@ function WorkingFolder({ bot }: { bot: Bot }) {
     </div>
   );
 }
+
+// the map loads with the Memory tab, so app start and the chat never pay for it
+const MemoryMap = lazyView(() => import("./MemoryMap").then((m) => ({ default: m.MemoryMap })));
 
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
@@ -427,7 +431,11 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
-      {empty && !(expanded && inMap) ? <MemoryEmpty /> : (!loading || loadFailed) && <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={openFile} onStack={(stacked) => setWide(!stacked)} />}
+      {empty && !(expanded && inMap) ? <MemoryEmpty /> : active && (!loading || loadFailed) && (
+        <LazyView>
+          <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={openFile} onStack={(stacked) => setWide(!stacked)} />
+        </LazyView>
+      )}
       <MemoryGroup>
         <SwitchRow
           label={t("settings.memoryNotes.toggle")}

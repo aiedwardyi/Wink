@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, formatBytes, NotedLines, type MemoryTopic } from "./MemoryGroups";
-import { closePanel, fadePanel, openMist, openPanel, type OpenParts } from "./MemoryMapMotion";
+import { closePanel, fadePanel, openMist, openPanel, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { Fold } from "./Fold";
 import "./MemoryMap.css";
 
@@ -110,10 +110,12 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const specks = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const panels = { long: useRef<HTMLButtonElement>(null), knowledge: useRef<HTMLButtonElement>(null) };
-  const [stacked, setStacked] = useState(false);
+  // a viewport under the threshold is always stacked, so a phone never lays out the wide map first
+  const [stacked, setStacked] = useState(() => typeof window !== "undefined" && window.innerWidth < STACK_BELOW);
   const [open, setOpen] = useState<Kind | null>(null);
   const [closing, setClosing] = useState(false);
   const [mistOn, setMistOn] = useState(false);
+  const [still, setStill] = useState(false);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const before = useRef<string | null>(null);
   const quiet = useRef(false);
@@ -122,6 +124,12 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const task = currentTask(bot);
   const done = task?.plan.filter((step) => step.status === "done").length ?? 0;
   const biggest = Math.max(1, ...topics.map((each) => each.bytes));
+
+  // the GPU probe makes a WebGL context, so it waits until the wide open has played
+  useEffect(() => {
+    const probe = setTimeout(() => setStill(softwareRender()), 600);
+    return () => clearTimeout(probe);
+  }, []);
 
   useLayoutEffect(() => {
     const el = root.current;
@@ -250,7 +258,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
-    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-closing={closing || undefined}>
+    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-closing={closing || undefined} data-still={still || undefined}>
       <svg width="0" height="0" className="absolute" aria-hidden="true">
         <defs>
           <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
