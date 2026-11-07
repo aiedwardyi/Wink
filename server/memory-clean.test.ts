@@ -291,6 +291,41 @@ describe("sleep", () => {
       const { cleanFiles } = await load();
       expect(await cleanFiles(night("x".repeat(240_000), [retire(1)]))).toMatchObject({ ok: false, stage: "propose", detail: "budget" });
     });
+
+    it("merges a rule or pointer line only when every rule word, fact and path stays", async () => {
+      const { cleanFiles, lineHash, parseHistory, validateChangeList } = await load();
+      const { undoText } = await import("./memory-clean-undo.ts");
+      const merge = (text: string) => [{ op: "merge", ids: [1, 2], text, reason: "Same subject" }];
+      const rules = "- Never deploy on Fridays\n- Never deploy on Fridays after 5pm\n";
+      expect(await check(rules, merge("- Never deploy on Fridays, even after 5pm"))).toMatchObject({ ok: true });
+      expect(await check(rules, merge("- Deploy on Fridays before 5pm"))).toMatchObject(rejects("protected"));
+      expect(validateChangeList({ file: "MEMORY.md", text: rules, typed: new Set([lineHash("- Never deploy on Fridays")]), list: list(merge("- Never deploy on Fridays, even after 5pm")) })).toMatchObject(rejects("protected"));
+      expect(await check(`## Lessons\n${rules}`, [{ op: "merge", ids: [2, 3], text: "- Never deploy on Fridays, even after 5pm", reason: "Same" }])).toMatchObject(rejects("protected"));
+      expect(await check("- Correction: the build must use node 22\n- build must use node 22\n", merge("- build must use node 22"))).toMatchObject(rejects("protected"));
+      const pointers = "- trips are in memory/trips.md\n- stops are in memory/stops.md\n";
+      expect(await check(pointers, merge("- trips and stops are in memory/trips.md and memory/stops.md"))).toMatchObject({ ok: true });
+      expect(await check(pointers, merge("- trips and stops are in memory/trips.md"))).toMatchObject(rejects("pointer"));
+      const result = await cleanFiles(night(`- kept\n${rules}`, [{ op: "merge", ids: [2, 3], text: "- Never deploy on Fridays, even after 5pm", reason: "Same" }]));
+      if (!result.ok) throw new Error(result.detail);
+      expect(undoText("MEMORY.md", result.memory, parseHistory(result.block)[0]!).text).toBe(`- kept\n${rules}`);
+    });
+
+    it("files a pointer line only behind a pointer that names every path it held", async () => {
+      const text = ["- see memory/alpha.md for Harbor0 trips", "- see memory/beta.md for Harbor1 trips", "- always read memory/gamma.md for Harbor2 first",
+        ...Array.from({ length: 60 }, (_, i) => `- trip ${i} ${"x".repeat(280)}`)].join("\n") + "\n";
+      const file = (ids: number[], pointer: string) => [{ op: "file", ids, topic: "pointers", pointer, reason: "Index" }];
+      expect(await check(text, file([1, 2], "- memory/pointers.md: memory/alpha.md (Harbor0), memory/beta.md (Harbor1)"))).toMatchObject({ ok: true });
+      expect(await check(text, file([1, 2], "- memory/pointers.md: memory/alpha.md, Harbor0, Harbor1"))).toMatchObject(rejects("pointer"));
+      expect(await check(text, file([3], "- memory/pointers.md: always read memory/gamma.md for Harbor2 first"))).toMatchObject(rejects("protected"));
+    });
+
+    it("caps net growth at 1 KB a night, remember appends aside", async () => {
+      const lines = Array.from({ length: 4 }, (_, i) => `Jun route ${i} ${"walks along the river ".repeat(12).trim()}`);
+      const user = lines.map((line) => said(line));
+      expect(await check("- kept\n", lines.map((line) => learn(line, `- ${line}`)), user)).toMatchObject(rejects("cap-growth"));
+      expect(await check("- kept\n", lines.slice(0, 3).map((line) => learn(line, `- ${line}`)), user)).toMatchObject({ ok: true });
+      expect(await check("- kept\n", lines.slice(0, 3).map((line) => learn(line, `- ${line}`)), [...user, said(`Remember the gate code is 4417 ${"by the north door ".repeat(8)}`, "remember")])).toMatchObject({ ok: true });
+    });
   });
 
   describe("service", () => {

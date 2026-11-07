@@ -96,8 +96,9 @@ describe("sleep soak", () => {
 
 describe("sleep sabotage", () => {
   const memory = ["- kept", "- Eddie has 9 cats", "- Eddie has 2 dogs", "- headcount 9 (noted 2026-11-04)", "- headcount 8 (noted 2026-10-01)", "- owned line typed", "- Never deploy on Fridays",
-    ...Array.from({ length: 55 }, (_, i) => detail(i)), "- dentist visit on Monday", "- gym opens at 6am", "- staging deploys on friday", "- prod deploys on monday", "- 스테이징 배포는 금요일 오후", "- 운영 배포는 월요일"].join("\n") + "\n";
+    ...Array.from({ length: 55 }, (_, i) => detail(i)), "- dentist visit on Monday", "- gym opens at 6am", "- staging deploys on friday", "- prod deploys on monday", "- 스테이징 배포는 금요일 오후", "- 운영 배포는 월요일", "- see memory/alpha.md for Harbor0"].join("\n") + "\n";
   const typed = new Set([lineHash("- owned line typed")]);
+  const long = Array.from({ length: 4 }, (_, i) => `Jun route ${i} ${"walks along the river ".repeat(12).trim()}`);
   const bot = sleepInput([{ id: "1", role: "bot", kind: "text", text: "Jun likes coffee", at: 5 }, { id: "2", role: "user", kind: "text", text: "thanks", at: 6 }] as never, 0, 10).user;
   it.each([
     ["learn without a quote", { op: "learn", text: "- Jun likes tea", lesson: false, reason: "Guess" }, [], "shape"],
@@ -112,8 +113,11 @@ describe("sleep sabotage", () => {
     ["a Korean learned line that does not match its quote", { op: "learn", text: "- 녹차를 싫어함", quote: "커피를 좋아해", lesson: false, reason: "User said it" }, [{ text: "나는 커피를 좋아해", at: 1, kind: "said" }], "not-quoted"],
     ["a merge that drops lowercase content words", { op: "merge", ids: [65, 66], text: "- deploys on monday", reason: "Deploys" }, [], "fact-lost"],
     ["a merge that drops Korean content words", { op: "merge", ids: [67, 68], text: "- 배포는 월요일", reason: "배포" }, [], "fact-lost"],
+    ["a rule merge that drops its rule word", { op: "merge", ids: [7, 8], text: `- deploy on Fridays; ${detail(0).slice(2)}`, reason: "Deploys" }, [], "protected"],
+    ["filing a pointer line behind a pointer that drops its path", { op: "file", ids: [69], topic: "index", pointer: "- memory/index.md: Harbor0 trips", reason: "Index" }, [], "pointer"],
+    ["a night that grows the file past 1 KB", long.map((line) => ({ op: "learn", text: `- ${line}`, quote: line, lesson: false, reason: "User said it" })), long.map((text) => ({ text, at: 1, kind: "said" })), "cap-growth"],
   ])("rejects %s after one repair retry and writes nothing", async (_, change, user, reason) => {
-    const propose = proposer(() => [change]);
+    const propose = proposer(() => [change].flat());
     const result = await cleanFiles({ memory, history: null, typed, user: user as SleepLine[], propose, recall: answerer() });
     expect(result).toMatchObject({ ok: false, stage: "validate" });
     expect(!result.ok && result.detail).toContain(reason);

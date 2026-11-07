@@ -8,6 +8,7 @@ import { isMemoryTopicName } from "./workspace.ts";
 
 export const FILE_FLOOR = 16 * 1024;
 const LEARN_MAX = 8;
+const GROWTH_MAX = 1024;
 const FILE_MAX_BYTES = 4096;
 const id = z.number().int().positive();
 const reason = z.string();
@@ -93,9 +94,13 @@ function sleepSlots(lines: string[]): { plain: number; lessons: number | null; e
 }
 const listSchema = z.object({ version: z.literal(1), file: cleanFileSchema, changes: z.array(changeSchema) }).strict();
 export const pointerLine = (line: string) => /\bmemory\/[\w][\w .-]*\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/.test(line);
+const RULE_WORDS = /\b(?:rules?|preferences?|prefer(?:s|red)?|always|never|don['’]t|do not|must|should)\b|항상|절대|하지\s*마|규칙|선호/gi;
+const PATHS = /\bmemory\/[\w][\w .-]*?\.md\b|(?<![\w./\\-])[a-z0-9_][a-z0-9_.-]*\.md\b/g;
+const ruleWords = (line: string) => [...line.matchAll(RULE_WORDS)].map(([word]) => word.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ""));
 export const declinedLine = (line: string) => /\b(declined?|rejected?|ruled out|turned down|chose against)\b|거절|사양|선택하지|하지 않기로/i.test(line);
 
-export function protectedLines(text: string, typed: ReadonlySet<string>, includeDeclined = true): Set<number> {
+/** Without `soft`, only lines no merge or file may touch: rule words and pointers are soft. */
+export function protectedLines(text: string, typed: ReadonlySet<string>, includeDeclined = true, soft = true): Set<number> {
   const protectedIds = new Set<number>();
   let pinnedDepth = 0;
   text.split("\n").forEach((line, i) => {
@@ -104,8 +109,8 @@ export function protectedLines(text: string, typed: ReadonlySet<string>, include
       if (pinnedDepth && heading[1]!.length <= pinnedDepth) pinnedDepth = 0;
       if (/\bpinned\b|고정/i.test(heading[2]!) || lessonsHeading(line)) pinnedDepth = heading[1]!.length;
     }
-    if (pinnedDepth || /\(pinned\)\s*$/i.test(line) || typed.has(lineHash(line)) || pointerLine(line) || includeDeclined && declinedLine(line) ||
-      /\b(corrections?|corrected|lessons?|rules?|preferences?|prefer(?:s|red)?|always|never|don['’]t|do not|must|should)\b|항상|절대|하지\s*마|교정|정정|교훈|규칙|선호/i.test(line)) protectedIds.add(i + 1);
+    if (pinnedDepth || /\(pinned\)\s*$/i.test(line) || typed.has(lineHash(line)) || includeDeclined && declinedLine(line) || /\b(corrections?|corrected|lessons?)\b|교정|정정|교훈/i.test(line) ||
+      soft && (pointerLine(line) || ruleWords(line).length > 0)) protectedIds.add(i + 1);
   });
   return protectedIds;
 }
@@ -145,6 +150,7 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   const lines = input.text.split("\n");
   const protectedIds = protectedLines(input.text, input.typed);
   const otherProtection = protectedLines(input.text, input.typed, false);
+  const hardIds = protectedLines(input.text, input.typed, true, false);
   const used = new Set<number>();
   const touched = new Set<number>();
   const removed = new Set<number>();
@@ -232,10 +238,13 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
       const line = lines[n - 1]!;
       if ((change.op === "retire" || change.op === "file") && openLine(line)) fail("protected", index);
       const exactCopy = change.op === "retire" && lines.some((other, i) => i + 1 !== n && other === line && !list.changes.some((op) => changedIds(op).includes(i + 1)));
-      if (pointerLine(line) && !exactCopy) fail("pointer", index);
+      // a rule or pointer line may merge, and a pointer line may file, when every rule word and path stays in the new line
+      const into = change.op === "merge" ? change.text : change.op === "file" && !ruleWords(line).length ? change.pointer : null;
+      const loose = into !== null && !hardIds.has(n) && ruleWords(line).every((word) => ruleWords(into).includes(word)) && [...line.matchAll(PATHS)].every(([path]) => into.includes(path));
+      if (pointerLine(line) && !exactCopy && !loose) fail("pointer", index);
       if (!protectedIds.has(n)) continue;
       const reminder = change.op === "remind" && input.file !== "MEMORY.md" && declinedLine(line) && !otherProtection.has(n);
-      if (!exactCopy && !reminder) fail("protected", index);
+      if (!exactCopy && !reminder && !loose) fail("protected", index);
     }
     let wrote: string[] = [];
     if (change.op === "merge") {
@@ -292,5 +301,6 @@ export function validateChangeList(input: ValidateInput): ValidateResult {
   if (touched.size + added > 40) fail("cap-lines");
   if (withSystemChanges("", input.text, text, 8000) === null) fail("cap-chars");
   if (input.file === "MEMORY.md" && !sizeFits(input.text, text, forced)) fail("budget");
+  if (Buffer.byteLength(text) - Buffer.byteLength(input.text) - forced > GROWTH_MAX) fail("cap-growth");
   return errors.length ? { ok: false, errors } : { ok: true, text, entries, counts, topics, forced };
 }
