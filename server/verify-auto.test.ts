@@ -18,7 +18,7 @@ let start: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; en
 let scan: ReturnType<typeof vi.fn<typeof scanVerifyWrites>>;
 let auto: ReturnType<typeof createVerifyAuto>;
 let turn: VerifyAutoTurn;
-const event = (fields: Partial<RuntimeEvent>) => ({ eventId: "e", provider: "claude", threadId: "thread", turnId: "turn", createdAt: new Date().toISOString(), ...fields }) as RuntimeEvent;
+const event = (fields: Partial<RuntimeEvent>) => ({ eventId: "e", provider: "claudeAgent", threadId: "thread", turnId: "turn", createdAt: new Date().toISOString(), ...fields }) as RuntimeEvent;
 const shell = () => {
   auto.event(event({ type: "item.started", itemType: "tool", itemId: "shell", title: "Bash" }));
   auto.event(event({ type: "item.completed", itemType: "tool", itemId: "shell", ok: true }));
@@ -240,10 +240,10 @@ it.each(["this repo has no tests yet", "I don't test on Safari"])("does not trea
 it.each([
   { title: "Bash" }, { title: "Shell" }, { title: "exec_command" },
   { provider: "codex", title: "npm run build", verb: "Bash" },
-  { provider: "grok", title: "npm run build", verb: "Bash" },
+  { provider: "grokAgent", title: "npm run build", verb: "Bash" },
 ])("scans successful shell tools: %o", async fields => {
   auto.event(event({ ...fields, type: "item.started", itemType: "tool", itemId: "exec" }));
-  auto.event(event({ provider: fields.provider ?? "claude", type: "item.completed", itemType: "tool", itemId: "exec", ok: true }));
+  auto.event(event({ provider: fields.provider ?? "claudeAgent", type: "item.completed", itemType: "tool", itemId: "exec", ok: true }));
   await auto.settled(turn);
   expect(scan).toHaveBeenCalledOnce();
   expect(start).toHaveBeenCalledOnce();
@@ -284,9 +284,17 @@ it("returns within the time cap when directory I/O stalls", async () => {
   expect(performance.now() - started).toBeLessThan(VERIFY_LIMITS.scanMs + 150);
 });
 
-it.each(["claude", "codex", "grok", "antigravity", "muse"])("checks %s writes or opaque tools after settlement", async provider => {
-  auto.event(event({ provider, type: "item.completed", itemType: "tool", ok: true, ...(["claude", "codex", "grok"].includes(provider) ? { writes: [join(root, "index.html")] } : {}) }));
+it("scans an antigravityAgent edit tool without write events", async () => {
+  auto.event(event({ provider: "antigravityAgent", type: "item.started", itemType: "tool", itemId: "edit", title: "replace_file_content" }));
+  auto.event(event({ provider: "antigravityAgent", type: "item.completed", itemType: "tool", itemId: "edit", ok: true }));
+  await auto.settled(turn);
+  expect(scan).toHaveBeenCalledExactlyOnceWith(root, turn.startedAt);
+  expect(start).toHaveBeenCalledOnce();
+});
+
+it.each(["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"])("checks %s writes or opaque tools after settlement", async provider => {
+  auto.event(event({ provider, type: "item.completed", itemType: "tool", ok: true, ...(["claudeAgent", "codex", "grokAgent"].includes(provider) ? { writes: [join(root, "index.html")] } : {}) }));
   await auto.settled(turn);
   expect(start).toHaveBeenCalledWith(expect.objectContaining({ botId: "bot", threadId: "thread", entry: join(root, "index.html"), episode: expect.any(String) }));
-  expect(scan).toHaveBeenCalledTimes(["antigravity", "muse"].includes(provider) ? 1 : 0);
+  expect(scan).toHaveBeenCalledTimes(["antigravityAgent", "museAgent"].includes(provider) ? 1 : 0);
 });

@@ -123,7 +123,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     if (name === undefined) turn.tools++;
     if (!event.ok || name?.title.includes("verify_site")) return;
     turn.sequence++;
-    if (!event.writes?.length && (name?.shell || event.provider === "antigravity" || event.provider === "muse")) turn.opaque = true;
+    if (!event.writes?.length && (name?.shell || event.provider === "antigravityAgent" || event.provider === "museAgent")) turn.opaque = true;
     for (const path of event.writes?.slice(0, 32) ?? []) turn.writes.add(path);
   };
   const checkStarted = (threadId: string, turnId: string) => {
