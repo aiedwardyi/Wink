@@ -27,11 +27,13 @@ export function ActivityCard() {
   const tag = localeTag(locale);
   const month = new Intl.DateTimeFormat(tag, { month: "short" });
   const busiest = activity.busiest && new Intl.DateTimeFormat(tag, { month: "short", day: "numeric" }).format(dayDate(activity.busiest.day));
-  const max = Math.max(...activity.counts);
+  const active = activity.counts.filter(Boolean).sort((a, b) => a - b);
+  const cuts = [1, 2, 3].map((quarter) => active[Math.floor((quarter / 4) * (active.length - 1))]!);
+  const shade = (count: number) => (count ? 1 + cuts.filter((cut) => count > cut).length : 0);
   const months = Array.from({ length: 26 }, (_, week) => dayDate(activity.start, week * 7))
     .map((date, week, weeks) => (week === 0 || date.getMonth() !== weeks[week - 1]!.getMonth() ? { week, label: month.format(date) } : null))
     .filter((label) => label !== null)
-    .filter((label, index, labels) => label.week < 25 && (label.week > 0 || (labels[index + 1]?.week ?? 26) >= 3));
+    .filter((label, index, labels) => label.week > 0 || (labels[index + 1]?.week ?? 26) >= 3);
   const stat = (value: string, label: React.ReactNode) => (
     <div className="min-w-0 @[30rem]/activity:flex @[30rem]/activity:items-baseline @[30rem]/activity:gap-1.5">
       <div className="text-[22px] font-semibold leading-tight tracking-tight text-ink tabular-nums @[30rem]/activity:text-[15px]">{value}</div>
@@ -44,13 +46,14 @@ export function ActivityCard() {
         <div className="flex flex-col-reverse gap-4 @[30rem]/activity:flex-row @[30rem]/activity:items-center @[30rem]/activity:gap-7">
           <div aria-hidden className="min-w-0 flex-1 @[30rem]/activity:max-w-[23rem]">
             <div className={cn(WEEK_GRID, "mb-1.5 text-[10px] leading-none text-ink-secondary")}>
-              {months.map(({ week, label }) => (
-                <span key={week} className="whitespace-nowrap" style={{ gridColumn: `${week + 1} / span ${Math.min(3, 26 - week)}` }}>{label}</span>
-              ))}
+              {months.map(({ week, label }) => {
+                const column = Math.min(week, 24);
+                return <span key={week} className="whitespace-nowrap" style={{ gridColumn: `${column + 1} / span ${Math.min(3, 26 - column)}` }}>{label}</span>;
+              })}
             </div>
             <div className={cn(WEEK_GRID, "grid-flow-col grid-rows-7 gap-y-[2px] @[30rem]/activity:gap-y-[3px]")}>
               {activity.counts.map((count, day) => (
-                <span key={day} className={cn("aspect-square rounded-[2px]", SHADES[count && Math.ceil((count / max) * 4)])} />
+                <span key={day} className={cn("aspect-square rounded-[2px]", SHADES[shade(count)])} />
               ))}
             </div>
           </div>
