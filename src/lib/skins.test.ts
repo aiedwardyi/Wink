@@ -214,6 +214,16 @@ describe("skins", () => {
     expect(SKIN_IDS).not.toContain("letelier");
   });
 
+  it("sets Precision in Space Grotesk with bubbles on both sides, wide, and no side line", () => {
+    expect(css.match(/\[data-skin="precision"\]\s*\{([^}]*)\}/)![1]).toMatch(/--font-sans:\s*"Space Grotesk"/);
+    expect(css).toMatch(/\[data-skin="precision"\]:lang\(ko\) \{\s*--font-sans: "Inter"/);
+    const own = css.match(/@scope \(\[data-skin="precision"\]\) to \(\[data-skin\]\) \{([\s\S]*?)\n\}/)![1];
+    expect(own).toContain("max-width: min(54rem, 94%);");
+    expect(own).toMatch(/\[data-orbit-message="bot"\] \[data-orbit-message-content\] \{\s*background: var\(--color-card\);/);
+    expect(own).toMatch(/\[data-orbit-message="user"\] \[data-orbit-message-content\] \{\s*box-shadow: none;/);
+    expect(css).toMatch(/@media \(max-width: 767px\) \{\s*@scope \(\[data-skin="precision"\]\) to \(\[data-skin\]\) \{\s*\[data-orbit-message-body\] \{\s*max-width: 96%;/);
+  });
+
   it("gives every non-Midnight skin its own focus and control tokens", () => {
     // Midnight inherits Grok-blue --color-focus from @theme. A light skin
     // that skips the token wears that blue on stone, paper, or porcelain.
