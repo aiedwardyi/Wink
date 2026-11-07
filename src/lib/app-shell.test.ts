@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const html = readFileSync(join(root, "index.html"), "utf8");
-const css = readFileSync(join(root, "src/styles.css"), "utf8");
+const css = ["src/styles.css", "src/skins/fresh-dark.css"].map((file) => readFileSync(join(root, file), "utf8")).join("\n");
 
 function paethPredictor(a: number, b: number, c: number): number {
   const p = a + b - c;

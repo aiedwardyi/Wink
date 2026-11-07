@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./motion.css";
+@import "./skins/fresh-dark.css";
 
 [data-media-viewer] header {
   padding-top: env(safe-area-inset-top, 0px);
