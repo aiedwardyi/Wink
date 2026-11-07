@@ -50,6 +50,7 @@ function open(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
     CREATE INDEX IF NOT EXISTS messages_parent ON messages(thread_id, json_extract(json, '$.parentId'));
+    CREATE INDEX IF NOT EXISTS messages_bot_text_at ON messages(at) WHERE role = 'bot' AND kind = 'text';
     CREATE TABLE IF NOT EXISTS thread_state (
       thread_id TEXT PRIMARY KEY,
       active_leaf_id TEXT
@@ -245,6 +246,17 @@ export function applySyncedRows(
 export function lastMessageAt(threadId: string): number | null {
   const row = db().prepare("SELECT MAX(at) AS at FROM messages WHERE thread_id = ?").get(threadId) as { at: number | null } | undefined;
   return row?.at ?? null;
+}
+
+/** Bot text replies between each pair of neighboring bounds. */
+export function botRepliesPerDay(bounds: readonly number[]): number[] {
+  // SAFETY: This SELECT list is one COUNT per day.
+  const rows = db().prepare(
+    "WITH day AS (SELECT value AS start, LEAD(value) OVER (ORDER BY key) AS end FROM json_each(?)) " +
+      "SELECT (SELECT COUNT(*) FROM messages WHERE role = 'bot' AND kind = 'text' AND at >= start AND at < end) AS count " +
+      "FROM day WHERE end IS NOT NULL ORDER BY start",
+  ).all(JSON.stringify(bounds)) as Array<{ count: number }>;
+  return rows.map((row) => row.count);
 }
 
 export function deleteThread(threadId: string): void {
