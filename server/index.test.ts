@@ -4519,18 +4519,22 @@ describe("resumable event stream", () => {
     const botId = body.bots[0].id;
     const first = await openSse(`${BASE}/api/events`);
     const hello = await first.until((frame) => frame.kind === "hello");
+    let cursor = hello.cursor;
     try {
       expect(await first.until((frame) => frame.kind === "ping")).toEqual({ kind: "ping" });
       await nudge(botId);
       const next = await first.until((frame) => frame.kind === "bot" && frame.bot?.id === botId);
-      expect(next.seq).toBe(Number(hello.cursor.split(":")[1]) + 1);
+      const since = Number(hello.cursor.split(":")[1]);
+      const numbered = first.frames.filter((frame) => Number.isSafeInteger(frame.seq) && frame.seq > since && frame.seq <= next.seq);
+      expect(next.seq).toBeGreaterThan(since);
+      expect(numbered.map((frame) => frame.seq)).toEqual(Array.from({ length: next.seq - since }, (_, index) => since + index + 1));
+      cursor = `${hello.cursor.split(":")[0]}:${next.seq}`;
     } finally {
       first.close();
     }
 
     // Heartbeats describe connection health, not application state. A
     // reconnect from the numbered application frame remains fully resumable.
-    const cursor = `${hello.cursor.split(":")[0]}:${Number(hello.cursor.split(":")[1]) + 1}`;
     const resumed = await openSse(`${BASE}/api/events?since=${encodeURIComponent(cursor)}`);
     try {
       expect((await resumed.until((frame) => frame.kind === "hello")).resumed).toBe(true);

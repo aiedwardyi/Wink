@@ -258,7 +258,7 @@ describe("reaction plumbing", () => {
   });
 
   it("marks a steer's reactions only once the model took the steer in", () => {
-    expect(botChatSource).toMatch(/\.steer\(threadId, prompt, \(taken, afterReply\) => \{\s+if \(taken\) store\.addReactionsDelivered\(bot\.id, threadId, reactions\);/);
+    expect(botChatSource).toMatch(/\.steer\(threadId, peerInput\?\.prompt \?\? prompt, \(taken\) => \{\s+if \(taken\) store\.addReactionsDelivered\(bot\.id, threadId, reactions\);/);
     expect(indexSource.match(/store\.markReactionsDelivered\(/g)).toHaveLength(1);
   });
 
