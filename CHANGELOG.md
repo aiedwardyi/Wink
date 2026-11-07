@@ -2,6 +2,32 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.240] - 2026-11-07
+
+### Added
+- Watch website done-checks live or replay their desktop and phone checks.
+- Pick a worker's account by name without changing Main.
+
+### Changed
+- Usage has clearer spacing and bars, a busy refresh indicator, and account-switch feedback.
+
+### Fixed
+- Signing out of Grok, Muse, Claude or Codex in Connections works on the first click.
+- Usage numbers refresh correctly after switching accounts.
+- Clicking empty space in the chat box focuses your draft.
+- Memory and Description text stays reachable after fonts load.
+
+## [1.0.239] - 2026-11-06
+
+### Added
+- Give a PC its own app name and logo with a brand file in the Wink data folder.
+
+### Fixed
+- A failed chat on a signed-out account names the account and offers Sign In Again.
+- Sign in directly from a Usage row.
+- A refused sign-in explains why.
+- Space plays and pauses a chat video after dragging its seek bar.
+
 ## [1.0.238] - 2026-11-06
 
 ### Added
@@ -670,6 +696,8 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.240]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.240
+[1.0.239]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.239
 [1.0.238]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.238
 [1.0.237]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.237
 [1.0.236]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.236

@@ -17,7 +17,7 @@ vi.mock("@/state/store", async () => {
 
 import { I18nProvider } from "@/lib/i18n";
 import { ConnectionError } from "@/lib/error-text";
-import { RemoteTerminalView, remotePaneHotkey, snapshotText } from "./RemoteTerminalView";
+import { RemoteTerminalView, snapshotText } from "./RemoteTerminalView";
 import { ProviderMark } from "./ProviderIcons";
 
 const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "App.tsx"), "utf8");
@@ -685,18 +685,18 @@ describe("RemoteTerminalView", () => {
       }
     });
 
-    it("leaves a main-first roster in order for Alt+n", async () => {
+    it("selects workers in a main-first roster", async () => {
       mainServer([{ sessionId: "main", main: true }, ...workers]);
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
-      const view = (paneHotkey: { n: number } | null) =>
-        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
+      const view = (paneFocus: { sessionId: string | null } | null) =>
+        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus }));
       try {
         await act(async () => root.render(view(null)));
-        await act(async () => root.render(view({ n: 2 })));
+        await act(async () => root.render(view({ sessionId: "one" })));
         expect(title(host)).toBe("Terminal / one");
-        await act(async () => root.render(view({ n: 3 })));
+        await act(async () => root.render(view({ sessionId: "two" })));
         expect(title(host)).toBe("Terminal / two");
       } finally {
         await act(async () => root.unmount());
@@ -716,18 +716,18 @@ describe("RemoteTerminalView", () => {
       }
     });
 
-    it("selects a worker-first live Main with Alt+1", async () => {
+    it("selects a worker-first live Main on request", async () => {
       mainServer([...workers, { sessionId: "main", main: true }]);
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
-      const view = (paneHotkey: { n: number } | null) =>
-        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
+      const view = (paneFocus: { sessionId: string | null } | null) =>
+        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus }));
       try {
         await act(async () => root.render(view(null)));
         await pickPane(host, "two");
         expect(host.querySelector("pre")?.textContent).toBe("$ two");
-        await act(async () => root.render(view({ n: 1 })));
+        await act(async () => root.render(view({ sessionId: null })));
         expect(title(host)).toBe("Terminal / Ada");
         expect(host.querySelector("pre")?.textContent).toBe("PS>");
       } finally {
@@ -735,20 +735,20 @@ describe("RemoteTerminalView", () => {
       }
     });
 
-    it("counts Main first for Alt+n", async () => {
+    it("selects a closed Main and workers on request", async () => {
       mainServer();
       const host = document.createElement("div");
       document.body.append(host);
       const root = createRoot(host);
-      const view = (paneHotkey: { n: number } | null) =>
-        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
+      const view = (paneFocus: { sessionId: string | null } | null) =>
+        createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus }));
       try {
         await act(async () => root.render(view(null)));
         expect(title(host)).toBe("Terminal / one");
-        await act(async () => root.render(view({ n: 1 })));
+        await act(async () => root.render(view({ sessionId: null })));
         expect(title(host)).toBe("Terminal / Ada");
         expect(host.textContent).toContain("No active terminal");
-        await act(async () => root.render(view({ n: 3 })));
+        await act(async () => root.render(view({ sessionId: "two" })));
         expect(title(host)).toBe("Terminal / two");
         expect(host.querySelector("pre")?.textContent).toBe("$ two");
       } finally {
@@ -1188,17 +1188,7 @@ describe("RemoteTerminalView", () => {
     expect(snapshotText({ recentText: "b" })).toBe("b");
   });
 
-  it("maps Alt+n onto the view's own pane order", () => {
-    const workerFirst = [
-      { sessionId: "worker", label: "Worker", main: false },
-      { sessionId: "main", label: "Main", main: true },
-    ];
-    expect(remotePaneHotkey(workerFirst, 1)).toBe("worker");
-    expect(remotePaneHotkey(workerFirst, 2)).toBeNull();
-    expect(remotePaneHotkey(workerFirst, 9)).toBeUndefined();
-  });
-
-  it("selects that pane when Alt+n arrives", async () => {
+  it("selects the requested pane and ignores missing panes", async () => {
     const panes = [
       { sessionId: "main", label: "Main", main: true },
       { sessionId: "worker", label: "Worker", main: false },
@@ -1211,16 +1201,16 @@ describe("RemoteTerminalView", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    const view = (paneHotkey: { n: number } | null) =>
-      createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneHotkey }));
+    const view = (paneFocus: { sessionId: string | null } | null) =>
+      createElement(I18nProvider, null, createElement(RemoteTerminalView, { bot: { id: "bot-1", name: "Ada" }, visible: true, onClose: () => {}, paneFocus }));
     try {
       await act(async () => root.render(view(null)));
       expect(title(host)).toBe("Terminal / Ada");
-      await act(async () => root.render(view({ n: 3 })));
+      await act(async () => root.render(view({ sessionId: "other" })));
       expect(title(host)).toBe("Terminal / Other");
-      await act(async () => root.render(view({ n: 1 })));
+      await act(async () => root.render(view({ sessionId: null })));
       expect(title(host)).toBe("Terminal / Ada");
-      await act(async () => root.render(view({ n: 9 })));
+      await act(async () => root.render(view({ sessionId: "missing" })));
       expect(title(host)).toBe("Terminal / Ada");
     } finally {
       await act(async () => root.unmount());
@@ -1248,7 +1238,7 @@ describe("RemoteTerminalView", () => {
       expect(title(host)).toBe("Terminal / Worker");
       await act(async () => root.render(view({ sessionId: "main" })));
       expect(title(host)).toBe("Terminal / Ada");
-      expect(app.slice(app.indexOf("<RemoteTerminalView"), app.indexOf("<RemoteTerminalView") + 240)).toContain("paneFocus={paneFocus}");
+      expect(app.slice(app.indexOf("<RemoteTerminalView"), app.indexOf("<RemoteTerminalView") + 240)).toContain("paneFocus={botPaneFocus}");
     } finally {
       await act(async () => root.unmount());
     }

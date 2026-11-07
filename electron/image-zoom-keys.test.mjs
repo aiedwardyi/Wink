@@ -46,7 +46,7 @@ describe("image viewer zoom keys", () => {
       target: "window",
       action: "in",
     });
-    expect(level.value).toBe(0.5);
+    expect(level.value).toBe(0.25);
     expect(routeZoomShortcut(webContents, { type: "keyDown", control: true, key: "0" })).toEqual({
       target: "window",
       action: "reset",

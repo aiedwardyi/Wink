@@ -28,7 +28,11 @@ describe("UI shape glyph gate", () => {
 
   it("fails the gate for a new UI file and extra uses in an allowlisted file", () => {
     expect(checkGlyphs(["src/Meter.tsx"], () => 'const bar = "▰";')).toHaveLength(1);
-    expect(checkGlyphs(["src/lib/terminal-skin.ts"], () => 'const bar = "▰" + "▰";')).toHaveLength(1);
+    expect(checkGlyphs(["electron/terminal-host.mjs"], () => 'const bar = "▰" + "▰";')).toHaveLength(1);
+  });
+
+  it("rejects the retired terminal meter exceptions", () => {
+    expect(checkGlyphs(["src/lib/terminal-skin.ts"], () => 'const bar = "▰" + "▰";')).toHaveLength(2);
   });
 
   it("accepts the repository with only its explicit base exceptions", () => {

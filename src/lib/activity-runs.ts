@@ -144,11 +144,12 @@ export const SERVER_LINES: ServerLine[] = [
   { re: /^the user denied this handoff$/, pick: () => ["chat.delegation.deniedHandoff", {}], file: "delegations.ts", needles: ["the user denied this handoff"] },
   { re: /^Delivered to @(.+)$/, pick: (m) => ["chat.delegation.delivered", { name: m[1] }], file: "delegations.ts", needles: ["Delivered to @"] },
   { re: /^@(.+) replied$/, pick: (m) => ["chat.delegation.replied", { name: m[1] }], file: "delegations.ts", needles: ["@${target.name} replied"] },
+  // Stored rows only: peer answers now stay with the requesting bot.
   {
     re: /^(.+?) answered (.+) in its own chat instead$/,
     pick: (m) => ["chat.delegation.answeredElsewhere", { name: m[1], who: m[2] }],
     file: "delegations.ts",
-    needles: [" answered ", " in its own chat instead"],
+    needles: [],
   },
   { re: /^No reply from @(.+)$/, pick: (m) => ["chat.delegation.finishedWithoutReply", { name: m[1] }], file: "delegations.ts", needles: ["No reply from @"] },
   { re: /^Delegated turn did not finish$/, pick: () => ["chat.delegation.turnDidNotFinish", {}], file: "delegations.ts", needles: ["Delegated turn did not finish"] },

@@ -17,13 +17,13 @@ import {
   findDelegationReceipt,
   finishDelegatedTurn,
   queueDelegation,
-  settleTakenOverDelegation,
   type DelegatedTurn,
 } from "./delegations.ts";
 import { hasUnreadReplyWake } from "./mail.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
 import { paneWakeEnabled, PaneWakeScheduler, PANE_WAKE_DEBOUNCE_MS } from "./pane-wake.ts";
-import { askSwitchedText, hasPeerWatch, onPeerTakeover, peerInputJoined, steerTakeover, takeOverPeerTurn } from "./peer-takeover.ts";
+import { hasPeerWatch, peerInputJoined, watchPeerTurn } from "./peer-takeover.ts";
+import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type BotRecord, type GroupRecord, type Message } from "./store.ts";
@@ -38,7 +38,7 @@ const NOTE = "[pane worker01] DONE: ram gate fixed, tests pass";
 const NOTE_BODY = "ram gate fixed";
 const ANSWER = "Yes, the ko check runs in the release gate.";
 const QUESTION = "Is the ko check in the release gate?";
-type Watched = DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void; reply: PeerTurnReply };
+type Watched = DelegatedTurn & { sourceThreadId: string; endPeerWatch?: () => void; reply: PeerTurnReply };
 
 describe("worker notes while a bot answers a bot", () => {
   let store: Store;
@@ -54,6 +54,7 @@ describe("worker notes while a bot answers a bot", () => {
   let paneWake: PaneWakeScheduler;
   let steerer: NoteSteerer;
   let turns: Map<string, string>;
+  let followups: Array<{ prompt: string; message: Message }>;
   const senderWakes = vi.fn();
   const listeners = new Set<(event: RuntimeEvent) => void>();
   const delegationWatch = new Map<string, Watched>();
@@ -64,6 +65,7 @@ describe("worker notes while a bot answers a bot", () => {
     rmSync(DATA_DIR, { recursive: true, force: true });
     _resetPending();
     _resetSteerQueue();
+    _resetPeerUserReplies();
     _resetCommsRoots();
     delegationWatch.clear();
     listeners.clear();
@@ -80,6 +82,7 @@ describe("worker notes while a bot answers a bot", () => {
     steered = [];
     woken = [];
     turns = new Map();
+    followups = [];
     paneWake = new PaneWakeScheduler({
       enabled: (botId, threadId) => hasUnreadReplyWake(store, threadId) || paneWakeEnabled(store, botId, threadId),
       paused: () => false,
@@ -118,6 +121,7 @@ describe("worker notes while a bot answers a bot", () => {
   afterEach(() => {
     _resetPending();
     _resetSteerQueue();
+    _resetPeerUserReplies();
     vi.useRealTimers();
   });
 
@@ -134,19 +138,15 @@ describe("worker notes while a bot answers a bot", () => {
     const watched = delegationWatch.get(threadId);
     if (!watched) return false;
     delegationWatch.delete(threadId);
-    watched.endTakeover?.();
+    watched.endPeerWatch?.();
     watched.reply.release();
+    settlePeerUserReplies(threadId);
     return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
   }
 
   function watchDelegatedTurn(targetThreadId: string, watched: Watched) {
     delegationWatch.set(targetThreadId, watched);
-    watched.endTakeover = onPeerTakeover(targetThreadId, (afterReply) => {
-      watched.reply.release();
-      const finished = afterReply ? watched.reply.text() : undefined;
-      if (finished !== undefined) delegationWatch.delete(targetThreadId);
-      settleTakenOverDelegation(commsBus, watched, "Edward", finished);
-    }, () => {
+    watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {
       watched.answer ??= watched.reply.text() ?? "";
     });
   }
@@ -155,13 +155,23 @@ describe("worker notes while a bot answers a bot", () => {
   function emit(threadId: string, patch: Record<string, unknown>) {
     const event = { provider: "claude", eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), threadId, turnId: turns.get(threadId), ...patch } as RuntimeEvent;
     peerReplies.observe(event);
-    if (event.type === "item.completed" && event.itemType === "assistant_text" && !event.summarized) store.appendMessage(threadId, { role: "bot", kind: "text", text: event.text });
+    peerUserRuntime(event);
+    if (event.type === "item.completed" && event.itemType === "assistant_text" && !persistPeerUserReply(store, event) && !event.summarized) store.appendMessage(threadId, { role: "bot", kind: "text", text: event.text });
     if (event.type === "turn.completed") {
       busy.delete(threadId);
       finalizeDelegationWatch(threadId, event.ok, delegationWatch.get(threadId)?.reply.text() ?? "");
+      settlePeerUserReplies(threadId, event.turnId);
     }
     for (const listener of listeners) listener(event);
-    if (event.type === "turn.completed") paneWake.settled();
+    if (event.type === "turn.completed") {
+      drainPeerUserReplies(store, async (_botId, prompt, opts) => {
+        followups.push({ prompt, message: opts.userMessage });
+        busy.add(opts.threadId);
+        turns.set(opts.threadId, crypto.randomUUID());
+        emit(opts.threadId, { type: "turn.started" });
+      }, (_botId, id) => busy.has(id));
+      paneWake.settled();
+    }
   }
   const say = (threadId: string, text: string, phase?: string) => emit(threadId, { type: "item.completed", itemType: "assistant_text", text, phase });
   const callTool = (threadId: string) => emit(threadId, { type: "item.completed", itemType: "tool", itemId: "call-1" });
@@ -210,10 +220,10 @@ describe("worker notes while a bot answers a bot", () => {
   }
 
   function edwardWritesMidTurn(text: string) {
-    const takeover = steerTakeover(wink.threadId, true);
-    takeover.consumed(true, false);
-    takeover.accepted();
-    store.appendMessage(wink.threadId, { role: "user", kind: "text", text, steered: true });
+    const input = beginPeerUserReply(wink.id, wink.threadId, text)!;
+    input.accept(store.appendMessage(wink.threadId, { role: "user", kind: "text", text, steered: true }));
+    const tag = input.prompt.match(/<user\d+>/)![0];
+    return (reply: string) => `${tag}${reply}${tag.replace("<", "</")}`;
   }
 
   async function workerNote(threadId = wink.threadId, text = NOTE, extra: Partial<Message> = {}) {
@@ -263,8 +273,8 @@ describe("worker notes while a bot answers a bot", () => {
       "skipTranscript.add(message.id);\n            holdNotes?.(messages);\n            const refreshedNotes = paneNotesForTurn(messages, skipTranscript,",
       "      if (holdNotes) newestPaneNoteId = undefined;\n      // a deferred recycle's live session",
       "      store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);",
-      "  watched.reply.release();\n  return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);",
-      "    watched.reply.release();\n    // a reply that finished before the read settles now; the turn's later end finds no watch\n    const finished = afterReply ? watched.reply.text() : undefined;",
+      "  watched.reply.release();\n  settlePeerUserReplies(threadId);\n  return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);",
+      "  watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {",
       "    watched.answer ??= watched.reply.text() ?? \"\";",
       "watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask, reply: peerReplies.start(targetThreadId) });",
       "  const collected = peer ? peerReplies.start(threadId) : undefined;\n  return waitForPeerReply({",
@@ -275,26 +285,52 @@ describe("worker notes while a bot answers a bot", () => {
     expect(index).not.toContain("lastReply.get(targetThreadId)");
   });
 
-  it("11-05: takeover, rerun, a note before the rerun's first text; Pokkey gets the answer and the note wakes Wink once", async () => {
+  it("splits a delegated answer from the user's mid-turn reply without a rerun", async () => {
+    const taskId = await handoff();
+    await drain(1);
+    begin(wink.threadId, QUESTION, pokkey);
+    const mark = edwardWritesMidTurn("Wink, what's left on DOG?");
+    say(wink.threadId, mark("Edward, DOG has one card left."), "commentary");
+    say(wink.threadId, ANSWER, "final_answer");
+    complete(wink.threadId);
+    expectAnswered(taskId);
+    await drain(1);
+    expect(peerReplies._live()).toBe(0);
+  });
+
+  it("gives an unanswered user message its own turn after the delegated answer", async () => {
     const taskId = await handoff();
     await drain(1);
     begin(wink.threadId, QUESTION, pokkey);
     edwardWritesMidTurn("Wink, what's left on DOG?");
+    const user = store.messagesFor(wink.threadId).at(-1)!;
+    say(wink.threadId, ANSWER, "final_answer");
+    complete(wink.threadId);
+    expectAnswered(taskId);
+    expect(followups).toEqual([{ prompt: user.text, message: user }]);
+    expect(store.messagesFor(wink.threadId).filter((message) => message.text === user.text)).toHaveLength(1);
     say(wink.threadId, "Edward, DOG has one card left.");
     complete(wink.threadId);
-    expect(findDelegationReceipt(taskId)?.state).toBe("ready");
+    expect(followups).toHaveLength(1);
+    await drain(1);
+  });
 
-    await drain(2);
-    expect(dispatched[1]!.message).toContain("Your earlier reply went to Edward");
-    begin(wink.threadId, dispatched[1]!.message, pokkey);
+  it("holds a pane note through the user's short reply and wakes once after the peer answer", async () => {
+    const taskId = await handoff();
+    await drain(1);
+    begin(wink.threadId, QUESTION, pokkey);
+    const mark = edwardWritesMidTurn("Wink, what's left on DOG?");
+    say(wink.threadId, mark("Edward, DOG has one card left."));
+    expect(hasPeerWatch(wink.threadId)).toBe(true);
     await workerNote();
     callTool(wink.threadId);
     say(wink.threadId, ANSWER);
     complete(wink.threadId);
-
     expectAnswered(taskId);
+    await drain(1);
     expect(steered).toEqual([]);
     expect(woken).toEqual([]);
+    expect(followups).toEqual([]);
     await expectOneWake();
     expect(peerReplies._live()).toBe(0);
   });
@@ -329,10 +365,8 @@ describe("worker notes while a bot answers a bot", () => {
     begin(wink.threadId, QUESTION, pokkey);
     say(wink.threadId, "Checking.");
     say(wink.threadId, ANSWER);
-    const takeover = steerTakeover(wink.threadId, true);
-    takeover.consumed(true, true);
-    takeover.accepted();
-    say(wink.threadId, "Edward, DOG has one card left.");
+    const mark = edwardWritesMidTurn("Wink, what's left on DOG?");
+    say(wink.threadId, mark("Edward, DOG has one card left."));
     complete(wink.threadId);
     expectAnswered(taskId, `Checking.\n${ANSWER}`);
     expect(peerReplies._live()).toBe(0);
@@ -404,7 +438,7 @@ describe("worker notes while a bot answers a bot", () => {
     expect(deliveredId(wink.threadId)).toBeDefined();
   });
 
-  it("keeps notes held through a queued takeover fold and its rerun, then delivers them once", async () => {
+  it("keeps notes held through a folded user message, then delivers them once", async () => {
     const taskId = await handoff();
     await drain(1);
     begin(wink.threadId, QUESTION, pokkey);
@@ -413,16 +447,11 @@ describe("worker notes while a bot answers a bot", () => {
     const skip = new Set([messages.at(-2)!.id]);
     const holdNotes = hasPeerWatch(wink.threadId) ? (rows: Message[]) => holdWorkerNotes(rows, skip, deliveredId(wink.threadId)) : undefined;
     holdNotes?.(messages);
-    store.appendMessage(wink.threadId, { role: "user", kind: "text", text: "Wink, what's left on DOG?", steered: true });
-    takeOverPeerTurn(wink.threadId);
+    const mark = edwardWritesMidTurn("Wink, what's left on DOG?");
     holdNotes?.(store.activePath(wink.threadId));
     expect(paneNotesForTurn(store.activePath(wink.threadId), skip, deliveredId(wink.threadId), false).notes).toEqual([]);
     store.markPaneNotesDelivered(wink.id, wink.threadId, holdNotes ? undefined : "moved");
-    say(wink.threadId, "Edward, DOG has one card left.");
-    complete(wink.threadId);
-
-    await drain(2);
-    begin(wink.threadId, dispatched[1]!.message, pokkey);
+    say(wink.threadId, mark("Edward, DOG has one card left."));
     expect((await startFold(wink.threadId, "resume")).sent).not.toContain(NOTE_BODY);
     say(wink.threadId, ANSWER);
     complete(wink.threadId);
@@ -520,6 +549,33 @@ describe("worker notes while a bot answers a bot", () => {
       expect((await reply).taskId).toBe("ask-1");
     };
 
+    it("splits an inline ask answer from the user's mid-turn reply", async () => {
+      const reply = ask("ask-1");
+      const mark = edwardWritesMidTurn("Wink, what's left on DOG?");
+      say(wink.threadId, mark("Edward, DOG has one card left."), "commentary");
+      say(wink.threadId, ANSWER, "final_answer");
+      complete(wink.threadId);
+      expect(await reply).toEqual({ text: ANSWER, replied: true });
+      expect(peerReplies._live()).toBe(0);
+    });
+
+    it.each([false, true])("follows an unanswered user message after the ask answer (adopted: %s)", async (adopt) => {
+      const reply = ask("ask-1");
+      if (adopt) await adopted(reply);
+      edwardWritesMidTurn("Wink, what's left on DOG?");
+      const user = store.messagesFor(wink.threadId).at(-1)!;
+      say(wink.threadId, ANSWER, "final_answer");
+      complete(wink.threadId);
+      if (adopt) expectAnswered("ask-1");
+      else expect(await reply).toEqual({ text: ANSWER, replied: true });
+      expect(followups).toEqual([{ prompt: user.text, message: user }]);
+      expect(store.messagesFor(wink.threadId).filter((message) => message.text === user.text)).toHaveLength(1);
+      say(wink.threadId, "Edward, DOG has one card left.");
+      complete(wink.threadId);
+      expect(followups).toHaveLength(1);
+      expect(peerReplies._live()).toBe(0);
+    });
+
     it("answers inline before the limit and releases its collection", async () => {
       const reply = ask("ask-1");
       say(wink.threadId, ANSWER);
@@ -567,15 +623,15 @@ describe("worker notes while a bot answers a bot", () => {
       expect(delegationWatch.size).toBe(0);
     });
 
-    it("keeps its takeover failure and never reruns after adoption", async () => {
+    it("delivers the peer answer without rerunning after an adopted ask gets a user reply", async () => {
       const reply = ask("ask-1");
-      say(wink.threadId, "Let me check.");
+      say(wink.threadId, "Let me check.", "commentary");
       await adopted(reply);
-      edwardWritesMidTurn("Wink, what's left on DOG?");
-      say(wink.threadId, "Edward, DOG has one card left.");
+      const mark = edwardWritesMidTurn("Wink, what's left on DOG?");
+      say(wink.threadId, mark("Edward, DOG has one card left."));
+      say(wink.threadId, ANSWER, "final_answer");
       complete(wink.threadId);
-      expect(findDelegationReceipt("ask-1")).toMatchObject({ status: "failed", result: askSwitchedText("Wink", "Edward") });
-      expect(taskRows("ask-1").filter((m) => m.comm?.peer === "reply")).toEqual([]);
+      expectAnswered("ask-1");
       expect(peerReplies._live()).toBe(0);
       await drain(0);
     });
