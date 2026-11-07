@@ -35,8 +35,16 @@ describe("rememberMemoryWrite", () => {
     peekMemory(botId);
     expect(rememberMemoryWrite(botId)).toBeNull();
     writeMemoryFile(botId, "# Memory\n- bullet-style standups\n");
-    expect(rememberMemoryWrite(botId)).toBe("bullet-style standups");
+    expect(rememberMemoryWrite(botId)).toEqual({ spoken: "bullet-style standups", lines: ["- bullet-style standups"] });
     expect(rememberMemoryWrite(botId)).toBeNull();
+  });
+
+  it("returns raw added lines in file order, capped and without trailing CR", () => {
+    writeMemoryFile(botId, "- old\n");
+    peekMemory(botId);
+    writeMemoryFile(botId, `- old\r\n${Array.from({ length: 22 }, (_, i) => `- note ${i}\r\n`).join("")}- ${"x".repeat(1001)}\r\n`);
+    const saved = rememberMemoryWrite(botId);
+    expect(saved).toMatchObject({ lines: Array.from({ length: 20 }, (_, i) => `- note ${i}`) });
   });
 });
 

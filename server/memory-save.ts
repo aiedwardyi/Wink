@@ -20,11 +20,18 @@ export function memorySaveSummary(before: string, after: string): string | null 
   return picked.slice(0, 80);
 }
 
+export function addedMemoryLines(before: string, after: string): string[] | undefined {
+  const previous = new Set(before.split("\n").map((line) => line.replace(/\r$/, "")));
+  const lines = after.split("\n").map((line) => line.replace(/\r$/, ""))
+    .filter((line) => line.trim() && !line.startsWith("#") && line.length <= 1000 && !previous.has(line)).slice(0, 20);
+  return lines.length ? lines : undefined;
+}
+
 export function peekMemory(botId: string): void {
   snapshots.set(botId, memoryFileRaw(botId));
 }
 
-export function rememberMemoryWrite(botId: string): string | null {
+export function rememberMemoryWrite(botId: string): { spoken: string; lines?: string[] } | null {
   const next = memoryFileRaw(botId);
   const prev = snapshots.get(botId);
   if (prev === undefined) {
@@ -32,7 +39,9 @@ export function rememberMemoryWrite(botId: string): string | null {
     return null;
   }
   snapshots.set(botId, next);
-  return memorySaveSummary(prev, next);
+  const spoken = memorySaveSummary(prev, next);
+  const lines = addedMemoryLines(prev, next);
+  return spoken ? { spoken, ...(lines ? { lines } : {}) } : null;
 }
 
 export function resetMemorySnapshots(): void {
