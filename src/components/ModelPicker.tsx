@@ -77,6 +77,7 @@ export function ModelPickerControl({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const focusComposerAfterCloseRef = useRef(false);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const switchingRef = useRef(false);
   const saveTimerRef = useRef(0);
   const switchSourceRef = useRef<string | undefined>(undefined);
@@ -151,7 +152,7 @@ export function ModelPickerControl({
   const finishSave = () => {
     close();
     if (focusComposerAfterCloseRef.current) {
-      focusComposerOnActivation({ activatedElement: triggerRef.current });
+      focusComposerOnActivation({ activatedElement: triggerRef.current, onDeclined: () => previousFocusRef.current?.focus() });
     }
   };
   const save = (candidate: ModelSelection = draft, fromKeyboard = false, closeDelay = 0) => {
@@ -189,6 +190,7 @@ export function ModelPickerControl({
     if (!open) return;
     void refreshInstances();
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : triggerRef.current;
+    previousFocusRef.current = previous;
     dialogRef.current?.focus();
     return () => {
       if (!focusComposerAfterCloseRef.current) previous?.focus();
