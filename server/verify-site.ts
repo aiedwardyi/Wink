@@ -1,9 +1,12 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createConnection } from "node:net";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
-import { VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS, VERIFY_RUN_STATES, type VerifyRunState } from "../electron/verify-protocol.mjs";
+import { VERIFY_BRIDGE_ROUTES, VERIFY_GRANT_PREFIX, VERIFY_POLL_MAX_MS, VERIFY_RUN_STATES, verifyLoopbackUrl, type VerifyRunState } from "../electron/verify-protocol.mjs";
 import { decodeChunks } from "../electron/verify-replay.mjs";
 import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL, VERIFY_TOOL_ENV, verifyCardStale, type VerifyCardData, type VerifyCardStatus, type VerifyCounts, type VerifyErrorCode, type VerifyResult, type VerifyToolReply } from "../shared/live-verify.ts";
 import type { autoVerdict } from "./auto-approve.ts";
@@ -117,29 +120,59 @@ async function siteRevision(root: string, entry: string): Promise<string> {
   return sha256(JSON.stringify(files.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
 }
 
-/** Canonical served root, entry and revision for an owned site, or why it is refused. */
-export async function resolveVerifySite(entryText: string, roots: string[]): Promise<Site | VerifyErrorCode> {
+/** Canonical disk site or loopback app, or why it is refused. */
+export async function resolveVerifySite(entryText: string, roots: string[], signal?: AbortSignal): Promise<Site | VerifyErrorCode> {
+  const local = verifyLoopbackUrl(entryText);
+  if (local) {
+    const ends = Date.now() + 10_000;
+    const hosts = local.hostname === "localhost" ? ["127.0.0.1", "[::1]"] : [local.hostname];
+    let refused = true;
+    while (Date.now() < ends) {
+      for (const host of hosts) {
+        const url = new URL(local); url.hostname = host;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const socket = createConnection({ host: host.replace(/^\[|\]$/g, ""), port: Number(url.port || 80), signal });
+            socket.once("connect", () => { socket.destroy(); resolve(); });
+            socket.once("error", reject);
+            socket.setTimeout(Math.max(1, Math.min(500, ends - Date.now())), () => socket.destroy(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })));
+          });
+          return { root: url.href, entry: "index.html", revision: sha256(url.href), site: local.href };
+        } catch (error) {
+          if (signal?.aborted) return "cancelled";
+          refused &&= (error as { code?: string }).code === "ECONNREFUSED";
+        }
+      }
+      await delay(Math.min(200, Math.max(0, ends - Date.now())), undefined, { signal });
+    }
+    throw Object.assign(siteError("page-failed"), { port: local.port || "80", refused });
+  }
+  if (/^file:/i.test(entryText)) {
+    try {
+      const url = new URL(entryText);
+      if (url.hostname || url.search || url.hash) return "outside-folders";
+      entryText = fileURLToPath(url);
+    } catch { return "outside-folders"; }
+  }
   // UNC, device, drive-relative and stream paths never name an owned folder.
   if (/[\x00-\x1f]/.test(entryText) || /^[\\/]{2}/.test(entryText) || /^[a-zA-Z]:(?![\\/])/.test(entryText) || entryText.replace(/^[a-zA-Z]:/, "").includes(":")) return "outside-folders";
-  if (!roots.length) return "outside-folders";
-  const target = resolve(roots[0]!, entryText);
-  const owned = (await Promise.all(roots.map((root) => realpath(root).catch(() => null)))).filter((root): root is string => root !== null);
-  if (!roots.some((root) => within(resolve(root), target)) && !owned.some((root) => within(root, target))) return "outside-folders";
+  const target = resolve(roots[0] ?? process.cwd(), entryText);
+  if (/^[\\/]{2}/.test(target)) return "outside-folders";
+  const owned = (await Promise.all(roots.filter(root => !/^[\\/]{2}/.test(root)).map((root) => realpath(root).catch(() => null)))).filter((root): root is string => root !== null);
   let real: string;
   try {
     real = await realpath(target);
   } catch {
     return "not-a-site";
   }
-  if (!owned.some((root) => within(root, real))) return "outside-folders";
+  if (/^[\\/]{2}/.test(real)) return "outside-folders";
   const info = await stat(real);
   const [root, entry] = info.isDirectory() ? [real, "index.html"] : info.isFile() && /\.html?$/i.test(real) ? [dirname(real), basename(real)] : [null, null];
   if (!root || !entry) return "not-a-site";
   const owner = owned.find((candidate) => within(candidate, root));
-  if (!owner) return "outside-folders";
   try {
     const revision = await siteRevision(root, entry);
-    return { root, entry, revision, site: relative(owner, join(root, entry)).split(sep).join("/") };
+    return { root, entry, revision, site: owner ? relative(owner, join(root, entry)).split(sep).join("/") : entry };
   } catch (error) {
     const code = (error as { code?: string }).code;
     return code === "resource-limit" || code === "outside-folders" ? code : "not-a-site";
@@ -385,8 +418,10 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const runId = randomUUID();
     let site: Site | VerifyErrorCode;
     try {
-      site = await resolveVerifySite(entryText, deps.botOutputRoots(conversation.bot, captured.threadId, conversation.group?.id));
-    } catch {
+      site = await resolveVerifySite(entryText, deps.botOutputRoots(conversation.bot, captured.threadId, conversation.group?.id), caller.signal);
+    } catch (error) {
+      const unavailable = error as { code?: string; port?: string; refused?: boolean };
+      if (unavailable.code === "page-failed" && unavailable.port) return send({ ...blocked("page-failed", entryText), text: `Not checked: ${unavailable.refused ? "nothing is running" : "nothing is responding"} on port ${unavailable.port}. Start the dev server and call verify_site again.` });
       site = "not-a-site";
     }
     if (typeof site === "string" || caller.signal.aborted || !turnLive(captured)) {
@@ -396,7 +431,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     const nonce = randomBytes(16).toString("hex");
     const run: Run = {
       ...site, runId, botId: captured.botId, threadId: captured.threadId, turnId: captured.turnId, nonce, expiresAt: 0, toolDeadline, replySent: replySent(res),
-      card: { v: 1, runId, owner: captured.botId, site: site.site, entry: join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
+      card: { v: 1, runId, owner: captured.botId, site: site.site, entry: verifyLoopbackUrl(site.root) ? site.root : join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
     };
     runs.set(runId, run);
     if (slot !== null) writeCard(run, { status: "waiting" });
@@ -441,7 +476,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
       const nonce = randomBytes(16).toString("hex");
       const run: Run = {
         ...site, runId: nextId, botId: body.owner, threadId: body.threadId, turnId: "", nonce, expiresAt: 0, toolDeadline, replySent: replySent(res),
-        card: { v: 1, runId: nextId, owner: body.owner, site: site.site, entry: join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
+        card: { v: 1, runId: nextId, owner: body.owner, site: site.site, entry: verifyLoopbackUrl(site.root) ? site.root : join(site.root, site.entry), status: "preparing", mode: "auto", decisionNonce: nonce, offeredAt: Date.now() },
       };
       runs.set(nextId, run);
       if (slot !== null) writeCard(run, { status: "waiting" });
