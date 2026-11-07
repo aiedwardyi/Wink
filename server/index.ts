@@ -151,6 +151,7 @@ import type { CommsBus } from "./comms-visibility.ts";
 import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { replyActivity } from "./reply-activity.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
@@ -7607,6 +7608,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (method === "GET" && path === "/api/key-uses") {
       return json(res, 200, { uses: loadKeyUses(DATA_DIR) });
+    }
+
+    if (method === "GET" && path === "/api/activity") {
+      return json(res, 200, replyActivity());
     }
 
     if (method === "GET" && path === "/api/analytics") {
