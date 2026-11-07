@@ -83,6 +83,11 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
   expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content 70px minmax(0, 1fr)");
   expect(rule("[data-phone-columns] .usage-summary")).toContain("grid-template-columns: subgrid");
   expect(rule("[data-phone-columns] .usage-meter-summary")).toContain("grid-template-columns: subgrid");
+  expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-sections')).toContain("row-gap: 30px");
+  expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar')).toContain("min-height: 44px; margin-bottom: 16px");
+  expect(rule("[data-phone-columns] .usage-meter-summary .usage-figures")).toContain("row-gap: 6px");
+  expect(rule("[data-phone-columns] .usage-meter-summary .usage-figures")).not.toContain("display: grid");
+  expect(css).not.toContain(".usage-meter-summary [data-left]:empty");
   expect(css).toMatch(/\[data-phone-columns\] \.usage-engine-head:has\(\.usage-summary\) \{[^}]*min-height: var\(--usage-row-height\)/);
   expect(css).not.toContain("@container usage-summary");
 });
