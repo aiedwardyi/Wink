@@ -342,15 +342,15 @@ describe("SettingsPanel memory groups", () => {
     vi.unstubAllGlobals();
   });
 
-  it("puts noted facts first, then the task and the memory file", async () => {
+  it("puts the memory map first, then auto notes and the memory file", async () => {
     await render({ ...claudeBot, tasks });
     const text = host.textContent ?? "";
-    const order = ["Lives in Seoul", "+1 more", "Auto Notes", "Current Task", "Memory File", "8 lines"];
+    const order = ["Long-Term Memory", "Working Memory", "Just Learned", "Lives in Seoul", "Auto Notes", "Memory File", "8 lines"];
     expect(text).not.toContain("From Your Chats");
     const at = order.map((label) => text.indexOf(label));
     expect(at).not.toContain(-1);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
-    expect(text).toContain("Prefers pnpm");
+    expect(text).toContain("Short answers");
     expect(text).not.toContain("Uses Windows");
     expect(text).toContain("1 of 3 steps done");
     expect(text).toContain("Next: Tag the release");
@@ -412,7 +412,7 @@ describe("SettingsPanel memory groups", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, tasks } })));
     });
-    expect(host.textContent).toContain("Current Task");
+    expect(host.textContent).toContain("1 of 3 steps done");
     expect(host.textContent).not.toContain("Memory fills in as you chat.");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: "", truncated: false, topics: [{ name: "phone.md", bytes: 900 }] }))));
     await act(async () => {
@@ -457,7 +457,7 @@ describe("SettingsPanel memory groups", () => {
     await render({ ...claudeBot, tasks });
     const text = host.textContent ?? "";
     expect(text).not.toContain("채팅에서");
-    for (const label of ["메모리 파일", "8줄", "+1개 더", "현재 작업", "3단계 중 1단계 완료", "다음: Tag the release"]) {
+    for (const label of ["메모리 파일", "8줄", "방금 배운 것", "작업 기억", "3단계 중 1단계 완료", "다음: Tag the release"]) {
       expect(text).toContain(label);
     }
   });

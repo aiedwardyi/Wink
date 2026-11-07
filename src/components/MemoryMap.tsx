@@ -115,9 +115,10 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null }: {
   useLayoutEffect(() => {
     const el = root.current;
     if (!el) return;
+    setStacked(el.offsetWidth < STACK_BELOW);
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => setStacked(el.offsetWidth < STACK_BELOW));
     observer.observe(el);
-    setStacked(el.offsetWidth < STACK_BELOW);
     return () => observer.disconnect();
   }, []);
 

@@ -19,10 +19,11 @@ export function useCoverChat(panel: RefObject<HTMLElement | null>, on: boolean, 
       else if (bar.left - box.left < box.right - bar.right) setInset({ left: bar.right - box.left, right: 0, marginLeft: 0 });
       else setInset({ left: 0, right: box.right - bar.left, marginLeft: 0 });
     };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(shell);
     if (side) observer.observe(side);
-    measure();
     return () => observer.disconnect();
   }, [on, panel]);
   // painted over is not out of reach: the chat would still take Tab and screen reader focus
