@@ -791,6 +791,32 @@ describe("SettingsPanel memory autosave", () => {
     }
   });
 
+  it("refits Description after a post-open font override", async () => {
+    let contentHeight = 185;
+    const width = vi.spyOn(HTMLTextAreaElement.prototype, "clientWidth", "get").mockReturnValue(323);
+    const height = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockImplementation(() => contentHeight);
+    const ready = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", { configurable: true, value: Object.assign(new EventTarget(), { ready: Promise.resolve() }) });
+    try {
+      const description = "Quarterly Research Synthesis Assistant 분기별 리서치 종합 도우미 " + "X".repeat(80) + " Research 한국어 메모. ".repeat(8);
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, description } }))));
+      const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
+      expect(area.style.height).toBe("185px");
+      contentHeight = 206;
+      await act(async () => {
+        area.style.fontFamily = "Verdana";
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(area.style.height).toBe("206px");
+      expect(area.className).toContain("overflow-hidden");
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
+      if (ready) Object.defineProperty(document, "fonts", ready);
+      else Reflect.deleteProperty(document, "fonts");
+    }
+  });
+
   it("keeps newer text unsaved when an older write lands", async () => {
     held = true;
     await render("bot-1");

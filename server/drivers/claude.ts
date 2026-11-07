@@ -302,6 +302,8 @@ function askSummary(ask: Ask): string {
   return askArgs(ask).slice(0, typeof ask.input?.question === "string" ? 300 : 200);
 }
 
+const brokerGeneration = new Map<string, number>();
+
 export function permissionSocketPath(threadId: string, generation = 1) {
   // A readable prefix alone is not unique: ids that agree on their first
   // characters ("t-perm-dup-1", "t-perm-dup-2") would share a socket. POSIX
@@ -827,7 +829,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       restartTurn?: () => void;
     }
     const sessions = new Map<string, Session>();
-    const brokerGeneration = new Map<string, number>();
     const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
     const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
       ? configuredIdleMinimum

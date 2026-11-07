@@ -1,28 +1,34 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
+import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
+import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
-import { museReading, readingAge, resetCompact, windowExpired } from "@/lib/usage";
-import { AUTO_REFRESH_MS } from "@/lib/usage-auto-refresh";
+import { museReading, resetCompact, windowExpired } from "@/lib/usage";
+import { joinRefresh, refreshReady, useRefreshPending } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
-import { useStore } from "@/state/store";
+import { api, useStore } from "@/state/store";
+import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
+import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { useUsageSwitch } from "@/lib/use-usage-switch";
+import { EngineSignIn } from "./EngineSetup";
 import { Fold } from "./Fold";
 import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
-import { AccountPicker } from "./UsageAccounts";
-import { AccountBars, barSlots } from "./UsageBars";
+import { AccountPicker, EditableAccountName, UsageGrip } from "./UsageAccounts";
+import { AccountBars, barSlots, WindowBar } from "./UsageBars";
 import { PagedAccounts, type RowSlots } from "./UsagePaged";
-import { USAGE_LAYOUT } from "./usage-layout";
+import { USAGE_LAYOUT, usageAccounts } from "./usage-layout";
 import { useCappedAccounts } from "./usage-cap";
 import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
 import "./UsageDesk.css";
@@ -195,70 +201,48 @@ function Ticker({ board, engineId, select, phone, terminal, clock, instances }: 
   );
 }
 
-function Head({ account, runs, name, control, t }: { account: UsageBoardAccount; runs: UsageBoard["runs"]; name?: ReactNode; control: ReactNode; t: Translate }) {
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  const names = [...new Set(account.bots.map((bot) => bot.bot))];
-  const bots = t(names.length === 1 ? "usage.desk.botOne" : "usage.desk.bots", { count: names.length });
-  const workers = runs !== "known" || account.workers === null ? t("usage.desk.workersUnknown")
-    : t(account.workers.length === 1 ? "usage.desk.workerOne" : "usage.desk.workers", { count: account.workers.length });
-  // The name, then bots and workers, wrap as one line while the spot stays on the first; the bot count opens the names.
-  return (
-    <>
-      <div data-account-head="" className="flex min-h-[26px] min-w-0 items-start gap-3">
-        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 leading-[26px]">
-          {name ?? <span data-account-name="" className="min-w-0 break-keep text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{account.name}</span>}
-          <span data-account-who="" className="flex items-baseline gap-1 whitespace-nowrap text-[12px] text-ink-secondary">
-            {names.length > 0
-              ? <button type="button" data-bot-count="" aria-expanded={open} aria-controls={id} onClick={(event) => { event.stopPropagation(); afterFold(id, () => setOpen(!open)); }}
-                className="relative rounded-[3px] underline-offset-2 hover:underline [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-3">{bots}</button>
-              : <span>{bots}</span>}
-            <span aria-hidden="true">·</span>
-            <span>{workers}</span>
-          </span>
-        </div>
-        {control}
-      </div>
-      {names.length > 0 && <Fold open={open} id={id}><span className="block text-[12px] leading-5 text-ink-secondary">{names.join(", ")}</span></Fold>}
-    </>
-  );
-}
-
 const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
-/** Main, Use and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
-const SPOT = "relative inline-flex h-[26px] min-w-14 shrink-0 items-center justify-center whitespace-nowrap border px-2.5 text-[12px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
+/** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
+const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
 const BUTTON = "border-hairline bg-raised text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none";
 
-/** Style 5 account row: name with bots and workers, its Main, Use or Sign In box, then a meter per reported window. */
-export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name }: {
+export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name, settings = false }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
-  terminal: boolean; clock: Clock; reloadInstances: () => unknown; signIn: () => void;
+  terminal: boolean; clock: Clock; reloadInstances: () => unknown; signIn: () => void; settings?: boolean;
 } & RowSlots) {
   const { t } = clock;
-  // Muse's limits move only when a turn or Check now reads them, so its rows state the age and mute past 1h (museReading).
-  const muse = engine.engine === "muse" ? museReading("museAgent", account.observedAt === null ? undefined : new Date(account.observedAt).toISOString(), clock.now) : null;
-  const cached = engine.engine !== "muse" && account.windows.length > 0 && account.observedAt !== null && clock.now - account.observedAt > AUTO_REFRESH_MS
-    ? readingAge(new Date(account.observedAt).toISOString(), clock.now) : null;
-  const age = muse?.label(t) ?? (cached ? t("usage.limits.readAgo", { age: t(cached.key, cached.vars) }) : null);
+  const { state: store } = useStore();
+  const highlight = useUsageSwitch(checked);
+  const instance = store.instances.find((each) => each.instanceId === account.id);
+  const email = settings ? instance?.snapshot.account : null;
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
   let control: ReactNode = null;
-  if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
-  else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-accent/55 bg-accent/10 text-accent-text")}>{t("accounts.main")}</span>;
+  // While it waits, the sign-in's steps take their own line under the name.
+  // The small card keeps a Sign In button where the account already reads connected, never a stray "Connected".
+  if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
+  else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
+  else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
   else if (account.signIn === "ready") control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
-      onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON, pending && !switching && "opacity-50")}>
+      onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON)}>
       {switching ? t("usage.desk.switching") : t("usage.desk.use")}
     </button>
   );
   return (
-    <div data-account-row={account.id} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
-      <Head account={account} runs={board.runs} name={name} control={control} t={t} />
+    <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
+      {settings && <UsageGrip label={account.name} />}
+      <div data-account-head="" className="usage-account-head">
+        <div className="usage-account-identity min-w-0">
+          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && ["claude", "codex"].includes(engine.engine)} />}
+          {email && <span data-account-email="" className="usage-email">{email}</span>}
+        </div>
+        {control}
+      </div>
       {account.signIn === "ready" ? <>
-        <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} muted={muse?.stale} />
-        {age && <div data-reading-age="" className="mt-1.5 text-[12px] text-ink-secondary">{age}</div>}
+        <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
       </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
     </div>
   );
@@ -396,38 +380,28 @@ function saveFold(base: string, folded: boolean, key = FOLDS_KEY) {
 function FoldSummary({ engine, account, clock }: { engine: UsageBoardEngine; account: UsageBoardAccount; clock: Clock }) {
   const { t, now } = clock;
   const slots = account.signIn === "ready" ? barSlots(engine.engine, account, t) : [];
-  return (
-    <span data-engine-summary="" className="flex min-w-0 flex-1 flex-wrap justify-end gap-x-1 text-right text-[12px] leading-5 tabular-nums text-ink-secondary">
-      {account.signIn !== "ready" ? t(STATE_KEY[account.signIn]) : !slots.length ? t("usage.desk.noUsage") : slots.map(({ key, label, window }, index) => {
-        const left = windowExpired(window.resetsAt, now) ? null : Math.round(leftOf(window));
-        return (
-          <span key={key} className="whitespace-nowrap">
-            {index > 0 && <span aria-hidden="true">· </span>}{label} <span className={cn(left === 0 && "text-danger")}>
-              {left === null ? t("usage.desk.resetPassed") : t("usage.desk.windowLeft", { percent: left })}
-            </span>
-          </span>
-        );
-      })}
-    </span>
-  );
+  return <span data-engine-summary="" className="usage-summary">
+    {account.signIn !== "ready" ? <span>{t(STATE_KEY[account.signIn])}</span> : !slots.length ? <span>{t("usage.desk.noUsage")}</span>
+        : slots.map((slot) => <WindowBar key={slot.key} slot={slot} now={now} t={t} compact />)}
+  </span>;
 }
 
-function EngineSection({ engine, board, state, stacked, terminal, clock, label, reloadInstances, signIn }: {
+function EngineSection({ engine, board, state, stacked, terminal, clock, label, reloadInstances, signIn, folded, onFold, accountOrder }: {
   engine: UsageBoardEngine; board: UsageBoard; state: UsageBoardState; stacked: boolean; terminal: boolean; clock: Clock; label: string;
-  reloadInstances: () => unknown; signIn: () => void;
+  reloadInstances: () => unknown; signIn: () => void; folded: boolean; onFold: () => void; accountOrder?: string[];
 }) {
   const { t } = clock;
   const checked = checkedMain(state, engine.base);
-  const [folded, setFolded] = useState(() => loadFolds()[engine.base] ?? !engine.accounts.some((each) => each.signIn === "ready"));
   const id = useId();
   const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
   const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
-    checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} {...slots} />;
-  const capped = useCappedAccounts({ accounts: engine.accounts, checked, t, row,
+    checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
+  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, t, row,
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
-    <div className="flex min-h-5 min-w-0 items-start gap-3">
-      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, () => { saveFold(engine.base, !folded); setFolded(!folded); })}
+    <div data-engine-head="" className="usage-engine-head">
+      <UsageGrip label={label} />
+      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, onFold)}
         className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
           terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
         <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
@@ -439,7 +413,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   );
   const group = (content: ReactNode) => <Fold open={!folded} id={id}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
   return (
-    <section data-usage-engine={engine.engine} aria-label={label} className="min-w-0">
+    <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
         : <>{head()}{group(capped)}</>}
       {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
@@ -460,21 +434,115 @@ export function UsageDesk() {
   const state = useUsageBoard();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
+  const mode = useUsageMode();
+  const pending = useRefreshPending();
+  const drag = useUsageDrag(state.board?.engines ?? []);
+  const desk = useRef<HTMLDivElement>(null);
+  const [folds, setFolds] = useState(() => loadFolds());
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [engineId, setEngineId] = useState<string | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const now = useVisibleClock();
   const clock: Clock = { t, locale: localeTag(locale), now };
-  const board = state.board;
+  useLayoutEffect(() => {
+    const list = desk.current?.querySelector<HTMLElement>("[data-usage-sections]");
+    if (!list) return;
+    const layout = () => {
+      delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
+      if (window.innerWidth >= 768) {
+        delete list.dataset.phoneColumns;
+        const summaries = list.querySelectorAll<HTMLElement>(".usage-summary");
+        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => Math.ceil(parseFloat(getComputedStyle(name).width))));
+        for (const size of ["large", "medium", "small"]) {
+          list.dataset.summarySize = size;
+          const widths: number[] = [];
+          // Ignore the entrance scale and round up to keep fractional widths from wrapping.
+          for (const summary of summaries) {
+            [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
+              const index = meter.dataset.window === "week" ? 1 : slot;
+              widths[0] ??= 0;
+              widths[index] = Math.max(widths[index] ?? 0, Math.ceil(parseFloat(getComputedStyle(meter).width)));
+            });
+          }
+          if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
+            list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
+            list.dataset.desktopColumns = "";
+            break;
+          }
+        }
+        return;
+      }
+      const heads = list.querySelectorAll<HTMLElement>(".usage-engine-head:has(.usage-summary)");
+      // Gap transitions must settle before measuring the natural wrapping height.
+      for (const head of heads) head.style.transitionProperty = "none";
+      delete list.dataset.phoneColumns;
+      if (!heads.length) return;
+      for (const head of heads) head.style.setProperty("--usage-row-height", `${head.getBoundingClientRect().height}px`);
+      list.dataset.phoneColumns = "";
+      for (const head of heads) head.style.removeProperty("transition-property");
+    };
+    let width = list.clientWidth;
+    layout();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      if (list.clientWidth === width) return;
+      width = list.clientWidth;
+      layout();
+    });
+    observer?.observe(list);
+    document.fonts?.addEventListener("loadingdone", layout);
+    return () => {
+      observer?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", layout);
+      delete list.dataset.phoneColumns;
+      delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
+    };
+  });
+  const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
   if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
   const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
   const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
+  const folded = (each: UsageBoardEngine) => folds[each.base] ?? !each.accounts.some((account) => account.signIn === "ready");
+  const allFolded = board.engines.filter((each) => each.accounts.length).every(folded);
+  const fold = (base: string, value: boolean) => {
+    saveFold(base, value);
+    setFolds((before) => ({ ...before, [base]: value }));
+  };
+  const refresh = async () => {
+    setRefreshFailed(false);
+    const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
+      && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
+      && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
+      .map((each) => joinRefresh(each.instanceId, async () => {
+        const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+        if (result.error) throw new Error("refresh");
+        return result;
+      })));
+    setRefreshFailed(results.some((each) => each.status === "rejected"));
+  };
   return (
-    <div data-usage-desk="" className="flex min-w-0 flex-col gap-[22px]">
+    <div ref={desk} data-usage-desk="" className="usage-desk min-w-0">
+      <div className="usage-toolbar">
+        <div className="usage-count-switch" role="group" aria-label={t("usage.limits.direction")}>
+          {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}
+            onClick={() => setUsageMode(value)}>{t(value === "used" ? "usage.limits.countUp" : "usage.limits.countDown")}</button>)}
+        </div>
+        <button type="button" data-fold-all="" onClick={() => { for (const each of board.engines) fold(each.base, !allFolded); }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
+        <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
+          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
+          <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
+        </button>
+      </div>
+      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.refreshFailed")}</div>}
+      <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
-      {board.engines.filter((each) => each.accounts.length).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
-        terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} reloadInstances={() => refreshInstances()}
+      {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
+        terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} folded={folded(each)} onFold={() => fold(each.base, !folded(each))} accountOrder={drag.orders[each.base]} reloadInstances={() => refreshInstances()}
         signIn={() => dispatch({ type: "toggleAppSettings", open: true, section: "connections" })} />)}
+      </div>
       {SHOW_DESK_HERO && account && <>
         <Ticker board={board} engineId={engine.base} select={setEngineId} phone={phone} terminal={terminal} clock={clock} instances={store.instances} />
         <Hero key={engine.base} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}

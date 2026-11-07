@@ -163,6 +163,9 @@ export function createTurnRail(host: HTMLElement, scroller: HTMLElement, hooks: 
   let intentTimer = 0;
   let ax = 0;
   let ay = 0;
+  let mx = NaN;
+  let my = NaN;
+  let still = false;
   let openedAt = -Infinity;
   let swallowAt = -1;
   let ink = "";
@@ -1107,8 +1110,14 @@ export function createTurnRail(host: HTMLElement, scroller: HTMLElement, hooks: 
     hit.classList.remove("grabbing");
   }
 
+  // A layout shift that slides the rail under a still mouse enters it where the mouse last moved; only travel shows intent.
+  const onDocMove = (e: PointerEvent) => {
+    still = e.clientX === mx && e.clientY === my;
+    mx = e.clientX;
+    my = e.clientY;
+  };
   const onHitEnter = (e: PointerEvent) => {
-    if (e.pointerType !== "mouse" || mode === "grab") return;
+    if (e.pointerType !== "mouse" || mode === "grab" || (e.clientX === mx && e.clientY === my)) return;
     refreshBox();
     py = clamp(pointY(e), 0, G.h);
     hit.classList.toggle("grab", onMark(pointY(e)));
@@ -1122,6 +1131,7 @@ export function createTurnRail(host: HTMLElement, scroller: HTMLElement, hooks: 
       return;
     }
     if (e.pointerType === "mouse") {
+      if (still) return;
       py = clamp(pointY(e), 0, G.h);
       hit.classList.toggle("grab", onMark(pointY(e)));
       if (mode !== "rail" && !live) return aim(e);
@@ -1367,6 +1377,7 @@ export function createTurnRail(host: HTMLElement, scroller: HTMLElement, hooks: 
   card.addEventListener("click", onCardClick);
   document.addEventListener("pointerdown", onDocDown, true);
   document.addEventListener("click", onDocClick, true);
+  document.addEventListener("pointermove", onDocMove, { capture: true, passive: true });
   zone.addEventListener("pointermove", onZoneMove, { passive: true });
   zone.addEventListener("pointerenter", onZoneEnter);
   zone.addEventListener("pointerleave", onZoneLeave);
@@ -1463,6 +1474,7 @@ export function createTurnRail(host: HTMLElement, scroller: HTMLElement, hooks: 
       hoverless.removeEventListener?.("change", onHover);
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("click", onDocClick, true);
+      document.removeEventListener("pointermove", onDocMove, true);
       document.fonts?.removeEventListener?.("loadingdone", onFonts);
       zone.removeEventListener("pointermove", onZoneMove);
       zone.removeEventListener("pointerenter", onZoneEnter);

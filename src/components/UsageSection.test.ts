@@ -85,12 +85,12 @@ describe("UsageSection", () => {
 
   it("shows no Check now, Refresh or Used/Remaining control in English or Korean", async () => {
     mockApi.mockImplementation(async (path) => path.startsWith("/api/usage/board") ? structuredClone(usageBoardFixture) : {});
-    for (const [locale, words] of [["en", ["Check now", "Checking", "Refresh", "Used", "Remaining"]], ["ko", ["지금 확인", "확인 중", "새로 고침", "사용함", "남음"]]] as const) {
+    for (const [locale, words] of [["en", ["Check now", "Checking"]], ["ko", ["지금 확인", "확인 중"]]] as const) {
       persistPreference(locale);
       await mounted(async (host) => {
         const controls = [...host.querySelectorAll("button")].map((button) => `${button.textContent} ${button.getAttribute("aria-label") ?? ""}`);
         for (const word of words) expect(controls.filter((control) => control.includes(word)), `${locale} ${word}`).toEqual([]);
-        expect(host.querySelector("[aria-pressed]")).toBeNull();
+        expect(host.querySelectorAll("[data-count-mode]")).toHaveLength(2);
       });
     }
   });

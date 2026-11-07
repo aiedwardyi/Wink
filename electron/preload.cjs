@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld("ogb", {
     },
   },
   getCapabilities: () => invoke("desktop:capabilities"),
+  getBrand: () => invoke("desktop:brand"),
   onCapabilitiesChanged: (cb) => {
     const handler = (_event, capabilities) => cb(capabilities);
     ipcRenderer.on("desktop:capabilities-changed", handler);

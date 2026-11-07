@@ -113,6 +113,11 @@ describe("catalogs", () => {
     expect(ko["settings.phoneNotifications.state.blocked"]).toMatch(/차단.*브라우저 설정.*허용/);
   });
 
+  it("says Switch on the account button in both languages", () => {
+    expect([en["usage.desk.use"], en["usage.desk.useAria"]]).toEqual(["Switch", "Switch to {name}"]);
+    expect([ko["usage.desk.use"], ko["usage.desk.useAria"]]).toEqual(["전환", "{name} 전환"]);
+  });
+
   it("says Main as 기본 in Korean, as the account rows do", () => {
     expect(ko["accounts.main"]).toBe("기본");
     expect(Object.entries(ko).filter(([, phrase]) => phrase.includes("메인")).map(([key]) => key)).toEqual([]);
@@ -545,7 +550,7 @@ describe("sidebar create group and bot/room chrome", () => {
     expect(groupWizard).not.toMatch(/>Create group ·/);
     expect(groupWizard).not.toMatch(/>Add bot</);
     expect(sidebar).toContain('t("chrome.duplicate")');
-    expect(sidebar).not.toContain('t("chrome.archive")');
+    expect(sidebar).toContain('t("chrome.archive")');
     expect(sidebar).toContain('t("chrome.delete")');
     expect(sidebar).toContain('t("chrome.cannotContactTeammates")');
     expect(sidebar).toContain('t("chrome.moveToContext")');
@@ -905,7 +910,7 @@ describe("plan usage", () => {
       expect(source).not.toMatch(/not available at the moment/);
     }
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
-    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name })');
+    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name: engineName(target.engine.engine) })');
     expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");

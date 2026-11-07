@@ -2,11 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { Loader2, Menu } from "lucide-react";
 import {
   StoreProvider,
+  api,
   openNotificationTarget,
   terminalAttentionForBot,
   terminalAttentionCount,
   terminalAttentionKey,
   useStore,
+  visibleMessages,
   visibleNotificationThread,
   type Bot,
   type Group,
@@ -28,9 +30,12 @@ import { LazyView } from "@/components/LazyView";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
 import { I18nProvider, useI18n } from "@/lib/i18n";
+import { useVerifyWatch, verifyCardIn } from "@/lib/verify-watch";
+import { LIVE_VERIFY_V0 } from "../shared/live-verify";
 import { buildTerminalNotification, showNotification, type NotificationTarget } from "@/lib/notify";
 import { terminalPopupsEnabled } from "@/lib/terminal-popups";
-import { altDigitSelectsPane, backquoteTogglesTerminal } from "@/lib/terminal-hotkeys";
+import { altDigitSelectsPane, backquoteTogglesTerminal, workerPaneOrder } from "@/lib/terminal-hotkeys";
+import { workerRuns } from "@/lib/worker-runs";
 import { useTerminalPanes } from "@/lib/terminal-panes";
 import { rememberTerminalOpened, schedulePrestart } from "@/lib/terminal-prestart";
 import { composerNeedsTap, focusComposerOnActivation } from "@/lib/focus-composer";
@@ -52,6 +57,7 @@ const SettingsModal = lazyView(() => import("@/components/SettingsModal").then((
 const NoEngines = lazyView(() => import("@/components/NoEngines").then((m) => ({ default: m.NoEngines })));
 const CommandPalette = lazyView(() => import("@/components/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const CreateBotSheet = lazyView(() => import("@/components/CreateBotSheet").then((m) => ({ default: m.CreateBotSheet })));
+const VerifyWatchPanel = lazyView(() => import("@/components/VerifyWatch").then((m) => ({ default: m.VerifyWatchPanel })));
 const TerminalWorkspace = lazyView(() => import("@/components/TerminalWorkspace").then((m) => ({ default: m.TerminalWorkspace })));
 const RemoteTerminalView = lazyView(() => import("@/components/RemoteTerminalView").then((m) => ({ default: m.RemoteTerminalView })));
 
@@ -118,8 +124,13 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const [sidebarOverlay, setSidebarOverlay] = useState<string | null>(null);
   const modelPickerIds = useRef(new Set<string>());
   const [terminalViews, setTerminalViews] = useState<Record<string, boolean>>({});
-  const [paneHotkey, setPaneHotkey] = useState<{ n: number; botId?: string } | null>(null);
-  const [paneFocus, setPaneFocus] = useState<{ sessionId: string } | null>(null);
+  const [paneFocus, setPaneFocus] = useState<{ sessionId: string | null; botId?: string } | null>(null);
+  const paneRequest = useRef(0);
+  const shownPaneOrder = useRef<{ botId: string; order: string[] } | null>(null);
+  const onPaneOrder = useCallback((botId: string, order: string[] | null) => {
+    if (order) shownPaneOrder.current = { botId, order };
+    else if (shownPaneOrder.current?.botId === botId) shownPaneOrder.current = null;
+  }, []);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarOnRight = useSidebarSide() === "right";
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -132,14 +143,16 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const openTerminal = useCallback(() => { if (botId) setTerminalViews((views) => ({ ...views, [botId]: true })); }, [botId]);
   const openTerminalPane = useCallback((sessionId: string) => {
     openTerminal();
-    setPaneFocus({ sessionId });
-  }, [openTerminal]);
+    if (botId) setPaneFocus({ sessionId, botId });
+  }, [botId, openTerminal]);
   const openMainTerminal = useCallback(() => {
     openTerminal();
-    if (botId) setPaneHotkey({ n: 1, botId });
+    if (botId) setPaneFocus({ sessionId: null, botId });
   }, [botId, openTerminal]);
-  // The Main row's pick belongs to its bot; a bare Alt+digit applies to whichever bot is shown.
-  const botPaneHotkey = paneHotkey?.botId && paneHotkey.botId !== botId ? null : paneHotkey;
+  const botPaneFocus = paneFocus?.botId && paneFocus.botId !== botId ? null : paneFocus;
+  useEffect(() => {
+    setPaneFocus((focus) => focus?.botId && focus.botId !== botId ? null : focus);
+  }, [botId]);
   const clearTerminalAttention = (attention: Pick<TerminalAttention, "botId" | "sessionId">) => {
     const key = terminalAttentionKey(attention.botId, attention.sessionId);
     const sessions = pendingTerminalAcknowledgements.current.get(attention.botId);
@@ -221,8 +234,18 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     state.appSettingsOpen ||
     state.pluginsOpen ||
     state.createBotOpen;
+  const watch = useVerifyWatch();
+  const watchChat = group ?? bot;
+  const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
+    ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner)
+    : undefined;
+  const watchPanel = (hidden: boolean) => watch && watchChat && watchCard && (
+    <LazyView>
+      <VerifyWatchPanel card={watchCard} threadId={watchChat.threadId} live={watch.live} hidden={hidden} />
+    </LazyView>
+  );
 
-  // App-wide shortcuts: Alt+T Themes · Alt+Shift+T Cycle theme · Alt+U Usage · Alt+I Model index · Alt+W Workers · Ctrl+1..9 Nth bot · Alt+1..9 Nth pane while the terminal is open, else Nth bot. Esc still closes panels.
+  // App-wide shortcuts: Alt+T Themes · Alt+Shift+T Cycle theme · Alt+U Usage · Alt+I Model index · Alt+W Workers · Ctrl+1..9 Nth bot · Alt+1..9 Nth worker pane. Esc still closes panels.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector("[data-media-viewer]")) return;
@@ -286,11 +309,25 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           : e.code === "Digit8" || e.code === "Numpad8" ? 8
           : e.code === "Digit9" || e.code === "Numpad9" ? 9
           : null;
-        // Desktop picks a preload pane. A window with no preload picks a remote pane. Ctrl+digit still switches bots.
-        if (n !== null && e.altKey && terminalOpen && altDigitSelectsPane(Boolean(window.ogb?.terminal), !window.ogb)) {
+        if (n !== null && e.altKey) {
+          if (!altDigitSelectsPane(Boolean(window.ogb?.terminal), !window.ogb) || !bot || group || nativeViewOverlayOpen || onboardingOpen) return;
           e.preventDefault();
           e.stopPropagation();
-          setPaneHotkey({ n });
+          const request = ++paneRequest.current;
+          const shown = shownPaneOrder.current;
+          if (shown?.botId === bot.id) {
+            const sessionId = shown.order[n - 1];
+            if (sessionId) openTerminalPane(sessionId);
+            return;
+          }
+          const roster = window.ogb?.terminal
+            ? window.ogb.terminal.readBot?.(bot.id)
+            : api(`/api/bots/${encodeURIComponent(bot.id)}/terminal`);
+          void roster?.then((snapshot) => {
+            if (request !== paneRequest.current || latestState.current.selectedId !== bot.id) return;
+            const sessionId = workerPaneOrder(snapshot?.panes ?? [], workerRuns(visibleMessages(bot)))[n - 1];
+            if (sessionId) openTerminalPane(sessionId);
+          }).catch(() => {});
           return;
         }
         if (n !== null) {
@@ -307,7 +344,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [state.appSettingsOpen, state.appSettingsSection, state.settingsOpen, terminalOpen, nativeViewOverlayOpen, onboardingOpen, dispatch]);
+  }, [state.appSettingsOpen, state.appSettingsSection, state.settingsOpen, bot, group, openTerminalPane, nativeViewOverlayOpen, onboardingOpen, dispatch]);
 
   useEffect(() => {
     if (!themeToast) return;
@@ -478,6 +515,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   }, [bot?.id, bot?.cwd, chatShown]);
 
   const closeTerminal = () => {
+    paneRequest.current++;
     if (bot) setTerminalViews((views) => ({ ...views, [bot.id]: false }));
     requestAnimationFrame(() => {
       if (!composerNeedsTap()) conversationRef.current?.querySelector<HTMLTextAreaElement>("[data-orbit-composer]")?.focus();
@@ -641,10 +679,17 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
           <NoEngines />
         </LazyView>
       ) : group ? (
-        <GroupView key={group.id} group={group} />
+        LIVE_VERIFY_V0 ? (
+          <div className={`relative flex min-h-0 min-w-0 flex-1${watchCard ? " verify-watch-dock" : ""}`}>
+            <GroupView key={group.id} group={group} />
+            {watchPanel(nativeViewOverlayOpen)}
+          </div>
+        ) : (
+          <GroupView key={group.id} group={group} />
+        )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">
-          <div ref={swipeStageRef} className="flex min-h-0 flex-1" inert={terminalOpen} aria-hidden={terminalOpen}>
+          <div ref={swipeStageRef} className={`flex min-h-0 flex-1${watchCard ? " verify-watch-dock" : ""}`} inert={terminalOpen} aria-hidden={terminalOpen}>
             <ChatView
               bot={bot}
               hidden={terminalOpen || nativeViewOverlayOpen}
@@ -652,14 +697,15 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
               onOpenTerminal={openMainTerminal}
               onOpenTerminalPane={openTerminalPane}
             />
+            {watchPanel(terminalOpen || nativeViewOverlayOpen)}
           </div>
           {terminalViews[bot.id] !== undefined && (
             <div className="orbit-terminal-overlay absolute inset-0 z-20 flex" data-open={terminalOpen} inert={!terminalOpen} aria-hidden={!terminalOpen}>
               <LazyView fallback={<BootFallback label={t("terminal.connecting")} />}>
                 {window.ogb?.terminal ? (
-                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneHotkey={botPaneHotkey} paneFocus={paneFocus} onClose={closeTerminal} />
+                  <TerminalWorkspace key={bot.id} bot={bot} visible={terminalOpen} focusBlocked={nativeViewOverlayOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
                 ) : (
-                  <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneHotkey={botPaneHotkey} paneFocus={paneFocus} onClose={closeTerminal} />
+                  <RemoteTerminalView key={bot.id} bot={bot} visible={terminalOpen} paneFocus={botPaneFocus} onClose={closeTerminal} onPaneOrder={onPaneOrder} />
                 )}
               </LazyView>
             </div>

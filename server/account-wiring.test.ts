@@ -193,15 +193,16 @@ it("holds a starting turn's account until it is accepted", async () => {
 });
 
 it("records each quota update path exactly once", async () => {
-  expect(count(source, "usageBoard.recordReport(")).toBe(6);
+  expect(count(source, "usageBoard.recordReport(")).toBe(7);
   const direct = [...source.matchAll(/rateLimitsByInstance\.set\(([^,]+), ([^)]+?)\);\n(\s+)scheduleSaveRateLimits\(rateLimitsByInstance, DATA_DIR\);\n\s+usageBoard\.recordReport\(([^,]+), ([^)]+?)\);/g)];
   expect(direct.map((match) => [match[1] === match[4], match[2] === match[5]])).toEqual(Array(4).fill([true, true]));
-  const spawnSave = section("  save: (id, report) => { scheduleSaveRateLimits", "\n");
+  const spawnSave = section("  save: (id, report) => { scheduleSaveRateLimits", "\n", section("const spawnUsage = createSpawnUsage({", "\n});"));
   expect(section("const spawnUsage = createSpawnUsage({", "\n});")).toContain(spawnSave);
   const usageSave = section("save: (id, report) => { saveRateLimits", " }),");
   expect(section("  usage: createAccountUsage({", "\n});")).toContain(usageSave);
   const invalidation = section("saveRateLimits: () => {", "}");
   for (const save of [spawnSave, usageSave]) expect(count(save, "usageBoard.recordReport(id, report)")).toBe(1);
+  expect(count(section("const refreshSwappedUsage = createUsageSwapRefresh({", "\n});"), "usageBoard.recordReport(id, report)")).toBe(1);
   expect(invalidation).not.toContain("recordReport");
   for (const [path, call] of [["./spawn-usage.ts", "deps.save(instanceId, result.report);"], ["./account-updates.ts", "deps.save(id, result.report);"]]) {
     expect(count(read(path), call)).toBe(1);

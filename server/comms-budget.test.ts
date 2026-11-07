@@ -173,12 +173,12 @@ describe("accounting", () => {
     for (let index = 0; index < 4; index++) tasks.push(await delegate());
     await drain(run);
     expect(run).toHaveBeenCalledTimes(4);
-    finishDelegatedTurn(bus(), settle(tasks[0]!, { takenOverBy: "User" }), true, "answer");
+    finishDelegatedTurn(bus(), settle(tasks[0]!), true, "<user1>Got it.</user1>answer");
     drainWaitingOn(bus(), bus(), run);
     await flush();
-    expect(run).toHaveBeenCalledTimes(5);
-    expect(left(rootId)).toBe(13);
-    for (let index = 0; index < 13; index++) {
+    expect(run).toHaveBeenCalledTimes(4);
+    expect(left(rootId)).toBe(14);
+    for (let index = 0; index < 14; index++) {
       replyRow(`wake-${index}`, rootId);
       const admission = admitPaneWake(store, from.id, from.threadId)!;
       expect(admission.rootId).toBe(rootId);
@@ -195,18 +195,18 @@ describe("accounting", () => {
     expect(lines(channelThread())).toHaveLength(1);
   });
 
-  it("takeover rerun needs another credit", async () => {
+  it("a user reply needs no extra peer credit", async () => {
     const rootId = human();
     spend(rootId, 23);
     const run = committingRun();
     const taskId = await delegate();
     await drain(run);
     expect(left(rootId)).toBe(0);
-    finishDelegatedTurn(bus(), settle(taskId, { takenOverBy: "User" }), true, "answer");
+    finishDelegatedTurn(bus(), settle(taskId), true, "<user1>Got it.</user1>answer");
     drainWaitingOn(bus(), bus(), run);
     await flush();
     expect(run).toHaveBeenCalledOnce();
-    expect(lines(from.threadId)).toHaveLength(1);
+    expect(lines(from.threadId)).toHaveLength(0);
   });
 
   it("stale completion cannot release a replacement turn's credit", async () => {
@@ -214,15 +214,13 @@ describe("accounting", () => {
     const run = committingRun();
     const taskId = await delegate();
     await drain(run);
-    finishDelegatedTurn(bus(), settle(taskId, { takenOverBy: "User" }), true, "answer");
-    expect(left(rootId)).toBe(22);
-    const dispatching = vi.fn();
-    drainWaitingOn(bus(), bus(), dispatching);
-    await flush();
-    const replacement = dispatching.mock.calls[0]![9] as roots.Reservation;
-    expect(replacement).toMatchObject({ rootId, kind: "rerun" });
+    finishDelegatedTurn(bus(), settle(taskId), true, "<user1>Got it.</user1>answer");
+    expect(left(rootId)).toBe(23);
+    const credit = roots.reserve(rootId, "delegation");
+    if (!credit.ok) throw new Error(credit.reason);
+    const replacement = credit.reservation;
     finishDelegatedTurn(bus(), settle(taskId), false, "", "Delegated turn did not finish");
-    finishDelegatedTurn(bus(), settle(taskId, { takenOverBy: "User" }), true, "late answer");
+    finishDelegatedTurn(bus(), settle(taskId), true, "late answer");
     discardDelegations(bus(), from.threadId);
     expect(left(rootId)).toBe(22);
     roots.commit(replacement);
