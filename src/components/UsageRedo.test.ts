@@ -20,6 +20,7 @@ import { I18nProvider, persistPreference } from "@/lib/i18n";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
+import { AccountConnections } from "./AccountConnections";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -159,6 +160,50 @@ it("reorders accounts with Alt+Down and keeps the order after remount", async ()
   expect(rows()).toEqual([before[1], before[0], before[2]]);
   await remount();
   expect(rows()).toEqual([before[1], before[0], before[2]]);
+});
+
+it("shares order between mounted Connections and Usage without losing other engines", async () => {
+  const before = h.board!.engines[0]!.accounts.map((account) => account.id);
+  const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
+  await mount(createElement("div", null, createElement(UsageDesk), createElement(AccountConnections, {
+    accounts: h.instances.filter((account) => account.accountOf === "claude"), reload: async () => {},
+  })));
+  const connections = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount);
+  await key('[data-connection-account="claude"] [data-usage-grip]', "ArrowDown");
+  expect(rows()).toEqual([before[1], before[0], before[2]]);
+  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowUp");
+  expect(connections()).toEqual(before);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
+});
+
+it("reads order changes from another window", async () => {
+  await mount();
+  const next = rows().reverse();
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: next }));
+  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
+  expect(rows()).toEqual(next);
+});
+
+it("keeps another window's engine order when dropping an in-flight drag", async () => {
+  await mount();
+  const before = rows();
+  const codex = h.board!.engines[1]!.accounts.map((account) => account.id).reverse();
+  for (const [index, row] of [...host.querySelectorAll<HTMLElement>('[data-usage-engine="claude"] [data-account-row]')].entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, index * 80, 400, 80));
+  }
+  Object.defineProperty(q('[data-account-row="claude"]'), "animate", { configurable: true, value: undefined });
+  await act(async () => q('[data-account-row="claude"] [data-usage-grip]')!.dispatchEvent(new PointerEvent("pointerdown", {
+    pointerType: "mouse", button: 0, clientY: 40, bubbles: true,
+  })));
+  localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
+  await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { clientY: 130, bubbles: true }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  expect(rows()).toEqual([before[1], before[0], before[2]]);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
 });
 
 it("reorders sections with Alt+Down and keeps the order after remount", async () => {
