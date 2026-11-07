@@ -10,6 +10,12 @@ import type { Bot, Task, TaskResumePacket } from "@/state/store";
 const { mockDispatch, mockConfig } = vi.hoisted(() => ({ mockDispatch: vi.fn(), mockConfig: { current: {} as { features?: { memoryNotes?: boolean } } } }));
 const chrome = vi.hoisted(() => ({ voiceAndStartupSettings: false }));
 const keepGoing = vi.hoisted(() => ({ request: 0 }));
+const mapLoads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./MemoryMap", async (importOriginal) => {
+  mapLoads.count += 1;
+  return importOriginal();
+});
 
 vi.mock("@/lib/friends-chrome", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/friends-chrome")>()),
@@ -68,6 +74,8 @@ vi.mock("./LocalComputerAutoWarning", () => ({
 
 import { SettingsPanel } from "./SettingsPanel";
 
+const mapLoadsAtImport = mapLoads.count;
+
 const claudeBot = {
   id: "bot-1",
   threadId: "t1",
@@ -86,6 +94,11 @@ const memoryRow = (host: HTMLElement) =>
 const tab = (host: HTMLElement, label: string) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === label)!;
 const shown = (node: Element | null | undefined) => Boolean(node && !node.closest("[hidden]"));
+// the map is a lazy chunk
+async function until(found: () => Element | null | undefined) {
+  for (let tries = 0; tries < 100 && !found(); tries++) await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
+  return found();
+}
 const topicsRow = (host: HTMLElement) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.startsWith("Topic Files"))!;
 
@@ -342,15 +355,44 @@ describe("SettingsPanel memory groups", () => {
     vi.unstubAllGlobals();
   });
 
-  it("puts noted facts first, then the task and the memory file", async () => {
+  it("loads the memory map with the Memory tab, not before", async () => {
     await render({ ...claudeBot, tasks });
+    expect(mapLoadsAtImport).toBe(0);
+    expect(host.querySelector(".mm")).toBeNull();
+    await act(async () => tab(host, "Memory").click());
+    expect(await until(() => host.querySelector(".mm"))).not.toBeNull();
+    await act(async () => tab(host, "Settings").click());
+    expect(host.querySelector(".mm")).toBeNull();
+  });
+
+  it("shows a failed read with Retry, never as empty memory", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
+    });
+    await act(async () => tab(host, "Memory").click());
+    const alert = await until(() => host.querySelector(".mm [role=\"alert\"]"));
+    expect(alert?.textContent).toBe("Couldn't load memory.Retry");
+    const counts = () => Array.from(host.querySelectorAll(".mm-count")).map((count) => count.textContent);
+    expect(counts()).toEqual(["–", "–", "–"]);
+    expect(host.querySelector(".mm")?.textContent).not.toContain("Nothing yet.");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: memory, truncated: false, topics: [{ name: "phone.md", bytes: 900 }] }))));
+    await act(async () => alert!.querySelector("button")!.click());
+    await until(() => (host.querySelector(".mm [role=\"alert\"]") ? null : host.querySelector(".mm")));
+    expect(counts()).toEqual(["4facts", "1file", "0lessons"]);
+  });
+
+  it("puts the memory map first, then auto notes and the memory file", async () => {
+    await render({ ...claudeBot, tasks });
+    await act(async () => tab(host, "Memory").click());
+    await until(() => host.querySelector(".mm"));
     const text = host.textContent ?? "";
-    const order = ["Lives in Seoul", "+1 more", "Auto Notes", "Current Task", "Memory File", "8 lines"];
+    const order = ["Long-Term Memory", "Working Memory", "Just Learned", "Lives in Seoul", "Auto Notes", "Memory File", "8 lines"];
     expect(text).not.toContain("From Your Chats");
     const at = order.map((label) => text.indexOf(label));
     expect(at).not.toContain(-1);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
-    expect(text).toContain("Prefers pnpm");
+    expect(text).toContain("Short answers");
     expect(text).not.toContain("Uses Windows");
     expect(text).toContain("1 of 3 steps done");
     expect(text).toContain("Next: Tag the release");
@@ -412,7 +454,9 @@ describe("SettingsPanel memory groups", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, tasks } })));
     });
-    expect(host.textContent).toContain("Current Task");
+    await act(async () => tab(host, "Memory").click());
+    await until(() => host.querySelector(".mm"));
+    expect(host.textContent).toContain("1 of 3 steps done");
     expect(host.textContent).not.toContain("Memory fills in as you chat.");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: "", truncated: false, topics: [{ name: "phone.md", bytes: 900 }] }))));
     await act(async () => {
@@ -455,9 +499,11 @@ describe("SettingsPanel memory groups", () => {
   it("labels the groups in Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
     await render({ ...claudeBot, tasks });
+    await act(async () => tab(host, "메모리").click());
+    await until(() => host.querySelector(".mm"));
     const text = host.textContent ?? "";
     expect(text).not.toContain("채팅에서");
-    for (const label of ["메모리 파일", "8줄", "+1개 더", "현재 작업", "3단계 중 1단계 완료", "다음: Tag the release"]) {
+    for (const label of ["메모리 파일", "8줄", "방금 배운 것", "작업 기억", "3단계 중 1단계 완료", "다음: Tag the release"]) {
       expect(text).toContain(label);
     }
   });
@@ -1106,12 +1152,13 @@ describe("SettingsPanel memory autosave", () => {
     });
     await render("bot-offline");
     expect(box().readOnly).toBe(true);
-    expect(host.querySelector(".text-danger")?.firstChild?.textContent).toBe("Couldn't load memory.");
+    await act(async () => tab(host, "Memory").click());
+    expect((await until(() => host.querySelector(".mm-failed")))?.firstChild?.textContent).toBe("Couldn't load memory.");
     vi.mocked(fetch).mockImplementation(serve);
     await act(async () => button("Retry").click());
     expect(box().readOnly).toBe(false);
     expect(box().value).toBe("important synced notes");
-    expect(host.querySelector(".text-danger")).toBeNull();
+    expect(host.querySelector(".mm-failed")).toBeNull();
     expect(readMemoryFile("bot-offline").text).toBe("important synced notes");
   });
 
