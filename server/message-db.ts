@@ -12,13 +12,17 @@
 // truth (the JSON file is left behind as a one-time backup).
 import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
-import { termVerb } from "../shared/tool-verb.ts";
+import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 
 import { DATA_DIR } from "./config.ts";
+import { stopSearchCache } from "./search-cache.ts";
+import { publishSearchDirt, searchDirty, searchSource } from "./search-gate.ts";
+import { querySearchCache } from "./search-query.ts";
+import { activityHaystack } from "./search-text.ts";
 import type { Message } from "./store.ts";
 import { redactToolMessage } from "./tool-detail.ts";
+
+export { searchHaystack } from "./search-text.ts";
 
 const DB_FILE = () => join(DATA_DIR, "messages.db");
 
@@ -67,8 +71,10 @@ function db(): DatabaseSync {
   try {
     handle?.close();
   } catch {}
+  void stopSearchCache();
   handle = open();
   handlePath = DB_FILE();
+  searchSource(handle);
   return handle;
 }
 
@@ -121,6 +127,7 @@ function importLegacy(threadId: string, legacyFile: string): ThreadRows {
     }
     setActiveLeaf(threadId, activeLeafId);
     db().exec("COMMIT");
+    searchDirty(db(), threadId);
   } catch (error) {
     db().exec("ROLLBACK");
     throw error;
@@ -138,9 +145,11 @@ function importLegacy(threadId: string, legacyFile: string): ThreadRows {
 
 export function insertMessage(threadId: string, message: Message): void {
   message = redactToolMessage(message);
-  db()
+  const database = db();
+  database
     .prepare("INSERT OR REPLACE INTO messages (thread_id, id, at, role, kind, text, json) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(threadId, message.id, message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message));
+  searchDirty(database, threadId, message.id);
 }
 
 /** Persist a new message and the branch head as one crash-safe mutation. */
@@ -153,9 +162,11 @@ export function appendMessage(threadId: string, message: Message): void {
 
 export function updateMessage(threadId: string, message: Message): void {
   message = redactToolMessage(message);
-  db()
+  const database = db();
+  database
     .prepare("UPDATE messages SET at = ?, role = ?, kind = ?, text = ?, json = ? WHERE thread_id = ? AND id = ?")
     .run(message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message), threadId, message.id);
+  searchDirty(database, threadId, message.id);
 }
 
 export function setActiveLeaf(threadId: string, leafId: string | null): void {
@@ -176,6 +187,7 @@ export function replaceThread(threadId: string, messages: Message[], activeLeafI
     for (const message of messages) insertMessage(threadId, message);
     setActiveLeaf(threadId, activeLeafId);
     database.exec("COMMIT");
+    searchDirty(database, threadId);
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -189,6 +201,7 @@ export function withMessageTransaction<T>(work: (database: DatabaseSync) => T): 
   try {
     const result = work(database);
     database.exec(nested ? "RELEASE message_write" : "COMMIT");
+    if (!nested) publishSearchDirt();
     return result;
   } catch (error) {
     database.exec(nested ? "ROLLBACK TO message_write; RELEASE message_write" : "ROLLBACK");
@@ -228,9 +241,11 @@ export function applySyncedRows(
   let touched = 0;
   for (const source of messages) {
     const message = redactToolMessage(source);
-    touched += Number(upsert.run(
+    const changes = Number(upsert.run(
       threadId, message.id, message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message),
     ).changes);
+    if (changes) searchDirty(database, threadId, message.id);
+    touched += changes;
   }
   if (activeLeafId !== undefined) {
     touched += Number(database.prepare(
@@ -261,7 +276,25 @@ export function botRepliesPerDay(bounds: readonly number[]): number[] {
 
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
+  searchDirty(db(), threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);
+}
+
+/** Drop PC-local sync notices; their children and the branch head move up to each notice's parent. */
+export function removeSyncNotices(threadId: string, ids: string[]): void {
+  withMessageTransaction((database) => {
+    for (const id of ids) {
+      const row = database.prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?").get(threadId, id);
+      if (!row) continue;
+      const message: Message = JSON.parse(String(row.json));
+      const parent = message.parentId ?? null;
+      database.prepare("UPDATE messages SET json = json_set(json, '$.parentId', ?) WHERE thread_id = ? AND json_extract(json, '$.parentId') = ?")
+        .run(parent, threadId, id);
+      database.prepare("UPDATE thread_state SET active_leaf_id = ? WHERE thread_id = ? AND active_leaf_id = ?").run(parent, threadId, id);
+      database.prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?").run(threadId, id);
+      searchDirty(database, threadId);
+    }
+  });
 }
 
 export interface SearchHit {
@@ -279,53 +312,6 @@ export interface SearchHit {
   matches: number;
   /** room messages: which member said it */
   from?: string;
-}
-
-// Same header and detail block the terminal row draws. Search must not outrun it.
-const INPUT_HEADERS = new Set(["Bash", "Update", "Write"]);
-
-type ToolBody = NonNullable<Message["tool"]>;
-type ToolDetail = NonNullable<ToolBody["detail"]>;
-
-function shownArgs(verb: string, summary: string | undefined, detail: ToolDetail | undefined, fallback?: string): string | undefined {
-  return (INPUT_HEADERS.has(verb) ? detail?.input ?? summary : summary ?? detail?.input) ?? fallback;
-}
-
-/** Detail text the terminal row draws: header input, then the visible output or diff lines. */
-function shownDetailLines(tool: ToolBody): string[] {
-  const detail = tool.detail;
-  const lines: string[] = [];
-  const args = shownArgs(termVerb(tool.verb ?? tool.name), tool.summary, detail, tool.verb ? tool.name : undefined);
-  if (args && (args === detail?.input || args === tool.summary)) lines.push(args);
-  if (!detail || detail.outputHidden) return lines;
-  const diff = tool.ok !== false && detail.diff?.length ? detail.diff : undefined;
-  const body = diff ?? detail.output;
-  if (!body?.length) return lines;
-  if (!detail.more && diff && detail.input && !lines.includes(detail.input)) lines.push(detail.input);
-  for (const line of body) {
-    lines.push(diff && (line[0] === "+" || line[0] === "-") ? `${line[0]} ${line.slice(1)}` : line);
-  }
-  return lines;
-}
-
-/** Text a find hit may quote. Activity rows include only detail the terminal row draws; `chips` rows draw the name and summary. */
-export function searchHaystack(message: Pick<Message, "kind" | "text" | "tool" | "comm">, chips = false): string {
-  if (message.kind !== "activity") return message.text ?? "";
-  const tool = message.tool;
-  if (!tool?.name) return "";
-  const lines = chips ? (tool.summary ? [tool.summary] : []) : shownDetailLines(tool);
-  // a comm chip draws its message body under the label
-  const detail = message.comm && message.text ? [...lines, message.text] : lines;
-  return detail.length ? `${tool.name}\n${detail.join("\n")}` : tool.name;
-}
-
-/** Visible detail text for one activity hit, from the tool object SQLite extracted. `body` is a comm chip's text. */
-function activityHaystack(toolJson: string | null, body: string | null, chips: boolean): string {
-  if (!toolJson) return "";
-  // SAFETY: tool_json is the $.tool object from a stored Message envelope.
-  const tool = redactToolMessage({ tool: JSON.parse(toolJson) as ToolBody }).tool;
-  const shown = searchHaystack({ kind: "activity", tool }, chips);
-  return shown && body ? `${shown}\n${body}` : shown;
 }
 
 /** Window around the first case-insensitive hit, with offsets after whitespace folding. */
@@ -363,6 +349,7 @@ export function searchMessages(
 ): SearchHit[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
+  const database = db();
   // escape LIKE wildcards so a literal % or _ in the query stays literal
   const like = (text: string) => `%${text.replace(/([\\%_])/g, "\\$1")}%`;
   const pattern = like(needle);
@@ -381,7 +368,7 @@ export function searchMessages(
     : "";
   // SAFETY: This projection selects at and SQLite's rowid.
   const cursor = threadId && before
-    ? db().prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
+    ? database.prepare("SELECT at, rowid AS row FROM messages WHERE thread_id = ? AND id = ?").get(threadId, before) as { at: number; row: number } | undefined
     : undefined;
   if (before && !cursor) return [];
   const scope = threadId ? `thread_id = ?3 AND ${cursor ? "(at < ?4 OR (at = ?4 AND rowid < ?5)) AND " : ""}` : "";
@@ -393,13 +380,13 @@ export function searchMessages(
     ? "(lower(ifnull(json_extract(json, '$.tool.name'), '')) LIKE ?1 ESCAPE '\\' OR lower(ifnull(json_extract(json, '$.tool.summary'), '')) LIKE ?1 ESCAPE '\\')"
     : `lower(json_extract(json, '$.tool.name', '$.tool.summary', '$.tool.detail.input', '$.tool.detail.output', '$.tool.detail.diff')) LIKE ?2 ESCAPE '\\'${decoded}`;
   // Sorts row ids only; the hit loop reads each row once it needs it.
-  const ordered = db().prepare(
+  const ordered = database.prepare(
     "SELECT rowid AS row FROM messages " +
       `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\' AND json_extract(json, '$.summarized') IS NOT 1) ` +
       "   OR (kind = 'activity' AND ((text IS NOT NULL AND json_extract(json, '$.comm') IS NOT NULL AND lower(text) LIKE ?1 ESCAPE '\\') " +
       `     OR (lower(json) LIKE ?2 ESCAPE '\\' AND ${gate})))) ORDER BY ${order}at DESC, rowid DESC`,
   );
-  const fetch = db().prepare(
+  const fetch = database.prepare(
     "SELECT thread_id, id, at, role, kind, CASE WHEN kind != 'activity' OR json_extract(json, '$.comm') IS NOT NULL THEN text END AS text, " +
       "CASE WHEN kind = 'activity' THEN json_extract(json, '$.tool') END AS tool_json, json_extract(json, '$.from.name') AS from_name FROM messages WHERE rowid = ?",
   );
@@ -413,27 +400,29 @@ export function searchMessages(
     tool_json: string | null;
     from_name: string | null;
   };
-  const hits: SearchHit[] = [];
   const args = [pattern, like(fragment), ...(threadId ? [threadId] : []), ...(cursor ? [cursor.at, cursor.row] : [])];
-  const rows = ordered.iterate(...args);
-  for (const { row: rowid } of rows) {
-    // SAFETY: This SELECT list is thread_id, id, at, role, kind, text, tool_json, from_name.
-    const row = fetch.get(rowid) as Row;
-    const haystack = row.kind === "activity" ? activityHaystack(row.tool_json, row.text, chips) : (row.text ?? "");
-    if (row.kind === "activity" && !haystack.toLowerCase().includes(needle)) continue;
-    const hit: SearchHit = {
-      threadId: row.thread_id,
-      messageId: row.id,
-      at: row.at,
-      role: row.role,
-      kind: row.kind,
-      ...searchSnippet(haystack, needle),
-    };
-    if (row.from_name) hit.from = row.from_name;
-    hits.push(hit);
-    if (hits.length >= limit) break;
-  }
-  return hits;
+  const collect = (rows: Iterable<Record<string, SQLOutputValue>>): SearchHit[] => {
+    const hits: SearchHit[] = [];
+    for (const { row: rowid } of rows) {
+      // SAFETY: This SELECT list is thread_id, id, at, role, kind, text, tool_json, from_name.
+      const row = fetch.get(rowid) as Row;
+      const haystack = row.kind === "activity" ? activityHaystack(row.tool_json, row.text, chips) : (row.text ?? "");
+      if (row.kind === "activity" && !haystack.toLowerCase().includes(needle)) continue;
+      const hit: SearchHit = {
+        threadId: row.thread_id,
+        messageId: row.id,
+        at: row.at,
+        role: row.role,
+        kind: row.kind,
+        ...searchSnippet(haystack, needle),
+      };
+      if (row.from_name) hit.from = row.from_name;
+      hits.push(hit);
+      if (hits.length >= limit) break;
+    }
+    return hits;
+  };
+  return querySearchCache(database, DATA_DIR, needle, limit, ordered, args, collect) ?? collect(ordered.iterate(...args));
 }
 
 /** Test/shutdown hook — closes the handle so a wiped DATA_DIR starts clean. */
@@ -443,4 +432,6 @@ export function closeMessageDb(): void {
   } catch {}
   handle = null;
   handlePath = null;
+  searchSource(null);
+  void stopSearchCache();
 }
