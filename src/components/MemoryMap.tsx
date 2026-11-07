@@ -1,11 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Activity, Archive, BookOpen, Brain, ChevronDown, ChevronRight, Moon, Repeat, Sparkle, Undo2, X } from "lucide-react";
+import { Activity, Archive, BookOpen, Brain, ChevronDown, ChevronRight, FileText, Moon, Pencil, Repeat, Sparkle, Undo2, X } from "lucide-react";
 import type { AppState, Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, formatBytes, NotedLines, type MemoryTopic } from "./MemoryGroups";
-import { closePanel, openMist, openPanel, type OpenParts } from "./MemoryMapMotion";
+import { closePanel, fadePanel, openMist, openPanel, type OpenParts } from "./MemoryMapMotion";
 import { Fold } from "./Fold";
 import "./MemoryMap.css";
 
@@ -61,11 +61,11 @@ export function SleepLine({ sleep }: { sleep: SleepReadout }) {
   );
 }
 
-function FactList({ facts, day }: { facts: MemoryFact[]; day: Intl.DateTimeFormat }) {
+function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTimeFormat; fresh?: ReadonlySet<string> }) {
   return (
     <ul className="mm-list">
       {facts.map((each) => (
-        <li key={each.line}>
+        <li key={each.line} data-fresh={fresh?.has(each.line) || undefined}>
           <span className="mm-list-text">{each.fact}</span>
           <span className="mm-date">{each.at ? day.format(each.at) : ""}</span>
         </li>
@@ -87,7 +87,7 @@ function TopicList({ topics }: { topics: MemoryTopic[] }) {
   );
 }
 
-export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry }: {
+export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, editing = false, onEditing, onStack }: {
   bot: Bot;
   text: string;
   topics: MemoryTopic[];
@@ -96,6 +96,11 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   sleep?: SleepReadout | null;
   failed?: boolean;
   onRetry?: () => void;
+  /** the memory file editor; on the wide map it opens over the three kinds */
+  editor?: ReactNode;
+  editing?: boolean;
+  onEditing?: (editing: boolean) => void;
+  onStack?: (stacked: boolean) => void;
 }) {
   const { t, locale } = useI18n();
   const gradient = `mm${useId().replace(/[^\w-]/g, "")}`;
@@ -109,6 +114,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const [open, setOpen] = useState<Kind | null>(null);
   const [closing, setClosing] = useState(false);
   const [mistOn, setMistOn] = useState(false);
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
+  const before = useRef<string | null>(null);
+  const quiet = useRef(false);
   const map = useMemo(() => memoryMap(text, bot.messages), [text, bot.messages]);
   const day = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" });
   const task = currentTask(bot);
@@ -118,9 +126,14 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   useLayoutEffect(() => {
     const el = root.current;
     if (!el) return;
-    setStacked(el.offsetWidth < STACK_BELOW);
+    const measure = () => {
+      const next = el.offsetWidth < STACK_BELOW;
+      setStacked(next);
+      onStack?.(next);
+    };
+    measure();
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => setStacked(el.offsetWidth < STACK_BELOW));
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -132,12 +145,47 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     return { sheet: to, content, mist: mist.current, specks: specks.current, from: from.offsetWidth / to.offsetWidth, side: kind === "long" ? "left" : "right" };
   };
 
+  const fade = () => {
+    const to = sheet.current;
+    if (to) fadePanel({ sheet: to, content: [...to.querySelectorAll<HTMLElement>("[data-mm-content]")] });
+  };
+
   useLayoutEffect(() => {
     if (!open || stacked || closing) return;
     const each = parts(open);
-    if (each) openPanel(each);
+    if (quiet.current) fade();
+    else if (each) openPanel(each);
+    quiet.current = false;
     closeButton.current?.focus({ preventScroll: true });
+    // scrolled inside the sheet only: scrollIntoView would move the whole tab too
+    const body = sheet.current?.querySelector<HTMLElement>(".mm-sheet-body");
+    const row = body?.querySelector<HTMLElement>("[data-fresh]");
+    if (body && row) body.scrollTop = row.offsetTop - body.offsetTop - body.clientHeight / 2;
   }, [open, stacked]);
+
+  const editingHere = editing && !stacked;
+  useLayoutEffect(() => {
+    if (editingHere) {
+      before.current = text;
+      setOpen(null);
+      setClosing(false);
+      root.current?.closest(".overflow-y-auto")?.scrollTo({ top: 0 });
+      fade();
+      sheet.current?.querySelector("textarea")?.focus({ preventScroll: true });
+      return;
+    }
+    if (before.current === null) return;
+    // the dated view shows what the edit changed
+    const was = new Set(before.current.split("\n").map((line) => line.trimEnd()));
+    before.current = null;
+    const changed = new Set(text.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim() && !was.has(line)));
+    setFresh(changed);
+    // a change that landed in Just Learned or Muscle Memory shows on the map itself
+    if (stacked || !map.longTerm.some((each) => changed.has(each.line))) return;
+    quiet.current = true;
+    setMistOn(false);
+    setOpen("long");
+  }, [editingHere]);
 
   const close = () => {
     if (!open || closing) return;
@@ -160,18 +208,19 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   };
 
   useEffect(() => {
-    if (!open || stacked) return;
+    if (!(open || editingHere) || stacked) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      close();
+      if (editingHere) onEditing?.(false);
+      else close();
     };
     // capture, so Bot details' own Escape sees it handled and stays open
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   });
 
-  useEffect(() => { if (!active) { setOpen(null); setClosing(false); } }, [active]);
+  useEffect(() => { if (!active) { setOpen(null); setClosing(false); setFresh(new Set()); } }, [active]);
 
   const panel = (kind: Kind, icon: ReactNode, name: string, hint: string, count: number | null, foot: ReactNode, viz: ReactNode, list: ReactNode) => (
     <div className={cn("mm-slot", kind === "long" ? "mm-left" : "mm-right")}>
@@ -196,12 +245,12 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
 
   const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed ? null : t("bot.memoryNone"));
   const count = (value: number) => (failed ? null : value);
-  const longList = <FactList facts={map.longTerm} day={day} />;
+  const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} />;
   const topicList = <TopicList topics={topics} />;
-  const shown = open && !stacked;
+  const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
-    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ? open : undefined} data-closing={closing || undefined}>
+    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-closing={closing || undefined}>
       <svg width="0" height="0" className="absolute" aria-hidden="true">
         <defs>
           <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
@@ -271,7 +320,20 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
             <Count kind="muscle" count={count(map.muscle.length)} />
           </div>
         </div>
-        {shown && (
+        {shown === "file" && (
+          <section ref={sheet} className="mm-sheet" data-kind="file" aria-label={t("bot.memoryFile")}>
+            <div className="mm-sheet-head" data-mm-content="">
+              <span className="mm-icon"><FileText size={16} aria-hidden="true" /></span>
+              <span className="mm-label">
+                <span className="mm-name">{t("bot.memoryFile")}</span>
+                <span className="mm-hint">{t("bot.memoryThisBotHelp")}</span>
+              </span>
+              <button type="button" className="mm-action" onClick={() => onEditing?.(false)}>{t("bot.memoryEditDone")}</button>
+            </div>
+            <div className="mm-sheet-body mm-edit" data-mm-content="">{editor}</div>
+          </section>
+        )}
+        {open && shown === open && (
           <section ref={sheet} className="mm-sheet" data-kind={open} aria-label={open === "long" ? t("bot.memoryLongTerm") : t("bot.memoryKnowledge")}>
             <div className="mm-sheet-head" data-mm-content="">
               <span className="mm-icon">{open === "long" ? <Archive size={16} aria-hidden="true" /> : <BookOpen size={16} aria-hidden="true" />}</span>
@@ -280,6 +342,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
                 <span className="mm-hint">{open === "long" ? t("bot.memoryLongTermHint") : t("bot.memoryKnowledgeHint")}</span>
               </span>
               <Count kind={open} count={open === "long" ? map.longTerm.length : topics.length} />
+              {open === "long" && onEditing && (
+                <button type="button" className="mm-action" onClick={() => onEditing(true)}><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</button>
+              )}
               <button ref={closeButton} type="button" className="mm-close" onClick={close} aria-label={t("bot.memoryClosePanel", { name: open === "long" ? t("bot.memoryLongTerm") : t("bot.memoryKnowledge") })}>
                 <X size={16} aria-hidden="true" />
               </button>

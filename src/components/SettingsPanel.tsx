@@ -246,8 +246,15 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const [open, setOpen] = useState(false);
   // a conflict needs its buttons, so it opens the file and leaves it open
   const expanded = open || conflict !== null;
+  const [wide, setWide] = useState(false);
+  // where the file opens is settled when it opens, so typing never jumps between the map and the fold
+  const [inMap, setInMap] = useState(false);
+  const openFile = (next: boolean) => {
+    if (next && !expanded) setInMap(wide);
+    setOpen(next);
+  };
   useEffect(() => {
-    if (conflict) setOpen(true);
+    if (conflict) openFile(true);
   }, [conflict]);
   const fileRow = useRef<HTMLButtonElement>(null);
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
@@ -385,12 +392,42 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
     };
   }, []);
 
+  const editor = (
+    <>
+      {conflict && (
+        <div role="alert" className="mb-3 rounded-lg border border-hairline/60 bg-inset px-3 py-2.5 text-[12px] leading-relaxed text-ink">
+          <div>{t("bot.memoryConflict")}</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={() => void loadLatest(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
+              {t("bot.memoryLoadLatest")}
+            </button>
+            <button onClick={() => keepMine(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
+              {t("bot.memoryKeepMine")}
+            </button>
+          </div>
+        </div>
+      )}
+      <FitTextarea
+        watchMetrics
+        className={cn(DETAILS_INPUT, "min-h-[160px]")}
+        value={text}
+        placeholder={t("bot.memoryPlaceholder")}
+        aria-label={t("bot.memory")}
+        readOnly={loadFailed}
+        onChange={(e) => edit(e.target.value)}
+        onFocus={() => void refresh()}
+        onBlur={() => void flushMemory(botId)}
+      />
+      {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
+    </>
+  );
+
   return (
     <div className="relative flex flex-col gap-3">
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
-      {empty ? <MemoryEmpty /> : (!loading || loadFailed) && <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} />}
+      {empty && !(expanded && inMap) ? <MemoryEmpty /> : (!loading || loadFailed) && <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={openFile} onStack={(stacked) => setWide(!stacked)} />}
       <MemoryGroup>
         <SwitchRow
           label={t("settings.memoryNotes.toggle")}
@@ -399,40 +436,12 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
-        <Fold open={expanded}>
+        <Fold open={expanded && !inMap}>
           <div className="px-4 pb-4 pt-3">
             {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}
-            {!loading && (
-              <>
-                {conflict && (
-                  <div role="alert" className="mb-3 rounded-lg border border-hairline/60 bg-inset px-3 py-2.5 text-[12px] leading-relaxed text-ink">
-                    <div>{t("bot.memoryConflict")}</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button onClick={() => void loadLatest(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
-                        {t("bot.memoryLoadLatest")}
-                      </button>
-                      <button onClick={() => keepMine(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
-                        {t("bot.memoryKeepMine")}
-                      </button>
-                    </div>
-                  </div>
-                )}
-                <FitTextarea
-                  watchMetrics
-                  className={cn(DETAILS_INPUT, "min-h-[160px]")}
-                  value={text}
-                  placeholder={t("bot.memoryPlaceholder")}
-                  aria-label={t("bot.memory")}
-                  readOnly={loadFailed}
-                  onChange={(e) => edit(e.target.value)}
-                  onFocus={() => void refresh()}
-                  onBlur={() => void flushMemory(botId)}
-                />
-                {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
-              </>
-            )}
+            {!loading && editor}
           </div>
         </Fold>
         {error && <div className="px-4 pb-4 pt-2 text-[12px] text-danger">{error}</div>}

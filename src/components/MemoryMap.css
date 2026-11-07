@@ -34,8 +34,8 @@
 .mm-undo { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line); }
 .mm-undo:hover { background: var(--color-raised-hover); }
 .mm-failed { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 4px 10px; font-size: 13px; line-height: 18px; color: var(--color-danger); }
-.mm-retry { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line); white-space: nowrap; }
-.mm-retry:hover { background: var(--color-raised-hover); }
+.mm-retry, .mm-action { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: var(--color-ink); background: var(--color-control); border: 1px solid var(--mm-line); white-space: nowrap; }
+.mm-retry:hover, .mm-action:hover { background: var(--color-raised-hover); }
 
 .mm-grid { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 18px; margin-top: 16px; perspective: 1400px; }
 .mm-slot { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -115,6 +115,9 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
   box-shadow: 0 0 0 1px rgb(var(--mm-cyan) / calc(0.08 * var(--mem-glow))), 0 0 60px rgb(99 102 241 / calc(0.35 * var(--mem-glow))), 0 30px 60px rgb(0 0 0 / 0.45); }
 .mm-sheet[data-kind="long"] { grid-column: 1 / 3; }
 .mm-sheet[data-kind="knowledge"] { grid-column: 2 / 4; }
+.mm-sheet[data-kind="file"] { grid-column: 1 / -1; }
+.mm-edit { display: flex; flex-direction: column; padding: 14px 18px 18px; }
+.mm-edit textarea { flex: 1 0 auto; min-height: 100%; font-size: 13.5px; }
 .mm[data-open="long"] .mm-left .mm-panel, .mm[data-open="knowledge"] .mm-right .mm-panel { visibility: hidden; }
 .mm-sheet-head { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--mm-line); }
 .mm-sheet-head .mm-label { flex: 1; }
@@ -130,6 +133,8 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-list li { break-inside: avoid; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--mm-line); font-size: 13px; line-height: 18px; }
 .mm-list-text { overflow-wrap: anywhere; }
 .mm-date { font-size: 12px; color: var(--color-ink-secondary); white-space: nowrap; }
+.mm-list li[data-fresh] { position: relative; }
+.mm-list li[data-fresh]::before { content: ""; position: absolute; z-index: -1; inset: 1px -8px; border-radius: 7px; background: rgb(var(--mm-cyan) / calc(0.14 * var(--mem-glow))); border-left: 2px solid rgb(var(--mm-cyan)); }
 .mm-mist { position: absolute; z-index: 6; pointer-events: none; top: -10%; left: 0; width: 70%; height: 120%; opacity: 0; filter: blur(18px);
   background: radial-gradient(closest-side at 40% 50%, rgb(var(--mm-violet) / calc(0.75 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.35 * var(--mem-glow))) 55%, transparent),
     radial-gradient(closest-side at 70% 40%, rgb(var(--mm-cyan) / calc(0.35 * var(--mem-glow))), transparent 70%); }

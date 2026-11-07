@@ -1,4 +1,4 @@
-import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { EASE_ENTRANCE, EASE_STANDARD, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMemoryMotion } from "./MemoryCleanMotion";
 
 export interface OpenParts {
@@ -51,6 +51,13 @@ export const openMist = () => MOTION.mist && !reducedMemoryMotion();
 
 export function openPanel(parts: OpenParts) {
   if (!reducedMemoryMotion()) MOTION.open(parts);
+}
+
+// a sheet that takes over from another one, or from the editor, has nothing to swing out of
+export function fadePanel({ sheet, content }: Pick<OpenParts, "sheet" | "content">) {
+  if (reducedMemoryMotion()) return;
+  sheet.animate([{ opacity: 0, transform: "translateY(6px)" }, { opacity: 1, transform: "none" }], { duration: MOTION_LARGE_MS, easing: EASE_ENTRANCE });
+  for (const el of content) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: MOTION_FAST_MS, delay: 60, easing: "ease-out", fill: "backwards" });
 }
 
 export function closePanel({ sheet, from, side }: OpenParts): Promise<unknown> {
