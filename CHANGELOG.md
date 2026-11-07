@@ -2,7 +2,7 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
-## [1.0.242] - 2026-11-07
+## [1.0.242] - 2026-11-08
 
 ### Added
 - An activity grid per account in Usage.
