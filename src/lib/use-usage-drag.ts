@@ -17,6 +17,10 @@ function load(): Orders {
   } catch { return {}; }
 }
 
+export function readUsageOrder(base: string) {
+  return load()[base];
+}
+
 export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => string): T[] {
   const rank = new Map(order.map((key, index) => [key, index]));
   return [...items].sort((a, b) => (rank.get(id(a)) ?? order.length) - (rank.get(id(b)) ?? order.length));

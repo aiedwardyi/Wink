@@ -11,6 +11,7 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usag
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { ordered, readUsageOrder } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { useAutoRefresh } from "@/lib/usage-auto-refresh";
@@ -90,6 +91,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   const soon = viewed.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR);
   const clock: Clock = { t, locale: localeTag(locale), now: useVisibleClock(soon) };
   const checked = checkedMain(state, engine.base);
+  const accountOrder = readUsageOrder(engine.base);
 
   const close = (focus = true) => {
     onClose();
@@ -175,10 +177,10 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
           {closeButton}
         </div>}
         <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
-          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
+          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={ordered(engine.accounts, accountOrder, (each) => each.id)} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
-            {usageAccounts(engine).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
+            {ordered(usageAccounts(engine), accountOrder, (each) => each.id).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
