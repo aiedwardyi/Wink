@@ -141,9 +141,10 @@ export function knownCatalogContextWindow(catalog: ModelCatalog, model: string):
   return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-export function contextWindowFor(catalog: ModelCatalog, model: string): number {
-  return knownCatalogContextWindow(catalog, model) ??
+export function contextWindowFor(catalog: ModelCatalog, model: string, reported?: number | null): number {
+  const window = knownCatalogContextWindow(catalog, model) ??
     (decodeInjectId(model) ? LOCAL_MODEL_CONTEXT_FALLBACK : MODEL_CONTEXT_FALLBACK);
+  return Math.min(window, reported ?? window);
 }
 
 /** Where the engine compacts its own session; null leaves compaction to Wink. */

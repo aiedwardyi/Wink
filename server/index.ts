@@ -2725,7 +2725,7 @@ const summaryBuild = createSummaryBuild({
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
     if (!instance) return null;
-    const contextWindow = contextWindowFor(instance.models, selection.model);
+    const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
     const inlineNotes = instance.adapter.capabilities.transcriptReplay !== true
@@ -2738,7 +2738,7 @@ const summaryBuild = createSummaryBuild({
         "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set(inlineNotes.ids) : undefined,
       reserveTokens: inlineNotes?.tokens,
-      nativeAt: nativeCompactAt(instance.driverKind, selection.model, reportedWindow(task, selection.model) ?? contextWindow),
+      nativeAt: nativeCompactAt(instance.driverKind, selection.model, contextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }),
     };
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
@@ -3936,7 +3936,7 @@ bus.subscribe((event: RuntimeEvent) => {
             const settled = registry.get(event.providerInstanceId);
             const model = before?.lastModel;
             if (settled && model) {
-              const nativeAt = nativeCompactAt(settled.driverKind, model, event.contextWindow ?? contextWindowFor(settled.models, model));
+              const nativeAt = nativeCompactAt(settled.driverKind, model, event.contextWindow ?? contextWindowFor(settled.models, model), { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[event.providerInstanceId]?.environment });
               flushNotes = nearNativeCompact({ last: event.prompt.last, growth: event.prompt.last - (priorLast ?? event.prompt.first), nativeAt });
             }
           }
@@ -4746,8 +4746,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
   // a teammate's turn leaves worker notes pending, for this whole dispatch
   const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
-  const modelContextWindow = contextWindowFor(instance.models, model);
-  const nativeAt = nativeCompactAt(instance.driverKind, model, reportedWindow(task, model) ?? modelContextWindow);
+  const modelContextWindow = contextWindowFor(instance.models, model, instance.driverKind === "claudeAgent" ? reportedWindow(task, model) : null);
+  const nativeAt = nativeCompactAt(instance.driverKind, model, modelContextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment });
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
@@ -4787,7 +4787,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   });
   const reactions = { delivered: task.reactionsDelivered };
   const summaryGrace: SummaryGrace = {
-    knownWindow: catalogWindow,
+    knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
     requestText: composeUserTurnPrompt(text, {
       replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
     }),
@@ -6264,9 +6264,9 @@ async function runClaimedGroupMemberTurn(
   startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
   const taskRecord = taskPacketForWrite(threadId);
   const taskRecordToFlush = taskRecord;
-  const catalogWindow = contextWindowFor(instance.models, selection.model);
+  const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
   // A room replays Wink's context every turn, so no native session ever compacts it.
-  const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
+  const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
   const recovering = isRecoveringPacket(taskRecord);
   const latestUser = lastUserInstruction(store.activePath(threadId));
   const durableTaskRecordText = taskRecord

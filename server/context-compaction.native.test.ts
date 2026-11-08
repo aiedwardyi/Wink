@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
-import { nativeCompactAt, nearNativeCompact, planCompaction, prepareModelContext } from "./context-compaction.ts";
+import { contextWindowFor, nativeCompactAt, nearNativeCompact, NATIVE_SUMMARY_WINDOW, planCompaction, prepareModelContext } from "./context-compaction.ts";
 import type { Message } from "./store.ts";
+import { reportedWindow } from "./turn-context.ts";
 
 const message = (id: string, text: string, patch: Partial<Message> = {}): Message => ({
   id,
@@ -17,6 +19,53 @@ const longThread = () => Array.from({ length: 70 }, (_, index) => [
   message(`u${index}`, `request ${index}`),
   message(`b${index}`, `outcome ${index}`, { role: "bot" }),
 ]).flat();
+
+describe("native compaction wiring", () => {
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const background = source.slice(source.indexOf("const summaryBuild ="), source.indexOf("const memoryPass ="));
+  const dispatch = source.slice(source.indexOf("  const modelContextWindow ="), source.indexOf("  const messagesBeforeSummary ="));
+  const room = source.slice(source.indexOf("  const catalogWindow = contextWindowFor", source.indexOf("const selectedInstance = registry.get(selection.instanceId);")), source.indexOf("  const recovering = isRecoveringPacket(taskRecord);", source.indexOf("const selectedInstance = registry.get(selection.instanceId);")));
+  const settled = source.slice(source.indexOf("              const nativeAt = nativeCompactAt"), source.indexOf("              flushNotes = nearNativeCompact"));
+
+  function run(path: string, window: number) {
+    const model = "claude-opus-5-5";
+    const task = { nativePrompt: { cursor: "s1", first: 10, last: 20, window: { model, tokens: window } } };
+    const instance = { driverKind: "claudeAgent", models: { options: [{ id: model, contextWindow: 1_000_000 }] } };
+    const nativeAt = vi.fn(nativeCompactAt);
+    const scope = {
+      instance, settled: instance, model, task, selection: { model, instanceId: "claude" }, instanceId: "claude",
+      event: { contextWindow: window, providerInstanceId: "claude" }, bot: { id: "bot" }, threadId: "thread",
+      store: { taskByThread: () => task }, cfg: {}, accounts: { snapshot: [] }, process: { env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500000" } },
+      instanceConfigs: () => ({ claude: { environment: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" } } }),
+      contextWindowFor, reportedWindow, nativeCompactAt: nativeAt, NATIVE_SUMMARY_WINDOW,
+    };
+    const code = path === "dispatch" ? `${dispatch}\nreturn modelContextWindow;`
+      : path === "room" ? `${room}\nreturn modelContextWindow;`
+      : path === "settled" ? `${settled}\nreturn 0;`
+      : `${background.slice(background.indexOf("    const contextWindow ="), background.indexOf("    const record ="))}\n${background.match(/      nativeAt: (.*),/)![1]};\nreturn contextWindow;`;
+    const contextWindow = new Function("scope", `with (scope) { ${code} }`)(scope) as number;
+    return { contextWindow, nativeAt: nativeAt.mock.results[0]?.value };
+  }
+
+  it.each([
+    ["dispatch", 200_000, 100_000],
+    ["background", 200_000, 100_000],
+    ["room", 200_000, 100_000],
+    ["room", 100_000, 50_000],
+  ] as const)("bounds the %s replay plan at %i reported tokens", (path, window, budgetTokens) => {
+    const { contextWindow } = run(path, window);
+    expect(planCompaction({ messages: longThread(), contextWindow })).toMatchObject({ budgetTokens });
+  });
+
+  it.each(["dispatch", "background", "room", "settled"])("uses the instance compaction override in %s", (path) => {
+    expect(run(path, 1_000_000).nativeAt).toBe(100_000);
+  });
+
+  it("bounds the grace window by Claude's reported window", () => {
+    const expression = source.match(/    knownWindow: (.*),/)![1];
+    expect(new Function("catalogWindow", "modelContextWindow", `return ${expression};`)(1_000_000, 200_000)).toBe(200_000);
+  });
+});
 
 describe("nativeCompactAt", () => {
   it.each([
