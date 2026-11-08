@@ -436,7 +436,7 @@ describe("send path wiring", () => {
   });
 
   it("marks rows shown only after the provider took the turn", () => {
-    expect(section("      accountNote.commit();", "      boardTurnStarted")).toContain("if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);");
+    expect(section("      markPaneMailRead(store, threadId, paneNoteIds", "      boardTurnStarted")).toContain("if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);");
   });
 
   it("builds after a reply settles, never at send", () => {
