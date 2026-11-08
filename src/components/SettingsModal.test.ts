@@ -308,7 +308,6 @@ describe("SettingsModal friends chrome", () => {
     expect(picker).toContain("language.name.ko");
     expect(picker).not.toContain("aria-describedby");
     expect(picker).not.toMatch(/title=\{id === "system"/);
-    expect(source).toContain("settings.profile.title");
     expect(source).not.toContain("compact");
     expect(profile).toContain("settings.profile.namePlaceholder");
     expect(profile).not.toContain("settings.profile.emailPlaceholder");

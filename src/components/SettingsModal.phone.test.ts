@@ -94,11 +94,12 @@ describe("phone Settings navigation", () => {
     expect(dialog()!.querySelector('[role="radiogroup"]')).toBeNull();
   });
 
-  it("shows only Profile on phone Account", async () => {
+  it("shows only the Profile photo header on phone Account", async () => {
     await open();
     await tap("Account");
     const pane = dialog()!.querySelector("[data-settings-page] .overflow-y-auto")!;
-    expect(pane.textContent).toContain("Profile");
+    expect(pane.querySelector("#settings-profile-name")).not.toBeNull();
+    expect(pane.querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
     expect(pane.children).toHaveLength(1);
     expect(pane.textContent).not.toContain("Sync");
   });

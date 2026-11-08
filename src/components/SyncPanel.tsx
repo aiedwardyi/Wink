@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
-import { Card } from "./SettingsPrimitives";
 
 type SyncStatus = {
   configured: boolean;
@@ -240,12 +239,15 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
   const desktop = Boolean(window.ogb);
 
   return (
-    <Card title={t("settings.section.sync")} subtitle={t(off ? "settings.sync.offSubtitle" : "settings.sync.subtitle")}>
+    <div className="min-w-0">
+      <div className="text-[15px] font-medium text-ink">{t("settings.section.sync")}</div>
+      <div className="mt-0.5 text-[13px] leading-relaxed text-ink-secondary">{t(off ? "settings.sync.offSubtitle" : "settings.sync.subtitle")}</div>
       {shown || (ready && desktop && (main || quiets.length > 0)) ? (
-        <div className="flex flex-col gap-3">
+        <div className="mt-4 flex flex-col gap-2">
           {shown ? <div role="status" className="text-[13px] text-ink">{shown}</div> : null}
           {ready && desktop && (main || quiets.length > 0) ? (
-            <div className="flex flex-wrap items-center gap-2">
+            // A quiet first button keeps its text on the column edge.
+            <div className={`flex flex-wrap items-center gap-2 ${main ? "" : "-ml-3"}`}>
               {main ? (
                 <button type="button" onClick={main.run} disabled={busy} className="rounded-lg bg-control px-3 py-2 text-[12px] font-medium text-ink hover:bg-raised disabled:opacity-40">
                   {main.label}
@@ -260,6 +262,6 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
           ) : null}
         </div>
       ) : null}
-    </Card>
+    </div>
   );
 }
