@@ -383,7 +383,8 @@ export function serveLinkedFile(req: IncomingMessage, res: ServerResponse, optio
         sendJson(res, 404, { error: "not found" });
         return;
       }
-      if (!insideRoot(real, [folder]) || !insideRoot(real, roots)) {
+      if (!insideRoot(real, [folder]) || !insideRoot(real, roots) ||
+          relative(folder, real).split(/[\\/]/).some((part) => part.startsWith(".") && part !== ".pnpm")) {
         sendJson(res, 404, { error: "not found" });
         return;
       }

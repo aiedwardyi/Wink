@@ -102,11 +102,11 @@ const hash = (text: string | null) => (text === null ? null : createHash("sha256
 
 // null = absent; undefined = unreadable (a Drive placeholder), left alone until a later pass
 function readText(path: string, file: string): string | null | undefined {
-  if (!existsSync(path)) return null;
   try {
     const text = readFileSync(path, "utf8");
     return file === MEMORY_FILE && (!text.trim() || text === MEMORY_SEED) ? null : text;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
     return undefined;
   }
 }

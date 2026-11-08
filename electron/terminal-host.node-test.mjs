@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
@@ -78,6 +79,25 @@ describe("captured worker account projections", () => {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test("retired panes leave one owner listener and destruction closes every live pane", async (t) => {
+  let owner;
+  const f = fixture({ owner: () => owner });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const lifecycle = new EventEmitter();
+  f.owner.once = lifecycle.once.bind(lifecycle);
+  for (let i = 0; i < 12; i++) {
+    const pane = await f.host.openForBot("bot-1");
+    await f.host.close(f.event, pane.sessionId);
+  }
+  assert.ok(lifecycle.listenerCount("destroyed") <= 1);
+  for (let i = 0; i < 3; i++) await f.host.openForBot(`live-${i}`);
+  lifecycle.emit("destroyed");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(f.children.every((child) => child.killed));
+  assert.equal(lifecycle.listenerCount("destroyed"), 0);
+});
 
 test("dispose stops panes one at a time through their shutdown acknowledgements", async () => {
   const f = fixture();
