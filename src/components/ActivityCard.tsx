@@ -16,7 +16,6 @@ const WEEK_GRID = "grid grid-cols-[repeat(26,minmax(0,1fr))] gap-x-[2px] @[30rem
 const KEY = "omb-activity";
 /** When the last square starts, so the whole sweep lands inside 700 ms. */
 const SWEEP_MS = 300;
-const SWEEP = "edge" as "edge" | "corner";
 const GLINT_PEAK = 1.7;
 /** Pale squares clip to white and vanish into the card at the dark peak. */
 const GLINT_PEAK_LIGHT = 1.05;
@@ -89,7 +88,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
     const peak = LIGHT_SKIN_IDS.has(readSkin()) ? GLINT_PEAK_LIGHT : GLINT_PEAK;
     for (const [day, square] of [...squares].entries()) {
       const week = Math.floor(day / 7);
-      const delay = SWEEP_MS * (SWEEP === "corner" ? (week + (day % 7)) / 31 : week / 25);
+      const delay = SWEEP_MS * week / 25;
       // One animation per square: a second layer each halves the frame rate at 4x.
       square.animate?.([
         { opacity: 0.35, transform: "translateY(-3px)", filter: "brightness(1)" },
