@@ -39,7 +39,8 @@ import {
   projectPathsFromRecords,
   userProjectTexts,
 } from "./project-folder.ts";
-import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage } from "./attachments.ts";
+import { attachmentExists, ATTACHMENTS_DIR, ensureAttachmentsDir, readAttachment, receiveAttachment, saveImage, sniffImageMime } from "./attachments.ts";
+import { applyBrandLeadBot } from "./brand-lead-bot.ts";
 import { cloudSyncRoots, createUploads, uploadTargetDir } from "./uploads.ts";
 import "./avatar-image.ts";
 import "./bot-profile.ts";
@@ -98,13 +99,14 @@ import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 import { validateAccountSettings } from "./account-settings.ts";
 import { canRefreshUsage, createMuseCheck, createUsageRefresh, museCheckModel, usageRefreshResponse } from "./usage-refresh.ts";
+import { createUsageSwapRefresh } from "./usage-swap-refresh.ts";
 import { createSpawnUsage } from "./spawn-usage.ts";
 import { createWorkerTurns } from "./worker-turn.ts";
 import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { contextWindowFor, holdWorkerNotes, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -144,25 +146,26 @@ import {
 import { BUSY_RESUME_DELAYS_MS, retryLine } from "./drivers/retry.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
-import { clearAskBudget, clearDelegationWakeBudget } from "./comms-budget.ts";
 import "./comms-visibility.ts";
 import type { CommsBus } from "./comms-visibility.ts";
 import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { replyActivity } from "./reply-activity.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
-import { adoptHumanRoot, rootForStart } from "./comms-root.ts";
+import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
-import { onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
+import { hasPeerWatch, watchPeerTurn, peerInputJoined, takePeerReplyStamp } from "./peer-takeover.ts";
+import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
+import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
   clearSendRunning,
   continueQueuedDrainIfIdle,
   drainSteeredMessages,
-  foldQueuedSends,
   hasQueuedSendBefore,
   hasQueuedSends,
   initializeSteerQueue,
@@ -276,6 +279,7 @@ import {
   hostMatchesRemote,
   initRemoteAccess,
   originAllowedByRemote,
+  remoteCookieAuthorized,
   remoteCookieRefresh,
   remoteKeyMatches,
   remoteLinkUrl,
@@ -395,8 +399,11 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
+import { createVerifyAuto } from "./verify-auto.ts";
+import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
-import { writeChatError, usageError, startQueuedTurn } from "./chat-error.ts";
+import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
 import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
@@ -693,12 +700,13 @@ function askBotAndWait(
   message: string,
   depth: number,
   fromBotId?: string,
-  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null },
+  peer?: { sender: BotRecord; channel?: GroupRecord; sourceThreadId: string; transcriptText?: string; taskId?: string; commsRoot?: string | null; reservation?: Reservation },
 ): Promise<AskReply> {
   const target = store.bot(targetBotId);
   if (!target) return Promise.resolve({ text: "(no such bot)", replied: false });
   const threadId = target.threadId;
   if (peer) peerTurnSource.set(threadId, peer.sourceThreadId);
+  const collected = peer ? peerReplies.start(threadId) : undefined;
   return waitForPeerReply({
     threadId,
     botName: target.name,
@@ -708,6 +716,7 @@ function askBotAndWait(
     start: (onDispatchError) => startTurn(targetBotId, message, {
       commsDepth: depth + 1,
       commsRoot: peer?.commsRoot ?? null,
+      reservation: peer?.reservation,
       unattended: isUnattended(fromBotId),
       transcriptText: peer?.transcriptText,
       ...peerAttribution(peer?.sender, peer?.channel),
@@ -717,7 +726,7 @@ function askBotAndWait(
     adopt: () => {
       if (!peer || !store.bot(targetBotId)?.busy) return undefined;
       const taskId = peer.taskId ?? newId();
-      watchDelegatedTurn(threadId, { channelId: peer.channel?.id, toBotId: targetBotId, taskId, sourceThreadId: peer.sourceThreadId, sourceBotId: peer.sender.id, ask: true });
+      watchDelegatedTurn(threadId, { channelId: peer.channel?.id, toBotId: targetBotId, taskId, sourceThreadId: peer.sourceThreadId, sourceBotId: peer.sender.id, ask: true, reply: collected! });
       return taskId;
     },
     fail: (taskId, failureName) => {
@@ -726,7 +735,10 @@ function askBotAndWait(
       finalizeDelegationWatch(threadId, false, "", failureName);
     },
   }).then((reply) => {
-    if (!reply.taskId) peerTurnSource.delete(threadId);
+    if (!reply.taskId) {
+      peerTurnSource.delete(threadId);
+      collected?.release();
+    }
     return reply;
   });
 }
@@ -2914,6 +2926,7 @@ const usageBoard = createUsageBoard({
     get drains() { return accounts.drains; },
   },
   names: accountNames, rateLimits: rateLimitsByInstance, history: createUsageHistory(DATA_DIR),
+  accountChanged: (id, ready) => { checkMuseUsage.invalidate(id); void refreshSwappedUsage(id, ready); },
   runs: async (timeoutMs) => {
     const result = await liveWorkerRuns(terminalBridgeAccess, {}, timeoutMs);
     return result.known ? { known: true, runs: result.runs.map((run) => ({ ...run, label: run.label ?? "" })) } : result;
@@ -2930,6 +2943,9 @@ const refreshUsage = createUsageRefresh({
   accountBlocked: (id) => Boolean(accounts.drains[id]) || Boolean(accounts.get(id) && registry.accountBlocked(id)),
 });
 const checkMuseUsage = createMuseCheck();
+const refreshSwappedUsage = createUsageSwapRefresh({ registry, configs: () => instanceConfigs(cfg, accounts.snapshot), refresh: refreshUsage,
+  rateLimits: rateLimitsByInstance, save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); if (report) usageBoard.recordReport(id, report); },
+});
 const spawnUsage = createSpawnUsage({
   rateLimits: rateLimitsByInstance,
   save: (id, report) => { scheduleSaveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); },
@@ -2947,6 +2963,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
@@ -2974,7 +2991,9 @@ const accountUpdates = createAccountUpdates({
     rateLimits: rateLimitsByInstance, save: (id, report) => { saveRateLimits(rateLimitsByInstance, DATA_DIR); usageBoard.recordReport(id, report); } }),
 });
 
-function withRateLimits<T extends { instanceId: string }>(instances: T[]) {
+function withRateLimits<T extends Awaited<ReturnType<typeof registry.describe>>[number]>(instances: T[]) {
+  rememberAutomaticAvailability(instances);
+  usageBoard.sync();
   return instances.map((instance) => {
     const rateLimits = rateLimitsByInstance.get(instance.instanceId);
     return rateLimits ? { ...instance, rateLimits } : instance;
@@ -3142,6 +3161,7 @@ async function reviewPermissionCard(args: {
 }
 
 bus.subscribe((event: RuntimeEvent) => {
+  verifyAuto.event(event);
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
   else if (event.type === "request.resolved") watchdog.setWaitingOnHuman(event.threadId, false);
   else if (event.type === "turn.completed") watchdog.settle(event.threadId);
@@ -3297,6 +3317,7 @@ void (async () => {
 const busyResumeThreads = new Set<string>();
 
 bus.subscribe((event: RuntimeEvent) => {
+  peerReplies.observe(event);
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
@@ -3315,7 +3336,8 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
-  broadcast({ kind: "runtime", event });
+  const visibleEvent = peerUserRuntime(event);
+  if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
@@ -3385,6 +3407,7 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
+        if (persistPeerUserReply(store, event, lastReply)) break;
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
@@ -3815,14 +3838,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.message === INCOMPLETE_LOG_MESSAGE) void reportServerFailure(terminalBridgeAccess);
       unreadTurns.start(event.threadId, event.turnId, store.messagesFor(event.threadId));
       const previousId = event.usageLimit ? limitWaits.messageId(event.threadId) : undefined;
-      const tool = {
-        name: `error: ${event.message}`,
-        ok: false,
-        setup: event.setup,
-        usageLimit: event.usageLimit,
-        signIn: event.signIn,
-        folder: event.folder,
-      };
+      const tool = runtimeErrorTool(event, (id) => Boolean(accounts.get(id)));
       const row = previousId
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
@@ -3841,6 +3857,10 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsage.set(event.threadId, { input: event.input, output: event.output, cachedInput: event.cachedInput });
       break;
     case "turn.completed": {
+      const verifyOwner = event.turnId ? turnRegistry.get(event.turnId) : undefined;
+      const verifyStartedAt = turnStartedAtMs.get(event.threadId) ?? Date.now();
+      const verifyDisposition = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+      const verifyRoutine = routineTurnThreads.has(event.threadId);
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
@@ -3990,11 +4010,17 @@ bus.subscribe((event: RuntimeEvent) => {
           // Channel replies only affect the channel unread state.
         }
       }
+      // Before the queue drain subscribers append the next send.
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      setImmediate(() => {
+        const owner = verifyOwner && store.bot(verifyOwner.botId);
+        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
+      });
       // A delegated turn's terminal state belongs in the A⇄B channel:
       // the request was mirrored there when the delegation drained, and a
       // channel that only ever shows requests is half a record. Mirror the
       // reply on success; mirror a failed/stopped terminal chip otherwise.
-      finalizeDelegationWatch(event.threadId, event.ok, reply);
+      finalizeDelegationWatch(event.threadId, event.ok, delegationWatch.get(event.threadId)?.reply.text() ?? "");
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
       break;
@@ -4007,7 +4033,8 @@ bus.subscribe((event: RuntimeEvent) => {
 // (target threadId → channel) lets the main fold mirror the delegated
 // turn's TERMINAL state into the A⇄B channel when it completes — the
 // channel stays the full record of the handoff, not just its request.
-const delegationWatch = new Map<string, DelegatedTurn & { endTakeover?: () => void }>();
+const delegationWatch = new Map<string, DelegatedTurn & { endPeerWatch?: () => void; reply: PeerTurnReply }>();
+const peerReplies = peerTurnReplies(staleTurnEvent);
 
 /** Consume one delegated-turn watch and mirror exactly one terminal state.
  * Some harness paths settle a busy bot without a provider turn.completed
@@ -4022,22 +4049,18 @@ function finalizeDelegationWatch(
   const watched = delegationWatch.get(threadId);
   if (!watched) return false;
   delegationWatch.delete(threadId);
-  watched.endTakeover?.();
+  watched.endPeerWatch?.();
+  watched.reply.release();
+  settlePeerUserReplies(threadId);
   return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
-function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void }): void {
+function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endPeerWatch?: () => void; reply: PeerTurnReply }): void {
   delegationWatch.set(targetThreadId, watched);
   peerTurnSource.set(targetThreadId, watched.sourceThreadId);
-  watched.endTakeover = onPeerTakeover(targetThreadId, (afterReply) => {
-    peerTurnSource.delete(targetThreadId);
-    // a reply that finished before the read settles now; the turn's later end finds no watch
-    const finished = afterReply ? lastReply.get(targetThreadId)?.text : undefined;
-    if (finished !== undefined) delegationWatch.delete(targetThreadId);
-    settleTakenOverDelegation(commsBus, watched, cfg.profile?.name?.trim() || "User", finished);
-  }, () => {
-    watched.answer ??= lastReply.get(targetThreadId)?.text ?? "";
+  watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {
+    watched.answer ??= watched.reply.text() ?? "";
   });
 }
 
@@ -4072,7 +4095,7 @@ const askHold = watchAskHold(store, bus);
 /** How a drained delegation becomes a real turn on the target. Shared by
  * the settle-time drain and the boot-time drain of what a previous process
  * left queued. */
-const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText, root) => {
+const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text, commsDepth, sourceThreadId, channel, taskId, sourceBotId, transcriptText, root, reservation) => {
     // startTurn REJECTS on an ordinary condition — busy target, deleted bot,
     // unavailable provider. Unhandled, that rejection is fatal to the
     // harness (Node's default), which in the packaged app kills the server
@@ -4080,7 +4103,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     const targetThreadId = store.bot(toBotId)?.threadId;
     const ask = findDelegationReceipt(taskId)?.kind === "ask" ? true : undefined;
     updateReceipt(taskId, { state: "running", status: "running" });
-    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask });
+    if (targetThreadId) watchDelegatedTurn(targetThreadId, { channelId: channel?.id, toBotId, taskId, sourceThreadId, sourceBotId, ask, reply: peerReplies.start(targetThreadId) });
     let failureReported = false;
     const reportStartFailure = (error: unknown) => {
       if (failureReported) return;
@@ -4116,6 +4139,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
     return startTurn(toBotId, text, {
       commsDepth,
       commsRoot: root ?? null,
+      reservation,
       commsAsk: ask,
       unattended: isUnattended(sourceBotId),
       transcriptText,
@@ -4131,8 +4155,8 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
 
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
-  clearAskBudget(event.threadId);
   peerTurnSource.delete(event.threadId);
+  settlePeerUserReplies(event.threadId, event.turnId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
@@ -4194,8 +4218,9 @@ const paneWake = new PaneWakeScheduler({
     const newest = store.activePath(threadId).findLast(isWakeNote);
     if (newest) store.markPaneNotesSkipped(botId, threadId, newest.id);
   },
-  wake: (botId, threadId) => {
-    startTurn(botId, PANE_WAKE_PROMPT, { threadId, cardContinuation: true, paneNoteWake: true }).then(() => undefined).catch((err) => {
+  wake: (botId, threadId, admission) => {
+    const credit = admission.reservation ? { commsRoot: admission.rootId, reservation: admission.reservation } : {};
+    startTurn(botId, PANE_WAKE_PROMPT, { threadId, cardContinuation: true, paneNoteWake: true, ...credit }).then(() => undefined).catch((err) => {
       if (isBusyRejection(err)) paneWake.noteArrived(botId, threadId);
       else {
         console.warn("pane wake failed:", err instanceof Error ? err.message : String(err));
@@ -4219,6 +4244,7 @@ function resumePaneWakes(botId: string) {
 const noteSteer = new NoteSteerer({
   enabled: (botId) => store.bot(botId)?.shareTerminalWithChat !== false,
   paused: (botId) => store.bot(botId)?.paneWakePaused === true,
+  holds: hasPeerWatch,
   liveTurn: (botId, threadId) => {
     const bot = store.bot(botId);
     if (!bot?.busy || bot.threadId !== threadId || bot.activeThreadId !== threadId || turnStartClaims.has(botId)) return undefined;
@@ -4240,9 +4266,10 @@ const noteSteer = new NoteSteerer({
 });
 
 function drainQueuedSends() {
+  drainPeerUserReplies(store, startTurn, botHasActiveTurn, terminalBridgeAccess);
   taskResumes.settled();
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
-    // a send that never runs leaves no turn.completed to rerun a taken-over handoff
+    // A failed send still frees waiting handoffs.
     const rerunIfIdle = () =>
       continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, runDelegatedTurn), botHasActiveTurn);
     if (room) {
@@ -4395,6 +4422,8 @@ type StartTurnOptions = {
   limitWaitId?: string;
   commsDepth?: number;
   commsRoot?: string | null;
+  /** A bot-caused start's credit: committed at the accepted start, released before it. */
+  reservation?: Reservation;
   userMessage?: Message;
   /** Clean copy for user transcript when the model prompt carries an internal harness envelope. */
   transcriptText?: string;
@@ -4442,7 +4471,7 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -4560,13 +4589,18 @@ const taskResumes = new TaskResumeScheduler({
   },
 });
 
+// Reservations whose dispatch is in flight; the dispatch settles them, not startTurn.
+const dispatchingReservations = new Set<Reservation>();
+
 async function startTurn(botId: string, text: string, opts?: StartTurnOptions) {
   if (!tryClaimTurnStart(botId, opts?.threadId ?? store.bot(botId)?.threadId)) {
+    if (opts?.reservation) release(opts.reservation);
     throw busyRejection("the bot is already working - interrupt it first");
   }
   try {
     return await startClaimedTurn(botId, text, opts);
   } finally {
+    if (opts?.reservation && !dispatchingReservations.has(opts.reservation)) release(opts.reservation);
     takeStartingHold(botId)();
     turnStartClaims.delete(botId);
     // Preparation can fail before a provider turn exists, so no
@@ -4616,7 +4650,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // (askBotAndWait) never clears a live wait that is not being replaced.
   markChatLatency({ sendId: latencySendId, threadId }, "turn.dispatch");
   broadcast({ kind: "turn.dispatch", threadId, createdAt: new Date().toISOString() });
-  if (turnStartedByUser(opts)) clearDelegationWakeBudget(threadId);
   const commsDepth = opts?.commsDepth ?? 0;
   // a task takes its name from the first thing the user asked it to do —
   // never from a peer's opening line
@@ -4714,8 +4747,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Model context follows the active branch only. The durable transcript is
   // never pruned; only this provider-facing projection is bounded.
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
+  // a teammate's turn leaves worker notes pending, for this whole dispatch
+  const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
   const modelContextWindow = contextWindowFor(instance.models, model);
   const messagesBeforeSummary = store.activePath(threadId);
+  holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
   let taskRecord = taskPacketForWrite(threadId);
   const selectionChanged = task.lastInstanceId !== undefined && (
@@ -4786,6 +4822,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   };
   const summaryWaitMs = await summaryBuild.settle(threadId, instance, 90_000, () => planBeforeSummary.needed, { sendId: latencySendId, grace: graceInputs, onWait: onSummaryWait });
   const activeMessages = summarySkipped ? messagesBeforeSummary : store.activePath(threadId);
+  holdNotes?.(activeMessages);
   // Inline replay carries this turn's notes after the reply marker, so they leave history and claim their room first.
   let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
@@ -4972,13 +5009,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
-    ? foldQueuedSends(store, bot.id, threadId, claimMark)
+    ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
     for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
-    takeOverPeerTurn(threadId);
   }
   const turnOpts = {
     replyTo: opts?.replyTo,
@@ -5098,6 +5134,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
   });
 
+  const reservation = opts?.reservation;
+  if (reservation) dispatchingReservations.add(reservation);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
       turnSeeds.release(threadId, seed);
@@ -5416,13 +5454,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
-          const queued = foldQueuedSends(store, bot.id, threadId, claimMark);
+          const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
           for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
-          takeOverPeerTurn(threadId);
           // the user joined this turn, so its finish alerts
           paneNoteTurnThreads.delete(threadId);
         };
@@ -5516,6 +5553,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             const messages = store.activePath(threadId);
             const replayedIds = new Set(activeMessages.map((message) => message.id));
             for (const message of messages) if (message.steered && !replayedIds.has(message.id)) skipTranscript.add(message.id);
+            holdNotes?.(messages);
             const refreshedNotes = paneNotesForTurn(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, !replaysNatively, modelContextWindow);
             if (!replaysNatively) inlineNotes = refreshedNotes;
             const compacted = await prepareContext(messages, waitedMs);
@@ -5580,6 +5618,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       });
       });
       bindInterruptedTurn(threadId, started.turnId, bot.id, epoch);
+      if (reservation) commit(reservation);
+      if (holdNotes) newestPaneNoteId = undefined;
       // a deferred recycle's live session never took this turn's summary, so
       // it certifies nothing and the next turn still sees it as unseeded
       if (started.turnId && !recycleDeferred) seed.turnId = started.turnId;
@@ -5650,7 +5690,11 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       releaseStarting();
       logSummaryWait();
     }
-  })();
+  })().finally(() => {
+    if (!reservation) return;
+    dispatchingReservations.delete(reservation);
+    release(reservation);
+  });
   return startedTurn(userMessage);
 }
 
@@ -7102,6 +7146,26 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifySite = createVerifySite({
+  store,
+  resolveCommsCaller: (header) => commsCallers.resolve(header),
+  botOutputRoots,
+  autoVerdict,
+  isUnattended,
+  bridge: () => terminalBridgeAccess && verifyBridgeClient(terminalBridgeAccess),
+  broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
+  logDecision: (row) => appendDecision(DATA_DIR, row),
+  deviceId: () => profileSyncSettings.deviceId,
+  appToken: authorizedComms,
+  remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+  toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+});
+const verifyAuto = createVerifyAuto({
+  enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
+  startAuto: input => verifySite.startAuto(input),
+  cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  log: line => console.log(line),
+});
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
   cancelUsageWait: (botId) => limitWaits.cancel(botId),
@@ -7122,6 +7186,16 @@ const botRoutes = createBotRoutes({
   memoryHealthCheck,
   activeVpsThreads,
   resumePaneWakes,
+});
+applyBrandLeadBot({
+  dataDir: DATA_DIR,
+  leadBot: process.env.OMB_BRAND_LEAD_BOT,
+  chiefId: () => store.bots.find((bot) => bot.chiefOfStaff)?.id,
+  saveAvatar: (bytes) => {
+    const mime = sniffImageMime(bytes);
+    return mime ? botAvatarUrlFromStoredPath(saveImage(bytes, mime).path) : null;
+  },
+  applyProfile: botRoutes.applyProfile,
 });
 const botChatRoutes = createBotChatRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
@@ -7245,6 +7319,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         !apiRequestAuthorized(credentials.bearerOk, req.headers.cookie, credentials.remoteKey, path) && !linkedFileGrant(method, path)) {
       return json(res, 401, { error: "unauthorized" });
     }
+    const verifyRunId = method === "POST" ? verifyDecisionRunId(path) : null;
+    if (verifyRunId) return await verifySite.handleDecision(req, res, verifyRunId, { relay, phoneSession: credentials.phoneSession });
+    const verifyStream = method === "GET" ? /^\/api\/verify\/runs\/([a-z0-9-]{8,64})\/(live|replay)$/.exec(path) : null;
+    if (verifyStream) return await verifySite.handleStream(req, res, verifyStream[1]!, verifyStream[2] === "replay", { relay, phoneSession: credentials.phoneSession });
     // One-time remote handshake: a valid key mints the cookie /api/* accepts.
     if (method === "GET" && path === "/remote") {
       const provided = url.searchParams.get("key");
@@ -7261,6 +7339,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "POST" && path === "/api/internal/team-report") {
         return json(res, 200, await teamReports.handle(await readBody(req)));
       }
+      if (method === "POST" && path === VERIFY_ROUTES.tool) return await verifySite.handleTool(req, res);
       if (method === "PUT" && path === "/api/internal/terminal-bridge") {
         const body = await readBody(req);
         const url = typeof body?.url === "string" ? body.url.trim().replace(/\/$/, "") : "";
@@ -7548,6 +7627,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (method === "GET" && path === "/api/key-uses") {
       return json(res, 200, { uses: loadKeyUses(DATA_DIR) });
+    }
+
+    if (method === "GET" && path === "/api/activity") {
+      return json(res, 200, replyActivity());
     }
 
     if (method === "GET" && path === "/api/analytics") {

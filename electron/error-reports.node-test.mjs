@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { spawnSync } from "node:child_process";
-import { writeChatError } from "../server/chat-error.ts";
+import { runtimeErrorTool, writeChatError } from "../server/chat-error.ts";
 
 const scratch = path.join(os.tmpdir(), "wink-REPORTS-FIX");
 fs.mkdirSync(scratch, { recursive: true });
@@ -58,12 +58,12 @@ test("only the bus's canonical log failure is reported from runtime.error", () =
   const message = bus.match(/INCOMPLETE_LOG_MESSAGE\s*=\s*\n?\s*"([^"]+)"/)[1];
   const branch = source("../server/index.ts").split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0].replace(/break;(\s*\})?\s*$/, "$1");
   const calls = [];
-  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
+  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", "runtimeErrorTool", "accounts", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
   for (const event of [
     { message: "usage limit", usageLimit: { resetsAt: null } }, { message: "sign in", signIn: true },
     { message: "setup", setup: true }, { message: "CLI not found" }, { message: "Permission request timed out" },
     { message: "provider offline" }, { message },
-  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError);
+  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError, runtimeErrorTool, new Map());
   assert.deepEqual(calls, [{ message }]);
 });
 
@@ -207,7 +207,7 @@ test("own startup kills skip SERVER_GONE but child crashes still report", async 
     proc.kill = () => proc.emit("exit", 1);
     proc.pid = 123;
     const serverToken = "token";
-    const context = { path, startupWindowMs: 0, process: { resourcesPath: "test", env: {}, uptime: () => 0 }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
+    const context = { path, startupWindowMs: 0, process: { resourcesPath: "test", env: {}, uptime: () => 0 }, managedComposioChildEnvironment: () => ({}), composioBrokerUrl: () => "", childEnvCredentials: {}, app: { getPath: () => "test", getVersion: () => "0.0.0" }, workspaceCredentialEnv: () => ({}), googleServerEnv: () => ({}), GOOGLE_CLIENT: null, crashReportsEnv: () => ({}), ERROR_REPORT_DSN: "", BRAND: null, terminalBridgeAccess: null, credentialStoreUnavailable: false, slog() {}, utilityProcess: { fork: () => proc }, keepAwake: { setPhoneServer() {} }, waitForAppToken: async () => serverToken, SERVER_BOOT_TIMEOUT_MS: 1, errorReports: { capture: (value) => captures.push(value) }, ERROR_SITES: { serverGone: 4, startupTimeout: 5 }, serverProc: null, pollServerIdentity: async () => { if (outcome === "exited") proc.emit("exit", 1); return { outcome }; } };
     const start = runInNewContext(`${body}\nstartServerOn`, context);
     await start(9311);
     if (outcome === "ready") proc.emit("exit", 1);
@@ -235,7 +235,7 @@ test("missing, malformed and non-object baked config cannot stop startup", async
   const reports = await import("./error-reports.mjs");
   for (const read of [() => { throw new Error("ENOENT"); }, () => JSON.parse("{"), () => null, () => ({}), () => ({ dsn: 4 })]) assert.equal(reports.errorReportDsn(read), "");
   assert.equal(reports.errorReportDsn(() => ({ dsn: "https://public@reports.example/1" })), "https://public@reports.example/1");
-  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
+  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = verifyProbe \? null : errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
 });
 
 test("the server learns the crash host but never the key", async () => {
@@ -614,6 +614,90 @@ test("handles an old marker without a version", async (t) => {
   await next.flush();
   assert.equal(f.received.length, 1);
   assert.equal(f.queue().records.length, 1);
+});
+
+const sessionWiring = () => source("./main.mjs").split("\n").filter((line) => /win\.on\("(query-)?session-end"/.test(line)).join("\n");
+const markerOf = (f) => path.join(f.dir, "error-report-active");
+
+test("does not report after query-session-end when the session ends", async (t) => {
+  const f = await fixture(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  const win = new EventEmitter();
+  runInNewContext(sessionWiring(), { win, closeGuard: { leaveBriefly() {}, leave() {} }, errorReports: f.reporter });
+  win.emit("query-session-end");
+  assert.equal(fs.existsSync(markerOf(f)), false);
+  win.emit("session-end");
+  t.mock.timers.tick(30000);
+  assert.equal(fs.existsSync(markerOf(f)), false);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 0);
+});
+
+test("re-arms the marker when a queried session does not end", async (t) => {
+  const f = await fixture(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  const win = new EventEmitter();
+  runInNewContext(sessionWiring(), { win, closeGuard: { leaveBriefly() {}, leave() {} }, errorReports: f.reporter });
+  win.emit("query-session-end");
+  assert.equal(fs.existsSync(markerOf(f)), false);
+  t.mock.timers.tick(30000);
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerOf(f), "utf8")), { build: f.config.build });
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+});
+
+test("does not report a same-build marker refreshed just before the OS booted", async (t) => {
+  const f = await fixture(t);
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.advance(3600000);
+  t.mock.timers.tick(30000);
+  f.advance(60000);
+  const boot = f.config.now();
+  f.config.bootTime = () => boot;
+  f.advance(60000);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(f.received.length, 0);
+  assert.equal(fs.existsSync(path.join(f.dir, "error-report-queue.json")), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerOf(f), "utf8")), { build: f.config.build });
+});
+
+test("still reports a same-build marker with no reboot since", async (t) => {
+  const f = await fixture(t);
+  const boot = f.config.now() - 3600000;
+  f.config.bootTime = () => boot;
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.advance(60000);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
+});
+
+test("still reports a same-build marker refreshed long before the OS booted", async (t) => {
+  const f = await fixture(t);
+  f.reporter.setConsent(true);
+  f.reporter.start();
+  f.advance(3600000);
+  const boot = f.config.now();
+  f.config.bootTime = () => boot;
+  f.advance(60000);
+  const next = f.open();
+  next.start();
+  await next.flush();
+  assert.equal(JSON.parse(f.received[0].body).message, "UNCLEAN_EXIT");
 });
 
 test("graceful shutdown preserves a pending report for retry after restart", async (t) => {

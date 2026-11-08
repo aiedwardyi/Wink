@@ -15,12 +15,12 @@ function Glyph({ color }: { color: string }) {
   return <path fill="none" stroke={color} strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" d={GLYPH_STROKE} />;
 }
 
-// Solid when on, hollow when paused; the glyph is cut out, so it shows the ground behind it.
-export function KeepGoingMark({ state, size = 12, className }: { state: KeepGoingMarkState; size?: number; className?: string }) {
+// Solid when on (gray when off), hollow when paused; the glyph is cut out, so it shows the ground behind it.
+export function KeepGoingMark({ state, size = 12, className }: { state: KeepGoingMarkState | "off"; size?: number; className?: string }) {
   const mask = `kgm${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return (
-    <svg width={size} height={size} viewBox="0 0 12 12" className={cn("block shrink-0 text-accent-text", className)} aria-hidden>
-      {state === "on" ? (
+    <svg width={size} height={size} viewBox="0 0 12 12" className={cn("block shrink-0", state === "off" ? "text-ink-secondary" : "text-accent-text", className)} aria-hidden>
+      {state !== "paused" ? (
         <>
           <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="12" height="12">
             <circle cx="6" cy="6" r="6" fill="#fff" />

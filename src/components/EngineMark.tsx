@@ -1,4 +1,4 @@
-// Engine mark with a hover card naming the account the engine bills. Opens
+// Engine mark with a hover card showing sign-in status. Opens
 // on hover and keyboard focus; on phones a hold opens it, only where the
 // mark sits outside a button or link that already owns the tap.
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -19,7 +19,7 @@ const OWNS_TAP = "button, a[href], [role='button'], [role='tab'], [tabindex]:not
 export function engineHoverText(instance: InstanceInfo, t: Translate): string {
   const { snapshot } = instance;
   const signedIn = snapshot.state === "available" && snapshot.authenticated === true;
-  const status = signedIn ? snapshot.account || t("engines.signedIn") : t("engines.notSignedIn");
+  const status = t(signedIn ? "engines.signedIn" : "engines.notSignedIn");
   return t("engines.accountLine", { engine: instance.displayName, status });
 }
 

@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { GitBranch, Wrench } from "lucide-react";
 import { api, useStore, formatTime } from "@/state/store";
-import { MausAvatar } from "./Avatar";
+import { BotAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
 import type { SearchHit } from "@/lib/search-hit";
 import { highlightParts } from "@/lib/chat-find";
@@ -76,13 +76,14 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
             className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-raised/60"
           >
             {bot ? (
-              <MausAvatar color={bot.color} state="idle" size={26} animated={false} />
+              <BotAvatar bot={bot} state="idle" size={26} animated={false} />
             ) : (
               <span className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-raised text-[11px] text-ink-secondary">#</span>
             )}
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline gap-1.5 text-[12px] text-ink-secondary">
-                <span className="truncate font-medium text-ink"><Highlighted text={hit.from ?? hit.name} query={q} /></span>
+                {/* with a task, the cap leaves room for the time and a bit of it */}
+                <span className={cn("truncate font-medium text-ink", hit.task && "max-w-[65%] shrink-0")}><Highlighted text={hit.from ?? hit.name} query={q} /></span>
                 {hit.task ? <span className="truncate">· <Highlighted text={hit.task} query={q} /></span> : null}
                 <span className="ml-auto shrink-0 tabular-nums">{formatTime(hit.at, localeTag(locale))}</span>
               </span>

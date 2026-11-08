@@ -4,11 +4,15 @@
 // endpoints, and drive the MCP stdio surface end to end. No shebang, no
 // shell — plain node child, so this runs on every OS like index.test.ts.
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { build } from "esbuild";
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { handle } from "./agents-proxy.ts";
 
 const { reply } = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/check-delegation.json", import.meta.url), "utf8"));
 
@@ -66,6 +70,9 @@ let botWakesPaused = false;
 let lastKeepGoingBody: { fromBotId: string; fromThreadId: string; on: boolean; start_after?: string } | null = null;
 let keepGoingResponse: { status: number; body: unknown } = { status: 200, body: { ok: true } };
 let taskStateNotice: string | undefined;
+let lastVerify: { auth?: string; body: unknown } | null = null;
+let verifyResponse: unknown = { status: "completed", text: "Live Verify: site/index.html - 22 checks, 22 passed, 0 issues, 0 blocked, 0 not run (21 s).\nNo issues found." };
+let verifyHold: ((closed: boolean) => void) | null = null;
 
 let child: ChildProcess;
 const pending = new Map<number, (msg: any) => void>();
@@ -270,6 +277,21 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && req.url === "/api/internal/verify-site") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastVerify = { auth: req.headers.authorization, body: JSON.parse(data) };
+        if (verifyHold) {
+          const hold = verifyHold;
+          res.on("close", () => hold(!res.writableEnded));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(verifyResponse));
+      });
+      return;
+    }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unknown" }));
   });
@@ -309,6 +331,18 @@ afterAll(async () => {
 });
 
 describe("agents-proxy MCP surface", () => {
+  it("answers the handshake through the exported handler", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await handle({ id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } });
+      expect(write).toHaveBeenCalledWith(`${JSON.stringify({ jsonrpc: "2.0", id: 1, result: {
+        protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "opengrokbot-agents", version: "0.1.0" },
+      } })}\n`);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("answers the MCP handshake and lists the tool surface", async () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05" });
     expect(init.result.serverInfo.name).toContain("agents");
@@ -456,6 +490,26 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("Call request_credential with openaiImageApiKey");
     const empty = await callTool("generate_image", { prompt: " " });
     expect(empty.result.content[0].text).toContain("needs a prompt");
+  });
+
+  it("advertises multipart uploads and forwards the form to the key broker", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "call_api");
+    expect(tool.description).toContain("For file uploads (multipart), pass form with fields and files (absolute paths inside your working folder).");
+    expect(tool.inputSchema.properties.form).toMatchObject({
+      type: "object",
+      properties: {
+        fields: { type: "object", additionalProperties: { type: "string" } },
+        files: { type: "array", items: {
+          type: "object", required: ["field", "path"],
+          properties: { field: { type: "string" }, path: { type: "string" }, filename: { type: "string" }, content_type: { type: "string" } },
+        } },
+      },
+    });
+    const form = { fields: { model: "asr" }, files: [{ field: "audio", path: "/proj/speech.m4a", filename: "voice.m4a", content_type: "audio/mp4" }] };
+    await callTool("call_api", { credential_id: "xaiApiKey", method: "POST", url: "https://api.x.ai/v1/chat", form });
+    expect(lastCallApiBody.form).toEqual(form);
+    expect(lastCallApiBody).not.toHaveProperty("body");
   });
 
   it("calls an API through the harness key broker", async () => {
@@ -695,10 +749,13 @@ describe("agents-proxy MCP surface", () => {
     expect(res.result.content[0].text).toContain("one hop");
   });
 
-  it("reports a per-turn ask budget as a limit, not as an unreachable peer", async () => {
-    askResponse = { limit: "this turn has already used its 4 teammate messages — use delegate_bot for the rest." };
+  it.each([
+    "You already have 4 teammate messages waiting. Collect those replies first.",
+    "This request reached its 24 bot turn limit. Finish with what you have; the user can send a message to continue.",
+  ])("reports an ask limit as a limit, not as an unreachable peer: %s", async (limit) => {
+    askResponse = { limit };
     const res = await callTool("ask_bot", { bot_id: "bot-helper", message: "ping" });
-    expect(res.result.content[0].text).toContain("already used its 4 teammate messages");
+    expect(res.result.content[0].text).toBe(limit);
     expect(res.result.content[0].text).not.toContain("Couldn't reach that bot");
   });
 
@@ -1076,9 +1133,9 @@ describe("agents-proxy MCP surface", () => {
   });
 });
 
-function probeWithIdentity(identity: Record<string, string>, name = "react", args: unknown = { emoji: "👍" }): Promise<{ list: any; call: any }> {
+function probeWithIdentity(identity: Record<string, string>, name = "react", args: unknown = { emoji: "👍" }, proxyFile = PROXY): Promise<{ list: any; call: any }> {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OMB_")));
-  const proxy = spawn(process.execPath, [PROXY], {
+  const proxy = spawn(process.execPath, [proxyFile], {
     windowsHide: true,
     env: { ...inherited, OMB_HARNESS_URL: "http://127.0.0.1:9", ...identity },
     stdio: ["pipe", "pipe", "inherit"],
@@ -1146,5 +1203,103 @@ describe("agents-proxy identity gate", () => {
   ])("keeps %s callable in a peer turn", async (name, args) => {
     const { call } = await probeWithIdentity({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "1", OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}` }, name as string, args);
     expect(call.result.isError).toBeFalsy();
+  });});
+
+describe("agents-proxy verify_site", () => {
+  let verifyProxy: string;
+  let enabledRoot: string;
+  const probe = (identity: Record<string, string>, name?: string, args?: unknown) => probeWithIdentity(identity, name, args, verifyProxy);
+  beforeAll(async () => {
+    const root = join(tmpdir(), "wink-LV-DONE-CHECK");
+    mkdirSync(root, { recursive: true });
+    enabledRoot = mkdtempSync(join(root, "proxy-"));
+    verifyProxy = join(enabledRoot, "agents-proxy.mjs");
+    await build({ entryPoints: [PROXY], outfile: verifyProxy, bundle: true, platform: "node", format: "esm" });
+  });
+  afterAll(() => rmSync(enabledRoot, { recursive: true, force: true }));
+
+  it("ships the done-check for browser changes unless the user opts out", async () => {
+    lastVerify = null;
+    const { list, call } = await probeWithIdentity(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
+    expect(names(list)).toContain("verify_site");
+    expect(call.error).toBeUndefined();
+    expect(lastVerify).not.toBeNull();
+  });
+
+  it("describes every browser change in any folder", async () => {
+    const { list } = await probe(identity(0, { OMB_LIVE_VERIFY: "1" }));
+    const tool = list.result.tools.find((row: { name: string }) => row.name === "verify_site");
+    expect(tool.description).toContain("every change that renders in a browser");
+    expect(tool.description).toContain("unless the user says not to");
+    expect(tool.description).toContain("any folder");
+    expect(tool.inputSchema.properties.entry.description).toContain("loopback");
+  });
+
+  const identity = (depth: number, flags: Record<string, string>) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, ...flags });
+  const names = (list: any): string[] => list.result.tools.map((t: { name: string }) => t.name);
+
+  it("adds zero tools/list bytes on production turns", async () => {
+    const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    const verify = await import("../verify-site.ts") as { verifyToolEnv?: (desktop: boolean, platform: NodeJS.Platform) => Record<string, string> };
+    const { list } = await probe(identity(0, verify.verifyToolEnv?.(true, "win32") ?? {}));
+    expect(names(list)).not.toContain("verify_site");
+    expect(Buffer.byteLength(JSON.stringify(list.result.tools.filter((tool: { name: string }) => tool.name === "verify_site"))) - 2).toBe(0);
+    expect(source.includes("verifyToolEnv")).toBe(false);
+  });
+
+  it.each<[Record<string, string>, number, boolean]>([
+    [{ OMB_TEAM_REPORTS: "0" }, 18, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 19, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 19, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 20, true],
+  ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
+    const { list } = await probe(identity(0, flags));
+    expect(names(list)).toHaveLength(total);
+    expect(names(list).includes("verify_site")).toBe(listed);
+  });
+
+  it.each<Record<string, string>>([{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, { OMB_TEAM_REPORTS: "1" }])("keeps the five peer tools and never lists verify_site at depth > 0 (%o)", async (flags) => {
+    const { list, call } = await probe(identity(1, flags), "verify_site", { entry: "site" });
+    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "list_routines", "update_task_state", "wait_delegation"]);
+    expect(call.result?.isError ?? call.error).toBeTruthy();
+  });
+
+  it("refuses a direct peer call before calling the harness", async () => {
+    lastVerify = null;
+    const { call } = await probe(identity(1, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site" });
+    expect(call.result.isError).toBe(true);
+    expect(call.result.content[0].text).toContain("unavailable in peer turns");
+    expect(lastVerify).toBeNull();
+  });
+
+  it.each([
+    [{ status: "completed", text: "Desktop and phone: no problems found." }, false],
+    [{ status: "blocked", errorCode: "busy", text: "Live Verify could not finish site: another Live Verify run is going; try again when it finishes." }, true],
+  ])("posts the entry with the bearer and returns the reply text (%o)", async (reply, isError) => {
+    verifyResponse = reply;
+    const { call } = await probe(identity(0, { OMB_LIVE_VERIFY: "1" }), "verify_site", { entry: "site", fromBotId: "bot-other" });
+    expect(lastVerify).toEqual({ auth: `Bearer ${TOKEN}`, body: { entry: "site" } });
+    expect(call.result.content[0].text).toBe(reply.text);
+    expect(Boolean(call.result.isError)).toBe(isError);
+  });
+
+  it("drops the harness request on notifications/cancelled and sends no reply", async () => {
+    lastVerify = null;
+    const dropped = new Promise<boolean>((resolve) => (verifyHold = resolve));
+    const proxy = spawn(process.execPath, [verifyProxy], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1" }) }, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    proxy.stdout!.on("data", (chunk) => (out += chunk));
+    try {
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "verify_site", arguments: { entry: "site" } } }) + "\n");
+      await vi.waitFor(() => expect(lastVerify).not.toBeNull(), { timeout: 10_000 });
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7 } }) + "\n");
+      expect(await dropped).toBe(true);
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: 8, method: "ping" }) + "\n");
+      await vi.waitFor(() => expect(out).toContain('"id":8'), { timeout: 10_000 });
+      expect(out).not.toContain('"id":7');
+    } finally {
+      verifyHold = null;
+      proxy.kill();
+    }
   });
 });

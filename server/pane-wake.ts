@@ -1,9 +1,12 @@
+import type { Reservation } from "./comms-root.ts";
 import type { Message, Store } from "./store.ts";
 
 export const PANE_WAKE_PROMPT = "A pane note arrived. Act on it.";
 export const PANE_WAKE_DEBOUNCE_MS = 3_000;
 export const PANE_WAKE_HOURLY_CAP = 20;
 const HOUR_MS = 60 * 60 * 1000;
+
+export interface WakeAdmission { rootId: string | null; reservation: Reservation | null }
 
 export interface PaneWakeDeps {
   enabled(botId: string, threadId: string): boolean;
@@ -15,13 +18,18 @@ export interface PaneWakeDeps {
   closedByBot?(botId: string, paneIds: string[]): Promise<boolean>;
   /** A burst was dropped because the bot closed all its panes. */
   skipped?(botId: string, threadId: string): void;
-  wake(botId: string, threadId: string): void;
-  admit?(botId: string, threadId: string): boolean;
+  /** Starts with the admission's own root and reservation, never a re-read. */
+  wake(botId: string, threadId: string, admission: WakeAdmission): void;
+  admit?(botId: string, threadId: string): WakeAdmission | null;
   warn(line: string): void;
   now?(): number;
 }
 
 const isReportNote = (message: Message) => message.kind === "note" && Boolean(message.reportIds?.length);
+
+/** The user's own message carried the notes before it; a teammate's peer turn held them. */
+export const endsNoteWindow = (message: Message) =>
+  message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !message.steered && !message.from?.botId;
 
 export function isWakeNote(message: Message): boolean {
   return (!message.quiet || isReportNote(message)) && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));
@@ -34,7 +42,7 @@ export function paneNoteWaiting(store: Pick<Store, "bot" | "taskByThread" | "act
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId) break;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if (message.kind === "note" && (sharing || isReportNote(message)) && isWakeNote(message) && message.text?.trim()) return true;
   }
   return false;
@@ -49,7 +57,7 @@ export function paneWakeEnabled(store: Store, botId: string, threadId: string): 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === task?.paneNotesDeliveredId || message.id === task?.paneNotesSkippedId) break;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if ((message.kind === "activity" || isReportNote(message)) && isWakeNote(message) && message.text?.trim()) return true;
   }
   return false;
@@ -59,7 +67,7 @@ export function hasLocalUndeliveredPaneNote(messages: Message[], deliveredId: st
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId || message.id === skippedId) break;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) break;
+    if (endsNoteWindow(message)) break;
     if (!message.quiet && isWakeNote(message) && message.text?.trim() && message.origin === deviceId) return true;
   }
   return false;
@@ -170,8 +178,9 @@ export class PaneWakeScheduler {
       entry.timer.unref?.();
       return;
     }
-    if (this.deps.admit && !this.deps.admit(botId, threadId)) return;
+    const admission = this.deps.admit ? this.deps.admit(botId, threadId) : { rootId: null, reservation: null };
+    if (!admission) return;
     this.wakes.set(botId, [...recent, now]);
-    this.deps.wake(botId, threadId);
+    this.deps.wake(botId, threadId, admission);
   }
 }

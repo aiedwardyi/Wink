@@ -2,6 +2,132 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.242] - 2026-11-08
+
+### Added
+- An activity grid per account in Usage.
+- Drag accounts to reorder them in Connections. Usage follows the same order.
+- Tap the usage bar to open the small limits card.
+- Ctrl+number switches bots, Alt+number opens that worker's terminal, and Ctrl+` opens Main.
+
+### Changed
+- Ctrl+plus/minus zooms in smaller steps.
+- The quick usage card follows your Usage order.
+
+### Fixed
+- Wink no longer lags at startup on PCs with many old worker folders.
+- A message you send while a bot is answering another bot gets its own reply.
+- Single-account Connections rows show the signed-in email.
+
+## [1.0.241] - 2026-11-07
+
+### Fixed
+- Startup lag on PCs with many old worker folders, first pass.
+
+## [1.0.240] - 2026-11-07
+
+### Added
+- Watch website done-checks live or replay their desktop and phone checks.
+- Pick a worker's account by name without changing Main.
+
+### Changed
+- Usage has clearer spacing and bars, a busy refresh indicator, and account-switch feedback.
+
+### Fixed
+- Signing out of Grok, Muse, Claude or Codex in Connections works on the first click.
+- Usage numbers refresh correctly after switching accounts.
+- Clicking empty space in the chat box focuses your draft.
+- Memory and Description text stays reachable after fonts load.
+
+## [1.0.239] - 2026-11-06
+
+### Added
+- Give a PC its own app name and logo with a brand file in the Wink data folder.
+
+### Fixed
+- A failed chat on a signed-out account names the account and offers Sign In Again.
+- Sign in directly from a Usage row.
+- A refused sign-in explains why.
+- Space plays and pauses a chat video after dragging its seek bar.
+
+## [1.0.238] - 2026-11-06
+
+### Added
+- Archive a bot from its menu.
+
+### Fixed
+- Keep your place when loading earlier messages.
+- The Usage account button now says Switch.
+- Korean shows 전환 중 while switching accounts.
+- A failed worker shows as working again once it moves on.
+- Text sent to a remote device's terminal arrives whole.
+
+## [1.0.237] - 2026-11-06
+
+### Added
+- Zoom the desktop model chart with the mouse wheel.
+- Pin groups to the top of the sidebar.
+- Usage page redone: compact rows, slanted bars back above the chat box, drag to reorder, and expand all.
+- Claude API errors that end a turn now show in chat.
+
+### Fixed
+- Show earlier messages now loads a full screen on each click.
+- Fixed several layout snags on the phone.
+- Korean words stay whole on phones.
+- Worker notes wait while a bot answers a bot, and read "No reply from @bot" when it does not.
+- Bot tools are no longer blocked after a Main account switch.
+- Added Claude accounts share your user setup, including new skills.
+- STALLED notes hold through Claude monitor waits.
+- Update launch logs are kept past 1 MB.
+
+## [1.0.236] - 2026-11-05
+
+### Fixed
+- Model Index charts in full screen on the phone keep their tabs on top, swipe to the next chart, and zoom with a pinch or a double-tap.
+- Settings > Devices no longer flickers its check marks when it opens.
+- The @ list and search show each bot's own picture.
+- New group lists each AI once, even with several accounts signed in, and signing in from that list uses your Main account.
+- A renamed account keeps its name after sign-in refreshes and restarts.
+
+## [1.0.235] - 2026-11-05
+
+### Changed
+- Settings > Usage shows each account as its own row with 5h and 7d meters, % left and the reset time. Each AI shows 3 accounts with Show more for the rest, and your Main account always stays in view.
+- Usage sections fold and stay folded on this device, numbers older than 5 minutes show how old they are, and the page refreshes on its own without a Refresh All button.
+- The usage quick view in chat uses the same rows on desktop and phone, and closes when another window opens over it.
+- Connections has a smoother menu on the phone, and an account still signing in shows one menu, clear of Cancel.
+
+### Fixed
+- The red sign-in warning clears once sign-in finishes.
+
+## [1.0.234] - 2026-11-05
+
+### Added
+- Bots can upload files, like a voice memo for speech-to-text or an image to edit, when they call an outside service with your saved key.
+- Bot Details shows a green Saved mark beside Description each time your edit saves.
+
+### Changed
+- Bots can go 24 turns with each other for each message you send, up from about 3. When they reach it, the chat says so and how to reset it.
+- Grok and Muse keep their sessions ready between turns, so their next reply can start sooner.
+
+### Fixed
+- Pictures and videos a bot links in chat now open on your other PCs and your phone, even when saved outside the bot's folder.
+- Gemini workers no longer stop at the "trust this folder" question.
+- Clicking beside a long Description no longer jumps to the bottom of the text.
+- The reply timer keeps counting from your first message when you add more while a bot is replying.
+- Restarting Windows is no longer reported as Wink closing unexpectedly.
+- Worker panes keep their private message keys off the screen and out of notes.
+
+## [1.0.233] - 2026-11-05
+
+### Changed
+- Bots know which account each of their workers runs on, shown as a number (Claude 1, Claude 2) or your nickname.
+- After you change an engine's Main account, bots with workers on that engine get one short note naming the workers still on the old account.
+
+### Fixed
+- Workers on a newly signed-in Claude account no longer stop at Claude's first-run screens.
+- A Claude worker waiting on a long background command no longer gets a stall alert every 30 minutes; the first comes after 2 hours.
+
 ## [1.0.231] - 2026-11-05
 
 ### Added
@@ -592,6 +718,16 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.242]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.242
+[1.0.241]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.241
+[1.0.240]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.240
+[1.0.239]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.239
+[1.0.238]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.238
+[1.0.237]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.237
+[1.0.236]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.236
+[1.0.235]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.235
+[1.0.234]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.234
+[1.0.233]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.233
 [1.0.231]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.231
 [1.0.230]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.230
 [1.0.229]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.229

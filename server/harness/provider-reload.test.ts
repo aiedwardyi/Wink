@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { createWarmPool, type Lease } from "../drivers/warm-pool.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { EventBus } from "./bus.ts";
 import { ProviderReload } from "./provider-reload.ts";
@@ -78,6 +79,69 @@ describe("provider settings reload", () => {
     expect(live).not.toBe(captured);
     expect(live).toBe(registry.get("muse"));
     reload.settled("muse-thread");
+  });
+
+  it("creates the replacement before the old dispose, which spares the replacement's leases", async () => {
+    const pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    const muse = makeFakeDriver({ kind: "museAgent" });
+    const order: string[] = [];
+    const leases = new Map<string, Lease>();
+    const create = muse.driver.create.bind(muse.driver);
+    muse.driver.create = async (input) => {
+      const instance = await create(input);
+      const incarnation = `muse-${leases.size + 1}`;
+      order.push(`create ${incarnation}`);
+      const lease = pool.reserve({ engine: "museAgent", instanceId: input.instanceId, threadId: `t-${incarnation}` }, "fp", { generation: 0, incarnation, identity: "auth-hash" }, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      leases.set(incarnation, lease);
+      const dispose = instance.dispose;
+      instance.dispose = async () => {
+        order.push(`dispose ${incarnation}`);
+        pool.invalidate({ instanceId: input.instanceId, incarnation }, "dispose");
+        await dispose();
+      };
+      return instance;
+    };
+    const registry = new ProviderRegistry([muse.driver], { warmPool: pool });
+    const initial = { muse: { driver: "museAgent" } };
+    await registry.load(initial);
+    const bus = new EventBus(() => {});
+    bus.attach(registry.instances());
+    const reload = new ProviderReload(registry, bus, initial);
+
+    await reload.reload({ muse: { driver: "museAgent", config: { cli: "muse-preset" } } });
+
+    expect(order).toEqual(["create muse-1", "create muse-2", "dispose muse-1"]);
+    expect(leases.get("muse-1")!.signal.aborted).toBe(true);
+    expect(leases.get("muse-2")!.signal.aborted).toBe(false);
+    expect(pool.stats().pending).toBe(1);
+  });
+
+  it("a reload invalidates the old incarnation's leases without the driver's help", async () => {
+    const pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    const muse = makeFakeDriver({ kind: "museAgent" });
+    const registry = new ProviderRegistry([muse.driver], { warmPool: pool });
+    const initial = { muse: { driver: "museAgent" } };
+    await registry.load(initial);
+    const bus = new EventBus(() => {});
+    bus.attach(registry.instances());
+    const reload = new ProviderReload(registry, bus, initial);
+    const reserve = (threadId: string) => {
+      const incarnation = registry.incarnation?.("muse") ?? "";
+      const lease = pool.reserve({ engine: "museAgent", instanceId: "muse", threadId }, "fp", { generation: 0, incarnation, identity: "auth-hash" }, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      return lease;
+    };
+    const old = reserve("t-old");
+
+    await reload.reload({ muse: { driver: "museAgent", config: { cli: "muse-preset" } } });
+
+    expect(old.signal.aborted).toBe(true);
+    const next = reserve("t-new");
+    expect(next.captured.incarnation).not.toBe(old.captured.incarnation);
+    expect(next.signal.aborted).toBe(false);
+    registry.remove("muse");
+    expect(next.signal.aborted).toBe(true);
   });
 });
 

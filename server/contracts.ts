@@ -81,6 +81,7 @@ export type RuntimeEvent = RuntimeEventBase &
     | { type: "session.started"; sessionId: string | null; model?: string | null }
     | { type: "session.exited"; reason?: string }
     | { type: "turn.started" }
+    | { type: "turn.stage"; stage: "setup" | "prompt-sent" | "finishing" }
     | {
         type: "turn.retrying";
         /** 1-based: the retry about to be launched (1 = first relaunch). */
@@ -122,7 +123,7 @@ export type RuntimeEvent = RuntimeEventBase &
         verb?: string;
       }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
-    | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail }
+    | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail; writes?: string[] }
     | { type: "item.completed"; itemType: "assistant_text"; text: string; summarized?: boolean; phase?: "commentary" | "partial_answer" | "final_answer" }
     | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
     | {
@@ -252,6 +253,12 @@ export interface SendTurnInput {
   };
   cwd?: string;
 }
+
+/** The turn a speculative prepare warms for; the driver rechecks it against the real SendTurnInput at take. */
+export type PrepareTurn = Pick<SendTurnInput, "threadId" | "model" | "effort" | "resumeCursor" | "approval" | "integrations" | "cwd"> & {
+  depth: 0 | 1 | 2;
+  captured: import("./drivers/warm-pool.ts").Captured;
+};
 
 export interface TurnStartResult {
   turnId: TurnId;
@@ -423,6 +430,8 @@ export interface ModelCatalog {
 export interface DriverCreateInput<Config> {
   account?: import("./account-policy.ts").AccountContext;
   instanceId: InstanceId;
+  /** registry.incarnation(instanceId) for this instance; Captured.incarnation must equal it. Absent outside the registry (tests): the driver mints its own. */
+  incarnation?: string;
   displayName: string | undefined;
   environment: Record<string, string>;
   enabled: boolean;
@@ -460,7 +469,12 @@ export interface ProviderInstance {
    * from a generic helper that may expose prompts in argv or lack approvals. */
   reviewPermission?(prompt: string, signal?: AbortSignal): Promise<string>;
   /** Opt-in handshake/CLI prepare for the focused bot only. Not used at boot. */
-  prepare?(): Promise<void>;
+  prepare?(turn?: PrepareTurn): Promise<void>;
+  /** The Captured this instance last computed itself (snapshot or capture), only while still current:
+   *  same pool generation, non-empty identity, enabled, not disposed; otherwise null.
+   *  Synchronous and memory only: no file, process or login read. Advisory: prepare, take and the prompt write recheck a fresh capture.
+   *  The identity is an in-memory hash: never log it or put it in a response. */
+  cachedCapture?(): import("./drivers/warm-pool.ts").Captured | null;
   dispose(): Promise<void>;
 }
 

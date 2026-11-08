@@ -5,7 +5,20 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { installOrbitMsg } from "./terminal-mailbox.mjs";
+import { installOrbitMsg, mailboxGrant, maskMailboxGrants } from "./terminal-mailbox.mjs";
+
+test("masks only complete mailbox grant shapes", () => {
+  const grant = mailboxGrant("test-token", "pane", "bot", "bot");
+  const masked = `${grant.split(".")[0]}.***`;
+  assert.equal(maskMailboxGrants(`'${grant}' Bearer ${grant}; 한글`), `'${masked}' Bearer ${masked}; 한글`);
+  const other = ["12345678.short", "A2345678." + "A".repeat(43), grant + "a", "a" + grant, grant.slice(0, -1), "a".repeat(64), "$env:ORBIT_MSG_AUTH", "12345678." + "!".repeat(43)].join("\n");
+  assert.equal(maskMailboxGrants(other), other);
+  for (let split = 1; split < grant.length; split++) {
+    const wrapped = `${grant.slice(0, split)}\n${grant.slice(split)}`;
+    const expected = split <= 9 ? `${masked.slice(0, split)}\n${masked.slice(split)}` : `${masked}\n`;
+    assert.equal(maskMailboxGrants(wrapped), expected);
+  }
+});
 
 const WIN32 = process.platform === "win32";
 const LIVE_TIMEOUT = 180_000;

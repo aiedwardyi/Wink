@@ -44,6 +44,7 @@ import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, codexRateLimitWindows } from "./rate-limits.ts";
 import { cachedSignIn } from "./auth-status.ts";
 import { accountLaunch } from "../account-policy.ts";
+import { baseAccount } from "../worker-resume.ts";
 import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount } from "./codex-account.ts";
 import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
 
@@ -202,6 +203,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
   async create(input: DriverCreateInput<CodexConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
+    const turnPolicy = input.account ? { ...launchPolicy, accountBaseHome: baseAccount(input.account.of, DRIVER_KIND, { ...process.env, ...input.environment }).home } : launchPolicy;
     let engineAccount: CodexAccount = {};
     let admitted = !input.account;
     let accountBlocked = false;
@@ -327,7 +329,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
 
         const child = spawnCli(config.cli, appServerArgs, {
-          ...launchPolicy,
+          ...turnPolicy,
           cwd: turn.cwd ?? homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -597,6 +599,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               };
               const detail = parsed.success ? codexToolDetail(parsed.data, !ok) : undefined;
               if (detail) event.detail = detail;
+              if (ok && parsed.success && parsed.data.type === "fileChange") event.writes = parsed.data.changes?.filter(change => change.kind.type !== "delete").map(change => change.path).slice(0, 32);
               emit(event);
             } else if (item.type === "reasoning") {
               emit({ ...base(threadId, turnId), type: "item.updated", itemType: "reasoning", tokens: null });

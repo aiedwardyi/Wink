@@ -618,6 +618,33 @@ describe("relative file links", () => {
     });
   });
 
+  it.each([
+    ["en", "This file is outside the bot's folder, so it can't open here."],
+    ["ko", "이 파일은 봇 폴더 밖에 있어서 여기서는 열 수 없어요."],
+  ] as const)("explains an outside-folder refusal in %s without a desktop bridge", async (locale, message) => {
+    applyLocale(locale);
+    const fetchFile = vi.fn(async () => new Response(JSON.stringify({ error: "not found", reason: "outside" }), { status: 404 }));
+    vi.stubGlobal("fetch", fetchFile);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const file = "C:\\Users\\mredw\\Desktop\\donecheck-demo.mp4";
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: `[donecheck-demo.mp4](<${file}>)`, threadId: "t1" })));
+      expect(host.textContent).toContain(message);
+      expect(host.textContent).toContain("donecheck-demo.mp4");
+      const refusal = host.querySelector('[data-file-unavailable="outside"]')!;
+      expect(refusal.firstElementChild?.textContent).toBe("donecheck-demo.mp4");
+      expect(refusal.lastElementChild?.textContent).toBe(message);
+      expect(host.querySelector("button, a, video")).toBeNull();
+      expect(fetchFile).toHaveBeenCalledTimes(1);
+      expect(fetchFile).toHaveBeenCalledWith(`/api/threads/t1/linked-file?path=${encodeURIComponent(file)}`, { headers: { Range: "bytes=0-0" } });
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+      applyLocale("en");
+    }
+  });
+
   it("waits to play a video and opens a pdf in a new tab", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
     const host = document.createElement("div");
@@ -644,6 +671,40 @@ describe("relative file links", () => {
     } finally {
       await act(async () => root.unmount());
       host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hands focus back to a scrubbed video so Space plays and pauses it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
+    const host = document.createElement("div");
+    const composer = document.createElement("textarea");
+    document.body.append(host, composer);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: "[clip.mp4](C:/clips/clip.mp4)", threadId: "t1" })));
+      await act(async () => {
+        await vi.waitFor(() => {
+          expect(host.querySelector("video")).not.toBeNull();
+        });
+      });
+      const video = host.querySelector("video")!;
+      const blurred = vi.fn();
+      video.addEventListener("blur", blurred);
+      video.setAttribute("tabindex", "0");
+      video.focus();
+      await act(async () => { video.dispatchEvent(new Event("seeked")); });
+      expect(blurred).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(video);
+      composer.focus();
+      blurred.mockClear();
+      await act(async () => { video.dispatchEvent(new Event("seeked")); });
+      expect(blurred).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      composer.remove();
       vi.unstubAllGlobals();
     }
   });

@@ -310,6 +310,38 @@ describe("engine sign-in row", () => {
     expect(host.textContent).toBe("Connected");
   });
 
+  it("shows why sign-in could not start and leaves the other sign-in running", async () => {
+    const reasons = [
+      ["login-busy", "Finish or cancel the other sign-in first.", "다른 로그인을 먼저 끝내거나 취소하세요."],
+      ["account-busy", "Finish this account's work first.", "이 계정의 작업이 끝나면 로그인하세요."],
+      ["host-unknown", "Can't check workers. Try again soon.", "작업을 확인할 수 없어요. 잠시 후 다시 해보세요."],
+      [undefined, "Didn't finish. Try again.", "완료되지 않았어요. 다시 시도하세요."],
+    ] as const;
+    vi.stubGlobal("localStorage", window.localStorage);
+    for (const locale of ["en", "ko"] as const) {
+      persistPreference(locale);
+      for (const [code, en, ko] of reasons) {
+        const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => init?.method === "POST"
+          ? new Response(JSON.stringify({ error: "Sign-in is busy", ...code && { code } }), { status: 409 }) : json({}));
+        vi.stubGlobal("fetch", fetchMock);
+        await render(createElement(EngineSignIn, { instance: instance("claudeAgent") }));
+        await click(locale === "en" ? "Sign In" : "로그인");
+        expect(host.textContent, code).toContain(locale === "en" ? en : ko);
+        expect(host.textContent).not.toContain("Sign-in is busy");
+        // the wrap marker stays so the card puts the reason under the title on narrow screens
+        expect(host.querySelector("[data-sign-in-open]"), code).not.toBeNull();
+        expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE"), code).toEqual([]);
+        await act(async () => root!.unmount());
+      }
+    }
+    persistPreference("en");
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => init?.method === "POST" ? Promise.reject(new TypeError("Failed to fetch")) : json({}));
+    vi.stubGlobal("fetch", fetchMock);
+    await render(createElement(EngineSignIn, { instance: instance("claudeAgent") }));
+    await click("Sign In");
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE"), "no answer: cancel the half-started sign-in").toHaveLength(1);
+  });
+
   it("keeps a still-authenticated engine signed in after failed sign-out without polling", async () => {
     const row = instance("museAgent", { snapshot: { state: "available", authenticated: true } });
     const fetchMock = vi.fn(async (url: string) => url.endsWith("/sign-out")

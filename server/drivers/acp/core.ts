@@ -13,10 +13,11 @@
 // is never a security contract). session/load REPLAYS history as ordinary
 // session/update notifications, so updates are double-gated: nothing emits
 // before the prompt is sent, and `_meta.isReplay` updates are dropped.
-import { homedir } from "node:os";
+import os, { homedir } from "node:os";
 import { z } from "zod";
 import { acpConnection } from "./connection.ts";
-import { canReuseWarmSession, warmToolsKey, type WarmEligibilityInput } from "./warm-eligibility.ts";
+import { canServeTurn, warmFingerprint, warmToolsKey, type WarmEligibilityInput } from "./warm-eligibility.ts";
+import { warmPool as sharedWarmPool, type Captured, type Lease, type WarmPool, type WarmSession } from "../warm-pool.ts";
 
 import { applyCredentialAllowlist } from "../../config.ts";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../../procs.ts";
@@ -114,6 +115,7 @@ import type {
   RuntimeEvent,
   RuntimeEventListener,
   SendTurnInput,
+  PrepareTurn,
   ProviderErrorCode,
 } from "../../contracts.ts";
 import { newEventId, newId } from "../../contracts.ts";
@@ -141,8 +143,7 @@ export interface AcpConfig {
 export interface AcpSupport {
   grokInterjections?: boolean;
   warmSessionIdentity?(env: Record<string, string | undefined>): string | null;
-  /** Idle TTL for a kept-warm child (default 60s). Tests may shorten. */
-  warmIdleMs?: number;
+  warmPool?: WarmPool;
   /** When true the harness can report subscription windows. */
   rateLimits?: boolean;
   /** ACP extension method that returns a billing payload the Grok mapper understands. */
@@ -318,6 +319,7 @@ function decodeAcpConfig(defaultCli: string) {
 
 export function acpChildEnv(support: AcpSupport, config: AcpConfig, environment: NodeJS.ProcessEnv, extraAllowed: readonly string[] = []) {
   const env: Record<string, string | undefined> = { ...environment };
+  for (const key of Object.keys(env)) if (key.startsWith("ORBIT_")) delete env[key];
   applyCredentialAllowlist(env, [...(support.credentialEnv ?? []), ...extraAllowed]);
   support.transformEnv?.(env, config);
   return env;
@@ -418,150 +420,70 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const active = new Map<string, Turn>();
       const systemHeld = systemLedger();
       const billingStops = new Set<() => void>();
-      // SPEED-4: at most one IDLE warm child per instance. Active turns borrow
-      // the connection (idle is null while borrowed) so TTL / eviction never
-      // kills a live prompt. Grok alone supplies warmSessionIdentity.
-      type WarmIdle = {
+      const pool = support.warmPool ?? sharedWarmPool;
+      const incarnation = input.incarnation ?? newId();
+      const keyFor = (threadId: string) => ({ engine: DRIVER_KIND, instanceId, threadId });
+      let lastCapture: Captured | null = null;
+      const generationNow = () => input.account?.generation ?? pool.generation(keyFor(""));
+      const capture = (): Captured => (lastCapture = {
+        generation: generationNow(),
+        incarnation,
+        identity: support.warmSessionIdentity?.(childEnv()) ?? "",
+      });
+      type WarmEntry = {
         connection: ReturnType<typeof acpConnection>;
-        eligibility: WarmEligibilityInput;
-        sessionId: string;
-        model: string | null;
-        threadId: string;
-        timer?: ReturnType<typeof setTimeout>;
+        lease?: Lease;
         ready: Promise<void>;
-      };
-      let idleWarm: WarmIdle | null = null;
-      // Prewarm has no session yet; reuse still requires matching cli/args/cwd.
-      type HandshakeWarm = {
-        connection: ReturnType<typeof acpConnection>;
-        cli: string;
-        argsKey: string;
-        spawnCwd: string;
         init: any;
-        ready: Promise<void>;
-        failed: boolean;
-        timer?: ReturnType<typeof setTimeout>;
+        sessionId: string | null;
+        model: string | null;
+        session: WarmSession;
+        loaded: boolean;
+        resumeFailed: boolean;
+        detached?: boolean;
+        onPromptWrite?: () => void;
+        setupStarted?: boolean;
+        closing?: Promise<void>;
       };
-      let handshakeWarm: HandshakeWarm | null = null;
-      let handshakePrewarm: Promise<void> | null = null;
+      const entries = new WeakMap<Lease, WarmEntry>();
+      const preparing = new Set<Promise<void>>();
+      const borrowedHandshakes = new Set<string>();
       let disposed = false;
-      const warmIdleMs = support.warmIdleMs ?? 60_000;
-      const discardIdle = (entry: WarmIdle | null = idleWarm) => {
-        if (!entry) return;
-        if (idleWarm === entry) idleWarm = null;
-        clearTimeout(entry.timer);
-        killCliTree(entry.connection.child);
+      const alive = (entry: WarmEntry) => entry.connection.healthy
+        && entry.connection.child.signalCode == null && !entry.connection.child.stdout.destroyed
+        && !entry.connection.child.stdout.readableEnded;
+      const close = (entry: WarmEntry): Promise<void> => {
+        if (entry.detached) return Promise.resolve();
+        if (entry.closing) return entry.closing;
+        const child = entry.connection.child;
+        if (child.exitCode !== null || child.signalCode != null) return Promise.resolve();
+        entry.closing = new Promise<void>((resolve) => child.once("close", () => resolve()));
+        entry.connection.rejectPending("warm child closed");
+        killCliTree(child);
+        return entry.closing;
       };
-      const discardHandshakeWarm = (entry: HandshakeWarm | null = handshakeWarm) => {
-        if (!entry) return;
-        if (handshakeWarm === entry) handshakeWarm = null;
-        clearTimeout(entry.timer);
-        killCliTree(entry.connection.child);
+      const attach = (entry: WarmEntry, lease: Lease) => {
+        entry.lease = lease;
+        entries.set(lease, entry);
+        lease.attach({
+          get session() { return entry.session; },
+          alive: () => alive(entry),
+          close: () => close(entry),
+        });
       };
-      const runHandshakePrewarm = async () => {
-        if (disposed || handshakeWarm) return;
-        const env = childEnv(LOCAL_HOST_KEY_ENVS);
-        let probed: { cli: string; version: string } | null = null;
-        try {
-          probed = await ensureCli(env);
-        } catch {
-          return;
-        }
-        if (!probed || disposed) return;
-        try {
-          if (
-            support.requireAuthenticationBeforeSpawn
-            && !(await support.isAuthenticated(env, config))
-          ) {
-            return;
-          }
-        } catch {
-          return;
-        }
-        if (disposed || active.size > 0) return;
-        // No session is created until a real turn supplies its context.
-        const stubTurn = { threadId: "__prewarm__", text: "" } as SendTurnInput;
-        const spawnArgv = support.spawnArgs(config, stubTurn);
-        const argsKey = spawnArgv.join("\0");
-        const spawnCwd = config.workspace ?? homedir();
-        const cli = effectiveCli();
-        let connection: ReturnType<typeof acpConnection>;
-        try {
-          connection = acpConnection(
-            spawnCli(cli, spawnArgv, {
-              cwd: spawnCwd,
-              env,
-              stdio: ["pipe", "pipe", "pipe"],
-            }),
-            (dir, msg) => appendNative("__prewarm__", { dir, source: SOURCE, msg }),
-          );
-        } catch {
-          return;
-        }
-        const entry: HandshakeWarm = {
-          connection,
-          cli,
-          argsKey,
-          spawnCwd,
-          init: null,
-          ready: Promise.resolve(),
-          failed: false,
-        };
-        handshakeWarm = entry;
-        entry.timer = setTimeout(() => {
-          if (handshakeWarm === entry) discardHandshakeWarm(entry);
-        }, warmIdleMs);
-        entry.timer.unref?.();
-        entry.ready = (async () => {
-          try {
-            if (disposed || handshakeWarm !== entry) {
-              discardHandshakeWarm(entry);
-              return;
-            }
-            const { request } = connection;
-            entry.init = await request(
-              "initialize",
-              { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } },
-              INIT_TIMEOUT,
-            );
-            const methods: Array<{ id?: string }> = Array.isArray(entry.init?.authMethods)
-              ? entry.init.authMethods
-              : [];
-            const methodId = support.pickAuthMethod(methods);
-            // No turn model yet, so only subscription auth applies.
-            if (methodId) {
-              try {
-                await request("authenticate", { methodId }, INIT_TIMEOUT);
-              } catch {
-                if (support.authFailure === "fail") throw new Error(support.loginNote);
-              }
-            } else if (support.authFailure === "fail") {
-              throw new Error(support.loginNote);
-            }
-            if (disposed || handshakeWarm !== entry || !connection.healthy) {
-              discardHandshakeWarm(entry);
-            }
-          } catch {
-            entry.failed = true;
-            discardHandshakeWarm(entry);
-          }
-        })();
-        await entry.ready.catch(() => {});
+      const release = (entry: WarmEntry, reason: string) => {
+        if (entry.lease) entry.lease.release(reason);
+        else void close(entry);
       };
-      const beginHandshakePrewarm = () => {
-        handshakePrewarm ??= runHandshakePrewarm().finally(() => { handshakePrewarm = null; });
-        return handshakePrewarm;
-      };
-      if (input.enabled && config.prewarm === true) void beginHandshakePrewarm().catch(() => {});
-
-      const stashIdle = (entry: Omit<WarmIdle, "timer">) => {
-        if (idleWarm && idleWarm.connection !== entry.connection) discardIdle(idleWarm);
-        const stored: WarmIdle = { ...entry };
-        idleWarm = stored;
-        stored.timer = setTimeout(() => {
-          if (idleWarm === stored) discardIdle(stored);
-        }, warmIdleMs);
-        stored.timer.unref?.();
+      const wait = <T,>(promise: Promise<T>, signal: AbortSignal, check: () => void): Promise<T> => {
+        return new Promise<T>((resolve, reject) => {
+          const abort = () => reject(new Error("warm setup cancelled"));
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+          promise.then((value) => {
+            try { check(); resolve(value); } catch (error) { reject(error); }
+          }, reject).finally(() => signal.removeEventListener("abort", abort));
+        });
       };
 
       const emit = (event: RuntimeEvent) => {
@@ -632,6 +554,165 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         return servers;
       };
 
+      const context = (turn: SendTurnInput, captured: Captured) => {
+        const cwd = turn.cwd ?? config.workspace ?? homedir();
+        const env = childEnv(LOCAL_HOST_KEY_ENVS);
+        const resolvedModel = support.resolveTurnModel?.(turn.model, env);
+        const allowed = new Set(support.credentialEnv ?? []);
+        for (const key of LOCAL_HOST_KEY_ENVS) if (!allowed.has(key)) delete env[key];
+        const cliTurn = resolvedModel !== undefined && resolvedModel !== turn.model ? { ...turn, model: resolvedModel } : turn;
+        const paths = support.wslPathTranslation === true
+          ? wslSessionPaths(cwd, acpMcpServers(turn)) : { cwd, servers: acpMcpServers(turn) };
+        const eligibility: WarmEligibilityInput = {
+          identity: captured.identity, generation: captured.generation, threadId: turn.threadId,
+          cli: effectiveCli(), argsKey: support.spawnArgs(config, cliTurn).join("\0"), cwd, sessionCwd: paths.cwd,
+          model: cliTurn.model, effort: cliTurn.effort, approval: turn.approval,
+          fullAuto: config.fullAuto === true, toolsKey: warmToolsKey(turn.integrations),
+        };
+        return { cwd, env, cliTurn, paths, eligibility };
+      };
+      const spawnEntry = (turn: SendTurnInput, env: NodeJS.ProcessEnv, cwd: string, lease?: Lease): WarmEntry => {
+        let entry!: WarmEntry;
+        const connection = acpConnection(spawnCli(effectiveCli(), support.spawnArgs(config, turn), {
+          cwd, env, stdio: ["pipe", "pipe", "pipe"],
+        }), (dir, msg: any) => {
+          appendNative(turn.threadId, { dir, source: SOURCE, msg });
+          if (dir === "out" && msg.method === "session/prompt") entry.onPromptWrite?.();
+        });
+        entry = { connection, ready: Promise.resolve(), init: null, sessionId: null,
+          model: null, session: { kind: "argv" }, loaded: false, resumeFailed: false };
+        connection.onRequest = (msg) => connection.send({ jsonrpc: "2.0", id: msg.id,
+          error: { code: -32600, message: "no active turn" } });
+        connection.child.stdout.once("end", () => release(entry, "stdout closed"));
+        connection.onError = () => release(entry, "transport error");
+        connection.onClose = () => entry.lease?.release("process closed");
+        if (lease) attach(entry, lease);
+        return entry;
+      };
+      const setup = async (entry: WarmEntry, turn: SendTurnInput, paths: { cwd: string; servers: AcpMcpServer[] },
+        signal: AbortSignal, check: () => void, handshakeOnly = false,
+        skipAuth = skipSubscriptionAuthForLocalInject(turn.model)) => {
+        const request = async (method: string, params: unknown, timeoutMs = SESSION_CONFIG_TIMEOUT) => {
+          check();
+          return wait(entry.connection.request(method, params, timeoutMs), signal, check);
+        };
+        if (!entry.init) {
+          entry.init = await request("initialize", {
+            protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+          }, INIT_TIMEOUT);
+          check();
+          const methods: Array<{ id?: string }> = Array.isArray(entry.init?.authMethods) ? entry.init.authMethods : [];
+          const methodId = support.pickAuthMethod(methods);
+          if (!skipAuth) {
+            if (methodId) {
+              try { await request("authenticate", { methodId }, INIT_TIMEOUT); }
+              catch { check(); if (support.authFailure === "fail") throw new Error(support.loginNote); }
+              check();
+            } else if (support.authFailure === "fail") throw new Error(support.loginNote);
+          }
+        }
+        if (handshakeOnly || entry.sessionId) return;
+        let sessionResult: any = null;
+        const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+        if (cursor) {
+          try {
+            sessionResult = await request("session/load", { sessionId: cursor, cwd: paths.cwd, mcpServers: paths.servers }, LOAD_SESSION_TIMEOUT);
+            check();
+            entry.sessionId = cursor;
+            entry.loaded = true;
+          } catch { check(); entry.resumeFailed = true; }
+        }
+        if (!entry.sessionId) {
+          sessionResult = await request("session/new", { cwd: paths.cwd, mcpServers: paths.servers }, NEW_SESSION_TIMEOUT);
+          check();
+          entry.sessionId = typeof sessionResult?.sessionId === "string" ? sessionResult.sessionId : null;
+          if (!entry.sessionId) throw new Error("session/new returned no sessionId");
+        }
+        entry.session = entry.loaded ? { kind: "loaded", id: entry.sessionId } : { kind: "fresh" };
+        if (support.selectModel) {
+          const { configId } = support.selectModel;
+          const currentOf = (r: any) => (Array.isArray(r?.configOptions) ? r.configOptions : [])
+            .find((o: any) => o?.id === configId)?.currentValue ?? null;
+          entry.model = currentOf(sessionResult);
+          if (turn.model && turn.model !== entry.model) {
+            entry.model = currentOf(await request("session/set_config_option", {
+              sessionId: entry.sessionId, configId, value: turn.model,
+            }, INIT_TIMEOUT));
+            check();
+            if (entry.model !== turn.model) throw new Error(
+              `${DRIVER_KIND} did not switch to ${turn.model} (still ${entry.model ?? "unknown"})`);
+          }
+        }
+        if (support.configureSession) {
+          await support.configureSession({ request, sessionId: entry.sessionId, config, turn, sessionResult });
+          check();
+          if (!entry.model && turn.model) entry.model = turn.model;
+        }
+      };
+      const prepare = (shape?: PrepareTurn): Promise<void> => {
+        if (!input.enabled || disposed || (shape ? active.has(shape.threadId) : active.size > 0)) return Promise.resolve();
+        if (shape?.integrations?.localComputer?.scope === "local-computer" && config.fullAuto) return Promise.resolve();
+        const captured = capture();
+        if (shape && (!captured.identity || shape.captured.generation !== captured.generation
+          || shape.captured.identity !== captured.identity
+          || shape.captured.incarnation !== captured.incarnation)) return Promise.resolve();
+        const turn: SendTurnInput = { ...(shape ?? { threadId: "__prewarm__" }), text: "" };
+        const ctx = context(turn, captured);
+        const fingerprint = warmFingerprint(ctx.eligibility);
+        const lease = pool.reserve(keyFor(turn.threadId), fingerprint, captured, shape ? "speculative" : "handshake");
+        if (typeof lease === "string") return Promise.resolve();
+        const existing = entries.get(lease);
+        if (existing) return existing.ready.catch(() => { lease.release("prepare failed"); });
+        const epoch = pool.generation(lease.key);
+        const check = (entry?: WarmEntry) => {
+          const current = capture();
+          if (disposed || lease.signal.aborted || epoch !== pool.generation(lease.key)
+            || current.generation !== captured.generation || current.identity !== captured.identity
+            || current.incarnation !== captured.incarnation
+            || warmFingerprint(context(turn, current).eligibility) !== fingerprint || (entry && !alive(entry))) {
+            throw new Error("warm setup invalidated");
+          }
+        };
+        // Publish the promise before the first await so simultaneous prepares join it.
+        const holder = {} as WarmEntry;
+        entries.set(lease, holder);
+        const pending = (async () => {
+          let entry: WarmEntry | undefined;
+          try {
+            await wait(ensureCli(ctx.env), lease.signal, () => check());
+            if (support.requireAuthenticationBeforeSpawn && !skipSubscriptionAuthForLocalInject(turn.model)) {
+              const authenticated = await wait(Promise.resolve(support.isAuthenticated(ctx.env, config)), lease.signal, () => check());
+              if (!authenticated) throw new Error(support.loginNote);
+            }
+            check();
+            entry = spawnEntry(ctx.cliTurn, ctx.env, ctx.cwd, lease);
+            entry.ready = holder.ready;
+            await setup(entry, ctx.cliTurn, ctx.paths, lease.signal, () => check(entry), !shape,
+              skipSubscriptionAuthForLocalInject(turn.model));
+            check(entry);
+            if (shape) {
+              try { await wait(entry.connection.request("ping", {}, 1000), lease.signal, () => check(entry)); }
+              catch (error) { check(entry); if ((error as { code?: number }).code !== -32601) throw error; }
+              check(entry);
+            }
+            lease.ready();
+          } catch (error) {
+            const current = capture();
+            const retryCli = !entry && !disposed && !lease.signal.aborted
+              && epoch === pool.generation(lease.key) && current.identity === captured.identity
+              && current.generation === captured.generation && ctx.eligibility.cli !== effectiveCli();
+            lease.release("prepare failed");
+            if (retryCli) { await prepare(shape); return; }
+            throw error;
+          }
+        })();
+        holder.ready = pending;
+        preparing.add(pending);
+        void pending.catch(() => {}).finally(() => preparing.delete(pending));
+        return pending.catch(() => {});
+      };
+      if (input.enabled && config.prewarm === true) void prepare();
+
       const sendTurn = async (turn: SendTurnInput) => {
         const { threadId } = turn;
         if (disposed) throw new Error("provider disposed");
@@ -641,8 +722,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           throw new Error("local computer control requires interactive provider approvals");
         }
         const turnId = newId();
+        const captured = capture();
+        const epoch = pool.generation(keyFor(threadId));
+        const controller = new AbortController();
+        let canceledBeforePrompt = false;
+        const cancelSetup = () => { canceledBeforePrompt = true; controller.abort(); };
         const cwd = turn.cwd ?? config.workspace ?? homedir();
-        const env = childEnv(LOCAL_HOST_KEY_ENVS);
+        let env = childEnv(LOCAL_HOST_KEY_ENVS);
         const spawnArgs = support.spawnArgs(config, turn);
         const turnTimer = startTurnTimer({
           engine: DRIVER_KIND,
@@ -652,53 +738,33 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           argsLength: spawnArgs.join(" ").length,
         });
         turnTimer.mark("dispatch");
-        // Reserve before the first await: two concurrent first turns would
-        // both pass the guard, spawn twice, and the second active.set would
-        // orphan the first turn's controls. The real entry after spawn
-        // replaces this placeholder; the gap between is synchronous, and
-        // every early exit below releases it.
-        active.set(threadId, { stop: () => {}, steer: async () => ({ taken: false }), interrupt: () => {}, turnId, asks: new Map() });
-        // The pre-spawn section runs as one unit so the reservation above is
-        // released on every early exit; the sync gap between it and the real
-        // entry below admits no interleaving, and only our own turnId is
-        // ever released.
+        // Own the thread before any auth, CLI probe or pool adoption can await.
+        active.set(threadId, { stop: cancelSetup, steer: async () => ({ taken: false }), interrupt: cancelSetup, turnId, asks: new Map() });
+        let preludeReady = false;
+        const checkCaptured = () => {
+          const current = capture();
+          if (disposed || controller.signal.aborted || epoch !== pool.generation(keyFor(threadId))
+            || current.generation !== captured.generation || current.identity !== captured.identity
+            || current.incarnation !== captured.incarnation) throw new Error("turn setup cancelled");
+        };
         const prelude = await (async () => {
           try {
             if (
               support.requireAuthenticationBeforeSpawn
               && !skipSubscriptionAuthForLocalInject(turn.model)
-              && !(await withWslProbeReason("turn", () => support.isAuthenticated(env, config)))
+              && !(await wait(Promise.resolve(withWslProbeReason("turn", () => support.isAuthenticated(env, config))),
+                controller.signal, checkCaptured))
             ) {
               emit({ ...base(threadId, turnId), type: "turn.started" });
               emit({ ...base(threadId, turnId), type: "runtime.error", message: support.loginNote, setup: true });
               turnTimer.mark("turnDone");
-        turnTimer.finish();
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "auth_required", cost: null });
+              turnTimer.finish();
+              emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "auth_required", cost: null });
               return { early: true as const };
             }
-            const resolvedModel = support.resolveTurnModel?.(turn.model, env);
-            const allowed = new Set(support.credentialEnv ?? []);
-            for (const key of LOCAL_HOST_KEY_ENVS) {
-              if (!allowed.has(key)) delete env[key];
-            }
-            const cliTurn =
-              resolvedModel !== undefined && resolvedModel !== turn.model
-                ? { ...turn, model: resolvedModel }
-                : turn;
-            // A Linux child behind the wsl wrapper cannot use Windows paths, so
-            // the session params (not the local spawn, which stays Windows-side)
-            // cross translated when the driver opts in. toWslPath rewrites only
-            // drive-letter and wsl$ paths, so POSIX values pass through even
-            // where the flag is on — off-Windows this changes nothing for real
-            // paths.
-            const sessionPaths = support.wslPathTranslation === true
-              ? wslSessionPaths(cwd, acpMcpServers(turn))
-              : { cwd, servers: acpMcpServers(turn) };
-            // Turns can precede any snapshot() (startup routines, API-driven
-            // turns), and the auth gate above never probes — without this the
-            // first such turn on win32 would spawn the bare CLI that only
-            // exists inside WSL.
-            const cliReady = await withWslProbeReason("turn", () => ensureCli(env));
+            const ctx = context(turn, captured);
+            const cliReady = await wait(withWslProbeReason("turn", () => ensureCli(env)), controller.signal, checkCaptured);
+            ctx.eligibility.cli = effectiveCli();
             if (!cliReady && support.wslProbeWrapper && !wslProbeAllowed("turn")) {
               emit({ ...base(threadId, turnId), type: "turn.started" });
               emit({ ...base(threadId, turnId), type: "runtime.error", message: wslBlockedReason(support.displayName), setup: true });
@@ -708,133 +774,134 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               return { early: true as const };
             }
             turnTimer.mark("cliProbed");
-            return { early: false as const, cliTurn, sessionCwd: sessionPaths.cwd, mcpServers: sessionPaths.servers };
+            preludeReady = true;
+            return { early: false as const, ...ctx };
+          } catch (error) {
+            if (!disposed && !controller.signal.aborted && epoch === pool.generation(keyFor(threadId))
+              && capture().identity === captured.identity) throw error;
+            emit({ ...base(threadId, turnId), type: "turn.started" });
+            turnTimer.finish();
+            emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
+            return { early: true as const };
           } finally {
-            if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
+            if (!preludeReady && active.get(threadId)?.turnId === turnId) active.delete(threadId);
           }
         })();
         if (prelude.early) return { turnId };
-        const { cliTurn, sessionCwd, mcpServers } = prelude;
-        // Re-reserve immediately: prelude's finally cleared the placeholder, and
-        // warm-ready / cold spawn may await. Only our turnId is ever released.
-        let canceledBeforePrompt = false;
-        active.set(threadId, {
-          stop: () => { canceledBeforePrompt = true; },
-          steer: async () => ({ taken: false }),
-          interrupt: () => { canceledBeforePrompt = true; },
-          turnId,
-          asks: new Map(),
-        });
-        const identity = support.warmSessionIdentity?.(env) ?? null;
-        const eligibility: WarmEligibilityInput | null =
-          identity && !skipSubscriptionAuthForLocalInject(turn.model)
-            ? {
-                identity,
-                threadId,
-                cli: effectiveCli(),
-                argsKey: support.spawnArgs(config, cliTurn).join("\0"),
-                cwd,
-                sessionCwd,
-                model: cliTurn.model,
-                effort: cliTurn.effort,
-                approval: turn.approval,
-                fullAuto: config.fullAuto === true,
-                toolsKey: warmToolsKey(turn.integrations),
-              }
-            : null;
-        let reused: WarmIdle | undefined;
-        if (idleWarm) {
-          const candidate = idleWarm;
-          const eligible =
-            !!eligibility
-            && candidate.connection.healthy
-            && canReuseWarmSession(candidate.eligibility, eligibility, candidate.sessionId, turn.resumeCursor);
-          if (!eligible) {
-            discardIdle(candidate);
-          } else {
-            // Borrow: clear the idle slot so TTL cannot kill an active turn.
-            clearTimeout(candidate.timer);
-            idleWarm = null;
-            reused = candidate;
+        env = prelude.env;
+        const { cliTurn, paths, eligibility: builtEligibility } = prelude;
+        const eligibility = captured.identity && !skipSubscriptionAuthForLocalInject(turn.model) ? builtEligibility : null;
+        const fingerprint = warmFingerprint(builtEligibility);
+        const check = (entry?: WarmEntry) => {
+          const current = capture();
+          if (disposed || canceledBeforePrompt || controller.signal.aborted
+            || active.get(threadId)?.turnId !== turnId || epoch !== pool.generation(keyFor(threadId))
+            || current.generation !== captured.generation || current.identity !== captured.identity
+            || current.incarnation !== captured.incarnation
+            || warmFingerprint(context(turn, current).eligibility) !== fingerprint
+            || (entry && (!alive(entry) || entry.lease?.signal.aborted))) throw new Error("turn setup cancelled");
+        };
+        let entry: WarmEntry | undefined;
+        let cold: WarmEntry | undefined;
+        let borrowed: Lease | undefined;
+        const cancel = () => {
+          cancelSetup();
+          borrowed?.release("turn cancelled");
+          if (cold) release(cold, "turn cancelled");
+          if (entry && entry !== cold) release(entry, "turn cancelled");
+        };
+        let borrowedSignal: AbortSignal | undefined;
+        const onBorrowedAbort = () => {
+          const current = capture();
+          if (epoch !== pool.generation(keyFor(threadId)) || current.generation !== captured.generation
+            || current.identity !== captured.identity) cancel();
+        };
+        const unlisten = () => borrowedSignal?.removeEventListener("abort", onBorrowedAbort);
+        active.set(threadId, { stop: cancel, steer: async () => ({ taken: false }), interrupt: cancel, turnId, asks: new Map() });
+        let started = false;
+        let reused = false;
+        let handshakeReuse = false;
+        try {
+          check();
+          let take = pool.take(keyFor(threadId), fingerprint, captured, turn.resumeCursor);
+          if (take === "miss" && borrowedHandshakes.size === 0) {
+            const handshakeFingerprint = warmFingerprint({ ...builtEligibility, threadId: "__prewarm__" });
+            take = pool.take(keyFor("__prewarm__"), handshakeFingerprint, captured, turn.resumeCursor);
+            if (typeof take !== "string") borrowedHandshakes.add(threadId);
           }
-        }
-        let handshakeReuse: HandshakeWarm | undefined;
-        if (!reused && handshakeWarm) {
-          const candidate = handshakeWarm;
-          await candidate.ready.catch(() => {});
-          const argsKey = support.spawnArgs(config, cliTurn).join("\0");
-          const eligible =
-            handshakeWarm === candidate
-            && !candidate.failed
-            && candidate.connection.healthy
-            && candidate.cli === effectiveCli()
-            && candidate.argsKey === argsKey
-            && candidate.spawnCwd === cwd
-            && !disposed;
-          if (!eligible) {
-            if (handshakeWarm === candidate) discardHandshakeWarm(candidate);
-          } else {
-            handshakeWarm = null;
-            clearTimeout(candidate.timer);
-            handshakeReuse = candidate;
-          }
-        }
-        turnTimer.mark("spawnOrReuse");
-        turnTimer.setMeta({ reusedSession: !!reused, reusedHandshake: !!handshakeReuse });
-        if (reused) {
-          const warmChild = reused.connection.child;
-          active.set(threadId, {
-            stop: () => {
-              canceledBeforePrompt = true;
-              killCliTree(warmChild);
-            },
-            steer: async () => ({ taken: false }),
-            interrupt: () => {
-              canceledBeforePrompt = true;
-              killCliTree(warmChild);
-            },
-            turnId,
-            asks: new Map(),
-          });
-          // ready never rejects: billing probe uses .catch(() => {}) when built
-          // (see settle). Health check below is the real warm-reuse fallback.
-          await reused.ready;
-          if (canceledBeforePrompt || disposed || active.get(threadId)?.turnId !== turnId) {
-            if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
-            if (reused) killCliTree(reused.connection.child);
-            if (disposed) throw new Error("provider disposed");
-            // Canceled while awaiting billing readiness: settle once without
-            // recursively retrying sendTurn (that would run the canceled prompt).
-            emit({ ...base(threadId, turnId), type: "turn.started" });
-            turnTimer.mark("turnDone");
-        turnTimer.finish();
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
-            return { turnId };
-          }
-          if (!reused.connection.healthy) {
-            killCliTree(reused.connection.child);
-            reused = undefined;
-          }
-        }
-        if (canceledBeforePrompt || disposed) {
-          if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
-          if (handshakeReuse) killCliTree(handshakeReuse.connection.child);
-          if (disposed) throw new Error("provider disposed");
+          if (take === "busy") throw new Error("a warm child is already in use on this thread");
+          borrowed = typeof take === "string" ? undefined : "hit" in take ? take.hit : take.pending;
           emit({ ...base(threadId, turnId), type: "turn.started" });
-          turnTimer.mark("turnDone");
-        turnTimer.finish();
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
+          started = true;
+          check();
+          borrowedSignal = borrowed?.signal;
+          borrowedSignal?.addEventListener("abort", onBorrowedAbort, { once: true });
+          if (typeof take === "string" || "pending" in take || !entries.get(take.hit)?.sessionId) {
+            emit({ ...base(threadId, turnId), type: "turn.stage", stage: "setup" });
+          }
+          const spawnCold = () => {
+            cold = spawnEntry(cliTurn, env, cwd);
+            return cold;
+          };
+          if (typeof take !== "string" && "hit" in take) {
+            entry = entries.get(take.hit);
+            if (entry && !alive(entry)) {
+              release(entry, "warm child closed");
+              entry = undefined;
+              borrowed = undefined;
+              emit({ ...base(threadId, turnId), type: "turn.stage", stage: "setup" });
+            }
+          } else if (typeof take !== "string") {
+            const lease = take.pending;
+            if (os.totalmem() < 8 * 1024 ** 3 || os.cpus().length <= 4) {
+              lease.release("smaller PC cold setup");
+              borrowed = undefined;
+            } else {
+              const candidate = entries.get(lease);
+              const pending = candidate?.ready.then(() => {
+                const prepared = entries.get(lease);
+                if (!prepared) throw new Error("warm child missing");
+                check(prepared);
+                if (!canServeTurn(prepared.session, turn.resumeCursor)) throw new Error("warm session cursor changed");
+                return prepared;
+              });
+              const racer = spawnCold();
+              racer.setupStarted = true;
+              racer.ready = setup(racer, cliTurn, paths, controller.signal, () => check(racer), false,
+                skipSubscriptionAuthForLocalInject(turn.model));
+              const coldReady = racer.ready.then(() => { check(racer); return racer; });
+              const race = Promise.any([pending ?? Promise.reject(new Error("warm child missing")), coldReady])
+                .catch(() => { check(); return racer; });
+              entry = await wait(race, controller.signal, () => check());
+              check(entry);
+              if (entry === racer) { lease.release("cold setup won"); borrowed = undefined; }
+              else release(racer, "warm setup won");
+            }
+          }
+          check();
+          entry ??= spawnCold();
+          reused = !!entry.sessionId;
+          handshakeReuse = !reused && !!entry.init;
+          check(entry);
+        } catch (error) {
+          unlisten();
+          const cancelled = disposed || controller.signal.aborted || epoch !== pool.generation(keyFor(threadId))
+            || capture().identity !== captured.identity;
+          cancel();
+          borrowedHandshakes.delete(threadId);
+          if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
+          if (!started) {
+            if ((error as Error).message.includes("already in use")) throw error;
+            emit({ ...base(threadId, turnId), type: "turn.started" });
+          }
+          turnTimer.finish();
+          if (!cancelled) throw error;
+          emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
           return { turnId };
         }
-        let connection: ReturnType<typeof acpConnection>;
-        try {
-          connection = reused?.connection ?? handshakeReuse?.connection ?? acpConnection(spawnCli(effectiveCli(), support.spawnArgs(config, cliTurn), {
-            cwd, env, stdio: ["pipe", "pipe", "pipe"],
-          }), (dir, msg) => appendNative(threadId, { dir, source: SOURCE, msg }));
-        } catch (error) {
-          if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
-          throw error;
-        }
+        turnTimer.mark("spawnOrReuse");
+        turnTimer.setMeta({ reusedSession: reused, reusedHandshake: handshakeReuse });
+        const connection = entry.connection;
         const child = connection.child;
 
         // promptAccepted: the agent answered this prompt, so its session holds it
@@ -847,8 +914,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         // first, Grok runs each one as its own prompt inside this turn.
         const queuedSteers = new Map<Promise<any>, () => void>();
         const asks = new Map<string, (behavior: string, source?: "user" | "timeout" | "system") => string | null>();
-        let sessionId: string | null = reused?.sessionId ?? null;
-        let selectedModel: string | null = reused?.model ?? null;
+        let sessionId: string | null = entry.sessionId;
+        let selectedModel: string | null = entry.model;
         let interruptTimer: ReturnType<typeof setTimeout> | null = null;
         // the system text this turn's prompt carried, and whether the agent
         // compacted its context while the prompt ran
@@ -856,8 +923,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         let compacted = false;
         const { send, request } = connection;
         const stop = () => {
-          if (idleWarm?.connection === connection) discardIdle(idleWarm);
-          else killCliTree(child);
+          canceledBeforePrompt = true;
+          controller.abort();
+          release(entry, "turn stopped");
         };
 
         const steer = (text: string): Promise<SteerResult> => {
@@ -923,62 +991,55 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             send({ jsonrpc: "2.0", id: msg.id, error: { code: -32600, message: "no active turn" } });
           };
-          // Belt-and-suspenders: close usually evicts idle warm, but an
-          // error-without-close must not leave a dead entry until TTL.
-          connection.onError = (_e) => {
-            if (idleWarm?.connection === connection) discardIdle(idleWarm);
+          connection.onError = () => release(entry, "transport error");
+          entry.onPromptWrite = undefined;
+          const finish = () => {
+            unlisten();
+            billingStops.delete(stop);
+            borrowedHandshakes.delete(threadId);
+            const current = capture();
+            const keep = eligibility && ok && stopReason === null && sessionId && alive(entry)
+              && !disposed && !interruptTimer && !canceledBeforePrompt && !controller.signal.aborted
+              && epoch === pool.generation(keyFor(threadId)) && current.generation === captured.generation
+              && current.identity === captured.identity;
+            if (keep && sessionId) {
+              entry.sessionId = sessionId;
+              entry.resumeFailed = false;
+              entry.model = selectedModel;
+              entry.session = { kind: "loaded", id: sessionId };
+              // A legacy handshake moves to the real thread's key after billing.
+              if (entry.lease?.key.threadId === "__prewarm__") {
+                entry.detached = true;
+                entry.lease.release("handshake adopted");
+                entry.detached = false;
+                entry.lease = undefined;
+              }
+              if (!entry.lease) {
+                const offered = pool.reserve(keyFor(threadId), fingerprint, captured, "speculative");
+                if (typeof offered !== "string") {
+                  attach(entry, offered);
+                  offered.ready();
+                  pool.take(keyFor(threadId), fingerprint, captured, sessionId);
+                }
+              }
+              entry.lease?.ready();
+              if (!entry.lease || !pool.offer(entry.lease)) release(entry, "offer refused");
+            } else release(entry, "turn finished");
+            if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
+            flushAssistantText();
+            turnTimer.mark("turnDone");
+            turnTimer.finish();
+            emit({ ...base(threadId, turnId), type: "turn.completed", ok,
+              stopReason: canceledBeforePrompt ? "cancelled" : stopReason, cost: null,
+              ...(state.promptAccepted ? { promptAccepted: true } : {}), ...promptReport });
           };
-          const keep = Boolean(
-            eligibility
-            && ok
-            && stopReason === null
-            && typeof sessionId === "string"
-            && connection.healthy
-            && !disposed
-            && !interruptTimer
-            && !canceledBeforePrompt
-          );
-          // Establish billing readiness BEFORE publishing turn.completed so a
-          // synchronous completion listener cannot sendTurn before ready is set.
-          let ready: Promise<void> = Promise.resolve();
           if (readBilling && support.billingMethod) {
             billingStops.add(stop);
-            ready = request(support.billingMethod, {}, INIT_TIMEOUT).then((result) => {
+            void request(support.billingMethod, {}, INIT_TIMEOUT).then((result) => {
               const windows = grokRateLimitWindows(result);
-              if (windows.length > 0) {
-                emit({ ...base(threadId, turnId), type: "account.rate-limits.updated", windows });
-              }
-            }).catch(() => {}).finally(() => {
-              billingStops.delete(stop);
-              // Keep path must not kill the reused child; cold path stops here.
-              if (!keep) stop();
-            });
-          } else if (!keep) {
-            stop();
-          }
-          if (keep && typeof sessionId === "string" && eligibility) {
-            stashIdle({
-              connection,
-              eligibility,
-              sessionId,
-              model: selectedModel,
-              threadId,
-              ready,
-            });
-          }
-          active.delete(threadId);
-          flushAssistantText();
-          turnTimer.mark("turnDone");
-        turnTimer.finish();
-        emit({
-          ...base(threadId, turnId),
-          type: "turn.completed",
-          ok,
-          stopReason,
-          cost: null,
-          ...(state.promptAccepted ? { promptAccepted: true } : {}),
-          ...promptReport,
-        });
+              if (windows.length > 0) emit({ ...base(threadId, turnId), type: "account.rate-limits.updated", windows });
+            }).catch(() => {}).then(finish);
+          } else finish();
         };
 
         // Whether this turn could have spent a subscription window at all.
@@ -1096,6 +1157,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             ok,
           };
           if (detail) event.detail = detail;
+          if (ok && call?.kind === "edit") {
+            const args = toolInputSchema.safeParse(call.rawInput);
+            event.writes = [...new Set([...(call.locations ?? []).map(location => location.path), ...(call.content ?? []).flatMap(block => block.type === "diff" ? [block.path] : []), ...(args.success ? Object.values(args.data).filter((path): path is string => path !== undefined) : typeof call.rawInput === "string" ? [call.rawInput] : [])])].slice(0, 32);
+          }
           emit(event);
         };
 
@@ -1201,10 +1266,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           settle(false, "spawn_error");
         };
         connection.onClose = (code, stderr) => {
-          if (idleWarm?.connection === connection) discardIdle(idleWarm);
+          if (state.settled) entry.lease?.release("process closed");
           if (!state.settled) {
             // Stop killed the child before the prompt result: settle quietly.
-            if (interruptTimer) {
+            if (interruptTimer || canceledBeforePrompt) {
               settle(true, "cancelled");
               return;
             }
@@ -1214,6 +1279,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         };
 
         const interrupt = () => {
+          if (!state.promptSent || state.settled) { stop(); settle(true, "cancelled"); return; }
           if (sessionId) send({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
           else stop();
           // armed once: the grace runs from the FIRST cancel, so pressing
@@ -1224,17 +1290,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         };
         active.set(threadId, { stop, steer, interrupt, turnId, asks });
         if (canceledBeforePrompt || disposed) {
-          active.delete(threadId);
-          if (idleWarm?.connection === connection) discardIdle(idleWarm);
-          else killCliTree(child);
-          if (disposed) throw new Error("provider disposed");
-          emit({ ...base(threadId, turnId), type: "turn.started" });
-          turnTimer.mark("turnDone");
-        turnTimer.finish();
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: "cancelled", cost: null });
+          stop();
+          settle(true, "cancelled");
           return { turnId };
         }
-        emit({ ...base(threadId, turnId), type: "turn.started" });
 
         (async () => {
           try {
@@ -1242,131 +1301,37 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               settle(true, "cancelled");
               return;
             }
-            let init: any = null;
-            let resumeFailed = false;
-            let loaded = false;
-            let sessionResult: any = null;
-            if (!reused) {
-            if (handshakeReuse) {
-              init = handshakeReuse.init;
-            } else {
-            init = await request(
-              "initialize",
-              { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } },
-              INIT_TIMEOUT,
-            );
-            const methods: Array<{ id?: string }> = Array.isArray(init?.authMethods) ? init.authMethods : [];
-            const methodId = support.pickAuthMethod(methods);
-            if (!skipSubscriptionAuthForLocalInject(turn.model)) {
-              if (methodId) {
-                try {
-                  await request("authenticate", { methodId }, INIT_TIMEOUT);
-                } catch {
-                  if (support.authFailure === "fail") throw new Error(support.loginNote);
-                  // else: proceed on an ambient login
-                }
-              } else if (support.authFailure === "fail") {
-                throw new Error(support.loginNote);
-              }
-            }
-            }
-
-            // After Orbit compaction the harness omits resumeCursor so this
-            // path starts a new session and injects the bounded transcript.
-            const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-            if (cursor) {
-              try {
-                sessionResult = await request(
-                  "session/load",
-                  { sessionId: cursor, cwd: sessionCwd, mcpServers },
-                  LOAD_SESSION_TIMEOUT,
-                );
-                sessionId = cursor;
-                loaded = true;
-              } catch {
-                resumeFailed = true;
-              }
-            }
-            if (!sessionId) {
-              sessionResult = await request("session/new", { cwd: sessionCwd, mcpServers }, NEW_SESSION_TIMEOUT);
-              sessionId = typeof sessionResult?.sessionId === "string" ? sessionResult.sessionId : null;
-              if (!sessionId) throw new Error("session/new returned no sessionId");
-            }
-            }
-            // Cold path throws if session/new omits sessionId; warm path borrows
-            // a string sessionId. Establish the invariant for configureSession.
-            if (typeof sessionId !== "string" || !sessionId) {
-              throw new Error("session/new returned no sessionId");
-            }
-            const activeSessionId: string = sessionId;
-            let sessionStarted = false;
             const emitSessionStarted = () => {
-              if (sessionStarted) return;
-              sessionStarted = true;
-              emit({
-                ...base(threadId, turnId),
-                type: "session.started",
-                sessionId: activeSessionId,
-                model: selectedModel ?? init?._meta?.modelState?.currentModelId ?? cliTurn.model ?? null,
-              });
+              if (!entry.sessionId) return;
+              emit({ ...base(threadId, turnId), type: "session.started", sessionId: entry.sessionId,
+                model: entry.model ?? entry.init?._meta?.modelState?.currentModelId ?? cliTurn.model ?? null });
             };
-
             try {
-              if (!reused && support.selectModel) {
-                const { configId } = support.selectModel;
-                const currentOf = (r: any) =>
-                  (Array.isArray(r?.configOptions) ? r.configOptions : []).find((o: any) => o?.id === configId)
-                    ?.currentValue ?? null;
-                selectedModel = currentOf(sessionResult);
-                if (cliTurn.model && cliTurn.model !== selectedModel) {
-                  selectedModel = currentOf(
-                    await request(
-                      "session/set_config_option",
-                      { sessionId: activeSessionId, configId, value: cliTurn.model },
-                      INIT_TIMEOUT,
-                    ),
-                  );
-                  // an agent that answers OK but keeps its old model is worse than
-                  // one that errors: it burns a paid turn on the wrong thing
-                  if (selectedModel !== cliTurn.model) {
-                    throw new Error(
-                      `${DRIVER_KIND} did not switch to ${cliTurn.model} (still ${selectedModel ?? "unknown"})`,
-                    );
-                  }
-                }
-              }
-
-              if (!reused && support.configureSession) {
-                await support.configureSession({
-                  request: (method, params, timeoutMs) =>
-                    request(method, params, timeoutMs ?? SESSION_CONFIG_TIMEOUT),
-                  sessionId: activeSessionId,
-                  config,
-                  turn: cliTurn,
-                  sessionResult,
-                });
-                // initialize's currentModelId is the CLI default (grok-4.6),
-                // not the model this turn asked for. After a successful pin,
-                // report the slug we set so the UI does not claim otherwise.
-                if (!selectedModel && cliTurn.model) selectedModel = cliTurn.model;
-              }
+              if (entry.setupStarted) await entry.ready;
+              else if (!reused) await setup(entry, cliTurn, paths, controller.signal, () => check(entry), false,
+                skipSubscriptionAuthForLocalInject(turn.model));
+              check(entry);
             } catch (error) {
-              // session.started is the only place the resume cursor is recorded,
-              // so a rejected setting must not orphan a session we just created.
               emitSessionStarted();
               throw error;
             }
+            const init = entry.init;
+            const resumeFailed = entry.resumeFailed;
+            const loaded = entry.loaded;
+            sessionId = entry.sessionId;
+            selectedModel = entry.model;
+            if (!sessionId) throw new Error("session/new returned no sessionId");
+            const activeSessionId = sessionId;
             emitSessionStarted();
             // Handshake + session config done (or warm reuse); CLI ready to prompt.
             turnTimer.mark("cliReady");
-            state.promptSent = true;
             const fallbackTurn = resumeFailed && turn.resumeFallback
               ? { ...cliTurn, text: turn.resumeFallback.text }
               : cliTurn;
             // A new session always gets the system text; a resumed one only
             // when it might not hold this exact text. Engines that never report
             // their own compaction keep it on every turn.
-            const resumed = Boolean(reused) || loaded;
+            const resumed = entry.session.kind === "loaded" || loaded;
             const system = fallbackTurn.system
               && (!resumed || !support.compacted || !systemHeld.holds(activeSessionId, fallbackTurn.system))
               ? fallbackTurn.system
@@ -1381,6 +1346,14 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               : promptTurn.system
                 ? `${promptTurn.system}\n\n${promptTurn.text}`
                 : promptTurn.text;
+            check(entry);
+            state.promptSent = true;
+            let stageSent = false;
+            entry.onPromptWrite = () => {
+              if (stageSent) return;
+              stageSent = true;
+              emit({ ...base(threadId, turnId), type: "turn.stage", stage: "prompt-sent" });
+            };
             let result = await request("session/prompt", {
               sessionId: activeSessionId,
               prompt: [{ type: "text", text }],
@@ -1395,6 +1368,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                 type: "thread.token-usage.updated",
                 input: usage.inputTokens ?? 0,
                 output: usage.outputTokens ?? 0,
+                ...(typeof usage.cachedReadTokens === "number" ? { cachedInput: usage.cachedReadTokens } : {}),
               });
             }
             while (result?.stopReason === "end_turn" && queuedSteers.size) {
@@ -1458,6 +1432,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (!probed && gated) return lastSnapshot ?? { state: "unavailable", reason: wslBlockedReason(support.displayName) };
           if (!probed) return { state: "unavailable", reason: `\`${effectiveCli()}\` CLI not found` };
           const authenticated = await support.isAuthenticated(env, config);
+          lastCapture = authenticated ? capture() : null;
           const ready: ProviderSnapshot = { state: "available", version: probed.version, authenticated, account: authenticated ? support.account?.(env) : undefined };
           if (!gated) lastSnapshot = ready;
           return ready;
@@ -1518,8 +1493,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           stopAll: async () => {
             for (const { stop } of active.values()) stop();
             for (const stop of billingStops) stop();
-            discardHandshakeWarm();
-            discardIdle();
+            pool.invalidate({ instanceId, incarnation }, "stop all");
           },
           onEvent: (listener) => {
             listeners.add(listener);
@@ -1529,19 +1503,17 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         generateText: text?.generateText,
         textModel: text?.textModel,
         textTimeoutMs: text?.textTimeoutMs,
-        prepare: async () => {
-          if (!input.enabled || disposed) return;
-          await beginHandshakePrewarm();
-        },
+        prepare,
+        cachedCapture: () => (input.enabled && !disposed && lastCapture && lastCapture.identity
+          && lastCapture.generation === generationNow()) ? { ...lastCapture } : null,
         dispose: async () => {
           disposed = true;
           text?.dispose();
-          discardHandshakeWarm();
-          discardIdle();
+          pool.invalidate({ instanceId, incarnation }, "dispose");
           for (const { stop } of active.values()) stop();
           for (const stop of billingStops) stop();
           listeners.clear();
-          await handshakePrewarm;
+          await Promise.allSettled([...preparing]);
         },
       };
     },

@@ -23,6 +23,13 @@ export function mailboxGrant(token, pane, bot, teacher) {
   return `${keyId}.${createHmac("sha256", token).update(`${GRANT_PREFIX}:${pane}:${bot}:${teacher}`).digest("base64url")}`;
 }
 
+export function maskMailboxGrants(text) {
+  return text.replace(/(?<![A-Za-z0-9_-])((?:[a-f0-9]\n?){8})\.((?:\n?[A-Za-z0-9_-]){43})(?![A-Za-z0-9_-])/g, (_, keyId, secret) => {
+    const start = secret.search(/[A-Za-z0-9_-]/);
+    return `${keyId}.${secret.slice(0, start)}***${secret.slice(start).replace(/[^\n]/g, "")}`;
+  });
+}
+
 /** Posts as the pane itself, so the note takes orbit-msg's route to the teacher. */
 export async function postPaneNote(mailbox, { pane, bot, teacher }, text, fetchImpl = fetch) {
   const response = await fetchImpl(`${mailbox.url}/api/mailbox`, {

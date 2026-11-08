@@ -41,7 +41,7 @@ export function useSettingsSwipe(ref: RefObject<HTMLElement | null>, enabled: bo
       drag = null;
       const touch = event.touches[0];
       if (settling || event.touches.length !== 1 || !touch || !(event.target instanceof Element)) return;
-      if (event.target.closest('[role="slider"], .dial-stage')) return;
+      if (event.target.closest('[role="slider"], .dial-stage, [data-mi-zoom]')) return;
       // Settings accepts starts at either edge, unlike chat navigation.
       if (swipeBlocked(event.target, window.innerWidth / 2)) return;
       drag = { x: touch.clientX, y: touch.clientY, lastX: touch.clientX, lastT: event.timeStamp, velocity: 0, axis: null, width: stage.clientWidth || window.innerWidth, reduced: reducedMotion() };

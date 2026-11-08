@@ -6,7 +6,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
-import { installOrbitMsg, postPaneNote } from "./terminal-mailbox.mjs";
+import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 
 function fixture(options = {}) {
@@ -1405,6 +1405,36 @@ function stallFixture({ failures = 0, commandEcho = true, shellIntegration = fal
   return { ...f, notes, settle, advance };
 }
 
+for (const [wrap, split] of [["unwrapped", null], ["key", 1], ["secret", 30]]) for (const kind of ["STALLED", "FINISHED", "EXITED", "snag"]) {
+  test(`${kind} tails mask mailbox grants and preserve other screen text (${wrap})`, async (t) => {
+    const snags = [];
+    const f = stallFixture({ shellIntegration: kind === "FINISHED", failures: kind === "snag" ? 99 : 0, snag: (snag) => snags.push(snag) });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { label: "W", command: "codex go" });
+    const prefix = "command-line listing: codex -c shell_environment_policy.set.ORBIT_MSG_AUTH='";
+    f.host.resize(f.event, pane.sessionId, split === null ? 240 : prefix.length + split, 30);
+    const grant = mailboxGrant("test-token", pane.sessionId, "bot-1", "bot-1");
+    const legacy = mailboxGrant("test-token", "legacy", "bot-1", "bot-1");
+    const text = `${prefix}${grant}'\nORBIT_MSG_TOKEN='${legacy}'\n한글  sqlite_home=acct_fixture  forced_login_method=chatgpt\nunchanged 12345678.short`;
+    f.children[0].data(`\x1b[2J\x1b[H${text.replaceAll("\n", "\r\n")}\r\n`);
+    const screen = f.host.readBot("bot-1", { sessionId: pane.sessionId }).screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).join("\n");
+    const wrapped = split === null ? grant : `${grant.slice(0, split)}\n${grant.slice(split)}`;
+    assert.ok(screen.includes(wrapped));
+    await f.settle();
+    if (kind === "FINISHED") f.children[0].data(finishedMark(pane));
+    if (kind === "EXITED") f.children[0].exit({ exitCode: 1 });
+    await f.advance(kind === "FINISHED" || kind === "EXITED" ? 10_000 : 121_000);
+    if (kind === "snag") for (let i = 0; i < 4; i++) await f.advance(61_000);
+    const output = kind === "snag" ? snags[0]?.tail.trimEnd() : f.notes[0]?.text.split("Last lines:\n")[1];
+    assert.ok(output);
+    for (const part of wrapped.slice(wrapped.indexOf(".") + 1).split("\n")) assert.ok(!output.includes(part));
+    assert.ok(!output.includes(legacy.split(".")[1]));
+    const key = grant.split(".")[0];
+    const masked = split === null ? `${key}.***` : split < key.length ? `${key.slice(0, split)}\n${key.slice(split)}.***` : `${key}.***\n`;
+    assert.equal(output, screen.replace(wrapped, masked).replace(legacy, `${legacy.split(".")[0]}.***`));
+  });
+}
+
 // Recorded from Claude Code 2.1.306 in a fresh folder; No is selected.
 const CLAUDE_FOLDER_TRUST = "\x1b[1t\x1b[c\x1b[?1004h\x1b[?9001h\x1b]0;claude\x1b\\\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1004h\x1b[?9001l\x1b[?9001h\r\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\r\n\x1b[2GAccessing\x1b[12Gworkspace:\r\n\r\n\x1b[2GC:\\Users\\tester\\AppData\\Local\\Temp\\wink-WORKER-TRUST-MENU\\fresh-iieFbG\r\n\r\n\x1b[2GQuick\x1b[8Gsafety\x1b[15Gcheck:\x1b[22GIs\x1b[25Gthis\x1b[30Ga\x1b[32Gproject\x1b[40Gyou\x1b[44Gcreated\x1b[52Gor\x1b[55Gone\x1b[59Gyou\x1b[63Gtrust?\x1b[70G(Like\x1b[76Gyour\x1b[81Gown\x1b[85Gcode,\x1b[91Ga\x1b[93Gwell-known\x1b[104Gopen\x1b[109Gsource\r\n\x1b[2Gproject,\x1b[11Gor\x1b[14Gwork\x1b[19Gfrom\x1b[24Gyour\x1b[29Gteam).\x1b[36GIf\x1b[39Gnot,\x1b[44Gtake\x1b[49Ga\x1b[51Gmoment\x1b[58Gto\x1b[61Greview\x1b[68Gwhat's\x1b[75Gin\x1b[78Gthis\x1b[83Gfolder\x1b[90Gfirst.\r\n\r\n\x1b[2GClaude\x1b[9GCode'll\x1b[17Gbe\x1b[20Gable\x1b[25Gto\x1b[28Gread,\x1b[34Gedit,\x1b[40Gand\x1b[44Gexecute\x1b[52Gfiles\x1b[58Ghere.\r\n\r\n\x1b[2GSecurity\x1b[11Gguide\r\n\r\n\x1b[2G>\x1b[4GNo,\x1b[8Gexit\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder\r\n\r\n\x1b[2GEnter\x1b[8Gto\x1b[11Gconfirm\x1b[19G·\x1b[21GEsc\x1b[25Gto\x1b[28Gcancel\r\n\x1b[1C\x1b[4A\x1b[>0q\x1b[?u\x1b]7501;?\x07\x1b[c";
 const CLAUDE_FOLDER_TRUST_YES = "\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n C:\\Users\\tester\\AppData\\Local\\Temp\\wink-WORKER-TRUST-MENU\\fresh-iieFbG\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source\n project, or work from your team). If not, take a moment to review what's in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n   No, exit\n > Yes, I trust this folder\n\n Enter to confirm · Esc to cancel";
@@ -1647,6 +1677,144 @@ test("ignores onboarding text quoted inside worker output", async (t) => {
     await f.settle();
   }
   assert.equal(f.children[0].writes.length, 1);
+});
+
+const AGY_TRUST = JSON.parse(fs.readFileSync(new URL("./terminal-host.agy-trust-shell.fixture.json", import.meta.url), "utf8"));
+const AGY_TRUST_SIGNIN = JSON.parse(fs.readFileSync(new URL("./terminal-host.agy-trust.fixture.json", import.meta.url), "utf8"));
+const AGY_TRUST_COMMAND = "$env:AGY_CLI_DISABLE_AUTO_UPDATE='true'; agy --model gemini-3.8-flash-low --dangerously-skip-permissions";
+const AGY_TRUST_MENU = "\x1b[2J\x1b[H" + AGY_TRUST.redraw.at(-1).data;
+const AGY_TRUST_BLOCK = AGY_TRUST_MENU.slice(0, AGY_TRUST_MENU.indexOf("enter Confirm") + "enter Confirm".length);
+const AGY_TRUST_NO = AGY_TRUST_MENU.replace("> Yes, I trust this folder", "  Yes, I trust this folder").replace("  No, exit", "> No, exit");
+
+for (const [name, recorded] of [["below a PowerShell prompt", AGY_TRUST], ["after signing in", AGY_TRUST_SIGNIN]]) {
+  test(`Antigravity folder trust answers the recorded menu once ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+    const child = f.children[0];
+    let elapsed = 0;
+    for (const entry of recorded.redraw) {
+      await f.advance(entry.t - elapsed);
+      elapsed = entry.t;
+      child.data(entry.data);
+      assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r"]);
+    }
+    await f.advance(499);
+    assert.equal(child.writes.length, 1);
+    await f.advance(1);
+    assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+    child.data(AGY_TRUST_MENU);
+    await f.advance(1_000);
+    assert.equal(child.writes.length, 2);
+  });
+}
+
+for (const [name, command, menu] of [
+  ["no bypass flag", AGY_TRUST_COMMAND.replace(" --dangerously-skip-permissions", ""), AGY_TRUST_MENU],
+  ["quoted bypass text", "agy -i '--dangerously-skip-permissions'", AGY_TRUST_MENU],
+  ["another engine", "gemini --dangerously-skip-permissions", AGY_TRUST_MENU],
+  ["Claude pane", CLAUDE_TRUST_COMMAND, AGY_TRUST_MENU],
+  ["No selected", AGY_TRUST_COMMAND, AGY_TRUST_NO],
+  ["no selection", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("> Yes,", "  Yes,")],
+  ["wrong workspace title", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("Accessing workspace:", "Workspace contents:")],
+  ["wrong title", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("Do you trust the contents of this project?", "Allow this action?")],
+  ["wrong permission", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("Antigravity CLI", "Another CLI")],
+  ["wrong footer", AGY_TRUST_COMMAND, AGY_TRUST_MENU.replace("enter Confirm", "enter Delete")],
+  ["earlier menu followed by output", AGY_TRUST_COMMAND, AGY_TRUST_BLOCK + "\r\nOther output follows."],
+  ["output after status lines", AGY_TRUST_COMMAND, AGY_TRUST_BLOCK + "\r\n◆ Gemini 3.8 Flash │ flash\r\nOther output follows."],
+  ["later No selection", AGY_TRUST_COMMAND, AGY_TRUST_BLOCK + "\r\n" + AGY_TRUST_BLOCK.replace("\x1b[2J\x1b[H", "").replace("> Yes, I trust this folder", "  Yes, I trust this folder").replace("  No, exit", "> No, exit")],
+]) {
+  test(`Antigravity folder trust ignores ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command });
+    f.children[0].data(menu);
+    await f.advance(1_000);
+    assert.deepEqual(f.children[0].writes, [command + "\r"]);
+  });
+}
+
+for (const [name, menu] of [
+  ["no status lines", AGY_TRUST_BLOCK],
+  ["model status", AGY_TRUST_BLOCK + "\r\n◆ Gemini 3.8 Flash │ flash"],
+  ["model and usage status", AGY_TRUST_BLOCK + "\r\n◆ Gemini 3.8 Flash │ flash\r\n▰▰▰▰▰ 98% │ ↑15.9k ↓4.8k"],
+  ["wrapped path", AGY_TRUST_BLOCK.replace("Do you trust", "another\\path\\segment\r\nand\\one\\more\r\nDo you trust")],
+  ["no path lines", AGY_TRUST_BLOCK.replace(/C:\\[^\r\n]+\r\n/u, "")],
+  ["later Yes selection", AGY_TRUST_BLOCK.replace("> Yes, I trust this folder", "  Yes, I trust this folder").replace("  No, exit", "> No, exit") + "\r\n" + AGY_TRUST_BLOCK.replace("\x1b[2J\x1b[H", "")],
+]) {
+  test(`Antigravity folder trust accepts the last menu with ${name}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+    f.children[0].data(menu.replace("\x1b[2J\x1b[H", "\x1b[2J\x1b[HPS C:\\repo> agy\r\n"));
+    await f.settle();
+    assert.deepEqual(f.children[0].writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+  });
+}
+
+test("Antigravity folder trust never confirms a transient Yes selection", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  child.data(AGY_TRUST_MENU);
+  await f.advance(499);
+  child.data(AGY_TRUST_NO);
+  await f.advance(1_000);
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r"]);
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+});
+
+test("Antigravity folder trust waits for a split redraw to finish", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  const split = AGY_TRUST_MENU.indexOf("  No, exit");
+  child.data(AGY_TRUST_MENU.slice(0, split));
+  await f.settle();
+  assert.equal(child.writes.length, 1);
+  child.data(AGY_TRUST_MENU.slice(split));
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", "\r"]);
+});
+
+for (const action of ["busy", "output", "exit", "close", "relaunch", "input"]) {
+  test(`Antigravity folder trust drops pending Enter on ${action}`, async (t) => {
+    const f = trustFixture(t, { commandEcho: false });
+    t.after(() => f.host.dispose());
+    const pane = await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+    const child = f.children[0];
+    child.data(AGY_TRUST_MENU);
+    if (action === "busy") child.data("\x1b[2J\x1b[H  ⣽  Reading file...\r\n");
+    if (action === "output") child.data("\r\nOther output follows.");
+    if (action === "exit") child.exit({ exitCode: 0 });
+    if (action === "close") await f.host.closeBotPanes("bot-1");
+    if (action === "relaunch") f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "codex\r" });
+    if (action === "input") f.host.write(f.event, pane.sessionId, "\x1b[B");
+    await f.advance(1_000);
+    const extra = action === "relaunch" ? ["codex\r"] : action === "input" ? ["\x1b[B"] : [];
+    assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", ...extra]);
+  });
+}
+
+test("Antigravity folder trust stops scanning once agy is working and re-arms on relaunch", async (t) => {
+  const f = trustFixture(t, { commandEcho: false });
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { command: AGY_TRUST_COMMAND });
+  const child = f.children[0];
+  await f.advance(2_000);
+  child.data("\x1b[2J\x1b[H  ⣽  Reading file...\r\n");
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r"]);
+  child.data("\x1b[2J\x1b[HPS C:\\repo> ");
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: AGY_TRUST_COMMAND + "\r" });
+  child.data(AGY_TRUST_MENU);
+  await f.settle();
+  assert.deepEqual(child.writes, [AGY_TRUST_COMMAND + "\r", AGY_TRUST_COMMAND + "\r", "\r"]);
 });
 
 test("keeps folder trust gated on bypass mode", async (t) => {
@@ -3050,6 +3218,21 @@ for (const [engine, ellipsis] of [["agy", "..."], ["gemini", "…"]]) {
   });
 }
 
+test("an idle Claude pane with a running shell sends no STALLED before Claude's 2-hour shell cap", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  f.children[0].data(claudeIdle("1 shell"));
+  await f.settle();
+  for (const minutes of [31, 30, 60]) {
+    await f.advance(minutes * 60_000);
+    assert.equal(f.notes.length, 0);
+  }
+  await f.advance(5 * 60_000);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: no screen change for 125 min/);
+});
+
 test("a Claude idle shell footer repeats STALLED twice on a 30/60-minute backoff", async (t) => {
   const f = stallFixture({ notePane: (mail, scope, text) => postPaneNote(mail, scope, text, async (url, init) => {
     const body = JSON.parse(init.body);
@@ -3062,20 +3245,20 @@ test("a Claude idle shell footer repeats STALLED twice on a 30/60-minute backoff
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell").replace("Brewed for 21s · done 6:26 PM", "Churned for 3m 5s · done 오전 7:30"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   assert.match(f.notes[0].text, /^STALLED: /);
   await f.advance(61 * 60_000);
   assert.equal(f.notes.length, 2);
-  assert.match(f.notes[1].text, /^STALLED: no screen change for 92 min/);
+  assert.match(f.notes[1].text, /^STALLED: no screen change for 186 min/);
   await f.advance(61 * 60_000);
   assert.equal(f.notes.length, 3);
-  assert.match(f.notes[2].text, /^STALLED: no screen change for 153 min/);
+  assert.match(f.notes[2].text, /^STALLED: no screen change for 247 min/);
   await f.advance(240 * 60_000);
   assert.equal(f.notes.length, 3);
   f.children[0].data(claudeIdle("1 shell").replace("Brewed", "Checked"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 4);
   await f.advance(31 * 60_000);
   assert.equal(f.notes.length, 5);
@@ -3092,11 +3275,66 @@ test("a recorded Claude idle pane with a background shell repeats STALLED", asyn
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(`\x1b[2J\x1b[H${recorded.reply.screen.join("\r\n")}\r\n`);
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   assert.match(f.notes[0].text, /^STALLED: /);
   await f.advance(31 * 60_000);
   assert.equal(f.notes.length, 2);
+});
+
+const IDLE_COMPACTION = JSON.parse(fs.readFileSync(new URL("../test/fixtures/recorded/claude/idle-compaction.json", import.meta.url), "utf8")).reply;
+const flatScreen = (data) => data.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, "").replace(/\s+/g, "");
+const replayIdleCompaction = async (f, { report = false } = {}) => {
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go", cols: IDLE_COMPACTION.cols, rows: IDLE_COMPACTION.rows });
+  let at = 0;
+  for (const { t, data } of IDLE_COMPACTION.chunks) {
+    if (t - at >= 1_000) {
+      while (t - at > 60_000) { await f.advance(60_000); at += 60_000; }
+      await f.advance(t - at);
+      at = t;
+    }
+    if (report && flatScreen(data).includes("●DONE")) f.host.attendBot("bot-1", pane.sessionId, "report");
+    f.children[0].data(data);
+  }
+  await f.settle();
+  return pane;
+};
+const advanceMinutes = async (f, minutes) => { for (let minute = 0; minute < minutes; minute++) await f.advance(60_000); };
+
+test("a recorded Claude pane that reported stays quiet through its idle compaction", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await replayIdleCompaction(f, { report: true });
+  await advanceMinutes(f, 120);
+  assert.equal(f.notes.length, 0);
+});
+
+test("a recorded Claude idle compaction does not restart a stalled pane's notes", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await replayIdleCompaction(f);
+  assert.equal(f.notes.length, 2);
+  await advanceMinutes(f, 5);
+  assert.equal(f.notes.length, 2);
+  await advanceMinutes(f, 60);
+  assert.equal(f.notes.length, 3);
+  assert.match(f.notes[2].text, /^STALLED: no screen change for [3-9]\d min and no report\./);
+  assert.match(f.notes[2].text, /Compacted while idle, before the prompt cache expired/);
+});
+
+test("a new task after a recorded idle compaction re-arms STALLED", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await replayIdleCompaction(f, { report: true });
+  const before = f.notes.length;
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "next task\r" });
+  f.children[0].data("next task\r\n");
+  await f.settle();
+  await f.advance(119_000);
+  assert.equal(f.notes.length, before);
+  await f.advance(2_000);
+  assert.equal(f.notes.length, before + 1);
+  assert.match(f.notes[before].text, /^STALLED: no screen change for 2 min and no report\./);
 });
 
 test("a stall receipt counts as delivered when the mailbox response is lost", async (t) => {
@@ -3109,7 +3347,7 @@ test("a stall receipt counts as delivered when the mailbox response is lost", as
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   await f.advance(5 * 60_000);
   assert.equal(f.notes.length, 1);
@@ -3123,7 +3361,7 @@ test("a stall receipt leaves the watcher armed and a plain note stops its repeat
   const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   await f.advance(1_000);
   f.host.attendBot("bot-1", pane.sessionId, "stall");
@@ -3141,7 +3379,7 @@ test("STALLED reminders wait 30 minutes and then 60 minutes", async (t) => {
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   for (const [minutes, count] of [[30, 1], [60, 2]]) {
     await f.advance(minutes * 60_000);
@@ -3157,7 +3395,7 @@ test("a report stops pending STALLED repeats", async (t) => {
   const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  await f.advance(31 * 60_000);
+  await f.advance(125 * 60_000);
   assert.equal(f.notes.length, 1);
   f.host.attendBot("bot-1", pane.sessionId, "report");
   await f.advance(240 * 60_000);
@@ -3168,7 +3406,7 @@ const stallThrice = async (f) => {
   await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
   f.children[0].data(claudeIdle("1 shell"));
   await f.settle();
-  for (const minutes of [31, 31, 61]) await f.advance(minutes * 60_000);
+  for (const minutes of [125, 31, 61]) await f.advance(minutes * 60_000);
   assert.equal(f.notes.length, 3);
 };
 
@@ -3184,7 +3422,7 @@ test("a worker still stuck 10 minutes after its third STALLED note sends one sta
   const { tail, ...rest } = snags[0];
   assert.deepEqual(rest, {
     event: "stalled", key: f.children[0].options.env.ORBIT_PANE, bot: "bot-1", worker: "claude", pane: f.children[0].options.env.ORBIT_PANE, label: "W",
-    detail: "3 STALLED notes, no screen change or report since", minutes: 133, notes: [["stalled", 102], ["stalled", 71], ["stalled", 10]],
+    detail: "3 STALLED notes, no screen change or report since", minutes: 227, notes: [["stalled", 102], ["stalled", 71], ["stalled", 10]],
   });
   assert.match(tail, /bypass permissions on/);
   await f.advance(240 * 60_000);
@@ -3283,8 +3521,8 @@ test("a failed report with no later report sends a note-lost snag after 10 minut
   }
 });
 
-for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
-  test(`a Claude running-shell footer stalls after 30 minutes despite status ticks: ${jobs}`, async (t) => {
+for (const jobs of ["1 shell", "2 shells, 1 monitor", "1 monitor", "3 monitors"]) {
+  test(`a Claude running shell or monitor footer stalls after 125 minutes despite status ticks: ${jobs}`, async (t) => {
     const f = stallFixture();
     t.after(() => f.host.dispose());
     await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
@@ -3295,11 +3533,11 @@ for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
     await f.advance(13 * 60_000);
     f.children[0].data(`${claudeIdle(jobs)}  95% context left · 12:16 PM\r\n`);
     await f.settle();
-    await f.advance(15 * 60_000 - 1);
+    await f.advance(110 * 60_000 - 1);
     assert.equal(f.notes.length, 0);
     await f.advance(1);
     assert.equal(f.notes.length, 1);
-    assert.match(f.notes[0].text, /^STALLED: no screen change for 30 min/);
+    assert.match(f.notes[0].text, /^STALLED: no screen change for 125 min/);
     f.children[0].data(`${claudeIdle(jobs)}  94% context left · 12:31 PM\r\n`);
     await f.settle();
     await f.advance(30 * 60_000);
@@ -3313,6 +3551,38 @@ for (const jobs of ["1 shell", "2 shells, 1 monitor"]) {
     assert.match(f.notes[1].text, /^STALLED: no screen change for 2 min/);
   });
 }
+
+test("an idle Claude pane waiting on one monitor stalls after 125 minutes", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await f.host.openForBot("bot-1", { label: "W", command: "claude go" });
+  const rule = "─".repeat(120);
+  f.children[0].data([
+    "\x1b[2J\x1b[H● Monitor(wait until 05:00 KST for timing legs)",
+    "  ⎿  Monitor started · task bzeizogyg · timeout 1800s",
+    "",
+    "● While waiting, I'm precreating the empty leg directories. That's not a timing leg.",
+    "",
+    "✻ Cogitated for 31m 44s · done 4:28 AM · 1 monitor still running",
+    "",
+    rule,
+    ">",
+    rule,
+    "  ctx 136k/300k",
+    "  ⏵⏵ bypass permissions on · 1 monitor",
+    "",
+  ].join("\r\n"));
+  await f.settle();
+  let waited = 0;
+  for (const minutes of [2, 31, 61, 124]) {
+    await f.advance((minutes - waited) * 60_000);
+    waited = minutes;
+    assert.equal(f.notes.length, 0, `${minutes} min`);
+  }
+  await f.advance(60_000);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /^STALLED: no screen change for 125 min/);
+});
 
 test("a Claude agent row that keeps changing holds the stall note until the screen freezes", async (t) => {
   const f = stallFixture();

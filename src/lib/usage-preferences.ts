@@ -14,18 +14,10 @@ function readUsageMode(): UsageMode {
 
 let mode = readUsageMode();
 
-export function getUsageMode(): UsageMode {
-  return mode;
-}
-
-export function setUsageMode(value: UsageMode): void {
+export function setUsageMode(value: UsageMode) {
   mode = value;
-  try {
-    localStorage.setItem(KEY, value);
-  } catch {
-    // Keep the choice for this session when storage is blocked.
-  }
-  for (const notify of watchers) notify();
+  try { localStorage.setItem(KEY, value); } catch { /* Keep the session choice. */ }
+  watchers.forEach((notify) => notify());
 }
 
 function subscribe(notify: () => void) {
@@ -33,6 +25,6 @@ function subscribe(notify: () => void) {
   return () => { watchers.delete(notify); };
 }
 
-export function useUsageMode(): UsageMode {
-  return useSyncExternalStore(subscribe, getUsageMode, getUsageMode);
+export function useUsageMode() {
+  return useSyncExternalStore(subscribe, () => mode, () => mode);
 }

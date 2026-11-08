@@ -7,13 +7,15 @@
 // The fake CLI is a shebang script Windows cannot exec directly —
 // resolveCliSpawn turns it into `node <script>`, so these run everywhere.
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EventEmitter, getEventListeners } from "node:events";
+import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
-import type { ProviderDriver, ProviderInstance } from "../../contracts.ts";
+import type { PrepareTurn, ProviderDriver, ProviderInstance, SendTurnInput } from "../../contracts.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { createAcpDriver, probeCliVersion, skipSubscriptionAuthForLocalInject, wslSessionPaths, type AcpSupport } from "./core.ts";
 import { toWslPath } from "../../env-path.ts";
@@ -23,11 +25,601 @@ import { readGrokBillingRpc } from "../../usage-refresh.ts";
 import { createTempDirs, removeTempDir } from "../../testing/cleanup.ts";
 import { ProviderRegistry } from "../../harness/registry.ts";
 import * as procs from "../../procs.ts";
+import { createWarmPool, type WarmPool } from "../warm-pool.ts";
+import { acpConnection } from "./connection.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "testing", "fake-acp-cli.ts");
+
+const acceleratedWarmPool = (ttlMs: number) => {
+  let now = 0;
+  const pool: WarmPool = createWarmPool({ now: () => now, timers: {
+    setInterval(fn) {
+      const timer = setInterval(() => {
+        // Keep accelerated idle expiry from shortening protocol setup.
+        if (pool.stats().idle > 0) now += 60_000;
+        fn();
+      }, ttlMs / 10);
+      timer.unref();
+      return timer;
+    },
+    clearInterval(timer) { clearInterval(timer as ReturnType<typeof setInterval>); },
+  } });
+  return pool;
+};
+
+describe("Grok warm leases (recorded transport)", () => {
+  const fixture = JSON.parse(readFileSync("test/fixtures/recorded/grok/prepare-session.json", "utf8"));
+  type Message = { id?: number; method?: string; params?: any; result?: any; error?: any };
+  type Peer = ReturnType<typeof makePeer>;
+  let peers: Peer[];
+  let pool: WarmPool;
+  let instance: ProviderInstance;
+  let recorder: EventRecorder;
+  let identity: string;
+  let incarnation: string;
+  let delay: (method: string, child: number) => number;
+  let held: Set<string>;
+  const shape = (): PrepareTurn => ({
+    threadId: "recorded-thread", model: "grok-4.7", effort: "low", cwd: "recorded-workspace", depth: 0,
+    captured: { identity, generation: pool.generation({ engine: "grokAgent", instanceId: "recorded-grok" }), incarnation },
+  });
+  const drain = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+
+  function makePeer(index: number) {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null as number | null,
+      signalCode: null as string | null, killed: false, pid: index + 900_000,
+    });
+    const requests: Message[] = [];
+    const pending = new Map<string, () => void>();
+    const inbound: Message[] = [];
+    const end = (code: number) => {
+      if (child.exitCode !== null) return;
+      child.exitCode = code;
+      child.stdout.end();
+      child.emit("close", code);
+    };
+    const emit = (message: Message) => {
+      if (child.exitCode !== null) return;
+      inbound.push(message);
+      child.stdout.write(JSON.stringify(message) + "\n");
+    };
+    const stdin = new Writable({ write(chunk, _encoding, done) {
+      const message: Message = JSON.parse(String(chunk));
+      requests.push(message);
+      const method = message.method;
+      const recordedMethod = method === "session/load" ? "session/new" : method;
+      const start = fixture.reply.wire.findIndex((item: any) => item.dir === "out" && item.msg.method === recordedMethod);
+      const block: Message[] = [];
+      if (start >= 0) {
+        for (const item of fixture.reply.wire.slice(start + 1)) {
+          if (item.dir === "out") break;
+          block.push(structuredClone(item.msg));
+        }
+      } else if (method && message.id !== undefined) {
+        block.push({ id: message.id, error: { code: -32601, message: "Method not found" } });
+      }
+      const respond = () => {
+        if (method === "session/load" && held.has("load-error")) {
+          emit({ id: message.id, error: { code: -32000, message: "Session not found" } });
+          return;
+        }
+        if (method === "session/load") {
+          const replay = structuredClone(fixture.reply.wire.find((item: any) =>
+            item.msg.params?.update?.sessionUpdate === "agent_message_chunk").msg);
+          replay.params.sessionId = message.params.sessionId;
+          emit(replay);
+        }
+        for (const item of block) {
+          if (item.id !== undefined) item.id = message.id;
+          if (message.params?.sessionId && item.params?.sessionId) item.params.sessionId = message.params.sessionId;
+          if (method === "session/prompt" && item.id !== undefined && held.has("prompt-result")) {
+            pending.set("prompt-result", () => emit(item));
+          } else emit(item);
+        }
+      };
+      if (method && held.has(`${index}:${method}`)) pending.set(method, respond);
+      else if (method && delay(method, index)) setTimeout(respond, delay(method, index));
+      else void Promise.resolve().then(respond);
+      done();
+    } });
+    stdin.on("finish", () => setTimeout(() => end(0), fixture.reply.exit.stdinCloseMs));
+    return { child: Object.assign(child, { stdin }), requests, inbound, pending, end };
+  }
+
+  const start = async (support: Partial<AcpSupport> = {}) => {
+    const Driver = createAcpDriver({ ...grokSupport, warmPool: pool,
+      warmSessionIdentity: () => identity, isAuthenticated: () => true, ...support });
+    instance = await Driver.create({ instanceId: "recorded-grok", displayName: "Grok", enabled: true,
+      incarnation, environment: {}, config: { cli: "recorded-grok-cli", fullAuto: false } });
+    recorder = recordEvents(instance.adapter);
+  };
+  const send = async (input: Partial<SendTurnInput> = {}) => {
+    const turn = await instance.adapter.sendTurn({ ...shape(), text: "Reply only OK.", ...input });
+    await drain();
+    return turn;
+  };
+  const methods = (peer: Peer) => peer.requests.map((message) => message.method);
+  const prompts = () => peers.flatMap((peer) => peer.requests.filter((message) => message.method === "session/prompt"));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    peers = [];
+    identity = "recorded-account";
+    incarnation = "grok#7";
+    delay = () => 0;
+    held = new Set();
+    pool = createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+    vi.spyOn(procs, "execCli").mockImplementation((_cli, _args, _options, callback) => callback(null, fixture.stamp.cliVersion));
+    vi.spyOn(procs, "spawnCli").mockImplementation(() => {
+      const peer = makePeer(peers.length);
+      peers.push(peer);
+      return peer.child as unknown as ReturnType<typeof procs.spawnCli>;
+    });
+    vi.spyOn(procs, "killCliTree").mockImplementation((child) => {
+      const peer = peers.find((peer) => peer.child === child as unknown);
+      if (peer) { peer.child.killed = true; peer.end(0); }
+    });
+  });
+  afterEach(async () => {
+    recorder?.stop();
+    await instance?.dispose();
+    await pool.closeAll("test complete", { final: true });
+    for (const peer of peers) peer.end(0);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("a prewarm with the bot's shape (nondefault model, effort and cwd) serves the first turn with one process", async () => {
+    await start();
+    await instance.prepare!(shape());
+    const turn = await send();
+    expect(recorder.events.find((event) => event.type === "turn.completed" && event.turnId === turn.turnId)).toMatchObject({ ok: true });
+    expect(peers).toHaveLength(1);
+    expect(procs.spawnCli).toHaveBeenCalledWith("recorded-grok-cli", expect.arrayContaining(["-m", "grok-4.7", "--reasoning-effort", "low"]),
+      expect.objectContaining({ cwd: "recorded-workspace" }));
+    expect(methods(peers[0]).filter((method) => method === "initialize")).toHaveLength(1);
+    expect(methods(peers[0])).toContain("session/set_config_option");
+  });
+
+  it("replays every recorded request, reply and notification through acpConnection", async () => {
+    await start();
+    const received: Message[] = [];
+    const connection = acpConnection(procs.spawnCli("recorded-grok-cli", [], {}), (dir, message: any) => {
+      if (dir === "in") received.push(message);
+    });
+    for (const item of fixture.reply.wire.filter((item: any) => item.dir === "out")) {
+      const request = connection.request(item.msg.method, item.msg.params, 20_000);
+      if (item.msg.method === "ping") await expect(request).rejects.toMatchObject(fixture.reply.ping.error);
+      else await request;
+    }
+    expect(received).toEqual(fixture.reply.wire.filter((item: any) => item.dir === "in").map((item: any) => item.msg));
+    expect(fixture.reply.historyBeforePrompt.emptySessionListed).toBe(false);
+  });
+
+  it("joins concurrent prepares on one counted lease", async () => {
+    await start();
+    await Promise.all(Array.from({ length: 8 }, () => instance.prepare!(shape())));
+    expect(peers).toHaveLength(1);
+    expect(pool.stats()).toMatchObject({ reserved: 1, idle: 1 });
+    expect(prompts()).toHaveLength(0);
+  });
+
+  it("cachedCapture returns the probe's capture without reading auth again", async () => {
+    const readIdentity = vi.fn(() => identity);
+    await start({ warmSessionIdentity: readIdentity });
+    expect(instance.cachedCapture?.()).toBeNull();
+    await instance.snapshot();
+    const calls = readIdentity.mock.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    for (let i = 0; i < 3; i++) {
+      const captured = instance.cachedCapture?.();
+      expect(captured).toEqual(shape().captured);
+      captured!.identity = "changed-copy";
+    }
+    expect(readIdentity).toHaveBeenCalledTimes(calls);
+  });
+
+  it("a barrier on the instance makes it null until the next capture", async () => {
+    await start();
+    await instance.snapshot();
+    pool.barrier({ instanceId: instance.instanceId }, "test barrier")();
+    expect(instance.cachedCapture?.()).toBeNull();
+    await instance.prepare!(shape());
+    expect(instance.cachedCapture?.()).toEqual(shape().captured);
+  });
+
+  it("a signed-out snapshot clears it", async () => {
+    const authenticated = vi.fn(() => true);
+    await start({ isAuthenticated: authenticated });
+    await instance.snapshot();
+    expect(instance.cachedCapture?.()).toEqual(shape().captured);
+    authenticated.mockReturnValue(false);
+    await instance.snapshot();
+    expect(instance.cachedCapture?.()).toBeNull();
+  });
+
+  it("dispose clears it", async () => {
+    await start();
+    await instance.snapshot();
+    expect(instance.cachedCapture?.()).toEqual(shape().captured);
+    await instance.dispose();
+    expect(instance.cachedCapture?.()).toBeNull();
+  });
+
+  it("leases carry the registry incarnation", async () => {
+    held.add("0:initialize");
+    const reserve = vi.spyOn(pool, "reserve");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    pool.invalidate({ instanceId: instance.instanceId, incarnation: "grok#7" }, "registry reload");
+    const lease = reserve.mock.results[0].value;
+    expect(lease.signal.aborted).toBe(true);
+    await preparing;
+    expect(peers[0].child.killed).toBe(true);
+  });
+
+  it("prepare declines a shape from another incarnation", async () => {
+    const reserve = vi.spyOn(pool, "reserve");
+    await start();
+    await instance.prepare!({ ...shape(), captured: { ...shape().captured, incarnation: "grok#6" } });
+    expect(reserve).not.toHaveBeenCalled();
+    expect(peers).toHaveLength(0);
+  });
+
+  it("a stale cached identity declines once, then the next shape prepares", async () => {
+    await start();
+    await instance.snapshot();
+    const captured = instance.cachedCapture?.();
+    expect(captured).toEqual(shape().captured);
+    identity = "changed-account";
+    await instance.prepare!({ ...shape(), captured: captured! });
+    expect(peers).toHaveLength(0);
+    expect(instance.cachedCapture?.()).toEqual(shape().captured);
+    await instance.prepare!({ ...shape(), captured: instance.cachedCapture!()! });
+    expect(peers).toHaveLength(1);
+  });
+
+  it("an ACP driver without warmSessionIdentity has no cached capture", async () => {
+    await start({ warmSessionIdentity: undefined });
+    await instance.snapshot();
+    expect(instance.cachedCapture?.()).toBeNull();
+  });
+
+  it("recovery history is sent only on the turn whose load failed", async () => {
+    held.add("load-error");
+    await start();
+    const resumeFallback = { text: "Recovery history" };
+    await send({ resumeCursor: "missing-cursor", resumeFallback });
+    expect(JSON.stringify(prompts()[0].params)).toContain(resumeFallback.text);
+    await send({ resumeCursor: "recorded-session", resumeFallback, text: "Follow-up" });
+    expect(peers).toHaveLength(1);
+    expect(JSON.stringify(prompts()[1].params)).toContain("Follow-up");
+    expect(JSON.stringify(prompts()[1].params)).not.toContain(resumeFallback.text);
+  });
+
+  it("returned leases retain no completed turn's abort listeners", async () => {
+    const reserve = vi.spyOn(pool, "reserve");
+    await start();
+    await instance.prepare!(shape());
+    const lease = reserve.mock.results[0].value;
+    const baseline = getEventListeners(lease.signal, "abort").length;
+    await send();
+    expect(pool.stats().idle).toBe(1);
+    expect(getEventListeners(lease.signal, "abort")).toHaveLength(baseline);
+    for (let i = 0; i < 3; i++) await send({ resumeCursor: "recorded-session" });
+    expect(getEventListeners(lease.signal, "abort")).toHaveLength(baseline);
+  });
+
+  it("releases every pending joiner when shared preparation fails", async () => {
+    held.add("0:ping");
+    await start();
+    const preparing = Array.from({ length: 8 }, () => instance.prepare!(shape()));
+    await drain();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(preparing);
+    expect(peers).toHaveLength(1);
+    expect(peers[0].child.killed).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("counts a no-shape handshake without creating a session", async () => {
+    await start();
+    await instance.prepare!();
+    expect(pool.stats()).toMatchObject({ reserved: 1, idle: 1 });
+    expect(methods(peers[0])).toEqual(["initialize", "authenticate"]);
+  });
+
+  it("Stop aborts authentication waits before any child exists", async () => {
+    await start({ requireAuthenticationBeforeSpawn: true, isAuthenticated: () => new Promise(() => {}) });
+    const sending = instance.adapter.sendTurn({ ...shape(), text: "OK" });
+    await drain();
+    await instance.adapter.stopAll();
+    await sending;
+    expect(peers).toHaveLength(0);
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", stopReason: "cancelled" });
+  });
+
+  it("dispose aborts a prepare authentication wait before any child exists", async () => {
+    await start({ requireAuthenticationBeforeSpawn: true, isAuthenticated: () => new Promise(() => {}) });
+    const preparing = instance.prepare!(shape());
+    await drain();
+    await instance.dispose();
+    await preparing;
+    expect(peers).toHaveLength(0);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("prepare and sendTurn build the same fingerprint for the same shape", async () => {
+    const reserve = vi.spyOn(pool, "reserve");
+    const take = vi.spyOn(pool, "take");
+    await start();
+    await instance.prepare!(shape());
+    const fingerprint = reserve.mock.calls[0][1];
+    await send();
+    expect(take.mock.calls[0][1]).toBe(fingerprint);
+    expect(take.mock.calls[0][2]).toEqual(reserve.mock.calls[0][2]);
+    expect(pool.stats().idle).toBe(1);
+  });
+
+  it.each([undefined, "loaded-cursor"])("a turn with a cursor never takes a fresh session; a cursorless turn never takes a loaded one (%s)", async (cursor) => {
+    await start();
+    await instance.prepare!({ ...shape(), resumeCursor: cursor });
+    expect(recorder.events).toHaveLength(0);
+    await send({ resumeCursor: cursor ? undefined : "other-cursor" });
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.killed).toBe(true);
+    expect(methods(peers[1])).toContain(cursor ? "session/new" : "session/load");
+  });
+
+  it.each([100, 1000])("a pending prepare never makes the turn later than cold (%i ms)", async (warmMs) => {
+    vi.spyOn(os, "cpus").mockReturnValue(Array.from({ length: 16 }, () => ({} as os.CpuInfo)));
+    vi.spyOn(os, "totalmem").mockReturnValue(32 * 1024 ** 3);
+    delay = (method, child) => method === "initialize" ? child === 0 ? warmMs : 200 : 0;
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    const sent = instance.adapter.sendTurn({ ...shape(), text: "OK" });
+    await drain();
+    expect(peers).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(Math.min(warmMs, 200) - 1);
+    expect(prompts()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    const turn = await sent;
+    await preparing;
+    await drain();
+    expect(prompts()).toHaveLength(1);
+    expect(recorder.events.find((event) => event.type === "turn.completed" && event.turnId === turn.turnId)).toMatchObject({ ok: true });
+    expect(peers[warmMs < 200 ? 1 : 0].child.killed).toBe(true);
+  });
+
+  it("cancels pending prepare and runs cold on a smaller PC", async () => {
+    vi.spyOn(os, "cpus").mockReturnValue([{} as os.CpuInfo]);
+    held.add("0:initialize");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    await send();
+    await preparing;
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.killed).toBe(true);
+    expect(prompts()).toHaveLength(1);
+  });
+
+  it("busy take never spawns a second child", async () => {
+    await start();
+    await instance.prepare!(shape());
+    vi.spyOn(pool, "take").mockReturnValue("busy");
+    await expect(send()).rejects.toThrow("already in use");
+    expect(peers).toHaveLength(1);
+  });
+
+  it("busy legacy take never spawns a second child", async () => {
+    await start();
+    vi.spyOn(pool, "take").mockReturnValueOnce("miss").mockReturnValue("busy");
+    await expect(send()).rejects.toThrow("already in use");
+    expect(peers).toHaveLength(0);
+  });
+
+  it.each(["auth hash", "generation"])("an %s change between prepare and Send drops the child", async (change) => {
+    await start();
+    await instance.prepare!(shape());
+    if (change === "auth hash") identity = "new-account";
+    else pool.barrier({ instanceId: instance.instanceId }, "account changed")();
+    await send();
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.killed).toBe(true);
+    expect(prompts()).toHaveLength(1);
+  });
+
+  it("sign-out during adoption keeps nothing", async () => {
+    held.add("0:initialize");
+    held.add("1:initialize");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    const sending = instance.adapter.sendTurn({ ...shape(), text: "OK" });
+    await drain();
+    pool.barrier({ instanceId: instance.instanceId }, "sign out")();
+    peers[1].pending.get("initialize")!();
+    await drain();
+    await Promise.all([preparing, sending]);
+    expect(prompts()).toHaveLength(0);
+    expect(pool.stats().reserved).toBe(0);
+    expect(peers.every((peer) => peer.child.killed)).toBe(true);
+  });
+
+  it.each(["auth hash", "generation"])("a returned old-account turn is closed, not offered (%s)", async (change) => {
+    held.add("prompt-result");
+    await start();
+    await instance.prepare!(shape());
+    await send();
+    if (change === "auth hash") identity = "new-account";
+    else pool.barrier({ instanceId: instance.instanceId }, "account changed")();
+    peers[0].pending.get("prompt-result")!();
+    await drain();
+    expect(pool.stats().idle).toBe(0);
+    expect(peers[0].child.killed).toBe(true);
+  });
+
+  it("prompt-sent precedes output while the prompt response is pending", async () => {
+    held.add("prompt-result");
+    await start();
+    await send();
+    const stage = recorder.events.findIndex((event) => event.type === "turn.stage" && event.stage === "prompt-sent");
+    const output = recorder.events.findIndex((event) => event.type === "content.delta");
+    expect(stage).toBeGreaterThan(0);
+    expect(output).toBeGreaterThan(stage);
+    expect(recorder.events.some((event) => event.type === "turn.completed")).toBe(false);
+    peers[0].pending.get("prompt-result")!();
+    await drain();
+  });
+
+  it("method-not-found ping keeps a healthy child", async () => {
+    await start();
+    await instance.prepare!(shape());
+    expect(peers[0].inbound.some((message) => message.error?.code === -32601)).toBe(true);
+    expect(pool.stats().idle).toBe(1);
+    await send();
+    expect(peers).toHaveLength(1);
+    expect(methods(peers[0]).filter((method) => method === "ping")).toHaveLength(1);
+  });
+
+  it("a timed-out prepare ping closes the child", async () => {
+    held.add("0:ping");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    await vi.advanceTimersByTimeAsync(1000);
+    await preparing;
+    expect(peers[0].child.killed).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("rechecks identity immediately before the prompt write", async () => {
+    await start();
+    await instance.prepare!(shape());
+    instance.adapter.onEvent((event) => {
+      if (event.type === "session.started") pool.barrier({ instanceId: instance.instanceId }, "sign out")();
+    });
+    await send();
+    expect(prompts()).toHaveLength(0);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("falls back to cold if a hit dies before setup selection", async () => {
+    await start();
+    await instance.prepare!(shape());
+    let dropped = false;
+    instance.adapter.onEvent((event) => {
+      if (event.type === "turn.started" && !dropped) { dropped = true; peers[0].end(0); }
+    });
+    await send();
+    expect(peers).toHaveLength(2);
+    expect(prompts()).toHaveLength(1);
+    expect(methods(peers[1])).toContain("session/new");
+  });
+
+  it("disposal of an old incarnation leaves a replacement's lease alone", async () => {
+    await start();
+    const old = instance;
+    await instance.prepare!(shape());
+    incarnation = "grok#8";
+    await start();
+    await instance.prepare!(shape());
+    await old.dispose();
+    await send();
+    expect(peers).toHaveLength(2);
+    expect(peers[0].child.killed).toBe(true);
+    expect(peers[1].child.killed).toBe(false);
+  });
+
+  it("billing in flight cannot race the next prompt", async () => {
+    held.add("0:_x.ai/billing");
+    await start();
+    await instance.prepare!(shape());
+    await send();
+    expect(pool.stats().idle).toBe(0);
+    await expect(send({ resumeCursor: "recorded-session" })).rejects.toThrow("already running");
+    expect(prompts()).toHaveLength(1);
+    peers[0].pending.get("_x.ai/billing")!();
+    await drain();
+    expect(pool.stats().idle).toBe(1);
+    await send({ resumeCursor: "recorded-session" });
+    expect(prompts()).toHaveLength(2);
+  });
+
+  it("Stop during billing readiness cannot run the canceled prompt", async () => {
+    held.add("0:_x.ai/billing");
+    await start();
+    await instance.prepare!(shape());
+    await send();
+    await instance.adapter.interruptTurn(shape().threadId);
+    await drain();
+    expect(pool.stats().reserved).toBe(0);
+    expect(peers[0].child.killed).toBe(true);
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", stopReason: "cancelled" });
+    peers[0].pending.get("_x.ai/billing")!();
+    await drain();
+    expect(prompts()).toHaveLength(1);
+  });
+
+  it("Stop during adopted setup kills the child and keeps nothing", async () => {
+    held.add("0:initialize");
+    held.add("1:initialize");
+    await start();
+    const preparing = instance.prepare!(shape());
+    await drain();
+    const sending = instance.adapter.sendTurn({ ...shape(), text: "OK" });
+    await drain();
+    await instance.adapter.interruptTurn(shape().threadId);
+    await Promise.all([preparing, sending]);
+    await drain();
+    expect(peers.every((peer) => peer.child.killed)).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+    expect(prompts()).toHaveLength(0);
+  });
+
+  it("keeps the child 10 min after a clean turn and closes it after", async () => {
+    await start();
+    await send();
+    expect(pool.stats().idle).toBe(1);
+    await vi.advanceTimersByTimeAsync(599_999);
+    expect(peers[0].child.killed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(peers[0].child.killed).toBe(true);
+    expect(pool.stats().reserved).toBe(0);
+  });
+
+  it("emits setup then prompt-sent on a cold turn and only prompt-sent on a warm turn", async () => {
+    await start();
+    const cold = await send();
+    const warm = await send({ resumeCursor: "recorded-session" });
+    const stages = (turnId: string) => recorder.events.flatMap((event) =>
+      event.type === "turn.stage" && event.turnId === turnId ? [event.stage] : []);
+    expect(stages(cold.turnId)).toEqual(["setup", "prompt-sent"]);
+    expect(stages(warm.turnId)).toEqual(["prompt-sent"]);
+    expect(peers).toHaveLength(1);
+  });
+
+  it("an idle warm child exits on stdin close within 5 s (real Grok 1.0.70: 3537/3552 ms)", async () => {
+    expect(fixture.stamp.cliVersion).toContain("1.0.70");
+    expect(fixture.reply.exit).toMatchObject({ code: 0, forced: false, stdinCloseMs: 3537 });
+    expect(fixture.reply.exit.stdinCloseMs).toBeLessThan(5000);
+    await start();
+    await instance.prepare!(shape());
+    peers[0].child.stdin.end();
+    await vi.advanceTimersByTimeAsync(fixture.reply.exit.stdinCloseMs - 1);
+    expect(peers[0].child.exitCode).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(peers[0].child.exitCode).toBe(0);
+    expect(peers[0].child.killed).toBe(false);
+  });
+});
 
 /** Every credential this process could be holding, plus two nobody has heard
  * of yet - the allowlist has to exclude those for the same reason, under
@@ -141,7 +733,7 @@ describe("SPEED4 warm session reuse (fake CLI)", () => {
     ...grokSupport,
     // Deterministic identity so fake-CLI tests do not depend on ~/.grok/auth.json.
     warmSessionIdentity: () => "speed4-test-identity",
-    warmIdleMs: 200,
+
     isAuthenticated: () => true,
   });
 
@@ -430,26 +1022,15 @@ describe("SPEED4 warm session reuse (fake CLI)", () => {
   });
 
   it("cancel while billing readiness is pending does not retry the canceled prompt", async () => {
+    process.env.FAKE_ACP_RPC_DUMP = join(scratch, "billing-stop.json");
+    writeFileSync(process.env.FAKE_ACP_RPC_DUMP, "[]");
     await createWarm("billing-hang");
     const t1 = await instance.adapter.sendTurn({ threadId: "t-bill-cancel", text: "one" });
-    await recorder.until((e) => e.type === "turn.completed" && e.turnId === t1.turnId);
-    const sessionId = sessionIdFor(t1.turnId);
-    const completedBefore = recorder.events.filter((e) => e.type === "turn.completed").length;
-
-    // Next turn blocks on ready (hanging billing). Interrupt must cancel, not recurse.
-    const pending = instance.adapter.sendTurn({
-      threadId: "t-bill-cancel",
-      text: "should-not-run",
-      resumeCursor: sessionId,
-    });
-    // Give the await-ready path a tick, then cancel via the reserved active entry.
-    await new Promise((r) => setTimeout(r, 50));
+    await waitForRpc((m) => m.includes("_x.ai/billing"));
     await instance.adapter.interruptTurn("t-bill-cancel");
-    const { turnId } = await pending;
-    const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === t1.turnId);
     expect(done).toMatchObject({ stopReason: "cancelled" });
-    expect(turnId).not.toBe(t1.turnId);
-    expect(recorder.events.filter((e) => e.type === "turn.completed").length).toBe(completedBefore + 1);
+    expect(rpcMethods().filter((m) => m === "session/prompt")).toHaveLength(1);
   });
 
   it("allows an immediate follow-up send from a turn.completed listener", async () => {
@@ -486,7 +1067,7 @@ describe("SPEED4 warm session reuse (fake CLI)", () => {
     const ShortTtl = createAcpDriver({
       ...grokSupport,
       warmSessionIdentity: () => "speed4-ttl-identity",
-      warmIdleMs: 80,
+      warmPool: acceleratedWarmPool(80),
       isAuthenticated: () => true,
     });
     process.env.FAKE_ACP_MODE = "happy";
@@ -801,6 +1382,7 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
+    delete process.env.FAKE_ACP_PROMPT_META;
     delete process.env.FAKE_ACP_PERMISSION_KINDS;
     delete process.env.FAKE_ACP_BILLING_PERCENT;
     delete process.env.FAKE_ACP_BILLING_END;
@@ -818,12 +1400,15 @@ describe("ACP turns (fake CLI)", () => {
     const types = recorder.events.map((e) => e.type);
     expect(types).toEqual([
       "turn.started",
+      "turn.stage",
       "session.started",
+      "turn.stage",
       "content.delta",
       "item.completed", // assistant_text before the tool, not summed on settle
       "item.started", // tool tc-1
       "item.completed", // tool tc-1 done
       "thread.token-usage.updated",
+      "account.rate-limits.updated",
       "turn.completed",
     ]);
     expect(recorder.events.every((e) => e.turnId === turnId && e.provider === "grokAgent")).toBe(true);
@@ -901,7 +1486,9 @@ describe("ACP turns (fake CLI)", () => {
     const types = recorder.events.map((e) => e.type);
     expect(types).toEqual([
       "turn.started",
+      "turn.stage",
       "session.started",
+      "turn.stage",
       "content.delta",
       "item.completed", // before one
       "item.started", // tc-1
@@ -912,6 +1499,7 @@ describe("ACP turns (fake CLI)", () => {
       "item.completed", // tc-2
       "content.delta",
       "thread.token-usage.updated",
+      "account.rate-limits.updated",
       "item.completed", // after — no following tool, so settle flushes
       "turn.completed",
     ]);
@@ -941,6 +1529,23 @@ describe("ACP turns (fake CLI)", () => {
 
     const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
     expect(usage).toMatchObject({ input: 10, output: 5 });
+  });
+
+  it("records Grok cachedReadTokens as cachedInput", async () => {
+    process.env.FAKE_ACP_PROMPT_META = JSON.stringify({
+      modelId: "grok-4.7-build-fast",
+      inputTokens: 31831,
+      outputTokens: 42,
+      cachedReadTokens: 31104,
+      reasoningTokens: 41,
+      usage: { inputTokens: 31831, outputTokens: 42, totalTokens: 31873, cachedReadTokens: 31104, cacheCreationTokens: 0, reasoningTokens: 41 },
+    });
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-cached", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
+    expect(usage).toMatchObject({ input: 31831, output: 42, cachedInput: 31104 });
   });
 
   it("passes ACP stdio flags and strips foreign provider keys from the child env", async () => {
@@ -1647,7 +2252,7 @@ describe("ACP turns (fake CLI)", () => {
     })).rejects.toThrow("refresh");
   });
 
-  it.each(["happy", "billing-fail", "billing-hang"])("reads %s billing after completing the turn", async (mode) => {
+  it.each(["happy", "billing-fail", "billing-hang"])("resolves %s billing before completing the turn", async (mode) => {
     const dump = join(scratch, "billing-order.json");
     instance = await GrokAgentDriver.create({
       instanceId: "billing-order",
@@ -1658,15 +2263,19 @@ describe("ACP turns (fake CLI)", () => {
     });
     recorder = recordEvents(instance.adapter);
     await instance.adapter.sendTurn({ threadId: "t-billing-order", text: "hi" });
-    expect(await recorder.until((e) => e.type === "turn.completed", 2_000)).toMatchObject({ ok: true });
     await expect.poll(() => JSON.parse(readFileSync(dump, "utf8"))).toContain("_x.ai/billing");
+    if (mode === "billing-hang") {
+      expect(recorder.events.some((e) => e.type === "turn.completed")).toBe(false);
+      await instance.adapter.interruptTurn("t-billing-order");
+    }
+    expect(await recorder.until((e) => e.type === "turn.completed", 2_000)).toMatchObject({ ok: true });
     const methods: string[] = JSON.parse(readFileSync(dump, "utf8"));
     expect(methods.indexOf("_x.ai/billing")).toBeGreaterThan(methods.indexOf("session/prompt.result"));
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
     if (mode === "happy") {
       await recorder.until((e) => e.type === "account.rate-limits.updated");
       const types = recorder.events.map((e) => e.type);
-      expect(types.indexOf("account.rate-limits.updated")).toBeGreaterThan(types.indexOf("turn.completed"));
+      expect(types.indexOf("account.rate-limits.updated")).toBeLessThan(types.indexOf("turn.completed"));
     }
   });
 
@@ -1954,7 +2563,7 @@ describe("ACP create-time handshake prewarm", () => {
   it("does not spawn CLIs when the registry loads instances without prewarm opt-in", async () => {
     const spawn = vi.spyOn(procs, "spawnCli");
     const exec = vi.spyOn(procs, "execCli");
-    const registry = new ProviderRegistry([GrokAgentDriver, LenientDriver]);
+    const registry = new ProviderRegistry([GrokAgentDriver, LenientDriver], { warmPool: createWarmPool() });
     try {
       await registry.load({
         grok: { driver: GrokAgentDriver.driverKind, config: { cli: FAKE_CLI } },
@@ -2029,7 +2638,8 @@ describe("ACP create-time handshake prewarm", () => {
       enabled: true,
       config: { cli: FAKE_CLI, fullAuto: true, workspace: scratch, prewarm: true },
     });
-    await expect.poll(() => JSON.parse(readFileSync(rpcDump, "utf8"))).toContain("authenticate");
+    await expect.poll(() => JSON.parse(readFileSync(rpcDump, "utf8")), { timeout: 5000 }).toContain("authenticate");
+    await instance.prepare!();
     const recorder = recordEvents(instance.adapter);
     const turns = await Promise.all([
       instance.adapter.sendTurn({ threadId: "t-hs-first", text: "one" }),
@@ -2045,7 +2655,7 @@ describe("ACP create-time handshake prewarm", () => {
 
   it("expires an unclaimed prewarm child and cold-spawns the next turn", async () => {
     const spawn = vi.spyOn(procs, "spawnCli");
-    const Driver = createAcpDriver({ ...grokSupport, warmIdleMs: 500 });
+    const Driver = createAcpDriver({ ...grokSupport, warmPool: acceleratedWarmPool(500) });
     instance = await Driver.create({
       instanceId: "acp-hs-idle",
       displayName: "ACP Handshake Idle",
@@ -2075,7 +2685,7 @@ describe("ACP create-time handshake prewarm", () => {
     writeFileSync(rpcDump, "[]");
     process.env.FAKE_ACP_RPC_DUMP = rpcDump;
     process.env.FAKE_ACP_MODE = "hang";
-    const Driver = createAcpDriver({ ...grokSupport, warmIdleMs: 500 });
+    const Driver = createAcpDriver({ ...grokSupport, warmPool: acceleratedWarmPool(500) });
     instance = await Driver.create({
       instanceId: "acp-hs-borrowed",
       displayName: "ACP Handshake Borrowed",
@@ -2084,6 +2694,7 @@ describe("ACP create-time handshake prewarm", () => {
       config: { cli: FAKE_CLI, fullAuto: true, workspace: scratch, prewarm: true },
     });
     await expect.poll(() => JSON.parse(readFileSync(rpcDump, "utf8"))).toContain("authenticate");
+    await instance.prepare!();
     await instance.adapter.sendTurn({ threadId: "t-hs-borrowed", text: "hi" });
     await expect.poll(() => JSON.parse(readFileSync(rpcDump, "utf8"))).toContain("session/prompt");
     await new Promise((resolve) => setTimeout(resolve, 600));
@@ -2173,7 +2784,7 @@ describe("ACP create-time handshake prewarm", () => {
 
   it("prepare() warms again after the idle child expires", async () => {
     const spawn = vi.spyOn(procs, "spawnCli");
-    const Driver = createAcpDriver({ ...grokSupport, warmIdleMs: 500 });
+    const Driver = createAcpDriver({ ...grokSupport, warmPool: acceleratedWarmPool(500) });
     instance = await Driver.create({
       instanceId: "acp-hs-prepare-expired",
       displayName: "ACP Handshake Expired",
@@ -2183,7 +2794,7 @@ describe("ACP create-time handshake prewarm", () => {
     });
     await instance.prepare!();
     const child = spawn.mock.results[0].value;
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 5000 }).toBe(true);
     await instance.prepare!();
     expect(spawn).toHaveBeenCalledTimes(2);
   });

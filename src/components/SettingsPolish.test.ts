@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import type { Bot, InstanceInfo } from "@/state/store";
 
-const { mockState, mockApi, claudeInstance, codexInstance, grokInstance, antigravityInstance } = vi.hoisted(() => {
+const { mockState, mockApi } = vi.hoisted(() => {
   const claudeInstance: InstanceInfo = {
     instanceId: "claude",
     driverKind: "claudeAgent",
@@ -145,7 +145,7 @@ describe("Settings Polish", () => {
     host.remove();
   });
 
-  it.each(["en", "ko"])("caps Name and Language on desktop without capping phone rows in %s", async (locale) => {
+  it.each(["en", "ko"])("caps Name on desktop and keeps Language flush right like every row in %s", async (locale) => {
     const previousLocale = localStorage.getItem("omb-locale");
     localStorage.setItem("omb-locale", locale);
     try {
@@ -157,8 +157,9 @@ describe("Settings Polish", () => {
       mockState.appSettingsSection = "general";
       await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsModal))));
       const language = host.querySelector('[role="radiogroup"]')!;
-      expect(language.closest(".md\\:max-w-md")).toBeTruthy();
+      expect(language.closest(".md\\:max-w-md")).toBeNull();
       expect(language.className).toContain("w-fit");
+      expect(language.parentElement?.className).toContain("[&>[role=radiogroup]]:ml-auto");
     } finally {
       if (previousLocale === null) localStorage.removeItem("omb-locale");
       else localStorage.setItem("omb-locale", previousLocale);
@@ -171,6 +172,7 @@ describe("Settings Polish", () => {
     const group = host.querySelector(`[role="radiogroup"][aria-label="${label}"]`)!;
     expect(group.className).toContain("w-fit");
     expect(group.parentElement?.className).toContain("flex-wrap");
+    expect(group.parentElement?.className).toContain("[&>[role=radiogroup]]:ml-auto");
     expect(group.querySelector("button")?.className).not.toContain("flex-1");
   });
 
@@ -185,105 +187,13 @@ describe("Settings Polish", () => {
     expect(group.querySelector("button")?.className).not.toContain("flex-1");
   });
 
-  it("the single Usage refresh button carries border border-hairline/40", async () => {
+  it("Usage has no Refresh All or per-engine Refresh button", async () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(UsageSection)));
     });
-
-    // exactly one refresh control for the whole section, never per-engine ones
-    expect([...host.querySelectorAll("button")].filter(
-      (b) => b.textContent?.trim() === "Refresh",
-    )).toHaveLength(0);
-    const refreshButton = [...host.querySelectorAll("button")].find(
-      (b) => b.getAttribute("aria-label") === "Refresh All",
-    );
-    expect(refreshButton).toBeDefined();
-    expect(refreshButton?.className).toContain("border border-hairline/40");
-    expect(refreshButton?.className).toContain("hover:bg-raised/50");
-    expect(refreshButton?.className).toContain("hover:text-ink");
-  });
-
-  it("with Claude, Codex, Grok and one Antigravity instance, clicking the button labelled 'Refresh all' POSTs /api/usage/refresh/ once for each of claude, codex and grok, and never for antigravity", async () => {
-    const previousInstances = mockState.instances;
-    mockState.instances = [claudeInstance, codexInstance, grokInstance, antigravityInstance];
-    mockApi.mockClear();
-    try {
-      await act(async () => {
-        root.render(createElement(I18nProvider, null, createElement(UsageSection)));
-      });
-
-      const refreshAllButton = [...host.querySelectorAll("button")].find(
-        (b) => b.getAttribute("aria-label") === "Refresh All",
-      );
-      expect(refreshAllButton).toBeDefined();
-      await act(async () => {
-        refreshAllButton?.click();
-      });
-
-      expect(mockApi).toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
-      expect(mockApi).toHaveBeenCalledWith("/api/usage/refresh/codex", { method: "POST" });
-      expect(mockApi).toHaveBeenCalledWith("/api/usage/refresh/grok", { method: "POST" });
-      expect(mockApi).not.toHaveBeenCalledWith(expect.stringContaining("antigravity"), expect.anything());
-      expect(mockApi).toHaveBeenCalledTimes(3);
-    } finally {
-      mockState.instances = previousInstances;
-    }
-  });
-
-  it("disables 'Refresh all' while a refresh is running and ignores clicks", async () => {
-    const previousInstances = mockState.instances;
-    mockState.instances = [claudeInstance, codexInstance, grokInstance, antigravityInstance];
-    let resolveClaude: () => void = () => {};
-    mockApi.mockReset();
-    mockApi.mockImplementation((path: string) => {
-      if (path === "/api/usage/refresh/claude") {
-        return new Promise((resolve) => {
-          resolveClaude = () => resolve({});
-        });
-      }
-      return Promise.resolve({});
-    });
-    try {
-      await act(async () => {
-        root.render(createElement(I18nProvider, null, createElement(UsageSection)));
-      });
-
-      const refreshAllButton = [...host.querySelectorAll("button")].find(
-        (b) => b.getAttribute("aria-label") === "Refresh All",
-      );
-      expect(refreshAllButton).toBeDefined();
-
-      await act(async () => {
-        refreshAllButton?.click();
-      });
-
-      expect(mockApi).toHaveBeenCalledTimes(3);
-      expect(mockApi).toHaveBeenCalledWith("/api/usage/refresh/claude", { method: "POST" });
-
-      const busyButton = [...host.querySelectorAll("button")].find(
-        (b) => b.getAttribute("aria-label") === "Refreshing…",
-      );
-      expect(busyButton).toBeDefined();
-      expect(busyButton?.hasAttribute("disabled")).toBe(true);
-
-      await act(async () => {
-        busyButton?.click();
-      });
-
-      expect(mockApi).toHaveBeenCalledTimes(3);
-
-      await act(async () => {
-        resolveClaude();
-      });
-
-      expect([...host.querySelectorAll("button")].find(
-        (b) => b.getAttribute("aria-label") === "Refresh All",
-      )).toBeDefined();
-    } finally {
-      mockState.instances = previousInstances;
-      mockApi.mockReset();
-      mockApi.mockImplementation(async () => ({}));
-    }
+    const labels = [...host.querySelectorAll("button")].map((b) => `${b.getAttribute("aria-label") ?? ""} ${b.textContent ?? ""}`);
+    expect(labels.filter((label) => /Refresh/.test(label))).toEqual([]);
+    expect(host.querySelector('[aria-keyshortcuts="Alt+R"]')).toBeNull();
   });
 
   it("saves Longer replies through the shared config inside Advanced", async () => {

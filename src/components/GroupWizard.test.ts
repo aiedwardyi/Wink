@@ -67,7 +67,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   };
 });
 
-import { GroupWizard } from "./GroupWizard";
+import { GroupWizard, NewBotRow } from "./GroupWizard";
 
 async function renderWizard() {
   const host = document.createElement("div");
@@ -76,9 +76,9 @@ async function renderWizard() {
   await act(async () => {
     root.render(createElement(GroupWizard, { onClose: () => undefined }));
   });
-  const dialog = host.querySelector('[role="dialog"]');
+  const dialog = document.body.querySelector('[role="dialog"]');
   if (!(dialog instanceof HTMLElement)) throw new Error("wizard did not render");
-  return { host, root };
+  return { host: document.body, root };
 }
 
 function button(host: HTMLElement, text: string): HTMLButtonElement {
@@ -130,6 +130,89 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
+  it("opens over the screen with a card that fits a 360 px phone", async () => {
+    const drawer = document.createElement("aside");
+    document.body.append(drawer);
+    const root = createRoot(drawer);
+    await act(async () => {
+      root.render(createElement(GroupWizard, { onClose: () => undefined }));
+    });
+    try {
+      const card = document.body.querySelector('[role="dialog"]')!;
+      expect(drawer.contains(card)).toBe(false);
+      expect(card.parentElement!.parentElement).toBe(document.body);
+      expect(card.parentElement!.className).toContain("p-4");
+      expect(card.className).toContain("w-full");
+      expect(card.className).toContain("max-w-[380px]");
+      expect(card.className.split(" ")).not.toContain("w-[380px]");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps the card inside a short screen: the body scrolls and Create stays in view", async () => {
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => button(host, "+ New bot").click());
+      const card = host.querySelector('[role="dialog"]')!;
+      const scroller = (el: Element) => el.closest(".overflow-y-auto:not(.max-h-64)");
+      expect(card.className).toContain("max-h-full");
+      expect(scroller(nameInputs(host)[0]!)).not.toBeNull();
+      expect(scroller(button(host, "Create"))).toBeNull();
+      expect(scroller(button(host, "Cancel"))).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it.each(["en", "ko"] as const)("creates with a base engine among four Claude and two Codex accounts in %s", async (locale) => {
+    applyLocale(locale);
+    const bases = [engine("claude", "claudeAgent", "Claude"), engine("codex", "codex", "Codex")];
+    instances = [...bases.flatMap((base, index) => Array.from({ length: index ? 1 : 3 }, (_, account) => ({
+      ...base,
+      instanceId: `acct_00000000-0000-0000-000${index}-${String(account).padStart(12, "0")}`,
+      accountOf: base.instanceId,
+      accountState: "ready" as const,
+    }))), ...bases.map((base) => ({ ...base, accountOf: base.instanceId }))];
+    apiImpl = () => Promise.resolve({ bot: { id: "new", name: "Research" } });
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => button(host, locale === "en" ? "+ New bot" : "+ 새 봇").click());
+      const select = host.querySelector("select")!;
+      expect([...select.options].map((option) => option.value)).toEqual(["claude", "codex"]);
+      expect(select.value).toBe("codex");
+      await act(async () => {
+        const input = nameInputs(host)[0]!;
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "Research");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(host, locale === "en" ? "Add bot" : "봇 추가").click());
+      await flush();
+      expect(JSON.parse(String(apiCalls[0]!.init?.body)).modelSelection).toEqual({ instanceId: "codex", model: "codex-model" });
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("never submits a saved account-copy override", async () => {
+    const base = engine("codex", "codex", "Codex");
+    const copy = { ...base, instanceId: "acct_00000000-0000-0000-0000-000000000000", accountOf: "codex" };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const onAdd = vi.fn();
+    try {
+      await act(async () => root.render(createElement(NewBotRow, {
+        row: { key: 1, name: "Research", instanceId: copy.instanceId, model: null, saving: false, error: null },
+        preferIndex: 0, instances: [copy, base], onPatch: () => undefined, onAdd,
+      })));
+      expect(host.querySelector("select")!.value).toBe("codex");
+      await act(async () => button(host, "Add bot").click());
+      expect(onAdd.mock.calls[0]?.[0].instance.instanceId).toBe("codex");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
 
   it.each([
     ["en", "+ New bot", "Name your bot", "For example, Researcher", "Add bot", "Add a name first."],

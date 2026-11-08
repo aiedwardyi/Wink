@@ -1,0 +1,559 @@
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, RefreshCw } from "lucide-react";
+import { usageIdentity } from "../../shared/usage-identity";
+import { z } from "zod";
+import { accountReady } from "@/lib/accounts";
+import { cn } from "@/lib/cn";
+import { afterFold } from "@/lib/fold-press";
+import { localeTag, useI18n, type Translate } from "@/lib/i18n";
+import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
+import { reducedMotion } from "@/lib/phone-swipe";
+import { isTerminalSkin, useSkin } from "@/lib/skins";
+import { museReading, resetCompact, windowExpired } from "@/lib/usage";
+import { joinRefresh, refreshReady, useRefreshPending } from "@/lib/usage-auto-refresh";
+import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
+import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
+import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
+import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useUsageBoard } from "@/lib/use-usage-board";
+import { useVisibleClock } from "@/lib/use-visible-clock";
+import { api, useStore } from "@/state/store";
+import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
+import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { useUsageSwitch } from "@/lib/use-usage-switch";
+import { EngineSignIn } from "./EngineSetup";
+import { Fold } from "./Fold";
+import { ProviderMark } from "./ProviderIcons";
+import { EmptyState } from "./SettingsPrimitives";
+import { AccountPicker, EditableAccountName, UsageGrip } from "./UsageAccounts";
+import { AccountBars, barSlots, WindowBar } from "./UsageBars";
+import { PagedAccounts, type RowSlots } from "./UsagePaged";
+import { USAGE_LAYOUT, usageAccounts } from "./usage-layout";
+import { useCappedAccounts } from "./usage-cap";
+import { UsageChart, UsageSpark, type ChartTone } from "./UsageChart";
+import "./UsageDesk.css";
+
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+const ENGINE_NAME: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", gemini: "Gemini", muse: "Muse" };
+export const ENGINE_DRIVER: Record<string, string> = { claude: "claudeAgent", codex: "codex", grok: "grokAgent", gemini: "geminiAgent", muse: "museAgent" };
+const TONE_TEXT: Record<ChartTone, string> = { ok: "text-ink", warn: "text-warning", out: "text-danger" };
+export const engineName = (engine: string) => ENGINE_NAME[engine] ?? engine;
+
+export type Clock = { t: Translate; locale: string; now: number };
+
+function toneOf(window: UsageBoardWindow | undefined, verdict: Verdict | undefined): ChartTone {
+  if (window && window.usedPercent >= 100) return "out";
+  return verdict?.kind === "runsOut" ? "warn" : "ok";
+}
+
+function sameDay(a: number, b: number) {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+export function clockText(at: number, { locale, now }: Clock) {
+  const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(at);
+  return sameDay(at, now) ? time : `${new Intl.DateTimeFormat(locale, { weekday: "short" }).format(at)} ${time}`;
+}
+const fullText = (at: number, locale: string) =>
+  new Intl.DateTimeFormat(locale, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }).format(at);
+
+export function countdown(ms: number, t: Translate) {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  const minutes = Math.floor(seconds / 60);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  return days > 0 ? t("usage.desk.countDh", { days, hours }) : t("usage.desk.countHm", { hours, minutes: minutes % 60 });
+}
+
+export function shortLabel(window: UsageBoardWindow, t: Translate) {
+  if (window.kind === "session") return t("usage.limits.sessionShort");
+  if (window.windowMinutes === 10080 || (window.kind === "week" && window.windowMinutes === null)) return t("usage.limits.weeklyShort");
+  return durationText(window.windowMinutes, t);
+}
+function durationText(minutes: number | null, t: Translate) {
+  if (minutes === null) return t("usage.limits.window");
+  return minutes >= 2880 && minutes % 1440 === 0 ? t("usage.limits.compactD", { days: minutes / 1440 }) : t("usage.limits.compactH", { hours: Math.round(minutes / 60) });
+}
+
+/** Both tracked windows, binding first: `5h 34%` then `7d 59%`, or what the empty slot truly means. */
+export function windowFacts(account: UsageBoardAccount, t: Translate) {
+  const { session, week } = splitWindows(account.windows);
+  const binding = bindingWindow([session, week].filter((window): window is UsageBoardWindow => Boolean(window)))
+    ?? bindingWindow(account.windows);
+  const fact = (window: UsageBoardWindow) => `${shortLabel(window, t)} ${Math.round(leftOf(window))}%`;
+  const other = binding === session ? week : binding === week ? session : undefined;
+  // The fact says which window has no data, so "7d 0%" never seems to own it; the bars' one empty state says the same.
+  const missing = !session && week ? account.coverage === "complete" ? t("usage.desk.weeklyOnly")
+    : t("usage.desk.windowNoData", { window: t("usage.limits.sessionShort") }) : null;
+  return { binding, first: binding ? fact(binding) : t("usage.desk.noData"), second: other ? fact(other) : binding === week ? missing : null };
+}
+
+export function Tile({ number, terminal }: { number: number; terminal: boolean }) {
+  return terminal
+    ? <span data-tile="" className="usage-glyphs shrink-0 text-[12px] text-ink-secondary">[{number}]</span>
+    : <span data-tile="" className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] border border-hairline bg-raised text-[10.5px] leading-none text-ink">{number}</span>;
+}
+
+function ResetLine({ slot, window, account, clock }: { slot: "session" | "week" | "extra"; window?: UsageBoardWindow; account: UsageBoardAccount; clock: Clock }) {
+  const { t } = clock;
+  const label = slot === "extra" && window ? shortLabel(window, t) : t(slot === "session" ? "usage.limits.sessionShort" : "usage.limits.weeklyShort");
+  let body: ReactNode;
+  if (!window) {
+    const week = splitWindows(account.windows).week;
+    body = account.coverage !== "complete" ? t("usage.desk.noData")
+      : slot === "session" && week ? t("usage.desk.weeklyOnly") : t("usage.desk.notOnPlan");
+  } else if (window.resetsAt === null) body = t("usage.limits.resetUnknown");
+  else if (windowExpired(window.resetsAt, clock.now)) body = t("usage.desk.resetPassed");
+  else body = <>
+    <time dateTime={new Date(window.resetsAt).toISOString()} aria-hidden="true" className="text-ink">{clockText(window.resetsAt, clock)}</time>
+    <span aria-hidden="true">{t("usage.desk.resetsIn", { time: countdown(window.resetsAt - clock.now, t) })}</span>
+    <span className="sr-only">{t("usage.desk.resetsAt", { time: fullText(window.resetsAt, clock.locale) })}</span>
+  </>;
+  return (
+    <div data-reset={slot} className="usage-num flex min-w-0 flex-wrap items-baseline gap-x-3 text-[12.5px] leading-5 text-ink-secondary">
+      <span className="min-w-6 shrink-0 whitespace-nowrap">{label}</span>
+      {body}
+    </div>
+  );
+}
+
+function verdictText(verdict: Verdict, clock: Clock) {
+  const { t } = clock;
+  switch (verdict.kind) {
+    case "out": return verdict.back === null ? t("usage.limits.checkLimit") : t("usage.desk.back", { time: clockText(verdict.back, clock) });
+    case "runsOut": return t("usage.desk.runsOut", { time: clockText(verdict.at, clock) });
+    case "lasts": return t("usage.desk.lasts");
+    case "learning": return t("usage.desk.learning");
+    case "noRecent": return t("usage.desk.noRecent");
+    case "awaiting": return t("usage.desk.awaiting");
+  }
+}
+
+function labelsText(labels: string[], t: Translate) {
+  const sorted = [...labels].sort();
+  const shown = sorted.slice(0, 3).join(", ");
+  return sorted.length > 3 ? t("usage.desk.labelsMore", { labels: shown, count: sorted.length - 3 }) : shown;
+}
+
+/** One grey line per kind, newest only, last 24 h; wording only from the event's own names and labels. */
+function eventLines(engine: UsageBoardEngine, board: UsageBoard, clock: Clock) {
+  const { t } = clock;
+  const name = (id?: string) => engine.accounts.find((account) => account.id === id)?.name;
+  const recent = engine.events.filter((event) => clock.now - event.at <= 24 * HOUR);
+  const newest = (kind: UsageBoardEvent["kind"]) => recent.filter((event) => event.kind === kind).sort((a, b) => b.seq - a.seq)[0];
+  const lines: { kind: string; at: number; text: string }[] = [];
+  const main = newest("main");
+  if (main && name(main.from) && name(main.to)) {
+    const old = engine.accounts.find((account) => account.id === main.from)!;
+    let text = t("usage.desk.eventMain", { engine: engineName(engine.engine), from: old.name, to: name(main.to)! });
+    if (board.runs === "known" && old.workers?.length) text += ` ${t("usage.desk.eventStill", { from: old.name, labels: labelsText(old.workers.map((run) => run.label), t) })}`;
+    lines.push({ kind: "main", at: main.at, text });
+  }
+  const auto = newest("auto");
+  if (auto && name(auto.to) && auto.label) {
+    const ranOut = auto.from && name(auto.from) && engine.events.some((event) => event.kind === "limit" && event.accountId === auto.from && event.seq < auto.seq);
+    const later = engine.events.some((event) => event.kind === "main" && event.seq > auto.seq);
+    const parts = [
+      ranOut ? t("usage.desk.eventRanOut", { from: name(auto.from)! }) : "",
+      t("usage.desk.eventAuto", { label: auto.label, to: name(auto.to)! }),
+      !later && name(engine.mainId) ? t("usage.desk.eventMainStays", { main: name(engine.mainId)! }) : "",
+    ];
+    lines.push({ kind: "auto", at: auto.at, text: parts.filter(Boolean).join(" ") });
+  }
+  const moved = newest("moved");
+  if (moved && name(moved.to) && moved.label) lines.push({ kind: "moved", at: moved.at, text: t("usage.desk.eventMoved", { label: moved.label, to: name(moved.to)! }) });
+  return lines.sort((a, b) => b.at - a.at);
+}
+
+function Ticker({ board, engineId, select, phone, terminal, clock, instances }: {
+  board: UsageBoard; engineId: string; select: (base: string) => void; phone: boolean; terminal: boolean; clock: Clock;
+  instances: { instanceId: string; displayName?: string }[];
+}) {
+  const { t } = clock;
+  return (
+    <div role="tablist" aria-label={t("usage.desk.engines")} className="grid gap-1 rounded-[3px] [corner-shape:bevel] bg-inset p-1"
+      style={{ gridTemplateColumns: phone ? `repeat(${board.engines.length}, auto)` : `repeat(${board.engines.length}, minmax(0, 1fr))` }}>
+      {board.engines.map((engine) => {
+        const main = engine.accounts.find((account) => account.id === engine.mainId) ?? engine.accounts[0];
+        const facts = main ? windowFacts(main, t) : null;
+        const selected = engine.base === engineId;
+        const label = engineLabel(board, engine, instances);
+        const series = main && facts?.binding ? chartSeries(main, facts.binding, engine.events, clock.now) : null;
+        const tone = toneOf(facts?.binding, undefined);
+        return (
+          <button key={engine.base} type="button" role="tab" data-engine={engine.engine} aria-selected={selected} onClick={() => select(engine.base)}
+            className={cn("flex min-w-0 flex-col items-start gap-1 rounded-[3px] [corner-shape:bevel] py-1.5 text-left", phone ? "px-1.5" : "px-2",
+              " transition-colors duration-100 motion-reduce:transition-none",
+              selected ? "bg-raised" : "hover:bg-raised-hover")}>
+            <span className="max-w-full truncate text-[11.5px] leading-none text-ink-secondary">{label}</span>
+            <span className="flex w-full items-end justify-between gap-1">
+              <span className="usage-num min-w-0">
+                <span className={cn("block leading-tight", phone ? "whitespace-nowrap text-[12px]" : "truncate text-[13px]", TONE_TEXT[tone])}>{facts?.first}</span>
+                <span className={cn("block leading-tight text-ink-secondary", phone ? "whitespace-nowrap text-[10.5px]" : "truncate text-[11px]")}>{facts?.second ?? " "}</span>
+              </span>
+              {!phone && <UsageSpark series={series} tone={tone} terminal={terminal} />}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const STATE_KEY = { "signing-in": "usage.desk.signingIn", "signed-out": "engines.notSignedIn", draining: "usage.desk.draining", unknown: "usage.desk.statusUnknown" } as const;
+/** Main, Switch and Sign In share one box: same height, width floor, radius and right edge; a larger touch target sits outside it on phones. */
+const SPOT = "usage-control relative inline-flex h-[22px] min-w-12 shrink-0 items-center justify-center whitespace-nowrap border px-2 text-[11px] leading-none [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2";
+const BUTTON = "border-hairline bg-raised text-ink transition-colors duration-100 hover:bg-raised-hover motion-reduce:transition-none";
+
+export function AccountRow({ engine, account, board, state, checked, terminal, clock, reloadInstances, signIn, name, settings = false }: {
+  engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState; checked: boolean;
+  terminal: boolean; clock: Clock; reloadInstances: () => unknown; signIn: () => void; settings?: boolean;
+} & RowSlots) {
+  const { t } = clock;
+  const { state: store } = useStore();
+  const highlight = useUsageSwitch(checked);
+  const instance = store.instances.find((each) => each.instanceId === account.id);
+  const email = settings ? instance?.snapshot.account : null;
+  const pending = state.pending[engine.base];
+  const switching = pending?.target === account.id;
+  const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
+  let control: ReactNode = null;
+  // While it waits, the sign-in's steps take their own line under the name.
+  // The small card keeps a Sign In button where the account already reads connected, never a stray "Connected".
+  if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
+  else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
+  else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
+  else if (account.signIn === "ready") control = (
+    <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
+      aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
+      onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON)}>
+      {switching ? t("usage.desk.switching") : t("usage.desk.use")}
+    </button>
+  );
+  return (
+    <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
+      {settings && <UsageGrip label={account.name} />}
+      <div data-account-head="" className="usage-account-head">
+        <div className="usage-account-identity min-w-0">
+          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && ["claude", "codex"].includes(engine.engine)} />}
+          {email && <span data-account-email="" className="usage-email">{email}</span>}
+        </div>
+        {control}
+      </div>
+      {account.signIn === "ready" ? <>
+        <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
+      </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
+    </div>
+  );
+}
+
+/** One engine's accounts in a bordered box with a line between rows. */
+export function AccountGroup({ label, terminal, children }: { label: string; terminal: boolean; children: ReactNode }) {
+  return <div role="group" aria-label={label} className={cn("usage-group mt-2.5 min-w-0 border border-hairline/70 bg-app", terminal ? "rounded-none" : "rounded-lg")}>{children}</div>;
+}
+
+export function Hero({ engine, account, accounts, select, terminal, phone, clock, instances, foldChart = false }: {
+  engine: UsageBoardEngine; account: UsageBoardAccount; accounts: UsageBoardAccount[]; select: (id: string) => void;
+  terminal: boolean; phone: boolean; clock: Clock; instances: { instanceId: string; capabilities?: { rateLimits?: boolean } }[]; foldChart?: boolean;
+}) {
+  const { t } = clock;
+  const ref = useRef<HTMLElement>(null);
+  const [details, setDetails] = useState(false);
+  const [chartOpen, setChartOpen] = useState(!foldChart);
+  const chartId = useId();
+  const detailsId = useId();
+  const shown = useRef(account.id);
+  useLayoutEffect(() => {
+    if (shown.current === account.id) return;
+    shown.current = account.id;
+    if (!reducedMotion()) ref.current?.animate?.([{ opacity: 0.55 }, { opacity: 1 }], { duration: MOTION_FAST_MS, easing: EASE_ENTRANCE });
+  }, [account.id]);
+  const { session, week } = splitWindows(account.windows);
+  const facts = windowFacts(account, t);
+  const window = facts.binding;
+  // An extra window (Gemini daily, a Codex slot of another length) keeps no history: no pace line and no chart for it.
+  const paced = window && historyColumn(account, window) !== null ? window : undefined;
+  const { verdict, projection } = paced ? pace(account, paced, engine.events, clock.now) : { verdict: undefined, projection: null };
+  const tone = toneOf(window, verdict);
+  const series = paced ? chartSeries(account, paced, engine.events, clock.now) : null;
+  const muse = engine.engine === "muse" ? museReading("museAgent", account.observedAt === null ? undefined : new Date(account.observedAt).toISOString(), clock.now) : null;
+  const limited = engine.engine === "muse" && account.windows.find((each) => each.usedPercent >= 100 && !windowExpired(each.resetsAt, clock.now));
+  const limitReset = limited ? resetCompact(limited.resetsAt, clock.now) : null;
+  const vs = week ? todayVsNormal(account, clock.now) : null;
+  const vsText = vs === null ? null : vs >= 1.15 ? t("usage.desk.todayVs", { times: vs >= 2 ? Math.round(vs) : vs.toFixed(1) })
+    : vs <= 0.85 ? t("usage.desk.todayLess") : t("usage.desk.todayNormal");
+  const reports = instances.find((each) => each.instanceId === account.id)?.capabilities?.rateLimits !== false;
+  let empty: string | null = null;
+  if (!reports) empty = t("usage.limits.notReported", { name: account.name });
+  else if (account.signIn !== "ready" && account.observedAt === null) empty = t(STATE_KEY[account.signIn]);
+  else if (account.observedAt === null) empty = t("usage.desk.noReport");
+  return (
+    <section ref={ref} data-usage-hero="" data-stale={muse?.stale || undefined} aria-label={account.name} className="min-w-0">
+      <div className="flex min-h-7 min-w-0 items-center gap-2">
+        <ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} />
+        {accounts.length > 1 && <Tile number={account.number} terminal={terminal} />}
+        {accounts.length > 1
+          ? <AccountPicker accounts={accounts} viewedId={account.id} select={select} />
+          : <span data-hero-name="" className="min-w-0 truncate text-[13.5px] font-medium text-ink">{account.name}</span>}
+      </div>
+      {empty ? <div className="mt-3"><EmptyState>{empty}</EmptyState></div> : <>
+        <div className="mt-1.5 flex min-w-0 flex-wrap items-end justify-between gap-x-4 gap-y-1">
+          <span className={cn("flex items-baseline gap-1.5", muse?.stale && "opacity-60")}>
+            <span data-hero-left="" className={cn("usage-num text-[38px] font-normal leading-none tracking-tight", TONE_TEXT[tone])}>
+              {window ? `${Math.round(leftOf(window))}%` : "–"}
+            </span>
+            {window && <span className="text-[13px] text-ink-secondary">{t("usage.desk.left")}</span>}
+          </span>
+          {verdict && <span data-verdict="" className={cn("pb-0.5 text-[13px]",
+            verdict.kind === "learning" || verdict.kind === "noRecent" || verdict.kind === "awaiting" ? "text-ink-secondary" : TONE_TEXT[tone])}>
+            {verdictText(verdict, clock)}
+          </span>}
+        </div>
+        <div className="mt-2 flex flex-col">
+          <ResetLine slot="session" window={session} account={account} clock={clock} />
+          <ResetLine slot="week" window={week} account={account} clock={clock} />
+          {window && !paced && <ResetLine slot="extra" window={window} account={account} clock={clock} />}
+        </div>
+        {muse && <div className={cn("mt-1 text-[12px]", muse.stale ? "text-ink-secondary opacity-70" : "text-ink-secondary")}>{muse.label(t)}</div>}
+        {limited && <div className="mt-1 text-[12px] text-danger">
+          {limitReset ? t("usage.limits.checkLimitResets", { time: t(limitReset.key, limitReset.vars) }) : t("usage.limits.checkLimit")}
+        </div>}
+        {foldChart && paced && <button type="button" data-chart-fold="" aria-expanded={chartOpen} aria-controls={chartId} onClick={() => setChartOpen(!chartOpen)}
+          className="mt-2 inline-flex h-7 items-center rounded-[3px] [corner-shape:bevel] px-1.5 text-[12px] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:h-11">
+          {t("usage.chat.chart")}
+        </button>}
+        <Fold open={chartOpen} id={chartId}><div className="mt-3">
+          {series && series.segments.length > 0
+            ? <UsageChart series={series} projection={projection} tone={tone} terminal={terminal} compact={phone}
+              caption={t("usage.desk.quota")} topLeft={vsText && <span data-today-normal="">{vsText}</span>}
+              finish={window?.resetsAt != null && window.resetsAt > clock.now ? clockText(window.resetsAt, clock) : undefined} />
+            : paced && <EmptyState>{t("usage.desk.noHistory")}</EmptyState>}
+        </div></Fold>
+      </>}
+      {account.windows.length > 0 && <>
+        <button type="button" data-details="" aria-expanded={details} aria-controls={detailsId} onClick={() => setDetails(!details)}
+          className="mt-2 inline-flex h-7 items-center rounded-[3px] [corner-shape:bevel] px-1.5 text-[12px] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:h-11">
+          {t("usage.desk.details")}
+        </button>
+        <Fold open={details} id={detailsId}>
+          <div data-details-body="" className="usage-num flex flex-col gap-0.5 px-1.5 pb-1 text-[12px] text-ink-secondary">
+            {account.windows.map((each) => (
+              <span key={each.id} className="flex flex-wrap gap-x-3">
+                <span className="text-ink">{each.id.includes("opus") ? `${t("usage.limits.opusShort")} ${shortLabel(each, t)}` : shortLabel(each, t)}</span>
+                <span>{t("usage.desk.windowLeft", { percent: Math.round(leftOf(each)) })}</span>
+                <span>{each.resetsAt === null ? t("usage.limits.resetUnknown") : windowExpired(each.resetsAt, clock.now)
+                  ? t("usage.desk.resetPassed") : t("usage.desk.resetsAt", { time: clockText(each.resetsAt, clock) })}</span>
+              </span>
+            ))}
+          </div>
+        </Fold>
+      </>}
+    </section>
+  );
+}
+
+/** Hidden for the bars-first look: the engine strip, hero, chart and event lines stay in code, not rendered. */
+const SHOW_DESK_HERO = false;
+
+const FOLDS_KEY = "openmausbot.usageFolds.v1";
+const ACCOUNTS_KEY = "openmausbot.usageAccountsOpen.v1";
+const Folds = z.record(z.string(), z.boolean());
+/** Folded engines on this device, kept like the sidebar's folded sections: local only, never synced. */
+function loadFolds(key = FOLDS_KEY): Record<string, boolean> {
+  try {
+    const parsed = Folds.safeParse(JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}"));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+function saveFold(base: string, folded: boolean, key = FOLDS_KEY) {
+  try {
+    globalThis.localStorage?.setItem(key, JSON.stringify({ ...loadFolds(key), [base]: folded }));
+  } catch {
+    // Same localStorage failure mode as the sidebar: the fold still applies this session.
+  }
+}
+
+/** A folded engine in one glance: Main's windows as the meters read them, or its state. */
+function FoldSummary({ engine, account, clock }: { engine: UsageBoardEngine; account: UsageBoardAccount; clock: Clock }) {
+  const { t, now } = clock;
+  const slots = account.signIn === "ready" ? barSlots(engine.engine, account, t) : [];
+  return <span data-engine-summary="" className="usage-summary">
+    {account.signIn !== "ready" ? <span>{t(STATE_KEY[account.signIn])}</span> : !slots.length ? <span>{t("usage.desk.noUsage")}</span>
+        : slots.map((slot) => <WindowBar key={slot.key} slot={slot} now={now} t={t} compact />)}
+  </span>;
+}
+
+function EngineSection({ engine, board, state, stacked, terminal, clock, label, reloadInstances, signIn, folded, onFold, accountOrder }: {
+  engine: UsageBoardEngine; board: UsageBoard; state: UsageBoardState; stacked: boolean; terminal: boolean; clock: Clock; label: string;
+  reloadInstances: () => unknown; signIn: () => void; folded: boolean; onFold: () => void; accountOrder?: string[];
+}) {
+  const { t } = clock;
+  const checked = checkedMain(state, engine.base);
+  const id = useId();
+  const main = engine.accounts.find((each) => each.id === checked) ?? engine.accounts[0];
+  const row = (account: UsageBoardAccount, slots?: RowSlots) => <AccountRow key={account.id} engine={engine} account={account} board={board} state={state}
+    checked={account.id === checked} terminal={terminal} clock={clock} reloadInstances={reloadInstances} signIn={signIn} settings {...slots} />;
+  const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, t, row,
+    loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
+  const head = (arrows?: ReactNode) => (
+    <div data-engine-head="" className="usage-engine-head">
+      <UsageGrip label={label} />
+      <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, onFold)}
+        className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
+          terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
+        <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px] font-normal")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
+        <span data-engine-name="" className="min-w-0 truncate">{label}</span>
+        <ChevronDown size={14} strokeWidth={2} aria-hidden="true" className={cn("-ml-0.5 shrink-0 text-ink-secondary transition-[color,transform] duration-150 ease-out group-hover:text-ink motion-reduce:transition-none", folded && "-rotate-90")} />
+      </button>
+      {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
+    </div>
+  );
+  const group = (content: ReactNode) => <Fold open={!folded} id={id}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
+  return (
+    <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
+      {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
+        : <>{head()}{group(capped)}</>}
+      {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+    </section>
+  );
+}
+
+/** One engine label per board group: the instance's own name when two groups share a driver. */
+export function engineLabel(board: UsageBoard, engine: UsageBoardEngine, instances: { instanceId: string; displayName?: string }[]) {
+  const twin = board.engines.some((other) => other !== engine && other.engine === engine.engine);
+  return (twin && instances.find((each) => each.instanceId === engine.base)?.displayName) || engineName(engine.engine);
+}
+
+/** Settings > Usage: every engine under a header that folds, its accounts in one box, each with a meter per reported window. */
+export function UsageDesk() {
+  const { t, locale } = useI18n();
+  const { state: store, dispatch, refreshInstances } = useStore();
+  const state = useUsageBoard();
+  const phone = useIsPhone();
+  const terminal = isTerminalSkin(useSkin());
+  const mode = useUsageMode();
+  const pending = useRefreshPending();
+  const drag = useUsageDrag(state.board?.engines ?? []);
+  const desk = useRef<HTMLDivElement>(null);
+  const [folds, setFolds] = useState(() => loadFolds());
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [engineId, setEngineId] = useState<string | null>(null);
+  const [viewed, setViewed] = useState<Record<string, string>>({});
+  const now = useVisibleClock();
+  const clock: Clock = { t, locale: localeTag(locale), now };
+  useLayoutEffect(() => {
+    const list = desk.current?.querySelector<HTMLElement>("[data-usage-sections]");
+    if (!list) return;
+    const layout = () => {
+      delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
+      if (window.innerWidth >= 768) {
+        delete list.dataset.phoneColumns;
+        const summaries = list.querySelectorAll<HTMLElement>(".usage-summary");
+        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => Math.ceil(parseFloat(getComputedStyle(name).width))));
+        for (const size of ["large", "medium", "small"]) {
+          list.dataset.summarySize = size;
+          const widths: number[] = [];
+          // Ignore the entrance scale and round up to keep fractional widths from wrapping.
+          for (const summary of summaries) {
+            [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
+              const index = meter.dataset.window === "week" ? 1 : slot;
+              widths[0] ??= 0;
+              widths[index] = Math.max(widths[index] ?? 0, Math.ceil(parseFloat(getComputedStyle(meter).width)));
+            });
+          }
+          if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
+            list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
+            list.dataset.desktopColumns = "";
+            break;
+          }
+        }
+        return;
+      }
+      const heads = list.querySelectorAll<HTMLElement>(".usage-engine-head:has(.usage-summary)");
+      // Gap transitions must settle before measuring the natural wrapping height.
+      for (const head of heads) head.style.transitionProperty = "none";
+      delete list.dataset.phoneColumns;
+      if (!heads.length) return;
+      for (const head of heads) head.style.setProperty("--usage-row-height", `${head.getBoundingClientRect().height}px`);
+      list.dataset.phoneColumns = "";
+      for (const head of heads) head.style.removeProperty("transition-property");
+    };
+    let width = list.clientWidth;
+    layout();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      if (list.clientWidth === width) return;
+      width = list.clientWidth;
+      layout();
+    });
+    observer?.observe(list);
+    document.fonts?.addEventListener("loadingdone", layout);
+    return () => {
+      observer?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", layout);
+      delete list.dataset.phoneColumns;
+      delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
+    };
+  });
+  const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
+  if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
+  if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
+  const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
+  const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
+  const folded = (each: UsageBoardEngine) => folds[each.base] ?? !each.accounts.some((account) => account.signIn === "ready");
+  const allFolded = board.engines.filter((each) => each.accounts.length).every(folded);
+  const fold = (base: string, value: boolean) => {
+    saveFold(base, value);
+    setFolds((before) => ({ ...before, [base]: value }));
+  };
+  const refresh = async () => {
+    setRefreshFailed(false);
+    const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
+      && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
+      && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
+      .map((each) => joinRefresh(each.instanceId, async () => {
+        const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+        if (result.error) throw new Error("refresh");
+        return result;
+      })));
+    setRefreshFailed(results.some((each) => each.status === "rejected"));
+  };
+  return (
+    <div ref={desk} data-usage-desk="" className="usage-desk min-w-0">
+      <div className="usage-toolbar">
+        <div className="usage-count-switch" role="group" aria-label={t("usage.limits.direction")}>
+          {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}
+            onClick={() => setUsageMode(value)}>{t(value === "used" ? "usage.limits.countUp" : "usage.limits.countDown")}</button>)}
+        </div>
+        <button type="button" data-fold-all="" onClick={() => { for (const each of board.engines) fold(each.base, !allFolded); }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
+        <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
+          aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
+          <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
+        </button>
+      </div>
+      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.refreshFailed")}</div>}
+      <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
+      {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
+      {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}
+        terminal={terminal} clock={clock} label={engineLabel(board, each, store.instances)} folded={folded(each)} onFold={() => fold(each.base, !folded(each))} accountOrder={drag.orders[each.base]} reloadInstances={() => refreshInstances()}
+        signIn={() => dispatch({ type: "toggleAppSettings", open: true, section: "connections" })} />)}
+      </div>
+      {SHOW_DESK_HERO && account && <>
+        <Ticker board={board} engineId={engine.base} select={setEngineId} phone={phone} terminal={terminal} clock={clock} instances={store.instances} />
+        <Hero key={engine.base} engine={engine} account={account} accounts={engine.accounts} terminal={terminal} phone={phone} clock={clock}
+          instances={store.instances} select={(id) => setViewed((current) => ({ ...current, [engine.base]: id }))} />
+        {eventLines(engine, board, clock).map((line) => (
+          <div key={line.kind} data-usage-event={line.kind} className="usage-num -mt-2 flex min-w-0 gap-2 text-[12px] leading-5 text-ink-secondary">
+            <span className="min-w-0">{line.text}</span>
+            <span className="shrink-0">{clockText(line.at, clock)}</span>
+          </div>
+        ))}
+      </>}
+    </div>
+  );
+}

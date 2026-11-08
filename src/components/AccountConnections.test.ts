@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import type { InstanceInfo } from "@/state/store";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ vi.mock("@/state/store", async (original) => ({
   useStore: () => ({ state, dispatch: vi.fn(), refreshInstances }),
 }));
 import { EnginesSettings } from "./EnginesSettings";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -75,30 +77,54 @@ it("keeps main-account sign-out disabled when no other account is ready", async 
   expect(buttons("Sign In")).toHaveLength(1);
 });
 
-it("names connected accounts and shows a long label in full, wrapping after @", async () => {
+it.each([false, true])("keeps a long email on one line with row disclosure and phone %s", async (phone) => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone } as MediaQueryList);
   await render();
-  const label = "personal.account.with.a.very.long.address@example.com";
-  state.instances[1]!.snapshot.account = label;
+  const label = "averyveryverylongname@example-company.com";
+  state.instances[0]!.snapshot.account = label;
   await update();
-  expect(host.textContent).toContain("claude@example.com");
   const identity = [...host.querySelectorAll("span")].find((node) => node.textContent === label)!;
-  expect(identity.classList.contains("truncate")).toBe(false);
-  expect(identity.innerHTML).toBe("personal.account.with.a.very.long.address@<wbr>example.com");
-  expect(buttons("Sign Out")).toHaveLength(2);
+  expect(identity.innerHTML).toBe(label);
+  expect(identity.title).toBe("");
+  expect([...identity.classList]).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
+  expect(identity.classList.contains("break-words")).toBe(false);
+  const disclosure = identity.closest<HTMLButtonElement>("button")!;
+  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => disclosure.click());
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+  expect(disclosure.closest("[data-connection-account]")!.querySelector("[data-connection-identity-body]")?.textContent).toBe(label);
+  expect(host.textContent).not.toContain("Main");
 });
 
-it.each([1, 2])("puts each of %i accounts and its icon on one row, with Add Account on the first", async (count) => {
+it.each([1, 2])("heads the engine above %i account rows, with Add Account only on the engine header row", async (count) => {
   await render(count);
   const group = host.querySelector('[data-engine-row="claude"]')!;
-  const marks = group.querySelectorAll('[data-engine-hover]');
-  expect(marks).toHaveLength(count);
-  for (const [i, mark] of [...marks].entries()) {
-    const row = mark.parentElement!.parentElement!;
+  const [header] = [...group.children];
+  const rows = [...group.querySelectorAll("[data-connection-account]")];
+  expect(header!.querySelector("svg")).not.toBeNull();
+  expect(header!.textContent).toBe("ClaudeAdd Account");
+  expect(header!.textContent).not.toContain("@");
+  expect([...group.querySelectorAll("svg")].filter((node) => !node.closest("[data-usage-grip]"))).toHaveLength(count + 1);
+  expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
+  expect(rows).toHaveLength(count);
+  expect(group.lastElementChild!.hasAttribute("data-connection-account")).toBe(true);
+  for (const [i, row] of rows.entries()) {
     expect(row.textContent).toContain(`${i ? `account-${i}` : "claude"}@example.com`);
     expect(row.textContent).toContain("Sign Out");
-    expect(row.textContent?.includes("Add Account")).toBe(i === 0);
+    expect(row.textContent).not.toContain("Add Account");
+    expect(row.textContent).not.toContain("Claude");
   }
-  expect(group.textContent).not.toContain("Claude");
+});
+
+it("draws Sign Out, Add Account and Sign In as the Settings row button, with Sign Out quieter", async () => {
+  await render();
+  state.instances = [...state.instances, engine("account-2", false)];
+  await update();
+  expect(buttons("Sign Out").map((node) => node.className)).toEqual([ROW_BUTTON, ROW_BUTTON]);
+  expect(buttons("Add Account")[0]!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+  expect(buttons("Sign In")[0]!.className).toBe(cn(ROW_BUTTON, "text-ink"));
+  expect(buttons("Sign Out")[0]!.classList.contains("text-ink-secondary")).toBe(true);
+  expect(buttons("Add Account")[0]!.classList.contains("text-ink-secondary")).toBe(false);
 });
 
 it.each(["claudeAgent", "codex", "grokAgent", "museAgent", "antigravityAgent"])("offers only Sign In while %s is signed out", async (driverKind) => {
@@ -213,6 +239,55 @@ it.each(["en", "ko"] as const)("shows account refusal messages in %s", async (lo
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in is already in progress");
 });
 
+it.each((["complete", "failed", "cancelled", "removed"] as const).flatMap((outcome) =>
+  (["en", "ko"] as const).map((locale) => ({ outcome, locale }))))("clears the $locale sign-in warning when it is $outcome", async ({ outcome, locale }) => {
+  persistPreference(locale);
+  for (const message of ["Sign-in is already in progress", "Another sign-in for this engine is still running"]) {
+    await render(3);
+    state.instances = [...state.instances, { ...engine("new", false), accountState: "pending", loginState: "pending" }];
+    await update();
+    request.mockRejectedValueOnce(new Error(message));
+    await act(async () => buttons(locale === "en" ? "Add Account" : "계정 추가")[0]!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    state.instances = state.instances.map((account) => ({ ...account }));
+    await update();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    state.instances = outcome === "removed" ? state.instances.filter((account) => account.instanceId !== "new")
+      : state.instances.map((account) => account.instanceId !== "new" ? account
+        : { ...engine("new", outcome === "complete"), accountState: outcome === "complete" ? "ready" : "pending", loginState: outcome });
+    await update();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    if (outcome === "complete") expect(host.textContent).toContain("new@example.com");
+  }
+});
+
+it("clears a late refusal for the settled sign-in even if another sign-in starts", async () => {
+  await render(1);
+  state.instances = [...state.instances, { ...engine("new", false), accountState: "pending", loginState: "pending" }];
+  await update();
+  let reject!: (error: Error) => void;
+  request.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+  await act(async () => buttons("Add Account")[0]!.click());
+  state.instances = [state.instances[0]!, { ...engine("new"), loginState: "pending" },
+    { ...engine("other", false), accountState: "pending", loginState: "pending" }];
+  await update();
+  await act(async () => reject(new Error("Another sign-in for this engine is still running")));
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(host.textContent).toContain("new@example.com");
+});
+
+it("keeps a real error when the pending sign-in finishes", async () => {
+  await render(1);
+  state.instances = [...state.instances, { ...engine("new", false), accountState: "pending", loginState: "pending" }];
+  await update();
+  request.mockRejectedValueOnce(new Error("Sign-in failed"));
+  await act(async () => buttons("Add Account")[0]!.click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in failed");
+  state.instances = [state.instances[0]!, { ...engine("new", false), loginState: "failed" }];
+  await update();
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("Sign-in failed");
+});
+
 it("signs out the main account with zero bots through the destination path", async () => {
   const bots = state.bots.splice(0);
   try {
@@ -261,6 +336,19 @@ it.each([false, true])("retries a failed drain with its recorded destination whe
   });
 });
 
+it("drops Sign Out from an open phone menu when the account starts draining", async () => {
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
+  await render();
+  const row = host.querySelector('[data-connection-account="account-1"]')!;
+  await act(async () => row.querySelector<HTMLButtonElement>("[data-connection-menu]")!.click());
+  expect(buttons("Sign Out")).toHaveLength(1);
+  state.instances[1]!.drain = { destinationId: "claude", phase: "draining" };
+  await update();
+  expect(row.querySelector('[role="status"]')?.textContent).toBe("Signing out…");
+  expect(buttons("Sign Out")).toHaveLength(0);
+  expect(buttons("Retry Sign Out")).toHaveLength(0);
+});
+
 it.each(["en", "ko"] as const)("submits a managed Claude browser code without exposing it in %s", async (locale) => {
   persistPreference(locale);
   await render();
@@ -302,6 +390,29 @@ it("keeps computer-only guidance for Claude account creation on a phone", async 
   expect(request).not.toHaveBeenCalledWith("/api/accounts", expect.anything());
 });
 
+it("puts computer-only guidance under the engine name, never beside it, and keeps action words on one line", async () => {
+  await render(2);
+  vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+  state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  await update();
+  const header = host.querySelector('[data-engine-row="claude"]')!.firstElementChild!;
+  const [line, under] = [...header.children];
+  expect(line!.textContent).toBe("Claude");
+  expect(under!.textContent).toBe("Sign in on a computer");
+  expect(under!.className).toContain("pl-6");
+  for (const slot of host.querySelectorAll("[data-connection-account] .justify-end")) expect(slot.classList.contains("whitespace-nowrap")).toBe(true);
+});
+
+it("shows an opened identity on single lines, never broken mid-address", async () => {
+  await render(1);
+  const disclosure = host.querySelector<HTMLButtonElement>("[data-connection-identity]")!;
+  await act(async () => disclosure.click());
+  const body = host.querySelector("[data-connection-identity-body]")!;
+  expect(body.className).not.toMatch(/break-all|break-words|wrap-anywhere|wrap-break-word/);
+  expect(body.textContent).toContain("claude@example.com");
+  for (const line of body.children) expect(line.classList.contains("truncate")).toBe(true);
+});
+
 it("offers recovery for a stopped account whose credentials remain valid", async () => {
   await render();
   state.instances[1]!.accountState = "stopped";
@@ -312,16 +423,18 @@ it("offers recovery for a stopped account whose credentials remain valid", async
 });
 
 
-it.each(["en", "ko"] as const)("shows the Main tag next to its email from pushed rows in %s", async (locale) => {
+it.each(["en", "ko"] as const)("keeps pushed rows without a Main tag or account-list GET in %s", async (locale) => {
   persistPreference(locale);
   await render();
   const tag = locale === "en" ? "Main" : "기본";
-  const mainTag = () => [...host.querySelectorAll("span")].find((span) => span.textContent === tag)!;
-  expect(mainTag().parentElement?.textContent).toContain(`claude@example.com${tag}`);
+  expect(host.textContent).toContain("claude@example.com");
+  expect(host.textContent).not.toContain(tag);
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
   state.instances = state.instances.map((account) => ({ ...account, accountMain: account.instanceId === "account-1" }));
   await update();
-  expect(mainTag().parentElement?.textContent).toContain(`account-1@example.com${tag}`);
+  expect(host.textContent).toContain("account-1@example.com");
+  expect(host.textContent).not.toContain(tag);
+  expect(request).not.toHaveBeenCalledWith("/api/accounts");
 });
 
 it("shows an accepted account as soon as the server pushes its signed-in row", async () => {

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { z } from "zod";
 
 import {
@@ -15,6 +15,7 @@ import {
   type CustomCredentialId,
 } from "../shared/credential-request.ts";
 import { writeFileAtomic } from "./atomic.ts";
+import { resolveLocalFile } from "./attachments.ts";
 import { generatedImagesDir } from "./generate-image.ts";
 
 export const CALL_API_TIMEOUT_MS = 60_000;
@@ -23,6 +24,12 @@ const MAX_RESPONSE_BYTES = 15 * 1024 * 1024;
 const KEY_USES_FILE = "key-uses.json";
 const BINARY_TYPE = /^(image\/|audio\/|application\/pdf$|application\/octet-stream$)/;
 const EXTENSIONS: Record<string, string> = { "audio/mpeg": "mp3", "image/jpeg": "jpg", "application/octet-stream": "bin" };
+const UPLOAD_TYPES: Record<string, string> = {
+  ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".webm": "audio/webm",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".pdf": "application/pdf",
+};
+const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 export const callApiRequestSchema = z.object({
   credentialId: z.string(),
@@ -30,13 +37,46 @@ export const callApiRequestSchema = z.object({
   url: z.string().min(1).max(4000),
   headers: z.record(z.string(), z.string()).optional(),
   body: z.unknown().optional(),
-});
+  form: z.object({
+    fields: z.record(z.string(), z.string()).optional(),
+    files: z.array(z.object({
+      field: z.string(),
+      path: z.string(),
+      filename: z.string().optional(),
+      content_type: z.string().optional(),
+    })).optional(),
+  }).optional(),
+}).refine((request) => request.form === undefined || request.body === undefined, { message: "form and body cannot be used together" });
 
 export type CallApiRequest = z.infer<typeof callApiRequestSchema>;
 export type CallApiResult = { status: number; text: string } | { status: number; path: string; contentType: string };
 export type KeyUses = Record<string, { botId: string; at: string }>;
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+function multipartBody(form: NonNullable<CallApiRequest["form"]>, roots: readonly string[]): FormData {
+  if ((form.files?.length ?? 0) > 8) throw fail(413, "upload exceeds 8 files");
+  let total = 0;
+  const files = (form.files ?? []).map((file) => {
+    const resolved = resolveLocalFile(file.path, roots);
+    if (resolved.size > MAX_UPLOAD_FILE_BYTES) throw fail(413, "file exceeds 25 MB");
+    total += resolved.size;
+    if (total > MAX_UPLOAD_BYTES) throw fail(413, "upload exceeds 50 MB");
+    return { ...file, resolved };
+  });
+  const body = new FormData();
+  for (const [name, value] of Object.entries(form.fields ?? {})) body.append(name, value);
+  total = 0;
+  for (const file of files) {
+    const bytes = readFileSync(file.resolved.path);
+    if (bytes.byteLength > MAX_UPLOAD_FILE_BYTES) throw fail(413, "file exceeds 25 MB");
+    total += bytes.byteLength;
+    if (total > MAX_UPLOAD_BYTES) throw fail(413, "upload exceeds 50 MB");
+    const type = file.content_type ?? UPLOAD_TYPES[extname(file.path).toLowerCase()] ?? "application/octet-stream";
+    body.append(file.field, new Blob([bytes], { type }), file.filename ?? basename(file.path));
+  }
+  return body;
+}
 
 export const missingKeyMessage = (id: BrokeredCredentialId | CustomCredentialId) =>
   isCustomCredentialId(id)
@@ -82,6 +122,7 @@ export async function callApi(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = CALL_API_TIMEOUT_MS,
 ): Promise<CallApiResult> {
+  if (request.form !== undefined && request.body !== undefined) throw fail(400, "form and body cannot be used together");
   const id = request.credentialId;
   if (!isBrokeredCredentialId(id) && !isCustomCredentialId(id)) {
     throw fail(400, isCredentialTargetId(id)
@@ -111,8 +152,11 @@ export async function callApi(
   } catch (error) {
     throw fail(400, redactKey(String((error as Error).message), key).slice(0, 300));
   }
-  let body: string | undefined;
-  if (typeof request.body === "string") body = request.body;
+  let body: string | FormData | undefined;
+  if (request.form !== undefined) {
+    body = multipartBody(request.form, roots);
+    headers.delete("content-type");
+  } else if (typeof request.body === "string") body = request.body;
   else if (request.body !== undefined && request.body !== null) {
     body = JSON.stringify(request.body);
     if (!headers.has("content-type")) headers.set("content-type", "application/json");

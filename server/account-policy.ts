@@ -31,6 +31,7 @@ export function accountLaunch(
   driver: string,
   args: string[],
   source: NodeJS.ProcessEnv,
+  userSetup = false,
 ): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!account) return { args, env: source };
   if (driver !== "claudeAgent" && driver !== "codex") throw new Error("Unsupported account engine");
@@ -50,7 +51,7 @@ export function accountLaunch(
     }
     env.CLAUDE_CONFIG_DIR = account.home;
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
-    return { env, args: args[0] === "auth" || args[0] === "--version" ? args : [...args, "--setting-sources", "project,local"] };
+    return { env, args: args[0] === "auth" || args[0] === "--version" ? args : [...args, "--setting-sources", userSetup ? "user,project,local" : "project,local"] };
   }
   env.CODEX_HOME = account.home;
   env.CODEX_SQLITE_HOME = join(account.home, "state");

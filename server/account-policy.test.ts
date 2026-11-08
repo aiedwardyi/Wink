@@ -17,6 +17,13 @@ const policy = await import("./account-policy.ts").catch(() => null);
 afterEach(() => vi.restoreAllMocks());
 
 describe("account launch boundary", () => {
+  it("R6 opts real Claude launches into user setup while exempting auth and version", () => {
+    expect(policy!.accountLaunch(account, "claudeAgent", ["-p", "fixture"], {}, true).args.slice(-2)).toEqual(["--setting-sources", "user,project,local"]);
+    for (const args of [["auth", "status"], ["--version"]]) {
+      expect(policy!.accountLaunch(account, "claudeAgent", args, {}, true).args).toEqual(args);
+    }
+  });
+
   it.each(["status", "login", "logout"])("keeps Claude auth %s free of turn settings", (command) => {
     const args = ["auth", command];
     const result = policy!.accountLaunch(account, "claudeAgent", args, {});

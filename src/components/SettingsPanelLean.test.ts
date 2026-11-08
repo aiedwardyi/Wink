@@ -287,8 +287,75 @@ describe("SettingsPanel memory and order", () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
     });
     const switches = Array.from(host.querySelectorAll('[role="switch"]'));
-    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Bot Notifications", "Terminal Access", "Agentic Mode", "Auto Notes"]);
+    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Agentic Mode", "Bot Notifications", "Terminal Access", "Auto Notes"]);
     for (const each of switches) expect(each.className).toContain("h-6 w-11");
+  });
+});
+
+describe("SettingsPanel Agentic Mode card", () => {
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  const words = {
+    en: { title: "Agentic Mode", help: "On: keeps going alone for nights, days, even weeks.\nOff: answers and waits.", paused: "Paused: two tries made no progress", avatar: "Avatar" },
+    ko: { title: "에이전트 모드", help: "켜면 밤낮으로 며칠, 몇 주도 혼자 계속해요.\n끄면 답하고 기다려요.", paused: "일시 중지됨: 두 번 시도에 진전 없음", avatar: "아바타" },
+  };
+  const states = [
+    { name: "off", keepGoing: null, checked: "false" },
+    { name: "on", keepGoing: { paused: null }, checked: "true" },
+    { name: "paused", keepGoing: { paused: "no-progress" }, checked: "true" },
+  ] as const;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    root.unmount();
+    host.remove();
+    localStorage.removeItem("omb-locale");
+    vi.unstubAllGlobals();
+  });
+
+  for (const lang of ["en", "ko"] as const) {
+    for (const state of states) {
+      it(`puts the ${state.name} card first in Settings in ${lang}`, async () => {
+        localStorage.setItem("omb-locale", lang);
+        await act(async () => {
+          root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, keepGoing: state.keepGoing } })));
+        });
+        const text = words[lang];
+        const cards = host.querySelectorAll("[data-settings-keep-going]");
+        expect(cards).toHaveLength(1);
+        const card = cards[0];
+        expect(card.parentElement?.firstElementChild).toBe(card);
+        expect(shown(card)).toBe(true);
+        expect(card.nextElementSibling?.textContent).toContain(text.avatar);
+        const [head, line] = Array.from(card.firstElementChild!.children);
+        expect(head.textContent).toBe(text.title);
+        expect(head.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe(state.checked);
+        const mark = head.querySelector("svg")!;
+        expect(head.firstElementChild?.firstElementChild).toBe(mark);
+        if (state.name === "paused") expect(mark.querySelector("circle")?.getAttribute("fill")).toBe("none");
+        else expect(mark.querySelector("circle[mask]")?.getAttribute("fill")).toBe("currentColor");
+        expect(mark.getAttribute("class")).toContain(state.name === "off" ? "text-ink-secondary" : "text-accent-text");
+        expect(line.textContent).toBe(state.name === "paused" ? text.paused : text.help);
+        expect(host.querySelectorAll(`[role="switch"][aria-label="${text.title}"]`)).toHaveLength(1);
+      });
+    }
+  }
+
+  it("turns Agentic Mode on with one tap", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ text: "", truncated: false, topics: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-settings-keep-going] [role="switch"]')!.click());
+    const calls = fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/bots/bot-1/keep-going"));
+    expect(calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ on: true }]);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 });
 
@@ -490,7 +557,7 @@ describe("SettingsPanel memory autosave", () => {
     }
   };
   const box = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]')!;
-  const status = () => host.querySelector('[role="status"]')?.textContent ?? "";
+  const status = () => box().closest(".relative.flex.flex-col.gap-3")?.querySelector('[role="status"]')?.textContent ?? "";
   const notice = () => host.querySelector('[role="alert"]')?.firstElementChild?.textContent ?? "";
   const button = (label: string) => Array.from(host.querySelectorAll("button")).find((each) => each.textContent === label)!;
   const topic = (name: string) => host.querySelector<HTMLButtonElement>(`button[data-topic="${name}"]`)!;
@@ -716,11 +783,37 @@ describe("SettingsPanel memory autosave", () => {
       expect(box().style.height).toBe("900px");
       expect(box().className).toContain("overflow-hidden");
       expect(box().className).toContain("resize-none");
-      const description = host.querySelector<HTMLTextAreaElement>("textarea:not([aria-label])")!;
+      const description = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
       expect(description.style.height).toBe("900px");
     } finally {
       width.mockRestore();
       height.mockRestore();
+    }
+  });
+
+  it("refits Description after a post-open font override", async () => {
+    let contentHeight = 185;
+    const width = vi.spyOn(HTMLTextAreaElement.prototype, "clientWidth", "get").mockReturnValue(323);
+    const height = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockImplementation(() => contentHeight);
+    const ready = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", { configurable: true, value: Object.assign(new EventTarget(), { ready: Promise.resolve() }) });
+    try {
+      const description = "Quarterly Research Synthesis Assistant 분기별 리서치 종합 도우미 " + "X".repeat(80) + " Research 한국어 메모. ".repeat(8);
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, description } }))));
+      const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
+      expect(area.style.height).toBe("185px");
+      contentHeight = 206;
+      await act(async () => {
+        area.style.fontFamily = "Verdana";
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(area.style.height).toBe("206px");
+      expect(area.className).toContain("overflow-hidden");
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
+      if (ready) Object.defineProperty(document, "fonts", ready);
+      else Reflect.deleteProperty(document, "fonts");
     }
   });
 

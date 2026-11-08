@@ -147,6 +147,17 @@ describe("hover intent", () => {
     ui.rail.destroy();
   });
 
+  it("opens nothing when a layout shift slides the strip under a still mouse, and opens on its next move", async () => {
+    const ui = await mount();
+    ui.mouse(document.body, "pointermove", 980, 300);
+    ui.mouse(ui.strip, "pointerenter", 980, 300);
+    ui.mouse(ui.strip, "pointermove", 980, 300);
+    expect(ui.wait(400)).toBe(Infinity);
+    ui.mouse(ui.strip, "pointermove", 980, 301);
+    expect(ui.wait(200)).toBeLessThanOrEqual(100);
+    ui.rail.destroy();
+  });
+
   it("does not jump on a click in the card's first moments, and opens it on a click with none open", async () => {
     const ui = await mount();
     ui.path([992, 300], [976, 300], 1);

@@ -2,9 +2,11 @@ import { useId, useState } from "react";
 import { Check, Download, Loader2 } from "lucide-react";
 import type { InstanceInfo } from "@/state/store";
 import { firstLaunchConnectInstances } from "@/lib/engine-rail";
+import { baseInstances } from "@/lib/cross-model-picker";
+import { usageAccount } from "@/lib/accounts";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useEngineInstall } from "@/lib/use-engine-install";
-import { EngineSetup, EngineSignIn, installCommandFor, openEngineInstallOrCopy } from "./EngineSetup";
+import { EngineSetup, EngineSignIn, installCommandFor, needsSignIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { Fold } from "./Fold";
 
@@ -24,10 +26,18 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const { attempts, begin, fail } = useEngineInstall(instances, onRefresh, recheckOnFocus);
-  const engines = firstLaunchConnectInstances(instances).sort((a, b) => ORDER.indexOf(a.driverKind) - ORDER.indexOf(b.driverKind));
+  const engines = firstLaunchConnectInstances(baseInstances(instances)).map((instance) => instance.pickerSnapshot
+    ? { ...instance, snapshot: { ...instance.snapshot, authenticated: instance.pickerSnapshot.state === "available" && instance.pickerSnapshot.authenticated !== false } }
+    : instance).sort((a, b) => ORDER.indexOf(a.driverKind) - ORDER.indexOf(b.driverKind));
   const hasInstalled = engines.some((instance) => instance.snapshot.state === "available");
   const primary = engines.filter((instance) => hasInstalled ? instance.snapshot.state === "available" : instance.driverKind === "claudeAgent");
   const others = engines.filter((instance) => !primary.includes(instance));
+  // Account copies are hidden here, so a base row signs in its Main account.
+  const signInAs = (instance: InstanceInfo) => {
+    const main = needsSignIn(instance) ? usageAccount(instances, instance.instanceId) : undefined;
+    return main && main.instanceId !== instance.instanceId
+      ? { ...instance, instanceId: main.instanceId, loginState: main.loginState, loginCapture: main.loginCapture } : instance;
+  };
 
   const install = async (instance: InstanceInfo) => {
     const id = instance.instanceId;
@@ -64,7 +74,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
               : recommended ? t("engineConnect.install", { name: instance.displayName }) : t("engines.install");
     const accountKey = ACCOUNTS[instance.driverKind as keyof typeof ACCOUNTS];
     const buttonClassName = `flex shrink-0 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[12.5px] font-semibold disabled:cursor-default ${featured ? "w-full bg-accent text-accent-ink hover:brightness-110" : "bg-control text-ink hover:bg-raised-hover"}`;
-    const button = installed && !ready ? <EngineSignIn instance={instance} buttonLabel={label} buttonClassName={buttonClassName}
+    const button = installed && !ready ? <EngineSignIn instance={signInAs(instance)} buttonLabel={label} buttonClassName={buttonClassName}
       onUpdated={(next) => { if (next.snapshot.authenticated === true) void onRefresh(); }} />
       : <button type="button" disabled={Boolean(ready || working || busy[instance.instanceId])}
       onClick={() => void install(instance)} className={buttonClassName}>
@@ -96,7 +106,7 @@ export function EngineConnect({ instances, onRefresh, recheckOnFocus = true, foo
       <div>{others.map((instance) => row(instance))}</div>
       <Fold open={commands}>
         <div id={commandsId} data-engine-connect-commands className="mt-4 flex flex-col gap-2.5">
-          {engines.map((instance) => <EngineSetup key={instance.instanceId} instance={instance} intent="cloud" />)}
+          {engines.map((instance) => <EngineSetup key={instance.instanceId} instance={signInAs(instance)} intent="cloud" />)}
         </div>
       </Fold>
     </div>

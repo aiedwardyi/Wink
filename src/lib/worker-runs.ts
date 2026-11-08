@@ -146,25 +146,25 @@ const SCREEN_ALERTS = new Set(["stalled", "limit", "waiting"]);
 // The stall watcher stamps a change on its next check, so the prompt behind a WAITING note can land just after the note.
 const NOTE_SETTLE_MS = 30_000;
 
-/** Live pane and note time of a run waiting on one of those alerts; a waiting run's newest note is the one that set it. */
+/** Live pane and note time of a failed run or a run waiting on one of those alerts. */
 function screenWait(run: WorkerRun, livePanes: Set<string>): { sessionId: string; at: number } | null {
   const last = run.notes.at(-1);
-  if (run.state !== "waiting" || !last?.note.alert || !SCREEN_ALERTS.has(last.note.alert.kind)) return null;
+  if (!last || (run.state !== "failed" && (run.state !== "waiting" || !last.note.alert || !SCREEN_ALERTS.has(last.note.alert.kind)))) return null;
   const sessionId = listedSessionId(run, livePanes);
   return sessionId ? { sessionId, at: last.at } : null;
 }
 
-/** A live run still waits on an alert its pane has not moved past, so fresh change times can still flip it. */
+/** A live run still waits on a failure or alert its pane has not moved past, so fresh change times can still flip it. */
 export function waitingOnScreen(runs: readonly WorkerRun[], livePanes: Set<string> | null, changedAt?: ReadonlyMap<string, number>): boolean {
-  return livePanes !== null && runs.some((run) => screenWait(run, livePanes) !== null && shownState(run, livePanes, changedAt) === "waiting");
+  return livePanes !== null && runs.some((run) => screenWait(run, livePanes) !== null && shownState(run, livePanes, changedAt) === run.state);
 }
 
 export function shownState(run: WorkerRun, livePanes: Set<string> | null, changedAt?: ReadonlyMap<string, number>): WorkerShownState {
-  if (!livePanes || run.state === "done" || run.state === "failed") return run.state;
+  if (!livePanes || run.state === "done") return run.state;
   const live = run.sessionId ? livePanes.has(run.sessionId) : run.pane8 ? [...livePanes].some((id) => id.startsWith(run.pane8!)) : true;
   const wait = screenWait(run, livePanes);
   if (wait && (changedAt?.get(wait.sessionId) ?? 0) > wait.at + NOTE_SETTLE_MS) return "working";
-  return live ? run.state : "ended";
+  return live || run.state === "failed" ? run.state : "ended";
 }
 
 /** Each run renders at its newest mounted message; null folds its other messages. */

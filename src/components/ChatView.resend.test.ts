@@ -8,15 +8,18 @@ import { StoreProvider, type Bot, type Message } from "@/state/store";
 import { I18nProvider } from "@/lib/i18n";
 
 import { DATA_DIR } from "../../server/config.ts";
+import { _resetCommsRoots, rootForStart } from "../../server/comms-root.ts";
 import type { CommsBus } from "../../server/comms-visibility.ts";
 import {
   drainDelegations,
   finishDelegatedTurn,
   queueDelegation,
-  takeOverDelegatedTurn,
   _pendingCount,
   _resetPending,
+  type DelegatedTurn,
 } from "../../server/delegations.ts";
+import { watchPeerTurn } from "../../server/peer-takeover.ts";
+import { _resetPeerUserReplies, beginPeerUserReply, persistPeerUserReply } from "../../server/peer-user-reply.ts";
 import { Store, type BotRecord, type GroupRecord } from "../../server/store.ts";
 
 import { ChatView } from "./ChatView";
@@ -66,7 +69,7 @@ async function mount(current: Bot) {
   return host;
 }
 
-describe("a bot's resent request in the target's chat", () => {
+describe("a user's reply during a peer turn", () => {
   let store: Store;
   let career: BotRecord;
   let wink: BotRecord;
@@ -75,10 +78,12 @@ describe("a bot's resent request in the target's chat", () => {
   beforeEach(() => {
     rmSync(DATA_DIR, { recursive: true, force: true });
     _resetPending();
+    _resetPeerUserReplies();
     store = new Store(() => ({ instanceId: "claude", model: "fake-model" }));
     career = store.patchBot(store.createBot().id, { name: "Career" })!;
     wink = store.patchBot(store.createBot().id, { name: "Wink" })!;
     commsBus = { store, broadcast: () => {} };
+    _resetCommsRoots();
   });
 
   const runTarget = (_to: string, _prompt: string, _depth: number, _src: string, channel: GroupRecord | undefined, taskId: string, _from: string, transcriptText?: string) => {
@@ -92,31 +97,46 @@ describe("a bot's resent request in the target's chat", () => {
     });
     turn = { channelId: channel?.id, toBotId: wink.id, taskId, sourceThreadId: career.threadId, sourceBotId: career.id };
   };
-  let turn: Parameters<typeof takeOverDelegatedTurn>[1];
+  let turn: DelegatedTurn;
   const drain = () => drainDelegations(commsBus, { store, broadcast: () => {} }, career.threadId, runTarget);
 
-  it("leads with the sender's chip and name, as the original does", async () => {
-    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0 }, 1);
+  it.each([
+    [1280, "Arial"], [360, "Arial"], [392, "Arial"], [392, "Verdana"],
+  ])("keeps peer attribution and the user's short reply separate at %s px with %s", async (width, font) => {
+    vi.stubGlobal("innerWidth", width);
+    document.body.style.fontFamily = String(font);
+    const root = rootForStart(career.threadId, { kind: "human", messageKey: "send-1" })!;
+    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await vi.waitFor(() => expect(turn && _pendingCount(career.threadId)).toBe(0));
-    takeOverDelegatedTurn(commsBus, turn, "Edward");
-    store.appendMessage(wink.threadId, { role: "user", kind: "text", text: "Hey Wink" });
-    finishDelegatedTurn(commsBus, turn, true, "Edward, 1.0.157 is out.");
+    const end = watchPeerTurn(wink.threadId);
+    const input = beginPeerUserReply(wink.id, wink.threadId, "Hey Wink")!;
+    input.accept(store.appendMessage(wink.threadId, { role: "user", kind: "text", text: "Hey Wink", steered: true }));
+    const tag = input.prompt.match(/<user\d+>/)![0];
+    const text = `${tag}네, 확인할게요.${tag.replace("<", "</")}\nTwo bullets were reworded.`;
+    persistPeerUserReply(store, {
+      provider: "claude", eventId: "reply", createdAt: new Date().toISOString(), threadId: wink.threadId,
+      type: "item.completed", itemType: "assistant_text", text,
+    });
+    end();
+    finishDelegatedTurn(commsBus, turn, true, text);
     drain();
-    await vi.waitFor(() => expect(store.messagesFor(wink.threadId).filter((m) => m.role === "user" && m.from)).toHaveLength(2));
+    await vi.waitFor(() => expect(store.messagesFor(wink.threadId).filter((m) => m.role === "user" && m.from)).toHaveLength(1));
 
     const stored = store.messagesFor(wink.threadId);
     const rows = stored.filter((m) => m.tool?.name === "Message from @Career" || (m.role === "user" && m.from));
     expect(rows.map((m) => m.tool?.name ?? m.text)).toEqual([
       "Message from @Career", "What changed in the resume?",
-      "Message from @Career", "Answering Career's earlier request",
     ]);
 
     const host = await mount(toBot(wink, stored as Message[]));
-    const bubble = [...host.querySelectorAll("[data-mid]")].find((row) => row.textContent?.includes("Answering Career's earlier request"));
-    expect(bubble?.previousElementSibling?.textContent).toContain("Message from @Career");
+    expect(host.textContent?.match(/네, 확인할게요\./g)).toHaveLength(1);
+    expect(host.textContent).not.toContain("Two bullets were reworded.");
+    expect(host.textContent).not.toContain("<user");
     const speaker = (text: string) => [...host.querySelectorAll("[data-mid]")]
       .find((row) => row.textContent?.includes(text))?.querySelector(".orbit-message-speaker")?.textContent;
-    expect(["What changed in the resume?", "Hey Wink", "Answering Career's earlier request"].map(speaker)).toEqual(["Career", "You", "Career"]);
+    expect(["What changed in the resume?", "Hey Wink"].map(speaker)).toEqual(["Career", "You"]);
+    expect(store.messagesFor(career.threadId).filter((message) => message.comm?.peer === "reply").map((message) => message.text)).toEqual(["Two bullets were reworded."]);
+    document.body.style.fontFamily = "";
   });
 });

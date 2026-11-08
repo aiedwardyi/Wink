@@ -39,6 +39,7 @@ import { pathToFileURL } from "node:url";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
+import { LIVE_VERIFY_V0, VERIFY_LIMITS, VERIFY_ROUTES, VERIFY_TOOL_ENV } from "../../shared/live-verify.ts";
 import { EXTENDED_REACTIONS } from "../../shared/reactions.ts";
 
 const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
@@ -52,6 +53,19 @@ const TOOLS_ENABLED = Boolean(BOT_ID && THREAD_ID && TOKEN);
 const PEER_TOOLS = new Set(["list_bots", "update_task_state", "check_delegation", "wait_delegation", "list_routines"]);
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
+// In-flight verify_site calls by JSON-RPC id, so notifications/cancelled can abort exactly one.
+const verifyCalls = new Map<unknown, AbortController>();
+
+const VERIFY_SITE_TOOL = {
+  name: "verify_site",
+  description: "After every change that renders in a browser, call verify_site before saying done, unless the user says not to. Checks static files in any folder or a local dev server, hidden in a real browser on desktop and phone. Fix reported problems in this turn, then recheck at most twice. Reports page errors, dead links, phone sideways scroll, missing phone menus and leftover copy, with locations and reproduction steps. Not checked means unverified; form delivery is never proved.",
+  inputSchema: {
+    type: "object",
+    properties: { entry: { type: "string", description: "A loopback http:// URL, or a site folder/.html file anywhere on this PC (path or file://). Relative paths use your working folder." } },
+    required: ["entry"],
+    additionalProperties: false,
+  },
+};
 
 const WEEKDAYS = [
   "monday",
@@ -200,6 +214,7 @@ const ROUTINE_FIELDS_SCHEMA = {
 
 const TOOLS = [
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
+  ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   {
     name: "list_bots",
     description: DEPTH > 0
@@ -419,7 +434,7 @@ const TOOLS = [
   {
     name: "call_api",
     description:
-      "Call a service's HTTPS API with the user's saved key for it. You never see the key; Wink adds it. Only that service's own hosts are allowed. Binary responses are saved to a file and the path is returned. A key saved with the custom form is custom:<host> and only works on that exact host.",
+      "Call a service's HTTPS API with the user's saved key for it. You never see the key; Wink adds it. Only that service's own hosts are allowed. Binary responses are saved to a file and the path is returned. A key saved with the custom form is custom:<host> and only works on that exact host. For file uploads (multipart), pass form with fields and files (absolute paths inside your working folder).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -429,6 +444,27 @@ const TOOLS = [
         url: { type: "string", description: "Full https URL on that service's API host." },
         headers: { type: "object", additionalProperties: { type: "string" }, description: "Extra headers. Never an auth header." },
         body: { description: "Request body: a JSON value (sent as JSON) or a string." },
+        form: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            fields: { type: "object", additionalProperties: { type: "string" } },
+            files: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  field: { type: "string" },
+                  path: { type: "string" },
+                  filename: { type: "string" },
+                  content_type: { type: "string" },
+                },
+                required: ["field", "path"],
+              },
+            },
+          },
+        },
       },
       required: ["credential_id", "method", "url"],
     },
@@ -610,7 +646,11 @@ function confirmationResult(r: Json, fallback: string): { text: string } {
   };
 }
 
-async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{ text: string; isError?: boolean }> {
+async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: AbortSignal): Promise<{ text: string; isError?: boolean }> {
+  if (name === VERIFY_SITE_TOOL.name) {
+    const r = await api(VERIFY_ROUTES.tool, { method: "POST", body: JSON.stringify({ entry: args.entry }), signal });
+    return { text: String(r.text ?? ""), ...(r.status === "blocked" ? { isError: true } : {}) };
+  }
   if (name === "report_issue") {
     const r = await api("/api/internal/team-report", { method: "POST", body: JSON.stringify({ ...args, fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
     return { text: JSON.stringify(r), ...(r.error ? { isError: true } : {}) };
@@ -854,6 +894,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs): Promise<{
     };
     if (args.headers !== undefined) body.headers = args.headers;
     if (args.body !== undefined) body.body = args.body;
+    if (args.form !== undefined) body.form = args.form;
     try {
       const r = await api("/api/internal/call-api", { method: "POST", body: JSON.stringify(body) });
       if (typeof r.path === "string") {
@@ -989,7 +1030,9 @@ export async function handle(msg: Json) {
       });
       return;
     case "notifications/initialized":
+      return;
     case "notifications/cancelled":
+      verifyCalls.get(params.requestId)?.abort("cancelled");
       return;
     case "ping":
       ok(id, {});
@@ -1001,11 +1044,19 @@ export async function handle(msg: Json) {
       const name = params.name as string;
       if (!TOOLS_ENABLED || !TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Unknown tool: ${name}`);
       if (DEPTH > 0 && !PEER_TOOLS.has(name)) return textResult(id, `${name} is unavailable in peer turns.`, true);
+      const verify = name === VERIFY_SITE_TOOL.name ? new AbortController() : null;
+      if (verify) verifyCalls.set(id, verify);
+      const deadline = verify ? setTimeout(() => verify.abort("deadline"), VERIFY_LIMITS.toolMs) : undefined;
       try {
-        const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json);
+        const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json, verify?.signal);
         textResult(id, text, isError);
       } catch (e) {
-        textResult(id, (e as Error).message, true);
+        // A cancelled request gets no response (MCP cancellation).
+        if (verify?.signal.reason === "cancelled") return;
+        textResult(id, verify?.signal.reason === "deadline" ? `Live Verify gave no result within ${VERIFY_LIMITS.toolMs / 1000} s.` : (e as Error).message, true);
+      } finally {
+        clearTimeout(deadline);
+        if (verify) verifyCalls.delete(id);
       }
       return;
     }
@@ -1029,5 +1080,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       if (msg.id !== undefined) rpcErr(msg.id, -32603, (e as Error).message);
     });
   });
-  rl.on("close", () => process.exit(0));
+  rl.on("close", () => {
+    for (const call of verifyCalls.values()) call.abort("cancelled");
+    process.exit(0);
+  });
 }

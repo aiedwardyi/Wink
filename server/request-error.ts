@@ -4,7 +4,8 @@ export function requestError(cause: unknown, log: (message: string) => void = co
   log(cause instanceof Error ? cause.message : String(cause));
   const status = (cause as { status?: unknown } | null)?.status;
   if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status < 500) {
-    return { status, body: { error: cause instanceof Error ? cause.message : String(cause) } };
+    const code = (cause as { code?: unknown }).code;
+    return { status, body: { error: cause instanceof Error ? cause.message : String(cause), ...typeof code === "string" && { code } } };
   }
   return {
     status: typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500,

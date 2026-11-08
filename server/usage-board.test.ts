@@ -7,6 +7,7 @@ import type { UsageBoard, UsageBoardFrame } from "../src/lib/usage-board.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
+import { codexRateLimitWindows } from "./drivers/rate-limits.ts";
 
 type Deps = Parameters<typeof createUsageBoard>[0];
 type Row = ReturnType<Deps["accounts"]["list"]>[number];
@@ -74,6 +75,47 @@ afterEach(() => {
 });
 
 describe("usage board", () => {
+  it("drops an old identity's queued history before it drains", async () => {
+    const s = setup();
+    s.rows()[0].status = { state: "available", authenticated: true, account: "old@example.test" };
+    s.accept("claude", report(100));
+    s.rows()[0].status = { state: "available", authenticated: true, account: "new@example.test" };
+    s.board.sync();
+    await settle();
+    expect(account(await s.board.read())).toMatchObject({ windows: [], history: { fine: [], coarse: [] } });
+  });
+
+  it.each(["claudeAgent", "codex", "grok", "muse", "gemini"])("drops %s windows and history on an identity swap", async (driverKind) => {
+    const s = setup();
+    s.setRows([{ ...s.rows()[0], driverKind, status: { state: "available", authenticated: true, account: "old@example.test" } }]);
+    s.accept("claude", report(100));
+    await settle();
+    const before = await s.board.read();
+    expect(account(before).windows[0].usedPercent).toBe(100);
+    expect(account(before).history.fine).not.toEqual([]);
+    s.setRows([{ ...s.rows()[0], status: { state: "available", authenticated: true, account: "new@example.test" } }]);
+    const after = await s.board.read(before.cursor);
+    expect(account(after).windows).toEqual([]);
+    expect(account(after).history).toEqual({ fine: [], coarse: [] });
+    expect(after.full).toBe(true);
+    expect(after.revision).toBeGreaterThan(before.revision);
+  });
+
+  it.each([undefined, 1440])("records Codex aliases with primary duration %s", async (windowDurationMins) => {
+    const s = setup();
+    s.setRows([{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }]);
+    s.accept("codex", { observedAt: new Date(now).toISOString(), windows: codexRateLimitWindows({
+      primary: { usedPercent: 24, resetsAt: (now + 60_000) / 1000, windowDurationMins },
+      secondary: { usedPercent: 40, resetsAt: (now + 7 * 86_400_000) / 1000 },
+    }) });
+    await settle();
+    const row = account(await s.board.read(), "codex");
+    expect(row.windows.map((window) => window.kind)).toEqual([windowDurationMins === undefined ? "session" : "other", "week"]);
+    const point = [origin / 60_000, windowDurationMins === undefined ? 24 : null, 40];
+    expect(row.history).toEqual({ fine: [point], coarse: [point] });
+    expect(s.history.snapshot().accounts.codex).toMatchObject({ fine: [point], coarse: [point] });
+  });
+
   it("rejects reserved instance ids consistently with account storage", async () => {
     const s = setup();
     s.setRows([{ ...s.rows()[0], id: "Constructor", of: "Constructor" }]);

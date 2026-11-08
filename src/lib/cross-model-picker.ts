@@ -30,9 +30,17 @@ export const PICKER_MODEL_IDS: readonly string[] = [
   ...GEMINI_VERSIONS.map((version) => `gemini-${version}-flash`),
 ];
 
-export function pickerRows(instances: InstanceInfo[], current: ModelSelection, preview = current): PickerRow[] {
-  instances = instances.filter((instance) => !instance.accountOf || instance.accountOf === instance.instanceId)
+export function baseInstances(instances: InstanceInfo[]): InstanceInfo[] {
+  return instances.filter((instance) => !instance.accountOf || instance.accountOf === instance.instanceId);
+}
+
+export function pickerInstances(instances: InstanceInfo[]): InstanceInfo[] {
+  return baseInstances(instances)
     .map((instance) => instance.pickerSnapshot ? { ...instance, snapshot: instance.pickerSnapshot, models: instance.pickerModels ?? instance.models } : instance);
+}
+
+export function pickerRows(instances: InstanceInfo[], current: ModelSelection, preview = current): PickerRow[] {
+  instances = pickerInstances(instances);
   const ordered: Array<{ instance: InstanceInfo; label: string }> = ENGINES.flatMap(([kind, label]) => instances
     .filter((instance) => instance.driverKind === kind)
     .map((instance) => ({ instance, label })));

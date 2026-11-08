@@ -1,6 +1,7 @@
 import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
+import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
@@ -10,7 +11,6 @@ import {
   ChevronRight,
   Clock,
   Crown,
-  Gauge,
   ListTree,
   Loader2,
   Pin,
@@ -32,7 +32,7 @@ import {
   type Message,
 } from "@/state/store";
 import { EngineSetup, needsCli, needsSignIn, setupErrorAction } from "./EngineSetup";
-import { SignedInCard, SignInCard } from "./SignInCard";
+import { AccountSignInCard, SignedInCard, SignInCard } from "./SignInCard";
 import { BotAvatar } from "./Avatar";
 import { TurnPresence, replySlot, useReplyDock, type ReplyDock } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
@@ -56,6 +56,7 @@ import { FolderFix } from "./FolderFix";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ChatPlanMeters } from "./ChatPlanMeters";
+import { UsageWaitCard } from "./UsageWaitCard";
 import { TermStatusLine } from "./TermStatusLine";
 import { ChatFindBar } from "./ChatFindBar";
 import { TurnRail } from "./TurnRail";
@@ -75,22 +76,21 @@ import { CallButton, CallOverlay } from "./CallView";
 import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
-import { screenImageUrl, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
-import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
+import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
+import { activityVisibleInChat, busyRetryLabel, groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, sameNotices, shownRunStep, type LinkedApproval, type TranscriptItem } from "@/lib/activity-runs";
 import { chatTranscriptRows, messageVisible } from "@/lib/chat-transcript";
 import { isShownMessage } from "@/lib/shown-message";
 import { focusComposerOnActivation, shouldFocusComposerOnTranscriptClick } from "@/lib/focus-composer";
 import { MemoryCleanSave } from "./MemoryTidyLine";
 import { MemorySaveRun } from "./MemorySaveChip";
 import { PeerMessageBody, commLabel } from "./PeerMessage";
-import { ActivityRun, ActivityStep, approvalHover } from "./ActivityRun";
+import { ActivityRun, ActivityStep, CommsNotice, approvalHover } from "./ActivityRun";
 import { pinPreview } from "@/lib/pin-preview";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
 import { TRANSCRIPT_GAP, useComposerDockPad } from "@/lib/composer-dock";
 import {
   TRANSCRIPT_WINDOW_SIZE,
-  expandWindowStart,
   focusWindow,
   followedWindow,
   resolveTranscriptWindow,
@@ -101,9 +101,7 @@ import { timelineEvents } from "@/lib/taskTimeline";
 import { useReplyDraft } from "@/lib/drafts";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { localeTag, useI18n } from "@/lib/i18n";
-import { usageLimitReset } from "@/lib/usage";
 import { usageAccount } from "@/lib/accounts";
-import { useNow } from "./PlanUsageBar";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
@@ -205,8 +203,10 @@ export function ErrorRow({
   usageLimit,
   usageWait,
   signIn,
+  bound,
   folder,
   botId,
+  identities,
 }: {
   message: string;
   botName?: string;
@@ -216,34 +216,35 @@ export function ErrorRow({
   usageLimit?: { resetsAt: number | null };
   usageWait?: NonNullable<Message["tool"]>["usageWait"];
   signIn?: boolean;
+  /** setupInstance is the account the turn failed on, not the bot's engine. */
+  bound?: boolean;
   folder?: string;
   botId: string;
+  identities?: readonly (string | undefined)[];
 }) {
-  const { t, locale } = useI18n();
-  const now = useNow();
+  const { t } = useI18n();
   if (folder) return <FolderFix folder={folder} botId={botId} onRetry={onRetry} />;
   const action = setupErrorAction(setupInstance, signIn);
-  if (setupInstance && !needsCli(setupInstance)) {
+  if (setupInstance && (bound || !needsCli(setupInstance))) {
     return (
       <div className="flex max-w-[min(42rem,100%)] justify-start" title={message}>
-        {action === "cli"
+        {bound ? <AccountSignInCard instance={setupInstance} onRetry={onRetry} />
+          : action === "cli"
           ? <SignInCard instance={setupInstance} help={t("chat.signInRetryHelp")} onRetry={signIn ? onRetry : undefined} />
           : <SignedInCard instance={setupInstance} onRetry={onRetry} />}
       </div>
     );
   }
+  if (usageLimit) return <UsageWaitCard message={message} botId={botId} usageLimit={usageLimit} usageWait={usageWait} onRetry={onRetry} retryDisabled={retryDisabled} identities={identities} />;
   const shown = chatErrorText(message, botName ?? t("errors.bot"), t);
-  if (!usageLimit && !setupInstance && !shown) return null;
-  const reset = usageLimit && !usageWait ? usageLimitReset(usageLimit.resetsAt, now) : null;
-  const waiting = usageWait?.state === "waiting";
-  const time = usageWait?.resumesAt == null ? "" : new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", ...(usageWait.weekly ? { weekday: "short" } : {}) }).format(usageWait.resumesAt);
+  if (!setupInstance && !shown) return null;
   const retryButton = onRetry && (
     <button
       onClick={onRetry}
       disabled={retryDisabled}
       className={cn(
         "mt-1.5 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12.5px]",
-        usageLimit ? "border-warning/30 hover:bg-warning/15" : "border-danger/30 hover:bg-danger/15",
+        "border-danger/30 hover:bg-danger/15",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
     >
@@ -256,23 +257,12 @@ export function ErrorRow({
         className="w-fit max-w-[min(42rem,78%)] rounded-xl border border-hairline/50 bg-inset px-3.5 py-2.5 text-[13.5px] text-ink"
       >
         <div className="flex items-start gap-2">
-          {usageLimit ? <Gauge size={15} className="mt-0.5 shrink-0 text-warning" /> : <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />}
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" />
           <span className="min-w-0 break-words">
-            {usageLimit ? (
-              <>
-                {!usageWait ? <><span className="font-semibold">{t("chat.usageLimit")}</span>{" "}{t("chat.usageLimitBody")}{reset && <> {t(reset.key, reset.vars)}</>}</>
-                  : waiting ? <span>{t(!time ? "chat.usageWaitUnknown" : usageWait.weekly ? "chat.usageWaitWeekly" : "chat.usageWaitAt", { time })}</span>
-                    : usageWait.state === "manual" ? <span>{t("chat.usageWaitManual")}</span> : null}
-                {waiting && usageWait.cancelable && <> · <button className="underline" onClick={() => void api(`/api/bots/${botId}/usage-wait/${usageWait.id}/cancel`, { method: "POST" }).catch(() => {})}>{t("chat.cancelQueuedAction")}</button></>}
-                {/* the engine's own words survive a misread of them */}
-                <span className="mt-1 block text-[12px] opacity-70">{message}</span>
-              </>
-            ) : (
-              setupInstance ? localizeServerLine(message, t) : shown?.text ?? message
-            )}
+            {setupInstance ? localizeServerLine(message, t) : shown?.text ?? message}
           </span>
         </div>
-        {!usageLimit && !setupInstance && <ErrorDetails raw={shown?.raw} />}
+        {!setupInstance && <ErrorDetails raw={shown?.raw} />}
         {action === "cli" && setupInstance ? (
           <>
             <EngineSetup instance={setupInstance} signIn={signIn} className="mt-2 text-ink-secondary" />
@@ -280,7 +270,7 @@ export function ErrorRow({
             {signIn && retryButton}
           </>
         ) : (
-          usageLimit && usageWait ? null : retryButton
+          retryButton
         )}
       </div>
     </div>
@@ -304,15 +294,15 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
         title={failed ? t("chat.stepDidNotComplete") : approvalHover(notices, t)}
         className="flex min-w-0 max-w-full items-center gap-2 border border-transparent px-3 py-1.5 text-[13px] text-ink-secondary"
       >
-        {tool.ok === undefined ? (
+        {isCommsNotice(tool.name) ? null : tool.ok === undefined ? (
           <Loader2 data-idle-hide size={13} className="shrink-0 animate-spin" />
         ) : failed ? (
           <X size={13} strokeWidth={1.5} className="shrink-0" />
         ) : (
           <Check size={13} className="shrink-0 text-success" />
         )}
-        <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"}>
-          {localizeServerLine(tool.name, t)}
+        <span className={status ? "min-w-0 max-w-[480px] break-words" : "min-w-0 max-w-[480px] truncate font-mono"} style={isCommsNotice(tool.name) ? { textWrap: "balance", wordBreak: "keep-all" } : undefined}>
+          {isCommsNotice(tool.name) ? <CommsNotice text={localizeServerLine(tool.name, t)} /> : localizeServerLine(tool.name, t)}
           {tool.summary && ` ${tool.summary}`}
         </span>
       </div>
@@ -778,6 +768,7 @@ const MessagesList = memo(function MessagesList({
               // bot⇄bot comm chips stay because they link to another conversation.
               // plain tool runs stay out unless Settings → Tool calls is on.
               if (m.tool?.name.startsWith("error:")) {
+                const accountId = m.tool.accountId;
                 return (
                   <ErrorRow
                     botId={bot.id}
@@ -785,10 +776,12 @@ const MessagesList = memo(function MessagesList({
                     folder={m.tool.folder}
                     message={m.tool.name.slice(6).trim()}
                     onRetry={m.id === canonicalLastMessageId && canRetryLast && !m.tool.name.startsWith(SYNC_NOTICE) ? onRegenerate : undefined}
-                    setupInstance={m.tool.setup || m.tool.signIn ? engine : undefined}
+                    setupInstance={accountId ? state.instances.find((instance) => instance.instanceId === accountId) : m.tool.setup || m.tool.signIn ? engine : undefined}
+                    bound={Boolean(accountId)}
                     usageLimit={m.tool.usageLimit}
                     usageWait={m.tool.usageWait}
                     signIn={m.tool.signIn}
+                    identities={state.instances.map((instance) => instance.snapshot.account)}
                   />
                 );
               }
@@ -802,7 +795,7 @@ const MessagesList = memo(function MessagesList({
             case "note":
             case "launch": {
               const worker = workerAt.get(m.id);
-              if (worker === undefined) return m.kind === "note" ? <NoteMessage message={m} /> : null;
+              if (worker === undefined) return m.verify ? <VerifyCard card={m.verify} threadId={bot.threadId} messageId={m.id} /> : m.kind === "note" ? <NoteMessage message={m} /> : null;
               if (!worker) return null;
               const live = livePanes && worker.run.sessionId ? livePanes.has(worker.run.sessionId) : null;
               return <WorkerRow {...worker} live={live} onOpenTerminalPane={onOpenTerminalPane} open={open.has(worker.run.id)} onToggle={() => toggle(worker.run.id)} />;
@@ -898,9 +891,9 @@ export function PinnedBanner({
   );
 }
 
-export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
+export function ChatView({ bot, hidden = false, focusComposerBlocked = false, onOpenTerminal, onOpenTerminalPane }: { bot: Bot; hidden?: boolean; focusComposerBlocked?: boolean; onOpenTerminal?: () => void; onOpenTerminalPane?: (sessionId: string) => void }) {
   const { t } = useI18n();
-  const { state, dispatch } = useStore();
+  const { state, dispatch, turnOrigin } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const sidebarOnRight = useSidebarSide() === "right";
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -916,6 +909,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   }, []);
 
   const stream = useStreaming();
+  const since = turnOrigin(bot.threadId);
   const provisioning = state.provisioning[bot.id];
   const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
   const engine = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId);
@@ -1031,6 +1025,9 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   if (rehydrated) setSeenSnapshot(state.snapshots);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
+  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+    terminal, workers: rowWorkers, renders: (message) => messageVisible(message, { showToolCalls, showActivities, transcript: shown }),
+  }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
     setWindowHead(head);
     const prepended = windowHead ? shown.findIndex((message) => message.id === windowHead) : -1;
@@ -1040,7 +1037,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
     } else if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
     } else if (prepended < 0) {
       const { id, index } = windowAnchor.current;
       const at = id ? shown.findIndex((message) => message.id === id) : -1;
@@ -1212,7 +1209,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
     slot: dockSlot,
     live: dockLive,
     label: activityLabel,
-    since: noReply ? undefined : lastUserMessage?.at,
+    since: noReply ? undefined : since,
     quiet: noReply?.quiet,
     wrap: Boolean(noReply),
     onSwitch: noReply && !modelSwitch.active ? modelSwitch.open : undefined,
@@ -1226,7 +1223,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
         trackPointer={false}
       />
     ),
-  } : null, [dockSlot, dockLive, activityLabel, lastUserMessage?.at, bot, toolInFlight, noReply, modelSwitch.active, modelSwitch.open]);
+  } : null, [dockSlot, dockLive, activityLabel, since, bot, toolInFlight, noReply, modelSwitch.active, modelSwitch.open]);
 
   // regenerate = fork the last user message with the same text — reuses the
   // existing branch machinery, so the old answer stays reachable via ‹ ›
@@ -1343,20 +1340,20 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   }, [fillPaging, loadOlder, underfilled]);
 
   const preExpandScroll = useRef<TranscriptScroll | null>(null);
-  const showEarlier = () => {
-    // expanding means reading scrollback — never let a mid-expand stream
+  const expandEarlier = (onFail: () => void, beforeCommit: () => boolean, pages: number) => {
+    // expanding means reading scrollback - never let a mid-expand stream
     // event pin the viewport back to the bottom
     setBottomFollow(false);
     if (startIndex === 0) {
       revealOlder.current = true;
       setTranscriptWindow((w) => ({ ...w, expanded: true }));
       (jump.messages ? jump.older : loadOlder)(() => {
-        preExpandScroll.current = captureTranscriptScroll(scrollRef.current);
-      });
+        preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
+      }, onFail, pages);
       return;
     }
-    preExpandScroll.current = captureTranscriptScroll(scrollRef.current);
-    const start = expandWindowStart(startIndex);
+    preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
+    const start = earlierStart(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1376,6 +1373,11 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
     if (!followRef.current) preExpandScroll.current ??= captureTranscriptScroll(scrollRef.current);
     setTranscriptWindow((w) => (w.end === null && !w.expanded ? { ...w, start: Math.min(w.start, tailStart) } : w));
   }, [jump.messages, tailStart, transcriptWindow]);
+
+  const [showEarlier, cancelEarlier] = useEarlierPage({
+    key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : bot.hasMore),
+    scrollRef, previousScrollTop, expand: expandEarlier,
+  });
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1408,6 +1410,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   const jumpToLatest = () => {
     closeJump();
     setBottomFollow(true);
+    cancelEarlier();
     setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -1424,7 +1427,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
   // Long enough to need the timeline: three screens, or rows outside the mounted window.
   const railShown = tall || hiddenCount > 0 || Boolean(bot.hasMore) || Boolean(jump.messages);
   const keepGoing = keepGoingMarkState(bot);
-  const keepGoingLabel = keepGoing ? t(keepGoing === "on" ? "bot.keepGoingOnMark" : "bot.keepGoingPausedMark") : undefined;
+  const keepGoingLabel = keepGoing ? t(keepGoing === "on" ? "bot.keepGoingOnMarkHint" : "bot.keepGoingPausedMarkHint") : undefined;
 
   return (
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
@@ -1503,6 +1506,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
               <KeepGoingMark state={keepGoing} size={14} />
             </button>
           )}
+          <VerifyWatchIcon messages={messages} threadId={bot.threadId} />
           <WorkerChip name={bot.name} runs={workers} livePanes={livePanes} paneLabels={lastLabels.get(bot.id)} waitForLive={livePanes === null && window.ogb?.terminal != null} onOpenTerminalPane={onOpenTerminalPane} onOpenTerminal={onOpenTerminal} />
           {showChatHeaderFind() && (
           <button
@@ -1688,7 +1692,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
               >
-                {hiddenCount > 0 ? t("room.showEarlier", { count: hiddenCount }) : t("room.showOlder")}
+                {t("room.showOlder")}
               </button>
             </div>
           )}
@@ -1751,7 +1755,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
             quiet={noReply?.quiet}
             wrap={Boolean(noReply)}
             onSwitch={noReply && !modelSwitch.active ? modelSwitch.open : undefined}
-            since={noReply ? undefined : lastUserMessage?.at}
+            since={noReply ? undefined : since}
           />
           {queued.map((m, index) => (
             <div key={m.id} className="contents" data-mid={m.id}>
@@ -1806,7 +1810,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           data-jump-latest
           onClick={jumpToLatest}
           aria-label={t("chat.jumpToLatest")}
-          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
+          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
           style={{ bottom: composerDock.height }}
         >
           <ArrowDown size={13} /> {t("chat.jumpToLatest")}
@@ -1830,6 +1834,9 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
         />
         {!terminal && (
           <ChatPlanMeters
+            identity={`${bot.id}:${bot.threadId}:${shownEngine?.accountOf ?? shownEngine?.instanceId}`}
+            hidden={hidden}
+            instanceId={shownEngine?.instanceId}
             windows={shownEngine?.rateLimits?.windows}
             driverKind={shownEngine?.driverKind}
             observedAt={shownEngine?.rateLimits?.observedAt}
@@ -1848,7 +1855,7 @@ export function ChatView({ bot, focusComposerBlocked = false, onOpenTerminal, on
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
         />
-        {terminal && <TermStatusLine bot={bot} engine={engine} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
+        {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>
       </div>
 

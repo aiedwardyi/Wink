@@ -59,6 +59,7 @@ export interface SecretRequestCardData {
 }
 
 export interface Message {
+  verify?: import("../../shared/live-verify").VerifyCardData;
   id: string;
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "compaction" | "note" | "launch";
@@ -87,6 +88,7 @@ export interface Message {
     detail?: ToolDetail;
     setup?: boolean;
     signIn?: boolean;
+    accountId?: string;
     folder?: string;
     usageLimit?: { resetsAt: number | null };
     usageWait?: import("../../server/limit-wait-store").UsageWaitView;
@@ -159,6 +161,7 @@ export interface Group {
   pinnedMessageId?: string;
   /** sidebar section heading this room is filed under (shared with bots) */
   section?: string;
+  pinned?: boolean;
   /** New user-created rooms remain in setup until Save or Skip. */
   setupCompletedAt?: number | null;
   setupSkippedAt?: number | null;
@@ -396,6 +399,7 @@ export interface InstanceInfo {
     authChecked?: boolean;
     /** email or account name of the sign-in, when the CLI names one */
     account?: string;
+    accountIdentity?: string;
     version?: string | null;
     /** a reported cost on a subscription is notional; the UI says so */
     billing?: "metered" | "subscription";
@@ -567,14 +571,14 @@ export type Action =
   | {
       type: "patchGroup";
       groupId: string;
-      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId" | "section">>;
+      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId" | "section" | "pinned">>;
     }
   | { type: "deleteGroup"; groupId: string }
   | { type: "switchGroupTask"; groupId: string; threadId: string }
   | { type: "toggleReaction"; threadId: string; messageId: string; emoji: string; message?: Message }
   | { type: "interruptGroup"; groupId: string }
   | { type: "instances"; instances: InstanceInfo[]; preserveRateLimits?: boolean }
-  | { type: "rateLimits"; instanceId: string; report: RateLimitReport }
+  | { type: "rateLimits"; instanceId: string; report: RateLimitReport; identity?: string | null }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
   | {

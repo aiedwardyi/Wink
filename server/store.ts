@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } 
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import type { BotHooks } from "./bot-hooks.ts";
 import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
@@ -24,6 +25,7 @@ import { clearAccountSessions } from "./account-sessions.ts";
 import { validateProjectNotes } from "./project-notes.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { redactToolMessage } from "./tool-detail.ts";
+import { redactVerifyCard } from "./verify-message.ts";
 import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
 import {
   deleteTaskResumePacket,
@@ -40,6 +42,7 @@ import {
 } from "../shared/bot-avatar.ts";
 import type { RoutineRequestCardData } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
+import type { VerifyCardData } from "../shared/live-verify.ts";
 import { readContextCompaction, type ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 export type MausColor =
@@ -133,6 +136,8 @@ export interface Message {
   /** One idempotently updated status card in the conversation that created a
    * routine. The actual provider turn remains in its isolated task. */
   routineRun?: RoutineRunCardData;
+  /** note messages: the bot's current Live Verify card. */
+  verify?: VerifyCardData;
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent
@@ -150,6 +155,7 @@ export interface Message {
     detail?: ToolDetail;
     setup?: boolean;
     signIn?: boolean;
+    accountId?: string;
     folder?: string;
     usageLimit?: { resetsAt: number | null };
     usageWait?: UsageWaitView;
@@ -264,6 +270,7 @@ export interface GroupRecord {
   /** sidebar section heading this room is filed under; shares the bots'
    * namespace so one heading can hold a project's room and its people */
   section?: string;
+  pinned?: boolean;
   /** New user-created rooms start with setup pending. Null timestamps are
    * intentional: records from before room setup has existed omit both keys
    * and remain immediately usable. */
@@ -378,6 +385,7 @@ export function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: 
     if (routineRun.error) routineRun.error = redactSecretsInText(routineRun.error);
     out.routineRun = routineRun;
   }
+  if (out.verify) out.verify = redactVerifyCard(out.verify);
   if (out.card) {
     const card = { ...out.card } as OptionCardData & { summary?: string };
     card.title = redactSecretsInText(card.title);
@@ -500,6 +508,7 @@ export interface BotRecord {
   pendingModelSelection?: ModelSelection;
   /** Skip user skills, plugins and plugin MCP servers at startup. Off unless on. */
   leanStartup?: boolean;
+  hooks?: BotHooks;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
   /** which computer the bot acts on: its cloud box, Local VM, this machine
@@ -1072,7 +1081,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();

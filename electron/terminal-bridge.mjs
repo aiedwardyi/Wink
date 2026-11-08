@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { z } from "zod";
 
 import { BOT_PANE_LIMIT } from "./terminal-host.mjs";
 import { handleServerErrorReport } from "./error-report-capture.mjs";
@@ -11,12 +10,24 @@ const SEND_GRANT_PREFIX = "orbit-terminal-send-v1";
 const PANE_COUNTS_GRANT_PREFIX = "orbit-terminal-pane-counts-v1";
 const UPDATE_GRANT_PREFIX = "orbit-update-v1";
 const MAX_SEND_BODY = 16 * 1024;
-const accountRunsSchema = z.array(z.object({
-  botId: z.string().regex(BOT_ID_RE), paneId: z.string().min(1).max(128), label: z.string().max(40).nullable(),
-  engine: z.enum(["claude", "codex"]), accountId: z.string().regex(/^[\w.-]{1,128}$/)
-    .refine((value) => !["constructor", "prototype", "__proto__", ".", ".."].includes(value.toLowerCase())),
-  accountGeneration: z.number().int().nonnegative(), state: z.enum(["busy", "idle", "limit", "starting"]),
-}));
+
+function accountRuns(value) {
+  if (!Array.isArray(value)) return null;
+  const runs = [];
+  for (const run of value) {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Worker runs cross the Electron/server process boundary.
+    if (!run || typeof run !== "object" || Array.isArray(run)) return null;
+    const { botId, paneId, label, engine, accountId, accountGeneration, state } = run;
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Worker run fields are untyped host output.
+    if (typeof botId !== "string" || typeof paneId !== "string" || label !== null && typeof label !== "string" || typeof accountId !== "string") return null;
+    if (!BOT_ID_RE.test(botId) || paneId.length < 1 || paneId.length > 128 || label !== null && label.length > 40
+      || !["claude", "codex"].includes(engine) || !/^[\w.-]{1,128}$/.test(accountId)
+      || ["constructor", "prototype", "__proto__", ".", ".."].includes(accountId.toLowerCase())
+      || !Number.isSafeInteger(accountGeneration) || accountGeneration < 0 || !["busy", "idle", "limit", "starting"].includes(state)) return null;
+    runs.push({ botId, paneId, label, engine, accountId, accountGeneration, state });
+  }
+  return runs;
+}
 
 export function terminalReadGrant(token, botId) {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Grant inputs cross the Electron/server process boundary.
@@ -129,11 +140,13 @@ async function handleUpdate(req, res, updater, token, action) {
 }
 
 /** Private loopback bridge between the Electron terminal host and a scoped MCP proxy. */
-export function createTerminalBridge({ host, updater, errorReports, saveCredential, token = randomBytes(24).toString("hex"), port = 0 } = {}) {
+export function createTerminalBridge({ host, updater, errorReports, saveCredential, verify: verifyFactory, token = randomBytes(24).toString("hex"), port = 0 } = {}) {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The host is supplied by the Electron main process.
   if (!host || typeof host.readBot !== "function" || typeof host.sendBot !== "function") throw new Error("Terminal host is required");
   let server;
   let address;
+  let verify;
+  let closing;
   const start = () => new Promise((resolve, reject) => {
     server = createServer(async (req, res) => {
       let parsed;
@@ -141,6 +154,13 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         parsed = new URL(req.url ?? "/", "http://127.0.0.1");
       } catch {
         return json(res, 400, { error: "Invalid terminal request" });
+      }
+      if (parsed.pathname.startsWith("/v1/verify/") && verifyFactory) {
+        try {
+          verify ??= Promise.resolve(verifyFactory(token));
+          if (await (await verify).handle(req, res, parsed)) return;
+        }
+        catch { return json(res, 500, { error: "Verify unavailable" }); }
       }
       if (parsed.pathname === "/v1/error-reports" && errorReports) return handleServerErrorReport(req, res, token, errorReports);
       if (parsed.pathname === "/v1/terminal/session") {
@@ -181,8 +201,11 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         const engine = parsed.searchParams.get("engine");
         if (botId !== null && !BOT_ID_RE.test(botId) || engine !== null && !["claude", "codex"].includes(engine)) return json(res, 400, { error: "Invalid worker run filter" });
         try {
-          const runs = accountRunsSchema.safeParse(host.liveAccountRuns?.({ ...(botId === null ? {} : { botId }), ...(engine === null ? {} : { engine }) }));
-          if (runs.success) return json(res, 200, { runs: runs.data });
+          const filter = {};
+          if (botId !== null) filter.botId = botId;
+          if (engine !== null) filter.engine = engine;
+          const runs = accountRuns(host.liveAccountRuns?.(filter));
+          if (runs) return json(res, 200, { runs });
         } catch {}
         return json(res, 503, { error: "Worker account runs are unavailable" });
       }
@@ -246,8 +269,9 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         }
         if (req.method === "POST" && match[2]) {
           const input = await readJson(req);
+          // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Terminal text is untyped HTTP request input.
           if (input && typeof input === "object" && typeof input.text === "string") input.text = normalizeTerminalText(input.text);
-          await host.sendBot(botId, input);
+          await host.sendBot(botId, input, { person: sendOnly });
           return json(res, 200, host.readBot(botId, input?.sessionId ? { sessionId: input.sessionId, observe: true } : undefined));
         }
         return json(res, 405, { error: "Method not allowed" });
@@ -266,10 +290,10 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
       resolve({ url: `http://127.0.0.1:${address.port}`, token });
     });
   });
-  const close = () => new Promise((resolve) => {
-    if (!server) return resolve();
-    server.close(() => resolve());
-  });
+  const close = () => closing ??= Promise.all([
+    Promise.resolve(verify).then(value => value?.close()).catch(() => {}),
+    new Promise((resolve) => { if (server) server.close(() => resolve()); else resolve(); }),
+  ]).then(() => {});
   return {
     start,
     close,

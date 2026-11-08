@@ -14,6 +14,7 @@ export interface LoginCapture {
 
 export class LoginBusyError extends Error {
   readonly status = 409;
+  readonly code = "login-busy";
   constructor() { super("Another sign-in for this engine is still running"); }
 }
 

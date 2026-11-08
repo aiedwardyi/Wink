@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { paneNotesForTurn, paneNotesSinceLastUserTurn } from "./context-compaction.ts";
-import { hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_HOURLY_CAP, PaneWakeScheduler } from "./pane-wake.ts";
+import { hasLocalUndeliveredPaneNote, PANE_WAKE_DEBOUNCE_MS, PANE_WAKE_HOURLY_CAP, paneNoteWaiting, PaneWakeScheduler, paneWakeEnabled, type WakeAdmission } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 
-function harness(overrides: { enabled?: boolean; busy?: boolean; hasNotes?: boolean; paused?: boolean } = {}) {
+const PANE_ONLY: WakeAdmission = { rootId: null, reservation: null };
+
+function harness(overrides: { enabled?: boolean; busy?: boolean; hasNotes?: boolean; paused?: boolean } = {}, admit?: (botId: string, threadId: string) => WakeAdmission | null) {
   const state = { enabled: true, busy: false, hasNotes: true, paused: false, ...overrides };
   const closed = new Set<string>();
   const wake = vi.fn();
@@ -22,6 +24,7 @@ function harness(overrides: { enabled?: boolean; busy?: boolean; hasNotes?: bool
     closedByBot,
     skipped,
     wake,
+    admit,
     warn,
     now: () => Date.now(),
   });
@@ -52,7 +55,7 @@ describe("PaneWakeScheduler", () => {
     state.hasNotes = true;
     scheduler.noteArrived("teacher", "t1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
   });
 
   it("preserves a pause and its reports across restart for the next user turn", async () => {
@@ -90,7 +93,7 @@ describe("PaneWakeScheduler", () => {
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS - 1);
     expect(wake).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
   });
 
   it("coalesces a burst into one wake", async () => {
@@ -130,7 +133,7 @@ describe("PaneWakeScheduler", () => {
     state.busy = false;
     scheduler.settled();
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
   });
 
   it("skips the wake when a user turn already delivered the notes", async () => {
@@ -164,7 +167,7 @@ describe("PaneWakeScheduler", () => {
     busy = false;
     scheduler.settled();
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
   });
 
   it("never wakes with the share-terminal gate off", async () => {
@@ -241,7 +244,7 @@ describe("PaneWakeScheduler", () => {
     scheduler.noteArrived("teacher", "t1", "p1");
     scheduler.noteArrived("teacher", "t1", "p2");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
     expect(skipped).not.toHaveBeenCalled();
   });
 
@@ -250,7 +253,7 @@ describe("PaneWakeScheduler", () => {
     scheduler.noteArrived("teacher", "t1", "p1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     expect(closedByBot).toHaveBeenCalledOnce();
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
     expect(skipped).not.toHaveBeenCalled();
   });
 
@@ -261,7 +264,7 @@ describe("PaneWakeScheduler", () => {
     scheduler.noteArrived("teacher", "t1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     expect(closedByBot).not.toHaveBeenCalled();
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
   });
 
   it("wakes when the bridge check throws", async () => {
@@ -270,7 +273,7 @@ describe("PaneWakeScheduler", () => {
     closedByBot.mockRejectedValueOnce(new Error("terminal bridge unreachable"));
     scheduler.noteArrived("teacher", "t1", "p1");
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
     expect(skipped).not.toHaveBeenCalled();
   });
 
@@ -286,7 +289,7 @@ describe("PaneWakeScheduler", () => {
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     expect(closedByBot).toHaveBeenLastCalledWith("teacher", ["p1", "p2"]);
     expect(skipped).not.toHaveBeenCalled();
-    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1");
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", PANE_ONLY);
   });
 
   it("holds the burst when the bot turns busy or paused during the check", async () => {
@@ -345,6 +348,24 @@ describe("PaneWakeScheduler", () => {
     await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
     expect(wake).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("wakes with the admission admit selected, and a refused admission spends no hourly slot", async () => {
+    const admission: WakeAdmission = { rootId: "root-a", reservation: { id: "credit-1", rootId: "root-a", kind: "wake" } };
+    const admit = vi.fn<(botId: string, threadId: string) => WakeAdmission | null>(() => null);
+    const { wake, warn, scheduler } = harness({}, admit);
+    for (let i = 0; i < PANE_WAKE_HOURLY_CAP; i++) {
+      scheduler.noteArrived("teacher", "t1");
+      await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
+    }
+    expect(admit).toHaveBeenCalledTimes(PANE_WAKE_HOURLY_CAP);
+    expect(wake).not.toHaveBeenCalled();
+    admit.mockReturnValueOnce(admission);
+    scheduler.noteArrived("teacher", "t1");
+    await vi.advanceTimersByTimeAsync(PANE_WAKE_DEBOUNCE_MS);
+    expect(wake).toHaveBeenCalledExactlyOnceWith("teacher", "t1", admission);
+    expect(wake.mock.calls[0]![2]).toBe(admission);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("forgetBot cancels a capped retry", async () => {
@@ -422,6 +443,45 @@ describe("hasLocalUndeliveredPaneNote", () => {
     const pending = paneNotesForTurn(reopened.activePath(bot.threadId), new Set([user.id]), task?.paneNotesDeliveredId ?? undefined, false);
     expect(pending.newestId).toBe(note.id);
     expect(pending.notes.some((text) => text.includes("DONE: verified"))).toBe(true);
+  });
+});
+
+describe("pending-note window around a teammate's turn", () => {
+  const pokkey = { botId: "pokkey", name: "Pokkey", color: "#38bdf8" };
+  function thread(row: Partial<Message>) {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-sonnet-5" }));
+    const bot = store.patchBot(store.createBot().id, { shareTerminalWithChat: false })!;
+    const add = (message: Partial<Message>) => store.appendMessage(bot.threadId, { role: "bot", kind: "text", ...message } as Omit<Message, "id" | "at">);
+    add({ role: "user", text: "Watch the worker" });
+    add({ kind: "note", text: "[pane worker01] DONE: ram gate fixed", origin: "home", reportIds: ["r1"] });
+    add({ role: "user", text: "Is the ko check in the release gate?", ...row });
+    add({ text: "Yes, the ko check runs in the release gate." });
+    const walks = () => {
+      const rows = store.activePath(bot.threadId);
+      const delivered = store.taskByThread(bot.id, bot.threadId)?.paneNotesDeliveredId ?? undefined;
+      return [
+        paneNotesSinceLastUserTurn(rows, new Set(), delivered).length > 0,
+        paneNoteWaiting(store, bot.id, bot.threadId),
+        paneWakeEnabled(store, bot.id, bot.threadId),
+        hasLocalUndeliveredPaneNote(rows, delivered, "home"),
+      ];
+    };
+    return { store, bot, walks };
+  }
+
+  it("keeps a note pending behind a teammate's row in all four walks", () => {
+    expect(thread({ from: pokkey }).walks()).toEqual([true, true, true, true]);
+  });
+
+  it("ends the window at the user's own row, but not at a steered one", () => {
+    expect(thread({}).walks()).toEqual([false, false, false, false]);
+    expect(thread({ steered: true }).walks()).toEqual([true, true, true, true]);
+  });
+
+  it("ends the window at the delivered note", () => {
+    const { store, bot, walks } = thread({ from: pokkey });
+    store.markPaneNotesDelivered(bot.id, bot.threadId, store.activePath(bot.threadId).find((message) => message.kind === "note")!.id);
+    expect(walks()).toEqual([false, false, false, false]);
   });
 });
 

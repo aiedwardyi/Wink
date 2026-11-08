@@ -9,7 +9,8 @@ import { saveImage } from "./attachments.ts";
 import { avatarGenerationRequestSchema, avatarGenerationStateMatches, generateAvatarImage, snapshotAvatarGenerationState } from "./avatar-image.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import type { BotAccounts } from "./bot-accounts.ts";
-import { parseBotProfilePatch } from "./bot-profile.ts";
+import { botHooksSchema, pictureStampsError } from "./bot-hooks.ts";
+import { parseBotProfilePatch, type BotProfilePatchInput } from "./bot-profile.ts";
 import { cloudBackendChangeError } from "./cloud-backend.ts";
 import type { AppConfig } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -22,7 +23,7 @@ import { modelPickPatch } from "./pending-model.ts";
 import { validateProjectNotes, type createProjectNotesCheck } from "./project-notes.ts";
 import { sectionKey, type BotRecord, type Message, type Store } from "./store.ts";
 import type { TaskResumePacket } from "./task-state.ts";
-import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile } from "./workspace.ts";
+import { isMemoryTopicName, listMemoryTopics, MEMORY_FILE_MAX_BYTES, readMemoryFile, readMemoryTopic, saveMemoryFile, workspaceDir } from "./workspace.ts";
 
 type BotRouteDeps = {
   cancelUsageWait?: (botId: string) => void;
@@ -66,7 +67,20 @@ export function createBotRoutes(deps: BotRouteDeps) {
     activeVpsThreads,
     resumePaneWakes,
   } = deps;
+  const applyProfile = (id: string, input: BotProfilePatchInput) => {
+    const parsed = parseBotProfilePatch(input, true);
+    if (!parsed.ok) return { status: 400, error: parsed.error };
+    if (parsed.patch.avatarUrl && !storedAvatarExists(parsed.patch.avatarUrl)) {
+      return { status: 400, error: "avatarUrl must reference an existing stored image" };
+    }
+    const bot = store.patchBot(id, parsed.patch);
+    if (!bot) return { status: 404, error: "no such bot" };
+    const visible = wireBot(bot);
+    broadcast({ kind: "bot", bot: visible });
+    return { status: 200, bot: visible };
+  };
   return {
+    applyProfile,
     order: async (req: IncomingMessage, res: ServerResponse) => {
       const parsed = z.object({ botIds: z.array(z.string()) }).safeParse(await readBody(req));
       if (!parsed.success || !store.reorderBots(parsed.data.botIds)) {
@@ -200,16 +214,8 @@ export function createBotRoutes(deps: BotRouteDeps) {
       return json(res, 201, { avatarUrl, bot: visible });
     },
     patchProfile: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
-      const parsed = parseBotProfilePatch(await readBody(req), true);
-      if (!parsed.ok) return json(res, 400, { error: parsed.error });
-      if (parsed.patch.avatarUrl && !storedAvatarExists(parsed.patch.avatarUrl)) {
-        return json(res, 400, { error: "avatarUrl must reference an existing stored image" });
-      }
-      const bot = store.patchBot(m[1], parsed.patch);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      const visible = wireBot(bot);
-      broadcast({ kind: "bot", bot: visible });
-      return json(res, 200, { bot: visible });
+      const result = applyProfile(m[1], await readBody(req));
+      return json(res, result.status, result.bot ? { bot: result.bot } : { error: result.error });
     },
     read: async (res: ServerResponse, m: RegExpMatchArray) => {
       const bot = store.patchBot(m[1], { unread: false });
@@ -349,6 +355,11 @@ export function createBotRoutes(deps: BotRouteDeps) {
         if (typeof body.leanStartup !== "boolean") return json(res, 400, { error: "leanStartup must be true or false" });
         patch.leanStartup = body.leanStartup;
       }
+      if (body.hooks !== undefined) {
+        const hooks = botHooksSchema.nullable().safeParse(body.hooks);
+        if (!hooks.success) return json(res, 400, { error: hooks.error.issues[0]?.message ?? "invalid hooks" });
+        patch.hooks = hooks.data ?? undefined;
+      }
       if (body.memoryNotes !== undefined) {
         if (typeof body.memoryNotes !== "boolean") return json(res, 400, { error: "memoryNotes must be true or false" });
         patch.memoryNotes = body.memoryNotes;
@@ -386,6 +397,13 @@ export function createBotRoutes(deps: BotRouteDeps) {
         if (!checked.ok) return json(res, 400, { error: checked.error });
         cwdBefore = existingBot?.cwd ?? undefined;
         patch.cwd = checked.cwd ?? undefined;
+      }
+      const pictures = (patch.hooks as BotRecord["hooks"])?.pictures;
+      if (existingBot && pictures) {
+        const cwd = body.cwd !== undefined ? patch.cwd as string | undefined : existingBot.cwd;
+        const roots = [cwd, workspaceDir(existingBot.id)].filter((root): root is string => Boolean(root));
+        const error = pictureStampsError(pictures.stamps, roots);
+        if (error) return json(res, 400, { error });
       }
       if (body.hidden === true && existingBot?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });

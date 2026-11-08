@@ -28,22 +28,27 @@ async function mount(locale: LocaleId, view?: UsageWaitView, onRetry?: () => voi
   return { host, render, reset, close: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 
+const actions = (host: HTMLElement) => host.querySelectorAll<HTMLButtonElement>("button:not([data-all-usage])");
+
 it.each(["en", "ko"] as const)("renders every usage wait line in %s without duplicate rows", async (locale) => {
   const view = await mount(locale, base);
   const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(resumesAt);
   try {
     expect(view.host.textContent).toContain(translate(locale, "chat.usageWaitAt", { time }));
-    expect(view.host.querySelectorAll("button")).toHaveLength(1);
+    expect(actions(view.host)).toHaveLength(1);
+    expect(actions(view.host)[0].textContent).toBe(translate(locale, "chat.cancelQueuedAction"));
     await view.render({ ...base, resumesAt: null });
     expect(view.host.textContent).toContain(translate(locale, "chat.usageWaitUnknown"));
     expect(view.host.textContent).not.toContain(translate(locale, "chat.usageWaitAt", { time }));
     const weeklyTime = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", weekday: "short" }).format(resumesAt);
     await view.render({ ...base, weekly: true });
     expect(view.host.textContent).toContain(translate(locale, "chat.usageWaitWeekly", { time: weeklyTime }));
-    expect(view.host.querySelectorAll("button")).toHaveLength(1);
+    expect(actions(view.host)).toHaveLength(1);
     await view.render({ ...base, state: "manual" });
     expect(view.host.textContent).toContain(translate(locale, "chat.usageWaitManual"));
-    expect(view.host.querySelectorAll("button")).toHaveLength(0);
+    expect(actions(view.host)).toHaveLength(0);
+    expect(view.host.querySelector("[data-engine-details]")).toBeNull();
+    expect(view.host.querySelector("[data-engine-details-body]")?.textContent).toBe("Provider detail");
     expect(view.host.textContent?.match(/Provider detail/g)).toHaveLength(1);
   } finally { await view.close(); }
 });
@@ -56,7 +61,7 @@ it.each(["en", "ko"] as const)("M1: only a live manual wait asks for Continue in
       await view.render({ ...base, state });
       expect(view.host.textContent).not.toContain(translate(locale, "chat.usageWaitManual"));
       expect(view.host.textContent).not.toContain("Resumes at");
-      expect(view.host.querySelector("button")).toBeNull();
+      expect(actions(view.host)).toHaveLength(0);
     }
   } finally { await view.close(); }
 });
@@ -78,11 +83,13 @@ it("Cancel calls the scoped route and a foreign owner's projection stays read-on
   vi.stubGlobal("fetch", fetch);
   const view = await mount("en", base);
   try {
-    await act(async () => view.host.querySelector<HTMLButtonElement>("button")!.click());
+    expect(actions(view.host)).toHaveLength(1);
+    await act(async () => actions(view.host)[0].click());
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith("/api/bots/bot/usage-wait/wait/cancel", expect.objectContaining({ method: "POST" }));
     await view.render({ ...base, cancelable: false });
     expect(view.host.textContent).toContain("Resumes at");
-    expect(view.host.querySelector("button")).toBeNull();
+    expect(view.host.textContent).not.toContain(translate("en", "chat.cancelQueuedAction"));
+    expect(actions(view.host)).toHaveLength(0);
   } finally { await view.close(); }
 });

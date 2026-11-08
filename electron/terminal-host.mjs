@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
+import { maskMailboxGrants, postPaneNote, terminalPaneEnv } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { managedWorkerCommand, unroutedWorkerCommand } from "./terminal-worker.mjs";
@@ -24,6 +24,8 @@ export const TERMINAL_TURN_END_MS = 90_000;
 const REPORT_WRAP_MS = 60_000;
 // A worker idle on its own background jobs keeps its turn-end note this long at most.
 const JOBS_HOLD_MS = 30 * 60_000;
+// Claude ends a background shell by 2 h and wakes its worker on each monitor line or timeout, so either wait holds STALLED that long plus slack.
+const WAIT_HOLD_MS = 125 * 60_000;
 // Long enough for an agent woken by its finished job to show busy and drop the note.
 const JOBS_QUIET_MS = 30_000;
 const JOBS_FOOTER_LINES = 4;
@@ -55,7 +57,7 @@ const AGENTS_RUNNING_RE = /^✻ Waiting for \d+ background agents?\b.*\n+─+$(?
 // Wrapping, borders, spinner glyphs and clocks change on a redraw without the worker moving; a busy agent's ticking timer still counts.
 const STALL_CHURN_RE = /[\u2500-\u257f\u2800-\u28ff✻✢✳✶✽·*●]|\b\d+[hms]\b|\d{1,2}:\d{2}(?::\d{2})?|\b\d+(?:\.\d+)?%(?=\s+context left\b)/gu;
 const stallSignature = (screenText) => AGENT_BUSY_RE.test(screenText) ? screenText : screenText.replace(STALL_CHURN_RE, "").replace(/\s+/g, "");
-const agentJobsRunning = (screenText, shellsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!shellsOnly || /\b[1-9]\d* shells?\b/u.test(line)));
+const agentJobsRunning = (screenText, waitsOnly = false) => AGENTS_RUNNING_RE.test(screenText) || screenText.split("\n").filter((line) => line.trim()).slice(-JOBS_FOOTER_LINES).some((line) => AGENT_JOBS_RE.test(line) && (!waitsOnly || /\b[1-9]\d* (?:shells?|monitors?)\b/u.test(line)));
 const INPUT_ECHO_LIMIT = 4_096;
 const BOT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 export const BOT_PANE_LIMIT = 16;
@@ -208,7 +210,7 @@ function usageLimit(screenText, engine, cols = 80) {
 
 // A turn that dies on a usage limit or a menu runs no engine hook, so the screen is the only signal.
 function stallNoteText(screenText, stallMs, cwd, engine, cols) {
-  const lines = screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES);
+  const lines = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES);
   const limit = usageLimit(screenText, engine, cols);
   if (limit) return `LIMIT: ${limit.engine} hit its usage limit (resets ${limit.reset}). Its work so far stays in ${cwd}. ${limit.resumes ? `It resumes by itself at ${limit.resumes}.` : 'Send "continue" after the reset, or move the job to another engine.'}`;
   const tail = lines.join("\n");
@@ -267,8 +269,19 @@ function claudeOnboardingScreen(screenText) {
   return null;
 }
 
-function claudeTrustKeys(screenText) {
+function folderTrustKeys(screenText, engine) {
   const lines = screenText.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (engine === "agy") {
+    const footer = lines.findLastIndex((line) => line === "↑/↓ Navigate · enter Confirm");
+    if (footer < 5 || !lines.slice(footer + 1).every((line) => line.startsWith("◆ ") || line.startsWith("▰"))) return null;
+    const title = lines.lastIndexOf("Accessing workspace:", footer - 5);
+    const [question, permission, yes, no] = lines.slice(footer - 4, footer);
+    if (title < 0 || question !== "Do you trust the contents of this project?"
+      || permission !== "Antigravity CLI requires permission to read, edit, and execute files here."
+      || yes !== "> Yes, I trust this folder" || no !== "No, exit") return null;
+    return "\r";
+  }
+  if (engine !== "claude") return null;
   const text = lines.join(" ");
   if (!lines.includes("Accessing workspace:")
     || !text.includes("Quick safety check: Is this a project you created or one you trust?")
@@ -335,12 +348,12 @@ function canSubmitSaveLine(screen, engine) {
 }
 
 function finishedNoteText(screenText) {
-  const tail = screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
+  const tail = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
   return `FINISHED: command ended without a report. terminal_read its pane, then act or tell the user. Last lines:\n${tail}`;
 }
 
 function exitNoteText(screenText, exitCode) {
-  const tail = screenText.split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
+  const tail = maskMailboxGrants(screenText).split("\n").map((line) => line.trimEnd()).filter(Boolean).slice(-STALL_TAIL_LINES).join("\n");
   const text = `EXITED: pane shell ended with code ${exitCode} (0x${(exitCode >>> 0).toString(16).toUpperCase()}) before a report. terminal_read the pane list, then respawn or tell the user.`;
   return tail ? `${text} Last lines:\n${tail}` : text;
 }
@@ -575,7 +588,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   };
   const snagPane = (session, event, detail, extra = {}) => {
     try {
-      const tail = session.screen.text().split("\n").slice(-SNAG_TAIL_LINES).join("\n").slice(-20_000);
+      const tail = maskMailboxGrants(session.screen.text()).split("\n").slice(-SNAG_TAIL_LINES).join("\n").slice(-20_000);
       snag({ event, key: session.id, bot: session.teacher, worker: session.engine ?? "", pane: session.id, label: session.label ?? "", detail: detail.slice(0, 300), tail, ...extra });
     } catch {}
   };
@@ -706,7 +719,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (session.stallDirty) {
         session.stallDirty = false;
         const signature = limitKey ?? stallSignature(text);
-        if (signature !== session.stallText) {
+        if (signature !== session.stallText && !session.idleCompacting) {
           session.stallText = signature;
           session.stallChangedAt = at;
           session.stallScreenAt = at;
@@ -729,7 +742,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         }
       }
       const capacity = session.engine === "codex" && codexCapacity(session.screen.snapshot({ maxScrollbackChars: 0 }));
-      const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !limit && (!session.agentSeen || session.engine === "claude" && agentJobsRunning(text, true)) ? JOBS_HOLD_MS : stallMs;
+      const held = !limit && (!session.agentSeen || session.engine === "claude" && agentJobsRunning(text, true));
+      const threshold = capacity ? CODEX_CAPACITY_WAIT_MS : !held ? stallMs : session.agentSeen && !AGENTS_RUNNING_RE.test(text) ? WAIT_HOLD_MS : JOBS_HOLD_MS;
       if (session.stallFired && (limit || capacity || AGENT_BUSY_RE.test(text) || session.stallPosts > STALL_REPEATS || at <= session.stallRepeatAt)) continue;
       if (at - session.stallChangedAt < threshold || at < session.stallRetryAt) continue;
       // Typed input can sit in the PTY before the screen echoes it
@@ -930,14 +944,15 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.screen.consume(data);
       } catch {}
       cancelClaudeStartup(session);
-      if (session.worker && session.exitCode === null && session.botPane && session.engine === "claude"
+      if (session.worker && session.exitCode === null && session.botPane
         && (session.claudeOnboarding?.active || (session.claudeTrust && !session.claudeTrustAnswered))) {
+        const engine = session.engine;
         const startup = session.claudeOnboarding;
         const frame = session.claudeStartupFrame = {};
         const screenText = session.screen.text();
         if (startup && (AGENT_BUSY_RE.test(screenText) || /^\s*❯(?:\s*$|[ \t]+(?![✔√][ \t])\S)/mu.test(screenText) || session.workerSession?.confirmed)) startup.active = false;
         const onboarding = startup?.active ? claudeOnboardingScreen(screenText) : null;
-        const trustKeys = session.claudeTrust && !session.claudeTrustAnswered ? claudeTrustKeys(screenText) : null;
+        const trustKeys = session.claudeTrust && !session.claudeTrustAnswered ? folderTrustKeys(screenText, engine) : null;
         if (onboarding || trustKeys) session.claudeStartupScreen = screenText;
         const keys = onboarding ? (startup.answered.has(onboarding) ? null : "\r") : trustKeys;
         if (keys && (onboarding || keys === "\r" || !session.claudeTrustMoved)) {
@@ -949,7 +964,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
             session.claudeTrustTimer = null;
             void Promise.resolve().then(() => {
               if (session.retired || session.pty !== pty || !session.worker || session.exitCode !== null || !session.botPane
-                || active.get(session.key) !== session.id || session.engine !== "claude" || session.claudeOnboarding !== startup
+                || active.get(session.key) !== session.id || session.engine !== engine || session.claudeOnboarding !== startup
                 || session.claudeStartupFrame !== frame
                 || session.workerSession?.run.launchGeneration !== launchGeneration || session.userInputAt !== userInputAt
                 || session.commandInput !== commandInput || session.screen.text() !== screenText) return;
@@ -957,7 +972,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
                 if (!startup.active || startup.answered.has(onboarding) || claudeOnboardingScreen(screenText) !== onboarding) return;
                 startup.answered.add(onboarding);
               } else {
-                if (!session.claudeTrust || session.claudeTrustAnswered || claudeTrustKeys(screenText) !== keys) return;
+                if (!session.claudeTrust || session.claudeTrustAnswered || folderTrustKeys(screenText, engine) !== keys) return;
                 if (keys === "\r") session.claudeTrustAnswered = true;
                 else session.claudeTrustMoved = true;
               }
@@ -981,9 +996,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         const busy = AGENT_BUSY_RE.test(session.screen.text());
         if (busy) {
           // Past the trust menu, so stop scanning every chunk for it.
-          session.claudeTrustAnswered = true;
+          if (session.engine !== "agy" || !/^[ \t]*[\u2800-\u28ff]\s+Signing in\.\.\.[ \t]*$/mu.test(session.screen.text())) session.claudeTrustAnswered = true;
           session.autoNote = null;
-          const resumed = session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt
+          // Claude compacts an idle pane on its own before its prompt cache expires; that is not the worker moving.
+          if (session.engine !== "claude" || !CLAUDE_COMPACTING_RE.test(session.screen.text())) session.idleCompacting = false;
+          else if (!session.agentBusy) session.idleCompacting = true;
+          const resumed = !session.idleCompacting && session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt
             && (!session.agentBusy || now() - session.reportAt >= REPORT_WRAP_MS);
           if (!session.agentBusy || resumed) {
             session.autoDelivered = false;
@@ -1085,7 +1103,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
       stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
-      commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, agentSeen: false, contextNote: null, contextCompactPending: false,
+      commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
       claudeTrust: false, claudeTrustMoved: false, claudeTrustAnswered: false, claudeTrustTimer: null,
     };
     session.outputParser = createTerminalOutputParser((osc) => {
@@ -1174,11 +1192,12 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.activityCooldownUntil = 0;
       session.stallArmedAt = now();
       session.stallChangedAt = session.stallArmedAt;
+      session.idleCompacting = false;
       const launched = session.botPane ? WORKER_CLI_RE.exec(text) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
         const args = worker ? worker.args : text.slice(launched.index + launched[0].length).match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-        session.claudeTrust = session.engine === "claude" && args.includes("--dangerously-skip-permissions");
+        session.claudeTrust = (session.engine === "claude" || session.engine === "agy") && args.includes("--dangerously-skip-permissions");
         session.claudeOnboarding = { active: session.engine === "claude", answered: new Set() };
         session.claudeStartupScreen = null;
         session.claudeTrustMoved = false;
@@ -1347,6 +1366,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (session.botPane && !session.runningCommand) session.commandUserInput = true;
         clearActivityTimer(session);
         session.userInputAt = now();
+        session.idleCompacting = false;
       }
       if (submit) session.activityArmed = true;
       if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);
@@ -1512,7 +1532,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       }
       return { count, unknown, generations };
     },
-    sendBot(botId, input) {
+    sendBot(botId, input, { person = false } = {}) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Confirmed send payloads cross the local IPC boundary.
@@ -1531,7 +1551,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (!session || session.generation !== input.generation) throw new Error("Terminal session is stale; take a fresh snapshot");
       if (session.exitCode !== null) throw new Error("Terminal has exited");
       if (input.text.includes("\x03")) throw new Error("Ctrl+C is not allowed in a confirmed terminal send");
-      if (workerAccountsEnabled && workerLaunch && !session.worker && (!session.workerAccount || session.workerFinished)) {
+      // Only a bot's own send is held to terminal_spawn; a person types here as at the host.
+      if (!person && workerAccountsEnabled && workerLaunch && !session.worker && (!session.workerAccount || session.workerFinished)) {
         return Promise.resolve(workerLaunch({ botId, command: `${session.commandInput}${input.text}`.replace(/\x1b\[(?:200|201)~/g, ""), environment: terminalEnvironment(env), mode: "send" }))
           .then(() => botWrite(session, input.text)).then(() => snapshot(session));
       }

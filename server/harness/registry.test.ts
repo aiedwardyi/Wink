@@ -14,6 +14,7 @@ import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import { MuseAgentDriver } from "../drivers/acp/muse.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { setWslGateForTests } from "../wsl-gate.ts";
+import { createWarmPool, type Lease } from "../drivers/warm-pool.ts";
 
 /** A fake driver whose snapshot() and refreshModels() stand in for CLI launches. */
 function countingDriver() {
@@ -48,9 +49,131 @@ function countingDriver() {
 const versions = (rows: { instanceId: string; snapshot: { version?: string | null } }[]) =>
   Object.fromEntries(rows.map((row) => [row.instanceId, row.snapshot.version]));
 
+const testPool = () => createWarmPool({ totalmem: () => 32 * 1024 ** 3, freemem: () => 16 * 1024 ** 3, cpus: () => 16 });
+const warmKey = (threadId: string) => ({ engine: "museAgent", instanceId: "a", threadId });
+const warmCaptured = { generation: 0, incarnation: "muse-1", identity: "auth-hash" };
+const warmChild = () => ({ session: { kind: "fresh" as const }, alive: () => true, close: vi.fn(async () => {}) });
+const canReserve = (pool: ReturnType<typeof testPool>, threadId: string) => pool.reserve(warmKey(threadId), "fp", warmCaptured, "speculative") !== "denied";
+
+/** A Muse-kind fake with a CLI, login and logout, wired to its own warm pool. */
+async function warmRegistry(install: Record<string, unknown> = {}) {
+  const fake = makeFakeDriver({ kind: "museAgent" });
+  const pool = testPool();
+  const registry = new ProviderRegistry([{
+    ...fake.driver, defaultConfig: () => ({ cli: "fake" }),
+    install: { login: { args: ["login"] }, logout: ["logout"], ...install },
+  }], { warmPool: pool });
+  await registry.load({ a: { driver: "museAgent" } });
+  await registry.describe();
+  return { fake, pool, registry };
+}
+
+function createLeaseRegistry() {
+  const fake = makeFakeDriver({ kind: "museAgent" });
+  const pool = testPool();
+  const leases: Lease[] = [];
+  const create = fake.driver.create.bind(fake.driver);
+  fake.driver.create = async (input) => {
+    const instance = await create(input);
+    const incarnation = input.incarnation ?? "own";
+    const lease = pool.reserve({ engine: "museAgent", instanceId: input.instanceId, threadId: `t-${leases.length}` }, "fp", { generation: 0, incarnation, identity: "auth-hash" }, "speculative");
+    if (typeof lease === "string") throw new Error(lease);
+    leases.push(lease);
+    return instance;
+  };
+  return { registry: new ProviderRegistry([fake.driver], { warmPool: pool }), pool, leases };
+}
+
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
 describe("ProviderRegistry", () => {
+  it("a driver gets the registry incarnation at create", async () => {
+    const fake = makeFakeDriver();
+    const create = vi.spyOn(fake.driver, "create");
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      await registry.load({ a: { driver: "fake" } });
+      const created = create.mock.calls[0][0];
+      expect(created.incarnation).toBe(registry.incarnation("a"));
+    } finally { await registry.disposeAll(); }
+  });
+
+  it("a reload invalidates leases a driver reserved with its create incarnation", async () => {
+    const { registry, pool, leases } = createLeaseRegistry();
+    try {
+      await registry.load({ a: { driver: "museAgent" } });
+      const old = leases[0];
+      expect(old.signal.aborted).toBe(false);
+      await registry.load({ a: { driver: "museAgent" } });
+      expect(leases).toHaveLength(2);
+      expect(old.signal.aborted).toBe(true);
+      expect(leases[1].captured.incarnation).toBe(registry.incarnation("a"));
+      expect(leases[1].signal.aborted).toBe(false);
+      expect(pool.stats().pending).toBe(1);
+    } finally {
+      await registry.disposeAll();
+      await pool.closeAll("test", { final: true });
+    }
+  });
+
+  it("parallel creates get distinct incarnations matching their own input", async () => {
+    const fake = makeFakeDriver();
+    const originalCreate = fake.driver.create.bind(fake.driver);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const order: string[] = [];
+    const create = vi.spyOn(fake.driver, "create").mockImplementation(async (input) => {
+      if (input.instanceId === "a") await gate;
+      order.push(input.instanceId);
+      return originalCreate(input);
+    });
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      const loading = registry.load({ a: { driver: "fake" }, b: { driver: "fake" } });
+      expect(create).toHaveBeenCalledTimes(2);
+      release();
+      await loading;
+      expect(order).toEqual(["b", "a"]);
+      const inputs = create.mock.calls.map(([input]) => input);
+      expect(new Set(inputs.map((input) => input.incarnation)).size).toBe(2);
+      for (const input of inputs) {
+        expect(input.incarnation).toBeTruthy();
+        expect(input.incarnation).toBe(registry.incarnation(input.instanceId));
+      }
+    } finally {
+      release();
+      await registry.disposeAll();
+    }
+  });
+
+  it("a failed create gets no incarnation", async () => {
+    const fake = makeFakeDriver();
+    const registry = new ProviderRegistry([fake.driver]);
+    try {
+      await registry.load({ a: { driver: "fake" } });
+      expect(registry.incarnation("a")).toBeTruthy();
+      vi.spyOn(fake.driver, "create").mockRejectedValueOnce(new Error("create failed"));
+      await registry.load({ a: { driver: "fake" } });
+      expect(registry.get("a")).toBeNull();
+      expect(registry.incarnation("a")).toBeUndefined();
+    } finally { await registry.disposeAll(); }
+  });
+
+  it("removing an instance invalidates its create incarnation's leases", async () => {
+    const { registry, pool, leases } = createLeaseRegistry();
+    try {
+      await registry.load({ a: { driver: "museAgent" } });
+      expect(leases[0].signal.aborted).toBe(false);
+      const removed = registry.remove("a");
+      expect(leases[0].signal.aborted).toBe(true);
+      expect(registry.incarnation("a")).toBeUndefined();
+      await removed?.dispose();
+    } finally {
+      await registry.disposeAll();
+      await pool.closeAll("test", { final: true });
+    }
+  });
+
   it.each(["antigravityAgent", "claudeAgent", "codex", "museAgent"])("marks completed available auth probes for %s", async (kind) => {
     const fake = makeFakeDriver({ kind });
     const registry = new ProviderRegistry([fake.driver]);
@@ -252,6 +375,73 @@ describe("ProviderRegistry", () => {
     }
   });
 
+  it.each(["grokAgent", "museAgent", "claudeAgent", "codex"].flatMap((kind) => [false, true].map((lateSnapshot) => [kind, lateSnapshot] as const)))("keeps %s signed out when an older refresh finishes late (snapshot: %s)", async (kind, lateSnapshot) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let authenticated = true;
+    try {
+      await registry.load({ engine: { driver: kind }, slow: { driver: kind } });
+      const live = registry.get("engine")!;
+      live.snapshot = async () => ({ state: "available", authenticated });
+      await registry.describe();
+      const snapshot = vi.fn(async () => ({ state: "available" as const, authenticated }));
+      snapshot.mockImplementationOnce(async () => {
+        const captured = authenticated;
+        if (lateSnapshot) await gate;
+        return { state: "available", authenticated: captured };
+      });
+      live.snapshot = snapshot;
+      const slow = vi.fn(async () => { await gate; return { state: "available" as const }; });
+      registry.get("slow")!.snapshot = slow;
+      const refresh = registry.describe({ refresh: true });
+      await vi.waitFor(() => { expect(snapshot).toHaveBeenCalledTimes(1); expect(slow).toHaveBeenCalledTimes(1); });
+      vi.spyOn(registry.logins, "start").mockImplementation(async () => { authenticated = false; return {}; });
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      expect(await registry.signOut("engine")).toBe(true);
+      release();
+      expect((await refresh).find((row) => row.instanceId === "engine")!.snapshot.authenticated).toBe(false);
+      expect(registry.describeSaved().find((row) => row.instanceId === "engine")!.snapshot.authenticated).toBe(false);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it.each(["grokAgent", "museAgent", "claudeAgent", "codex"])("keeps %s signed out when the first probe finishes late", async (kind) => {
+    const fake = makeFakeDriver({ kind });
+    const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let authenticated = true;
+    try {
+      await registry.load({ engine: { driver: kind } });
+      const snapshot = vi.fn(async () => ({ state: "available" as const, authenticated }));
+      snapshot.mockImplementationOnce(async () => {
+        const captured = authenticated;
+        await gate;
+        return { state: "available", authenticated: captured };
+      });
+      registry.get("engine")!.snapshot = snapshot;
+      const first = registry.describe();
+      await vi.waitFor(() => { expect(snapshot).toHaveBeenCalledTimes(1); });
+      expect(registry.describeSaved()).toEqual([]);
+      vi.spyOn(registry.logins, "start").mockImplementation(async () => { authenticated = false; return {}; });
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      expect(await registry.signOut("engine")).toBe(true);
+      release();
+      expect((await first)[0].snapshot.authenticated).toBe(false);
+      expect(registry.describeSaved()[0].snapshot.authenticated).toBe(false);
+      expect((await registry.describeCached())[0].snapshot.authenticated).toBe(false);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
   it("finishes sign-out after the instance is removed", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([{ ...fake.driver, defaultConfig: () => ({ cli: "fake" }), install: { logout: ["logout"] } }]);
@@ -299,7 +489,10 @@ describe("ProviderRegistry", () => {
         if (process.env.MUSE_LOGIN !== '0') process.exit(1);
         fs.writeFileSync(marker, 'yes');
         process.stderr.write('https://auth.example/device\\nCode: ABCD-EFGH\\n');
-      } else if (mode === 'logout') fs.unlinkSync(marker);
+      } else if (mode === 'logout') {
+        process.stdout.write('https://auth.example/device\\nCode: ABCD-EFGH\\n');
+        setTimeout(() => fs.unlinkSync(marker), 100);
+      }
       else process.exit(1);
     `);
     const fake = makeFakeDriver();
@@ -935,5 +1128,146 @@ describe("ProviderRegistry", () => {
     expect(fake.disposed.sort()).toEqual(["a", "b"]);
     expect(registry.entries()).toHaveLength(0);
     expect(registry.get("a")).toBeNull();
+  });
+
+  it("sign-out blocks adoption before its confirmation", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      const lease = pool.reserve(warmKey("t1"), "fp", warmCaptured, "speculative");
+      if (typeof lease === "string") throw new Error(lease);
+      lease.attach(warmChild());
+      lease.ready();
+      let confirm: (() => void) | undefined;
+      vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      vi.spyOn(registry.logins, "wait").mockImplementation(() => new Promise<void>((resolve) => { confirm = resolve; }));
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: false });
+      const signedOut = registry.signOut("a");
+      expect(pool.take(warmKey("t1"), "fp", warmCaptured, undefined)).toBe("miss");
+      expect(lease.signal.aborted).toBe(true);
+      expect(canReserve(pool, "t2")).toBe(false);
+      await vi.waitFor(() => expect(confirm).toBeDefined());
+      expect(canReserve(pool, "t2")).toBe(false);
+      confirm!();
+      expect(await signedOut).toBe(true);
+      expect(canReserve(pool, "t2")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("a failed logout keeps the barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
+      expect(await registry.signOut("a")).toBe(false);
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describeCached();
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("startSignIn and refreshLogins raise the barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      const barrier = vi.spyOn(pool, "barrier");
+      const start = vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      await registry.startSignIn("a");
+      expect(barrier).toHaveBeenCalledWith({ instanceId: "a" }, "sign-in");
+      expect(barrier.mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+      expect(canReserve(pool, "t1")).toBe(false);
+
+      barrier.mockClear();
+      registry.logins.waitExternal("a");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
+      await registry.refreshLogins();
+      expect(barrier.mock.calls).toEqual([
+        [{ instanceId: "a" }, "refresh"],
+        [{ instanceId: "a" }, "sign-in complete"],
+      ]);
+      expect(registry.logins.state("a")).toBe("complete");
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("install raises the barrier before the command is handed out", async () => {
+    const { pool, registry } = await warmRegistry({ command: { [process.platform]: "npm i -g fake" } });
+    try {
+      const barrier = vi.spyOn(pool, "barrier");
+      expect(registry.install("a")?.command).toBe("npm i -g fake");
+      expect(barrier).toHaveBeenCalledWith({ instanceId: "a" }, "install");
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+      registry.invalidateAccount("a");
+      expect(barrier).toHaveBeenLastCalledWith({ instanceId: "a" }, "account");
+      expect(canReserve(pool, "t2")).toBe(false);
+    } finally {
+      await registry.disposeAll();
+    }
+  });
+
+  it("closes the pool after disposeAll", async () => {
+    const { fake, pool, registry } = await warmRegistry();
+    const disposedAtClose: string[][] = [];
+    const closeAll = vi.spyOn(pool, "closeAll").mockImplementation(async () => { disposedAtClose.push([...fake.disposed]); });
+    await registry.disposeAll();
+    expect(closeAll).toHaveBeenCalledWith("exit", { final: true });
+    expect(disposedAtClose).toEqual([["a"]]);
+  });
+
+  it("a completed login refresh keeps a newer account barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      let probed: (() => void) | undefined;
+      registry.logins.waitExternal("a");
+      registry.get("a")!.snapshot = () => new Promise((resolve) => { probed = () => resolve({ state: "available", authenticated: true }); });
+      const refreshed = registry.refreshLogins();
+      await vi.waitFor(() => expect(probed).toBeDefined());
+      registry.invalidateAccount("a");
+      probed!();
+      await refreshed;
+      expect(registry.logins.state("a")).toBe("complete");
+      expect(canReserve(pool, "t1")).toBe(false);
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: true });
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
+  });
+
+  it("a confirmed sign-out keeps a newer account barrier", async () => {
+    const { pool, registry } = await warmRegistry();
+    try {
+      let confirm: (() => void) | undefined;
+      vi.spyOn(registry.logins, "start").mockResolvedValue({});
+      vi.spyOn(registry.logins, "wait").mockImplementation(() => new Promise<void>((resolve) => { confirm = resolve; }));
+      vi.spyOn(registry.logins, "state").mockReturnValue("complete");
+      registry.get("a")!.snapshot = async () => ({ state: "available", authenticated: false });
+      const signedOut = registry.signOut("a");
+      await vi.waitFor(() => expect(confirm).toBeDefined());
+      registry.invalidateAccount("a");
+      confirm!();
+      expect(await signedOut).toBe(true);
+      expect(canReserve(pool, "t1")).toBe(false);
+      await registry.describe();
+      expect(canReserve(pool, "t1")).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await registry.disposeAll();
+    }
   });
 });

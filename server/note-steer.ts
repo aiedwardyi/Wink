@@ -18,6 +18,8 @@ export function steerUntilTaken(adapter: Pick<ProviderAdapter, "capabilities" | 
 export interface NoteSteerDeps {
   enabled(botId: string): boolean;
   paused(botId: string): boolean;
+  /** A teammate's turn on the thread holds notes for the wake after it. */
+  holds?(threadId: string): boolean;
   /** The teacher's turn on this thread, once its dispatch has moved the watermark. */
   liveTurn(botId: string, threadId: string): string | undefined;
   busy(botId: string, threadId: string): boolean;
@@ -52,7 +54,7 @@ export class NoteSteerer {
 
   private async deliver(botId: string, threadId: string, paneId?: string): Promise<void> {
     // Sharing off or wakes paused: paneWake holds the note for the user's next turn.
-    if (!this.deps.enabled(botId) || this.deps.paused(botId)) return this.wake(botId, threadId, paneId);
+    if (!this.deps.enabled(botId) || this.deps.paused(botId) || this.deps.holds?.(threadId)) return this.wake(botId, threadId, paneId);
     const turnId = this.deps.liveTurn(botId, threadId);
     if (!turnId) return this.wake(botId, threadId, paneId);
     const deliveredId = this.deps.deliveredId(botId, threadId);

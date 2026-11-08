@@ -37,8 +37,8 @@ export type TranscriptItem =
   | { kind: "memory"; id: string; messages: Message[] };
 
 /** Default-off hides named tool pills, success or fail: the bot usually
- * retries past a miss. Bot⇄bot chips, `error:` turn failures, and
- * memory.save stay. */
+ * retries past a miss. Bot⇄bot chips, `error:` turn failures, bots-paused
+ * notices and memory.save stay. */
 export function activityVisibleInChat(message: Message, showToolCalls: boolean): boolean {
   const tool = message.tool;
   return Boolean(
@@ -47,7 +47,8 @@ export function activityVisibleInChat(message: Message, showToolCalls: boolean):
       (showToolCalls ||
         message.comm ||
         tool.name.startsWith("error:") ||
-        tool.name === "memory.save"),
+        tool.name === "memory.save" ||
+        isCommsNotice(tool.name)),
   );
 }
 
@@ -86,7 +87,7 @@ interface ServerLine {
   re: RegExp;
   pick: (m: RegExpExecArray) => [MessageKey, Record<string, string | number>];
   /** fixed English the server must keep writing, in `file`; the drift guard scans for it */
-  file: "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
+  file: "comms-notice.ts" | "comms-visibility.ts" | "delegations.ts" | "peer-reply-publication.ts" | "index.ts" | "drivers/antigravity.ts" | "drivers/retry.ts";
   needles: string[];
 }
 
@@ -143,12 +144,14 @@ export const SERVER_LINES: ServerLine[] = [
   { re: /^the user denied this handoff$/, pick: () => ["chat.delegation.deniedHandoff", {}], file: "delegations.ts", needles: ["the user denied this handoff"] },
   { re: /^Delivered to @(.+)$/, pick: (m) => ["chat.delegation.delivered", { name: m[1] }], file: "delegations.ts", needles: ["Delivered to @"] },
   { re: /^@(.+) replied$/, pick: (m) => ["chat.delegation.replied", { name: m[1] }], file: "delegations.ts", needles: ["@${target.name} replied"] },
+  // Stored rows only: peer answers now stay with the requesting bot.
   {
     re: /^(.+?) answered (.+) in its own chat instead$/,
     pick: (m) => ["chat.delegation.answeredElsewhere", { name: m[1], who: m[2] }],
     file: "delegations.ts",
-    needles: [" answered ", " in its own chat instead"],
+    needles: [],
   },
+  { re: /^No reply from @(.+)$/, pick: (m) => ["chat.delegation.finishedWithoutReply", { name: m[1] }], file: "delegations.ts", needles: ["No reply from @"] },
   { re: /^Delegated turn did not finish$/, pick: () => ["chat.delegation.turnDidNotFinish", {}], file: "delegations.ts", needles: ["Delegated turn did not finish"] },
   { re: /^Delegated turn completed$/, pick: () => ["chat.delegation.turnCompleted", {}], file: "peer-reply-publication.ts", needles: ["Delegated turn completed"] },
   { re: /^interrupted by a restart$/, pick: () => ["chat.delegation.interrupted", {}], file: "delegations.ts", needles: ["interrupted by a restart"] },
@@ -183,7 +186,24 @@ export const SERVER_LINES: ServerLine[] = [
     file: "index.ts",
     needles: ["Delegated turn could not start \u2014 "],
   },
+  {
+    re: /^Bot messaging limit reached\. Send a message to reset it\.$/,
+    pick: () => ["chat.comms.paused", {}],
+    file: "comms-notice.ts",
+    needles: ["Bot messaging limit reached. Send a message to reset it."],
+  },
+  {
+    re: /^Bot messaging paused\. Send a message to reset it\.$/,
+    pick: () => ["chat.comms.unavailable", {}],
+    file: "comms-notice.ts",
+    needles: ["Bot messaging paused. Send a message to reset it."],
+  },
 ];
+
+/** The bots-paused lines: finished server notices, never a running step. */
+export function isCommsNotice(name: string): boolean {
+  return SERVER_LINES.some((line) => line.file === "comms-notice.ts" && line.re.test(name));
+}
 
 /** Translate stored notices; raw failures belong in Details. */
 export function localizeServerLine(name: string, t: Translate): string {
@@ -311,7 +331,7 @@ function foldable(message: Message): boolean {
   const tool = message.tool;
   if (message.kind !== "activity" || !tool) return false;
   if (message.comm) return false;
-  if (tool.name.startsWith("error:") || tool.name === "memory.save") return false;
+  if (tool.name.startsWith("error:") || tool.name === "memory.save" || isCommsNotice(tool.name)) return false;
   return true;
 }
 

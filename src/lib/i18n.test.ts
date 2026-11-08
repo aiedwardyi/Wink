@@ -50,7 +50,7 @@ const searchResults = readFileSync(join(here, "../components/SearchResults.tsx")
 const manageMembers = readFileSync(join(here, "../components/ManageMembersPanel.tsx"), "utf8");
 const pluginsPanel = readFileSync(join(here, "../components/PluginsPanel.tsx"), "utf8");
 const usageSection = readFileSync(join(here, "../components/UsageSection.tsx"), "utf8");
-const planUsageBar = readFileSync(join(here, "../components/PlanUsageBar.tsx"), "utf8");
+const usageDesk = readFileSync(join(here, "../components/UsageDesk.tsx"), "utf8");
 const usageLib = readFileSync(join(here, "usage.ts"), "utf8");
 const chatPlanMeters = readFileSync(join(here, "../components/ChatPlanMeters.tsx"), "utf8");
 const composer = readFileSync(join(here, "../components/Composer.tsx"), "utf8");
@@ -93,13 +93,17 @@ describe("catalogs", () => {
   it("names Agentic Mode in both locales and title cases settings labels", () => {
     expect.soft(en["bot.keepGoing"]).toBe("Agentic Mode");
     expect.soft(ko["bot.keepGoing"]).toBe("에이전트 모드");
-    expect.soft(en["bot.keepGoingHelp"]).toBe("Keeps working on the task until it's done, without stopping to ask.");
-    expect.soft(ko["bot.keepGoingHelp"]).toBe("멈춰서 묻지 않고, 작업이 끝날 때까지 계속 진행해요.");
+    expect.soft(en["bot.keepGoingHelp"]).toBe("On: keeps going alone for nights, days, even weeks.\nOff: answers and waits.");
+    expect.soft(ko["bot.keepGoingHelp"]).toBe("켜면 밤낮으로 며칠, 몇 주도 혼자 계속해요.\n끄면 답하고 기다려요.");
     expect.soft(en["chat.keepGoingPaused"]).toBe("Agentic Mode paused: two tries made no progress");
     expect.soft(en["bot.keepGoingOnMark"]).toBe("Agentic Mode on");
     expect.soft(en["bot.keepGoingPausedMark"]).toBe("Agentic Mode paused");
     expect.soft(ko["bot.keepGoingOnMark"]).toBe("에이전트 모드 켜짐");
     expect.soft(ko["bot.keepGoingPausedMark"]).toBe("에이전트 모드 일시 중지됨");
+    expect.soft(en["bot.keepGoingOnMarkHint"]).toBe("Agentic Mode on. Turn it off in Bot Details.");
+    expect.soft(en["bot.keepGoingPausedMarkHint"]).toBe("Agentic Mode paused. Turn it off in Bot Details.");
+    expect.soft(ko["bot.keepGoingOnMarkHint"]).toBe("에이전트 모드 켜짐. 봇 세부 정보에서 끌 수 있어요.");
+    expect.soft(ko["bot.keepGoingPausedMarkHint"]).toBe("에이전트 모드 일시 중지됨. 봇 세부 정보에서 끌 수 있어요.");
     expect.soft(en["bot.leanStartup"]).toBe("Load Skills & Plugins");
     expect.soft(en["settings.replyStyle.title"]).toBe("Reply Style");
   });
@@ -107,6 +111,26 @@ describe("catalogs", () => {
   it("explains blocked notification recovery in both languages", () => {
     expect(en["settings.phoneNotifications.state.blocked"]).toMatch(/blocked.*browser settings/i);
     expect(ko["settings.phoneNotifications.state.blocked"]).toMatch(/차단.*브라우저 설정.*허용/);
+  });
+
+  it("says Switch on the account button in both languages", () => {
+    expect([en["usage.desk.use"], en["usage.desk.useAria"]]).toEqual(["Switch", "Switch to {name}"]);
+    expect([ko["usage.desk.use"], ko["usage.desk.useAria"]]).toEqual(["전환", "{name} 전환"]);
+  });
+
+  it("says Main as 기본 in Korean, as the account rows do", () => {
+    expect(ko["accounts.main"]).toBe("기본");
+    expect(Object.entries(ko).filter(([, phrase]) => phrase.includes("메인")).map(([key]) => key)).toEqual([]);
+    for (const key of ["usage.desk.mainFailed", "usage.desk.eventMain", "usage.desk.eventMainStays"] as const) {
+      expect(en[key], key).toMatch(/\bMain\b/);
+      expect(ko[key], key).toContain("기본");
+    }
+  });
+
+  it("drops the retired Alt+R refresh from the shortcuts help in both languages", () => {
+    expect(en["shortcuts.help"]).not.toContain("Alt+R");
+    expect(ko["shortcuts.help"]).not.toContain("Alt+R");
+    expect(en["shortcuts.help"]).toMatch(/shell/);
   });
 
   it("rejects fixed Korean particles after every catalog interpolation", () => {
@@ -526,7 +550,7 @@ describe("sidebar create group and bot/room chrome", () => {
     expect(groupWizard).not.toMatch(/>Create group ·/);
     expect(groupWizard).not.toMatch(/>Add bot</);
     expect(sidebar).toContain('t("chrome.duplicate")');
-    expect(sidebar).not.toContain('t("chrome.archive")');
+    expect(sidebar).toContain('t("chrome.archive")');
     expect(sidebar).toContain('t("chrome.delete")');
     expect(sidebar).toContain('t("chrome.cannotContactTeammates")');
     expect(sidebar).toContain('t("chrome.moveToContext")');
@@ -720,8 +744,6 @@ describe("first-run core path leftovers", () => {
     expect(en["engines.models"]).toBe("Models");
     expect(ko["engines.models"]).toBe("모델");
     expect(en["usage.limits.notReported"]).toBe("{name} does not report a usage limit.");
-    expect(en["usage.limits.pending"]).toBe("Appears after your next {name} message.");
-    expect(en["usage.limits.pending"]).not.toBe(en["usage.limits.notReported"]);
     expect(Object.hasOwn(en, "usage.limits.unavailable")).toBe(false);
     expect(en["connections.connected"]).toBe("Connected");
     expect(ko["connections.connected"]).toBe("연결됨");
@@ -845,19 +867,12 @@ describe("plan usage", () => {
       "usage.limits.resetsInOneMinute",
       "usage.limits.resetUnknown",
       "usage.limits.resetPassed",
-      "usage.limits.pending",
       "usage.limits.notReported",
     ] as const) {
       expect(ko[key]).not.toMatch(/Resets|window|report|used|Weekly/i);
     }
-    expect(ko["usage.limits.pending"]).toContain("{name}");
     expect(ko["usage.limits.notReported"]).toContain("{name}");
-    expect(ko["usage.limits.pending"]).not.toBe(ko["usage.limits.notReported"]);
-    expect(ko["usage.limits.pending"]).not.toMatch(/not available|at the moment/i);
     expect(ko["usage.limits.notReported"]).not.toMatch(/not available|at the moment/i);
-    expect(translate("en", "usage.limits.pending", { name: "Claude" })).toBe(
-      "Appears after your next Claude message.",
-    );
     expect(translate("en", "usage.limits.notReported", { name: "Grok" })).toBe(
       "Grok does not report a usage limit.",
     );
@@ -878,33 +893,25 @@ describe("plan usage", () => {
     expect(translate("ko", "usage.limits.refreshAgeHours", { hours: 2 })).toBe("2시간");
     expect(translate("en", "usage.limits.refreshAgeDays", { days: 2 })).toBe("2d");
     expect(translate("ko", "usage.limits.refreshAgeDays", { days: 2 })).toBe("2일");
-    expect(translate("en", "usage.limits.cachedAsOf", { age: "5m" })).toBe("Cached, as of 5m ago.");
-    expect(translate("ko", "usage.limits.cachedAsOf", { age: "5분" })).toBe("캐시된 값, 5분 전 기준입니다.");
   });
 
   it("wires those phrases into the Usage settings surface instead of hardcoded English", () => {
     expect(usageSection).not.toContain('t("usage.limits.title")');
-    expect(usageSection).toContain('t("usage.limits.empty")');
-    expect(planUsageBar).toContain('"usage.limits.session"');
-    expect(planUsageBar).toContain('"usage.limits.weekly"');
-    expect(planUsageBar).toContain('"usage.limits.window"');
-    expect(planUsageBar).toContain('"usage.limits.sessionShort"');
-    expect(planUsageBar).toContain('"usage.limits.weeklyShort"');
-    expect(planUsageBar).toContain('t("usage.limits.percentUsed", { percent })');
-    expect(usageSection).toContain('"usage.limits.pending"');
-    expect(usageSection).toContain('"usage.limits.notReported"');
+    expect(usageDesk).toContain('t("usage.desk.noReport")');
+    expect(usageDesk).toContain('t("usage.desk.left")');
+    expect(usageDesk).toContain('"usage.desk.resetsIn"');
     expect(usageLib).toContain('"usage.limits.refreshAgeMinutes"');
     expect(usageLib).toContain('"usage.limits.refreshAgeHours"');
-    expect(usageSection).toContain('"usage.limits.cachedAsOf"');
-    expect(usageSection).not.toContain('"usage.limits.unavailable"');
-    expect(planUsageBar).toContain("t(phrase.key, phrase.vars)");
-    expect(planUsageBar).toContain("t(compactReset.key, compactReset.vars)");
-    expect(usageSection).not.toMatch(/Resets in/);
-    expect(planUsageBar).not.toMatch(/Resets in/);
-    expect(usageSection).not.toMatch(/% used/);
-    expect(usageSection).not.toMatch(/does not report/);
-    expect(usageSection).not.toMatch(/not available at the moment/);
+    expect(usageDesk).not.toContain('"usage.limits.unavailable"');
+    for (const source of [usageSection, usageDesk, chatPlanMeters]) {
+      expect(source).not.toMatch(/Resets in/);
+      expect(source).not.toMatch(/% used/);
+      expect(source).not.toMatch(/does not report/);
+      expect(source).not.toMatch(/not available at the moment/);
+    }
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
+    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name: engineName(target.engine.engine) })');
+    expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");
     expect(chatView).toContain("shownEngine?.rateLimits?.windows");

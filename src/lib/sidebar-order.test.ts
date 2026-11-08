@@ -177,6 +177,15 @@ describe("listedSearchHits", () => {
 describe("preferredStartupSelectionId", () => {
   const EMPTY_ORDER = { sectionOrder: [], itemOrder: {} };
 
+  it("picks a pinned group before a regular group and bot", () => {
+    const groups = [{ id: "regular" }, { id: "pinned", pinned: true }];
+    expect(preferredStartupSelectionId([{ id: "bot" }], groups, EMPTY_ORDER)).toBe("pinned");
+  });
+
+  it("picks a chief bot before a pinned group", () => {
+    expect(preferredStartupSelectionId([{ id: "chief", chiefOfStaff: true }], [{ id: "group", pinned: true }], EMPTY_ORDER)).toBe("chief");
+  });
+
   it("merges saved built-in labels before choosing the first row", () => {
     const order = { sectionOrder: [UNASSIGNED_SECTION_ID], itemOrder: { [UNASSIGNED_SECTION_ID]: ["bot:career", "bot:a"] } };
     expect(preferredStartupSelectionId([{ id: "a" }, { id: "career", section: "Others" }], [], order)).toBe("career");

@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 
 import { api, useOptionalStoreDispatch, useStore, type InstanceInfo } from "@/state/store";
 import { EngineMark } from "./EngineMark";
-import { AccountConnections, CONNECTION_ACTION, ConnectionRow, SignInRow } from "./AccountConnections";
+import { AccountConnections, ConnectionRow, SignInRow } from "./AccountConnections";
+import { ROW_BUTTON } from "./SettingsPrimitives";
 import { groupAccounts } from "@/lib/accounts";
+import { cn } from "@/lib/cn";
 import { installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Fold } from "./Fold";
 
 export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boolean {
@@ -16,6 +19,7 @@ export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boo
 export function EngineRow({ instance, onConnected, onUpdated }: { instance: InstanceInfo; onConnected?: () => void; onUpdated?: (instance: InstanceInfo) => void }) {
   const { t } = useI18n();
   const dispatch = useOptionalStoreDispatch();
+  const phone = useIsPhone();
   const [current, setCurrent] = useState(instance);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -56,9 +60,9 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
               : installStatus === "copied" ? t("engine.commandCopied")
                 : installStatus === "failed" && !current.install?.docsUrl ? t("engines.installFailed") : t("engines.notInstalled")}</span>
             {installCommand && !(installStatus === "failed" && current.install?.docsUrl) ? <button type="button" onClick={() => void install()} disabled={busy}
-              className="text-ink hover:underline disabled:opacity-50">{t("engines.install")}</button>
+              className={cn(ROW_BUTTON, "text-ink")}>{t("engines.install")}</button>
               : current.install?.docsUrl && <a href={current.install.docsUrl} target="_blank" rel="noreferrer"
-              className="text-ink hover:underline">{t("engines.install")}</a>}
+              className={cn(ROW_BUTTON, "text-ink")}>{t("engines.install")}</a>}
             {(installStatus === "opened" || installStatus === "running") && (
               <p className="w-full text-right text-[11px] leading-[14px] text-ink-secondary/70">{t(installStatus !== "running" ? "engine.pasteAndEnter" : installSignsIn(current.install) ? "engine.followSignIn" : "engine.installRunning")}</p>
             )}
@@ -67,8 +71,11 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
             )}
           </div>} />
       ) : isEngineConnected(current) ? (
-        <ConnectionRow mark={mark} label={name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
-          className={CONNECTION_ACTION}>{t("engines.signOut")}</button> : <span>{t("connections.connected")}</span>}>
+        <ConnectionRow mark={mark} label={current.snapshot.account ? <div className={cn("flex min-w-0 flex-1 flex-col items-start", !phone && "py-1")}>
+          <div className={phone ? "flex h-9 min-w-0 items-center [@media(pointer:coarse)]:h-11" : "contents"}>{name}</div>
+          <span data-account-email="" className={cn("block min-w-0 max-w-full truncate text-[11px] text-ink-secondary", phone && "-mt-1.5")}>{current.snapshot.account}</span>
+        </div> : name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
+          className={ROW_BUTTON}>{t("engines.signOut")}</button> : <span>{t("connections.connected")}</span>}>
           {error && <span role="alert">{t("engines.didntFinish")}</span>}
         </ConnectionRow>
       ) : (
@@ -129,7 +136,7 @@ export function EnginesSettings() {
       })}
       {missing.length > 0 && <>
         <button type="button" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}
-          className="mt-3 self-start py-2 text-[12px] text-ink-secondary underline hover:text-ink">{t("engines.moreEngines")}</button>
+          className={cn(ROW_BUTTON, "mt-3 self-start")}>{t("engines.moreEngines")}</button>
         <Fold open={showAll}>
           <div className="mt-2 flex min-w-0 flex-col">
             {missing.map((instance) => <EngineRow key={instance.instanceId} instance={instance} />)}

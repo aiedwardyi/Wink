@@ -9,12 +9,14 @@ export function KeyboardShortcuts() {
   const mod = mac ? "Cmd" : "Ctrl";
   const alt = mac ? "Option" : "Alt";
   const terminal: Array<[MessageKey, ...string[][]]> = !window.ogb || window.ogb.terminal ? [["shortcuts.terminal", [mod, "`"]]] : [];
+  const workerPane: Array<[MessageKey, ...string[][]]> = terminal.length ? [["shortcuts.workerPane", [alt, "1–9"]]] : [];
   const groups: Array<{ title: MessageKey; rows: Array<[MessageKey, ...string[][]]> }> = [
     { title: "shortcuts.navigation", rows: [
+      ["shortcuts.jump", ["Ctrl", "1–9"]],
+      ...workerPane,
       ["shortcuts.themes", [alt, "T"]],
       ["shortcuts.themeCycle", [alt, "Shift", "T"]],
       ["shortcuts.usage", [alt, "U"]],
-      ["shortcuts.usageRefresh", [alt, "R"]],
       ["shortcuts.modelsIndex", [alt, "I"]],
       ["shortcuts.modelsIndexCycle", [alt, "Shift", "I"]],
     ] },
