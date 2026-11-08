@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { realpath, unlink } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { VerifyRunState } from "../electron/verify-protocol.mjs";
@@ -15,7 +16,7 @@ import { paneNotesForTurn, prepareModelContext } from "./context-compaction.ts";
 import { hasLocalUndeliveredPaneNote, isWakeNote } from "./pane-wake.ts";
 import { Store, type Message } from "./store.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { createVerifySite, verifyToolEnv, type VerifyBridge } from "./verify-site.ts";
+import { createVerifySite, type VerifyBridge } from "./verify-site.ts";
 
 const flags = vi.hoisted(() => ({ on: true, limits: {} as Record<string, number>, original: {} as Record<string, number> }));
 vi.mock("../shared/live-verify.ts", async (importOriginal) => {
@@ -43,6 +44,7 @@ let decisions: unknown[];
 let botId: string;
 let threadId: string;
 let token: string;
+let verify: ReturnType<typeof createVerifySite>;
 
 type FakeBridge = VerifyBridge & { starts: Array<{ watch: boolean; root: string; entry: string; revision: string }>; cancels: number; watches: number; states: VerifyRunState[]; startReply: string };
 
@@ -127,7 +129,7 @@ beforeEach(async () => {
   broadcasts = [];
   decisions = [];
   verdict = vi.fn(autoVerdict);
-  const verify = createVerifySite({
+  verify = createVerifySite({
     store,
     resolveCommsCaller: (header) => callers.resolve(header),
     botOutputRoots: () => [work],
@@ -266,9 +268,6 @@ describe("verify_site caller", () => {
 
 describe("verify_site scope", () => {
   it.each([
-    ["a sibling prefix folder", () => join(tmp, "work2")],
-    ["a .. escape", () => "site/../../outside"],
-    ["a junction out of the root", () => "link"],
     ["a UNC path", () => "\\\\server\\share\\site"],
     ["a stream path", () => "site/index.html:secret"],
   ])("refuses %s as outside-folders with no card", async (_label, entry) => {
@@ -290,6 +289,65 @@ describe("verify_site scope", () => {
     bridge!.states = finalStates(result());
     await tool({ entry: "site/page.htm" });
     expect(bridge!.starts[0]).toMatchObject({ entry: "page.htm", root: expect.stringMatching(/site$/), revision: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
+  it("accepts file URLs and refuses remote file hosts", async () => {
+    bridge!.states = finalStates(result());
+    expect((await tool({ entry: pathToFileURL(join(work, "site", "index.html")).href })).body.status).toBe("completed");
+    expect(bridge!.starts[0]).toMatchObject({ entry: "index.html", root: await realpath(join(work, "site")) });
+    for (const entry of ["file://other-pc/share/index.html", "file:///C:/index.html?secret", "file:///C:/index.html#fragment"]) {
+      expect((await tool({ entry })).body).toMatchObject({ status: "blocked", errorCode: "outside-folders" });
+    }
+    expect(bridge!.starts).toHaveLength(1);
+  });
+
+  it.each(["path", "file", "relative", "junction"])("accepts a site outside workspace folders via %s", async kind => {
+    bridge!.states = finalStates(result());
+    const entry = kind === "file" ? pathToFileURL(join(tmp, "outside", "index.html")).href : kind === "relative" ? "../outside" : kind === "junction" ? "link" : join(tmp, "outside", "index.html");
+    expect((await tool({ entry })).body.status).toBe("completed");
+    expect(bridge!.starts[0]).toMatchObject({ root: await realpath(join(tmp, "outside")), entry: "index.html" });
+    expect(card()?.status).toBe("completed");
+  });
+
+  it.each(["localhost", "127.0.0.1", "[::1]"])("accepts loopback dev servers on %s", async host => {
+    const local = createServer((_req, res) => res.end("ready"));
+    await new Promise<void>(resolve => local.listen(0, host === "[::1]" ? "::1" : "127.0.0.1", resolve));
+    try {
+      bridge!.states = finalStates(result());
+      const entry = `http://${host}:${(local.address() as { port: number }).port}/dashboard?q=1`;
+      expect((await tool({ entry })).body.status).toBe("completed");
+      expect(bridge!.starts[0]).toMatchObject({ root: expect.stringContaining("/dashboard?q=1"), entry: "index.html" });
+      expect(card()?.entry).toMatch(/^http:/);
+    } finally { await new Promise<void>(resolve => local.close(() => resolve())); }
+  });
+
+  it("waits for a slow loopback listener", async () => {
+    const local = createServer((_req, res) => res.end("ready"));
+    await new Promise<void>(resolve => local.listen(0, "127.0.0.1", resolve));
+    const port = (local.address() as { port: number }).port;
+    await new Promise<void>(resolve => local.close(() => resolve()));
+    const timer = setTimeout(() => local.listen(port, "127.0.0.1"), 650);
+    try {
+      bridge!.states = finalStates(result());
+      expect((await tool({ entry: `http://127.0.0.1:${port}/` })).body.status).toBe("completed");
+    } finally { clearTimeout(timer); if (local.listening) await new Promise<void>(resolve => local.close(() => resolve())); }
+  });
+
+  it("explains an unused loopback port within the startup budget", async () => {
+    const local = createServer();
+    await new Promise<void>(resolve => local.listen(0, "127.0.0.1", resolve));
+    const port = (local.address() as { port: number }).port;
+    await new Promise<void>(resolve => local.close(() => resolve()));
+    const started = Date.now(), reply = await tool({ entry: `http://127.0.0.1:${port}/` });
+    expect(reply.body).toMatchObject({ status: "blocked", errorCode: "page-failed" });
+    expect(reply.body.text).toContain(`nothing is running on port ${port}`);
+    expect(Date.now() - started).toBeLessThan(13_000);
+    expect(bridge!.starts).toHaveLength(0);
+  });
+
+  it.each(["http://192.168.1.2:3000/", "http://example.com/", "http://localhost.example.com/", "http://user:pass@127.0.0.1/", "http://2130706433/", "http://127.1/", "http://[::ffff:127.0.0.1]/"])("refuses noncanonical or foreign URL %s", async entry => {
+    expect((await tool({ entry })).body).toMatchObject({ status: "blocked", errorCode: "outside-folders" });
+    expect(bridge!.starts).toHaveLength(0);
   });
 
   it("answers desktop-required without a bridge and queues another run", async () => {
@@ -368,6 +426,76 @@ describe("verify_site hidden checks", () => {
 });
 
 describe("verify_site Auto", () => {
+  it("does not check or save a replay for a static site outside owned roots", async () => {
+    bridge!.states = finalStates(result());
+    await verify.startAuto({ botId, threadId, entry: join(tmp, "outside"), episode: "outside" });
+    expect(bridge!.starts).toEqual([]);
+    expect(card()).toBeUndefined();
+    expect(existsSync(join(DATA_DIR, "verify-replays", threadId))).toBe(false);
+  });
+
+  it("runs after settlement, creates task cards and patches episode rechecks with fixed counts", async () => {
+    turnRegistry.settle("turn-1");
+    const input = { botId, threadId, entry: join(work, "site"), episode: "task-one" };
+    bridge!.states = finalStates(result([{ tile: "desktop", checker: "LINKS", rule: "missing target", where: "a#missing", measured: "No target" }]));
+    await verify.startAuto(input);
+    expect(card()?.issueTotal).toBe(1);
+    const first = store.activePath(threadId).findLast(message => message.verify)!;
+    bridge!.states = finalStates(result());
+    await verify.startAuto(input);
+    expect(card()?.fixed).toBe(1);
+    expect(store.activePath(threadId).filter(message => message.verify)).toHaveLength(1);
+    expect(store.activePath(threadId).findLast(message => message.verify)!.id).toBe(first.id);
+    bridge!.states = finalStates(result());
+    await verify.startAuto({ ...input, episode: "task-two" });
+    expect(store.activePath(threadId).filter(message => message.verify)).toHaveLength(2);
+    expect(card()?.fixed).toBeUndefined();
+  });
+
+  it("queues behind a tool run and replaces an older auto run for the same thread", async () => {
+    const toolRun = tool({ entry: "site" });
+    await until(() => bridge!.starts.length === 1);
+    const input = { botId, threadId, entry: join(work, "site"), episode: "old-task" };
+    const old = verify.startAuto(input);
+    await new Promise<void>(done => setTimeout(done, 40));
+    const latest = verify.startAuto({ ...input, episode: "new-task" });
+    await old;
+    expect(bridge!.starts).toHaveLength(1);
+    bridge!.states = finalStates(result());
+    bridge!.poll = async () => ({ runId: "x", revision: 3, state: "completed", counts: counts(10), result: result() });
+    turnRegistry.settle("turn-1");
+    await toolRun;
+    await latest;
+    expect(bridge!.starts).toHaveLength(2);
+  });
+
+  it("silently skips auto starts without a bridge or an admitted entry", async () => {
+    await verify.startAuto({ botId, threadId, entry: join(work, "notes"), episode: "notes" });
+    expect(card()).toBeUndefined();
+    bridge = null;
+    await verify.startAuto({ botId, threadId, entry: join(work, "site"), episode: "site" });
+    expect(card()).toBeUndefined();
+  });
+
+  it("reruns an earlier task card after a newer task and keeps its episode count", async () => {
+    turnRegistry.settle("turn-1");
+    const issue = { tile: "desktop" as const, checker: "LINKS" as const, rule: "missing target", where: "a#missing", measured: "No target" };
+    const input = { botId, threadId, entry: join(work, "site"), episode: "first" };
+    bridge!.states = finalStates(result([issue]));
+    await verify.startAuto(input);
+    const first = card()!;
+    bridge!.states = finalStates(result());
+    await verify.startAuto({ ...input, episode: "second" });
+    const second = card()!;
+    bridge!.states = finalStates(result());
+    expect((await decide(first.runId, "rerun", first.decisionNonce)).status).toBe(200);
+    await until(() => store.activePath(threadId).some(message => message.verify?.fixed === 1));
+    const cards = store.activePath(threadId).filter(message => message.verify);
+    expect(cards).toHaveLength(2);
+    expect(cards[1]!.verify!.runId).toBe(second.runId);
+    expect(cards[0]!.verify!.fixed).toBe(1);
+  });
+
   it("keeps each room owner's card", async () => {
     const other = store.createBot({}, { seedMessages: false });
     const room = store.createGroup("Team", [botId, other.id]);
@@ -557,10 +685,5 @@ describe("verify_site kill switch", () => {
     expect((await decide("abcdefgh-1234", "skip", "n")).status).toBe(404);
     for (const kind of ["live", "replay"]) expect((await fetch(`${base}/api/verify/runs/abcdefgh-1234/${kind}`, { headers: { authorization: "Bearer app-token" } })).status).toBe(404);
     expect(existsSync(join(DATA_DIR, "verify-replays"))).toBe(false);
-    expect(verifyToolEnv(true, "win32")).toEqual({});
-    flags.on = true;
-    expect(verifyToolEnv(true, "win32")).toEqual({ OMB_LIVE_VERIFY: "1" });
-    expect(verifyToolEnv(false, "win32")).toEqual({});
-    expect(verifyToolEnv(true, "darwin")).toEqual({});
   });
 });

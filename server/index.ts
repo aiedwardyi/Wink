@@ -399,8 +399,9 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
-import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
-import { VERIFY_ROUTES } from "../shared/live-verify.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
+import { createVerifyAuto } from "./verify-auto.ts";
+import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
@@ -3158,6 +3159,7 @@ async function reviewPermissionCard(args: {
 }
 
 bus.subscribe((event: RuntimeEvent) => {
+  verifyAuto.event(event);
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
   else if (event.type === "request.resolved") watchdog.setWaitingOnHuman(event.threadId, false);
   else if (event.type === "turn.completed") watchdog.settle(event.threadId);
@@ -3853,6 +3855,10 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsage.set(event.threadId, { input: event.input, output: event.output, cachedInput: event.cachedInput });
       break;
     case "turn.completed": {
+      const verifyOwner = event.turnId ? turnRegistry.get(event.turnId) : undefined;
+      const verifyStartedAt = turnStartedAtMs.get(event.threadId) ?? Date.now();
+      const verifyDisposition = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+      const verifyRoutine = routineTurnThreads.has(event.threadId);
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
@@ -4002,6 +4008,12 @@ bus.subscribe((event: RuntimeEvent) => {
           // Channel replies only affect the channel unread state.
         }
       }
+      // Before the queue drain subscribers append the next send.
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      setImmediate(() => {
+        const owner = verifyOwner && store.bot(verifyOwner.botId);
+        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
+      });
       // A delegated turn's terminal state belongs in the A⇄B channel:
       // the request was mirrored there when the delegation drained, and a
       // channel that only ever shows requests is half a record. Mirror the
@@ -5380,7 +5392,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
-      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -6324,7 +6335,6 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
-  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7146,6 +7156,13 @@ const verifySite = createVerifySite({
   deviceId: () => profileSyncSettings.deviceId,
   appToken: authorizedComms,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+  toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+});
+const verifyAuto = createVerifyAuto({
+  enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
+  startAuto: input => verifySite.startAuto(input),
+  cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  log: line => console.log(line),
 });
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
