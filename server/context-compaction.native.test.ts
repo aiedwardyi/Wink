@@ -58,7 +58,7 @@ describe("native compaction wiring", () => {
   });
 
   it.each(["dispatch", "background", "room", "settled"])("uses the instance compaction override in %s", (path) => {
-    expect(run(path, 1_000_000).nativeAt).toBe(100_000);
+    expect(run(path, 1_000_000).nativeAt).toBe(67_000);
   });
 
   it("bounds the grace window by Claude's reported window", () => {
@@ -72,10 +72,14 @@ describe("nativeCompactAt", () => {
     ["claudeAgent", "claude-opus-5-5", 1_000_000, {}, 967_000],
     ["claudeAgent", "claude-sonnet-5-5", 200_000, {}, null],
     ["claudeAgent", "ollama::small:latest", 1_000_000, {}, null],
-    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" }, 100_000],
-    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k" }, 500_000],
-    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200" }, 100_000],
-    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "2000000" }, 1_000_000],
+    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" }, 67_000],
+    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k" }, 467_000],
+    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200k" }, 167_000],
+    ["claudeAgent", "claude-sonnet-5-5", 200_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200k" }, 167_000],
+    ["claudeAgent", "claude-sonnet-5-5", 200_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k" }, 167_000],
+    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200" }, 67_000],
+    ["claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "2000000" }, 967_000],
+    ["claudeAgent", "claude-opus-5-5", 50_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" }, 25_000],
     ["codex", "gpt-5.5", 1_000_000, {}, null],
     ["antigravityAgent", "gemini-4-argon-high", 1_048_576, {}, null],
     ["grokAgent", "grok-build", 500_000, {}, null],
@@ -98,6 +102,11 @@ describe("native compaction plan", () => {
     expect(nearNativeCompact({ last: 805_000, growth: 70_000, nativeAt: 967_000 })).toBe(true);
     expect(nearNativeCompact({ last: 700_000, growth: 70_000, nativeAt: 967_000 })).toBe(false);
     expect(nearNativeCompact({ last: 900_000, growth: 70_000, nativeAt: null })).toBe(false);
+  });
+
+  it("queues the summary before Claude compacts under a 100k override", () => {
+    const nativeAt = nativeCompactAt("claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" });
+    expect(nearNativeCompact({ last: 58_047, growth: 24_000, nativeAt })).toBe(true);
   });
 
   it("resumes a native session with no inline summary; a reseed still compacts", async () => {

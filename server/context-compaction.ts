@@ -19,7 +19,7 @@ export const MODEL_CONTEXT_FALLBACK = 128_000;
 export const LOCAL_MODEL_CONTEXT_FALLBACK = 16_384;
 
 const CONTEXT_BUDGET_SHARE = 0.5;
-// Claude Code's own point on a 1M window; CLAUDE_CODE_AUTO_COMPACT_WINDOW moves it within 100k..window.
+// Claude Code's own point on a 1M window; CLAUDE_CODE_AUTO_COMPACT_WINDOW moves the window within 100k..window.
 const CLAUDE_NATIVE_COMPACT_AT = 967_000;
 const CLAUDE_NATIVE_WINDOW = 1_000_000;
 const CLAUDE_COMPACT_WINDOW_MIN = 100_000;
@@ -156,8 +156,9 @@ export function nativeCompactAt(
 ): number | null {
   if (driverKind !== "claudeAgent" || decodeInjectId(model) || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return null;
   const set = /^(\d+)(k?)$/i.exec(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW?.trim() ?? "");
-  if (set) return Math.min(contextWindow, Math.max(CLAUDE_COMPACT_WINDOW_MIN, Number(set[1]) * (set[2] ? 1_000 : 1)));
-  return contextWindow >= CLAUDE_NATIVE_WINDOW ? CLAUDE_NATIVE_COMPACT_AT : null;
+  if (!set) return contextWindow >= CLAUDE_NATIVE_WINDOW ? CLAUDE_NATIVE_COMPACT_AT : null;
+  const window = Math.min(contextWindow, Math.max(CLAUDE_COMPACT_WINDOW_MIN, Number(set[1]) * (set[2] ? 1_000 : 1)));
+  return Math.max(contextBudget(window), window - (CLAUDE_NATIVE_WINDOW - CLAUDE_NATIVE_COMPACT_AT));
 }
 
 /** The turn after this one would pass Wink's summary point. */
