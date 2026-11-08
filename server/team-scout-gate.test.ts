@@ -48,6 +48,7 @@ describe.each(["scout", "directory"] as const)("/api/teams/%s from a phone", (na
 
   it("still reaches the folder check for the desktop", async () => {
     desktop = true;
+    vi.mocked(statSync).mockImplementationOnce(() => { throw new Error("ENOENT"); });
     const response = await get("//host/share");
     expect(response.status).toBe(400);
     expect(statSync).toHaveBeenCalled();
