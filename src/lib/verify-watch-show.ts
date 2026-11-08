@@ -16,7 +16,12 @@ const LIVE_GLIDE_MS = 250;
 const CURSOR_MS = 900;
 const CURSOR_REST_MS = 180;
 const CURSOR_GAP = 110;
+const CURSOR_NEAR = 40;
+const CURSOR_REACH = 1100;
 const CURSOR_ALONG = [0, 0.6, 0.3];
+const CURSOR_MAX = 6;
+const CURSOR_EXTRA = 3;
+const CURSOR_ROOM = 4;
 
 type Row = Record<string, unknown> & { result?: unknown; box: number[] | null };
 
@@ -33,7 +38,8 @@ export type Part = "loads" | "links" | "phone";
 export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "between" | "done" | "expired" | "failed";
 
 export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number; hold: number }
-export interface Cursor { checker: string; tile: VerifyTile; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
+export interface Cursor { checker: string; tile: VerifyTile; extra?: number; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
+const cursorKey = (c: Cursor) => `${c.tile}:${c.extra ? `+${c.extra}` : c.checker}`;
 export interface Ring { tile: VerifyTile; x: number; y: number; at: number }
 interface Stored { jpeg: Uint8Array; scrollY: number; ms: number }
 
@@ -123,41 +129,57 @@ function spotsOf(things: Thing[], [w, h]: readonly number[]) {
   return new Map([...spots].map(([checker, own]) => [checker, [...own.values()]]));
 }
 
-/** Each checker's glides over its own checks in view, arriving one checker at a time. */
+interface Lane { id: string; checker: string; extra: number }
+
+/** Each checker's glides over its own checks in view, arriving one cursor at a time; spare cursors join the checker with the most boxes left to visit. */
 function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[], slot: number, play: number, scrollAt: (at: number) => number): Cursor[] {
-  const spots = spotsOf(things, size), checkers = [...spots.keys()], route: Cursor[] = [], h = size[1]!;
-  if (!checkers.length) return route;
+  const spots = spotsOf(things, size), route: Cursor[] = [], h = size[1]!;
+  const lanes: Lane[] = [...spots.keys()].map(checker => ({ id: checker, checker, extra: 0 }));
+  if (!lanes.length) return route;
+  const shown = (spot: Spot, top: number) => { const y = spot.y - (spot.top ?? top); return y >= 0 && y <= h - 16; };
+  const richest = [...spots].map(([checker, own]) => ({ checker, n: own.filter(s => s.w).length })).sort((a, b) => b.n - a.n)[0]!;
+  // A spare cursor needs boxes of its own to visit, so a check with no box (or a few) lends none.
+  const spare = Math.min(CURSOR_EXTRA, CURSOR_MAX - lanes.length, Math.floor(richest.n / CURSOR_ROOM));
+  for (let extra = 1; extra <= spare; extra++) lanes.push({ id: `+${extra}`, checker: richest.checker, extra });
   const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, Spot>();
-  const aim = (checker: string, at: number) => {
-    const top = scrollAt(at), lit = slot ? Math.floor(at / slot) : 0, others = [...now].filter(([id]) => id !== checker).map(([, p]) => p);
+  const aim = (lane: Lane, at: number) => {
+    const top = scrollAt(at), lit = slot ? Math.floor(at / slot) : 0, others = [...now].filter(([id]) => id !== lane.id).map(([, p]) => p), from = now.get(lane.id);
+    if (lane.extra) {
+      const fresh = (checker: string) => spots.get(checker)!.filter(s => s.w && !s.visits && shown(s, top)).length;
+      const pick = [...spots.keys()].sort((a, b) => fresh(b) - fresh(a))[0]!;
+      if (!fresh(lane.checker) && fresh(pick)) lane.checker = pick;
+    }
     let best: { spot: Spot; x: number; y: number; score: number } | null = null;
-    for (const spot of spots.get(checker)!) {
+    for (const spot of spots.get(lane.checker)!) {
+      if (!shown(spot, top) || (lane.extra && !spot.w)) continue;
       const y = spot.y - (spot.top ?? top);
-      if (y < 0 || y > h - 16) continue;
       const x = spot.x + Math.max(0, spot.w - 30) * CURSOR_ALONG[spot.visits % CURSOR_ALONG.length]!;
       const gap = Math.min(Infinity, ...others.map(p => Math.hypot(p.x - x, p.y - y)));
-      const score = (gap < CURSOR_GAP ? 1e6 - gap : 0) + spot.visits * 1000 + Math.abs(spot.thing - lit);
+      if (gap < CURSOR_NEAR) continue;
+      const far = from ? Math.max(0, Math.hypot(x - from.x, y - from.y) - CURSOR_REACH) : 0;
+      const score = (gap < CURSOR_GAP ? 1e6 - gap : 0) + spot.visits * 1000 + Math.abs(spot.thing - lit) + far * 10;
       if (!best || score < best.score) best = { spot, x, y, score };
     }
-    if (best) { best.spot.visits++; last.set(checker, best.spot); return { x: best.x, y: best.y }; }
-    // Nothing of its own in this view: it waits just off the page, on the side its last check went.
-    const gone = last.get(checker) ?? spots.get(checker)![0]!;
+    if (best) { best.spot.visits++; last.set(lane.id, best.spot); return { x: best.x, y: best.y }; }
+    // Nothing free of its own in this view: it waits just off the page, on the side its last check went.
+    const gone = last.get(lane.id) ?? spots.get(lane.checker)![0]!;
     return { x: gone.x, y: gone.y - (gone.top ?? top) < 0 ? -40 : h + 8 };
   };
-  for (const checker of checkers) {
-    const to = aim(checker, 0);
-    now.set(checker, to);
-    arrived.set(checker, 0);
-    route.push({ checker, tile, from: to, to, at: 0, duration: 0 });
+  const cursor = (lane: Lane, fields: Pick<Cursor, "from" | "to" | "at" | "duration">): Cursor => ({ checker: lane.checker, tile, ...(lane.extra ? { extra: lane.extra } : {}), ...fields });
+  for (const lane of lanes) {
+    const to = aim(lane, 0);
+    now.set(lane.id, to);
+    arrived.set(lane.id, 0);
+    route.push(cursor(lane, { from: to, to, at: 0, duration: 0 }));
   }
-  const step = CURSOR_MS / checkers.length, lead = Math.max(0, CURSOR_MS * 2 / 3 - step);
-  // Runs past the end on purpose so nobody sits still waiting for the show to close.
+  const step = CURSOR_MS / lanes.length, lead = Math.max(0, CURSOR_MS * 2 / 3 - step);
+  // Everyone is under way within one rest of the start, and the route runs past the end so nobody sits still waiting for the show to close.
   for (let turn = 1; lead + turn * step < play + CURSOR_MS; turn++) {
-    const checker = checkers[(turn - 1) % checkers.length]!, due = lead + turn * step, from = now.get(checker)!;
-    const at = Math.max(arrived.get(checker)!, due - (CURSOR_MS - CURSOR_REST_MS)), to = aim(checker, due);
-    now.set(checker, to);
-    arrived.set(checker, due);
-    route.push({ checker, tile, from, to, at, duration: due - at });
+    const lane = lanes[(turn - 1) % lanes.length]!, due = lead + turn * step, from = now.get(lane.id)!;
+    const free = due - (CURSOR_MS - CURSOR_REST_MS), at = Math.max(arrived.get(lane.id)!, turn <= lanes.length ? Math.min(free, CURSOR_REST_MS) : free), to = aim(lane, due);
+    now.set(lane.id, to);
+    arrived.set(lane.id, due);
+    route.push(cursor(lane, { from, to, at, duration: due - at }));
   }
   return route;
 }
@@ -343,7 +365,7 @@ export class VerifyWatchShow {
     }
     while (this.route.length && this.route[0]!.at <= this.clock) {
       const cursor = this.route.shift()!;
-      this.cursors.set(`${cursor.tile}:${cursor.checker}`, cursor);
+      this.cursors.set(cursorKey(cursor), cursor);
       this.version++;
     }
     this.step();

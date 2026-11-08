@@ -447,10 +447,11 @@ it.each([false, true])("keeps snapshot frames at their captured scroll on open a
 const CHECKERS = ["LINKS", "TEXT_A", "FIT", "NAV", "PAGE_ERRORS"];
 const crew = (checkers: string[], things = 30, tile = "desktop") => checkers.flatMap((checker, c) => Array.from({ length: things }, (_, i) => result(i, 40 + c * 220 + (i % 5) * 30, 20 + (i % 20) * 32, { tile, checker, where: `a#x${i}` })));
 const swarm = (show: VerifyWatchShow, tile: "desktop" | "phone" = "desktop") => [...show.cursors.values()].filter(c => c.tile === tile);
+const who = (c: { checker: string; extra?: number }) => c.extra ? `+${c.extra}` : c.checker;
 const arrivals = (show: VerifyWatchShow) => {
   const seen = new Map<string, { checker: string; due: number; to: { x: number; y: number } }>();
   while (show.phase === "play") {
-    for (const c of swarm(show)) seen.set(`${c.checker}@${c.at + c.duration}`, { checker: c.checker, due: c.at + c.duration, to: c.to });
+    for (const c of swarm(show)) seen.set(`${who(c)}@${c.at + c.duration}`, { checker: c.checker, due: c.at + c.duration, to: c.to });
     show.advance(16);
   }
   return [...seen.values()].filter(a => a.due > 0).sort((a, b) => a.due - b.due);
@@ -459,14 +460,14 @@ const arrivals = (show: VerifyWatchShow) => {
 it("gives each real checker its own cursor on each tile", () => {
   const show = replay(frame(0), frame(1, "phone"), ...crew(CHECKERS), ...crew(["LINKS", "FIT"], 10, "phone"), end(90));
   toClock(show, 100);
-  expect(swarm(show).map(c => c.checker).sort()).toEqual([...CHECKERS].sort());
-  expect(swarm(show, "phone").map(c => c.checker).sort()).toEqual(["FIT", "LINKS"]);
+  expect(swarm(show).filter(c => !c.extra).map(c => c.checker).sort()).toEqual([...CHECKERS].sort());
+  expect(swarm(show, "phone").filter(c => !c.extra).map(c => c.checker).sort()).toEqual(["FIT", "LINKS"]);
 });
 
 it("shows only the checkers that really ran, with no stand-ins", () => {
   const show = replay(frame(0), ...crew(["LINKS", "TEXT_A", "FIT"]), end(90));
   toClock(show, 2000);
-  expect(swarm(show).map(c => c.checker).sort()).toEqual(["FIT", "LINKS", "TEXT_A"]);
+  expect([...new Set(swarm(show).map(c => c.checker))].sort()).toEqual(["FIT", "LINKS", "TEXT_A"]);
 });
 
 it("sends each cursor only to things its own checker checked", () => {
@@ -484,7 +485,7 @@ it("staggers arrivals so the cursors never move in lockstep", () => {
   const seen = arrivals(replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90)));
   const dues = seen.map(a => a.due);
   expect(new Set(dues).size).toBe(dues.length);
-  expect(Math.min(...dues.slice(1).map((due, i) => due - dues[i]!))).toBeGreaterThanOrEqual(200);
+  expect(Math.min(...dues.slice(1).map((due, i) => due - dues[i]!))).toBeGreaterThanOrEqual(150);
 });
 
 it("never teleports a cursor and keeps them apart when they land", () => {
@@ -495,9 +496,9 @@ it("never teleports a cursor and keeps them apart when they land", () => {
     if (show.phase !== "play") break;
     const now = swarm(show).map(c => ({ c, p: show.cursorAt(c) }));
     for (const { c, p } of now) {
-      const was = last.get(c.checker);
+      const was = last.get(who(c));
       if (was) expect(Math.hypot(p.x - was.x, p.y - was.y)).toBeLessThan(60);
-      last.set(c.checker, p);
+      last.set(who(c), p);
       if (show.clock >= c.at + c.duration) for (const other of now) if (other.c !== c && show.clock >= other.c.at + other.c.duration) expect(Math.hypot(other.p.x - p.x, other.p.y - p.y)).toBeGreaterThan(40);
     }
   }
@@ -510,8 +511,8 @@ it("rests only a moment on a thing before moving on", () => {
   while (show.phase === "play" && show.clock < SHOW_MAX_MS) {
     show.advance(16);
     for (const c of swarm(show)) {
-      const rest = show.clock >= c.at && show.clock < c.at + c.duration ? 0 : (still.get(c.checker) ?? 0) + 16;
-      still.set(c.checker, rest);
+      const rest = show.clock >= c.at && show.clock < c.at + c.duration ? 0 : (still.get(who(c)) ?? 0) + 16;
+      still.set(who(c), rest);
       longest = Math.max(longest, rest);
     }
   }
@@ -547,7 +548,7 @@ it("keeps the same show length and the same counts with the swarm", () => {
 });
 
 it("clears the swarm with the run and starts the next one fresh", () => {
-  const show = replay(frame(0), ...crew(["LINKS", "FIT"], 6), end(20));
+  const show = replay(frame(0), ...crew(["LINKS", "FIT"], 3), end(20));
   toClock(show, 500);
   expect(show.cursors.size).toBe(2);
   toClock(show, SHOW_MIN_MS + 20);
@@ -555,4 +556,46 @@ it("clears the swarm with the run and starts the next one fresh", () => {
   show.beginRun();
   show.advance(16);
   expect(show.cursors.size).toBe(0);
+});
+
+const boxes = (checker: string, n: number, tile = "desktop") => Array.from({ length: n }, (_, i) => result(i, 40 + (i % 5) * 200, 20 + i * 24, { tile, checker, where: `a#${checker}${i}` }));
+
+it("adds spare cursors in the busiest checker's color, 4 to 6 in all", () => {
+  const show = replay(frame(0), ...boxes("LINKS", 2), ...boxes("TEXT_A", 29), ...boxes("FIT", 19), end(90));
+  toClock(show, 1000);
+  const spares = swarm(show).filter(c => c.extra);
+  expect(swarm(show).length).toBeGreaterThanOrEqual(4);
+  expect(swarm(show).length).toBeLessThanOrEqual(6);
+  expect(spares.length).toBeGreaterThan(0);
+  for (const c of spares) expect(c.checker).toBe("TEXT_A");
+});
+
+it("never goes past six cursors a tile", () => {
+  const show = replay(frame(0), ...crew([...CHECKERS, "MENU", "ERRORS"], 20), end(90));
+  toClock(show, 1000);
+  expect(swarm(show)).toHaveLength(7);
+  expect(swarm(show).filter(c => c.extra)).toHaveLength(0);
+  const some = replay(frame(0), ...crew(CHECKERS.slice(0, 3), 20), end(90));
+  toClock(some, 1000);
+  expect(swarm(some)).toHaveLength(6);
+});
+
+it("gives no spare cursor to a check with no box or a few boxes", () => {
+  const page = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "ok", where: "/index.html" } });
+  const flat = replay(frame(0), page, ...boxes("LINKS", 3), end(90));
+  toClock(flat, 1000);
+  expect(swarm(flat)).toHaveLength(2);
+  const rich = replay(frame(0), page, ...boxes("LINKS", 12), end(90));
+  toClock(rich, 1000);
+  for (const c of swarm(rich).filter(c => c.extra)) expect(c.checker).toBe("LINKS");
+});
+
+it("never lands two cursors on the same spot when checkers share boxes", () => {
+  const rows = ["LINKS", "FIT", "TEXT_A"].flatMap(checker => Array.from({ length: 12 }, (_, i) => result(i, 40 + (i % 3) * 30, 20 + i * 24, { checker })));
+  const show = replay(frame(0), ...rows, end(90));
+  while (show.phase === "play") {
+    show.advance(16);
+    const landed = swarm(show).filter(c => show.clock >= c.at + c.duration && c.to.y >= 0).map(c => c.to);
+    landed.forEach((p, i) => landed.slice(i + 1).forEach(q => expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(20)));
+  }
 });
