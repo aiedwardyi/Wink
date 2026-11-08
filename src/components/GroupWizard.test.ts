@@ -342,8 +342,8 @@ describe("GroupWizard members", () => {
     try {
       await act(async () => pickRow(host, "Bo").click());
       await act(async () => pickRow(host, "Ada").click());
-      expect(pickRow(host, "Bo").textContent).toMatch(/Bo1번째$/);
-      expect(pickRow(host, "Ada").textContent).toMatch(/Ada2번째$/);
+      expect(pickRow(host, "Bo").textContent).toMatch(/Bo첫 번째$/);
+      expect(pickRow(host, "Ada").textContent).toMatch(/Ada두 번째$/);
     } finally {
       await act(async () => {
         root.unmount();

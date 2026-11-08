@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { roomResponders } from "../../server/store.ts";
 import { translate } from "./i18n";
-import { answerOrderKey, moveMember, nextMemberIds } from "./room-members";
+import { answerOrderKey, answerOrderVars, moveMember, nextMemberIds } from "./room-members";
 
 const pick = (...ids: string[]) => new Set(ids);
 
@@ -53,7 +53,7 @@ describe("moveMember", () => {
 });
 
 describe("answerOrderKey", () => {
-  const label = (locale: "en" | "ko", n: number) => translate(locale, answerOrderKey(n), { n });
+  const label = (locale: "en" | "ko", n: number) => translate(locale, answerOrderKey(n), answerOrderVars(locale, n));
 
   it("says 1st, 2nd, 3rd in English", () => {
     expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23].map((n) => label("en", n))).toEqual([
@@ -61,7 +61,9 @@ describe("answerOrderKey", () => {
     ]);
   });
 
-  it("says 1번째, 2번째, 3번째 in Korean", () => {
-    expect([1, 2, 3, 4].map((n) => label("ko", n))).toEqual(["1번째", "2번째", "3번째", "4번째"]);
+  it("counts in native Korean words up to a full 100-bot group", () => {
+    expect([1, 2, 3, 4, 10, 11, 12, 20, 21, 35, 99, 100, 101].map((n) => label("ko", n))).toEqual([
+      "첫 번째", "두 번째", "세 번째", "네 번째", "열 번째", "열한 번째", "열두 번째", "스무 번째", "스물한 번째", "서른다섯 번째", "아흔아홉 번째", "백 번째", "101 번째",
+    ]);
   });
 });

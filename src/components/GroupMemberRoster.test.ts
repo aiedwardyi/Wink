@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
+import { SWIPE_MOTION_MS } from "@/lib/phone-swipe";
 import { LONG_PRESS_MS } from "@/lib/use-touch-drag";
 import { StoreProvider, type Bot, type Group } from "@/state/store";
 
@@ -147,6 +148,36 @@ describe("group member roster", () => {
     await pointer("pointermove", 0, "touch");
     await pointer("pointerup", 0, "touch");
     expect(saved()).toEqual([["career", "wink", "pokkey"]]);
+  });
+
+  it("lifts in place on desktop and as a copy over the page where the phone row clips", async () => {
+    vi.useFakeTimers();
+    await render();
+    await press("wink");
+    await pointer("pointermove", at("wink") + 10);
+    expect(picture("wink").style.scale).toBe("1.2");
+    expect(document.body.children).toHaveLength(1);
+    await pointer("pointerup", at("wink") + 10);
+    await act(async () => vi.advanceTimersByTime(SWIPE_MOTION_MS));
+
+    const strip = picture("wink").parentElement!;
+    strip.style.overflowX = "auto";
+    await press("wink", "touch");
+    await act(async () => vi.advanceTimersByTime(LONG_PRESS_MS));
+    const copy = document.body.lastElementChild as HTMLElement;
+    expect(strip.contains(copy)).toBe(false);
+    expect(copy).toMatchObject({ textContent: "Wink", inert: true });
+    expect(copy.style).toMatchObject({ position: "fixed", scale: "1.2" });
+    expect(picture("wink").style).toMatchObject({ opacity: "0", scale: "", boxShadow: "" });
+    await pointer("pointermove", at("wink") + 50, "touch");
+    expect(copy.style.translate).toBe("50px 0");
+    await pointer("pointerup", at("wink") + 50, "touch");
+    expect(saved()).toEqual([["pokkey", "wink", "career"]]);
+    await show(saved()[0]!);
+    expect(copy.style.translate).toBe("30px 0px");
+    await act(async () => vi.advanceTimersByTime(SWIPE_MOTION_MS));
+    expect(copy.isConnected).toBe(false);
+    expect(picture("wink").style.opacity).toBe("");
   });
 
   it("leaves a touch tap to open Manage members", async () => {

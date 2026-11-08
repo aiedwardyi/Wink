@@ -6,6 +6,10 @@ import { LONG_PRESS_MS, LONG_PRESS_SLOP, SCROLL_EDGE, SCROLL_STEP } from "./use-
 
 const SLIDE = `translate ${SWIPE_MOTION_MS}ms ${SWIPE_SPRING}`;
 const LIFT = "scale 150ms ease-out, box-shadow 150ms ease-out";
+const LIFTED = { scale: "1.2", boxShadow: "0 8px 24px rgb(0 0 0 / 0.35)" };
+
+// A copy of the lifted picture drawn over the page, standing in for it while the row clips.
+type Ghost = { el: HTMLElement; copy: HTMLElement; left: number; top: number };
 
 type Press = {
   id: string;
@@ -18,6 +22,7 @@ type Press = {
   maxScroll: number;
   frame: number;
   lifted: boolean;
+  ghost: Ghost | null;
   centers: number[];
   to: number;
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -42,12 +47,19 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
   const drawnAt = useRef<Map<string, number> | null>(null);
   const focusId = useRef<string | null>(null);
   const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const landing = useRef<Ghost | null>(null);
   const latest = useRef({ ids, onReorder });
   useLayoutEffect(() => {
     latest.current = { ids, onReorder };
   });
 
   const pictures = () => [...(rowRef.current?.querySelectorAll<HTMLElement>("[data-member-id]") ?? [])];
+
+  const dropGhost = () => {
+    landing.current?.copy.remove();
+    landing.current?.el.style.removeProperty("opacity");
+    landing.current = null;
+  };
 
   // slide every picture from where it was drawn to its new place
   const settle = () => {
@@ -60,6 +72,8 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       el.style.transition = "none";
       el.style.translate = "";
     }
+    const ghost = landing.current;
+    const to = ghost?.el.getBoundingClientRect();
     for (const el of els) {
       const old = from.get(el.dataset.memberId!);
       if (old !== undefined && !still) el.style.translate = `${old - centerOf(el)}px 0`;
@@ -69,9 +83,13 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       el.style.transition = still ? "" : `${SLIDE}, ${LIFT}`;
       for (const key of ["translate", "scale", "box-shadow", "cursor"]) el.style.removeProperty(key);
     }
+    if (ghost && to) {
+      Object.assign(ghost.copy.style, { transition: still ? "" : `${SLIDE}, ${LIFT}`, translate: `${to.left - ghost.left}px ${to.top - ghost.top}px`, scale: "", boxShadow: "" });
+    }
     clearTimeout(settling.current);
     settling.current = setTimeout(() => {
       for (const el of els) for (const key of ["transition", "z-index"]) el.style.removeProperty(key);
+      dropGhost();
     }, still ? 0 : SWIPE_MOTION_MS);
   };
 
@@ -103,7 +121,9 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       clearTimeout(p?.timer);
       if (p) cancelAnimationFrame(p.frame);
       p?.unbind();
+      p?.ghost?.copy.remove();
       clearTimeout(settling.current);
+      dropGhost();
     },
     [],
   );
@@ -119,10 +139,27 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
 
   const lift = (p: Press) => {
     clearTimeout(settling.current);
+    dropGhost();
     p.lifted = true;
     p.centers = pictures().map(centerOf);
     for (const el of pictures()) el.style.transition = el === p.el ? LIFT : SLIDE;
-    Object.assign(p.el.style, { zIndex: "20", scale: "1.2", boxShadow: "0 8px 24px rgb(0 0 0 / 0.35)", cursor: "grabbing" });
+    const row = rowRef.current;
+    if (row && /auto|scroll|hidden|clip/.test(getComputedStyle(row).overflowX)) {
+      // the phone row scrolls, so it clips anything that pokes out of it
+      const { left, top } = p.el.getBoundingClientRect();
+      const copy = p.el.cloneNode(true) as HTMLElement;
+      copy.removeAttribute("data-member-id");
+      copy.setAttribute("aria-hidden", "true");
+      copy.inert = true;
+      Object.assign(copy.style, { position: "fixed", left: `${left}px`, top: `${top}px`, margin: "0", zIndex: "50", pointerEvents: "none", transition: LIFT });
+      p.el.ownerDocument.body.append(copy);
+      copy.getBoundingClientRect();
+      Object.assign(copy.style, LIFTED);
+      Object.assign(p.el.style, { opacity: "0", cursor: "grabbing" });
+      p.ghost = { el: p.el, copy, left, top };
+    } else {
+      Object.assign(p.el.style, { zIndex: "20", cursor: "grabbing", ...LIFTED });
+    }
     hapticTick();
     const tick = () => {
       if (press.current !== p) return;
@@ -145,6 +182,7 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
     const from = ids.indexOf(p.id);
     const dx = x - p.x + (rowRef.current?.scrollLeft ?? 0) - p.scrollLeft;
     p.el.style.translate = `${dx}px 0`;
+    if (p.ghost) p.ghost.copy.style.translate = `${x - p.x}px 0`;
     const to = rosterSlot(p.centers, from, p.centers[from]! + dx);
     if (to === p.to) return;
     p.to = to;
@@ -163,6 +201,7 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
     p.unbind();
     if (!p.lifted) return;
     swallowClick.current = true;
+    landing.current = p.ghost;
     commit(p.id, drop ? p.to : latest.current.ids.indexOf(p.id));
   };
 
@@ -184,6 +223,7 @@ export function useMemberReorder(ids: string[], onReorder: (next: string[], id: 
       maxScroll: Math.max(0, (rowRef.current?.scrollWidth ?? 0) - (rowRef.current?.clientWidth ?? 0)),
       frame: 0,
       lifted: false,
+      ghost: null,
       centers: [],
       to: latest.current.ids.indexOf(id),
       timer: touch ? setTimeout(() => lift(p), LONG_PRESS_MS) : undefined,

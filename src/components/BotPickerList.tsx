@@ -6,7 +6,7 @@ import type { Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
-import { answerOrderKey } from "@/lib/room-members";
+import { answerOrderKey, answerOrderVars } from "@/lib/room-members";
 
 export function BotPickerList({
   bots,
@@ -23,7 +23,7 @@ export function BotPickerList({
   /** label each ticked bot with its place in the tick order */
   ordered?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const order = ordered ? [...picked] : [];
   return (
     <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
@@ -41,7 +41,7 @@ export function BotPickerList({
             <span className="min-w-0 truncate text-[14px] text-ink">{b.name}</span>
             {order.includes(b.id) && (
               <span className="shrink-0 text-[12.5px] text-ink-secondary">
-                {t(answerOrderKey(order.indexOf(b.id) + 1), { n: order.indexOf(b.id) + 1 })}
+                {t(answerOrderKey(order.indexOf(b.id) + 1), answerOrderVars(locale, order.indexOf(b.id) + 1))}
               </span>
             )}
           </span>
