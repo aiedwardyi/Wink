@@ -411,7 +411,7 @@ import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
-import { currentTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
 
@@ -5180,6 +5180,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
   });
 
+  const settleTrace = holdTurnTrace(trace);
   const reservation = opts?.reservation;
   if (reservation) dispatchingReservations.add(reservation);
   void (async () => {
@@ -5187,6 +5188,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
+      settleTrace?.();
       return;
     }
     const releaseStarting = takeStartingHold(bot.id);
@@ -5697,6 +5699,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       }
     } catch (e) {
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
+      trace?.finish("send-failed");
       turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
       workerTurns.settled(threadId);
@@ -5742,6 +5745,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     } finally {
       releaseStarting();
       logSummaryWait();
+      settleTrace?.();
     }
   })().finally(() => {
     if (!reservation) return;
