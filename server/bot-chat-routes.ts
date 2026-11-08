@@ -36,6 +36,7 @@ type BotChatRouteDeps = {
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   store: Store;
+  clientMessage: (message: Message) => Message;
   sendSequencer: SendSequencer;
   ensureChatLatency: (input: { sendId?: string; threadId: string; userMessageId?: string; turnId?: string }) => void;
   markChatLatency: (input: { sendId?: string; threadId: string; userMessageId?: string; turnId?: string }, stage: "post.received" | "queue.decided" | "post.receipt", ids?: { queueId?: string; turnId?: string; assistantMessageId?: string }) => void;
@@ -79,6 +80,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     cfg,
     threadSyncGate,
     store,
+    clientMessage,
     sendSequencer,
     ensureChatLatency,
     markChatLatency,
@@ -143,7 +145,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
         },
       });
-      return json(res, 200, { message: patched });
+      return json(res, 200, { message: patched && clientMessage(patched) });
     },
     send: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const body = await readBody(req);

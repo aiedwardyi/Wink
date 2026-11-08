@@ -216,7 +216,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!emoji) return json(res, 400, { error: "emoji required" });
       const patched = store.toggleReaction(m[1], m[2], emoji, typeof body.by === "string" ? body.by : "user");
       if (!patched) return json(res, 404, { error: "no such message" });
-      return json(res, 200, { message: patched });
+      return json(res, 200, { message: clientMessage(patched) });
     },
     respond: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const threadId = m[1];
