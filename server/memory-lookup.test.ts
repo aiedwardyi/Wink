@@ -410,6 +410,6 @@ describe("send path wiring", () => {
 
   it("builds after a reply settles, never at send", () => {
     expect(section("  const recallNotes =", "\n  const syncNotes")).not.toMatch(/await|refresh/);
-    expect(section("memoryPass.onSettled(bot.id, event.threadId);", "memoryHealthCheck.settled")).toContain("memoryLookup.settled(bot.id, event.threadId, cursor)");
+    expect(section("memoryPass.onSettled(bot.id, event.threadId, flushNotes);", "memoryHealthCheck.settled")).toContain("memoryLookup.settled(bot.id, event.threadId, cursor)");
   });
 });
