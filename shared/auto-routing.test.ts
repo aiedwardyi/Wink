@@ -27,18 +27,18 @@ function input(engine: AutoEngine, kind: AutoTask, patch: Partial<AutoSelectionI
 
 type ExpectedGrid = Record<AutoEngine, Array<[string, EffortLevel]>>;
 const EXPECTED = {
-  claudeAgent: [[C[4], "low"], [C[3], "medium"], [C[3], "medium"], [C[3], "medium"], [C[4], "medium"], [C[3], "high"], [C[3], "high"], [C[2], "high"], [C[2], "high"], [C[2], "high"], [C[2], "high"]],
-  codex: [[X[3], "low"], [X[1], "medium"], [X[1], "medium"], [X[2], "medium"], [X[3], "medium"], [X[2], "medium"], [X[1], "high"], [X[0], "high"], [X[0], "high"], [X[1], "high"], [X[1], "high"]],
-  grokAgent: [[G[1], "low"], [G[1], "medium"], [G[0], "high"], [G[0], "medium"], [G[0], "high"], [G[1], "high"], [G[0], "high"], [G[0], "xhigh"], [G[0], "xhigh"], [G[0], "high"], [G[0], "xhigh"]],
-  antigravityAgent: [[A[3], "low"], [A[4], "medium"], [A[4], "medium"], [A[4], "medium"], [A[5], "high"], [A[5], "high"], [A[5], "high"], [A[5], "high"], [A[5], "high"], [A[5], "high"], [A[5], "high"]],
-  museAgent: [[M[0], "low"], [M[0], "medium"], [M[0], "medium"], [M[0], "medium"], [M[0], "high"], [M[1], "high"], [M[1], "high"], [M[1], "high"], [M[1], "high"], [M[1], "high"], [M[1], "high"]],
+  claudeAgent: [[C[4], "low"], [C[3], "medium"], [C[2], "high"], [C[3], "medium"], [C[4], "medium"], [C[3], "medium"], [C[2], "high"], [C[2], "high"], [C[2], "high"], [C[2], "high"], [C[2], "high"]],
+  codex: [[X[3], "low"], [X[1], "medium"], [X[1], "high"], [X[2], "medium"], [X[2], "high"], [X[2], "medium"], [X[1], "high"], [X[1], "high"], [X[1], "high"], [X[1], "high"], [X[1], "high"]],
+  grokAgent: [[G[0], "medium"], [G[0], "medium"], [G[0], "high"], [G[0], "medium"], [G[0], "high"], [G[0], "medium"], [G[0], "high"], [G[0], "xhigh"], [G[0], "xhigh"], [G[0], "xhigh"], [G[0], "xhigh"]],
+  antigravityAgent: [[A[3], "low"], [A[4], "medium"], [A[4], "medium"], [A[4], "medium"], [A[4], "medium"], [A[4], "medium"], [A[5], "high"], [A[5], "high"], [A[5], "high"], [A[5], "high"], [A[5], "high"]],
+  museAgent: [[M[0], "low"], [M[0], "medium"], [M[0], "medium"], [M[0], "medium"], [M[0], "medium"], [M[0], "medium"], [M[0], "high"], [M[0], "high"], [M[0], "high"], [M[0], "high"], [M[0], "high"]],
 } satisfies ExpectedGrid;
 const SAME_FAMILY = {
-  claudeAgent: [C[3], C[2], C[2], C[2], C[2], C[2], C[2], C[3], C[3], C[3], C[3]],
-  codex: [X[2], X[2], X[2], X[1], X[1], X[1], X[2], X[1], X[1], X[2], X[0]],
-  grokAgent: [G[0], G[0], G[1], G[1], G[1], G[0], G[1], G[1], G[1], G[1], G[1]],
+  claudeAgent: [C[3], C[2], C[3], C[2], C[2], C[2], C[3], C[3], C[3], C[3], C[3]],
+  codex: [X[2], X[2], X[2], X[1], X[1], X[1], X[2], X[2], X[2], X[2], X[0]],
+  grokAgent: Array(11).fill(G[0]),
   antigravityAgent: [A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5], A[5]],
-  museAgent: [M[1], M[1], M[1], M[1], M[1], M[0], M[0], M[0], M[0], M[0], M[0]],
+  museAgent: Array(11).fill(M[0]),
 };
 const CROSS_FAMILY = {
   claudeAgent: [X[1], X[1], G[0], X[1], X[1], X[1], X[1], X[1], X[1], X[1], X[1]],
@@ -79,7 +79,6 @@ describe("approved task grid", () => {
   it("uses approved variants for mechanical, source review and large designs", () => {
     expect(selectAutoRoute(input("codex", "edit", { task: { kind: "edit", risk: "low", scope: "mechanical" } }))).toMatchObject({ kind: "selected", route: { effort: "low" } });
     expect(selectAutoRoute(input("claudeAgent", "research", { task: { kind: "research", risk: "low", scope: "multi-source" } }))).toMatchObject({ kind: "selected", route: { model: C[3], effort: "high" } });
-    for (const engine of ["codex", "museAgent"] as const) expect(selectAutoRoute(input(engine, "architecture", { task: { kind: "architecture", risk: "high", scope: "large" } }))).toMatchObject({ kind: "selected", route: { effort: "xhigh" } });
   });
 
   it("keeps the approved unknown first-chat defaults", () => {
@@ -140,7 +139,7 @@ describe("effort coverage and hard admission", () => {
 
   it("never lets a pin or habit weaken protected work", () => {
     expect(selectAutoRoute(input("codex", "protected", { pin: { model: X[3], effort: "low" }, pinVerified: true })).kind).toBe("hold");
-    expect(selectAutoRoute(input("codex", "protected", { habit: { target: "worker", taskClass: "protected", engine: "codex", model: X[3], effort: "low" } }))).toMatchObject({ kind: "selected", route: { model: X[0], effort: "high" } });
+    expect(selectAutoRoute(input("codex", "protected", { habit: { target: "worker", taskClass: "protected", engine: "codex", model: X[3], effort: "low" } }))).toMatchObject({ kind: "selected", route: { model: X[1], effort: "high" } });
   });
 
   it.each(AUTO_ENGINES.filter((engine) => engine !== "antigravityAgent"))("requires offered effort on every explicit %s choice", (engine) => {
@@ -165,8 +164,8 @@ describe("precedence, fallback and review", () => {
   it("tries the same tier on another engine before one tier up", () => {
     const candidates = [autoCandidate("claudeAgent", { models: [C[3], C[2]] }), autoCandidate("codex")];
     expect(selectAutoRoute(input("claudeAgent", "quick", { candidates }))).toMatchObject({ kind: "selected", route: { engine: "codex", model: X[3], tier: "cheap" } });
-    expect(selectAutoRoute(input("claudeAgent", "quick", { candidates: candidates.slice(0, 1) }))).toMatchObject({ kind: "selected", route: { model: C[3], tier: "mid" } });
-    expect(selectAutoRoute(input("claudeAgent", "quick", { candidates: [autoCandidate("claudeAgent", { models: [C[2]] })] })).kind).toBe("hold");
+    expect(selectAutoRoute(input("claudeAgent", "quick", { candidates: candidates.slice(0, 1) }))).toMatchObject({ kind: "selected", route: { model: C[2], tier: "mid" } });
+    expect(selectAutoRoute(input("claudeAgent", "quick", { candidates: [autoCandidate("claudeAgent", { models: [C[3]] })] })).kind).toBe("hold");
     expect(selectAutoRoute(input("claudeAgent", "protected", { candidates: [autoCandidate("claudeAgent", { models: [C[4], C[3]] })] })).kind).toBe("hold");
   });
 
@@ -191,13 +190,14 @@ describe("precedence, fallback and review", () => {
     expect(result).toMatchObject({ kind: "selected", route: { model: X[3], effort: "max" } });
     expect(selectAutoRoute(input("codex", "bug", { rules: { max: true, preferences: [] }, chatEngine: "grokAgent", candidates: [autoCandidate("codex", { models: [X[3]] }), autoCandidate("grokAgent")] }))).toMatchObject({ kind: "selected", route: { model: G[0], effort: "xhigh" } });
     const duplicated = autoCandidate("codex");
-    expect(selectAutoRoute(input("codex", "bug", { rules: { max: true, preferences: [] }, candidates: [duplicated, duplicated] }))).toMatchObject({ kind: "selected", route: { model: X[0], effort: "high" } });
+    expect(selectAutoRoute(input("codex", "bug", { rules: { max: true, preferences: [] }, candidates: [duplicated, duplicated] }))).toMatchObject({ kind: "selected", route: { model: X[1], effort: "high" } });
   });
 
   it("keeps an adequate current chat route even when the grid now prefers another arm", () => {
     const current = { engine: "codex" as const, model: X[1], effort: "high" as const, account: "local-codex", tier: "mid" as const };
     expect(selectAutoRoute(input("codex", "chat", { target: "chat", current }))).toMatchObject({ kind: "selected", reason: "sticky", route: current });
-    expect(selectAutoRoute(input("codex", "bug", { target: "chat", current }))).toMatchObject({ kind: "selected", route: { model: X[0], tier: "strong" } });
+    const lower = { ...current, model: X[2], effort: "medium" as const };
+    expect(selectAutoRoute(input("codex", "bug", { target: "chat", current: lower }))).toMatchObject({ kind: "selected", route: { model: X[1], tier: "strong" } });
   });
 
   it("never turns coding tie order into a cheap-task order", () => {
@@ -211,8 +211,9 @@ describe("precedence, fallback and review", () => {
   it.each(AUTO_ENGINES)("labels a same-family fresh review for %s", (engine) => {
     const maker = gridArm(engine, "build");
     const result = selectAutoRoute(input(engine, "build", { task: { kind: "build", risk: "low", scope: "bounded", reviewOf: maker } }));
-    expect(result).toMatchObject({ kind: "selected", route: { reviewLabel: engine === "antigravityAgent" ? "same model, fresh look" : "same family", freshReview: true } });
-    if (result.kind === "selected" && engine !== "antigravityAgent") expect(result.route.model).not.toBe(maker.model);
+    const oneModel = ["antigravityAgent", "grokAgent", "museAgent"].includes(engine);
+    expect(result).toMatchObject({ kind: "selected", route: { reviewLabel: oneModel ? "same model, fresh look" : "same family", freshReview: true } });
+    if (result.kind === "selected" && !oneModel) expect(result.route.model).not.toBe(maker.model);
   });
 
   it("prefers a second engine and honors a required second family", () => {

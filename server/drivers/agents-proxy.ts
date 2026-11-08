@@ -214,7 +214,7 @@ const ROUTINE_FIELDS_SCHEMA = {
 } as const;
 
 const TOOLS = [
-  ...(process.env.OMB_AUTO_ROUTING === "1" ? [AUTO_RULE_TOOL] : []),
+  ...(process.env.OMB_AUTO_ROUTING === "1" && process.env.OMB_TERMINAL_SHARED === "1" ? [AUTO_RULE_TOOL] : []),
   ...(process.env.OMB_TEAM_REPORTS === "1" ? [TEAM_REPORT_TOOL] : []),
   ...(LIVE_VERIFY_V0 && process.env[VERIFY_TOOL_ENV] === "1" ? [VERIFY_SITE_TOOL] : []),
   {

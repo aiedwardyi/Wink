@@ -38,7 +38,17 @@ export function loadHarnessPlaybook(
 
 const HARNESS_PLAYBOOK = loadHarnessPlaybook();
 
+const AUTO_MATCH_START = "- Match the model to the job:";
+const AUTO_MATCH_END = "writing, X news.";
+const AUTO_LINE = "- Pass a task to terminal_spawn; Auto picks the worker's model, effort and engine. Tell the user each pick in one sentence.";
+
+function autoPlaybook(playbook: string): string {
+  const start = playbook.indexOf(AUTO_MATCH_START);
+  const end = playbook.indexOf(AUTO_MATCH_END, start);
+  return start < 0 || end < 0 ? playbook : playbook.slice(0, start) + AUTO_LINE + playbook.slice(end + AUTO_MATCH_END.length);
+}
+
 /** Only a bot with the shared terminal mounted gets the worker playbook. */
-export function harnessPlaybookPrompt(terminalShared: boolean, playbook = HARNESS_PLAYBOOK): string {
-  return terminalShared ? playbook : "";
+export function harnessPlaybookPrompt(terminalShared: boolean, playbook = HARNESS_PLAYBOOK, auto = false): string {
+  return terminalShared ? (auto ? autoPlaybook(playbook) : playbook) : "";
 }

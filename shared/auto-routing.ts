@@ -115,27 +115,25 @@ export function gridArm(engine: AutoEngine, taskClass: AutoTask, tier = TASK_TIE
     if (taskClass === "chat") return arm(engine, strong ? "claude-opus-5-5" : "claude-sonnet-5-5", "medium");
     if (strong) return arm(engine, "claude-opus-5-5", "high");
     if (taskClass === "quick" || (taskClass === "research" && tier === "cheap")) return arm(engine, "claude-haiku-5-5", taskClass === "quick" && scope === "bounded" ? "low" : "medium");
-    return arm(engine, "claude-sonnet-5-5", ["writing", "creative"].includes(taskClass) ? "medium" : "high");
+    if (["writing", "build"].includes(taskClass)) return arm(engine, "claude-opus-5-5", "high");
+    return arm(engine, "claude-sonnet-5-5", ["creative", "edit"].includes(taskClass) ? "medium" : "high");
   }
   if (engine === "codex") {
     if (taskClass === "chat") return arm(engine, "gpt-6.1-sol", "medium");
-    if (["bug", "architecture", "protected", "unknown"].includes(taskClass) || (strong && !["build", "design", "audit", "chat", "writing"].includes(taskClass))) return arm(engine, "gpt-6-astra", taskClass === "architecture" && scope === "large" ? "xhigh" : "high");
+    if (strong) return arm(engine, "gpt-6.1-sol", "high");
     if (taskClass === "quick") return arm(engine, "gpt-6-luna", "low");
-    if (taskClass === "research") return arm(engine, "gpt-6-luna", scope === "bounded" ? "medium" : "high");
+    if (taskClass === "research") return arm(engine, "gpt-6.1-terra", "high");
     if (taskClass === "creative" || taskClass === "edit") return arm(engine, "gpt-6.1-terra", scope === "mechanical" ? "low" : "medium");
-    return arm(engine, "gpt-6.1-sol", ["chat", "writing"].includes(taskClass) && !strong ? "medium" : "high");
+    return arm(engine, "gpt-6.1-sol", "high");
   }
   if (engine === "grokAgent") {
-    if (taskClass === "chat") return arm(engine, "grok-4.6", "medium");
-    if (strong) return arm(engine, "grok-4.7", ["design", "build", "writing", "research", "quick", "creative"].includes(taskClass) ? "high" : "xhigh");
-    if (taskClass === "quick") return arm(engine, "grok-4.6", "low");
-    if (taskClass === "edit") return arm(engine, "grok-4.6", "high");
-    return arm(engine, "grok-4.7", taskClass === "creative" ? "medium" : "high");
+    if (taskClass === "chat") return arm(engine, "grok-4.7", "medium");
+    if (strong) return arm(engine, "grok-4.7", ["build", "writing", "research", "quick", "creative"].includes(taskClass) ? "high" : "xhigh");
+    return arm(engine, "grok-4.7", ["quick", "edit", "creative"].includes(taskClass) ? "medium" : "high");
   }
-  if (engine === "antigravityAgent") return arm(engine, "gemini-3.8-flash", strong ? "high" : taskClass === "quick" ? "low" : ["chat", "writing", "creative"].includes(taskClass) ? "medium" : "high");
+  if (engine === "antigravityAgent") return arm(engine, "gemini-3.8-flash", strong ? "high" : taskClass === "quick" ? "low" : ["chat", "writing", "creative", "research", "edit"].includes(taskClass) ? "medium" : "high");
   if (taskClass === "chat") return arm(engine, "muse-spark-1.3", "medium");
-  if (strong || ["edit", "build"].includes(taskClass)) return arm(engine, "muse-spark-1.3-contributor", taskClass === "architecture" && scope === "large" ? "xhigh" : "high");
-  return arm(engine, "muse-spark-1.3", taskClass === "quick" ? "low" : taskClass === "research" ? "high" : "medium");
+  return arm(engine, "muse-spark-1.3", strong || taskClass === "build" ? "high" : taskClass === "quick" ? "low" : "medium");
 }
 
 export type AutoDimensions = Partial<AutoArm> & { account?: string };
@@ -231,9 +229,9 @@ function reviewArm(engine: AutoEngine, taskClass: AutoTask, maker: AutoArm, tier
       const preferred = taskClass === "audit" ? "gpt-6-astra" : ["quick", "chat", "writing", "build", "design"].includes(taskClass) ? "gpt-6.1-terra" : "gpt-6.1-sol";
       return arm(engine, maker.model === preferred ? preferred === "gpt-6.1-sol" ? "gpt-6.1-terra" : "gpt-6.1-sol" : preferred, "high");
     }
-    if (engine === "grokAgent") return arm(engine, maker.model === "grok-4.7" ? "grok-4.6" : "grok-4.7", "high");
+    if (engine === "grokAgent") return arm(engine, "grok-4.7", "high");
     if (engine === "antigravityAgent") return arm(engine, "gemini-3.8-flash", "high");
-    return arm(engine, maker.model === "muse-spark-1.3-contributor" ? "muse-spark-1.3" : "muse-spark-1.3-contributor", "high");
+    return arm(engine, "muse-spark-1.3", "high");
   }
   if (taskClass === "writing" && engine === "grokAgent") return arm(engine, "grok-4.7", "high");
   if (engine === "claudeAgent") return arm(engine, maker.engine === "codex" ? ["quick", "creative"].includes(taskClass) ? "claude-sonnet-5-5" : "claude-opus-5-5" : tier === "strong" ? "claude-opus-5-5" : "claude-sonnet-5-5", "high");
@@ -299,7 +297,7 @@ export function selectAutoRoute(input: AutoSelectionInput): AutoDecision {
         if (argon && !(exact && dimensions.model && (BIG_JOBS.has(taskClass) || task.scope === "large"))) continue;
         if (chosen.effort === "max" && !(input.pinVerified && input.pin?.effort === "max") && (!input.rules.max || tier !== "strong" || !["bug", "audit"].includes(taskClass))) continue;
         if ((taskClass === "protected" || taskClass === "unknown") && gridClass !== "chat" && !maker && ![
-          "claude-opus-5-5", "gpt-6-astra", "gpt-6.1-sol", "grok-4.7", "gemini-3.8-flash-high", "gemini-4-argon-high", "muse-spark-1.3-contributor",
+          "claude-opus-5-5", "gpt-6-astra", "gpt-6.1-sol", "grok-4.7", "gemini-3.8-flash-high", "gemini-4-argon-high", "muse-spark-1.3", "muse-spark-1.3-contributor",
         ].includes(chosen.model)) continue;
         if ((taskClass === "protected" || taskClass === "unknown") && gridClass !== "chat" && !["high", "xhigh", "max"].includes(chosen.effort)) continue;
         if (task.tools?.some((tool) => !candidate.tools.includes(tool)) || ((taskClass === "creative" || task.kind === "creative") && !candidate.tools.includes("image")) || (task.contextTokens ?? 0) > candidate.contextTokens) continue;
