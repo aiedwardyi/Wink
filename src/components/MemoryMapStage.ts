@@ -2,6 +2,9 @@ import { startTransition, useEffect, useState } from "react";
 import type { Bot } from "@/state/store";
 import { currentTask } from "./MemoryGroups";
 
+// below this the three kinds stack, as on a phone
+export const STACK_BELOW = 860;
+
 /** Counts up to `last` one transition per commit, so the map paints in parts after the tab's first frame. */
 export function useStage(last: number, now = false): number {
   const [stage, setStage] = useState(now ? last : 0);

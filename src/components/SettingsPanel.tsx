@@ -40,6 +40,7 @@ import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
 import { SaveStatus } from "./SaveStatus";
+import { STACK_BELOW } from "./MemoryMapStage";
 // the map's CSS comes with Bot details, so a Memory tab open never waits on a stylesheet
 import "./MemoryMap.css";
 
@@ -225,6 +226,8 @@ function WorkingFolder({ bot }: { bot: Bot }) {
 
 // the map loads with the Memory tab, so app start and the chat never pay for it
 const MemoryMap = lazyView(() => import("./MemoryMap").then((m) => ({ default: m.MemoryMap })));
+// a wide window fetches it with Bot details, so its map paints with the tab instead of after a suspend
+let loadedMap: typeof import("./MemoryMap").MemoryMap | null = null;
 
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
@@ -263,6 +266,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
     if (conflict) openFile(true);
   }, [conflict]);
   const fileRow = useRef<HTMLButtonElement>(null);
+  const MapView = loadedMap ?? MemoryMap;
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
 
   const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
@@ -354,6 +358,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
 
   useEffect(() => {
     void load();
+    if (window.innerWidth >= STACK_BELOW) void import("./MemoryMap").then((m) => { loadedMap = m.MemoryMap; }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -435,7 +440,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       </span>
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : active && (!loading || loadFailed) && (
         <LazyView>
-          <MemoryMap bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={openFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={openFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>

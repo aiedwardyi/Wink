@@ -7,7 +7,7 @@ import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, formatBytes, NotedLines, type MemoryTopic } from "./MemoryGroups";
 import { closePanel, fadePanel, openMist, openPanel, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { Fold } from "./Fold";
-import { liveHeight, useStage } from "./MemoryMapStage";
+import { liveHeight, STACK_BELOW, useStage } from "./MemoryMapStage";
 import "./MemoryMap.css";
 
 export interface SleepReadout {
@@ -21,8 +21,6 @@ export interface SleepReadout {
 
 type Kind = "long" | "knowledge";
 
-// below this the three kinds stack, as on a phone
-const STACK_BELOW = 860;
 const DOTS = 40;
 
 const UNITS = {
