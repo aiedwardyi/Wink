@@ -128,6 +128,14 @@ it("jumps only on arrival with reduced motion, keeping check timing unchanged", 
   expect(show.checks).toBe(2);
 });
 
+it("redraws on the frame a cursor arrives so a reduced-motion jump shows on time", () => {
+  const show = replay(result(0, 0, 0), result(1200, 1000, 0), end(1300));
+  toClock(show, 899);
+  expect(show.advance(2)).toBe(true);
+  expect(position(show, true)).toEqual({ x: 1012, y: 10 });
+  expect(show.advance(2)).toBe(false);
+});
+
 it("aims only at things in the view it plays at", () => {
   const show = replay(frame(0), result(0, 0, 0), mark(1100, "scroll", { tile: "desktop", y: 500 }), frame(1110), result(1200, 600, 700, { scrollY: 500 }), end(1300));
   toClock(show, 1080);

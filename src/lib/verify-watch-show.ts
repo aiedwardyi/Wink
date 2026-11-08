@@ -334,7 +334,7 @@ export class VerifyWatchShow {
 
   /** Moves the clock; false while nothing changed. */
   advance(ms: number): boolean {
-    const before = this.version;
+    const before = this.version, from = this.clock;
     this.clock += Math.max(0, Math.min(ms, 250));
     this.queue.sort((a, b) => a.due - b.due);
     while (this.queue.length && this.queue[0]!.due <= this.clock) {
@@ -353,7 +353,7 @@ export class VerifyWatchShow {
       this.outlines = this.outlines.filter(o => o.issue || this.clock - o.at <= o.hold + FADE_MS);
       this.version++;
     }
-    if (this.moving()) this.version++;
+    if (this.moving(from)) this.version++;
     return this.version !== before;
   }
 
@@ -409,8 +409,8 @@ export class VerifyWatchShow {
     return age <= outline.hold ? 1 : Math.max(0, 1 - (age - outline.hold) / FADE_MS);
   }
 
-  private moving() {
-    return [...this.cursors.values()].some(c => this.clock >= c.at && this.clock < c.at + c.duration) || (this.ring !== null && this.clock - this.ring.at < RING_MS) || this.outlines.some(o => !o.issue && this.clock - o.at > o.hold - 20);
+  private moving(from: number) {
+    return [...this.cursors.values()].some(c => this.clock >= c.at && from < c.at + c.duration) || (this.ring !== null && this.clock - this.ring.at < RING_MS) || this.outlines.some(o => !o.issue && this.clock - o.at > o.hold - 20);
   }
 
   private set(phase: ShowPhase) {
