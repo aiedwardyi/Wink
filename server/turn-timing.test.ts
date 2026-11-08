@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { currentTurnTrace, recordToolSchemas, startTurnTimer, startTurnTrace, traceClaimedTurn, traceHelperCall } from "./turn-timing.ts";
+import ts from "typescript";
+import { experimentalAgents, slimStaticText } from "./drivers/tool-catalog.ts";
+import { currentTurnTrace, recordToolSchemas, startTurnTimer, startTurnTrace, traceClaimedTurn, traceHelperCall, tracePart } from "./turn-timing.ts";
 
 describe("turn-timing", () => {
   const dir = join(tmpdir(), `orbit-turn-timing-${process.pid}`);
@@ -187,5 +189,56 @@ describe("turn-timing", () => {
     const helper = rows.find((row) => row.batchId);
     expect(helper).toMatchObject({ botId: "bot", threadId: "thread", sourceSendIds: ["send"], sourceMessageIds: ["message"], requests: [{ id: "attempt-1", usage: null, nested: false }, { id: "attempt-2", usage: null, nested: false }] });
     expect(helper.endpoints.runnerReceipt).toBeNull();
+  });
+});
+
+describe("flags off", () => {
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const section = (from: string, to: string) => {
+    const start = source.indexOf(from);
+    const end = source.indexOf(to, start);
+    if (start < 0 || end < start) throw new Error(`Missing section: ${from}`);
+    return source.slice(start, end);
+  };
+  const names = ["ORBIT_TURN_TIMING", "ORBIT_WINK_TOOL_CATALOG", "ORBIT_WINK_STATIC_SLIM"];
+  const saved = names.map((name) => process.env[name]);
+
+  beforeEach(() => { for (const name of names) delete process.env[name]; });
+  afterEach(() => names.forEach((name, i) => { if (saved[i] === undefined) delete process.env[name]; else process.env[name] = saved[i]; }));
+
+  const stub = (name: string): unknown => new Proxy(() => name, {
+    get: (_t, key) => key === Symbol.toPrimitive ? () => name : key === "map" ? () => [] : key === "length" ? 0 : stub(`${name}.${String(key)}`),
+    apply: () => name,
+  });
+  const scope = {
+    tracePart, slimStaticText, privateWorkspace: true, canMessage: true, tagged: [], opts: {}, cfg: {},
+    integrations: {}, instance: { driverKind: "claudeAgent" }, SHOW_IMAGE_GUIDANCE: "show. To create a new image, call generate_image.",
+  } as Record<string | symbol, unknown>;
+  const build = (body: string) => {
+    const run = new Function(`${ts.transpileModule(`function run(scope) { with (scope) { ${body} } }`, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
+    }).outputText}\nreturn run;`)() as (scope: object) => string;
+    return run(new Proxy(scope, {
+      has: (target, key) => key in target || (typeof key === "string" && !(key in globalThis)),
+      get: (target, key) => key === Symbol.unscopables ? undefined : key in target ? target[key] : stub(String(key)),
+    }));
+  };
+
+  it("builds the real system prompt as the untraced source does", () => {
+    const head = "        const system =\n";
+    const system = section(head, "\n        // a rewound, Orbit-compacted").slice(head.length);
+    const image = section("      const showImagePrompt =", "\n");
+    const untraced = (code: string) => code.replace(/tracePart\("\w+", (.*)\) \+$/gm, "($1) +").replace(/slimStaticText\((\w+), [\w.]+\)/, "$1");
+    expect(untraced(system)).not.toContain("tracePart");
+    const wrapped = build(`${image}\nconst system = ${system};\nreturn system;`);
+    expect(wrapped).toBe(build(`${untraced(image)}\nconst system = ${untraced(system)};\nreturn system;`));
+    expect(wrapped).toContain("call generate_image.");
+  });
+
+  it("leaves the turn flow, mount and static text alone", async () => {
+    const mount = { command: "node", args: ["a"], env: { A: "1" } };
+    expect(await traceClaimedTurn({ botId: "b" }, async () => currentTurnTrace())).toBeUndefined();
+    expect(experimentalAgents(mount)).toBe(mount);
+    expect(slimStaticText("x To create a new image, call generate_image.", "codex")).toBe("x To create a new image, call generate_image.");
   });
 });

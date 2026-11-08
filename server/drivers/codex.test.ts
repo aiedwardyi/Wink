@@ -172,6 +172,23 @@ describe("CodexDriver turns (fake app-server)", () => {
     }
   });
 
+  it("traces process ready, dispatch, first token and turn end", async () => {
+    vi.stubEnv("ORBIT_TURN_TIMING", "1");
+    vi.stubEnv("OMB_DATA_DIR", scratch);
+    try {
+      await create({ mode: "happy" });
+      await instance.adapter.sendTurn({ threadId: "t-trace", text: "current" });
+      await recorder.until((event) => event.type === "turn.completed");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const row = JSON.parse(readFileSync(join(scratch, "turn-traces.jsonl"), "utf8").trim().split("\n").at(-1)!);
+    const closed = (phase: string) => row.spans.some((span: { phase: string; end: number | null }) => span.phase === phase && span.end !== null);
+    expect(["spawn", "initialize", "start", "dispatch", "first_event", "completion"].filter((phase) => !closed(phase))).toEqual([]);
+    expect(Object.keys(row.marks)).toEqual(expect.arrayContaining(["first_visible_text", "native_completion", "driver_completion"]));
+    expect(row.engine).toBe("codex");
+  });
+
   it("steers the native running turn without starting another turn", async () => {
     await create({ mode: "steer" });
     expect(instance.adapter.capabilities.queueing).toBe(true);
