@@ -6,7 +6,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly —
 // resolveCliSpawn turns it into `node <script>`, so these run everywhere.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -353,6 +353,48 @@ describe("Grok warm leases (recorded transport)", () => {
     expect(peers[0].requests.filter((message) => message.method === "session/prompt")).toHaveLength(2);
     expect(prompts()).toHaveLength(2);
     expect(peers[0].child.killed).toBe(false);
+  });
+
+  it("an unused fresh guess discards only its own session, after exit", async () => {
+    const discardSession = vi.fn();
+    await start({ discardSession });
+    await instance.prepare!();
+    await instance.prepare!(shape());
+    expect(discardSession).not.toHaveBeenCalled();
+    await pool.closeAll("test");
+    expect(discardSession.mock.calls).toEqual([[{ id: "recorded-session", cwd: expect.stringContaining("recorded-workspace"), env: expect.any(Object) }]]);
+  });
+
+  it("a guess that served a Send keeps its session", async () => {
+    const discardSession = vi.fn();
+    await start({ discardSession });
+    await instance.prepare!();
+    await instance.prepare!(shape());
+    await send();
+    await pool.closeAll("test");
+    expect(prompts()).toHaveLength(1);
+    expect(discardSession).not.toHaveBeenCalled();
+  });
+
+  it("a resumed guess keeps its session", async () => {
+    const discardSession = vi.fn();
+    await start({ discardSession });
+    await instance.prepare!();
+    await instance.prepare!({ ...shape(), resumeCursor: "recorded-session" });
+    await pool.closeAll("test");
+    expect(discardSession).not.toHaveBeenCalled();
+  });
+
+  it("Grok discards only the named session folder", () => {
+    const home = temps.make(join(tmpdir(), "omb-grok-discard-"));
+    const cwd = "C:\\work\\bot";
+    const folder = join(home, "sessions", encodeURIComponent("C:/work/bot"));
+    for (const id of ["guess", "kept"]) mkdirSync(join(folder, id), { recursive: true });
+    const env = { GROK_HOME: home };
+    grokSupport.discardSession!({ id: "guess", cwd, env });
+    grokSupport.discardSession!({ id: "..", cwd, env });
+    expect(existsSync(join(folder, "guess"))).toBe(false);
+    expect(existsSync(join(folder, "kept"))).toBe(true);
   });
 
   it("a guess that misses at Send runs today's path", async () => {
