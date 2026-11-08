@@ -7106,6 +7106,7 @@ const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSe
 const groupRoutes = createGroupRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   store,
+  clientMessage,
   registry,
   createGroupTaskRequestSchema,
   checkedMemberIds,
@@ -7217,6 +7218,7 @@ const botChatRoutes = createBotChatRoutes({
   threadSyncGate,
   registry,
   store,
+  clientMessage,
   sendSequencer,
   ensureChatLatency,
   markChatLatency,
@@ -7868,10 +7870,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await teamRoutes.github(req, res);
     }
     if (method === "GET" && path === "/api/teams/scout") {
-      return await teamRoutes.scout(res, url);
+      return await teamRoutes.scout(res, url, credentials.bearerOk);
     }
     if (method === "GET" && path === "/api/teams/scout/directory") {
-      return await teamRoutes.directory(res, url);
+      return await teamRoutes.directory(res, url, credentials.bearerOk);
     }
     if (method === "POST" && path === "/api/teams/import") {
       return await teamRoutes.importTeam(req, res, url);
