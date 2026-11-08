@@ -113,6 +113,15 @@ describe("Fold", () => {
     expect(body()).toBe(shown);
   });
 
+  it("opens and closes at once when instant", async () => {
+    const instant = (open: boolean) => act(async () => root.render(createElement(Fold, { open, instant: true, children: createElement("p", { "data-body": "" }, "Notes") })));
+    await instant(false);
+    await instant(true);
+    expect(fold()?.dataset.fold).toBe("open");
+    await instant(false);
+    expect(host.innerHTML).toBe("");
+  });
+
   it("opens and closes at once under reduced motion", async () => {
     stubReducedMotion(true);
     await render(false);

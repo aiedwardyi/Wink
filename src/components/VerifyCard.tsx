@@ -72,6 +72,10 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
   const stale = verifyCardStale(card, Date.now());
   const running = !stale && (card.status === "preparing" || card.status === "running");
   const showing = useVerifyShowing(card.runId);
+  const driven = running || (!stale && card.status === "waiting");
+  const wasDriven = useRef(driven);
+  useEffect(() => { wasDriven.current = driven; });
+  const byReplay = !driven && !wasDriven.current;
   const replaying = !running && showing !== null;
   const moving = running || replaying;
   useEffect(() => {
@@ -137,7 +141,7 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
           {action === "watch" && <button type="button" data-verify-watch={action} aria-expanded={phone ? inline : undefined} onClick={watch}><Play size={13} />{c.watch}</button>}
         </span>}
       </div>
-      <Fold open={moving || waiting} keep>
+      <Fold open={moving || waiting} keep instant={byReplay}>
         {waiting && <div className="verify-card-strip">{c.waiting}</div>}
         <ul className="verify-card-plan">{c.plan.map((text, i) => <li key={text} data-state={waiting ? "waiting" : rowState(by, PLAN[i]!)}>
           <span className="verify-card-dots">{DOTS[i]!.map(dot)}</span><span>{text}</span>
@@ -151,7 +155,7 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
         })}</div>}
         {phone && running && card.live && <div className="verify-card-phone-watch"><Monitor size={14} />{c.watchPhone}</div>}
       </Fold>
-      <Fold open={!moving && !waiting} keep>
+      <Fold open={!moving && !waiting} keep instant={byReplay}>
         <div className="verify-card-strip">{tally.length ? <>
           {card.fixed ? <span>{c.fixedOnly(card.fixed)}</span> : null}
           {tally.map(([key, n]) => <span key={key}><b data-issues={key === "issues" || undefined}>{n}</b> {c.tally[key](n)}</span>)}

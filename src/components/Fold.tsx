@@ -4,8 +4,8 @@ import { MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 
-/** Opens and closes its content by its height on the shared fold motion (motion.css); closed, the content unmounts. Open at mount, it shows at once. `className` places the fold in its parent; a margin there stays put while the content folds. With an `id`, an empty hidden box keeps that id while closed, so `aria-controls` always has a target. `soft` is the longer, flat-landing motion for a fold whose rows below travel far. `keep` shows the last open content while it closes, for content that empties the moment it closes. */
-export function Fold({ open, id, className, soft, keep, children }: { open: boolean; id?: string; className?: string; soft?: boolean; keep?: boolean; children: ReactNode }) {
+/** Opens and closes its content by its height on the shared fold motion (motion.css); closed, the content unmounts. Open at mount, it shows at once. `className` places the fold in its parent; a margin there stays put while the content folds. With an `id`, an empty hidden box keeps that id while closed, so `aria-controls` always has a target. `soft` is the longer, flat-landing motion for a fold whose rows below travel far. `keep` shows the last open content while it closes, for content that empties the moment it closes. `instant` opens and closes with no motion. */
+export function Fold({ open, id, className, soft, keep, instant, children }: { open: boolean; id?: string; className?: string; soft?: boolean; keep?: boolean; instant?: boolean; children: ReactNode }) {
   const { mounted, closing } = usePresence(open, soft ? MOTION_LARGE_MS : undefined);
   const [was, setWas] = useState(open);
   const [opening, setOpening] = useState(false);
@@ -14,10 +14,10 @@ export function Fold({ open, id, className, soft, keep, children }: { open: bool
   if (open) kept.current = children;
   if (open !== was) {
     setWas(open);
-    setOpening(open && !reducedMotion());
+    setOpening(open && !reducedMotion() && !instant);
     setLanded(false);
   }
-  if (!mounted) return id ? <div id={id} hidden /> : null;
+  if (!mounted || (instant && !open)) return id ? <div id={id} hidden /> : null;
   return (
     <div
       id={id}

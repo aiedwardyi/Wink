@@ -304,6 +304,20 @@ it("folds the running body out and the result in when a run ends, and back when 
   } finally { await view.close(); }
 });
 
+it("swaps to the lanes and back at once while the Watch replay plays, with no fold motion", async () => {
+  const view = await mounted(card({ replay: ["a"], counts: counts() }));
+  try {
+    await act(async () => setVerifyShowing({ runId: "run-123456", checks: 12, by: { LINKS: { desktop: [3, 10] } } }));
+    expect(view.host.querySelector(".verify-card-lanes")).not.toBeNull();
+    expect(view.host.querySelector(".verify-card-strip")).toBeNull();
+    expect(view.host.querySelector('[data-fold="opening"], [data-fold="closing"]')).toBeNull();
+    await act(async () => setVerifyShowing(null));
+    expect(view.host.querySelector(".verify-card-lanes")).toBeNull();
+    expect(folded(view.host, "open", ".verify-card-strip")).not.toBeNull();
+    expect(view.host.querySelector('[data-fold="opening"], [data-fold="closing"]')).toBeNull();
+  } finally { await view.close(); }
+});
+
 it("shows a finished card at once, with no fold motion", async () => {
   const view = await mounted(card({ counts: counts() }));
   try {

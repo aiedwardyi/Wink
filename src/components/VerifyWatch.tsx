@@ -38,6 +38,7 @@ interface FrameProps {
   /** stream the running check instead of the kept replays */
   live: boolean;
   hidden: boolean;
+  closing?: boolean;
   inline?: boolean;
   onClose(): void;
 }
@@ -46,12 +47,12 @@ const TAG_FONT = `10px "Cascadia Mono", ui-monospace, monospace`;
 // measureText resolves the font on first use (several ms); the tag font is monospace.
 const TAG_CHAR = 6.1;
 
-export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false, onClose }: FrameProps) {
+export function VerifyWatchFrame({ card, threadId, live, hidden, closing = false, inline = false, onClose }: FrameProps) {
   const { locale } = useI18n();
   const c = copy[locale];
   const phone = useIsPhone();
   const visibility = useVisibility();
-  const gate = verifyLiveGate(true, hidden, visibility);
+  const gate = verifyLiveGate(!closing, hidden, visibility);
   const [show, setShow] = useState(() => new VerifyWatchShow(live, verifyChosenTab(card.runId)));
   const [maximized, setMaximized] = useState(false);
   const expanded = maximized && !inline && !phone;
@@ -339,7 +340,7 @@ function handles(ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
 export function VerifyWatchPanel({ card, threadId, live, hidden, closing = false }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean }) {
   return (
     <aside className="verify-watch animate-panel-in" data-verify-watch data-side-panel="" data-closing={closing || undefined} inert={closing || undefined}>
-      <VerifyWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} onClose={closeVerifyWatch} />
+      <VerifyWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} closing={closing} onClose={closeVerifyWatch} />
     </aside>
   );
 }

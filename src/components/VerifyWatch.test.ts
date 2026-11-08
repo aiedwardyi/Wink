@@ -532,6 +532,15 @@ it("slides the docked panel in and keeps it mounted, inert and click-through, wh
   expect(host.querySelector(".verify-watch-frame")).not.toBeNull();
 });
 
+it("stops the live stream the moment the panel starts closing", async () => {
+  const panel = (closing: boolean) => act(async () => root.render(createElement(VerifyWatchPanel, { card, threadId: "t", live: true, hidden: false, closing })));
+  await panel(false);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.signal.aborted).toBe(false);
+  await panel(true);
+  expect(calls[0]!.signal.aborted).toBe(true);
+});
+
 const watchCss = readFileSync("src/components/VerifyWatch.css", "utf8");
 const watchRule = (selector: string) => {
   const start = watchCss.indexOf(`\n${selector} {`);
