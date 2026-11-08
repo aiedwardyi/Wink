@@ -143,6 +143,28 @@ describe("FitTextarea", () => {
     else document.documentElement.setAttribute(attribute, previous);
   });
 
+  it("leaves a box in a hidden tab unmeasured until the tab shows", async () => {
+    const width = vi.spyOn(HTMLTextAreaElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLTextAreaElement) {
+      return this.closest("[hidden]") ? 0 : 315;
+    });
+    await act(async () => root.render(createElement("div", { hidden: true }, createElement(FitTextarea, { value: "Long memory\n한국어 메모\nLast line", readOnly: true, watchMetrics: true }))));
+    width.mockClear();
+    height = 700;
+    await act(async () => {
+      const style = document.createElement("style");
+      style.dataset.fitTest = "";
+      style.textContent = "textarea { font-size: 18px; }";
+      document.head.appendChild(style);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    expect(width).not.toHaveBeenCalled();
+    await act(async () => {
+      host.querySelector("div")!.hidden = false;
+      resized();
+    });
+    expect(box().style.height).toBe("702px");
+  });
+
   it("checks overflow on viewport resize even at the same width", async () => {
     await render(true);
     height = 1400;
