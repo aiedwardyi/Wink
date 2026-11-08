@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeIdentityCanary, scanForCanary, type IdentityCanary } from "@/lib/identity-canary";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardSample } from "@/lib/usage-board";
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 
 const h = vi.hoisted(() => ({
   state: { bots: [] as unknown[], instances: [] as unknown[], terminalPanes: {} as Record<string, string[]> },
@@ -293,7 +293,7 @@ describe("Usage desk", () => {
     const folds = [...host.querySelectorAll("button[data-engine-fold]")];
     expect(folds).toHaveLength(4);
     for (const node of folds) await click(node);
-    await act(async () => { await vi.advanceTimersByTimeAsync(PRESENCE_EXIT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
     expect(host.querySelectorAll("[data-engine-summary]")).toHaveLength(4);
     expect(q("[data-account-row]")).toBeNull();
     scan("every engine folded");
@@ -1163,7 +1163,7 @@ describe("Usage desk", () => {
     expect(stored()).toEqual({ "codex-work": true, claude: true });
     expect(arrows()).toHaveLength(0);
     expect([content("codex")?.getAttribute("data-fold"), content("codex")?.hasAttribute("inert"), content("codex")?.contains(row("codex"))]).toEqual(["closing", true, true]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(PRESENCE_EXIT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
     expect([content("codex")?.hidden, content("codex")?.childElementCount, content("claude")?.hidden]).toEqual([true, 0, true]);
     expect([row("codex"), row(CODEX_2), row("claude")]).toEqual([null, null, null]);
     expect([summary("codex"), summary()]).toEqual(["7d 62% left", "5h 34% left · 7d 59% left"]);

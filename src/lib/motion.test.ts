@@ -44,6 +44,7 @@ describe("shared motion tokens", () => {
     expect(`${motion.MOTION_LARGE_MS}ms`).toBe(token("motion-large"));
     expect(motion.EASE_STANDARD).toBe(token("ease-standard"));
     expect(motion.EASE_ENTRANCE).toBe(token("ease-entrance"));
+    expect(motion.EASE_SOFT).toBe(token("ease-soft"));
     expect(PRESENCE_EXIT_MS).toBe(motion.MOTION_FAST_MS);
   });
 

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import { setUsageMode } from "@/lib/usage-preferences";
@@ -24,6 +25,10 @@ import { ChatPlanMeters } from "./ChatPlanMeters";
 let host: HTMLDivElement;
 let root: Root;
 const q = (selector: string) => host.querySelector<HTMLElement>(selector);
+const foldAll = async () => {
+  await click("[data-fold-all]");
+  await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
+};
 const click = async (selector: string) => {
   expect(q(selector), selector).not.toBeNull();
   await act(async () => q(selector)!.click());
@@ -112,13 +117,13 @@ it("measures phone rows before aligning and restores the expanded layout", async
   const size = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 302, 45));
   await mount();
   expect(q("[data-phone-columns]")).toBeNull();
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-phone-columns]")).not.toBeNull();
   for (const head of host.querySelectorAll<HTMLElement>(".usage-engine-head")) {
     expect(head.style.getPropertyValue("--usage-row-height")).toBe("45px");
     expect(head.style.transitionProperty).toBe("");
   }
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-phone-columns]")).toBeNull();
   size.mockRestore();
 });
@@ -146,7 +151,7 @@ it("shares desktop window widths and drops them when expanded or too narrow", as
   let width = 628;
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
   await mount();
-  await click("[data-fold-all]");
+  await foldAll();
   const list = q("[data-desktop-columns]")!;
   expect(list).not.toBeNull();
   expect(list.style.getPropertyValue("--usage-summary-columns")).toBe("210px 190px");
@@ -154,7 +159,7 @@ it("shares desktop window widths and drops them when expanded or too narrow", as
   await mount();
   expect(q("[data-desktop-columns]")).toBeNull();
   width = 628;
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-desktop-columns]")).toBeNull();
   vi.restoreAllMocks();
 });
