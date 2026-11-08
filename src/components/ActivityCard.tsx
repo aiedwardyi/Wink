@@ -5,6 +5,7 @@ import { localeTag, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { EASE_ENTRANCE, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
+import { LIGHT_SKIN_IDS, readSkin } from "@/lib/skins";
 import { placeTooltip } from "@/lib/tooltip-position";
 import { PLAIN_TOOLTIP_CLASS } from "@/lib/tooltips";
 import { api } from "@/state/store";
@@ -13,8 +14,11 @@ import { Card } from "./SettingsPrimitives";
 const SHADES = ["bg-control", "bg-accent/25", "bg-accent/50", "bg-accent/75", "bg-accent"];
 const WEEK_GRID = "grid grid-cols-[repeat(26,minmax(0,1fr))] gap-x-[2px] @[30rem]/activity:gap-x-[3px]";
 const KEY = "omb-activity";
-/** Per column, so the whole wave lands inside 450 ms. */
-const WAVE_STEP_MS = 8;
+/** When the last square starts, so the whole sweep lands inside 700 ms. */
+const SWEEP_MS = 300;
+const GLINT_PEAK = 1.7;
+/** Pale squares clip to white and vanish into the card at the dark peak. */
+const GLINT_PEAK_LIGHT = 1.05;
 
 let last: ReplyActivity | null = null;
 
@@ -81,10 +85,19 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
     if (waved?.current || reducedMotion()) return;
     if (waved) waved.current = true;
     const squares = grid.current?.querySelectorAll<HTMLElement>("[data-day]") ?? [];
-    for (const [day, square] of [...squares].entries()) square.animate?.(
-      [{ opacity: 0.35, transform: "scale(0.7)" }, { opacity: 1, transform: "none" }],
-      { duration: MOTION_LARGE_MS, delay: Math.floor(day / 7) * WAVE_STEP_MS, easing: EASE_ENTRANCE, fill: "backwards" },
-    );
+    const peak = LIGHT_SKIN_IDS.has(readSkin()) ? GLINT_PEAK_LIGHT : GLINT_PEAK;
+    for (const [day, square] of [...squares].entries()) {
+      const week = Math.floor(day / 7);
+      const delay = SWEEP_MS * week / 25;
+      // One animation per square: a second layer each halves the frame rate at 4x.
+      square.animate?.([
+        { opacity: 0.35, transform: "translateY(-3px)", filter: "brightness(1)" },
+        { filter: "brightness(1)", offset: 0.25 },
+        { filter: `brightness(${peak})`, offset: 0.55 },
+        { filter: "brightness(1)", offset: 0.85 },
+        { opacity: 1, transform: "none", filter: "brightness(1)" },
+      ], { duration: MOTION_LARGE_MS, delay, easing: EASE_ENTRANCE, fill: "backwards" });
+    }
   }, []);
   useEffect(() => {
     if (!tip) return;
