@@ -5180,14 +5180,15 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     cursor: resume ? task.resumeCursors[instanceId] : undefined,
   });
 
+  const settleTrace = holdTurnTrace(trace);
   const reservation = opts?.reservation;
   if (reservation) dispatchingReservations.add(reservation);
-  const settleTrace = holdTurnTrace(trace);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
       memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
+      settleTrace?.();
       return;
     }
     const releaseStarting = takeStartingHold(bot.id);
@@ -5697,8 +5698,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         startScreenPoller(bot.id, previewCapture, { screenIsTheWork: instance.driverKind === "boxAgent" });
       }
     } catch (e) {
-      trace?.finish("send-failed");
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
+      trace?.finish("send-failed");
       turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
       workerTurns.settled(threadId);
@@ -5744,9 +5745,9 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     } finally {
       releaseStarting();
       logSummaryWait();
+      settleTrace?.();
     }
   })().finally(() => {
-    settleTrace?.();
     if (!reservation) return;
     dispatchingReservations.delete(reservation);
     release(reservation);
