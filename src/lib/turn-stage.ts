@@ -277,6 +277,10 @@ export function revealStream(text: string, ramps: readonly StreamRamp[], now: nu
 function openMarkup(text: string): number {
   let tilde = -1;
   let under = -1;
+  const earliest = (stop: number) => {
+    const open = [tilde, under, stop].filter((index) => index >= 0);
+    return open.length ? Math.min(...open) : -1;
+  };
   for (let at = 0; at < text.length; at++) {
     const c = text[at];
     if (c === "\\") at++;
@@ -284,18 +288,24 @@ function openMarkup(text: string): number {
       let n = 1;
       while (text[at + n] === "`") n++;
       const close = text.indexOf("`".repeat(n), at + n);
-      if (close < 0) return -1;
+      if (close < 0) return earliest(-1);
       at = close + n - 1;
     } else if (c === "[") {
       const from = text[at - 1] === "!" ? at - 1 : at;
       const end = text.indexOf("]", at);
-      if (end < 0) return from;
-      if (text[end + 1] === "(" ? text.indexOf(")", end) < 0 : end === text.length - 1) return from;
+      if (end < 0) return earliest(from);
+      if (text[end + 1] !== "(") {
+        if (end === text.length - 1) return earliest(from);
+        continue;
+      }
+      const close = text.indexOf(")", end);
+      if (close < 0) return earliest(from);
+      at = close;
     } else if (c === "<" && /[A-Za-z/!]/.test(text[at + 1] ?? "")) {
-      if (text.indexOf(">", at) < 0) return at;
-    } else if (c === "!" && at === text.length - 1) return at;
+      if (text.indexOf(">", at) < 0) return earliest(at);
+    } else if (c === "!" && at === text.length - 1) return earliest(at);
     else if (c === "~" && (at === text.length - 1 || text[at + 1] === "~")) {
-      if (at === text.length - 1) return tilde < 0 ? at : tilde;
+      if (at === text.length - 1) return earliest(at);
       tilde = tilde < 0 ? at : -1;
       at++;
     } else if (c === "_") {
@@ -305,12 +315,14 @@ function openMarkup(text: string): number {
       else if (under < 0 && !/\s/.test(next) && !/[\p{L}\p{N}]/u.test(prev)) under = at;
     }
   }
-  return tilde < 0 || under < 0 ? Math.max(tilde, under) : Math.min(tilde, under);
+  return earliest(-1);
 }
 
 /** The first paragraph while it is still arriving: nothing that could still turn into another block or half-draw markup. */
 function openParagraph(block: string, settle: (text: string) => string): string[] {
-  if (block.includes("|") || /^\s*\d{1,9}\s*$/.test(block)) return [];
+  const [head, next] = block.split("\n");
+  const table = head.includes("|") && (next === undefined || /^[\s|:-]*$/.test(next));
+  if (table || /^\s*\d{1,9}\s*$/.test(block)) return [];
   const cut = openMarkup(block);
   const shown = settle(cut < 0 ? block : block.slice(0, cut)).trimEnd();
   return shown ? [shown] : [];

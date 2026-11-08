@@ -35,6 +35,7 @@ describe("paragraph reply blocks", () => {
 
   it.each([
     ["a table header", "| A | B |"],
+    ["a header with half a delimiter row", "A | B\n|--"],
     ["a list number", "1"],
     ["a list", "- First"],
     ["a heading", "## Title"],
@@ -52,6 +53,8 @@ describe("paragraph reply blocks", () => {
     ["an open tag", "Run <span cla", "Run"],
     ["open strikethrough", "Drop ~~this one", "Drop"],
     ["open underscores", "This is _very", "This is"],
+    ["a link inside open strikethrough", "The killer is ~~Alice [profile", "The killer is"],
+    ["open code inside open strikethrough", "The ~~spoiler `code", "The"],
   ])("never draws %s", (_, text, shown) => {
     expect(splitReplyBlocks(text)).toEqual([shown]);
   });
@@ -62,6 +65,8 @@ describe("paragraph reply blocks", () => {
     "A ~~gone~~ word and _slanted_ text",
     "Take a[0] and [x] and 2 < 3",
     "Mixed <b>bold</b> done",
+    "See [docs](https://host/_private) now",
+    "A | B\ncontinues here",
   ])("shows closed markup as written in %j", (text) => {
     expect(splitReplyBlocks(text)).toEqual([text]);
   });
