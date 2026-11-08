@@ -462,7 +462,7 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       </MemoryGroup>
       <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
-        <Fold open={expanded && !inMap}>
+        <Fold open={expanded && (!inMap || !wide)}>
           <div className="px-4 pb-4 pt-3">
             {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}
             {!loading && editor}

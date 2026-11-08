@@ -480,6 +480,35 @@ describe("SettingsPanel memory groups", () => {
     expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
   });
 
+  it("keeps exactly one memory editor, text intact, when the window resizes", async () => {
+    let width = 1200;
+    const watchers: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class { constructor(run: () => void) { watchers.push(run); } observe() {} disconnect() {} });
+    const measured = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? width : 0; });
+    const resize = async (next: number) => {
+      width = next;
+      await act(async () => watchers.forEach((run) => run()));
+      await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
+    };
+    const editors = () => Array.from(host.querySelectorAll<HTMLTextAreaElement>("textarea[aria-label=\"Memory\"]"));
+    await render({ ...claudeBot, id: "bot-resize" });
+    await act(async () => tab(host, "Memory").click());
+    await until(() => host.querySelector(".mm-live-tag"));
+    await act(async () => memoryRow(host).click());
+    const typed = `${memory}
+- typed before resize`;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editors()[0], typed);
+      editors()[0].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(editors().map((box) => [box.closest(".mm-sheet") !== null, box.value])).toEqual([[true, typed]]);
+    await resize(500);
+    expect(editors().map((box) => [box.closest(".mm-sheet") !== null, box.value])).toEqual([[false, typed]]);
+    await resize(1200);
+    expect(editors().map((box) => [box.closest(".mm-sheet") !== null, box.value])).toEqual([[true, typed]]);
+    measured.mockRestore();
+  });
+
   it("hides the task when there is none", async () => {
     await render(claudeBot);
     const text = host.textContent ?? "";
