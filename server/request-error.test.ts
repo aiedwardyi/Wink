@@ -30,3 +30,12 @@ it.each([400, 409, 413])("preserves explicit %s route errors", async (status) =>
   expect(requestError(error, log)).toEqual({ status, body: { error: error.message } });
   expect(log).toHaveBeenCalledWith(error.message);
 });
+
+it("sends the code of a refused sign-in", async () => {
+  const { requestError } = await import("./request-error.ts");
+  const { LoginBusyError } = await import("./engine-login.ts");
+  expect(requestError(new LoginBusyError(), () => {})).toEqual({
+    status: 409,
+    body: { error: "Another sign-in for this engine is still running", code: "login-busy" },
+  });
+});

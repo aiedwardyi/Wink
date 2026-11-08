@@ -46,6 +46,7 @@ it.each([
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   applyLocale("en");
   state.appSettingsSection = section;
+  localStorage.setItem("omb-keys-open", "1");
   const status = {
     runtime: "docker", daemonUp: true, image: true, imageMatches: false,
     managed: true, container: "stopped", network: "loopback", security: "hardened",

@@ -3,6 +3,9 @@ import { lockAxis, reducedMotion, SWIPE_MOTION_MS, SWIPE_SLOP, SWIPE_SPRING, SWI
 
 type Drag = { x: number; y: number; lastX: number; lastT: number; velocity: number; axis: SwipeAxis; width: number; reduced: boolean };
 
+// Settings accepts starts at either edge, unlike chat navigation.
+export const settingsSwipeBlocked = (target: Element) => Boolean(target.closest('[role="slider"], .dial-stage, [data-mi-zoom]')) || swipeBlocked(target, window.innerWidth / 2);
+
 export function useSettingsSwipe(ref: RefObject<HTMLElement | null>, enabled: boolean, page: string | false, back: () => void): void {
   const latest = useRef(back);
   useLayoutEffect(() => { latest.current = back; });
@@ -41,9 +44,7 @@ export function useSettingsSwipe(ref: RefObject<HTMLElement | null>, enabled: bo
       drag = null;
       const touch = event.touches[0];
       if (settling || event.touches.length !== 1 || !touch || !(event.target instanceof Element)) return;
-      if (event.target.closest('[role="slider"], .dial-stage, [data-mi-zoom]')) return;
-      // Settings accepts starts at either edge, unlike chat navigation.
-      if (swipeBlocked(event.target, window.innerWidth / 2)) return;
+      if (settingsSwipeBlocked(event.target)) return;
       drag = { x: touch.clientX, y: touch.clientY, lastX: touch.clientX, lastT: event.timeStamp, velocity: 0, axis: null, width: stage.clientWidth || window.innerWidth, reduced: reducedMotion() };
     };
     const move = (event: TouchEvent) => {

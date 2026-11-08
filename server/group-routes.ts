@@ -17,6 +17,7 @@ import type { RecoveryFlushReason, TaskResumeScheduler } from "./task-recovery-f
 
 type GroupRouteDeps = {
   store: Store;
+  clientMessage: (message: Message) => Message;
   registry: ProviderRegistry;
   instanceForBot?: (bot: BotRecord, threadId?: string) => ProviderInstance | null;
   createGroupTaskRequestSchema: z.ZodType<{ title?: string }>;
@@ -42,6 +43,7 @@ type GroupRouteDeps = {
 export function createGroupRoutes(deps: GroupRouteDeps) {
   const {
     store,
+    clientMessage,
     registry,
     createGroupTaskRequestSchema,
     checkedMemberIds,
@@ -426,7 +428,7 @@ export function createGroupRoutes(deps: GroupRouteDeps) {
       if (patch.answered !== undefined) card.answered = patch.answered;
       if (patch.dismissed) card.dismissed = true;
       const patched = store.patchMessage(group.threadId, m[2], { card });
-      return json(res, 200, { message: patched });
+      return json(res, 200, { message: patched && clientMessage(patched) });
     },
   };
 }

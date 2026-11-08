@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { validateBotCwd } from "./bot-cwd.ts";
+import { isNetworkPath, validateBotCwd } from "./bot-cwd.ts";
 import { fetchBotDirectory, matchDirectoryBots, type MatchedDirectoryBot } from "./bot-directory.ts";
 import { isBotPackage, packageAgentAsMember, parseBotPackage, renderBotPackageMarkdown } from "./bot-package.ts";
 import type { AppConfig } from "./config.ts";
@@ -21,6 +21,9 @@ type TeamRouteDeps = {
   publicGroupState: (group: GroupRecord) => Record<string, unknown>;
   broadcast: (payload: Record<string, unknown>) => void;
 };
+
+// A phone-reachable GET must not make this PC stat a network share.
+const phoneNetworkRefusal = "that folder must be on this PC";
 
 export function createTeamRoutes(deps: TeamRouteDeps) {
   const { cfg, store, routines, defaultSelection, publicBot, publicGroupState, broadcast } = deps;
@@ -93,7 +96,7 @@ export function createTeamRoutes(deps: TeamRouteDeps) {
         return json(res, status, { error: error instanceof Error ? error.message : "The GitHub team could not be loaded" });
       }
     },
-    scout: async (res: ServerResponse, url: URL) => {
+    scout: async (res: ServerResponse, url: URL, desktop: boolean) => {
       // The scout reads a folder and answers with a suggestion - it creates
       // nothing. Bots and the room come into being only when the human sends
       // the suggested manifest through /api/teams/import, so "the agent
@@ -102,16 +105,18 @@ export function createTeamRoutes(deps: TeamRouteDeps) {
       // trust boundary as pointing any bot's working folder at a path.
       // Deliberately offline - the community directory lives on its own
       // route below, so a slow network can never delay the suggestion.
+      if (!desktop && isNetworkPath(url.searchParams.get("cwd"))) return json(res, 400, { error: phoneNetworkRefusal });
       const validated = validateBotCwd(url.searchParams.get("cwd"));
       if (!validated.ok) return json(res, 400, { error: validated.error });
       if (!validated.cwd) return json(res, 400, { error: "scout needs a folder to read" });
       const profile = scoutProject(validated.cwd);
       return json(res, 200, { profile, suggestion: suggestTeam(profile) });
     },
-    directory: async (res: ServerResponse, url: URL) => {
+    directory: async (res: ServerResponse, url: URL, desktop: boolean) => {
       // Community bots that fit the scouted folder - a separate, lazy call
       // so an unreachable directory degrades to "no extra candidates", never
       // to a broken scout.
+      if (!desktop && isNetworkPath(url.searchParams.get("cwd"))) return json(res, 400, { error: phoneNetworkRefusal });
       const validated = validateBotCwd(url.searchParams.get("cwd"));
       if (!validated.ok) return json(res, 400, { error: validated.error });
       if (!validated.cwd) return json(res, 400, { error: "scout needs a folder to read" });

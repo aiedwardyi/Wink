@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { sameModelSelection } from "../../shared/model-selection";
+import { usageInstances, usageReport } from "./usage-instances";
 import { ringingRuns, routineChatOnScreen } from "@/lib/routine-ring";
 import { currentCall } from "@/lib/call";
 import { showNotification, type NotificationTarget } from "@/lib/notify";
@@ -33,7 +34,7 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
-import { openLiveEvents } from "@/lib/live-events";
+import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
@@ -274,20 +275,12 @@ export function reducer(state: AppState, action: Action): AppState {
     case "instances":
       return {
         ...state,
-        instances: action.instances.map((instance) => {
-          const current = state.instances.find((candidate) => candidate.instanceId === instance.instanceId)?.rateLimits;
-          if (!action.preserveRateLimits || !current || (instance.rateLimits && Date.parse(instance.rateLimits.observedAt) >= Date.parse(current.observedAt))) return instance;
-          return { ...instance, rateLimits: current };
-        }),
+        instances: usageInstances(state.instances, action.instances, action.preserveRateLimits),
       };
     case "rateLimits":
       return {
         ...state,
-        instances: state.instances.map((instance) => {
-          if (instance.instanceId !== action.instanceId) return instance;
-          if (instance.rateLimits && Date.parse(action.report.observedAt) < Date.parse(instance.rateLimits.observedAt)) return instance;
-          return { ...instance, rateLimits: action.report };
-        }),
+        instances: state.instances.map((instance) => usageReport(instance, action)),
       };
     case "configStatus":
       return {
@@ -2370,6 +2363,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
+      wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();

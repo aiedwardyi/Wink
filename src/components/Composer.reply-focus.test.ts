@@ -59,7 +59,133 @@ async function mount(replyTo: Message | null, focusBlocked = false, locked = fal
   return textarea;
 }
 
+async function typeDraft(textarea: HTMLTextAreaElement) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "half a thought");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  textarea.setSelectionRange(2, 5);
+}
+
 describe("composer reply focus", () => {
+  it("focuses at the draft end when empty frame space is clicked", async () => {
+    const textarea = await mount(null) as HTMLTextAreaElement;
+    await typeDraft(textarea);
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    await act(async () => frame.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+  });
+
+  it("focuses from an empty lower-row child", async () => {
+    const textarea = await mount(null);
+    const row = host!.querySelector("[data-orbit-composer-frame] button")!.parentElement!;
+    await act(async () => row.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it("leaves textarea clicks and selection drags alone", async () => {
+    const textarea = await mount(null) as HTMLTextAreaElement;
+    await typeDraft(textarea);
+    textarea.focus();
+    textarea.setSelectionRange(2, 5);
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    await act(async () => {
+      textarea.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      textarea.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      frame.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(textarea.selectionStart).toBe(2);
+    expect(textarea.selectionEnd).toBe(5);
+  });
+
+  it("preserves selection until an empty-space press becomes a click", async () => {
+    const textarea = await mount(null) as HTMLTextAreaElement;
+    await typeDraft(textarea);
+    textarea.focus();
+    textarea.setSelectionRange(2, 5);
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    const down = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+    Object.defineProperty(down, "pointerType", { value: "mouse" });
+    await act(async () => frame.dispatchEvent(down));
+    expect(down.defaultPrevented).toBe(true);
+    expect(textarea.selectionStart).toBe(2);
+    expect(textarea.selectionEnd).toBe(5);
+  });
+
+  it("leaves attach clicks on nested icons alone", async () => {
+    const textarea = await mount(null);
+    const input = host!.querySelector('input[type="file"]') as HTMLInputElement;
+    const pick = vi.spyOn(input, "click");
+    const icon = host!.querySelector("[data-orbit-composer-frame] button svg")!;
+    await act(async () => icon.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(pick).toHaveBeenCalledOnce();
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it.each(["button", "a", "input", "select", "textarea"])("does not focus through an interactive %s", async (tag) => {
+    const textarea = await mount(null);
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    const control = document.createElement(tag);
+    frame.append(control);
+    await act(async () => control.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it("does not force focus while locked", async () => {
+    const textarea = await mount(null, false, true);
+    const focus = vi.spyOn(textarea, "focus");
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    await act(async () => frame.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("does not force focus during an approval", async () => {
+    const textarea = await mount(null);
+    const bot: Bot = {
+      id: "approval", threadId: "approval-thread", name: "Approval", title: "", description: "",
+      notifications: false, color: "blue", unread: false,
+      modelSelection: { instanceId: "claude", model: "claude" },
+      messages: [{ id: "approval", role: "bot", kind: "options", text: "", at: 0,
+        card: { title: "Approve", subtitle: "Run command", options: [], requestId: "request", tool: "Bash" } }],
+    };
+    await act(async () => root!.render(createElement(Composer, { bot })));
+    const focus = vi.spyOn(textarea, "focus");
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    await act(async () => frame.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect((textarea as HTMLTextAreaElement).disabled).toBe(true);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("prevents touch blur and focuses once on the click", async () => {
+    const textarea = await mount(null);
+    const focus = vi.spyOn(textarea, "focus");
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    const down = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+    Object.defineProperty(down, "pointerType", { value: "touch" });
+    await act(async () => {
+      frame.dispatchEvent(down);
+      expect(focus).not.toHaveBeenCalled();
+      frame.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(down.defaultPrevented).toBe(true);
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a right press alone", async () => {
+    const textarea = await mount(null);
+    const frame = host!.querySelector("[data-orbit-composer-frame]")!;
+    const down = new MouseEvent("pointerdown", { button: 2, bubbles: true, cancelable: true });
+    Object.defineProperty(down, "pointerType", { value: "mouse" });
+    await act(async () => {
+      frame.dispatchEvent(down);
+      frame.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(down.defaultPrevented).toBe(false);
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
   it("requests prewarm again on later focus and typing", async () => {
     const textarea = await mount(null);
     const bot: Bot = {

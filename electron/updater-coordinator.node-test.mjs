@@ -394,6 +394,45 @@ test("downloaded release survives same-version checks until a newer release appe
   assert.equal(feed.downloads, 1);
 });
 
+test("Try again after a failed manual check returns to the downloaded release", async () => {
+  const { updater, coordinator, getState } = harness();
+  const feed = releaseFeed(updater, "1.0.94");
+  await coordinator.download();
+  const check = updater.checkForUpdates;
+  updater.checkForUpdates = () => Promise.reject(new Error("offline"));
+  await coordinator.check(true);
+  assert.equal(getState().status, "error");
+
+  updater.checkForUpdates = check;
+  await coordinator.check(true);
+  assert.equal(getState().status, "downloaded");
+  assert.equal(getState().version, "1.0.94");
+
+  updater.checkForUpdates = () => Promise.reject(new Error("offline"));
+  await coordinator.check(true);
+  updater.checkForUpdates = check;
+  feed.live = "1.0.95";
+  await coordinator.check(true);
+  assert.deepEqual(getState(), { status: "available", version: "1.0.95", message: undefined });
+});
+
+test("Try again does not bring back a withdrawn release", async () => {
+  const { updater, coordinator, getState } = harness();
+  const feed = versionedFeed(updater, "1.0.97", "1.0.98");
+  await coordinator.download();
+  feed.live = "1.0.97";
+  await coordinator.download();
+  updater.checkForUpdates = () => Promise.reject(new Error("offline"));
+  await coordinator.check(true);
+  updater.checkForUpdates = () => {
+    updater.emit("checking-for-update");
+    updater.emit("update-not-available");
+    return Promise.resolve({ isUpdateAvailable: false, updateInfo: { version: feed.live } });
+  };
+  await coordinator.check(true);
+  assert.equal(getState().status, "idle");
+});
+
 for (const failure of ["event", "rejection"]) {
   test(`downloaded release survives a background check ${failure}`, async () => {
     const { updater, coordinator, getState, states } = harness();

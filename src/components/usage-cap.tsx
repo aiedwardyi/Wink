@@ -19,6 +19,7 @@ export function useCappedAccounts({ accounts, checked, t, row, loadOpen, saveOpe
 }) {
   const [open, setOpen] = useState(loadOpen);
   const [picked, setPicked] = useState(() => pickRows(accounts, checked));
+  if (!open && checked && accounts.some((account) => account.id === checked) && !picked.includes(checked)) setPicked(pickRows(accounts, checked));
   const id = useId();
   if (accounts.length <= 3) return accounts.map(row);
   const groups: { kept: boolean; accounts: UsageBoardAccount[] }[] = [];
@@ -42,7 +43,7 @@ export function useCappedAccounts({ accounts, checked, t, row, loadOpen, saveOpe
           ? <Fragment key={group.accounts[0]!.id}>{group.accounts.map(row)}</Fragment>
           : <Fold key={group.accounts[0]!.id} id={`${id}-${index}`} open={open}>{group.accounts.map(row)}</Fold>)}
       </div>
-      <div className="border-t border-hairline/70 px-4 py-3 [@container_usage-group_(width<486px)]:px-3.5">
+      <div className="usage-cap border-t border-hairline/70">
         <button type="button" data-accounts-cap="" aria-expanded={open} aria-controls={id} onClick={toggle}
           className="group flex min-h-5 items-center gap-2 text-[14px] font-semibold text-ink-secondary transition-colors duration-150 hover:text-ink motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11">
           <ChevronDown size={14} strokeWidth={2} aria-hidden="true"

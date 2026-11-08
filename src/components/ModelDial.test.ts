@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { modelDialEnabled } from "@/lib/feature-flags";
-import { I18nProvider } from "@/lib/i18n";
+import { I18nProvider, persistPreference } from "@/lib/i18n";
 import * as phoneSwipe from "@/lib/phone-swipe";
 import type { Bot, InstanceInfo } from "@/state/store";
 import { ModelPickerControl } from "./ModelPicker";
@@ -257,12 +257,42 @@ describe("ModelDial", () => {
   });
 
   it.each([
-    ["claude-opus-5-5", ["53.6", "54.0", "2.94"]],
+    ["claude-opus-5-5", ["53.6", "54.0", "1.82"]],
     ["unlisted-model", ["Unavailable", "Unavailable", "Unavailable"]],
   ])("exposes formatted stats without rolling digits for %s", async (model, values) => {
     media();
     await mount({ model });
     expect(Array.from(document.querySelectorAll(".dial-odo"), spoken)).toEqual(values);
+  });
+
+  it.each([
+    ["en", "/Task"],
+    ["ko", "/작업"],
+  ] as const)("rolls the cost with effort in %s", async (locale, unit) => {
+    persistPreference(locale);
+    media();
+    await mount();
+    const cost = () => document.querySelector(".dial-cost");
+    const shown = () => [spoken(cost()!.querySelector(".dial-odo")!), cost()!.querySelector(".unit")!.textContent];
+    expect(shown()).toEqual(["1.82", unit]);
+    expect(cost()!.parentElement!.querySelector(".dial-src")!.textContent).toContain("$");
+    await key("ArrowLeft");
+    expect(shown()).toEqual(["1.34", unit]);
+    await key("ArrowLeft");
+    await key("ArrowLeft");
+    expect(shown()).toEqual(["0.55", unit]);
+    for (let i = 0; i < 4; i++) await key("ArrowRight");
+    expect(shown()).toEqual(["5.98", unit]);
+  });
+
+  it("keeps the price per 1M where an effort has no run cost", async () => {
+    persistPreference("en");
+    media();
+    await mount({ model: "gpt-6-luna" });
+    for (let i = 0; i < 4; i++) await key("ArrowLeft");
+    expect(effort()).toBe("low");
+    expect(document.querySelector(".dial-cost .unit")!.textContent).toBe("/1M");
+    expect(spoken(document.querySelector(".dial-cost .dial-odo")!)).not.toBe("0.00");
   });
 
   it("jumps by typed name and lands with Enter", async () => {
@@ -859,6 +889,10 @@ describe("ModelDial confirm", () => {
     expect(fills(button)).toHaveLength(1);
     expect(rings()).toHaveLength(1);
     expect(dispatch.mock.invocationCallOrder.at(-1)).toBeLessThan(animate.mock.invocationCallOrder[0]!);
+    if (path === "Enter") {
+      expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+      return;
+    }
     await click("[data-dial-pick]");
     await click('.dial-card[aria-pressed="true"]');
     await key("Enter");
@@ -868,6 +902,22 @@ describe("ModelDial confirm", () => {
     expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
     await wait(1);
     expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+  });
+
+  it("closes at once on Enter so the next keys reach the composer", async () => {
+    mouse(1200);
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    document.body.append(composer);
+    await mount();
+    await key("ArrowDown");
+    await key("Enter");
+    expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+    const letter = new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true });
+    await act(async () => (document.activeElement ?? document.body).dispatchEvent(letter));
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+    expect(letter.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(composer);
   });
 
   it("does nothing for a disabled selection through every commit path", async () => {
@@ -896,7 +946,7 @@ describe("ModelDial confirm", () => {
     await mount();
     const button = document.querySelector("[data-dial-pick]")!;
     animate.mockClear();
-    await key("Enter");
+    await click("[data-dial-pick]");
     expect(saves()).toHaveLength(1);
     expect(fills(button)).toHaveLength(1);
     expect(rings()).toHaveLength(0);

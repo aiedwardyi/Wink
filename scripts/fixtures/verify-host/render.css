@@ -1,0 +1,6 @@
+body { margin: 20px; }
+#target { width: 100px; height: 40px; background: rgb(20, 30, 40); }
+#target:hover { background: rgb(1, 200, 3); }
+#typing { display: block; margin-top: 20px; width: 200px; height: 40px; }
+#transition { width: 10px; height: 10px; transition: width 150ms linear; }
+#transition.active { width: 100px; }

@@ -9,9 +9,10 @@
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
@@ -29,7 +30,7 @@ export const MEMORY_MAX_BYTES = 24_000;
 /** Either budget this full puts a trim notice in the prompt, before anything is cut. */
 const MEMORY_WARN_SHARE = 0.8;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
-const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
+export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
 
 export const MEMORY_SEED = `# Memory
 
@@ -118,7 +119,7 @@ export function memoryRevision(text: string): string {
  * run a turn, and the write must not depend on that ordering. */
 export function writeMemoryFile(botId: string, text: string): void {
   ensureWorkspace(botId);
-  writeFileSync(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
+  writeFileAtomic(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
 }
 
 /** Writes only while MEMORY.md is still at `baseRevision`, so an editor never

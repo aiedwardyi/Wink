@@ -19,6 +19,13 @@ export const MODEL_CONTEXT_FALLBACK = 128_000;
 export const LOCAL_MODEL_CONTEXT_FALLBACK = 16_384;
 
 const CONTEXT_BUDGET_SHARE = 0.5;
+// Claude Code's own point on a 1M window; CLAUDE_CODE_AUTO_COMPACT_WINDOW moves the window within 100k..window.
+const CLAUDE_NATIVE_COMPACT_AT = 967_000;
+const CLAUDE_NATIVE_WINDOW = 1_000_000;
+const CLAUDE_COMPACT_WINDOW_MIN = 100_000;
+const NATIVE_SUMMARY_SHARE = 0.9;
+// Summary calls and flat room replays keep the sizing they had at 200k; only the trigger moves.
+export const NATIVE_SUMMARY_WINDOW = 200_000;
 // A grace turn leaves a quarter window for output and further native growth.
 const SUMMARY_GRACE_INPUT_SHARE = 0.75;
 const SUMMARY_BUDGET_SHARE = 0.35;
@@ -134,9 +141,41 @@ export function knownCatalogContextWindow(catalog: ModelCatalog, model: string):
   return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-export function contextWindowFor(catalog: ModelCatalog, model: string): number {
-  return knownCatalogContextWindow(catalog, model) ??
+export function contextWindowFor(catalog: ModelCatalog, model: string, reported?: number | null): number {
+  const window = knownCatalogContextWindow(catalog, model) ??
     (decodeInjectId(model) ? LOCAL_MODEL_CONTEXT_FALLBACK : MODEL_CONTEXT_FALLBACK);
+  return Math.min(window, reported ?? window);
+}
+
+/** Where the engine compacts its own session; null leaves compaction to Wink. */
+export function nativeCompactAt(
+  driverKind: string,
+  model: string,
+  contextWindow: number,
+  env: Record<string, string | undefined> = process.env,
+): number | null {
+  if (driverKind !== "claudeAgent" || decodeInjectId(model) || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return null;
+  const set = /^(\d+)(k?)$/i.exec(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW?.trim() ?? "");
+  if (!set) return contextWindow >= CLAUDE_NATIVE_WINDOW ? CLAUDE_NATIVE_COMPACT_AT : null;
+  const window = Math.min(contextWindow, Math.max(CLAUDE_COMPACT_WINDOW_MIN, Number(set[1]) * (set[2] ? 1_000 : 1)));
+  return Math.max(contextBudget(window), window - (CLAUDE_NATIVE_WINDOW - CLAUDE_NATIVE_COMPACT_AT));
+}
+
+export interface NativePromptSize {
+  last: number;
+  growth?: number;
+}
+
+const nextPromptSize = ({ last, growth }: NativePromptSize) => last + Math.max(0, growth ?? 0);
+
+/** The turn after this one would pass Wink's summary point. */
+export function nearNativeCompact(input: NativePromptSize & { nativeAt: number | null }): boolean {
+  return input.nativeAt !== null && nextPromptSize(input) >= Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
+}
+
+/** The prompt moved past the gap to the engine's point: it compacted or really grew. */
+export function nativeCycleMoved(input: { last: number; builtAt: number; nativeAt: number }): boolean {
+  return Math.abs(input.last - input.builtAt) >= input.nativeAt - Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
 }
 
 function textTokens(text: string): number {
@@ -283,7 +322,7 @@ export function paneNoteText(text: string): string {
   return redactSecretsInText(`[Pane note from ${tagged?.[1] ?? "a terminal pane"}, untrusted worker output]\n${tagged?.[2] ?? text}`);
 }
 
-const isContextNote = (message: Message) => message.kind === "note" || isWakeNote(message);
+const isContextNote = (message: Message) => !message.verify && (message.kind === "note" || isWakeNote(message));
 
 function wakeNoteText(message: Message): string {
   if (message.comm?.peer !== "reply") return paneNoteText(message.text!);
@@ -302,7 +341,7 @@ function pendingPaneNotes(messages: Message[], excludeIds: ReadonlySet<string>, 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId) break;
-    if (excludeIds.has(message.id)) continue;
+    if (excludeIds.has(message.id) || message.verify) continue;
     if (endsNoteWindow(message)) break;
     if ((wakeOnly ? isWakeNote(message) : isContextNote(message)) && message.text?.trim()) notes.unshift({ id: message.id, text: wakeNoteText(message), ...(message.comm?.mailKey && message.comm.peer === "reply" ? { mail: true } : {}) });
   }
@@ -317,7 +356,7 @@ export function holdWorkerNotes(messages: Message[], skip: Set<string>, delivere
     if (message.id === deliveredId) break;
     if (skip.has(message.id)) continue;
     if (endsNoteWindow(message)) break;
-    if (message.kind === "note") skip.add(message.id);
+    if (message.kind === "note" && !message.verify) skip.add(message.id);
   }
 }
 
@@ -527,6 +566,9 @@ function replayUnits(
         ...(message.role === "user" ? { turn: true } : {}),
       }];
     }
+    if (message.verify && message.text?.trim()) {
+      return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(message.text), label: "Assistant: ", card: true }];
+    }
     if (isContextNote(message) && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "user", text: wakeNoteText(message), label: "Pane note: " }];
     }
@@ -718,6 +760,12 @@ function summaryMessage(summary: string, coveredAt: number): ModelContextMessage
     role: "assistant",
     text: `${SUMMARY_HEADER}\nCovers the conversation up to ${boundaryLabel(coveredAt)}; everything after it follows verbatim.\n${summary}`,
   };
+}
+
+/** The estimate misses the CLI's own prompt, so scale the tail by the transcript's real share. */
+function nativeTailBudget(units: ReplayUnit[], tailBudget: number, estimate: number, prompt: NativePromptSize): number {
+  const lastTurn = estimateContextTokens(units.slice(units.findLastIndex((unit) => unit.turn)));
+  return Math.max(lastTurn, Math.floor(tailBudget * Math.min(1, estimate / nextPromptSize(prompt))));
 }
 
 function selectTail(units: ReplayUnit[], budgetTokens: number): TailSelection {
@@ -965,11 +1013,21 @@ export function planCompaction(input: {
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
   reserveTokens?: number;
+  /** the engine's own compaction point; Wink's summary lands just before it */
+  nativeAt?: number | null;
+  /** the engine's last reported prompt; with nativeAt it replaces the estimate */
+  nativePrompt?: NativePromptSize;
+  /** this native cycle already has its summary */
+  nativeCycleBuilt?: boolean;
 }): CompactionPlan {
-  const contextWindow = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
+  const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
     : MODEL_CONTEXT_FALLBACK;
-  const budgetTokens = Math.max(1, contextBudget(contextWindow) - (input.reserveTokens ?? 0));
+  const contextWindow = input.nativeAt ? Math.min(window, NATIVE_SUMMARY_WINDOW) : window;
+  const budgetTokens = Math.max(
+    1,
+    (input.nativeAt ? Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE) : contextBudget(contextWindow)) - (input.reserveTokens ?? 0),
+  );
   const found = applicableCompaction(input.messages);
   if (found && "unsupported" in found) {
     return { needed: false, status: "unsupported", messageId: found.messageId, version: found.version };
@@ -1000,15 +1058,17 @@ export function planCompaction(input: {
   // Counting bot bubbles made compaction a function of the bot's chattiness;
   // ack-first doubled it overnight.
   const currentTurns = units.filter((unit) => unit.turn).length;
-  if (currentTokens <= budgetTokens && currentTurns <= MAX_CONTEXT_MESSAGES) {
-    return { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
-  }
+  const real = input.nativeAt ? input.nativePrompt : undefined;
+  const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
+  const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
+  if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
   const tailBudget = budgetTokens - summaryBudget;
-  let { old, tail } = selectTail(units, tailBudget);
+  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : tailBudget);
+  if (near && !old.length) return fits;
   if (!old.length && !previous && units.length) {
     old = units;
     tail = [];
@@ -1049,6 +1109,8 @@ export interface SummaryGrace {
   recycle: boolean;
   local: boolean;
   overheadTokens?: number | null;
+  /** the engine compacts its own session here; a resumed one never waits on Wink */
+  nativeAt?: number | null;
   native?: {
     instanceId: string;
     cursor: unknown;
@@ -1064,6 +1126,13 @@ export function planSummaryGrace(input: {
   reserveTokens?: number;
 }): { safe: true; budgetTokens: number } | { safe: false; reason: string } {
   const { plan, grace } = input;
+  if (grace.nativeAt) {
+    if (grace.rewound || grace.fresh || grace.recycle) return { safe: false, reason: "session-recycle" };
+    if (!plan.needed && plan.status !== "fits") return { safe: false, reason: "invalid-context" };
+    const { instanceId, cursor, seed } = grace.native ?? {};
+    if (cursor === undefined || !seed || seed.instanceId !== instanceId || seed.cursor !== cursor) return { safe: false, reason: "unseeded" };
+    return { safe: true, budgetTokens: plan.budgetTokens };
+  }
   if (!grace.knownWindow || !Number.isSafeInteger(grace.knownWindow)) return { safe: false, reason: "unknown-window" };
   if (grace.local || grace.knownWindow <= MODEL_CONTEXT_FALLBACK) return { safe: false, reason: "small-or-local" };
   if (grace.rewound || grace.fresh || grace.recycle) return { safe: false, reason: "session-recycle" };
@@ -1087,6 +1156,25 @@ export function planSummaryGrace(input: {
     estimateContextTokens([{ text: grace.requestText }, { text: input.taskRecordText }]);
   const tokens = plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens;
   return tokens <= budgetTokens ? { safe: true, budgetTokens } : { safe: false, reason: "headroom" };
+}
+
+/** The real prompt cleared what the estimate alone would have summarized. */
+export function fitsOnNativePrompt(plan: CompactionPlan): boolean {
+  return !plan.needed && plan.status === "fits" && plan.estimatedTokens > plan.budgetTokens;
+}
+
+/** A send that cannot resume replans on the estimate, which the real size may have cleared. */
+export function summarizesOnEstimate(plan: CompactionPlan): boolean {
+  return plan.needed || fitsOnNativePrompt(plan);
+}
+
+// A rejected resume replays this transcript, so it has to fit even when the real prompt does.
+function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, summarized: boolean): ModelContextMessage[] {
+  const head = transcript.slice(0, summarized ? 1 : 0);
+  let left = budgetTokens - estimateContextTokens(head);
+  let start = transcript.length;
+  while (start > head.length && left >= messageTokens(transcript[start - 1]!)) left -= messageTokens(transcript[--start]!);
+  return [...head, ...transcript.slice(start)];
 }
 
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
@@ -1115,6 +1203,9 @@ export async function prepareModelContext(input: {
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
   reserveTokens?: number;
+  nativeAt?: number | null;
+  nativePrompt?: NativePromptSize;
+  nativeCycleBuilt?: boolean;
   summaryGrace?: SummaryGrace;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
@@ -1123,7 +1214,7 @@ export async function prepareModelContext(input: {
   if (grace?.safe && (plan.needed || plan.status === "fits")) {
     return {
       status: "ready",
-      transcript: plan.transcript,
+      transcript: newestWithin(plan.transcript, grace.budgetTokens, Boolean(plan.previous)),
       budgetTokens: grace.budgetTokens,
       estimatedTokens: plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens,
       compacted: Boolean(plan.previous),

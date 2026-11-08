@@ -10,7 +10,7 @@ describe("wink guide", () => {
   });
 
   it("points to the packaged guide", () => {
-    expect(CREDENTIAL_PROMPT).toContain(`How Wink itself works (engines, keys, workers, sync, phone): ${PACKAGED_FILES.winkGuide}. Read it only when a task is about Wink.`);
+    expect(CREDENTIAL_PROMPT).toContain(`How Wink itself works (engines, keys, accounts, workers, routines, sync, phone): ${PACKAGED_FILES.winkGuide}. Read it for Wink questions or before asking for setup.`);
   });
 
   it("warns on and skips the pointer when the guide is missing", () => {

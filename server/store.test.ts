@@ -1099,6 +1099,22 @@ describe("Store", () => {
     expect(store.activePath(bot.threadId).map((m) => m.id)).toEqual(messages.map((m) => m.id));
   });
 
+  it("keeps the durable path after an append write fails", async () => {
+    const { closeMessageDb } = await import("./message-db.ts");
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    const first = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "first" });
+    store.setSyncWriter(() => { throw new Error("disk full"); });
+    expect(() => store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "failed" })).toThrow("disk full");
+    store.setSyncWriter(undefined);
+    const last = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "last" });
+    closeMessageDb();
+    const reloaded = new Store(selection);
+    expect(reloaded.activePath(bot.threadId).map((row) => row.id)).toEqual([first.id, last.id]);
+    expect(store.messagesFor(bot.threadId).map((row) => row.text)).toEqual(["first", "last"]);
+    expect(reloaded.messagesFor(bot.threadId).map((row) => row.text)).toEqual(["first", "last"]);
+  });
+
   it("branchMessage forks at the edited message and hides the old tail", () => {
     const store = new Store(selection);
     const bot = store.createBot();

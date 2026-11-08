@@ -17,6 +17,11 @@ function unquotePath(value: string): string {
   return value;
 }
 
+/** UNC and device paths (`\\host\share`, `//host/share`, `\\?\`, `\\.\`) make Windows reach the network on a stat. */
+export function isNetworkPath(input: unknown): boolean {
+  return typeof input === "string" && /^[\\/]{2}/.test(unquotePath(input.trim()));
+}
+
 export function validateBotCwd(input: unknown): CwdValidation {
   if (input === null) return { ok: true, cwd: null };
   if (typeof input !== "string") return { ok: false, error: "working folder must be a path" };

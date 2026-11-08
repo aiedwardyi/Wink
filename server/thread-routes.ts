@@ -77,7 +77,9 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       else pullSyncedThread(threadId);
       const before = url.searchParams.get("before");
       const around = url.searchParams.get("around");
+      const pages = Number(url.searchParams.get("pages") ?? 1);
       if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      if (!Number.isInteger(pages) || pages < 1 || pages > 5 || (pages > 1 && !before)) return json(res, 400, { error: "invalid page count" });
       if (around) {
         const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
         if (!window) return json(res, 404, { error: "no such message" });
@@ -88,7 +90,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
         return json(res, 404, { error: "no such message" });
       }
-      return json(res, 200, messagePage(threadId, limit ?? DEFAULT_PAGE, before));
+      return json(res, 200, messagePage(threadId, (limit ?? DEFAULT_PAGE) * pages, before));
     },
     turns: async (res: ServerResponse, m: RegExpMatchArray) => {
       const threadId = m[1];
@@ -214,7 +216,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps) {
       if (!emoji) return json(res, 400, { error: "emoji required" });
       const patched = store.toggleReaction(m[1], m[2], emoji, typeof body.by === "string" ? body.by : "user");
       if (!patched) return json(res, 404, { error: "no such message" });
-      return json(res, 200, { message: patched });
+      return json(res, 200, { message: clientMessage(patched) });
     },
     respond: async (req: IncomingMessage, res: ServerResponse, m: RegExpMatchArray) => {
       const threadId = m[1];

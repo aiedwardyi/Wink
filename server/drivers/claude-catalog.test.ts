@@ -16,17 +16,17 @@ describe("readClaudeModelCatalog", () => {
     expect(readClaudeModelCatalog({ HOME: join(tmpdir(), "omb-claude-missing-home") })).toEqual(STATIC_CLAUDE_MODELS);
     expect(STATIC_CLAUDE_MODELS.options).toEqual(
       expect.arrayContaining([
-        { id: "claude-fable-5-1", label: "Claude Fable 5.1", contextWindow: 200_000 },
-        { id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 200_000 },
+        { id: "claude-fable-5-1", label: "Claude Fable 5.1", contextWindow: 1_000_000 },
+        { id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 1_000_000 },
       ]),
     );
     expect(STATIC_CLAUDE_MODELS.options[0]).toEqual({
       id: "claude-fable-5-1",
       label: "Claude Fable 5.1",
-      contextWindow: 200_000,
+      contextWindow: 1_000_000,
     });
-    expect(STATIC_CLAUDE_MODELS.options.every((option) => option.contextWindow === 200_000)).toBe(true);
-    expect(STATIC_CLAUDE_MODELS.options.at(-1)).toEqual({ id: "claude-haiku-5-5", label: "Claude Haiku 5.5", contextWindow: 200_000 });
+    expect(STATIC_CLAUDE_MODELS.options.every((option) => option.contextWindow === 1_000_000)).toBe(true);
+    expect(STATIC_CLAUDE_MODELS.options.at(-1)).toEqual({ id: "claude-haiku-5-5", label: "Claude Haiku 5.5", contextWindow: 1_000_000 });
     expect(STATIC_CLAUDE_MODELS.options.map((option) => option.id)).not.toContain("claude-haiku-4-5");
   });
 

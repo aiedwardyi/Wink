@@ -285,6 +285,56 @@ it.each(["en", "ko"] as const)("says a settings install failed when no docs link
   }
 });
 
+it.each(["grokAgent", "museAgent"])("signs %s out on one click while guarding a slow logout", async (driverKind) => {
+  const connected = instance({ instanceId: driverKind, driverKind, install: { login: { args: ["login"] }, logout: ["logout"] } });
+  const signedOut = { ...connected, snapshot: { state: "available" as const, authenticated: false } };
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+    if (init?.method === "POST") { await gate; return new Response("{}"); }
+    return new Response(JSON.stringify({ instances: [signedOut] }));
+  });
+  const onUpdated = vi.fn();
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(I18nProvider, null, createElement(EngineRow, { instance: connected, onUpdated }))));
+    const button = host.querySelector("button")!;
+    await act(async () => button.click());
+    expect(button.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    expect(host.querySelector("button")?.textContent).toBe("Sign In");
+    expect(onUpdated).toHaveBeenCalledExactlyOnceWith(signedOut);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    finish();
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+  }
+});
+
+it.each(["en", "ko"] as const)("shows a failed sign-out and allows retry in %s", async (locale) => {
+  applyLocale(locale);
+  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Sign-out failed" }), { status: 502 }));
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(EngineRow, {
+      instance: instance({ instanceId: "grok", driverKind: "grokAgent", install: { logout: ["logout"] } }),
+    })));
+    await act(async () => host.querySelector("button")!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(locale === "en" ? "Didn't finish. Try again." : "완료되지 않았어요. 다시 시도하세요.");
+    expect(host.querySelector("button")!.disabled).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    fetch.mockRestore();
+    applyLocale("en");
+  }
+});
+
 it("shares signed-out instances with the model picker and onboarding", async () => {
   const signedOut = instance({ snapshot: { state: "available", authenticated: false }, install: { logout: ["logout"] } });
   const previous = globalThis.fetch;
@@ -346,6 +396,50 @@ describe("EnginesSettings friends Connections list", () => {
     } finally {
       await act(async () => root.unmount());
       restore();
+    }
+  });
+
+  it.each(["en", "ko"] as const)("shows a connected single-account engine's sign-in email under its name (%s)", async (locale) => {
+    applyLocale(locale);
+    const restores = [
+      stage("grok", { snapshot: { state: "available", authenticated: true, account: "grok.user@example.com" }, install: { logout: ["logout"] } }),
+      stage("muse", { snapshot: { state: "available", authenticated: true, account: "muse.user@example.com" } }),
+      stage("antigravity", { snapshot: { state: "available", authenticated: true } }),
+    ];
+    const { host, root, row } = await renderList();
+    try {
+      for (const [id, email] of [["grok", "grok.user@example.com"], ["muse", "muse.user@example.com"]]) {
+        const line = row(id).querySelector("[data-account-email]")!;
+        expect(line.textContent).toBe(email);
+        expect(line.className).toContain("text-[11px]");
+        expect(line.className).toContain("truncate");
+        expect(row(id).textContent).toContain(email);
+      }
+      expect(row("antigravity").querySelector("[data-account-email]")).toBeNull();
+      expect(row("antigravity").textContent).not.toMatch(/@/);
+      const attributes = [...host.querySelectorAll("*")].flatMap((node) => [...node.attributes].filter((attribute) => attribute.name !== "class").map((attribute) => attribute.value));
+      expect(attributes.filter((value) => value.includes("@"))).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      restores.forEach((restore) => restore());
+      applyLocale("en");
+    }
+  });
+
+  it.each([false, true])("gives a single-account email the Claude and Codex name row and offset on a phone (phone=%s)", async (phone) => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone, addEventListener() {}, removeEventListener() {} } as unknown as MediaQueryList);
+    const restore = stage("grok", { snapshot: { state: "available", authenticated: true, account: "rocknblock.official@gmail.com" }, install: { logout: ["logout"] } });
+    const { root, row } = await renderList();
+    try {
+      const email = row("grok").querySelector("[data-account-email]")!;
+      const nameRow = email.previousElementSibling!;
+      expect(nameRow.className).toBe(phone ? "flex h-9 min-w-0 items-center [@media(pointer:coarse)]:h-11" : "contents");
+      expect(email.classList.contains("-mt-1.5")).toBe(phone);
+      expect(email.parentElement!.classList.contains("py-1")).toBe(!phone);
+    } finally {
+      await act(async () => root.unmount());
+      restore();
+      vi.restoreAllMocks();
     }
   });
 
