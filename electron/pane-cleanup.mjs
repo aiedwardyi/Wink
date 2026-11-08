@@ -212,7 +212,7 @@ export async function readCleanupPins(dataDir) {
   return pins;
 }
 
-export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot = path.join(home, "orbit-wt"), pinned = [], now = Date.now, retryMs = 60_000, schedule = setTimeout, cancel = clearTimeout, setPriority = os.setPriority, instance = process.execPath, warn = () => {} }) {
+export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot = path.join(home, "orbit-wt"), pinned = [], now = Date.now, retryMs = 60_000, schedule = setTimeout, cancel = clearTimeout, setPriority = os.setPriority, instance = process.defaultApp ? process.env.OMB_USER_DATA || "dev" : "app", warn = () => {} }) {
   tempRoot = resolveTempRoot(tempRoot);
   const git = (cwd, args) => runGit(cwd, args, setPriority);
   const file = path.join(home, ".orbit", "pane-ledger.json");

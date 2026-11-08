@@ -1493,3 +1493,26 @@ test("a dirty worktree swept twice is listed as kept once", async (t) => {
   assert.equal(fs.realpathSync.native(kept[0].path), fs.realpathSync.native(target));
   assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "unsaved");
 });
+
+test("the default instance survives a changed executable path", (t) => {
+  const f = fixture(t);
+  f.cleanup.opened(f.session);
+  const execPath = process.execPath;
+  process.execPath = path.join(f.home, "new-mount", "wink");
+  const restarted = createPaneCleanup(f.options);
+  process.execPath = execPath;
+  restarted.start(() => []);
+  t.after(() => restarted.dispose());
+  assert.ok(f.ledger()[0].closedAt);
+});
+
+test("a dev launch leaves the packaged app's open rows open", (t) => {
+  const f = fixture(t);
+  f.cleanup.opened(f.session);
+  process.defaultApp = true;
+  const dev = createPaneCleanup(f.options);
+  delete process.defaultApp;
+  dev.start(() => []);
+  t.after(() => dev.dispose());
+  assert.equal(f.ledger()[0].closedAt, null);
+});
