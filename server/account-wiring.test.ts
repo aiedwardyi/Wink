@@ -204,7 +204,7 @@ it("records each quota update path exactly once", async () => {
   for (const save of [spawnSave, usageSave]) expect(count(save, "usageBoard.recordReport(id, report)")).toBe(1);
   expect(count(section("const refreshSwappedUsage = createUsageSwapRefresh({", "\n});"), "usageBoard.recordReport(id, report)")).toBe(1);
   expect(invalidation).not.toContain("recordReport");
-  for (const [path, call] of [["./spawn-usage.ts", "deps.save(instanceId, result.report);"], ["./account-updates.ts", "deps.save(id, result.report);"]]) {
+  for (const [path, call] of [["./spawn-usage.ts", "deps.save(instanceId, next);"], ["./account-updates.ts", "deps.save(id, result.report);"]]) {
     expect(count(read(path), call)).toBe(1);
   }
 

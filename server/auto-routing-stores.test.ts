@@ -174,7 +174,7 @@ describe("verified local habits", () => {
 });
 
 it("keeps local rules and habits outside portable profile changes and bot export", () => {
-  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const body = source.split("function portableSyncChanges(bot: BotRecord, folder: string): Record<string, unknown> {")[1].split("\n}\n")[0];
   const portableSyncChanges = new Function("bot", "folder", "syncAvatarAssetForBot", "syncSectionId", body);
   const bot = { name: "Fixture", modelSelection: { model: "gpt-6.1-sol", instanceId: "codex", mode: "pinned" } };

@@ -199,7 +199,7 @@ export function antigravityRateLimitWindows(payload: unknown, now = Date.now()):
     if (!kind) continue;
     if (typeof candidate.fraction !== "number" || !Number.isFinite(candidate.fraction)) continue;
     if (candidate.fraction < 0 || candidate.fraction > 1) continue;
-    const usedPercent = 100 - candidate.fraction * 100;
+    const usedPercent = Number((100 - candidate.fraction * 100).toFixed(10));
     const current = best.get(kind.id);
     if (!current || usedPercent > current.usedPercent) {
       best.set(kind.id, { id: kind.id, usedPercent, resetsAt: candidate.resetMs, windowMinutes: kind.windowMinutes });
