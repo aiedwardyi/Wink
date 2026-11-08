@@ -6,7 +6,7 @@ import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
-import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
+import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
@@ -411,7 +411,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
       {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
     </div>
   );
-  const group = (content: ReactNode) => <Fold open={!folded} id={id}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
+  const group = (content: ReactNode) => <Fold open={!folded} id={id} soft><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
   return (
     <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
@@ -438,6 +438,7 @@ export function UsageDesk() {
   const pending = useRefreshPending();
   const drag = useUsageDrag(state.board?.engines ?? []);
   const desk = useRef<HTMLDivElement>(null);
+  const heads = useRef(new Map<HTMLElement, number>());
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [museAuthFailed, setMuseAuthFailed] = useState(false);
@@ -483,6 +484,11 @@ export function UsageDesk() {
       list.dataset.phoneColumns = "";
       for (const head of heads) head.style.removeProperty("transition-property");
     };
+    // Restyling the whole list here would stall the fold's first frame; measure once it has landed.
+    if (list.querySelector('[data-fold="opening"], [data-fold="closing"]')) {
+      const settled = setTimeout(layout, MOTION_LARGE_MS - 20);
+      return () => clearTimeout(settled);
+    }
     let width = list.clientWidth;
     layout();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
@@ -495,10 +501,15 @@ export function UsageDesk() {
     return () => {
       observer?.disconnect();
       document.fonts?.removeEventListener("loadingdone", layout);
-      delete list.dataset.phoneColumns;
-      delete list.dataset.desktopColumns;
-      delete list.dataset.summarySize;
     };
+  });
+  useLayoutEffect(() => {
+    // The head changes height the moment its summary comes or goes; a margin carries the difference with the body.
+    for (const [head, before] of heads.current) {
+      const delta = before - head.getBoundingClientRect().height;
+      if (delta && !reducedMotion()) head.animate?.([{ marginBottom: `${delta}px` }, { marginBottom: "0px" }], { duration: MOTION_LARGE_MS, easing: EASE_SOFT });
+    }
+    heads.current.clear();
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
@@ -508,6 +519,8 @@ export function UsageDesk() {
   const folded = (each: UsageBoardEngine) => folds[each.base] ?? !each.accounts.some((account) => account.signIn === "ready");
   const allFolded = board.engines.filter((each) => each.accounts.length).every(folded);
   const fold = (base: string, value: boolean) => {
+    const head = desk.current?.querySelector<HTMLElement>(`[data-usage-base="${base}"] > [data-engine-head]`);
+    if (head) heads.current.set(head, head.getBoundingClientRect().height);
     saveFold(base, value);
     setFolds((before) => ({ ...before, [base]: value }));
   };
@@ -536,7 +549,10 @@ export function UsageDesk() {
           {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}
             onClick={() => setUsageMode(value)}>{t(value === "used" ? "usage.limits.countUp" : "usage.limits.countDown")}</button>)}
         </div>
-        <button type="button" data-fold-all="" onClick={() => { for (const each of board.engines) fold(each.base, !allFolded); }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
+        <button type="button" data-fold-all="" onClick={() => {
+          if ([...desk.current?.querySelectorAll("[data-fold]") ?? []].some((each) => each.getAnimations?.().some((motion) => motion.playState === "running"))) return;
+          for (const each of board.engines) fold(each.base, !allFolded);
+        }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
         <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
           aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
           <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />

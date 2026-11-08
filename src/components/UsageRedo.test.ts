@@ -407,3 +407,115 @@ it("removes bot and worker counts and offers inline name editing", async () => {
   expect(q('[data-account-row="claude"] [data-account-name-editor] input')).not.toBeNull();
   expect(q('[data-account-name-editor]')!.className).toContain("account-name-inline");
 });
+
+const usageCss = readFileSync(resolve(process.cwd(), "src/components/UsageDesk.css"), "utf8");
+const coarse = usageCss.slice(usageCss.indexOf("@media (pointer: coarse)"));
+const claudeFold = '[data-usage-engine="claude"] [data-engine-fold]';
+const claudeBody = () => q('[data-usage-engine="claude"] [data-fold]');
+const land = async () => {
+  const end = new Event("animationend", { bubbles: true });
+  Object.assign(end, { animationName: "fold-close" });
+  await act(async () => claudeBody()!.dispatchEvent(end));
+};
+const touch = (node: Element, type: string, y = 100) => {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(event, { touches: type === "touchend" ? [] : [{ clientX: 40, clientY: y }] });
+  node.dispatchEvent(event);
+  return event;
+};
+const held = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
+const lifted = () => host.querySelectorAll("[data-usage-lifted]").length;
+
+it("keeps the folded meter hidden until a closing engine's body has landed", async () => {
+  await mount();
+  await click(claudeFold);
+  expect(claudeBody()?.getAttribute("data-fold")).toBe("closing");
+  expect(claudeBody()?.hasAttribute("data-fold-soft")).toBe(true);
+  expect(usageCss).toMatch(/\[data-usage-engine\]:has\(> \[data-fold="closing"\]:not\(\[data-fold-done\]\)\) \.usage-summary \{ opacity: 0;/);
+  await land();
+  expect(claudeBody()?.hasAttribute("data-fold-done")).toBe(true);
+});
+
+it("hides the folded meter again on every later close", async () => {
+  await mount();
+  await click(claudeFold);
+  await land();
+  await held(300);
+  await click(claudeFold);
+  await held(300);
+  await click(claudeFold);
+  expect(claudeBody()?.getAttribute("data-fold")).toBe("closing");
+  expect(claudeBody()?.hasAttribute("data-fold-done")).toBe(false);
+});
+
+it("keeps a closing body at full width in the phone columns", () => {
+  expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
+});
+
+it.each([".usage-engine-head > .usage-grip::after", "[data-account-row] > .usage-grip::after", "[data-connection-account][data-account-row] > .usage-grip::after"])("gives %s a 44 px touch target", (selector) => {
+  const rule = coarse.slice(coarse.indexOf(selector), coarse.indexOf("}", coarse.indexOf(selector)));
+  expect(rule).toContain("width: 44px");
+  expect(rule).toContain("height: 44px");
+});
+
+it("lifts a row from its grip on the first small move", async () => {
+  await mount();
+  const grip = q('[data-account-row="claude"] [data-usage-grip]')!;
+  await act(async () => void touch(grip, "touchstart", 100));
+  await act(async () => void touch(grip, "touchmove", 105));
+  expect(lifted()).toBe(1);
+  await act(async () => void touch(grip, "touchcancel"));
+});
+
+it("picks a row up on a long press", async () => {
+  await mount();
+  const row = q('[data-account-row="claude"]')!;
+  await act(async () => void touch(row, "touchstart"));
+  await held(399);
+  expect(lifted()).toBe(0);
+  await held(1);
+  expect(lifted()).toBe(1);
+  await act(async () => void touch(row, "touchcancel"));
+});
+
+const connections = () => mount(createElement(AccountConnections, { accounts: h.instances.filter((account) => account.accountOf === "claude"), reload: async () => {} }));
+
+it("lifts a Connections row from its email on a long press but not a tap", async () => {
+  await connections();
+  const email = q('[data-connection-account="claude"] [data-connection-identity]')!;
+  await act(async () => void touch(email, "touchstart"));
+  await held(300);
+  await act(async () => void touch(email, "touchend"));
+  expect(lifted()).toBe(0);
+  await act(async () => void touch(email, "touchstart"));
+  await held(400);
+  expect(lifted()).toBe(1);
+  await act(async () => void touch(email, "touchcancel"));
+});
+
+it("passes a slow tap on the grip through to the button under it", async () => {
+  await connections();
+  const grip = q('[data-connection-account="claude"] [data-usage-grip]')!;
+  const email = q('[data-connection-account="claude"] [data-connection-identity]')!;
+  const opened = vi.spyOn(email, "click");
+  Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [grip, email] });
+  await act(async () => void touch(grip, "touchstart"));
+  await held(200);
+  await act(async () => void touch(grip, "touchend"));
+  expect(opened).toHaveBeenCalledOnce();
+  expect(lifted()).toBe(0);
+});
+
+it("leaves a press on Switch and a scrolling touch alone", async () => {
+  await mount();
+  const row = q('[data-usage-engine="claude"] [data-use]')!.closest("[data-account-row]")!;
+  await act(async () => void touch(row.querySelector("[data-use]")!, "touchstart"));
+  await held(500);
+  expect(lifted()).toBe(0);
+  await act(async () => void touch(row.querySelector("[data-use]")!, "touchend"));
+  await act(async () => void touch(row, "touchstart", 100));
+  const scroll = touch(row, "touchmove", 130);
+  await held(500);
+  expect(scroll.defaultPrevented).toBe(false);
+  expect(lifted()).toBe(0);
+});

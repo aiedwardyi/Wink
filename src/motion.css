@@ -15,6 +15,8 @@
   --ease-standard: cubic-bezier(0.2, 0, 0.38, 0.9);
   --ease-entrance: cubic-bezier(0, 0, 0.38, 0.9);
   --ease-exit: cubic-bezier(0.2, 0, 1, 0.9);
+  /* not Carbon: lands flat, for a fold whose rows below travel far */
+  --ease-soft: cubic-bezier(0.25, 0.1, 0.25, 1);
 
   --default-transition-duration: var(--motion-fast);
   --default-transition-timing-function: var(--ease-standard);
@@ -86,6 +88,11 @@
 [data-fold="closing"] {
   animation: fold-close var(--motion-fast) var(--ease-standard) forwards;
   pointer-events: none;
+}
+[data-fold-soft][data-fold="opening"],
+[data-fold-soft][data-fold="closing"] {
+  animation-duration: var(--motion-large);
+  animation-timing-function: var(--ease-soft);
 }
 [data-fold="opening"] > *,
 [data-fold="closing"] > * {
