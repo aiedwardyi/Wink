@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { AppWindow, Monitor, MousePointerClick, Play, RefreshCw } from "lucide-react";
+import { Monitor, MousePointerClick, Play, RefreshCw } from "lucide-react";
 import { LIVE_VERIFY_V0, verifyCardStale, type VerifyCardData, type VerifyChecker, type VerifyCounts, type VerifyErrorCode, type VerifyTile } from "../../shared/live-verify";
 import { useI18n } from "@/lib/i18n";
 import { VERIFY_ROLE, VERIFY_TAG, verifyProblem } from "@/lib/verify-copy";
 import { lazyView } from "@/lib/stale-build";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyWatch, verifyCardAction, verifyCardIn } from "@/lib/verify-watch";
+import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyShowing, useVerifyWatch, verifyCardAction, verifyCardIn } from "@/lib/verify-watch";
 import type { Message } from "@/state/store";
 import { LazyView } from "./LazyView";
 import "./VerifyCard.css";
@@ -70,13 +70,16 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
   const ref = useRef<HTMLElement>(null);
   const stale = verifyCardStale(card, Date.now());
   const running = !stale && (card.status === "preparing" || card.status === "running");
+  const showing = useVerifyShowing(card.runId);
+  const replaying = !running && showing !== null;
+  const moving = running || replaying;
   useEffect(() => {
     const el = ref.current;
-    if (!running || !el || typeof IntersectionObserver === "undefined") return;
+    if (!moving || !el || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(([entry]) => el.toggleAttribute("data-off", !entry!.isIntersecting));
     io.observe(el);
     return () => io.disconnect();
-  }, [running]);
+  }, [moving]);
   if (!LIVE_VERIFY_V0) return null;
   const waiting = !stale && card.status === "waiting";
   const complete = card.status === "completed";
@@ -84,7 +87,7 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
   const details = card.details ?? [];
   const checks = card.counts?.completed || undefined;
   // Older runners send totals only: their rows stay neutral and the lanes stay hidden.
-  const by = card.counts ? card.counts.by : {};
+  const by = replaying ? showing.by : card.counts ? card.counts.by : {};
   const counted = (text: string) => checks === undefined ? text : `${c.checks(checks)} · ${text}`;
   const seconds = `${Math.max(0, Math.round(((card.endedAt ?? Date.now()) - (card.startedAt ?? card.offeredAt)) / 1000))}${c.s}`;
   const title = waiting ? c.waiting
@@ -115,24 +118,24 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
     else openVerifyWatch({ threadId, owner: card.owner, messageId, live: action === "live" });
   };
   return (
-    <section ref={ref} className="verify-card" data-active={running || waiting || undefined} aria-label={title} data-verify-card>
+    <section ref={ref} className="verify-card" data-active={moving || waiting || undefined} aria-label={title} data-verify-card>
       <div className="verify-card-head" role="status" aria-live="polite">
         <MousePointerClick size={14} />
         <span className="verify-card-title">{c.head(card.site)}</span>
-        {running ? <span className="verify-card-side">
-          {checks !== undefined && <span className="verify-card-count">{c.checks(checks)}</span>}
+        {moving ? <span className="verify-card-side">
+          {(replaying ? showing.checks : checks) !== undefined && <span className="verify-card-count">{c.checks(replaying ? showing.checks : checks!)}</span>}
           {action === "live" && <button type="button" data-verify-watch="live" onClick={watch}>{c.watch}</button>}
         </span> : <span className="verify-card-side">
           {action === "rerun" && <button type="button" className="verify-card-rerun" onClick={rerun} disabled={pending}><RefreshCw size={13} className={pending ? "animate-spin" : undefined} />{c.rerun}</button>}
           {action === "watch" && <button type="button" data-verify-watch={action} aria-expanded={phone ? inline : undefined} onClick={watch}><Play size={13} />{c.watch}</button>}
         </span>}
       </div>
-      {running || waiting ? <>
+      {moving || waiting ? <>
         {waiting && <div className="verify-card-strip">{c.waiting}</div>}
         <ul className="verify-card-plan">{c.plan.map((text, i) => <li key={text} data-state={waiting ? "waiting" : rowState(by, PLAN[i]!)}>
           <span className="verify-card-dots">{DOTS[i]!.map(dot)}</span><span>{text}</span>
         </li>)}</ul>
-        {running && by && <div className="verify-card-lanes" aria-hidden="true">{LANES.map(checker => {
+        {moving && by && <div className="verify-card-lanes" aria-hidden="true">{LANES.map(checker => {
           const fill = share(by, checker) * 10, on = active(by, [checker]);
           return <div key={checker} data-on={on || undefined} style={{ "--role": VERIFY_ROLE[checker] } as CSSProperties}>
             <span className="verify-card-tag">{dot(checker)}{VERIFY_TAG[checker]}</span>
@@ -165,7 +168,7 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
   );
 }
 
-/** Chat top bar: a browser icon while the chat's card can be watched; a dot while it streams. */
+/** Chat top bar: the click-cursor mark while the chat's card can be watched; a dot while it streams. */
 export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Message[]; threadId: string }) {
   const { locale } = useI18n();
   const open = useVerifyWatch();
@@ -182,7 +185,7 @@ export function VerifyWatchIcon({ messages, threadId }: { messages: readonly Mes
       onClick={() => toggleVerifyWatch({ threadId, owner: card.owner, live: verifyCardAction(card, false) === "live" })}
       className="relative rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink aria-pressed:text-accent max-md:hidden"
     >
-      <AppWindow size={18} />
+      <MousePointerClick size={18} />
       {card.live && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 rounded-full bg-[#f05d5d]" />}
     </button>
   );

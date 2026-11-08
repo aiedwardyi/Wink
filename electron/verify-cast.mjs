@@ -1,6 +1,7 @@
 export function startCast({ cdp, page, tile, started, frame }) {
   let stopped = false, received = false, capturing = false, last = -Infinity;
   const timers = new Set();
+  const jpeg = image => image.resize(tile === "desktop" ? { width: 640 } : { height: 800 }).toJPEG(60).toString("base64");
   const emit = data => {
     if (stopped || Date.now() - last < 250) return;
     last = Date.now();
@@ -22,8 +23,15 @@ export function startCast({ cdp, page, tile, started, frame }) {
       if (stopped || received || capturing || !page.capturePage || Date.now() - last < 250) return;
       capturing = true;
       void page.capturePage().then(image => {
-        if (!stopped && !received) emit(image.resize(tile === "desktop" ? { width: 640 } : { height: 800 }).toJPEG(60).toString("base64"));
+        if (!stopped && !received) emit(jpeg(image));
       }).catch(() => {}).finally(() => { capturing = false; });
+    },
+    async shot() {
+      if (stopped || !page.capturePage) return;
+      const image = await page.capturePage();
+      if (stopped) return;
+      last = Date.now();
+      frame({ tile, ms: Math.max(0, last - started), data: jpeg(image) });
     },
     stop() {
       stopped = true;
