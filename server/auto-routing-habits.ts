@@ -24,15 +24,17 @@ export class AutoRoutingHabits {
   constructor(dataDir: string, write = writeFileAtomic) {
     this.file = join(dataDir, "auto-routing-habits.json");
     this.write = write;
-    if (existsSync(this.file)) this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
+    this.reload();
   }
+
+  reload(): void { this.state = existsSync(this.file) ? stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8"))) : { v: 1, rows: [] }; }
 
   rows(): AutoHabitRow[] { return structuredClone(this.state.rows); }
 
-  observe(row: AutoHabitRow, choice: ChoiceProvenance, context: ChoiceContext, now: number, unconstrained: boolean): boolean {
+  observe(row: AutoHabitRow, choice: ChoiceProvenance, context: ChoiceContext, now: number, unconstrained: boolean, choiceId = choice.actionId): boolean {
     const parsed = rowSchema.parse(row);
     if (!unconstrained || !verifiedChoice(choice, context) || context.intent !== "choice" || parsed.taskClass === "unknown"
-      || parsed.choiceId !== choice.actionId || parsed.target !== choice.target || parsed.taskClass !== choice.taskClass || parsed.origin !== choice.origin
+      || parsed.choiceId !== choiceId || parsed.target !== choice.target || parsed.taskClass !== choice.taskClass || parsed.origin !== choice.origin
       || parsed.engine !== choice.dimensions.engine || parsed.model !== choice.dimensions.model || parsed.effort !== choice.dimensions.effort
       || parsed.at > now || parsed.at <= now - 30 * DAY || this.state.rows.some((item) => item.choiceId === parsed.choiceId)) return false;
     const rows = [...this.state.rows.filter((item) => item.at > now - 30 * DAY), parsed].sort((a, b) => a.at - b.at).slice(-500);

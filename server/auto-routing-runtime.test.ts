@@ -233,8 +233,8 @@ describe("Auto worker reservations", () => {
   });
 
   it.each<[AutoEngine, string]>([
-    ["claudeAgent", "claude-sonnet-5-5"], ["codex", "gpt-6.1-sol"], ["grokAgent", "grok-4.7"],
-    ["antigravityAgent", "gemini-3.8-flash-high"], ["museAgent", "muse-spark-1.3-contributor"],
+    ["claudeAgent", "claude-opus-5-5"], ["codex", "gpt-6.1-sol"], ["grokAgent", "grok-4.7"],
+    ["antigravityAgent", "gemini-3.8-flash-high"], ["museAgent", "muse-spark-1.3"],
   ])("prepares a base %s instance with zero managed accounts", async (engine, model) => {
     const f = fixture();
     f.state.candidates = [candidate(engine, { engine, models: [model] })];

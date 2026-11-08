@@ -86,8 +86,10 @@ export class AutoRoutingState {
   constructor(dataDir: string, write = writeFileAtomic) {
     this.file = join(dataDir, "auto-routing-state.json");
     this.write = write;
-    if (existsSync(this.file)) this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
+    this.reload();
   }
+
+  reload(): void { this.state = existsSync(this.file) ? stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8"))) : { v: 1, bots: {} }; }
 
   get(botId: string): LocalAutoBot | undefined { return Object.hasOwn(this.state.bots, botId) ? structuredClone(this.state.bots[botId]) : undefined; }
 

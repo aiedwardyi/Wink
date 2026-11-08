@@ -30,16 +30,20 @@ export type RuleAuthorization = {
   attributed: AutoDimensions;
 };
 
+const shipped = (): z.infer<typeof stateSchema> => ({ v: 1, current: { id: 0, content: structuredClone(SHIPPED_AUTO_RULES) }, versions: [{ id: 0, content: structuredClone(SHIPPED_AUTO_RULES) }] });
+
 export class AutoRoutingRules {
-  private state: z.infer<typeof stateSchema> = { v: 1, current: { id: 0, content: structuredClone(SHIPPED_AUTO_RULES) }, versions: [{ id: 0, content: structuredClone(SHIPPED_AUTO_RULES) }] };
+  private state = shipped();
   readonly file: string;
   private readonly write: typeof writeFileAtomic;
 
   constructor(dataDir: string, write = writeFileAtomic) {
     this.file = join(dataDir, "auto-routing-rules.json");
     this.write = write;
-    if (existsSync(this.file)) this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
+    this.reload();
   }
+
+  reload(): void { this.state = existsSync(this.file) ? stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8"))) : shipped(); }
 
   current(): { id: number; content: AutoRules } { return structuredClone(this.state.current); }
   versions(): number[] { return [...new Set([0, ...this.state.versions.map((version) => version.id)])]; }

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
-import { autoEffortSchema, autoEngineSchema, classifyAutoTask, selectAutoRoute, validAutoArm, type AutoCandidate, type AutoDimensions, type AutoRoute, type AutoRules, type ChoiceContext, type ChoiceProvenance, type TaskData } from "../shared/auto-routing.ts";
+import { autoEffortSchema, autoEngineSchema, classifyAutoTask, selectAutoRoute, validAutoArm, type AutoCandidate, type AutoDimensions, type AutoPreference, type AutoRoute, type AutoRules, type AutoTask, type ChoiceContext, type ChoiceProvenance, type TaskData } from "../shared/auto-routing.ts";
 import { applicableWindows, assessUsage } from "../shared/usage-windows.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import type { AutoRoutingEvents } from "./auto-routing-events.ts";
@@ -36,6 +36,10 @@ type Deps = {
   source?(botId: string, turn: AutoWorkerTurn): AttributionSource;
   kept?(botId: string, turn: AutoWorkerTurn): AutoDimensions | undefined;
   keep?(botId: string, turn: AutoWorkerTurn, choice: ChoiceProvenance, context: ChoiceContext): void;
+  observe?(botId: string, turn: AutoWorkerTurn, route: AutoRoute, choice: ChoiceProvenance, context: ChoiceContext): void;
+  bind?(botId: string, turn: AutoWorkerTurn, route: AutoRoute, taskClass: AutoTask): void;
+  habit?(taskClass: AutoTask, now: number): AutoPreference | undefined;
+  transaction?<T>(run: () => T): T;
   rules(): { id: number; content: AutoRules };
   candidates(): readonly AutoWorkerCandidate[];
   valid(route: AutoRoute, turn: AutoWorkerTurn): boolean;
@@ -49,6 +53,7 @@ const active = (row: AutoWorkerRow) => ["accepting", "running", "unknown"].inclu
 const sameAccount = (route: AutoRoute, candidate: Pick<AutoCandidate, "engine" | "account" | "generation">) =>
   route.engine === candidate.engine && route.account === candidate.account && route.generation === candidate.generation;
 const accountKey = (route: Pick<AutoRoute, "engine" | "account" | "generation">) => JSON.stringify([route.engine, route.account, route.generation]);
+const direct = <T>(run: () => T) => run();
 
 export class AutoRoutingRuntime {
   private state: z.infer<typeof stateSchema> = { v: 1, rows: [], limits: {} };
@@ -67,7 +72,7 @@ export class AutoRoutingRuntime {
     const marker = join(dataDir, "auto-routing-workers.created");
     if (existsSync(this.file) !== existsSync(marker)) throw new Error("Auto worker state is missing");
     if (existsSync(this.file)) {
-      this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8")));
+      this.reload();
       const rows = this.state.rows.map((row) => ({ ...row, stage: pending(row) ? "failed" as const : row.stage === "accepting" ? "unknown" as const : row.stage }));
       this.save(rows);
     } else {
@@ -76,6 +81,8 @@ export class AutoRoutingRuntime {
       this.save([]);
     }
   }
+
+  reload(): void { this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, "utf8"))); }
 
   rows(): AutoWorkerRow[] { return structuredClone(this.state.rows); }
 
@@ -101,23 +108,29 @@ export class AutoRoutingRuntime {
     const dimensions: AutoDimensions = {};
     if (request.pin?.model) { dimensions.model = request.pin.model; dimensions.engine = names(request.pin.userQuote).engine; }
     if (request.pin?.effort) dimensions.effort = request.pin.effort;
+    const taskClass = classifyAutoTask(request.task).taskClass;
     const attributed = request.pin && source && source.turn?.turnId === turn.id
-      ? userChoice(source, "worker", classifyAutoTask(request.task).taskClass, request.pin.userQuote, dimensions) : undefined;
+      ? userChoice(source, "worker", taskClass, request.pin.userQuote, dimensions) : undefined;
     if (request.pin && !attributed) return { kind: "hold", reason: "unverified-pin" };
-    if (attributed) this.deps.keep?.(request.botId, turn, attributed.choice, attributed.context);
     const pin = attributed?.choice.dimensions ?? this.deps.kept?.(request.botId, turn);
     const select = () => {
       const rules = this.deps.rules();
       return selectAutoRoute({ target: "worker", task: request.task, now: this.now(),
         candidates: this.candidates(), rules: rules.content, rulesVersion: rules.id,
-        pin, pinVerified: Boolean(pin) });
+        habit: this.deps.habit?.(taskClass, this.now()), pin, pinVerified: Boolean(pin) });
     };
     let decision = select();
     if (decision.kind !== "selected") return { kind: "hold", reason: decision.reason };
     let row: AutoWorkerRow = { requestId: request.requestId, routeId: randomBytes(16).toString("hex"), botId: request.botId,
       turnId: turn.id, nativeId: randomUUID(), at: this.now(), rulesVersion: decision.rulesVersion,
       route: routeSchema.parse(decision.route), stage: "preparing", attempts: 1, coverageMissing: false };
-    this.put(row);
+    (this.deps.transaction ?? direct)(() => {
+      if (attributed) {
+        this.deps.keep?.(request.botId, turn, attributed.choice, attributed.context);
+        this.deps.observe?.(request.botId, turn, row.route, attributed.choice, attributed.context);
+      } else if (pin) this.deps.bind?.(request.botId, turn, row.route, taskClass);
+      this.put(row);
+    });
     this.preparations.set(row.routeId, { turn, task: structuredClone(request.task) });
     try {
       for (;;) {
@@ -174,7 +187,7 @@ export class AutoRoutingRuntime {
 
   recovered(routeId: string, nativeId: string, paneId: string): void {
     const row = this.get(routeId);
-    if (row.stage !== "unknown" || row.nativeId !== nativeId || !paneId) throw new Error("Auto recovery identity is unavailable");
+    if ((row.stage !== "unknown" && row.stage !== "running") || row.nativeId !== nativeId || !paneId) throw new Error("Auto recovery identity is unavailable");
     this.put({ ...row, stage: "running", paneId });
   }
 
