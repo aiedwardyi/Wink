@@ -404,6 +404,7 @@ export function SettingsModal({
   useEffect(() => { backRef.current = back; }, [back]);
   useBackLayer(!closing && phone && page, back);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const activityWaved = useRef(false);
   useSettingsSwipe(dialogRef, phone && !closing, phone && page ? section : false, back);
   const [preferencesOpen, setPreferencesOpen] = useState(defaultAdvancedOpen);
   const phoneAvailable = true;
@@ -614,7 +615,7 @@ export function SettingsModal({
                     )}
                   </div>
                 </Card>
-                <ActivityCard />
+                <ActivityCard waved={activityWaved} />
               </>
             )}
 

@@ -259,6 +259,13 @@ export function botRepliesPerDay(bounds: readonly number[]): number[] {
   return rows.map((row) => row.count);
 }
 
+/** Time of the first bot text reply, or null before any. */
+export function firstBotReplyAt(): number | null {
+  // SAFETY: This SELECT list is one MIN over an INTEGER column.
+  const row = db().prepare("SELECT MIN(at) AS at FROM messages WHERE role = 'bot' AND kind = 'text'").get() as { at: number | null } | undefined;
+  return row?.at ?? null;
+}
+
 export function deleteThread(threadId: string): void {
   db().prepare("DELETE FROM messages WHERE thread_id = ?").run(threadId);
   db().prepare("DELETE FROM thread_state WHERE thread_id = ?").run(threadId);

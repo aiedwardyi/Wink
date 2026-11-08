@@ -26,7 +26,7 @@ describe("replyActivity", () => {
 
   it("is empty with no replies", () => {
     const activity = replyActivity(local(11, 4));
-    expect(activity).toMatchObject({ start: "2026-05-10", streak: 0, busiest: null, total: 0 });
+    expect(activity).toMatchObject({ start: "2026-05-10", since: null, streak: 0, busiest: null, total: 0 });
     expect(activity.counts).toHaveLength(25 * 7 + 4);
     expect(activity.counts.every((count) => count === 0)).toBe(true);
   });
@@ -41,13 +41,25 @@ describe("replyActivity", () => {
     expect(counts.slice(-3)).toEqual([1, 2, 1]);
   });
 
-  it("counts only bot text inside the window", () => {
+  it("counts only bot text, in the grid for 26 weeks and in the totals since the first reply", () => {
     reply(local(11, 4), { role: "user" });
     reply(local(11, 4), { kind: "activity" });
+    reply(new Date(2025, 5, 3, 9).getTime());
     reply(local(5, 9, 23, 59));
     reply(local(11, 5, 0, 0));
     reply(local(5, 10, 0, 0));
-    expect(replyActivity(local(11, 4)).total).toBe(1);
+    const activity = replyActivity(local(11, 4));
+    expect(activity.counts.reduce((sum, count) => sum + count, 0)).toBe(1);
+    expect(activity).toMatchObject({ since: "2025-06-03", total: 3 });
+  });
+
+  it("runs the streak and the busiest day back past the grid", () => {
+    for (let day = 0; day < 200; day++) reply(new Date(2026, 3, 19 + day, 12).getTime());
+    for (const hour of [9, 10]) reply(new Date(2026, 0, 2, hour).getTime());
+    const activity = replyActivity(local(11, 4));
+    expect(activity.streak).toBe(200);
+    expect(activity.busiest).toEqual({ day: "2026-01-02", count: 2 });
+    expect(activity.since).toBe("2026-01-02");
   });
 
   it("keeps the streak through a quiet morning and stops at a gap", () => {

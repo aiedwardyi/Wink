@@ -100,7 +100,8 @@ describe("phone Settings navigation", () => {
     const pane = dialog()!.querySelector("[data-settings-page] .overflow-y-auto")!;
     expect(pane.querySelector("#settings-profile-name")).not.toBeNull();
     expect(pane.querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
-    expect(pane.children).toHaveLength(1);
+    // the Activity card holds its place while its numbers load
+    expect([...pane.children].map((child) => child.textContent?.startsWith("Activity"))).toEqual([false, true]);
     expect(pane.textContent).not.toContain("Sync");
   });
 
