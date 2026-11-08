@@ -706,6 +706,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               rpcPending.delete(msg.id);
               msg.error ? pend.reject(Object.assign(new Error(msg.error.message ?? JSON.stringify(msg.error)), { code: msg.error.code })) : pend.resolve(msg.result);
             }
+          } else if (abandoned) {
+            // a retired attempt's late turn/completed would settle its replacement
+            continue;
           } else if (msg.id !== undefined && msg.method) {
             handleServerRequest(msg);
           } else if (msg.method) {

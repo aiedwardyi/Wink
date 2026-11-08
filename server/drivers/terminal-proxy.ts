@@ -21,6 +21,8 @@ const ACCOUNT_NAMES: Record<string, string> = JSON.parse(process.env.OMB_ACCOUNT
 // agy mounts this proxy machine-wide, so a process without a bot's terminal grant gets no tools.
 const TOOLS_ENABLED = Boolean(HOST && TOKEN && BOT_ID);
 const REQUEST_TIMEOUT_MS = 10_000;
+// Above the host's 15 s Windows ready wait: openForBot cannot be cancelled, so an abort leaves the pane opening and the bot relaunches it.
+const SPAWN_TIMEOUT_MS = 30_000;
 // Over the harness's 3 s cap on a usage refresh.
 const USAGE_TIMEOUT_MS = 5_000;
 const READ_WAIT_DEFAULT_MS = 15_000;
@@ -250,7 +252,7 @@ async function terminalRequest<T = Snapshot>(fetchImpl: typeof fetch, config: Te
   if (!host || !token || !botId) throw new Error("the shared terminal is not enabled for this bot");
   const url = `${host}/v1/bots/${encodeURIComponent(botId)}/terminal`;
   const post = route.send ? { path: "send", body: route.send } : route.spawn ? { path: "open", body: route.spawn } : route.close ? { path: "close", body: route.close } : null;
-  const signal = AbortSignal.timeout(post ? REQUEST_TIMEOUT_MS : readDeadlineMs(route));
+  const signal = AbortSignal.timeout(route.spawn ? SPAWN_TIMEOUT_MS : post ? REQUEST_TIMEOUT_MS : readDeadlineMs(route));
   const query = new URLSearchParams();
   if (route.sessionId) query.set("sessionId", route.sessionId);
   if (route.waitFor) query.set("waitFor", route.waitFor);

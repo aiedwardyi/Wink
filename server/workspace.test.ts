@@ -1,7 +1,7 @@
 // Workspace + file memory contract: the workspace is created idempotently,
 // MEMORY.md loads under a hard budget, and an empty file gets only a starter
 // block in the first-turn prompt.
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -119,6 +119,19 @@ describe("workspace", () => {
       truncated: false,
       revision: memoryRevision("# Memory\n- one fact\n"),
     });
+  });
+
+  it("writeMemoryFile replaces the file instead of truncating it in place", () => {
+    const dir = ensureWorkspace(BOT);
+    const file = join(dir, "MEMORY.md");
+    writeFileSync(file, "- old note\n");
+    linkSync(file, join(dir, "MEMORY.link"));
+
+    writeMemoryFile(BOT, "- new note\n");
+
+    expect(readFileSync(join(dir, "MEMORY.link"), "utf8")).toBe("- old note\n");
+    expect(readFileSync(file, "utf8")).toBe("- new note\n");
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   it("writeMemoryFile round-trips without needing the workspace to exist first", () => {
