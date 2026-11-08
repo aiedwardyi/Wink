@@ -12,6 +12,8 @@ export const LIVE_EVENTS_PATH = "/api/events";
 export const LIVE_EVENTS_STALE_MS = 40_000;
 export const LIVE_EVENTS_RETRY_MIN_MS = 500;
 export const LIVE_EVENTS_RETRY_MAX_MS = 10_000;
+// The reconnecting cue's 2 s grace follows this, so a dead link still shows at 10 s.
+export const LIVE_EVENTS_WAKE_QUIET_MS = 8_000;
 
 export interface LiveFrame {
   kind: string;
@@ -61,6 +63,9 @@ export interface LiveEventsHandlers {
   staleMs?: number;
   retryMinMs?: number;
   retryMaxMs?: number;
+  /** A phone's link dies while it sits in the background and takes seconds to return, so
+   * onError waits this long after the page comes back, and stays silent while hidden. */
+  wakeQuietMs?: number;
 }
 
 export function liveEventsUrl(options?: { since?: string | null; screens?: boolean; coldOpen?: string }): string {
@@ -194,9 +199,12 @@ export function openLiveEvents(
   const retryMinMs = Math.max(1, handlers.retryMinMs ?? LIVE_EVENTS_RETRY_MIN_MS);
   const retryMaxMs = Math.max(retryMinMs, handlers.retryMaxMs ?? LIVE_EVENTS_RETRY_MAX_MS);
   const staleCheckMs = Math.min(10_000, Math.max(250, staleMs / 2));
+  const wakeQuietMs = handlers.wakeQuietMs ?? 0;
 
   let stopped = false;
   let source: LiveEventSourceLike | null = null;
+  let linkOpen = false;
+  let wakeQuietTimer: ReturnType<typeof setTimeout> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryAttempt = 0;
   let cursor: string | null = null;
@@ -217,9 +225,29 @@ export function openLiveEvents(
     retryTimer = null;
   };
 
+  const clearWakeQuiet = () => {
+    if (wakeQuietTimer === null) return;
+    clearTimeout(wakeQuietTimer);
+    wakeQuietTimer = null;
+  };
+
+  const reportLost = () => {
+    if (wakeQuietMs > 0 && (wakeQuietTimer !== null || !platform.isVisible())) return;
+    handlers.onError?.();
+  };
+
+  const holdReportsForWake = () => {
+    if (wakeQuietMs === 0 || wakeQuietTimer !== null) return;
+    wakeQuietTimer = setTimeout(() => {
+      wakeQuietTimer = null;
+      if (!linkOpen) handlers.onError?.();
+    }, wakeQuietMs);
+  };
+
   const closeSource = () => {
     const current = source;
     source = null;
+    linkOpen = false;
     if (!current) return;
     if (pendingSnapshot?.source === current) {
       snapshotGeneration += 1;
@@ -248,7 +276,7 @@ export function openLiveEvents(
     if (stopped || source !== current) return;
     wakePending = false;
     closeSource();
-    handlers.onError?.();
+    reportLost();
     scheduleReconnect();
   };
 
@@ -260,7 +288,7 @@ export function openLiveEvents(
         liveEventsUrl({ since: cursor, screens: handlers.screens, coldOpen: firstStreamId() }),
       );
     } catch {
-      handlers.onError?.();
+      reportLost();
       scheduleReconnect();
       return;
     }
@@ -273,6 +301,8 @@ export function openLiveEvents(
     current.onopen = () => {
       if (stopped || source !== current) return;
       lastHeardAt = platform.now();
+      linkOpen = true;
+      clearWakeQuiet();
       markColdOpen("sseOpen");
       noteSse("open");
       handlers.onOpen?.();
@@ -362,7 +392,7 @@ export function openLiveEvents(
     clearRetry();
     if (source) {
       closeSource();
-      if (reportDisconnect) handlers.onError?.();
+      if (reportDisconnect) reportLost();
     }
     connect();
   };
@@ -383,20 +413,28 @@ export function openLiveEvents(
     }
   };
   const onOnline = () => recover(true);
+  const onReturn = () => {
+    // A hello landing while hidden clears wasHidden, so a closed link counts too.
+    if (wasHidden || !linkOpen) holdReportsForWake();
+    recover(wasHidden);
+  };
   const onFocus = () => {
-    if (platform.isVisible()) recover(wasHidden);
+    if (platform.isVisible()) onReturn();
   };
   const onVisibilityChange = () => {
-    if (platform.isVisible()) recover(wasHidden);
+    if (platform.isVisible()) onReturn();
     else {
       wasHidden = true;
       wakePending = false;
+      clearWakeQuiet();
     }
   };
   // A back/forward-cache restore keeps the old source object, but its socket
   // was dropped while the page sat in the cache.
   const onPageShow = (event?: { persisted?: boolean }) => {
-    if (event?.persisted) recover(true);
+    if (!event?.persisted) return;
+    holdReportsForWake();
+    recover(true);
   };
 
   connect();
@@ -411,6 +449,7 @@ export function openLiveEvents(
     stopped = true;
     clearInterval(staleTimer);
     clearRetry();
+    clearWakeQuiet();
     closeSource();
     platform.windowTarget?.removeEventListener("online", onOnline);
     platform.windowTarget?.removeEventListener("focus", onFocus);

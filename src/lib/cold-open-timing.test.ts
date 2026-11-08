@@ -51,6 +51,7 @@ function fakePage(href: string, navType: NavigationTimingType = "navigate", extr
     href,
     timeOrigin: ORIGIN,
     now: () => now,
+    clock: () => ORIGIN + now,
     navigation: () => ({ ...navigation, ...extra.nav, type: navType }),
     paints: () => paints,
     resources: () => resources,
@@ -88,7 +89,7 @@ describe("cold-open timing", () => {
     const fetch = vi.fn(async (_url: string, _init: RequestInit) => ({}));
     class Navigation { type = "navigate"; }
     vi.stubGlobal("window", { ogb: {}, location: { href: "http://localhost/" }, matchMedia: () => ({ matches: false }) });
-    vi.stubGlobal("document", { visibilityState: "visible", querySelector: () => null });
+    vi.stubGlobal("document", { visibilityState: "visible", querySelector: () => null, addEventListener: () => {} });
     vi.stubGlobal("navigator", { userAgent: "desktop fixture" });
     vi.stubGlobal("PerformanceNavigationTiming", Navigation);
     vi.stubGlobal("performance", { timeOrigin: ORIGIN, now: () => 100, getEntriesByType: (type: string) => type === "navigation" ? [new Navigation()] : [] });
@@ -103,6 +104,62 @@ describe("cold-open timing", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("records a resumed phone page from its return to the first paint after hello", () => {
+    const fake = fakePage("https://home.example/remote", "reload");
+    const timing = createColdOpenTiming(fake.page);
+    timing.visibility(true);
+    fake.at(60_000);
+    timing.visibility(false);
+    expect(timing.streamId()).toBe("0123456789abcdef");
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent).toEqual([]);
+    fake.at(60_010);
+    timing.sse("created");
+    fake.at(63_000);
+    timing.sse("open");
+    timing.mark("sseOpen");
+    fake.at(63_010);
+    timing.mark("hello");
+    fake.at(63_030);
+    fake.paint();
+    expect(fake.sent).toEqual([
+      expect.objectContaining({ label: "resume", hiddenMs: 60_000, sseOpen: 3_000, hello: 3_010, chatPaint: 3_030, sse: { created: 10, open: 3_000, errors: 0 } }),
+    ]);
+    expect(fake.sent[0].nav).toBeUndefined();
+  });
+
+  it("sends a resume whose link never came back, without its hello", () => {
+    const fake = fakePage("https://home.example/remote", "reload");
+    const timing = createColdOpenTiming(fake.page);
+    timing.visibility(true);
+    fake.at(5_000);
+    timing.visibility(false);
+    fake.expire();
+    expect(fake.sent[0]).toMatchObject({ label: "resume", hiddenMs: 5_000 });
+    expect(fake.sent[0].hello).toBeUndefined();
+  });
+
+  it("leaves a first open still measuring alone when the page comes back", () => {
+    const fake = fakePage("https://home.example/remote");
+    const timing = createColdOpenTiming(fake.page);
+    timing.visibility(true);
+    fake.at(900);
+    timing.visibility(false);
+    timing.chatShown("t1");
+    fake.paint();
+    expect(fake.sent).toEqual([expect.objectContaining({ label: "open", chatPaint: 900 })]);
+  });
+
+  it("records no resume on the desktop app", () => {
+    const fake = fakePage("http://127.0.0.1:8799/", "reload");
+    const timing = createColdOpenTiming({ ...fake.page, desktop: true });
+    timing.visibility(true);
+    timing.visibility(false);
+    fake.expire();
+    expect(fake.sent).toEqual([]);
   });
 
   it("identifies a desktop's first hydrated chat", () => {
