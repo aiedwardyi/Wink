@@ -7,6 +7,7 @@ import type { VerifyCardData, VerifyIssue } from "../../shared/live-verify";
 import { chunk } from "../../electron/verify-replay.mjs";
 import { applyLocale } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { chooseVerifyTab } from "@/lib/verify-watch";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
 import { VerifyWatchFrame } from "./VerifyWatch";
 
@@ -467,6 +468,49 @@ it("never draws check lines on a stage with no picture, and draws them once it h
   await act(async () => decoded({ close() {} }));
   await tick(2);
   expect(strokes).toHaveBeenCalled();
+});
+
+it.each([[false, "desktop"], [true, "desktop"], [false, "phone"], [true, "phone"]] as const)("keeps the stage hidden and the clock at zero until the first picture decodes (inline=%s, %s)", async (inline, tabName) => {
+  const tick = animationClock();
+  const drawImage = vi.fn();
+  const ctx = new Proxy({ drawImage }, { get: (target, key) => key in target ? target[key as "drawImage"] : () => {}, set: () => true });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  let decoded = (_image: unknown) => {};
+  vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise(resolve => { decoded = resolve; })));
+  const clocks: number[] = [];
+  const advance = VerifyWatchShow.prototype.advance;
+  vi.spyOn(VerifyWatchShow.prototype, "advance").mockImplementation(function (this: VerifyWatchShow, ms: number) { const changed = advance.call(this, ms); clocks.push(this.clock); return changed; });
+  const data = inlineCard(`run-first-picture-${inline}-${tabName}`);
+  chooseVerifyTab(data.runId, tabName);
+  const mark = chunk(2, { ms: 0, kind: "result", ev: { tile: tabName, checker: "LINKS", result: "ok", box: [10, 20, 80, 30], where: "a#one" } });
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"), mark)));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: data, threadId: "t", live: false, hidden: false, inline, onClose() {} })));
+  await tick(8);
+  const stage = host.querySelector(".verify-watch-stage")!;
+  expect(stage.hasAttribute("data-pending")).toBe(true);
+  expect(drawImage).not.toHaveBeenCalled();
+  expect(Math.max(...clocks)).toBe(0);
+  await act(async () => decoded({ close() {} }));
+  expect(stage.hasAttribute("data-pending")).toBe(false);
+  expect(drawImage).toHaveBeenCalled();
+  await tick(3);
+  expect(Math.max(...clocks)).toBeGreaterThan(0);
+});
+
+it("keeps the last picture up while watching again", async () => {
+  const tick = animationClock();
+  const drawImage = vi.fn();
+  const ctx = new Proxy({ drawImage }, { get: (target, key) => key in target ? target[key as "drawImage"] : () => {}, set: () => true });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ close() {} })));
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: inlineCard("run-again-picture"), threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(120);
+  const again = host.querySelector<HTMLButtonElement>(".verify-watch-again")!;
+  const before = drawImage.mock.calls.length;
+  await act(async () => again.click());
+  expect(host.querySelector(".verify-watch-stage")!.hasAttribute("data-pending")).toBe(false);
+  expect(drawImage.mock.calls.length).toBeGreaterThan(before);
 });
 
 it.each([["en", "Phone fit"], ["ko", "휴대폰 맞춤"]] as const)("names the phone width check so the list never cuts it in %s", async (locale, label) => {

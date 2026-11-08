@@ -56,6 +56,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   const [maximized, setMaximized] = useState(false);
   const expanded = maximized && !inline && !phone;
   const [, setVersion] = useState(0);
+  const [, setDecoded] = useState(0);
   const [rerunning, setRerunning] = useState(false);
   const [error, setError] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -63,6 +64,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   const stageRef = useRef<HTMLDivElement>(null);
   const stageHeight = useRef<number | null>(null);
   const bitmap = useRef<{ jpeg: Uint8Array; image: ImageBitmap; tile: VerifyTile } | null>(null);
+  const undecodable = useRef<Uint8Array | null>(null);
   const runs = useRef(card.replay ?? []);
   const close = useRef(onClose);
   close.current = onClose;
@@ -114,7 +116,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
     if (!gate) return;
     let last = performance.now(), frame = 0, drawn = -1, shown = -1;
     const tick = (now: number) => {
-      show.advance(now - last);
+      show.advance(awaiting() ? 0 : now - last);
       last = now;
       if (show.version !== drawn) { drawn = show.version; draw(); }
       if (show.ui !== shown) {
@@ -155,6 +157,14 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
   useEffect(() => () => bitmap.current?.image.close(), []);
   useLayoutEffect(() => { draw(); }, [expanded, show]);
 
+  // The show's clock waits for a tile's first picture, so the stage is never painted before it.
+  function awaiting() {
+    if (bitmap.current?.tile === show.tile) return false;
+    if (show.phase === "loading") return true;
+    const stored = show.frame();
+    return Boolean(stored && canvasRef.current?.getContext("2d")) && undecodable.current !== stored!.jpeg;
+  }
+
   function draw() {
     const canvas = canvasRef.current, ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
@@ -169,12 +179,13 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
         bitmap.current?.image.close();
         bitmap.current = { jpeg, image, tile };
         draw();
-      }, () => {});
+        setDecoded(n => n + 1);
+      }, () => { undecodable.current = jpeg; setDecoded(n => n + 1); });
     }
     ctx.fillStyle = "#0a0d14";
     ctx.fillRect(0, 0, w, h);
     // The last picture stays up while the next one decodes, so a scroll stop never flashes black.
-    if (stored && bitmap.current?.tile === tile) ctx.drawImage(bitmap.current.image, 0, 0, w, h);
+    if (bitmap.current?.tile === tile) ctx.drawImage(bitmap.current.image, 0, 0, w, h);
     const px = Math.max(w / Math.max(1, canvas.clientWidth || w), h / Math.max(1, canvas.clientHeight || h));
     ctx.lineWidth = px;
     const reel = show.reelIssue();
@@ -273,7 +284,7 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
         <span className="verify-watch-url" title={head?.page}>{head?.site ?? card.site}</span>
       </div>
       {error && <div className="verify-watch-error" role="alert">{c.retry}</div>}
-      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} style={{ aspectRatio: tileSize(show).join(" / ") }}>
+      <div ref={stageRef} className="verify-watch-stage" data-tile={tile} data-pending={awaiting() || undefined} style={{ aspectRatio: tileSize(show).join(" / ") }}>
         <canvas ref={canvasRef} aria-label={c.watch} />
         {(show.phase === "after" || show.phase === "done" || show.phase === "reel" || show.phase === "clean") && show.end && (
           <div className="verify-watch-pill" data-top={pillTop || undefined}>{c.checks(show.checks)} · <span data-red={issues.length > 0 || undefined}>{issues.length ? c.problems(issues.length) : c.clean}</span></div>
