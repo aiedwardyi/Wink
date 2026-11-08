@@ -13,7 +13,7 @@ import { openBlankTerminal } from "./terminal-launch.mjs";
 import { openEngineSignIn } from "./engine-signin.mjs";
 import { registerEngineInstall } from "./engine-install.mjs";
 import { createGoogleAccountController, createGoogleSessionPush, googleClient, googleServerEnv, watchDevServer } from "./google-signin.mjs";
-import { createTerminalHost, trustedTerminalSender } from "./terminal-host.mjs";
+import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./terminal-host.mjs";
 import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
 import { resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
@@ -317,6 +317,7 @@ async function paneMailbox() {
   return { url: `http://127.0.0.1:${port}`, token, binDir };
 }
 const paneRuns = createPaneRuns(path.join(app.getPath("userData"), "pane-runs.json"));
+const scratchRoot = process.env.ORBIT_TEMP_ROOT || os.tmpdir();
 const terminalHost = createTerminalHost({
   authorize(event) {
     const origin = app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin;
@@ -328,7 +329,9 @@ const terminalHost = createTerminalHost({
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
-  paneCleanup: createPaneCleanup({ home: app.getPath("home"), worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
+  scratchRoot,
+  processes: paneProcesses,
+  paneCleanup: createPaneCleanup({ home: app.getPath("home"), tempRoot: scratchRoot, worktreeRoot: process.env.ORBIT_WORKTREE_ROOT || path.join(app.getPath("home"), "orbit-wt"), pinned: () => readCleanupPins(process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".orbit")), warn: slog }),
   snag: (snag) => spoolTeamSnag(path.join(app.getPath("userData"), "team-snags"), errorReports.consent, snag),
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(
     require.resolve(app.isPackaged ? path.join(process.resourcesPath, "terminal", "node-pty") : "node-pty"), shell, args, options,
