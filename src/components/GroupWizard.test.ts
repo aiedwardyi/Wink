@@ -76,9 +76,9 @@ async function renderWizard() {
   await act(async () => {
     root.render(createElement(GroupWizard, { onClose: () => undefined }));
   });
-  const dialog = host.querySelector('[role="dialog"]');
+  const dialog = document.body.querySelector('[role="dialog"]');
   if (!(dialog instanceof HTMLElement)) throw new Error("wizard did not render");
-  return { host, root };
+  return { host: document.body, root };
 }
 
 function button(host: HTMLElement, text: string): HTMLButtonElement {
@@ -130,6 +130,41 @@ afterEach(() => {
 });
 
 describe("GroupWizard members", () => {
+  it("opens over the screen with a card that fits a 360 px phone", async () => {
+    const drawer = document.createElement("aside");
+    document.body.append(drawer);
+    const root = createRoot(drawer);
+    await act(async () => {
+      root.render(createElement(GroupWizard, { onClose: () => undefined }));
+    });
+    try {
+      const card = document.body.querySelector('[role="dialog"]')!;
+      expect(drawer.contains(card)).toBe(false);
+      expect(card.parentElement!.parentElement).toBe(document.body);
+      expect(card.parentElement!.className).toContain("p-4");
+      expect(card.className).toContain("w-full");
+      expect(card.className).toContain("max-w-[380px]");
+      expect(card.className.split(" ")).not.toContain("w-[380px]");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("keeps the card inside a short screen: the body scrolls and Create stays in view", async () => {
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => button(host, "+ New bot").click());
+      const card = host.querySelector('[role="dialog"]')!;
+      const scroller = (el: Element) => el.closest(".overflow-y-auto:not(.max-h-64)");
+      expect(card.className).toContain("max-h-full");
+      expect(scroller(nameInputs(host)[0]!)).not.toBeNull();
+      expect(scroller(button(host, "Create"))).toBeNull();
+      expect(scroller(button(host, "Cancel"))).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it.each(["en", "ko"] as const)("creates with a base engine among four Claude and two Codex accounts in %s", async (locale) => {
     applyLocale(locale);
     const bases = [engine("claude", "claudeAgent", "Claude"), engine("codex", "codex", "Codex")];
@@ -268,6 +303,47 @@ describe("GroupWizard members", () => {
         // argument; the stub carries only the id the effect reads.
         create.onSuccess?.({ id: "g1" } as Group);
       });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("answers in tick order, shows 1st 2nd 3rd and renumbers on untick", async () => {
+    // SAFETY: same picker-only fields as defaultBots.
+    bots = [...defaultBots, { id: "b3", name: "Cy", hidden: false, modelSelection: { instanceId: "codex-1", model: "m" } } as Bot];
+    const { host, root } = await renderWizard();
+    const order = () => ["Ada", "Bo", "Cy"].map((name) => pickRow(host, name).textContent?.match(/\d+(?:st|nd|rd|th|번째)$/)?.[0] ?? "");
+    const tick = (name: string) => act(async () => pickRow(host, name).click());
+    try {
+      await tick("Cy");
+      await tick("Ada");
+      await tick("Bo");
+      expect(order()).toEqual(["2nd", "3rd", "1st"]);
+      await tick("Ada");
+      expect(order()).toEqual(["", "2nd", "1st"]);
+      await tick("Ada");
+      expect(order()).toEqual(["3rd", "2nd", "1st"]);
+      await act(async () => {
+        button(host, "Create").click();
+      });
+      expect(findCreate()).toMatchObject({ memberIds: ["b3", "b2", "b1"] });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  });
+
+  it("shows the tick order in Korean", async () => {
+    applyLocale("ko");
+    const { host, root } = await renderWizard();
+    try {
+      await act(async () => pickRow(host, "Bo").click());
+      await act(async () => pickRow(host, "Ada").click());
+      expect(pickRow(host, "Bo").textContent).toMatch(/Bo첫 번째$/);
+      expect(pickRow(host, "Ada").textContent).toMatch(/Ada두 번째$/);
     } finally {
       await act(async () => {
         root.unmount();

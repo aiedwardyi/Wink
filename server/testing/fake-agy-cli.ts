@@ -11,6 +11,7 @@
 // FAKE_AGY_RESULT_ERROR, when set, is the result.error of a status ERROR turn.
 // FAKE_AGY_RESULT_RESPONSE, with it, is that turn's result.response (else "").
 // While FAKE_AGY_RESULT_ERROR_FILE exists, its text is that result.error.
+// FAKE_AGY_USAGE, when set, is the JSON usage on the response step and the result.
 // Deterministic, no network.
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -155,7 +156,10 @@ if (process.env.FAKE_AGY_CHECKPOINT_FILE && existsSync(process.env.FAKE_AGY_CHEC
 if (process.env.FAKE_AGY_SYSTEM_NOTICE === "1") {
   out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 2, state: "DONE", step_type: "agent_response", text_delta: systemNotice } });
 }
-out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 1, state: "DONE", step_type: "agent_response", usage: { input_tokens: 100, output_tokens: 20, thinking_tokens: 0, cache_read_tokens: 5, total_tokens: 125 } } });
+const fakeUsage = process.env.FAKE_AGY_USAGE
+  ? JSON.parse(process.env.FAKE_AGY_USAGE)
+  : { input_tokens: 100, output_tokens: 20, thinking_tokens: 0, cache_read_tokens: 5, total_tokens: 125 };
+out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 1, state: "DONE", step_type: "agent_response", usage: fakeUsage } });
 if (resultError && process.env.FAKE_AGY_LAST_STEP_TYPE) {
   out({ event: "step_update", conversation_id: CONV, step_update: { conversation_id: CONV, step_index: 2, state: process.env.FAKE_AGY_LAST_STEP_STATE ?? "DONE", step_type: process.env.FAKE_AGY_LAST_STEP_TYPE } });
 }
@@ -177,7 +181,7 @@ out({
     error: resultError,
     duration_seconds: 1,
     num_turns: 1,
-    usage: { input_tokens: 100, output_tokens: 20, thinking_tokens: 0, cache_read_tokens: 5, total_tokens: 125 },
+    usage: fakeUsage,
   },
 });
 const postResultDelayMs = Number(process.env.FAKE_AGY_POST_RESULT_DELAY_MS ?? 0);

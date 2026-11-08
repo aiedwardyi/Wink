@@ -305,6 +305,22 @@ describe("Antigravity turns (fake CLI)", () => {
     expect((await instance.snapshot()).authenticated).toBe(true);
   });
 
+  it("records agy cache_read_tokens as cachedInput", async () => {
+    process.env.FAKE_AGY_USAGE = JSON.stringify({ input_tokens: 3741, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 7595, total_tokens: 3742 });
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-cached", text: "hi", model: "gemini-3.6-flash-low" });
+      await recorder.until((e) => e.type === "turn.completed");
+
+      const usage = recorder.events.filter((e) => e.type === "thread.token-usage.updated");
+      expect(usage).toHaveLength(2);
+      for (const u of usage) expect(u).toMatchObject({ input: 11336, output: 1, cachedInput: 7595 });
+      expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", usage: { input: 11336, output: 1, cachedInput: 7595 } });
+    } finally {
+      delete process.env.FAKE_AGY_USAGE;
+    }
+  });
+
   it("emits only the real answer when a system notice precedes it", async () => {
     const previous = { notice: process.env.FAKE_AGY_SYSTEM_NOTICE, after: process.env.FAKE_AGY_AFTER_NOTICE };
     process.env.FAKE_AGY_SYSTEM_NOTICE = "1";

@@ -35,6 +35,7 @@ let sync = { configured: false, syncChats: false };
 let syncAnswer: Promise<void> | null = null;
 let bots: Bot[] = [];
 let groups: Group[] = [];
+const dispatched: Array<{ type: string; botId?: string; id?: string; patch?: unknown }> = [];
 
 function bot(id: string, name: string, hidden: boolean): Bot {
   return {
@@ -90,7 +91,7 @@ vi.mock("@/state/store", async (importOriginal) => {
         },
         mascotMotion: null,
       },
-      dispatch: () => undefined,
+      dispatch: (action: (typeof dispatched)[number]) => dispatched.push(action),
       refreshInstances: async () => undefined,
     }),
   };
@@ -147,6 +148,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   document.body.replaceChildren();
   calls.length = 0;
+  dispatched.length = 0;
   sync = { configured: false, syncChats: false };
   syncAnswer = null;
   bots = [];
@@ -177,33 +179,68 @@ describe("decluttered sidebar menus", () => {
       const menu = document.querySelector("[data-bot-menu]")!;
       const labels = [...menu.querySelectorAll("button")].map((node) => node.textContent);
       expect(labels).toEqual(visible
-        ? ["Unpin", "Remove Chief of Staff", "Move to section", "Mark as Unread", "Edit Profile", "Make a copy", "Delete"]
-        : ["Unpin", "Remove Chief of Staff", "Move to section", "Mark as Unread", "Edit Profile", "Delete"]);
+        ? ["Unpin", "Remove Chief of Staff", "Move to section", "Mark as Unread", "Edit Profile", "Make a copy", "Archive", "Delete"]
+        : ["Unpin", "Remove Chief of Staff", "Move to section", "Mark as Unread", "Edit Profile", "Archive", "Delete"]);
       await act(async () => buttonByText("New or share").click());
       expect(document.body.textContent?.includes("Export all bots")).toBe(visible);
       expect(document.body.textContent?.includes("Teams")).toBe(false);
-      expect(buttonByText("New Bot")).not.toBeNull();
+      expect(buttonByText("New bot")).not.toBeNull();
       expect(buttonByText("New group")).not.toBeNull();
       await act(async () => {
         document.querySelector('[data-sidebar-row-id="team"] button')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 60, clientY: 60 }));
       });
       const room = document.querySelector("[data-room-menu]")!;
-      expect([...room.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Rename Team", "Move to section", "Delete group"]);
+      expect([...room.querySelectorAll("button")].map((node) => node.textContent)).toEqual(["Pin", "Rename Team", "Move to section", "Delete group"]);
     } finally {
       await act(async () => root.unmount());
     }
   });
 });
 
-describe("bot archive is not a user action", () => {
-  it("drops the row and menu archive actions and keeps restore behind the archived entry", () => {
+describe("New menu with the phone drawer", () => {
+  it("is closed after the drawer closes and opens again", async () => {
+    const { host, root } = await renderSidebar();
+    const draw = (open: boolean) =>
+      act(async () => {
+        root.render(createElement(I18nProvider, null, createElement(Sidebar, { open, onClose: () => undefined })));
+      });
+    const settle = () => act(() => new Promise<void>((done) => setTimeout(done, PRESENCE_EXIT_MS + 60)));
+    try {
+      expect(en["chrome.newBot"]).toBe("New bot");
+      expect(ko["chrome.newBot"]).toBe("새 봇");
+      await act(async () => buttonByText("New or share").click());
+      expect(buttonByText("New group", host)).toBeDefined();
+      await draw(false);
+      await settle();
+      await draw(true);
+      expect([...host.querySelectorAll("button")].some((node) => node.textContent === "New group")).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("stays open while the desktop sidebar is shown without a drawer", async () => {
+    const { host, root } = await renderSidebar();
+    try {
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(Sidebar, { open: false, onClose: () => undefined }))));
+      await act(async () => buttonByText("New or share").click());
+      await act(() => new Promise<void>((done) => setTimeout(done, PRESENCE_EXIT_MS + 60)));
+      expect(buttonByText("New group", host)).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+});
+
+describe("bot archive from its menu", () => {
+  it("offers Archive in the menu and keeps restore behind the archived entry", () => {
     expect(en["chrome.deleteBotBody"]).toBe("This permanently deletes {name} and its conversation. This cannot be undone.");
     expect(en["chrome.deleteBotBodyAllPcs"]).toBe(
       "This permanently deletes {name} and its conversation on all your PCs. This cannot be undone.",
     );
     expect(ko["chrome.deleteBotBodyAllPcs"]).toBe("{name} 및 대화를 모든 PC에서 완전히 삭제합니다. 되돌릴 수 없습니다.");
-    expect(sidebar).not.toContain('t("chrome.archive")');
-    expect(sidebar).not.toContain("chrome.archiveBot");
+    expect(sidebar).toContain('t("chrome.archive")');
+    expect(ko["chrome.archive"]).toBe("보관");
     expect(sidebar).toContain("archivedBots.length > 0");
     expect(sidebar).toContain("JSON.stringify({ hidden: false })");
     expect(sidebar).toContain('deleteReach === "every-pc" ? "chrome.deleteBotBodyAllPcs" : "chrome.deleteBotBody"');
@@ -217,7 +254,7 @@ describe("bot archive is not a user action", () => {
       await openMenu("Ada");
       const menu = document.querySelector("[data-bot-menu]");
       if (!(menu instanceof HTMLElement)) throw new Error("menu missing");
-      expect([...menu.querySelectorAll("button")].some((node) => node.textContent?.trim() === "Archive")).toBe(false);
+      expect(buttonByText("Archive", menu)).toBeTruthy();
       expect(buttonByText("Delete", menu)).toBeTruthy();
 
       await act(async () => {
@@ -239,6 +276,40 @@ describe("bot archive is not a user action", () => {
         buttonByText("New or share").click();
       });
       expect([...document.querySelectorAll("button")].some((node) => node.textContent?.includes("Archived bots"))).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("archives the open bot with the hidden patch and opens the next one", async () => {
+    bots = [bot("ada", "Ada", false), bot("bo", "Bo", false)];
+    const { root } = await renderSidebar();
+    try {
+      await openMenu("Ada");
+      await act(async () => buttonByText("Archive", document.querySelector("[data-bot-menu]")!).click());
+      expect(dispatched).toEqual([
+        { type: "updateBot", botId: "ada", patch: { hidden: true } },
+        { type: "select", id: "bo" },
+      ]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("blocks Archive for the Chief of Staff and for the last active bot", async () => {
+    bots = [{ ...bot("ada", "Ada", false), chiefOfStaff: true }, bot("bo", "Bo", false)];
+    const { root } = await renderSidebar();
+    try {
+      await openMenu("Ada");
+      expect(buttonByText("Archive", document.querySelector("[data-bot-menu]")!).disabled).toBe(true);
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      await act(() => new Promise<void>((done) => setTimeout(done, PRESENCE_EXIT_MS + 60)));
+      bots = [bot("ada", "Ada", false)];
+      await act(async () => {
+        root.render(createElement(I18nProvider, null, createElement(Sidebar, { open: true, onClose: () => undefined })));
+      });
+      await openMenu("Ada");
+      expect(buttonByText("Archive", document.querySelector("[data-bot-menu]")!).disabled).toBe(true);
     } finally {
       await act(async () => root.unmount());
     }

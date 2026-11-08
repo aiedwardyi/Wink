@@ -33,7 +33,8 @@ export interface AccountRecord extends AccountContext {
 
 export class AccountError extends Error {
   readonly status: number;
-  constructor(message: string, status = 409) { super(message); this.status = status; }
+  readonly code?: string;
+  constructor(message: string, status = 409, code?: string) { super(message); this.status = status; this.code = code; }
 }
 
 function plainDirectory(path: string, create: boolean) {

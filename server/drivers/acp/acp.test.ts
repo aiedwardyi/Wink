@@ -1415,6 +1415,7 @@ describe("ACP turns (fake CLI)", () => {
     delete process.env.FAKE_ACP_MODELS;
     delete process.env.FAKE_ACP_MODEL_STICKS;
     delete process.env.FAKE_ACP_USAGE_ROOT;
+    delete process.env.FAKE_ACP_PROMPT_META;
     delete process.env.FAKE_ACP_PERMISSION_KINDS;
     delete process.env.FAKE_ACP_BILLING_PERCENT;
     delete process.env.FAKE_ACP_BILLING_END;
@@ -1561,6 +1562,23 @@ describe("ACP turns (fake CLI)", () => {
 
     const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
     expect(usage).toMatchObject({ input: 10, output: 5 });
+  });
+
+  it("records Grok cachedReadTokens as cachedInput", async () => {
+    process.env.FAKE_ACP_PROMPT_META = JSON.stringify({
+      modelId: "grok-4.7-build-fast",
+      inputTokens: 31831,
+      outputTokens: 42,
+      cachedReadTokens: 31104,
+      reasoningTokens: 41,
+      usage: { inputTokens: 31831, outputTokens: 42, totalTokens: 31873, cachedReadTokens: 31104, cacheCreationTokens: 0, reasoningTokens: 41 },
+    });
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-cached", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const usage = recorder.events.find((e) => e.type === "thread.token-usage.updated");
+    expect(usage).toMatchObject({ input: 31831, output: 42, cachedInput: 31104 });
   });
 
   it("passes ACP stdio flags and strips foreign provider keys from the child env", async () => {

@@ -54,7 +54,7 @@ $C expect reply text '[data-orbit-message="bot"] >> nth=-1' "STUB CODEX" --page 
 - `scroll` wheels on desktop and swipes on phone Chromium. It prints the row on top before its last step, so `expect in-view` can prove a load kept your place.
 - One browser per engine stays up between commands (Playwright `launchServer` + `connect`), so pages keep their state.
 - `eval` only reads. It refuses DOM writes and synthetic input; drive with `click`, `type`, `press`.
-- Selectors are Playwright selectors. ARIA roles and labels first, then the app's `data-*` hooks. The shared ones live in [references/features/README.md](references/features/README.md).
+- Selectors are Playwright selectors. ARIA roles and labels first, then the app's `data-*` hooks. Use [docs/feature-map.md](../../../docs/feature-map.md) as the one map for reaching any screen.
 
 ## Evidence
 

@@ -3,6 +3,7 @@
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { ErrorRow } from "./ChatView";
+import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
 import {
@@ -55,6 +56,7 @@ import { ReactionBar, ReactionChips } from "./Reactions";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, holdToOpen, isTouchPrimary, keepsNativeMenu, type MessageMenuRequest } from "./MessageMenu";
 import { ApprovalCard } from "./ApprovalCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
+import { GroupMemberRoster } from "./GroupMemberRoster";
 import { groupActivityRuns, isCommsNotice, isServerLine, itemMatchesFind, localizeServerLine, shownRunStep, type LinkedApproval } from "@/lib/activity-runs";
 import { messageVisible, roomTranscriptRows } from "@/lib/room-transcript";
 import { isShownMessage } from "@/lib/shown-message";
@@ -67,7 +69,7 @@ import { cn } from "@/lib/cn";
 import { useSearchFindSeed } from "@/lib/chat-find";
 import { useFindCurrentId } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
-import { screenImageUrl, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
+import { createEarlierWindow, screenImageUrl, useEarlierPage, useForwardWindow, useJumpWindow, useOlderMessages, useThreadMessage } from "@/lib/message-pages";
 import { shortPath } from "@/lib/short-path";
 import { BOTTOM_FOLLOW_THRESHOLD, captureTranscriptScroll, newestBelowView, restoreTranscriptScroll, shouldResumeBottomFollow, spaceAfterNewestRow, transcriptUnderfilled, type TranscriptScroll } from "@/lib/bottom-follow";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-column";
@@ -82,7 +84,6 @@ import { splitAttachedImages } from "@/lib/composer-attachments";
 import { pinPreview } from "@/lib/pin-preview";
 import {
   TRANSCRIPT_WINDOW_SIZE,
-  expandWindowStart,
   focusWindow,
   followedWindow,
   resolveTranscriptWindow,
@@ -468,7 +469,9 @@ export const Transcript = memo(function Transcript({
           // `tool` distinguishes a permission from a QUESTION — a question
           // only accepts an "answer", so routing it here would offer an
           // Allow the broker rejects
-          m.kind === "secret" && m.secret && m.from?.botId ? (
+          m.kind === "note" && m.verify ? (
+            <VerifyCard card={m.verify} threadId={group.threadId} messageId={m.id} />
+          ) : m.kind === "secret" && m.secret && m.from?.botId ? (
             <SecretRequestCard botId={m.from.botId} threadId={group.threadId} message={m} />
           ) : m.kind === "connector" && m.connector && m.from?.botId ? (
             <ConnectorCard botId={m.from.botId} threadId={group.threadId} message={m} />
@@ -477,7 +480,7 @@ export const Transcript = memo(function Transcript({
               <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />
             </div>
           ) : isAskUserCard(m) ? (
-            <div className="flex justify-start">
+            <div className="flex justify-start empty:hidden">
               <AskUserRecord
                 message={m}
                 transcript={transcript}
@@ -1256,13 +1259,16 @@ export function GroupView({ group }: { group: Group }) {
   const revealOlder = useRef(false);
   const head = shown[0]?.id;
   const [windowHead, setWindowHead] = useState(head);
+  const earlierStart = useMemo(() => createEarlierWindow(shown, {
+    terminal, workers: rowWorkers, renders: (message) => messageVisible(message, showToolCalls, showActivities),
+  }), [shown, terminal, rowWorkers, showToolCalls, showActivities]);
   if (windowHead !== head) {
     setWindowHead(head);
     const prepended = windowHead ? shown.findIndex((message) => message.id === windowHead) : -1;
     if (prepended > 0) {
       const reveal = revealOlder.current;
       revealOlder.current = false;
-      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal));
+      setTranscriptWindow((w) => shiftForPrepend(w, prepended, reveal, reveal ? prepended - earlierStart(prepended, scrollRef.current) : undefined));
     }
   }
   const {
@@ -1414,20 +1420,20 @@ export function GroupView({ group }: { group: Group }) {
   }, [fillPaging, loadOlder, underfilled]);
 
   const preExpandScroll = useRef<TranscriptScroll | null>(null);
-  const showEarlier = () => {
-    // expanding means reading scrollback — never let a mid-expand stream
+  const expandEarlier = (onFail: () => void, beforeCommit: () => boolean, pages: number) => {
+    // expanding means reading scrollback - never let a mid-expand stream
     // event pin the viewport back to the bottom
     setBottomFollow(false);
     if (startIndex === 0) {
       revealOlder.current = true;
       setTranscriptWindow((w) => ({ ...w, expanded: true }));
       (jump.messages ? jump.older : loadOlder)(() => {
-        preExpandScroll.current = captureTranscriptScroll(scrollRef.current);
-      });
+        preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
+      }, onFail, pages);
       return;
     }
-    preExpandScroll.current = captureTranscriptScroll(scrollRef.current);
-    const start = expandWindowStart(startIndex);
+    preExpandScroll.current = beforeCommit() ? null : captureTranscriptScroll(scrollRef.current);
+    const start = earlierStart(startIndex, scrollRef.current);
     setTranscriptWindow((w) => ({ ...w, start, expanded: true }));
   };
   useLayoutEffect(() => {
@@ -1447,6 +1453,11 @@ export function GroupView({ group }: { group: Group }) {
     if (!followRef.current) preExpandScroll.current ??= captureTranscriptScroll(scrollRef.current);
     setTranscriptWindow((w) => (w.end === null && !w.expanded ? { ...w, start: Math.min(w.start, tailStart) } : w));
   }, [jump.messages, tailStart, transcriptWindow]);
+
+  const [showEarlier, cancelEarlier] = useEarlierPage({
+    key: transcriptKey, shown, startIndex, hasMore: hiddenCount > 0 || Boolean(jump.messages ? jump.hasMore : group.hasMore),
+    scrollRef, previousScrollTop, expand: expandEarlier,
+  });
 
   const advanceLater = useForwardWindow({
     key: transcriptKey, window: transcriptWindow, shown, startIndex, endIndex, jump, scrollRef, previousScrollTop,
@@ -1469,6 +1480,7 @@ export function GroupView({ group }: { group: Group }) {
   const jumpToLatest = () => {
     closeJump();
     setBottomFollow(true);
+    cancelEarlier();
     setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(group.messages.length, TRANSCRIPT_WINDOW_SIZE, renders), end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -1545,19 +1557,27 @@ export function GroupView({ group }: { group: Group }) {
           ) : (
             // The roster lives where you already look to see who is in the
             // room; a dashed + says the row is editable without shouting.
-            <button
-              ref={membersTriggerRef}
-              type="button"
-              onClick={() => setMembersOpen(true)}
-              title={t("room.manageMembers")}
-              aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
-              className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60 max-md:gap-0 max-md:-space-x-1.5"
+            <GroupMemberRoster
+              group={group}
+              members={members}
+              mauses={memberMauses}
+              onOpen={(pressed) => {
+                if (pressed) membersTriggerRef.current = pressed;
+                setMembersOpen(true);
+              }}
             >
-              {memberMauses}
-              <span className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary">
-                <Plus size={11} />
-              </span>
-            </button>
+              <button
+                ref={membersTriggerRef}
+                type="button"
+                title={t("room.manageMembers")}
+                aria-label={members.length === 1 ? t("room.manageMembersCountOne") : t("room.manageMembersCount", { count: members.length })}
+                className="relative flex size-[18px] shrink-0 items-center justify-center rounded-full text-ink-secondary pointer-coarse:-my-[13px] pointer-coarse:-mr-[26px] pointer-coarse:size-11 pointer-coarse:justify-start pointer-coarse:rounded-none"
+              >
+                <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-hairline/70">
+                  <Plus size={11} />
+                </span>
+              </button>
+            </GroupMemberRoster>
           )}
         </div>
       </div>
@@ -1759,7 +1779,7 @@ export function GroupView({ group }: { group: Group }) {
                 onClick={showEarlier}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
               >
-                {hiddenCount > 0 ? t("room.showEarlier", { count: hiddenCount }) : t("room.showOlder")}
+                {t("room.showOlder")}
               </button>
             </div>
           )}
@@ -1817,7 +1837,7 @@ export function GroupView({ group }: { group: Group }) {
         <button
           onClick={jumpToLatest}
           aria-label={t("chat.jumpToLatest")}
-          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
+          className="animate-pop-in absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-hairline/40 bg-raised px-3 py-1.5 text-[12.5px] text-ink shadow-lg hover:bg-raised-hover"
           style={{ bottom: composerDock.height }}
         >
           <ArrowDown size={13} /> {t("chat.jumpToLatest")}

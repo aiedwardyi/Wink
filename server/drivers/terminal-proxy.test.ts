@@ -365,6 +365,9 @@ describe("terminal proxy", () => {
     await callTool("terminal_close", fetchImpl, config, { sessionId: "p1" });
     expect(timeoutSpy.mock.calls.at(-1)?.[0]).toBe(10_000); // other routes are unaffected
 
+    await callTool("terminal_spawn", fetchImpl, config, { label: "worker" });
+    expect(timeoutSpy.mock.calls.at(-1)?.[0]).toBe(30_000); // spawn outlasts the host's ready wait
+
     timeoutSpy.mockRestore();
   });
 

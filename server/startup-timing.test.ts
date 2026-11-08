@@ -4,7 +4,8 @@ import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createStartupTiming } from "./startup-timing.ts";
-import { foldQueuedSends, isSendCancelled, queueMark, queueSteeredMessage, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
+import { foldPeerQueuedSends } from "./peer-user-reply.ts";
+import { isSendCancelled, queueMark, queueSteeredMessage, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 
 afterEach(() => vi.useRealTimers());
@@ -328,8 +329,9 @@ describe("startup timing", () => {
     const dispatch = vi.fn();
     _resetSteerQueue();
     const pending = runInNewContext(`(async () => { ${ts.transpile(`${prefix}\n${folded}\n${stopped}\ndispatch(folded);`, { target: ts.ScriptTarget.ES2022 })} })()`, {
-      botId: bot.id, bot, threadId, opts: {}, store, startupTiming, queueMark, foldQueuedSends, isSendCancelled,
-      currentTurnEpoch: () => epoch, logSummaryWait() {}, startedTurn() {}, userMessage: {}, dispatch,
+      botId: bot.id, bot, threadId, opts: {}, store, startupTiming, queueMark, foldPeerQueuedSends, isSendCancelled,
+      instance: { adapter: { capabilities: { queueing: false } } },
+      currentTurnEpoch: () => epoch, logSummaryWait() {}, startedTurn() {}, userMessage: {}, dispatch, memoryLookup: { release() {} },
     }) as Promise<void>;
     try {
       startupTiming.paint();

@@ -104,6 +104,7 @@ import { anyChatNeedsYou } from "@/lib/open-question";
 import { anyRoutineRinging, routineChatOnScreen } from "@/lib/routine-ring";
 import { useArrivalGlow } from "@/lib/arrival-glow";
 import { DeviceSwitcher } from "./DeviceSwitcher";
+import { BrandMark } from "./BrandMark";
 import { phoneSettingsAvailable } from "@/lib/phone-availability";
 import { isPhone } from "@/lib/phone-swipe";
 import { t, useI18n } from "@/lib/i18n";
@@ -195,8 +196,14 @@ function RoomContextMenu({
   const { state, dispatch } = useStore();
   const group = state.groups.find((g) => g.id === menu.groupId);
   const [renaming, setRenaming] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuHeight, setMenuHeight] = useState(240);
   const renameRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState(group?.name ?? "");
+
+  useLayoutEffect(() => {
+    if (menuRef.current) setMenuHeight(Math.max(240, menuRef.current.offsetHeight + 12));
+  }, [group?.name, renaming, t]);
 
   useEffect(() => {
     if (!closing) renameRef.current?.focus();
@@ -224,16 +231,27 @@ function RoomContextMenu({
     if (name) dispatch({ type: "patchGroup", groupId: group.id, patch: { name } });
     onClose();
   };
-  const top = Math.min(menu.y, window.innerHeight - 204);
+  const top = Math.min(menu.y, window.innerHeight - menuHeight);
   const left = Math.min(menu.x, window.innerWidth - 240);
   return createPortal(
     <div
+      ref={menuRef}
       data-room-menu
       data-closing={closing || undefined}
       inert={closing}
       style={{ top, left }}
       className="animate-pop-in fixed z-40 w-[228px] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1.5 shadow-2xl shadow-black/60"
     >
+      <button
+        onClick={() => {
+          dispatch({ type: "patchGroup", groupId: group.id, patch: { pinned: !group.pinned } });
+          onClose();
+        }}
+        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+      >
+        {group.pinned ? <PinOff size={16} className="text-ink-secondary" /> : <Pin size={16} className="text-ink-secondary" />}
+        {group.pinned ? t("chrome.unpin") : t("chrome.pin")}
+      </button>
       {renaming ? (
         <div className="flex items-center gap-1 px-2 py-1">
           <input
@@ -485,6 +503,13 @@ function BotContextMenu({
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
   const canCoordinate = engine?.capabilities?.agentsMcp === true;
+  const activeBots = state.bots.filter((candidate) => !candidate.hidden);
+  const archiveBlocked = Boolean(bot.chiefOfStaff) || activeBots.length <= 1;
+  const archiveHint = bot.chiefOfStaff
+    ? t("chrome.chooseAnotherChief")
+    : activeBots.length <= 1
+      ? t("chrome.keepOneBot")
+      : t("chrome.archiveHint");
   // keep the menu on-screen near the click
   const top = Math.max(8, Math.min(menu.y, window.innerHeight - 380));
   const left = Math.min(menu.x, window.innerWidth - 300);
@@ -555,6 +580,16 @@ function BotContextMenu({
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
         divider("d3"),
+        item(
+          <Archive size={16} className="text-ink-secondary" />,
+          t("chrome.archive"),
+          () => {
+            dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } });
+            const next = activeBots.find((candidate) => candidate.id !== bot.id);
+            if (state.selectedId === bot.id && next) dispatch({ type: "select", id: next.id });
+          },
+          { disabled: archiveBlocked, hint: archiveHint },
+        ),
         item(<Trash2 size={16} />, t("chrome.delete"), () => onDeleteRequest(bot), {
           danger: true,
         }),
@@ -666,6 +701,10 @@ export function Sidebar({
     window.addEventListener("orbit:close-sidebar-overlay", close);
     return () => window.removeEventListener("orbit:close-sidebar-overlay", close);
   }, [backOverlay]);
+  // Desktop never opens the drawer, so only a phone drawer closing reaches this.
+  useEffect(() => {
+    if (!open) setPlusOpen(false);
+  }, [open]);
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const sidebarWidthRef = useRef(sidebarWidth);
   const sidebarCollapsedRef = useRef(sidebarCollapsed);
@@ -1067,7 +1106,7 @@ export function Sidebar({
   }
   const priorityByKey: Record<string, SidebarPriority | null> = {};
   for (const item of items) {
-    priorityByKey[item.key] = item.kind === "bot" ? sidebarPriorityFor(item.bot!) : null;
+    priorityByKey[item.key] = sidebarPriorityFor(item.bot ?? item.group!);
   }
   const priorityPartition = partitionSidebarItemKeys(sectionOrder, orderedKeysBySection, priorityByKey);
   const priorityItemsByTier: Record<SidebarPriority, SidebarItem[]> = {
@@ -1085,7 +1124,7 @@ export function Sidebar({
   }
   const draggingItem = drag ? itemByKey.get(drag.from) : undefined;
   const showEmptyUnassignedDropTarget = q.length === 0 && Boolean(drag) && !(
-    draggingItem?.kind === "bot" && sidebarPriorityFor(draggingItem.bot!)
+    draggingItem && priorityByKey[draggingItem.key]
   );
   const sectionIds = sectionOrder.filter((id) =>
     (orderedItemsBySection.get(id)?.length ?? 0) > 0 ||
@@ -1201,8 +1240,8 @@ export function Sidebar({
     const from = itemByKey.get(drag.from);
     const to = itemByKey.get(toKey);
     if (!from || !to || from.key === to.key) return null;
-    const fromPriority = from.kind === "bot" ? sidebarPriorityFor(from.bot!) : null;
-    const toPriority = to.kind === "bot" ? sidebarPriorityFor(to.bot!) : null;
+    const fromPriority = priorityByKey[from.key];
+    const toPriority = priorityByKey[to.key];
     if (fromPriority !== toPriority || (fromPriority && from.sectionId !== to.sectionId)) return null;
     const itemOrder = currentItemOrder();
     const targetKeys = itemOrder[to.sectionId] ?? [];
@@ -1216,10 +1255,7 @@ export function Sidebar({
           from.sectionId,
           from.key,
           to.key,
-          targetKeys.filter((key) => {
-            const candidate = itemByKey.get(key);
-            return candidate?.kind === "bot" && sidebarPriorityFor(candidate.bot!) === fromPriority;
-          }),
+          targetKeys.filter((key) => priorityByKey[key] === fromPriority),
           place,
         )
       : moveSidebarItem(itemOrder, from.sectionId, to.sectionId, from.key, to.key, place);
@@ -1256,7 +1292,7 @@ export function Sidebar({
   const canDropItemInSection = (id: string) => {
     if (!rowsReorderable || !drag) return false;
     const from = itemByKey.get(drag.from);
-    return Boolean(from && from.sectionId !== id && !(from.kind === "bot" && sidebarPriorityFor(from.bot!)));
+    return Boolean(from && from.sectionId !== id && !priorityByKey[from.key]);
   };
   const aimItemSection = (id: string) => {
     if (!drag || !canDropItemInSection(id)) return false;
@@ -1280,7 +1316,7 @@ export function Sidebar({
       return;
     }
     const from = itemByKey.get(drag.from);
-    if (!from || from.sectionId === id || (from.kind === "bot" && sidebarPriorityFor(from.bot!))) {
+    if (!from || from.sectionId === id || priorityByKey[from.key]) {
       resetRowDrag();
       return;
     }
@@ -1311,12 +1347,10 @@ export function Sidebar({
     const item = itemByKey.get(key);
     if (!item) return;
     const itemOrder = currentItemOrder();
-    const priority = item.kind === "bot" ? sidebarPriorityFor(item.bot!) : null;
-    const keys = (itemOrder[item.sectionId] ?? []).filter((candidateKey) => {
-      if (!priority) return true;
-      const candidate = itemByKey.get(candidateKey);
-      return candidate?.kind === "bot" && sidebarPriorityFor(candidate.bot!) === priority;
-    });
+    const priority = priorityByKey[item.key];
+    const keys = (itemOrder[item.sectionId] ?? []).filter((candidateKey) =>
+      !priority || priorityByKey[candidateKey] === priority,
+    );
     const index = keys.indexOf(key);
     if (index < 0) return;
     if ((direction < 0 && index > 0) || (direction > 0 && index < keys.length - 1)) {
@@ -1430,6 +1464,26 @@ export function Sidebar({
     },
   });
   const pendingTeamUndo = teamFeedback?.undo;
+  const renderItem = (item: SidebarItem) => item.kind === "group" ? (
+    <GroupListItem
+      key={item.key}
+      group={item.group!}
+      density={density}
+      onMenu={setRoomMenu}
+      drag={rowsReorderable ? rowDrag(item) : undefined}
+      onReselect={open ? onClose : undefined}
+    />
+  ) : (
+    <BotListItem
+      key={item.key}
+      bot={item.bot!}
+      density={density}
+      onMenu={setMenu}
+      drag={rowsReorderable ? rowDrag(item) : undefined}
+      onTerminalAttention={onTerminalAttention}
+      onReselect={open ? onClose : undefined}
+    />
+  );
 
   return (
     <aside
@@ -1495,8 +1549,10 @@ export function Sidebar({
           <div className={cn("min-w-0", density === "icons" ? "flex w-full justify-center" : "flex-1")}>
             <DeviceSwitcher labeled iconOnly={density === "icons"} drawerOpen={open} />
           </div>
-        ) : (
+        ) : density === "icons" ? (
           <div />
+        ) : (
+          <BrandMark />
         )}
         <div
           className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
@@ -1657,17 +1713,7 @@ export function Sidebar({
             if (priorityItems.length === 0) return null;
             return (
               <div key={tier} data-sidebar-priority-tier={tier} className="flex flex-col gap-0.5">
-                {priorityItems.map((item) => (
-                  <BotListItem
-                    key={item.key}
-                    bot={item.bot!}
-                    density={density}
-                    onMenu={setMenu}
-                    drag={rowsReorderable ? rowDrag(item) : undefined}
-                    onTerminalAttention={onTerminalAttention}
-                    onReselect={open ? onClose : undefined}
-                  />
-                ))}
+                {priorityItems.map(renderItem)}
               </div>
             );
           })}
@@ -1725,26 +1771,7 @@ export function Sidebar({
                     onMove={(direction) => moveSidebarSection(id, direction)}
                   />
                 )}
-                {shownItems.map((item) => item.kind === "group" ? (
-                  <GroupListItem
-                    key={item.key}
-                    group={item.group!}
-                    density={density}
-                    onMenu={setRoomMenu}
-                    drag={rowsReorderable ? rowDrag(item) : undefined}
-                    onReselect={open ? onClose : undefined}
-                  />
-                ) : (
-                  <BotListItem
-                    key={item.key}
-                    bot={item.bot!}
-                    density={density}
-                    onMenu={setMenu}
-                    drag={rowsReorderable ? rowDrag(item) : undefined}
-                    onTerminalAttention={onTerminalAttention}
-                    onReselect={open ? onClose : undefined}
-                  />
-                ))}
+                {shownItems.map(renderItem)}
                 {sectionDropTarget?.id === id && sectionDropTarget.place === "after" && draggingSectionId !== id && (
                   <div className="mx-2 h-0.5 rounded-full bg-accent" />
                 )}

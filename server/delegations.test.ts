@@ -24,13 +24,11 @@ import {
   queueDelegation,
   recordDelegationReceipt,
   resolveDelegationId,
-  settleTakenOverDelegation,
-  takeOverDelegatedTurn,
   _pendingCount,
   type DelegatedTurn,
 } from "./delegations.ts";
 import { peerAllowKey, resolvePeerComms } from "./peer-approval.ts";
-import { onPeerTakeover, peerInputJoined, takeOverPeerTurn } from "./peer-takeover.ts";
+import { peerInputJoined, watchPeerTurn } from "./peer-takeover.ts";
 import { _resetSteerQueue, cancelSteeredMessage, drainSteeredMessages, queueRoomParticipation, queueSteeredMessage } from "./steer-queue.ts";
 import { Store, type BotRecord, type GroupRecord } from "./store.ts";
 
@@ -257,7 +255,7 @@ describe("sender chip status", () => {
   it.each([
     ["the reply lands", true, "Done, see the PR.", ["@Helper replied", "Reply from @Helper"]],
     ["the turn fails", false, "", ["Delegated turn did not finish"]],
-    ["the reply is blank", true, " ", ["@Helper replied"]],
+    ["the reply is blank", true, " ", ["No reply from @Helper"]],
   ])("shows the handoff under its chip and a reply row only when %s", async (_, ok, reply, names) => {
     const turn = await delivered();
     expect(rows()).toMatchObject([{ tool: { name: "Delivered to @Helper" }, text: "do this", comm: { groupId: turn.channelId } }]);
@@ -1114,7 +1112,7 @@ describe("resolveDelegationId", () => {
   });
 });
 
-describe("user takeover of a delegated turn", () => {
+describe("user messages during a delegated turn", () => {
   let store: Store;
   let career: BotRecord;
   let wink: BotRecord;
@@ -1155,116 +1153,40 @@ describe("user takeover of a delegated turn", () => {
   const channelRows = (channel: GroupRecord) =>
     store.messagesFor(channel.threadId).filter((m) => m.kind === "activity").map((m) => m.tool?.name);
   const chip = () => store.messagesFor(career.threadId).filter((m) => m.kind === "activity" && m.comm?.peer !== "reply").at(-1)?.tool;
-  const paused = "Wink paused to answer Edward; it will reply after";
-
-  async function takenOverOnce() {
+  async function handoff() {
     const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
-    const turn = turnOf(dispatched[0]!);
-    takeOverDelegatedTurn(commsBus, turn, "Edward");
-    finishDelegatedTurn(commsBus, turn, true, "Edward, 1.0.157 is out.");
-    return { taskId: queued.id!, channel: dispatched[0]!.channel! };
+    return { taskId: queued.id!, channel: dispatched[0]!.channel!, turn: turnOf(dispatched[0]!) };
   }
 
-  it("completes with the finished reply when the read came after it, without a rerun", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
-    drain();
-    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
-    settleTakenOverDelegation(commsBus, turnOf(dispatched[0]!), "Edward", "Two bullets were reworded.");
-    expect(channelTexts(dispatched[0]!.channel!)).toEqual(["What changed in the resume?", "Two bullets were reworded."]);
-    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "done", result: "Two bullets were reworded." });
-    expect(chip()).toMatchObject({ name: "@Wink replied", ok: true });
-    drain();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(dispatched).toHaveLength(1);
-    expect(pendingDelegationInfo(queued.id!)).toBeNull();
-  });
-
-  it("reruns when the read came mid-reply", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
-    drain();
-    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
-    const turn = turnOf(dispatched[0]!);
-    settleTakenOverDelegation(commsBus, turn, "Edward");
-    finishDelegatedTurn(commsBus, turn, true, "Edward, 1.0.157 is out.");
-    expect(findDelegationReceipt(queued.id!)?.state).toBe("ready");
-    expect(chip()).toEqual({ name: paused });
-    drain();
-    await waitFor(() => dispatched.length === 2 && _pendingCount(career.threadId) === 0);
-    expect(dispatched[1]!.message).toContain("Your earlier reply went to Edward");
-  });
-
-  it("completes an adopted ask with the finished reply when the read came after it", () => {
-    const channel = getOrCreateChannel(store, career, wink);
-    const turn: DelegatedTurn = { channelId: channel.id, toBotId: wink.id, taskId: "ask-after", sourceThreadId: career.threadId, sourceBotId: career.id, ask: true };
-    settleTakenOverDelegation(commsBus, turn, "Edward", "Two bullets were reworded.");
-    expect(findDelegationReceipt("ask-after")).toMatchObject({ status: "done", result: "Two bullets were reworded." });
-    expect(channelTexts(channel)).toEqual(["Two bullets were reworded."]);
-  });
-
-  it("keeps a taken-over turn's text out of the channel and requeues the same handoff", async () => {
-    const { taskId, channel } = await takenOverOnce();
-    expect(channelTexts(channel)).toEqual(["What changed in the resume?"]);
-    expect(channelRows(channel)).toEqual([paused]);
-    // a plain row hides unless Show tool calls is on; the link to Wink's chat keeps it visible
-    expect(store.messagesFor(channel.threadId).find((m) => m.kind === "activity")?.comm).toMatchObject({ groupId: wink.id, withBotId: wink.id });
-    expect(chip()).toEqual({ name: paused });
-    expect(findDelegationReceipt(taskId)?.state).toBe("ready");
-    expect(pendingDelegationInfo(taskId)).toMatchObject({ sourceThreadId: career.threadId, toBotId: wink.id, attempts: 0 });
-  });
-
-  it("reruns the handoff and settles it with the rerun's reply", async () => {
-    const { taskId, channel } = await takenOverOnce();
-    drain();
-    await waitFor(() => dispatched.length === 2 && _pendingCount(career.threadId) === 0);
-    const rerun = dispatched[1]!;
-    expect(rerun.taskId).toBe(taskId);
-    expect(rerun.message).toContain("What changed in the resume?");
-    expect(rerun.message).toContain("Your earlier reply went to Edward because they messaged you mid-turn, so answer @Career now.");
-    expect(rerun.transcriptText).toBe("Answering Career's earlier request");
-    expect(store.messagesFor(wink.threadId).filter((m) => m.tool?.name === "Message from @Career")).toHaveLength(2);
-    expect(pendingDelegationInfo(taskId)).toBeNull();
-
-    finishDelegatedTurn(commsBus, turnOf(rerun), true, "Two bullets were reworded.");
+  it.each([false, true])("delivers the peer answer once without rerunning after a user reply (ask: %s)", async (ask) => {
+    const { taskId, channel, turn } = await handoff();
+    if (ask) turn.ask = true;
+    const reply = "<user1>Edward, 1.0.157 is out.</user1>\nTwo bullets were reworded.";
+    finishDelegatedTurn(commsBus, turn, true, reply);
+    expect(finishDelegatedTurn(commsBus, turn, true, reply)).toBe(false);
     expect(channelTexts(channel)).toEqual(["What changed in the resume?", "Two bullets were reworded."]);
     expect(findDelegationReceipt(taskId)).toMatchObject({ status: "done", result: "Two bullets were reworded." });
     expect(chip()).toMatchObject({ name: "@Wink replied", ok: true });
-  });
-
-  it("points at the target's own chat when the rerun is taken over too", async () => {
-    const { taskId, channel } = await takenOverOnce();
     drain();
-    await waitFor(() => dispatched.length === 2 && _pendingCount(career.threadId) === 0);
-    const rerun = turnOf(dispatched[1]!);
-    takeOverDelegatedTurn(commsBus, rerun, "Edward");
-    finishDelegatedTurn(commsBus, rerun, true, "Edward, the release notes are up.");
-
-    const pointer = "Wink answered Edward in its own chat instead";
-    expect(findDelegationReceipt(taskId)).toMatchObject({ status: "done", result: pointer });
-    expect(channelTexts(channel)).toEqual(["What changed in the resume?"]);
-    expect(channelRows(channel)).toEqual([paused, pointer]);
-    expect(chip()).toMatchObject({ name: pointer, ok: true });
-    drain();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(dispatched).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(dispatched).toHaveLength(1);
     expect(pendingDelegationInfo(taskId)).toBeNull();
   });
 
-  it("mirrors the final text as before when nobody takes the turn over", async () => {
-    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
-    drain();
-    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
-    finishDelegatedTurn(commsBus, turnOf(dispatched[0]!), true, "Two bullets were reworded.");
-    expect(channelTexts(dispatched[0]!.channel!)).toEqual(["What changed in the resume?", "Two bullets were reworded."]);
-    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "done", result: "Two bullets were reworded." });
+  it("mirrors the final text as before without a user message", async () => {
+    const { taskId, channel, turn } = await handoff();
+    finishDelegatedTurn(commsBus, turn, true, "Two bullets were reworded.");
+    expect(channelTexts(channel)).toEqual(["What changed in the resume?", "Two bullets were reworded."]);
+    expect(findDelegationReceipt(taskId)).toMatchObject({ status: "done", result: "Two bullets were reworded." });
     expect(chip()).toMatchObject({ name: "@Wink replied", ok: true });
   });
 
   // index.ts wiring: a pane note the turn reads freezes the answer at the last text so far
   function watchWithNote(turn: DelegatedTurn) {
     let last = "";
-    const end = onPeerTakeover(wink.threadId, () => {}, () => {
+    const end = watchPeerTurn(wink.threadId, () => {
       turn.answer ??= last;
     });
     return { reply: (text: string) => (last = text), end };
@@ -1288,7 +1210,7 @@ describe("user takeover of a delegated turn", () => {
     expect(store.messagesFor(career.threadId).filter((m) => m.comm?.peer === "reply").map((m) => m.text)).toEqual([answer]);
   });
 
-  it("mirrors only the completed row when a pane note joined before any reply", async () => {
+  it("fails without a reply when a pane note joined before any reply", async () => {
     const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "FYI: NIGHT-PAD is on the shared API key.", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
@@ -1301,101 +1223,84 @@ describe("user takeover of a delegated turn", () => {
 
     const channel = dispatched[0]!.channel!;
     expect(channelTexts(channel)).toEqual(["FYI: NIGHT-PAD is on the shared API key."]);
-    expect(channelRows(channel)).toEqual(["Delegated turn completed"]);
-    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "done", result: "" });
+    expect(channelRows(channel)).toEqual(["No reply from @Wink"]);
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", result: "No reply from @Wink" });
     expect(store.messagesFor(career.threadId).filter((m) => m.comm?.peer === "reply")).toEqual([]);
   });
 
-  it("still reruns on a user takeover after a pane note joined", async () => {
-    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
-    drain();
-    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
-    const turn = turnOf(dispatched[0]!);
-    const end = onPeerTakeover(wink.threadId, () => takeOverDelegatedTurn(commsBus, turn, "Edward"), () => {
-      turn.answer ??= "";
-    });
-    peerInputJoined(wink.threadId);
-    expect(takeOverPeerTurn(wink.threadId)).toBe(true);
-    end();
-    finishDelegatedTurn(commsBus, turn, true, "Edward, 1.0.157 is out.");
-    expect(chip()).toEqual({ name: paused });
-    drain();
-    await waitFor(() => dispatched.length === 2 && _pendingCount(career.threadId) === 0);
-  });
-
-  it("fails a taken-over turn that did not finish, without a rerun", async () => {
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \n\t"],
+  ])("settles an ok turn with %s text as failed, red and unwoken", async (_, reply) => {
+    const wakeSender = vi.fn();
+    commsBus.wakeSender = wakeSender;
     const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
     const turn = turnOf(dispatched[0]!);
-    takeOverDelegatedTurn(commsBus, turn, "Edward");
-    finishDelegatedTurn(commsBus, turn, false);
-    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed" });
-    expect(pendingDelegationInfo(queued.id!)).toBeNull();
+    expect(finishDelegatedTurn(commsBus, turn, true, reply)).toBe(true);
+    const rows = store.messagesFor(career.threadId).length;
+    expect(finishDelegatedTurn(commsBus, turn, true, reply)).toBe(false);
+
+    expect(store.messagesFor(career.threadId)).toHaveLength(rows);
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", state: "failed", result: "No reply from @Wink" });
+    expect(chip()).toMatchObject({ name: "No reply from @Wink", ok: false });
+    expect(channelRows(dispatched[0]!.channel!)).toEqual(["No reply from @Wink"]);
+    expect(store.messagesFor(career.threadId).filter((m) => m.comm?.peer === "reply")).toEqual([]);
+    expect(store.messagesFor(career.threadId).some((m) => m.tool?.name === "Delegated turn completed")).toBe(false);
+    expect(wakeSender).not.toHaveBeenCalled();
   });
 
-  it("fails an adopted ask the user takes over, and ignores its later end", () => {
+  it("keeps a failed turn's own wording when its text is blank", async () => {
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
+    drain();
+    await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
+    finishDelegatedTurn(commsBus, turnOf(dispatched[0]!), false, "", "Delegated turn could not start 2014 spawn failed");
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", result: "Delegated turn could not start 2014 spawn failed" });
+    expect(chip()).toMatchObject({ name: "Delegated turn could not start 2014 spawn failed", ok: false });
+  });
+
+  it("says a turn with no task had no reply", () => {
     const channel = getOrCreateChannel(store, career, wink);
-    const turn: DelegatedTurn = { channelId: channel.id, toBotId: wink.id, taskId: "ask-1", sourceThreadId: career.threadId, sourceBotId: career.id, ask: true };
-    takeOverDelegatedTurn(commsBus, turn, "Edward");
-
-    const switched = "Wink switched to Edward's message before answering. Ask again later.";
-    expect(findDelegationReceipt("ask-1")).toMatchObject({ status: "failed", result: switched });
-    expect(channelRows(channel)).toEqual([switched]);
-    finishDelegatedTurn(commsBus, turn, true, "Edward, 1.0.157 is out.");
-    expect(findDelegationReceipt("ask-1")).toMatchObject({ status: "failed", result: switched });
-    expect(channelRows(channel)).toEqual([switched]);
-    expect(channelTexts(channel)).toEqual([]);
-    expect(pendingDelegationInfo("ask-1")).toBeNull();
+    finishDelegatedTurn(commsBus, { channelId: channel.id, toBotId: wink.id }, true, " ");
+    expect(channelRows(channel)).toEqual(["No reply from @Wink"]);
+    expect(store.messagesFor(channel.threadId).find((m) => m.tool?.name === "No reply from @Wink")?.tool?.ok).toBe(false);
+    finishDelegatedTurn(commsBus, { channelId: channel.id, toBotId: wink.id }, false, "", "Delegated turn stalled and was stopped");
+    expect(channelRows(channel)).toEqual(["No reply from @Wink", "Delegated turn stalled and was stopped"]);
   });
 
-  it("lets the user's queued messages run first without spending a busy retry", async () => {
-    const { taskId } = await takenOverOnce();
-    const waiting = queueSteeredMessage(wink.id, wink.threadId, "one more thing");
-    drain();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(dispatched).toHaveLength(1);
-
-    cancelSteeredMessage(wink.id, waiting.id);
-    store.patchBot(wink.id, { busy: true });
-    drain();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(dispatched).toHaveLength(1);
-    expect(pendingDelegationInfo(taskId)).toMatchObject({ attempts: 0 });
-    expect(chip()).toEqual({ name: paused });
-
-    store.patchBot(wink.id, { busy: false });
-    drain();
-    await waitFor(() => dispatched.length === 2 && _pendingCount(career.threadId) === 0);
-  });
-
-  it("asks before a rerun whose handoff was never approved", async () => {
-    const { taskId } = await takenOverOnce();
-    store.patchBot(career.id, { approvePeerComms: true });
-    drain();
-    const card = await waitFor(() => store.messagesFor(career.threadId).find((m) => m.card?.requestId));
-    expect(card.card?.tool).toBe("delegate_bot");
-    expect(dispatched).toHaveLength(1);
-
-    resolvePeerComms(approvalBus, card.card!.requestId!, "deny");
-    await waitFor(() => findDelegationReceipt(taskId)?.status === "denied");
-    expect(dispatched).toHaveLength(1);
+  it("keeps the pane-note backstop after a short user reply", async () => {
+    const { taskId, channel, turn } = await handoff();
+    const watch = watchWithNote(turn);
+    watch.reply("Two bullets were reworded.");
+    peerInputJoined(wink.threadId);
+    const last = watch.reply("<user1>Edward, 1.0.157 is out.</user1>");
+    watch.end();
+    finishDelegatedTurn(commsBus, turn, true, last);
+    expect(findDelegationReceipt(taskId)).toMatchObject({ status: "done", result: "Two bullets were reworded." });
+    expect(channelTexts(channel)).toEqual(["What changed in the resume?", "Two bullets were reworded."]);
     expect(pendingDelegationInfo(taskId)).toBeNull();
   });
 
-  it("skips the card on a rerun of an approved handoff", async () => {
+  it("fails an unfinished turn without a rerun", async () => {
+    const { taskId, turn } = await handoff();
+    finishDelegatedTurn(commsBus, turn, false);
+    expect(findDelegationReceipt(taskId)).toMatchObject({ status: "failed" });
+    expect(pendingDelegationInfo(taskId)).toBeNull();
+  });
+
+  it("keeps an approved handoff to one dispatch and one approval", async () => {
     store.patchBot(career.id, { approvePeerComms: true });
-    queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
+    const queued = queueDelegation(commsBus, career, { toBotId: wink.id, message: "What changed in the resume?", depth: 0, root }, 1);
     drain();
     const card = await waitFor(() => store.messagesFor(career.threadId).find((m) => m.card?.requestId));
     resolvePeerComms(approvalBus, card.card!.requestId!, "allow");
     await waitFor(() => dispatched.length === 1 && _pendingCount(career.threadId) === 0);
-    const turn = turnOf(dispatched[0]!);
-    takeOverDelegatedTurn(commsBus, turn, "Edward");
-    finishDelegatedTurn(commsBus, turn, true, "Edward, 1.0.157 is out.");
-
+    finishDelegatedTurn(commsBus, turnOf(dispatched[0]!), true, "<user1>Release is out.</user1>\nTwo bullets were reworded.");
     drain();
-    await waitFor(() => dispatched.length === 2 && _pendingCount(career.threadId) === 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(dispatched).toHaveLength(1);
+    expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "done", result: "Two bullets were reworded." });
     expect(store.messagesFor(career.threadId).filter((m) => m.card?.requestId)).toHaveLength(1);
   });
 
@@ -1416,17 +1321,18 @@ describe("user takeover of a delegated turn", () => {
     expect(pendingDelegationInfo(fresh.id!)).toMatchObject({ attempts: 0 });
   });
 
-  it("reruns a taken-over handoff when the user's queued send never starts", async () => {
-    const { taskId } = await takenOverOnce();
+  it("dispatches a waiting handoff when the user's queued send never starts", async () => {
     const waiting = queueSteeredMessage(wink.id, wink.threadId, "one more thing");
+    const taskId = queueDelegation(commsBus, career, { toBotId: wink.id, message: "Work", depth: 0, root }, 1).id!;
+    drain();
     drainWaitingOn(commsBus, approvalBus, runTarget);
     await new Promise((r) => setTimeout(r, 50));
-    expect(dispatched).toHaveLength(1);
+    expect(dispatched).toHaveLength(0);
 
     // the send left the queue but its turn never started, so no turn.completed follows
     cancelSteeredMessage(wink.id, waiting.id);
     drainWaitingOn(commsBus, approvalBus, runTarget);
-    await waitFor(() => dispatched.length === 2 && pendingDelegationInfo(taskId) === null);
+    await waitFor(() => dispatched.length === 1 && pendingDelegationInfo(taskId) === null);
 
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const drainSends = index.slice(index.indexOf("function drainQueuedSends() {"));
@@ -1437,17 +1343,18 @@ describe("user takeover of a delegated turn", () => {
     expect(body).toMatch(/continueQueuedDrainIfIdle\(store, botId, drainQueuedSends, botHasActiveTurn\);\r?\n\s*rerunIfIdle\(\);/);
   });
 
-  it("reruns a taken-over handoff when a queued room turn never starts", async () => {
-    const { taskId } = await takenOverOnce();
+  it("dispatches a waiting handoff when a queued room turn never starts", async () => {
     queueRoomParticipation(wink.id, "room-thread", { groupId: "room" });
+    const taskId = queueDelegation(commsBus, career, { toBotId: wink.id, message: "Work", depth: 0, root }, 1).id!;
+    drain();
     drainWaitingOn(commsBus, approvalBus, runTarget);
     await new Promise((r) => setTimeout(r, 50));
-    expect(dispatched).toHaveLength(1);
+    expect(dispatched).toHaveLength(0);
 
     // the room item left the queue, but its turn aborted before a provider turn
     drainSteeredMessages(store, () => {});
     drainWaitingOn(commsBus, approvalBus, runTarget);
-    await waitFor(() => dispatched.length === 2 && pendingDelegationInfo(taskId) === null);
+    await waitFor(() => dispatched.length === 1 && pendingDelegationInfo(taskId) === null);
 
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     const drainSends = index.slice(index.indexOf("function drainQueuedSends() {"));
@@ -1465,8 +1372,7 @@ describe("user takeover of a delegated turn", () => {
     failUnwatchedDelegation(queued.id!, career.threadId, wink.id, "Wink", "Delegated turn could not start: no such bot", commsBus);
     expect(findDelegationReceipt(queued.id!)).toMatchObject({ status: "failed", result: "Delegated turn could not start: no such bot" });
 
-    // the running entry is gone, so a stray settle cannot queue it again
-    finishDelegatedTurn(commsBus, { ...turnOf(dispatched[0]!), takenOverBy: "Edward" }, true, "late");
+    finishDelegatedTurn(commsBus, turnOf(dispatched[0]!), true, "late");
     expect(pendingDelegationInfo(queued.id!)).toBeNull();
 
     const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");

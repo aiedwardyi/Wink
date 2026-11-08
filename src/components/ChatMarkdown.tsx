@@ -11,6 +11,7 @@ import remarkGfm from "remark-gfm";
 import type { Extension } from "mdast-util-from-markdown";
 import { Check, Copy } from "lucide-react";
 import { ReadableImage } from "./MediaViewerProvider";
+import { PhoneVideo } from "./PhoneVideo";
 import { z } from "zod";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -549,16 +550,7 @@ function PhoneFile({
       </a>
     );
   }
-  return (
-    <video
-      src={src}
-      controls
-      preload="metadata"
-      playsInline
-      data-phone-media="video"
-      className="max-h-96 max-w-full rounded-lg border border-hairline/30"
-    />
-  );
+  return <PhoneVideo src={src} />;
 }
 
 function LocalFileLink({
@@ -641,7 +633,7 @@ function ChatMarkdownComponent({
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);
   const blocks = useMemo(() => {
-    if (style === "paragraphs") return streaming ? splitReplyBlocks(text, false, whole) : [text];
+    if (style === "paragraphs") return streaming ? splitReplyBlocks(text, false, whole, settleStreamTail) : [text];
     if (!split) return [text];
     const parts = streamBlocks(text);
     if (streaming) parts[parts.length - 1] = settleStreamTail(parts[parts.length - 1]);
@@ -649,7 +641,8 @@ function ChatMarkdownComponent({
   }, [split, text, streaming, style, whole]);
   useLayoutEffect(() => {
     const catchup = whole > previousWhole.current || whole >= text.length;
-    const fade = style === "paragraphs" && previousStyle.current === style && streaming && !catchup
+    const typing = blocks.length === 1 && !/\n[ \t]*\r?\n/.test(text);
+    const fade = style === "paragraphs" && previousStyle.current === style && streaming && !catchup && !typing
       && document.visibilityState === "visible" && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     for (const child of root.current?.children ?? []) {
       if (!seen.current.has(child) && fade) child.animate?.(

@@ -1,2 +1,7 @@
-/** Usage layout: "B" lists every account as a row (Edward's pick, style 5); "A" is today's (Main left, one other account picked with the dropdown and arrows), kept behind this switch. */
+import type { UsageBoardAccount, UsageBoardEngine } from "@/lib/usage-board";
+
 export const USAGE_LAYOUT: "A" | "B" = "B";
+
+export function usageAccounts(engine: UsageBoardEngine): UsageBoardAccount[] {
+  return engine.engine === "gemini" ? engine.accounts.filter((account) => account.windows.length > 0) : engine.accounts;
+}

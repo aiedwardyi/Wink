@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeIdentityCanary, scanForCanary, type IdentityCanary } from "@/lib/identity-canary";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardSample } from "@/lib/usage-board";
-import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 
 const h = vi.hoisted(() => ({
   state: { bots: [] as unknown[], instances: [] as unknown[], terminalPanes: {} as Record<string, string[]> },
@@ -30,7 +30,7 @@ const CODEX_2 = "acct_00000000-0000-4000-8000-000000000012";
 const UNUSED = { id: "five_hour", kind: "session", usedPercent: 0, resetsAt: null, windowMinutes: 300 } as const;
 const GLYPHS = /[\u2580-\u25FF]/u;
 const FOLDS = "openmausbot.usageFolds.v1";
-const BOX = ["h-[26px]", "min-w-14", "shrink-0", "border", "px-2.5", "text-[12px]", "rounded-md"];
+const BOX = ["h-[22px]", "min-w-12", "shrink-0", "border", "px-2", "text-[11px]", "rounded-md"];
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
 function deferred<T>(): Deferred<T> {
@@ -82,7 +82,11 @@ function setMedia({ phone = false, coarse = phone, reduce = false }: { phone?: b
   })) as unknown as typeof window.matchMedia;
 }
 
-const text = (node: Element | null | undefined) => (node?.textContent ?? "").replace(/\s+/g, " ").trim();
+const text = (node: Element | null | undefined) => {
+  const clone = node?.cloneNode(true) as Element | undefined;
+  clone?.querySelectorAll(".usage-reset-short").forEach((el) => el.remove());
+  return (clone?.textContent ?? "").replace(/\s+/g, " ").trim();
+};
 const q = (selector: string) => host.querySelector(selector);
 const section = (engine: string) => q(`section[data-usage-engine="${engine}"]`);
 const row = (id: string) => q(`[data-account-row="${id}"]`);
@@ -104,16 +108,17 @@ const live = (node: Element) => !node.closest("[aria-hidden]");
 const visible = (engine = "claude") => [...section(engine)?.querySelectorAll("[data-account-row]") ?? []].filter(live).map((node) => node.getAttribute("data-account-row") ?? "");
 const viewed = (engine = "claude") => visible(engine).at(-1) ?? null;
 const column = (name: string, engine = "claude") => section(engine)?.querySelector(`[data-account-column="${name}"]`) ?? null;
-const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold])") ?? []];
+const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold]):not([data-usage-grip])") ?? []];
 const picker = (engine = "claude") => [...section(engine)?.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]') ?? []].find(live) ?? null;
 const fold = (engine = "claude") => section(engine)?.querySelector<HTMLButtonElement>("button[data-engine-fold]") ?? null;
 // The phrases sit apart by a CSS gap, not a space, so join them as they read.
 const summary = (engine = "claude") => {
   const node = section(engine)?.querySelector("[data-engine-summary]");
-  return node?.childElementCount ? [...node.children].map(text).join(" ") : text(node);
+  const windows = [...node?.querySelectorAll("[data-window]") ?? []];
+  return windows.length ? windows.map((window) => `${text(window.firstElementChild)} ${text(window.querySelector("[data-left]"))}`).join(" · ") : text(node);
 };
 const boxOf = (node: Element | null | undefined) => BOX.filter((name) => node?.classList.contains(name));
-const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => [...cell.classList].find((name) => name.startsWith("bg-")));
+const tones = (meter: Element | null | undefined) => [...meter?.querySelectorAll("[data-cell]") ?? []].map((cell) => cell.getAttribute("data-cell") === "on" ? [...cell.parentElement!.classList].find((name) => name.startsWith("text-")) : "off");
 const said = (root: Element) => [root.textContent ?? "", ...[...root.querySelectorAll("*")].flatMap((node) => [...node.attributes].map((attribute) => attribute.value))].join("\n");
 function unused(board: UsageBoard, ...ids: string[]) {
   for (const id of ids) {
@@ -135,7 +140,7 @@ function cellsOn(root: Element | null | undefined) {
       expect([...boxes[0]!.children].map((cell) => cell.getAttribute("data-cell")), label).toEqual(Array.from({ length: 10 }, (_, i) => (i < on ? "on" : "off")));
       expect(boxes[0]!.textContent, label).toBe("");
       const left = group.querySelector("[data-left]");
-      expect(on, label).toBe(left ? Math.round(parseInt(text(left), 10) / 10) : 0);
+      expect(on, label).toBe(left ? Math.max(parseInt(text(left), 10) > 0 ? 1 : 0, Math.round(parseInt(text(left), 10) / 10)) : 0);
       return on;
     });
   });
@@ -162,7 +167,7 @@ async function mount({ phone = false, coarse = phone, locale = "en", reduce = fa
   setMedia({ phone, coarse, reduce });
   i18n.persistPreference(locale);
   h.state.instances = instancesFor(server.board);
-  if (layout) vi.doMock("./usage-layout", () => ({ USAGE_LAYOUT: layout }));
+  if (layout) vi.doMock("./usage-layout", async (original) => ({ ...await original<typeof import("./usage-layout")>(), USAGE_LAYOUT: layout }));
   const { UsageSection } = await import("./UsageSection");
   host = document.createElement("div");
   document.body.append(host);
@@ -253,7 +258,9 @@ describe("Usage desk", () => {
     const scans: string[] = [];
     const scan = (label: string) => {
       scans.push(label);
-      expect(scanForCanary(canary), label).toEqual([]);
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll("[data-account-email]").forEach((el) => { el.textContent = ""; });
+      expect(scanForCanary(canary, clone), label).toEqual([]);
     };
     expect(picker() !== null, "engine account selector").toBe(layout === "A");
     scan("closed");
@@ -276,7 +283,7 @@ describe("Usage desk", () => {
       scan("picked account");
     }
     const counts = [...host.querySelectorAll("button[data-bot-count]")];
-    expect(counts.length).toBeGreaterThan(0);
+    expect(counts).toHaveLength(0);
     for (const count of counts) await click(count);
     expect(counts.map((count) => count.getAttribute("aria-expanded"))).toEqual(counts.map(() => "true"));
     scan("bot names");
@@ -286,7 +293,7 @@ describe("Usage desk", () => {
     const folds = [...host.querySelectorAll("button[data-engine-fold]")];
     expect(folds).toHaveLength(4);
     for (const node of folds) await click(node);
-    await act(async () => { await vi.advanceTimersByTimeAsync(PRESENCE_EXIT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
     expect(host.querySelectorAll("[data-engine-summary]")).toHaveLength(4);
     expect(q("[data-account-row]")).toBeNull();
     scan("every engine folded");
@@ -519,7 +526,7 @@ describe("Usage desk", () => {
     await mount();
     if (retained) await act(async () => meterRoot.render(createElement(Meter)));
     const before = text(row("claude"));
-    expect(before).toContain("3 workers");
+    expect(before).not.toContain("workers");
     await unmount();
     h.state.terminalPanes = { "bot-atlas": [] };
     accountOf(server.board, "claude").workers = [];
@@ -550,7 +557,7 @@ describe("Usage desk", () => {
     const empty = () => ({ version: 1 as const, accounts: {}, events: {}, seq: 0, counter: 0 });
     const board = createUsageBoard({
       accounts: { list: () => [{ id: "codex", of: "codex", driverKind: "codex", generation: 0, existing: false, state: "ready" }], defaultFor: () => "codex", drains: {} },
-      names: { get: () => null }, rateLimits: { get: () => report },
+      names: { get: () => null }, rateLimits: { get: () => report, delete: vi.fn() },
       history: { snapshot: empty, since: empty, record: vi.fn(), event: vi.fn(), purge: vi.fn() },
       runs: async () => ({ known: true, runs: [] }), bots: () => [], now: () => usageBoardNow,
     });
@@ -605,7 +612,7 @@ describe("Usage desk", () => {
     const say = (key: Parameters<typeof i18n.translate>[1], vars?: Record<string, number>) => i18n.translate(locale, key, vars);
     expect(accountOf(server.board, "codex").coverage).toBe("complete");
     expect(accountOf(server.board, CLAUDE_2).coverage).toBe("unknown");
-    for (const [id, label] of [["codex", say("usage.limits.weeklyShort")], [CLAUDE_2, say("usage.limits.weeklyShort")], ["gemini", say("usage.limits.compactH", { hours: 24 })]] as const) {
+    for (const [id, label] of [["codex", say("usage.limits.weeklyShort")], [CLAUDE_2, say("usage.limits.weeklyShort")]] as const) {
       expect(slots(id), id).toEqual([label]);
       expect(row(id)?.querySelectorAll('[role="group"][data-window]'), id).toHaveLength(1);
       expect(row(id)?.querySelector("[data-window-empty]"), id).toBeNull();
@@ -631,7 +638,7 @@ describe("Usage desk", () => {
       expect(bars, `${account.name} bars`).toBeTruthy();
       expect(section(engine)?.contains(bars ?? null), `${account.name} under its engine`).toBe(true);
       expect(slots(account.id), account.name).toEqual(reported[account.id]);
-      if (locale === "en") expect(who(account.id), account.name).toMatch(/^\d+ bots? · /);
+      expect(who(account.id), account.name).toBe("");
     }
     expect(host.querySelectorAll("[data-account-row]")).toHaveLength(accounts.length);
     const empties = [...host.querySelectorAll("[data-window-empty]")];
@@ -651,24 +658,12 @@ describe("Usage desk", () => {
     expect(host.querySelector("[data-account-row] svg.lucide-check")).toBeNull();
   });
 
-  it("shows unknown workers apart from none", async () => {
-    const board = fresh();
-    board.runs = "unknown";
-    for (const account of engineOf(board, "claude").accounts) account.workers = null;
-    server.board = board;
+  it("keeps bot and worker details off account rows, including unknown workers", async () => {
+    server.board.runs = "unknown";
+    for (const account of engineOf(server.board, "claude").accounts) account.workers = null;
     await mount();
-    expect(who("claude")).toBe("2 bots · Workers unknown");
-    expect(who(CLAUDE_3)).toBe("0 bots · Workers unknown");
-    expect(who(CLAUDE_3)).not.toMatch(/\b0 workers\b/);
-    await reload();
-    server.board = fresh();
-    await mount();
-    expect(who("claude")).toBe("2 bots · 3 workers");
-    expect(who(CLAUDE_3)).toBe("0 bots · 0 workers");
-    expect(who(CLAUDE_3)).not.toContain("Workers unknown");
-    expect(text(row("claude"))).not.toContain("Atlas, Mira");
-    await click(row("claude")?.querySelector("button[data-bot-count]"));
-    expect(text(row("claude"))).toContain("Atlas, Mira");
+    expect(q("[data-account-who], [data-bot-count]")).toBeNull();
+    expect(text(row("claude"))).not.toMatch(/workers|Atlas|Mira/);
   });
 
   const museEngine = (observedAt: number): UsageBoardEngine => ({
@@ -683,6 +678,97 @@ describe("Usage desk", () => {
     }],
   });
 
+  it.each([false, true])("checks Muse once after a manual refresh has no observation (phone=%s)", async (phone) => {
+    server.board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
+    await mount({ phone });
+    const api = h.api;
+    const check = deferred<unknown>();
+    const report = { observedAt: new Date(usageBoardNow).toISOString(), windows: [
+      { ...accountOf(server.board, "muse").windows[0]!, usedPercent: 0 },
+      { ...accountOf(server.board, "muse").windows[1]!, usedPercent: 20 },
+    ] };
+    h.api = async (path, init) => {
+      if (path === "/api/usage/refresh/muse" || path === "/api/usage/check/muse") {
+        server.calls.push(`${init?.method} ${path}`);
+        return path.includes("/check/") ? check.promise : { status: "no_observation" };
+      }
+      return api(path, init);
+    };
+    await click(q("[data-usage-refresh]"));
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.filter((call) => call === "POST /api/usage/check/muse")).toHaveLength(1);
+    expect(q("[data-usage-refresh]")?.hasAttribute("disabled")).toBe(true);
+    accountOf(server.board, "muse").windows = report.windows;
+    accountOf(server.board, "muse").observedAt = usageBoardNow;
+    server.board.revision++;
+    await act(async () => {
+      check.resolve({ status: "fresh", report });
+      (await client()).usageBoardFrame(server.board.revision);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(h.dispatched).toContainEqual({ type: "rateLimits", instanceId: "muse", report, identity: canary.address });
+    expect(left("muse", "five_hour")).toBe("100% left");
+    expect(left("muse", "seven_day")).toBe("80% left");
+    expect(q("[role=alert]")).toBeNull();
+    expect(q("[data-usage-refresh]")?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("spends no Muse turn when manual refresh returns a fresh reading", async () => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount();
+    const api = h.api;
+    h.api = async (path, init) => path === "/api/usage/refresh/muse" ? { status: "fresh" } : api(path, init);
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it("never checks Muse automatically on mount, tab return or reopen", async () => {
+    server.board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (!path.startsWith("/api/usage/refresh/")) return api(path, init);
+      server.calls.push(`${init?.method} ${path}`);
+      return { status: "no_observation" };
+    };
+    await mount();
+    const { useAutoRefresh } = await import("@/lib/usage-auto-refresh");
+    function QuickRefresh() { useAutoRefresh(server.board); return null; }
+    await act(async () => root.render(createElement(QuickRefresh)));
+    await settle();
+    expect(server.calls).toContain("POST /api/usage/refresh/muse");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await unmount();
+    await mount();
+    expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it.each(["transport_error", "auth_error", "no_observation", "limit_reached", "reject", "auth_error_ko"])("keeps Muse's reading when its check returns %s", async (outcome) => {
+    const locale = outcome === "auth_error_ko" ? "ko" : "en";
+    const status = outcome === "auth_error_ko" ? "auth_error" : outcome;
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount({ locale });
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (path === "/api/usage/refresh/muse") return { status: "no_observation" };
+      if (path === "/api/usage/check/muse") {
+        server.calls.push(`${init?.method} ${path}`);
+        if (status === "reject") throw new Error("offline");
+        return { status, ...(status.endsWith("error") ? { error: status === "auth_error" ? "Sign in again in Muse" : "Could not refresh Muse limits" } : {}) };
+      }
+      return api(path, init);
+    };
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.filter((call) => call === "POST /api/usage/check/muse")).toHaveLength(1);
+    expect(left("muse", "seven_day")).toBe(locale === "ko" ? "39% 남음" : "39% left");
+    expect(h.dispatched).toEqual([]);
+    expect(Boolean(q("[role=alert]"))).toBe(status.endsWith("error") || status === "reject");
+    if (status === "auth_error") expect(text(q("[role=alert]"))).toBe(locale === "ko" ? "Muse에서 다시 로그인하세요" : "Sign in again in Muse");
+  });
+
   it("keeps every reported window and Muse", async () => {
     const board = fresh();
     accountOf(board, "claude").windows.push({ id: "seven_day_opus", kind: "week", usedPercent: 75, resetsAt: usageBoardNow + 2 * 1440 * MIN, windowMinutes: 10080 });
@@ -693,11 +779,11 @@ describe("Usage desk", () => {
     const opus = row("claude")?.querySelector('[data-window="seven_day_opus"]');
     expect(opus?.getAttribute("aria-label")).toBe("Opus 7d: 25% left, Resets in 2 days");
     expect(text(opus?.querySelector("[data-left]"))).toBe("25% left");
-    expect(tones(opus)).toEqual([...Array(3).fill("bg-warning"), ...Array(7).fill("bg-ink/12")]);
-    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("bg-accent"), ...Array(7).fill("bg-ink/12")]);
+    expect(tones(opus)).toEqual([...Array(3).fill("text-warning"), ...Array(7).fill("off")]);
+    expect(tones(row("claude")?.querySelector('[data-window="session"]'))).toEqual([...Array(3).fill("text-accent"), ...Array(7).fill("off")]);
     expect(slots("gemini")).toEqual(["24h"]);
-    expect(row("gemini")?.querySelector('[data-window="daily"]')?.getAttribute("aria-label")).toBe("24h: 82% left, Resets in 9 hours");
     expect(left("gemini", "daily")).toBe("82% left");
+    expect(row("gemini")?.querySelectorAll("[data-cells]")).toHaveLength(1);
     expect(q("[data-verdict]")).toBeNull();
     expect(text(host)).not.toContain("No history yet");
     expect(text(section("muse")?.querySelector("[data-engine-name]"))).toBe("Muse");
@@ -705,11 +791,11 @@ describe("Usage desk", () => {
     expect(slots("muse")).toEqual(["5h", "7d"]);
     expect(left("muse", "five_hour")).toBe("0% left");
     expect(row("muse")?.querySelector('[data-window="five_hour"] [data-left]')?.className).toMatch(/\btext-danger\b/);
-    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("bg-ink/12"));
+    expect(tones(row("muse")?.querySelector('[data-window="five_hour"]'))).toEqual(Array(10).fill("off"));
     expect(left("muse", "seven_day")).toBe("39% left");
-    expect(text(row("muse")?.querySelector("[data-reading-age]")), "Muse states the age of its reading").toBe("Last seen 2h ago");
-    expect(row("muse")?.querySelector("[data-account-bars]")?.className, "and mutes a reading over 1h old").toMatch(/\bopacity-60\b/);
-    expect(host.querySelectorAll("[data-reading-age]"), "only Muse").toHaveLength(1);
+    expect(row("muse")?.querySelector("[data-reading-age]")).toBeNull();
+    expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
+    expect(host.querySelectorAll("[data-reading-age]")).toHaveLength(0);
     expect(text(host)).not.toContain("Limit reached.");
     expect(q("[data-stale]")).toBeNull();
     expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
@@ -720,7 +806,7 @@ describe("Usage desk", () => {
     board.engines.push(museEngine(usageBoardNow - 5 * MIN));
     server.board = board;
     await mount({ locale });
-    expect(text(row("muse")?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 5m ago" : "5분 전 기준");
+    expect(q("[data-reading-age]")).toBeNull();
     expect(row("muse")?.querySelector("[data-account-bars]")?.className).not.toMatch(/\bopacity-60\b/);
   });
 
@@ -833,8 +919,8 @@ describe("Usage desk", () => {
     await mount({ locale });
     expect(q("[data-usage-desk]")).not.toBeNull();
     const labels = [...host.querySelectorAll("button")].map((button) => `${text(button)}|${button.getAttribute("aria-label") ?? ""}`);
-    for (const key of ["usage.limits.refreshAll", "usage.limits.countUp", "usage.limits.countDown"]) {
-      expect(labels.some((label) => label.includes(i18n.translate(locale, key as never)))).toBe(false);
+    for (const key of ["usage.limits.countUp", "usage.limits.countDown"]) {
+      expect(labels.some((label) => label.includes(i18n.translate(locale, key as never)))).toBe(true);
     }
     expect(host.querySelector('[aria-keyshortcuts="Alt+R"]')).toBeNull();
     const before = server.calls.length;
@@ -842,7 +928,7 @@ describe("Usage desk", () => {
     expect(server.calls.slice(before).filter((call) => call.startsWith("POST /api/usage/"))).toEqual([]);
     const { en, ko } = await import("@/lib/i18n-catalog");
     for (const catalog of [en, ko]) {
-      for (const key of ["shortcuts.usageRefresh", "usage.limits.refreshAll", "usage.limits.direction", "usage.limits.countUp", "usage.limits.countDown"]) {
+      for (const key of ["shortcuts.usageRefresh", "usage.limits.refreshAll"]) {
         expect(key in catalog, key).toBe(false);
       }
     }
@@ -881,8 +967,8 @@ describe("Usage desk", () => {
       expect(boxOf(control)).toEqual(BOX);
       expect(control?.className).toMatch(/\[@media\(pointer:coarse\)\]:after:-inset-y-2/);
       expect(node.querySelector("[data-account-head]")?.lastElementChild, "Main or Use ends the head line").toBe(control);
-      expect(control?.previousElementSibling?.contains(node.querySelector("[data-account-who]") ?? null), "the name and counts sit beside it").toBe(true);
-      expect(control?.previousElementSibling?.className, "and wrap before they push it").toMatch(/\bmin-w-0\b.*\bflex-1\b.*\bflex-wrap\b/);
+      expect(control?.previousElementSibling?.contains(node.querySelector("[data-account-name]") ?? null), "the name sits beside it").toBe(true);
+      expect(control?.previousElementSibling?.className).toMatch(/\bmin-w-0\b/);
       expect(node.querySelector("[data-account-name]")?.className).toMatch(/\bmin-w-0\b/);
       // A's picker button keeps its own one-line name.
       if (layout === "B") expect(node.querySelector("[data-account-name]")?.className, "a 24-character nickname with no space wraps instead of running under Use, and a Korean name wraps between words").toMatch(/\bbreak-keep\b.*\[overflow-wrap:anywhere\]/);
@@ -1077,7 +1163,7 @@ describe("Usage desk", () => {
     expect(stored()).toEqual({ "codex-work": true, claude: true });
     expect(arrows()).toHaveLength(0);
     expect([content("codex")?.getAttribute("data-fold"), content("codex")?.hasAttribute("inert"), content("codex")?.contains(row("codex"))]).toEqual(["closing", true, true]);
-    await act(async () => { await vi.advanceTimersByTimeAsync(PRESENCE_EXIT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
     expect([content("codex")?.hidden, content("codex")?.childElementCount, content("claude")?.hidden]).toEqual([true, 0, true]);
     expect([row("codex"), row(CODEX_2), row("claude")]).toEqual([null, null, null]);
     expect([summary("codex"), summary()]).toEqual(["7d 62% left", "5h 34% left · 7d 59% left"]);
@@ -1128,21 +1214,54 @@ describe("Usage desk", () => {
     expect(engines.map((engine) => summary(engine))).toEqual(en
       ? ["5h 34% left · 7d 59% left", "7d 62% left", "No usage yet", "24h 82% left"]
       : ["5시간 34% 남음 · 7일 59% 남음", "7일 62% 남음", "아직 사용량 없음", "24시간 82% 남음"]);
-    expect(engines.map((engine) => section(engine)?.querySelector("[data-engine-summary]")?.childElementCount)).toEqual([2, 1, 0, 1]);
+    expect(engines.map((engine) => section(engine)?.querySelectorAll("[data-engine-summary] .usage-meter-summary").length)).toEqual([2, 1, 0, 1]);
     expect(q("[data-account-row]")).toBeNull();
-    expect(q("[data-engine-summary] .text-danger")).toBeNull();
+    expect(q("[data-engine-summary] [data-left].text-danger")).toBeNull();
     const next = fresh();
     next.revision = 43;
     engineOf(next, "claude").mainId = CLAUDE_2;
     server.board = next;
     await act(async () => { (await client()).usageBoardFrame(43); await vi.advanceTimersByTimeAsync(0); });
     expect(summary()).toBe(en ? "7d 0% left" : "7일 0% 남음");
-    expect(text(section("claude")?.querySelector("[data-engine-summary] .text-danger"))).toBe(en ? "0% left" : "0% 남음");
+    expect(text(section("claude")?.querySelector("[data-engine-summary] [data-left].text-danger"))).toBe(en ? "0% left" : "0% 남음");
   });
 
-  it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account and opens Connections (%s)", async (locale) => {
+  it.each(["en", "ko"] as const)("shows Main as a plain tag and Switch as the button (%s)", async (locale) => {
+    await mount({ locale });
+    const en = locale === "en";
+    const tag = row("claude")?.querySelector("[data-main-check]") ?? null;
+    expect(text(tag)).toBe(en ? "Main" : "기본");
+    expect(tag?.tagName).toBe("SPAN");
+    expect(tag?.closest("button")).toBeNull();
+    expect(tag?.hasAttribute("tabindex")).toBe(false);
+    expect(tag?.className).toMatch(/border-transparent/);
+    expect(tag?.className).not.toMatch(/(?:bg-|hover:|border-accent)/);
+    expect(boxOf(tag)).toEqual(BOX);
+    const button = useButton(CLAUDE_2);
+    expect(text(button)).toBe(en ? "Switch" : "전환");
+    expect(button?.getAttribute("aria-label")).toBe(en ? "Switch to Claude 2" : "Claude 2 전환");
+  });
+
+  it.each(["en", "ko"] as const)("starts that account's sign-in on the Usage page in one tap (%s)", async (locale) => {
     accountOf(server.board, CLAUDE_3).signIn = "signed-out";
     await mount({ locale });
+    h.state.instances = h.state.instances.map((each) => (each as { instanceId: string }).instanceId === CLAUDE_3 ? { ...each as object, accountState: "stopped" } : each);
+    await rerender();
+    const signIn = row(CLAUDE_3)?.querySelector("button[data-sign-in]") ?? null;
+    expect(boxOf(signIn)).toEqual(BOX);
+    expect(row(CLAUDE_3)?.querySelector("[data-account-head]")?.lastElementChild?.contains(signIn), "Sign In ends the head line").toBe(true);
+    h.api = async (path, init) => { server.calls.push(`${(init?.method ?? "GET").toUpperCase()} ${path}`); return { url: "https://auth.example/device", code: "ABCD-EFGH" }; };
+    await click(signIn);
+    expect(server.calls.filter((call) => call.includes("/sign-in"))).toEqual([`POST /api/instances/${encodeURIComponent(CLAUDE_3)}/sign-in`]);
+    expect(text(row(CLAUDE_3))).toContain("ABCD-EFGH");
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it.each(["en", "ko"] as const)("offers Sign In in the same box as Main and Use for a signed-out account Wink has no record of and opens Connections (%s)", async (locale) => {
+    accountOf(server.board, CLAUDE_3).signIn = "signed-out";
+    await mount({ locale });
+    h.state.instances = h.state.instances.filter((each) => (each as { instanceId: string }).instanceId !== CLAUDE_3);
+    await rerender();
     const en = locale === "en";
     const account = row(CLAUDE_3);
     const signIn = account?.querySelector("button[data-sign-in]") ?? null;
@@ -1168,11 +1287,11 @@ describe("Usage desk", () => {
     const reset = week?.querySelector('[data-reset="week"]');
     expect(text(reset)).toBe(en ? "Limit reached · resets in 5d 2h" : "한도 도달 · 5일 2시간 후 초기화");
     expect([...reset?.querySelectorAll(".text-danger") ?? []].map(text)).toEqual([en ? "Limit reached" : "한도 도달"]);
-    expect(tones(week)).toEqual(Array(10).fill("bg-ink/12"));
+    expect(tones(week)).toEqual(Array(10).fill("off"));
     const low = row(CLAUDE_3)?.querySelector('[data-window="session"]');
-    expect([text(low?.querySelector("[data-left]")), low?.querySelector(".text-danger")]).toEqual([en ? "10% left" : "10% 남음", null]);
+    expect(text(low?.querySelector("[data-left].text-danger"))).toBe(en ? "10% left" : "10% 남음");
     expect(text(low?.querySelector('[data-reset="session"]'))).toBe(en ? "resets in 2h 10m" : "2시간 10분 후 초기화");
-    expect(tones(low)).toEqual(["bg-danger", ...Array(9).fill("bg-ink/12")]);
+    expect(tones(low)).toEqual(["text-danger", ...Array(9).fill("off")]);
   });
 
   it.each(["en", "ko"] as const)("ends a used-up window with no reset time at Limit reached, with no dot after it (%s)", async (locale) => {
@@ -1185,7 +1304,7 @@ describe("Usage desk", () => {
     accountOf(server.board, CLAUDE_2).windows.find((each) => each.kind === "week")!.usedPercent = 99.9;
     await mount({ locale });
     const week = row(CLAUDE_2)?.querySelector('[data-window="week"]');
-    expect(text(week?.querySelector("[data-left]"))).toBe(locale === "en" ? "0% left" : "0% 남음");
+    expect(text(week?.querySelector("[data-left]"))).toBe(locale === "en" ? "1% left" : "1% 남음");
     expect(text(week?.querySelector("[data-reset]"))).not.toContain(locale === "en" ? "Limit reached" : "한도 도달");
   });
 
@@ -1203,11 +1322,11 @@ describe("Usage desk", () => {
     }
     await mount({ locale });
     for (const id of ["claude", "codex", "grok"]) {
-      expect(text(row(id)?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 10m ago" : "10분 전 기준");
+      expect(row(id)?.querySelector("[data-reading-age]")).toBeNull();
     }
     const boardClient = await client();
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
-    expect(text(row("claude")?.querySelector("[data-reading-age]"))).toBe(locale === "en" ? "As of 10m ago" : "10분 전 기준");
+    expect(q("[data-reading-age]")).toBeNull();
     for (const id of ["claude", "codex", "grok"]) accountOf(server.board, id).observedAt = usageBoardNow - 5 * MIN;
     server.board.revision++;
     await act(async () => { boardClient.usageBoardFrame(server.board.revision); await vi.advanceTimersByTimeAsync(0); });
@@ -1219,12 +1338,42 @@ describe("Usage desk", () => {
     await mount({ locale });
     const boardClient = await client();
     accountOf(server.board, "muse").signIn = "signed-out";
+    h.state.instances = h.state.instances.map((each) => (each as { instanceId: string }).instanceId === "muse" ? { ...each as object, accountState: "stopped" } : each);
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
     expect(row("muse")?.querySelector("[data-account-bars], [data-main-check]")).toBeNull();
     expect(text(row("muse"))).toContain(locale === "en" ? "Sign In" : "로그인");
     accountOf(server.board, "muse").signIn = "ready";
     await act(async () => { boardClient.usageBoardReconnected(); await vi.advanceTimersByTimeAsync(0); });
     expect(row("muse")?.querySelector("[data-account-bars]")).not.toBeNull();
+  });
+
+  it.each(["en", "ko"] as const)("clears swapped usage and pace before painting the new email (%s)", async (locale) => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    const ids = ["claude", "codex", "grok", "gemini", "muse"];
+    for (const id of ids) accountOf(server.board, id).windows = structuredClone(accountOf(server.board, "claude").windows);
+    await mount({ locale });
+    for (const id of ids) expect(row(id)?.querySelector("[data-account-bars]")).not.toBeNull();
+    const reply = deferred<UsageBoard>();
+    server.reply = () => reply.promise;
+    h.state.instances = h.state.instances.map((instance) => ({ ...instance as object,
+      snapshot: { state: "available", authenticated: true, account: "new@example.test" },
+    }));
+    await rerender();
+    for (const id of ids) {
+      if (id === "gemini") { expect(row(id)).toBeNull(); continue; }
+      expect(text(row(id))).toContain("new@example.test");
+      expect(row(id)?.querySelector("[data-account-bars], [data-window], [data-pace]")).toBeNull();
+      expect(text(row(id)?.querySelector("[data-window-empty]"))).toBe(locale === "en" ? "No usage yet" : "아직 사용량 없음");
+    }
+    const next = fresh();
+    next.engines.push(museEngine(usageBoardNow));
+    next.revision++;
+    for (const id of ids) {
+      accountOf(next, id).windows = [{ ...UNUSED, usedPercent: 40 }];
+      accountOf(next, id).history = { fine: [], coarse: [] };
+    }
+    await act(async () => { reply.resolve(next); await vi.advanceTimersByTimeAsync(0); });
+    for (const id of ids) expect(text(row(id)?.querySelector("[data-left]"))).toBe(locale === "en" ? "60% left" : "60% 남음");
   });
 
   it.each(["en", "ko"] as const)("says No usage yet, the same on every engine, for an account with no windows (%s)", async (locale) => {

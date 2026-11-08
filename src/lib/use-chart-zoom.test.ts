@@ -11,10 +11,10 @@ let root: Root;
 let renders: number;
 let frames: FrameRequestCallback[];
 
-function Chart({ index = "a", enabled = true }: { index?: string; enabled?: boolean }) {
+function Chart({ index = "a", enabled = true, input = "touch" }: { index?: string; enabled?: boolean; input?: "touch" | "mouse" }) {
   renders++;
   const ref = useRef<SVGSVGElement>(null);
-  const { zoom } = useChartZoom(ref, enabled, index, { left: 0, right: 400, top: 0, bottom: 200 }, () => true, () => undefined);
+  const { zoom } = useChartZoom(ref, enabled ? input : undefined, index, { left: 0, right: 400, top: 0, bottom: 200 }, () => true, () => undefined);
   return createElement("svg", { ref, "data-scale": zoom.scale, "data-mi-zoom": enabled ? zoom.scale : undefined },
     createElement("g", {
       "data-mi-point": "", "data-mi-x": 0.5, "data-mi-y": 0.5,
@@ -26,6 +26,8 @@ function Chart({ index = "a", enabled = true }: { index?: string; enabled?: bool
     }),
     createElement("text", { "data-mi-label": "", "data-mi-x": 200, "data-mi-y": 100, style: { fontSize: 10.5, transform: "translate(200px, 100px)" } }, "Model"),
     createElement("g", { "data-mi-live-lines": "" }),
+    input === "mouse" && createElement("text", { "data-mi-label": "", "data-mi-x": 210, "data-mi-y": 96, "data-mi-ax": 200, "data-mi-ay": 100, style: { transform: "translate(210px, 96px)" } }, "Pinned"),
+    input === "mouse" && createElement("path", { "data-mi-live-lines": "", "data-mi-ax": 200, "data-mi-ay": 100 }),
   );
 }
 
@@ -176,5 +178,108 @@ describe("useChartZoom", () => {
     await act(async () => root.render(createElement(Chart, change === "close" ? { enabled: false } : { index: "b" })));
     expect(styles()).toEqual(rendered);
     expect(host.querySelector("svg")!.getAttribute("data-mi-zoom")).toBe(change === "close" ? null : "1");
+  });
+});
+
+describe("useChartZoom with a mouse", () => {
+  const svg = () => host.querySelector("svg")!;
+  const scale = () => Number(svg().getAttribute("data-scale"));
+  const spot = (dot: Element) => (dot as SVGGElement).style.transform.match(/-?[\d.]+/g)!.map(Number);
+  const wheel = (target: EventTarget, deltaY: number, [clientX, clientY]: [number, number], time: number, ctrlKey = false, cancelable = true) => {
+    // happy-dom's WheelEvent drops clientX and ctrlKey.
+    const event = new MouseEvent("wheel", { bubbles: true, cancelable, clientX, clientY, ctrlKey });
+    for (const [key, value] of Object.entries({ deltaX: 0, deltaY, deltaMode: 0, timeStamp: time })) Object.defineProperty(event, key, { value });
+    act(() => void target.dispatchEvent(event));
+    return event;
+  };
+  const mouse = (target: EventTarget, type: string, [clientX, clientY]: [number, number]) =>
+    act(() => void target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, button: 0 })));
+  const settle = () => act(() => vi.advanceTimersByTime(200));
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => root.render(createElement(Chart, { input: "mouse" })));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([{ deltaY: -100, ctrlKey: false }, { deltaY: -30, ctrlKey: true }])("zooms around the cursor with ctrl $ctrlKey", ({ deltaY, ctrlKey }) => {
+    const [center, edge] = host.querySelectorAll("[data-mi-point]");
+    expect(wheel(svg(), deltaY, [360, 100], 1000, ctrlKey).defaultPrevented).toBe(true);
+    act(() => frames.at(-1)!(16));
+    expect(spot(edge!)[0]).toBeCloseTo(360);
+    expect(spot(center!)[0]).toBeCloseTo(360 - 160 * 2 ** 0.3);
+    settle();
+    expect(scale()).toBeCloseTo(2 ** 0.3);
+    expect(spot(edge!)[0]).toBeCloseTo(360);
+  });
+
+  it("keeps a label and its leader beside their dot while the wheel zooms", () => {
+    const center = host.querySelector("[data-mi-point]")!;
+    wheel(svg(), -300, [360, 60], 1000);
+    act(() => frames.at(-1)!(16));
+    const [x, y] = spot(center);
+    const [lx, ly] = spot(host.querySelector("text[data-mi-ax]")!);
+    const [tx, ty] = host.querySelector("path[data-mi-ax]")!.getAttribute("transform")!.match(/-?[\d.]+/g)!.map(Number);
+    expect([lx! - x!, ly! - y!, tx! - (x! - 200), ty! - (y! - 100)].map((v) => Math.round(v * 1000) / 1000 + 0)).toEqual([10, -4, 0, 0]);
+  });
+
+  it("keeps scrolling the page when a wheel that started outside passes over the chart", () => {
+    expect(wheel(document.body, -100, [200, 100], 1000).defaultPrevented).toBe(false);
+    expect(wheel(svg(), -100, [200, 100], 1200).defaultPrevented).toBe(false);
+    expect(wheel(svg(), -100, [200, 100], 1500).defaultPrevented).toBe(false);
+    expect(frames).toHaveLength(0);
+    expect(wheel(svg(), -100, [200, 100], 1950).defaultPrevented).toBe(true);
+  });
+
+  it("scrolls the page when the browser already scrolled before the chart got the wheel", () => {
+    wheel(svg(), -100, [200, 100], 1000, false, false);
+    expect(wheel(svg(), -100, [200, 100], 1100).defaultPrevented).toBe(false);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("scrolls the page on wheel down at 1x, also once a zoom is back at 1x", () => {
+    expect(wheel(svg(), 100, [200, 100], 1000).defaultPrevented).toBe(false);
+    expect(wheel(svg(), -100, [200, 100], 2000).defaultPrevented).toBe(true);
+    expect(wheel(svg(), 100, [200, 100], 2050).defaultPrevented).toBe(true);
+    settle();
+    expect(scale()).toBe(1);
+    expect(wheel(svg(), 100, [200, 100], 2300).defaultPrevented).toBe(false);
+  });
+
+  it("pans on drag while zoomed, clamped to the data area", () => {
+    mouse(svg(), "mousedown", [200, 100]);
+    expect(svg().hasAttribute("data-mi-drag")).toBe(false);
+    wheel(svg(), -1000, [200, 100], 1000);
+    settle();
+    expect(scale()).toBe(8);
+    mouse(svg(), "mousedown", [200, 100]);
+    expect(svg().hasAttribute("data-mi-drag")).toBe(true);
+    mouse(window, "mousemove", [5000, 100]);
+    mouse(window, "mouseup", [5000, 100]);
+    expect(svg().hasAttribute("data-mi-drag")).toBe(false);
+    expect(scale()).toBe(8);
+    expect(spot(host.querySelector("[data-mi-point]")!)).toEqual([1600, 100]);
+  });
+
+  it("returns to the full view on double-click", () => {
+    wheel(svg(), -300, [200, 100], 1000);
+    settle();
+    expect(scale()).toBeGreaterThan(1);
+    mouse(svg(), "dblclick", [200, 100]);
+    expect(scale()).toBe(1);
+  });
+
+  it("resets when the index changes, even mid-wheel", async () => {
+    wheel(svg(), -300, [200, 100], 1000);
+    settle();
+    expect(scale()).toBeGreaterThan(1);
+    wheel(svg(), -300, [200, 100], 1100);
+    await act(async () => root.render(createElement(Chart, { input: "mouse", index: "b" })));
+    settle();
+    expect(scale()).toBe(1);
+    expect(wheel(svg(), 100, [200, 100], 3000).defaultPrevented).toBe(false);
   });
 });

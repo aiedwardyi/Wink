@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./motion.css";
+@import "./skins/fresh-dark.css";
 
 [data-media-viewer] header {
   padding-top: env(safe-area-inset-top, 0px);
@@ -171,6 +172,11 @@
   justify-content: flex-end;
 }
 
+/* These skins zero the bot padding the chips pull up into. */
+:is([data-skin="claude"], [data-skin="notebook"]) [data-orbit-message="bot"] [data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
+  padding-bottom: 0.875rem;
+}
+
 [data-room-transcript] [data-orbit-message-body]:has(> [data-message-reactions]) {
   padding-bottom: 0;
 }
@@ -311,6 +317,19 @@
 /* Korean UI keeps its old faces: Geist first would set the Hangul baseline and spaces. */
 html[lang="ko"] {
   --font-geist: ;
+}
+
+/* Korean breaks between words, not inside them; break-word still wraps long links, paths and code. */
+html:lang(ko) {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* Message text too, since Korean can show in an English UI. */
+[data-orbit-message-content],
+[data-peer-body] {
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 /* ── Midnight ──────────────────────────────────────────────────────────────
@@ -2200,10 +2219,15 @@ html[lang="ko"] {
   --color-scrollbar: #3b3f4a;
   --color-maus-line: #a3a7b3;
 
-  --font-sans: var(--font-geist) "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+  --font-sans: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Malgun Gothic", system-ui, sans-serif;
   --radius-lg: 6px;
   --radius-xl: 8px;
+}
+
+/* Korean keeps the old faces: Space Grotesk first would set the Hangul baseline and spaces. */
+[data-skin="precision"]:lang(ko) {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
 }
 
 @scope ([data-skin="precision"], [data-skin="mono-hud"], [data-skin="servo-gray"]) to ([data-skin]) {
@@ -2303,6 +2327,40 @@ html[lang="ko"] {
   --radius-lg: 4px;
   --radius-xl: 8px;
   --hud-composer-background: linear-gradient(160deg, #414850, #353c44 60%, #2d333b);
+}
+
+@scope ([data-skin="precision"]) to ([data-skin]) {
+  [data-orbit-message-body] {
+    max-width: min(54rem, 94%);
+  }
+
+  [data-orbit-message="bot"] [data-orbit-message-content] {
+    background: var(--color-card);
+    padding: 10px 14px;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 767px) {
+  @scope ([data-skin="precision"]) to ([data-skin]) {
+    [data-orbit-message-body] {
+      max-width: 96%;
+    }
+  }
+}
+
+@scope ([data-skin="mono-hud"]) to ([data-skin]) {
+  [data-orbit-message="bot"] [data-orbit-message-content] {
+    background: var(--color-card);
+    padding: 10px 14px;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    box-shadow: none;
+  }
 }
 
 @scope ([data-skin="servo-gray"]) to ([data-skin]) {

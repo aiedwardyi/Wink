@@ -11,10 +11,13 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usag
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
+import { ordered, readUsageOrder } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
+import { useAutoRefresh } from "@/lib/usage-auto-refresh";
 import { ProviderMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
+import { usageAccounts } from "./usage-layout";
 import "./UsageDesk.css";
 
 const HOUR = 3_600_000;
@@ -26,6 +29,8 @@ const FOOTER_KEPT = 51;
 const SHOW_QUICK_HERO = false;
 /** Phone heights under this drop the header and seat Close beside All usage. */
 const TIGHT = 320;
+/** Phone heights from this up are limited by the 60% cap alone; the last message may sit under the view. */
+const ROOMY = 600;
 
 type Spot = { left: number; bottom: number; width: number; maxHeight: number; dimBottom: number };
 
@@ -61,7 +66,7 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   const bottom = window.innerHeight - rect.top + gap;
   if (phone) {
     const cap = height * 0.6;
-    const room = rect.top - gap - keptTop(top);
+    const room = rect.top - gap - (height >= ROOMY ? top : keptTop(top));
     const maxHeight = Math.max(FOOTER_KEPT, Math.floor(Math.min(cap, room)));
     const edge = terminal ? 0 : 16;
     return { left: edge, bottom, width: window.innerWidth - 2 * edge, maxHeight, dimBottom: window.innerHeight - rect.top };
@@ -76,6 +81,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   anchor: RefObject<HTMLElement | null>; onClose: () => void;
 }) {
   const { t, locale } = useI18n();
+  useAutoRefresh(board);
   const { state: store, dispatch, refreshInstances } = useStore();
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
@@ -87,6 +93,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   const soon = viewed.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR);
   const clock: Clock = { t, locale: localeTag(locale), now: useVisibleClock(soon) };
   const checked = checkedMain(state, engine.base);
+  const accountOrder = readUsageOrder(engine.base);
 
   const close = (focus = true) => {
     onClose();
@@ -172,10 +179,10 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
           {closeButton}
         </div>}
         <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
-          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={engine.accounts} select={setViewedId} foldChart
+          {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={ordered(engine.accounts, accountOrder, (each) => each.id)} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
-            {engine.accounts.map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
+            {ordered(usageAccounts(engine), accountOrder, (each) => each.id).map((each) => <AccountRow key={each.id} engine={engine} account={each} board={board} state={state} checked={each.id === checked}
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}

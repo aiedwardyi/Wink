@@ -110,8 +110,9 @@ async function render(bot: Bot, instances: InstanceInfo[]) {
 function meter(host: HTMLElement) {
   const line = host.querySelector("[data-usage-meter]");
   if (!line) return null;
-  const text = (hook: string) => line.querySelector(`[${hook}]`)?.textContent ?? null;
-  return { first: text("data-meter-first"), second: text("data-meter-second") };
+  const windows = [...line.querySelectorAll("[data-window]")];
+  const text = (node: Element | undefined) => node ? `${node.firstElementChild?.textContent} ${node.querySelector("[data-left]")?.textContent}` : null;
+  return { first: text(windows[0]), second: text(windows[1]) };
 }
 
 describe("ChatView plan meters follow the shown pick", () => {
@@ -129,8 +130,8 @@ describe("ChatView plan meters follow the shown pick", () => {
       { ...busy, pendingModelSelection: { instanceId: "muse", model: "muse-model", effort: "high" } },
       [claude, muse],
     );
-    expect(meter(host)).toEqual({ first: "7d 60%", second: "5h 90%" });
-    expect(host.textContent).toContain("Last seen 4d ago");
+    expect(meter(host)).toEqual({ first: "5h 90%", second: "7d 60%" });
+    expect(host.textContent).not.toMatch(/Last seen|As of/);
   });
 
   it("shows the running engine's windows in ChatPlanMeters when nothing is pending", async () => {
@@ -156,7 +157,7 @@ describe("ChatView plan meters follow the shown pick", () => {
     await act(async () => dispatch({ type: "instances", instances: [
       { ...base, accountMain: false }, { ...second, accountMain: true },
     ] }));
-    expect(meter(host)).toEqual({ first: "7d 66%", second: "5h 88%" });
+    expect(meter(host)).toEqual({ first: "5h 88%", second: "7d 66%" });
     await act(async () => dispatch({ type: "rateLimits", instanceId: "second", report: {
       observedAt: new Date(now).toISOString(),
       windows: [{ id: "five_hour", usedPercent: 20, resetsAt: now + 7_200_000 }],

@@ -106,7 +106,7 @@ describe("Codex summaries", () => {
       return message;
     });
     const build = createSummaryBuild({
-      store: { activePath: () => [...messages], activeLeaf: () => messages.at(-1)!.id, messagesFor: () => messages, appendCompaction },
+      store: { activePath: () => [...messages], activeLeaf: () => messages.at(-1)!.id, messagesFor: () => messages, appendCompaction, taskByThread: () => undefined },
       sendInputs: async () => ({ instance, contextWindow: 200_000, taskRecordText: "Verify the pending research" }),
       busy: () => false, userName: () => "User",
     });

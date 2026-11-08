@@ -94,12 +94,14 @@ describe("phone Settings navigation", () => {
     expect(dialog()!.querySelector('[role="radiogroup"]')).toBeNull();
   });
 
-  it("shows only Profile on phone Account", async () => {
+  it("shows only the Profile photo header on phone Account", async () => {
     await open();
     await tap("Account");
     const pane = dialog()!.querySelector("[data-settings-page] .overflow-y-auto")!;
-    expect(pane.textContent).toContain("Profile");
-    expect(pane.children).toHaveLength(1);
+    expect(pane.querySelector("#settings-profile-name")).not.toBeNull();
+    expect(pane.querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
+    // the Activity card holds its place while its numbers load
+    expect([...pane.children].map((child) => child.textContent?.startsWith("Activity"))).toEqual([false, true]);
     expect(pane.textContent).not.toContain("Sync");
   });
 
@@ -151,6 +153,26 @@ describe("phone Settings navigation", () => {
     expect(dialog()?.parentElement?.hasAttribute("data-closing")).toBe(false);
     expect(button("Back")).toBeNull();
     await escape();
+    await wait(PRESENCE_EXIT_MS + 40);
+    expect(dialog()).toBeNull();
+  });
+
+  it.each([
+    ["en", "Account", "account", "Close Settings"],
+    ["en", "General", "general", "Close Settings"],
+    ["en", "Connections", "connections", "Close Settings"],
+    ["en", "Usage", "usage", "Close Settings"],
+    ["en", "Devices", "companion", "Close Settings"],
+    ["en", "Themes", "themes", "Close Settings"],
+    ["en", "Model Index", "models-index", "Close Settings"],
+    ["ko", "사용량", "usage", "설정 닫기"],
+  ])("keeps %s %s painted while X closes Settings", async (locale, row, page, close) => {
+    await open(locale);
+    await tap(row);
+    await act(async () => button(close)!.click());
+    expect(dialog()?.parentElement?.hasAttribute("data-closing")).toBe(true);
+    expect(dialog()!.querySelector("[data-settings-page]")?.getAttribute("data-settings-page")).toBe(page);
+    expect(dialog()!.querySelector("[data-settings-list]")?.hasAttribute("inert")).toBe(true);
     await wait(PRESENCE_EXIT_MS + 40);
     expect(dialog()).toBeNull();
   });

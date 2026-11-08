@@ -121,6 +121,27 @@ describe.each(engines)("$name tool detail", ({ name, driver, cli, fixtureEnv }) 
     expect(event.detail).toEqual({ input: "cert.pem", outputHidden: true });
   });
 
+  it("emits raw native writes with tool detail off", async () => {
+    const path = `src/${"long-".repeat(60)}page.html`;
+    writeFixture([{ id: "edit", path, oldText: "old", newText: "new", output: "ok" }]);
+    await create();
+    expect(await run()).toMatchObject([{ writes: [path] }]);
+    expect(recorder.events.some(event => "detail" in event)).toBe(false);
+  });
+
+  it("caps native writes at 32 and ignores failed edits and deletions", async () => {
+    const paths = Array.from({ length: 40 }, (_, i) => `src/${i}.html`);
+    const frames = name === "Codex"
+      ? ["completed", "failed"].map(status => ({ method: "item/completed", params: { item: { id: status, type: "fileChange", status, changes: [{ path: "deleted.html", kind: { type: "delete" }, diff: "" }, ...paths.map(path => ({ path, kind: { type: "update" }, diff: "" }))] } } }))
+      : ["completed", "failed"].map(status => ({ sessionUpdate: "tool_call", toolCallId: status, kind: "edit", status, locations: paths.map(path => ({ path })), rawInput: { path: paths[0] } }));
+    writeFileSync(fixturePath, JSON.stringify(frames));
+    await create();
+    const events = await run();
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ writes: paths.slice(0, 32) });
+    expect("writes" in events[1]!).toBe(false);
+  });
+
   it.skipIf(name !== "Codex").each(["add", "update", "delete"])("safety hides a sensitive fileChange %s", async (type) => {
     writeFileSync(fixturePath, JSON.stringify([{ method: "item/completed", params: { item: { id: "private-file", type: "fileChange", status: "completed", changes: [{ path: ".env.production", kind: { type }, diff: "@@ -1 +1 @@\n-OldBody987654321\n+PartialPrivateBody987654321" }] } } }]));
     saveConfig({ features: { toolDetailCapture: true } });

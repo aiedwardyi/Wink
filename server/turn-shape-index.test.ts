@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { isEffortOffered } from "../shared/model-effort.ts";
 import { resolveAutomaticSelection } from "./automatic-selection.ts";
-import { applicableCompaction, knownCatalogContextWindow, supersededCompactionIds } from "./context-compaction.ts";
+import { applicableCompaction, knownCatalogContextWindow, nativeCompactAt, supersededCompactionIds } from "./context-compaction.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { canServeTurn, warmToolsKey } from "./drivers/acp/warm-eligibility.ts";
 import { shouldMountLocalComputer } from "./local-routing.ts";
@@ -215,7 +215,7 @@ it("live freshness, seed, recycle and final cursor decisions agree for every cac
     const scope = {
       ...context, bot: h.bot, task: h.task, instance: h.instance, instanceId: "grok", threadId: "chat", model: h.bot.modelSelection.model,
       activeMessages: [...h.activeMessages, { id: "send", role: "user", kind: "text", text: "current send" }], skipTranscript: new Set(["send"]), transcript: [],
-      knownCatalogContextWindow, supersededCompactionIds,
+      knownCatalogContextWindow, supersededCompactionIds, nativeAt: nativeCompactAt(h.instance.driverKind, h.bot.modelSelection.model, 1_000_000),
     };
     const results = [];
     for (const recovering of [false, true]) for (const expanded of [false, true]) {

@@ -1,14 +1,44 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, GripVertical, Pencil } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
+import type { UsageBoardAccount } from "@/lib/usage-board";
+import { invalidateUsageBoard } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { usePresence } from "@/lib/use-presence";
 import { MENU_CLASS } from "./MessageMenu";
 import { Tile } from "./UsageDesk";
+import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 
 const PRESS = "transition-[background-color,transform] duration-100 motion-reduce:transition-none";
+
+export function UsageGrip({ label }: { label: string }) {
+  const { t } = useI18n();
+  return <button type="button" data-usage-grip="" aria-label={t("usage.desk.reorder", { name: label })}
+    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" className="usage-grip"><GripVertical size={12} aria-hidden="true" /></button>;
+}
+
+export function EditableAccountName({ account, revision, editable }: { account: UsageBoardAccount; revision: number; editable: boolean }) {
+  const { t } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [saved, setSaved] = useState<(SavedAccountName & { revision: number }) | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  const version = useRef(revision);
+  version.current = revision;
+  const name = saved && saved.revision >= revision ? saved : account;
+  useLayoutEffect(() => {
+    if (!editing && restoreFocus.current) { restoreFocus.current = false; button.current?.focus(); }
+  }, [editing]);
+  const close = () => { restoreFocus.current = true; setEditing(false); };
+  if (editing) return <AccountNameEditor id={account.id} nickname={name.nickname} inline onClose={close}
+    onSaved={(next) => { setSaved({ ...next, revision: version.current }); invalidateUsageBoard(); }} />;
+  return editable ? <button ref={button} type="button" data-edit-name="" aria-label={t("accounts.name.edit")}
+    onClick={() => setEditing(true)} className="usage-name-button min-w-0 text-left">
+    <span data-account-name="" className="min-w-0 break-keep [overflow-wrap:anywhere]">{name.name}</span><Pencil size={10} aria-hidden="true" />
+  </button> : <span data-account-name="" className="min-w-0 break-keep [overflow-wrap:anywhere]">{name.name}</span>;
+}
 
 /** Passive inspection: finds an account by name and number only, and never changes Main. */
 export function AccountPicker({ accounts, viewedId, select }: {

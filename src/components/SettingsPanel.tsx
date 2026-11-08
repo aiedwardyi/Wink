@@ -21,22 +21,34 @@ import {
 } from "@/lib/memory-drafts";
 import { requestNotificationPermission } from "@/lib/notify";
 import { shortPath } from "@/lib/short-path";
+import { MOTION_MODERATE_MS } from "@/lib/motion";
+import { hapticTick, reducedMotion } from "@/lib/phone-swipe";
+import { useIsPhone } from "@/lib/use-phone-swipe";
+import { useSettingsSwipe } from "@/lib/use-settings-swipe";
+import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, MemoryHeading, MemoryTask, NotedLines, TopicFiles, type MemoryTopic } from "./MemoryGroups";
-import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsLabel, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, type MemoryTopic } from "./MemoryGroups";
+import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
+import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { MemoryCleanRow } from "./MemoryCleanRow";
 import { MemoryCleanIcon } from "./MemoryCleanMotion";
 import { useMemoryClean } from "@/lib/memory-clean";
-import { recentLines, memoryTargetLine } from "@/lib/memory-recent";
+import { memoryTargetLine } from "@/lib/memory-recent";
+import { useCoverChat } from "@/lib/cover-chat";
+import { lazyView } from "@/lib/stale-build";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { VoiceSettings } from "./VoiceSettings";
+import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
 import { SaveStatus } from "./SaveStatus";
+import { STACK_BELOW } from "./MemoryMapStage";
+// the map's CSS comes with Bot details, so a Memory tab open never waits on a stylesheet
+import "./MemoryMap.css";
 
 // One Bot Details is up at a time. A bot switch mounts the next panel (keyed by
 // bot) while the last is still up, and must not replay the slide-in.
@@ -92,7 +104,7 @@ const KEEP_GOING_PAUSED = {
   "usage-stale": "bot.keepGoingUsageStale",
 } as const;
 
-function KeepGoingRow({ bot }: { bot: Bot }) {
+function KeepGoingCard({ bot }: { bot: Bot }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const rowRef = useRef<HTMLDivElement>(null);
@@ -123,15 +135,20 @@ function KeepGoingRow({ bot }: { bot: Bot }) {
   }, [request]);
 
   return (
-    <div ref={rowRef} data-settings-keep-going className={DETAILS_ROW}>
-      <div className="flex items-center justify-between gap-4">
-        <DetailsLabel
-          label={t("bot.keepGoing")}
-          hint={paused ? t("bot.keepGoingPaused", { reason: t(KEEP_GOING_PAUSED[paused]) }) : t("bot.keepGoingHelp")}
-        />
-        <DetailsSwitch on={on} label={t("bot.keepGoing")} disabled={saving} className="disabled:cursor-wait" onToggle={() => void toggle()} />
+    <div ref={rowRef} data-settings-keep-going className={DETAILS_BOX}>
+      <div className={DETAILS_ROW}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <KeepGoingMark state={keepGoingMarkState(bot) ?? "off"} size={14} />
+            <div className="truncate text-[14px] font-medium text-ink">{t("bot.keepGoing")}</div>
+          </div>
+          <DetailsSwitch on={on} label={t("bot.keepGoing")} disabled={saving} className="disabled:cursor-wait" onToggle={() => void toggle()} />
+        </div>
+        <div className="mt-1 whitespace-pre-line break-keep text-[12px] leading-relaxed text-ink-secondary">
+          {paused ? t("bot.keepGoingPaused", { reason: t(KEEP_GOING_PAUSED[paused]) }) : t("bot.keepGoingHelp")}
+        </div>
+        {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
       </div>
-      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );
 }
@@ -218,11 +235,16 @@ function WorkingFolder({ bot }: { bot: Bot }) {
   );
 }
 
+// the map loads with the Memory tab, so app start and the chat never pay for it
+const MemoryMap = lazyView(() => import("./MemoryMap").then((m) => ({ default: m.MemoryMap })));
+// a wide window fetches it with Bot details, so its map paints with the tab instead of after a suspend
+let loadedMap: typeof import("./MemoryMap").MemoryMap | null = null;
+
 /** MEMORY.md + memory/ topic files, surfaced so the user can read and fix
  * what the bot believes. Fetched on expand, not on mount: settings opens for
  * every bot and most visits never look at memory — and an expand also
  * re-reads, so notes the bot wrote mid-session show up on the next open. */
-function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
+function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const { run, undo } = useMemoryClean(bot.id, bot.messages, active);
@@ -236,18 +258,43 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const [truncated, setTruncated] = useState(false);
   const [topics, setTopics] = useState<MemoryTopic[]>([]);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const [topic, setTopic] = useState<{ name: string; text: string } | null>(null);
-  const [topicError, setTopicError] = useState<string | null>(null);
-  const topicRequest = useRef(0);
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
   // a conflict needs its buttons, so it opens the file and leaves it open
   const expanded = open || conflict !== null;
+  const [wide, setWide] = useState(false);
+  // where the file opens is settled when it opens, so typing never jumps between the map and the fold
+  const [inMap, setInMap] = useState(false);
+  const openFile = (next: boolean) => {
+    if (next && !expanded) setInMap(wide);
+    setOpen(next);
+  };
   useEffect(() => {
-    if (conflict) setOpen(true);
+    if (conflict) openFile(true);
   }, [conflict]);
+  // the map stays up through the pass away, so the page only folds once it is out of sight
+  const up = active || warm;
+  useEffect(() => {
+    if (!up && !conflict) setOpen(false);
+  }, [up]);
+  // a collapse unmounts the editor without a blur
+  useEffect(() => {
+    if (active) return () => void flushMemory(botId);
+  }, [active]);
+  const [toFile, setToFile] = useState(0);
+  const editFile = (next: boolean) => {
+    openFile(next);
+    if (next && !wide) setToFile((count) => count + 1);
+  };
+  // waits for the fold: until it has grown the page may be too short to bring the file up
+  useEffect(() => {
+    if (!toFile) return;
+    const opened = setTimeout(() => fileRow.current?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "instant" : "smooth" }), MOTION_MODERATE_MS);
+    return () => clearTimeout(opened);
+  }, [toFile]);
   const fileRow = useRef<HTMLButtonElement>(null);
+  const MapView = loadedMap ?? MemoryMap;
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
 
   const read = (): Promise<MemoryLatest & { truncated: boolean; topics: MemoryTopic[] }> =>
@@ -256,7 +303,6 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const load = async () => {
     setLoading(true);
     setError(null);
-    setTopic(null);
     try {
       const result = await read();
       setTruncated(result.truncated);
@@ -322,23 +368,10 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
     setText(latest.text);
   };
 
-  const openTopic = async (name: string) => {
-    const request = ++topicRequest.current;
-    setTopicError(null);
-    if (topic?.name === name) {
-      setTopic(null);
-      return;
-    }
-    try {
-      const result: { name: string; text: string } = await api(`/api/bots/${bot.id}/memory/topics/${encodeURIComponent(name)}`);
-      if (request === topicRequest.current) setTopic(result);
-    } catch (e) {
-      if (request === topicRequest.current) setTopicError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   useEffect(() => {
     void load();
+    // a phone keeps the lazy render, so its first tab frame stays light, but never waits on the network
+    void import("./MemoryMap").then((m) => { if (window.innerWidth >= STACK_BELOW) loadedMap = m.MemoryMap; }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -383,19 +416,47 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
     };
   }, []);
 
+  const editor = (
+    <>
+      {conflict && (
+        <div role="alert" className="mb-3 rounded-lg border border-hairline/60 bg-inset px-3 py-2.5 text-[12px] leading-relaxed text-ink">
+          <div>{t("bot.memoryConflict")}</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={() => void loadLatest(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
+              {t("bot.memoryLoadLatest")}
+            </button>
+            <button onClick={() => keepMine(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
+              {t("bot.memoryKeepMine")}
+            </button>
+          </div>
+        </div>
+      )}
+      <FitTextarea
+        watchMetrics
+        className={cn(DETAILS_INPUT, "min-h-[160px]")}
+        value={text}
+        placeholder={t("bot.memoryPlaceholder")}
+        aria-label={t("bot.memory")}
+        readOnly={loadFailed}
+        onChange={(e) => edit(e.target.value)}
+        onFocus={() => void refresh()}
+        onBlur={() => void flushMemory(botId)}
+      />
+      {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
+    </>
+  );
+
   return (
     <div className="relative flex flex-col gap-3">
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
-      {empty && <MemoryEmpty />}
+      {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (!loading || loadFailed) && (
+        <LazyView>
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+        </LazyView>
+      )}
       <MemoryGroup>
-        {recentLines(text, bot.messages).length > 0 && (
-          <div className={DETAILS_ROW}>
-            <MemoryHeading title={t("bot.memoryRecent")} />
-            <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} />
-          </div>
-        )}
         <SwitchRow
           label={t("settings.memoryNotes.toggle")}
           hint={t("settings.memoryNotes.help")}
@@ -403,57 +464,16 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryTask bot={bot} />
-      <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => setOpen(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
-        <Fold open={expanded}>
+        <Fold open={expanded && (!inMap || !wide)}>
           <div className="px-4 pb-4 pt-3">
             {loading && <div className="text-[13px] text-ink-secondary">{t("bot.memoryLoading")}</div>}
-            {!loading && (
-              <>
-                {conflict && (
-                  <div role="alert" className="mb-3 rounded-lg border border-hairline/60 bg-inset px-3 py-2.5 text-[12px] leading-relaxed text-ink">
-                    <div>{t("bot.memoryConflict")}</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button onClick={() => void loadLatest(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
-                        {t("bot.memoryLoadLatest")}
-                      </button>
-                      <button onClick={() => keepMine(conflict)} className={cn(ROW_BUTTON, "text-ink")}>
-                        {t("bot.memoryKeepMine")}
-                      </button>
-                    </div>
-                  </div>
-                )}
-                <FitTextarea
-                  className={cn(DETAILS_INPUT, "min-h-[160px]")}
-                  value={text}
-                  placeholder={t("bot.memoryPlaceholder")}
-                  aria-label={t("bot.memory")}
-                  readOnly={loadFailed}
-                  onChange={(e) => edit(e.target.value)}
-                  onFocus={() => void refresh()}
-                  onBlur={() => void flushMemory(botId)}
-                />
-                {truncated && <div className="mt-2 text-[12px] text-ink-secondary">{t("bot.memoryTruncated")}</div>}
-              </>
-            )}
+            {!loading && editor}
           </div>
         </Fold>
-        {(loadFailed || error) && (
-          <div className="px-4 pb-4">
-            {loadFailed && (
-              <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[12px] text-danger">
-                {t("bot.memoryLoadFailed")}
-                <button onClick={() => void load()} className={ROW_BUTTON}>
-                  {t("bot.memoryRetry")}
-                </button>
-              </div>
-            )}
-            {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-          </div>
-        )}
+        {error && <div className="px-4 pb-4 pt-2 text-[12px] text-danger">{error}</div>}
       </MemoryFile>
-      <TopicFiles topics={topics} shown={topic} error={topicError} onOpen={(name) => void openTopic(name)} />
     </div>
   );
 }
@@ -468,6 +488,7 @@ export function SettingsPanel({
   const { state, dispatch } = useStore();
   const { t } = useI18n();
   const panelRef = useRef<HTMLElement>(null);
+  const phone = useIsPhone();
   const [slideIn] = useState(() => panelsUp === 0);
   useEffect(() => {
     panelsUp += 1;
@@ -480,7 +501,7 @@ export function SettingsPanel({
   const [avatarOpen, setAvatarOpen] = useState(avatarRequest > 0);
   const seenAvatarRequest = useRef(0);
   const avatarSectionRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const pagesRef = useRef<HTMLDivElement>(null);
   const keepGoingRequest = state.settingsKeepGoingRequest ?? 0;
   // a new Agentic Mode request (the chat header mark) lands on its row in Settings
   const [memoryAt, setMemoryAt] = useState<number | null>(null);
@@ -492,11 +513,12 @@ export function SettingsPanel({
     setMemoryAt(keepGoingRequest);
     setSeenMemoryRequest(memoryRequest);
   }, [memoryRequest, keepGoingRequest]);
+  const cover = useCoverChat(panelRef, memoryTab, closing);
   const showTab = (memory: boolean) => {
     if (memory === memoryTab) return;
     setMemoryAt(memory ? keepGoingRequest : null);
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
+  const paging = useDetailsTabs(pagesRef, phone, closing, memoryTab, showTab);
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
   const patch = (
     p: Partial<
@@ -541,9 +563,18 @@ export function SettingsPanel({
     restoreFocusOnClose.current = true;
     dispatch({ type: "toggleSettings", open: false });
   };
+  useSettingsSwipe(panelRef, phone && !closing && !memoryTab, false, () => {
+    hapticTick();
+    // The swipe already settled offscreen; do not replay the panel exit.
+    if (panelRef.current) panelRef.current.style.animation = "none";
+    closeSettings();
+  });
 
   useEffect(() => {
     if (closing) return;
+    for (const key of ["animation", "transform", "opacity", "transition", "will-change"]) {
+      panelRef.current?.style.removeProperty(key);
+    }
     restoreFocusOnClose.current = false;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -576,7 +607,7 @@ export function SettingsPanel({
     {/* Below md the sidebar is already a drawer, so docking here would leave a
         ~200px chat column at the window floor. Take the content area instead,
         z-30 to cover the drawer button, still under the drawer itself at z-40. */}
-    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} className={cn(slideIn && "animate-panel-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
+    <aside ref={panelRef} data-settings-panel="" data-side-panel="" data-closing={closing || undefined} inert={closing} style={cover} className={cn(slideIn && "animate-panel-in", "relative z-20 flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel md:data-closing:-ml-[400px] max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:w-full")}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <button
@@ -598,7 +629,7 @@ export function SettingsPanel({
         </button>
       </div>
 
-      <div role="tablist" aria-label={t("bot.details")} className="mx-5 flex gap-1 rounded-xl bg-inset p-1">
+      <div role="tablist" aria-label={t("bot.details")} className={cn("mx-5 flex gap-1 rounded-xl bg-inset p-1", cover && "md:w-[360px] md:self-center")}>
         {([false, true] as const).map((memory) => (
           <button
             key={String(memory)}
@@ -617,8 +648,9 @@ export function SettingsPanel({
         ))}
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 pb-5">
-        <div hidden={memoryTab} className="flex flex-col gap-3 pt-4">
+      <div ref={pagesRef} className="relative min-h-0 flex-1 overflow-hidden">
+        <div hidden={memoryTab && !paging} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
+          <KeepGoingCard bot={bot} />
           <div className={DETAILS_BOX}>
             <div ref={avatarSectionRef} className={DETAILS_ROW}>
               <div className="flex items-center gap-3">
@@ -669,6 +701,7 @@ export function SettingsPanel({
             </Field>
             <Field label={t("bot.description")} status={<SaveStatus botId={bot.id} />}>
               <FitTextarea
+                watchMetrics
                 aria-label={t("bot.description")}
                 className={cn(DETAILS_INPUT, "min-h-[96px]")}
                 maxLength={BOT_PROFILE_LIMITS.description}
@@ -718,7 +751,6 @@ export function SettingsPanel({
                 onToggle={() => patch({ shareTerminalWithChat: !terminalShared })}
               />
             )}
-            <KeepGoingRow bot={bot} />
             {showBotVoiceAndStartupSettings() && engine?.driverKind === "claudeAgent" && (
               <SwitchRow
                 label={t("bot.leanStartup")}
@@ -730,8 +762,8 @@ export function SettingsPanel({
 
           {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
         </div>
-        <div hidden={!memoryTab} className="pt-4">
-          <MemoryCard key={bot.id} bot={bot} active={memoryTab} />
+        <div hidden={!memoryTab && !paging} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
+          <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />
         </div>
       </div>
     </aside>

@@ -25,6 +25,7 @@ import { clearAccountSessions } from "./account-sessions.ts";
 import { validateProjectNotes } from "./project-notes.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { redactToolMessage } from "./tool-detail.ts";
+import { redactVerifyCard } from "./verify-message.ts";
 import type { NativePrompt, ResumeSeed } from "./turn-context.ts";
 import {
   deleteTaskResumePacket,
@@ -41,6 +42,7 @@ import {
 } from "../shared/bot-avatar.ts";
 import type { RoutineRequestCardData } from "../shared/routine-request.ts";
 import type { RoutineRunCardData } from "../shared/routine-run.ts";
+import type { VerifyCardData } from "../shared/live-verify.ts";
 import { readContextCompaction, type ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 export type MausColor =
@@ -134,6 +136,8 @@ export interface Message {
   /** One idempotently updated status card in the conversation that created a
    * routine. The actual provider turn remains in its isolated task. */
   routineRun?: RoutineRunCardData;
+  /** note messages: the bot's current Live Verify card. */
+  verify?: VerifyCardData;
   /** activity messages: tool name + outcome. `spoken` is the same chip as
    * a phrase a voice can read ("reading a file") — computed once here so
    * call mode never has to re-derive it from the raw tool name, and absent
@@ -151,6 +155,7 @@ export interface Message {
     detail?: ToolDetail;
     setup?: boolean;
     signIn?: boolean;
+    accountId?: string;
     folder?: string;
     usageLimit?: { resetsAt: number | null };
     usageWait?: UsageWaitView;
@@ -265,6 +270,7 @@ export interface GroupRecord {
   /** sidebar section heading this room is filed under; shares the bots'
    * namespace so one heading can hold a project's room and its people */
   section?: string;
+  pinned?: boolean;
   /** New user-created rooms start with setup pending. Null timestamps are
    * intentional: records from before room setup has existed omit both keys
    * and remain immediately usable. */
@@ -379,6 +385,7 @@ export function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: 
     if (routineRun.error) routineRun.error = redactSecretsInText(routineRun.error);
     out.routineRun = routineRun;
   }
+  if (out.verify) out.verify = redactVerifyCard(out.verify);
   if (out.card) {
     const card = { ...out.card } as OptionCardData & { summary?: string };
     card.title = redactSecretsInText(card.title);
@@ -1074,7 +1081,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "readAt" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "pinned" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (patch.unread === false) group.readAt = Date.now();
@@ -1262,10 +1269,17 @@ export class Store {
       }
     }
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
+    const previousLeaf = t.activeLeafId;
     t.messages.push(full);
     t.activeLeafId = full.id;
     this.beforeWrite(threadId);
-    this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    try {
+      this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    } catch (error) {
+      t.messages.pop();
+      t.activeLeafId = previousLeaf;
+      throw error;
+    }
     if (full.comm?.mailKey && full.comm.peer === "reply") this.indexMail(threadId, full);
     if (full.kind === "screen") {
       for (const pruned of this.pruneScreenFrames(t)) {
@@ -1718,11 +1732,12 @@ export class Store {
   ) {
     const task = this.taskByThread(botId, threadId);
     const cursor = task?.resumeCursors[instanceId];
-    if (!task || cursor === undefined) return;
+    if (!task || cursor === undefined) return undefined;
     const same = task.nativePrompt?.cursor === cursor ? task.nativePrompt : undefined;
     const window = contextWindow && task.lastModel ? { model: task.lastModel, tokens: contextWindow } : task.nativePrompt?.window;
-    task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, window };
+    task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, growth: prompt.last - (same?.last ?? prompt.first), window };
     this.saveBots();
+    return task.nativePrompt;
   }
 
   /** Repoint saved bot selections and task continuity from a retired model id. */

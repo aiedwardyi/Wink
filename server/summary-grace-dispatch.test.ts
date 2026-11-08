@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { estimateContextTokens, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, withoutTurnNotes } from "./context-compaction.ts";
+import { estimateContextTokens, holdWorkerNotes, paneNotesForTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, summarizesOnEstimate, withoutTurnNotes } from "./context-compaction.ts";
 import { joinRunningTurn } from "./continuation-turn.ts";
 import { composeUserTurnPrompt, userTurnReactionKeys } from "./replies.ts";
 import { adoptHumanRoot } from "./comms-root.ts";
@@ -19,7 +19,7 @@ const preparation = source.slice(source.indexOf("  const folded = currentTurnEpo
 const marker = "const started = await dispatchAdapterTurn(threadId, async () => {";
 const start = source.indexOf(marker) + marker.length;
 const dispatch = source.slice(start, source.indexOf("\n      });\n      bindInterruptedTurn", start)).replace("(base: string)", "(base)").replace("const late: string[]", "const late");
-const delivery = source.slice(source.indexOf("      // a deferred recycle's live session"), source.indexOf("      store.markReactionsDelivered", start));
+const delivery = source.slice(source.indexOf("      if (holdNotes) newestPaneNoteId = undefined;"), source.indexOf("      store.markReactionsDelivered", start));
 const runDispatch = new Function("scope", `with (scope) { return (async () => {${messaging}\n${preparation}\nconst started = await (async () => {${dispatch}})();\n${delivery}\nreturn started;})(); }`);
 
 beforeEach(() => {
@@ -70,15 +70,27 @@ describe("summary grace dispatch", () => {
     ["dispatch", "image", false, "wait note"],
     ["dispatch", "paste", true, "background"],
     ["dispatch", "image", true, "mail"],
+    ["dispatch", "image", true, "held setup note"],
+    ["dispatch", "image", false, "held wait note"],
+    ["dispatch", "image", true, "held mail"],
   ] as const)("waits after the %s fold adds a late %s (pinned system %s, event %s)", async (fold, kind, pinnedSystem, event) => {
     const messages: Message[] = Array.from({ length: 70 }, (_, index) => [
       { id: `u${index}`, at: index * 2, role: "user", kind: "text", text: `request ${index}` },
       { id: `b${index}`, at: index * 2 + 1, role: "bot", kind: "text", text: `outcome ${index} ${"x".repeat(420)}` },
     ] as Message[]).flat();
+    const held = event.startsWith("held ");
+    if (event === "held mail") {
+      messages.push(
+        { id: "reply-a", at: 140, role: "bot", kind: "activity", text: "Pokkey: the build is green.", comm: { groupId: "g", withBotId: "pokkey", withName: "Pokkey", withColor: "", peer: "reply", wake: true } },
+        { id: "worker-note", at: 141, role: "bot", kind: "note", text: "[pane worker01] DONE: ram gate fixed" },
+        { id: "reply-b", at: 142, role: "bot", kind: "activity", text: "Pokkey: release notes are up.", comm: { groupId: "g", withBotId: "pokkey", withName: "Pokkey", withColor: "", peer: "reply", wake: true } },
+      );
+    }
     const taskRecordText = "Goal: preserve context";
     const generateText = vi.fn(() => new Promise<string>((resolve) => setTimeout(() => resolve("SUMMARY\nretained decisions"), 80_000)));
-    const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000 };
+    const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000, adapter: { capabilities: { queueing: true } } };
     const store = {
+      taskByThread: () => undefined,
       activePath: () => [...messages],
       activeLeaf: () => messages.at(-1)?.id ?? null,
       messagesFor: () => messages,
@@ -106,6 +118,9 @@ describe("summary grace dispatch", () => {
       const userMessage = store.appendMessage("thread", { role: "user", kind: "text", text: "next request" });
       const activeMessages = store.activePath();
       const skipTranscript = new Set([userMessage.id]);
+      // index.ts holds before planning; the slices below hold again on every refresh
+      const holdNotes = held ? (rows: Message[]) => holdWorkerNotes(rows, skipTranscript, undefined) : undefined;
+      holdNotes?.(activeMessages);
       const input = { messages: activeMessages, contextWindow: 200_000, taskRecordText, excludeIds: skipTranscript };
       const summaryGrace = {
         knownWindow: 200_000, requestText: "next request", fresh: false, rewound: false, recycle: false, local: false,
@@ -148,7 +163,7 @@ describe("summary grace dispatch", () => {
           shouldRecycleProviderSession: () => false, rewound: false, recovering: false,
           countLastTurnToolRounds: () => 0, countSessionToolRounds: () => 0,
           messagesBeforeSummary: activeMessages, skipTranscript, task: {},
-          instance: { adapter: live.adapter }, threadId: "thread", catalogWindow: 200_000, sessionPrompt: undefined,
+          instance: { adapter: live.adapter }, threadId: "thread", catalogWindow: 200_000, sessionPrompt: undefined, nativeAt: null,
         });
         expect(planSummaryGrace({ ...graceInputs, grace: { ...summaryGrace, recycle: plannedRecycle } })).toEqual({ safe: false, reason: "session-recycle" });
       }
@@ -158,14 +173,14 @@ describe("summary grace dispatch", () => {
         accounts: { snapshot: [] }, workerTurns: { capture() {}, settled() {} },
         providerReload: { started: () => {
           if (fold === "dispatch") enqueue();
-          if (event === "setup note") store.appendMessage("thread", { role: "bot", kind: "note", text: "[pane build] setup finished" });
+          if (event === "setup note" || event === "held setup note") store.appendMessage("thread", { role: "bot", kind: "note", text: "[pane build] setup finished" });
           return live;
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-        foldQueuedSends, adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
-        buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace,
-        clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {}, paneNoteTurnThreads: new Set(),
-        mailForTurn: () => event === "mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead() {},
+        turnStartedByUser: () => false, foldPeerQueuedSends: foldQueuedSends, adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
+        buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace, summarizesOnEstimate,
+        clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
+        mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
         opensHostFiles: () => false, privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",
         computerKind: undefined, integrations: {}, browserPrompt: () => "", coordinationPrompt: "", credentialPrompt: "", routinePrompt: "",
@@ -194,15 +209,15 @@ describe("summary grace dispatch", () => {
       expect(planSummaryGrace(finalGrace)).toEqual({ safe: false, reason: kind === "paste" ? "headroom" : "unknown-headroom" });
       if (kind === "paste") expect(80_000 + estimateContextTokens([{ text: finalGrace.grace.requestText }])).toBeGreaterThan(200_000);
       if (event === "wait send") queueSteeredMessage("bot", "thread", "sent while waiting");
-      const note = event === "wait note"
+      const note = event === "wait note" || event === "held wait note"
         ? store.appendMessage("thread", { role: "bot", kind: "note", text: "[pane build] deferred work finished" })
-        : event === "setup note" ? messages.findLast((message) => message.kind === "note") : undefined;
+        : event === "setup note" || held ? messages.findLast((message) => message.kind === "note") : undefined;
       await vi.advanceTimersByTimeAsync(60_000);
       if (event === "prepare send") await vi.advanceTimersByTimeAsync(1_000);
       await dispatched;
       expect(sendTurn).toHaveBeenCalledOnce();
       const turn = sendTurn.mock.calls[0]![0];
-      if (event === "mail") {
+      if (event === "mail" || event === "held mail") {
         expect(turn.text).toContain("folded peer reply");
         expect(scope.markMailRead).toHaveBeenCalledWith(store, "thread", [{ id: "reply", text: "folded peer reply", upto: 17 }], "turn");
       }
@@ -213,7 +228,20 @@ describe("summary grace dispatch", () => {
         expect(turn.transcript.some((row) => row.text.includes(text))).toBe(false);
         expect(messages.filter((row) => row.text === text)).toHaveLength(1);
       }
-      if (note) {
+      if (note && held) {
+        const body = note.text!.split("] ")[1]!;
+        expect(store.markPaneNotesDelivered).toHaveBeenCalledWith("bot", "thread", undefined);
+        expect(turn.text).not.toContain(body);
+        expect(turn.transcript.some((row) => row.text.includes(body))).toBe(false);
+        for (const [rows] of prepareContext.mock.calls) expect(rows.filter((row) => !skipTranscript.has(row.id)).some((row) => row.text?.includes(body))).toBe(false);
+        expect(paneNotesForTurn(store.activePath(), new Set([userMessage.id]), undefined, false).notes.join("\n")).toContain(body);
+      }
+      if (event === "held mail") {
+        expect(turn.text).toContain("Pokkey: the build is green.");
+        expect(turn.text).toContain("Pokkey: release notes are up.");
+        expect(scope.markPaneMailRead).toHaveBeenCalledWith(store, "thread", ["reply-a", "reply-b"], "turn", "fold");
+      }
+      if (note && !held) {
         expect(store.markPaneNotesDelivered).toHaveBeenCalledWith("bot", "thread", note.id);
         expect(turn.text.split(note.text!.split("] ")[1]!)).toHaveLength(2);
         expect(paneNotesForTurn(store.activePath(), skipTranscript, note.id, false).notes).toEqual([]);

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -6,6 +6,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AccountContext } from "./account-policy.ts";
+import { createAccountNames } from "./account-names.ts";
 import { AccountService } from "./accounts.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { DATA_DIR } from "./config.ts";
@@ -59,6 +60,142 @@ function mainRouting(f: Awaited<ReturnType<typeof fixture>>, resumeAccount?: () 
 }
 
 describe("trusted worker accounts", () => {
+  it.each(["codex", "claude"] as const)("selects a %s worker by Usage name or known home without switching Main", async (engine) => {
+    const f = await fixture();
+    const selected = engine === "codex" ? f.third : await f.accounts.identify((await f.accounts.add(engine)).id, "selected-claude");
+    const names = createAccountNames(join(DATA_DIR, `names-${++serial}`));
+    names.sync(f.accounts.list());
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: createSpawnUsage({ rateLimits: f.rateLimits, refresh: f.refresh, save() {}, environment: () => ({}), nameOf: names.nameOf }),
+      accounts: () => f.accounts.snapshot.filter((row) => row.state === "ready"), nameOf: names.nameOf, mainAccount: () => undefined });
+    f.turns.capture("bot", "thread", { instanceId: engine, driverKind: engine === "codex" ? "codex" : "claudeAgent" });
+    const selector = engine === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+    const other = f.bases[engine].environment![selector]!;
+    mkdirSync(selected.home, { recursive: true });
+    mkdirSync(other, { recursive: true });
+    const token = engine === "codex" ? "auth.json" : ".credentials.json";
+    writeFileSync(join(selected.home, token), "selected-fixture");
+    writeFileSync(join(other, token), "main-fixture");
+    f.rateLimits.set(selected.id, { observedAt: new Date().toISOString(), windows: [{ id: "seven_day", usedPercent: 20, resetsAt: null }] });
+    for (const value of [names.nameOf(selected.id, engine), selected.home]) {
+      const launch = await prepare({ ...f.input, command: `$env:${selector}='${value.replace(/'/g, "''")}'; ${engine} 'task'` });
+      expect(launch).toMatchObject({ kind: "managed", account: { id: selected.id, generation: selected.generation },
+        environment: { [selector]: selected.home }, line: `${names.nameOf(selected.id, engine)} usage left: weekly 80%.` });
+      expect(f.accounts.defaultFor(engine)).toBeUndefined();
+      expect(readFileSync(join(selected.home, token), "utf8")).toBe("selected-fixture");
+      expect(readFileSync(join(other, token), "utf8")).toBe("main-fixture");
+    }
+    f.rateLimits.set(selected.id, { observedAt: new Date().toISOString(), windows: [{ id: "seven_day", usedPercent: 99, resetsAt: Date.now() + 60_000 }] });
+    expect(await prepare({ ...f.input, command: `$env:${selector}='${selected.home}'; ${engine} 'task'` })).toMatchObject({ kind: "hold", hold: expect.stringContaining(names.nameOf(selected.id, engine)) });
+    expect(await prepare({ ...f.input, command: `${engine} 'task'` })).toMatchObject({ account: { id: engine, generation: 0 }, environment: { [selector]: other } });
+  });
+
+  it.each(["Missing account", "C:/unknown-worker-home"])("refuses unknown account selector %s with valid Usage names", async (value) => {
+    const f = await fixture();
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), accounts: () => [f.third],
+      nameOf: (id) => id === f.third.id ? "Codex 3" : "Codex 1" });
+    await expect(prepare({ ...f.input, command: `$env:CODEX_HOME='${value}'; codex 'task'` })).rejects.toThrow("Unknown or unavailable worker account; choose Codex 1, Codex 3");
+    expect(f.refresh).not.toHaveBeenCalled();
+  });
+
+  it("uses a renamed Usage account through the private worker route", async () => {
+    const f = await fixture();
+    const names = createAccountNames(join(DATA_DIR, `names-${++serial}`));
+    names.sync(f.accounts.list());
+    names.setNickname(f.third.id, "작업 계정");
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), accounts: () => [f.third], nameOf: names.nameOf });
+    const access = { url: "http://fixture", token: "private-host" };
+    const result = await panes!.workerLaunchResponse(access, access.token, { ...f.input, command: "$env:codeX_home='작업 계정'; codex 'task'" }, prepare);
+    expect(result).toMatchObject({ status: 200, body: { launch: { account: { id: f.third.id, generation: f.third.generation },
+      environment: { CODEX_HOME: f.third.home }, line: "Worker account: 작업 계정." } } });
+  });
+
+  it.each(["removed", "generation"])("refuses a selected account whose %s changes during usage refresh", async (change) => {
+    const f = await fixture();
+    let accounts = [f.third];
+    const usage = Object.assign(vi.fn(async () => {
+      accounts = change === "removed" ? [] : [{ ...f.third, generation: f.third.generation + 1 }];
+      return {};
+    }), { invalidate() {} });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage, accounts: () => accounts, nameOf: () => "Codex 3" });
+    await expect(prepare({ ...f.input, command: `$env:CODEX_HOME='${f.third.home}'; codex 'task'` })).rejects.toThrow("Worker account changed before launch");
+    expect(existsSync(join(f.third.home, "AGENTS.md"))).toBe(false);
+  });
+
+  it("keeps an explicit worker account when Main changes during usage refresh", async () => {
+    const f = await fixture();
+    f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
+    const mainAccount = vi.fn(() => f.third);
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => { mainAccount.mockReturnValue({ ...f.third, generation: 99 }); return {}; }), { invalidate() {} }),
+      accounts: () => [f.third], nameOf: () => "Codex 3", mainAccount });
+    expect(await prepare({ ...f.input, command: `$env:CODEX_HOME='${f.third.home}'; codex 'task'` })).toMatchObject({ account: { id: f.third.id, generation: f.third.generation } });
+    expect(mainAccount).not.toHaveBeenCalled();
+  });
+
+  it.each(["$env:CODEX_HOME='x'; claude task", "$env:CLAUDE_CONFIG_DIR='x'; codex task", "$env:CODEX_HOME='x'; grok task",
+    "$env:CODEX_HOME='x'; $env:CODEX_HOME='y'; codex task", "$env:CODEX_HOME='x'; $env:CLAUDE_CODE_OAUTH_TOKEN='fixture'; codex task"])("refuses conflicting account prefixes: %s", (command) => {
+    expect(() => workers!.workerCommand(command)).toThrow(/Worker account prefix|Conflicting worker home/);
+  });
+
+  it.each([{ id: "R1", resume: false }, { id: "R2", resume: true }])("$id shares setup on an added Claude worker, resume $resume", async ({ resume }) => {
+    const f = await fixture();
+    const pending = await f.accounts.add("claude");
+    const third = await f.accounts.identify(pending.id, "claude-shared");
+    const base = f.bases.claude.environment!.CLAUDE_CONFIG_DIR!;
+    for (const name of ["rules", "skills/my-skill", "skills/synced/x"]) mkdirSync(join(base, name), { recursive: true });
+    writeFileSync(join(base, "CLAUDE.md"), "fixture rules");
+    writeFileSync(join(base, "rules/r1.md"), "fixture rule");
+    writeFileSync(join(base, "skills/my-skill/SKILL.md"), "fixture skill");
+    writeFileSync(join(base, "skills/synced/x/SKILL.md"), "account skill");
+    f.turns.capture("bot", "thread", { instanceId: third.id, driverKind: "claudeAgent", account: third });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases,
+      available: f.available, usage: Object.assign(vi.fn(async () => ({})), { invalidate() {} }), resumeAccount: () => third });
+    const launch = await prepare({ ...f.input, command: "claude 'task'", ...(resume ? { resume: { engine: "claude" as const,
+      nativeId: "00000000-0000-4000-8000-000000000001", accountId: third.id, accountGeneration: third.generation,
+      template: { executable: "claude", args: ["--model", "fixture", "task"] } } } : {}) });
+    if (launch?.kind !== "managed") throw new Error("Expected managed launch");
+    expect(launch.args.slice(-2)).toEqual(["--setting-sources", "user,project,local"]);
+    expect(launch.args.filter((arg) => arg === "--setting-sources")).toHaveLength(1);
+    expect(readFileSync(join(third.home, "CLAUDE.md"), "utf8")).toBe(`@${base.replace(/\\/g, "/").replace(/ /g, "\\ ")}/CLAUDE.md\n`);
+    expect(lstatSync(join(third.home, "rules")).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(third.home, "skills/my-skill")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(third.home, "skills/synced"))).toBe(false);
+  });
+
+  it("R3 shares rules and skills on an added Codex worker", async () => {
+    const f = await fixture();
+    const base = f.bases.codex.environment!.CODEX_HOME!;
+    mkdirSync(join(base, "skills/my-skill"), { recursive: true });
+    writeFileSync(join(base, "AGENTS.md"), "fixture global rules");
+    writeFileSync(join(base, "skills/my-skill/SKILL.md"), "fixture skill");
+    const launch = await f.prepare(f.input);
+    expect(existsSync(join(f.third.home, "AGENTS.md"))).toBe(true);
+    expect(readFileSync(join(f.third.home, "AGENTS.md"))).toEqual(readFileSync(join(base, "AGENTS.md")));
+    expect(lstatSync(join(f.third.home, "skills/my-skill")).isSymbolicLink()).toBe(true);
+    expect(launch?.kind === "managed" && launch.environment.CODEX_HOME).toBe(f.third.home);
+  });
+
+  it.each(["hold", "refuse"])("writes no user setup when a launch is %s", async (mode) => {
+    const f = await fixture();
+    const base = f.bases.codex.environment!.CODEX_HOME!;
+    mkdirSync(join(base, "skills/my-skill"), { recursive: true });
+    writeFileSync(join(base, "AGENTS.md"), "fixture rules");
+    const usage = Object.assign(vi.fn(async () => {
+      if (mode === "refuse") f.available.mockReturnValue(false);
+      return mode === "hold" ? { hold: { reason: "fixture" } as any } : {};
+    }), { invalidate() {} });
+    const prepare = workers!.createWorkerLaunch({ enabled: () => true, resolveWorkerTurn: f.turns.resolveWorkerTurn,
+      bases: () => f.bases, available: f.available, usage });
+    if (mode === "hold") expect(await prepare(f.input)).toMatchObject({ kind: "hold" });
+    else await expect(prepare(f.input)).rejects.toThrow("Worker account changed before launch");
+    expect(existsSync(join(f.third.home, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(f.third.home, "skills"))).toBe(false);
+  });
+
   it("names the PC sign-in in the signed-out Main line", async () => {
     const f = await fixture();
     f.turns.capture("bot", "thread", { instanceId: "claude", driverKind: "claudeAgent" });
@@ -383,7 +520,7 @@ describe("trusted worker accounts", () => {
     expect(f.refresh).toHaveBeenCalledExactlyOnceWith(f.third.id, undefined);
   });
 
-  it.each(["$env:CODEX_HOME='wrong'; codex 'task'", "$env:CLAUDE_CONFIG_DIR='wrong'; claude 'task'", "codex --profile work 'task'", "codex -c sqlite_home='wrong' 'task'", "codex --config=forced_login_method='api' 'task'", "codex -- 'task'"])("refuses a model selector: %s", async (command) => {
+  it.each(["codex --profile work 'task'", "codex -c sqlite_home='wrong' 'task'", "codex --config=forced_login_method='api' 'task'", "codex -- 'task'"])("refuses a model selector: %s", async (command) => {
     const f = await fixture();
     await expect(f.prepare({ ...f.input, command })).rejects.toThrow(/Conflicting/);
     expect(f.refresh).not.toHaveBeenCalled();
@@ -391,11 +528,16 @@ describe("trusted worker accounts", () => {
 
   it("other-engine workers use the explicitly named base and its home", async () => {
     const f = await fixture();
+    const base = f.bases.claude.environment!.CLAUDE_CONFIG_DIR!;
+    mkdirSync(base, { recursive: true });
+    writeFileSync(join(base, "CLAUDE.md"), "fixture base rules");
     const launch = await f.prepare({ ...f.input, command: "claude --model fixture 'task'" });
     expect(launch).toMatchObject({ account: { id: "claude", generation: 0 }, environment: { CLAUDE_CONFIG_DIR: f.bases.claude.environment!.CLAUDE_CONFIG_DIR } });
     if (launch?.kind !== "managed") throw new Error("expected managed launch");
     expect(launch.environment).not.toHaveProperty("CODEX_HOME");
     expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+    expect(readFileSync(join(base, "CLAUDE.md"), "utf8")).toBe("fixture base rules");
+    expect(readdirSync(base)).toEqual(["CLAUDE.md"]);
     expect(f.available).toHaveBeenCalledWith("claude", 0);
   });
 
@@ -501,7 +643,7 @@ describe("trusted worker accounts", () => {
     expect(launch).toMatchObject({ workerSettings: true, account: { id: third.id }, environment: { CLAUDE_CONFIG_DIR: third.home, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
     if (launch?.kind !== "managed") throw new Error("expected managed launch");
     expect(launch.args.join(" ")).not.toContain("claude-worker.json");
-    expect(launch.args.slice(-2)).toEqual(["--setting-sources", "project,local"]);
+    expect(launch.args.slice(-2)).toEqual(["--setting-sources", "user,project,local"]);
   });
 
   it.each(["& codex 'task'", "codex 'task'; echo done", "pwsh -Command codex", "pnpm exec codex 'task'", "C:/bin/codex.cmd 'task'", "'codex' 'task'", "codex $(whoami)", "codex 'task\x1b[D'"])("refuses ambiguous workers: %s", async (command) => {
@@ -593,6 +735,9 @@ describe("trusted worker accounts", () => {
   it.each(["claude", "codex"] as const)("resumes a zero-account %s run unrouted after the base sign-in and usage checks", async (engine) => {
     const f = await fixture();
     const account = Object.freeze({ id: engine, of: engine, generation: 0, home: join(DATA_DIR, `base-${engine}`) });
+    const base = f.bases[engine].environment![engine === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"]!;
+    mkdirSync(join(base, "skills/my-skill"), { recursive: true });
+    writeFileSync(join(base, engine === "claude" ? "CLAUDE.md" : "AGENTS.md"), "fixture global rules");
     const resumeAccount = vi.fn(() => account);
     const usage = Object.assign(vi.fn(async (): Promise<{ hold?: string; line?: string }> => ({ line: "ready" })), { invalidate() {} });
     const prepare = workers!.createWorkerLaunch({ enabled: () => false, resolveWorkerTurn: f.turns.resolveWorkerTurn, bases: () => f.bases, available: f.available, usage, resumeAccount });
@@ -603,6 +748,8 @@ describe("trusted worker accounts", () => {
     const launch = await prepare({ ...f.input, command: engine, resume });
     expect(launch).toMatchObject({ kind: "unrouted", account: { id: engine, generation: 0 }, executable: engine, workerSettings: engine === "claude", line: "ready", session: { nativeId } });
     expect(launch).not.toHaveProperty("environment");
+    expect(launch?.kind === "unrouted" && launch.args).not.toContain("--setting-sources");
+    expect(existsSync(account.home)).toBe(false);
     expect(launch?.kind === "unrouted" && launch.args).toEqual(engine === "claude" ? ["--model", "original", "--dangerously-skip-permissions", "-r", nativeId, RESUME_NUDGE]
       : ["resume", nativeId, "--model", "original", "--dangerously-bypass-approvals-and-sandbox", "-c", "model_provider=custom", RESUME_NUDGE]);
     expect(usage).toHaveBeenCalledExactlyOnceWith("bot", "worker", engine, undefined, true);

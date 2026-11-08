@@ -81,57 +81,61 @@ export function ProfileFields() {
     "whitespace-nowrap rounded-lg px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink disabled:cursor-wait disabled:opacity-50";
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-3">
-        <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={avatarUrl} size={32} />
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
-          className="sr-only"
-          tabIndex={-1}
-          aria-hidden="true"
-          onChange={(event) => void changePhoto(event.target.files?.[0])}
-        />
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-          <button type="button" onClick={() => fileRef.current?.click()} disabled={saving} className={buttonClass}>
-            {t("settings.profile.changePhoto")}
-          </button>
-          {state.config?.profile?.googlePhoto ? (
-            <button type="button" onClick={() => void googlePhoto()} disabled={saving} className={quietButtonClass}>
-              {t("settings.profile.googlePhoto")}
-            </button>
-          ) : null}
-          {avatarUrl ? (
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => void changePhoto(event.target.files?.[0])}
+      />
+      <div className="flex items-center gap-4 max-md:flex-col max-md:gap-3">
+        <InitialsAvatar initials={profileInitials(state.config?.profile)} imageUrl={avatarUrl} size={56} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 max-md:w-full max-md:flex-col-reverse max-md:gap-3">
+          <div className="flex items-center gap-2">
+            <label htmlFor="settings-profile-name" className="sr-only">{t("settings.profile.nameLabel")}</label>
+            <input
+              id="settings-profile-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t("settings.profile.namePlaceholder")}
+              disabled={saving}
+              className={`min-w-0 flex-1 ${inputClass}`}
+            />
             <button
               type="button"
-              onClick={() => void put(async () => ({ avatarUrl: "" }), "settings.profile.photoError")}
+              onClick={() => void save()}
               disabled={saving}
-              className={quietButtonClass}
+              aria-label={t("settings.profile.saveAria")}
+              className={`self-start ${buttonClass}`}
             >
-              {t("settings.profile.removePhoto")}
+              {t("settings.profile.save")}
             </button>
-          ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-1 max-md:justify-center">
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={saving} className={buttonClass}>
+              {t("settings.profile.changePhoto")}
+            </button>
+            {state.config?.profile?.googlePhoto ? (
+              <button type="button" onClick={() => void googlePhoto()} disabled={saving} className={quietButtonClass}>
+                {t("settings.profile.googlePhoto")}
+              </button>
+            ) : null}
+            {avatarUrl ? (
+              <button
+                type="button"
+                onClick={() => void put(async () => ({ avatarUrl: "" }), "settings.profile.photoError")}
+                disabled={saving}
+                className={quietButtonClass}
+              >
+                {t("settings.profile.removePhoto")}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
       {(showAvatarFormatsHint() || rejected) && <p className="text-[11.5px] text-ink-secondary">{t("bot.avatarFormats")}</p>}
-      <label htmlFor="settings-profile-name" className="sr-only">{t("settings.profile.nameLabel")}</label>
-      <input
-        id="settings-profile-name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder={t("settings.profile.namePlaceholder")}
-        disabled={saving}
-        className={inputClass}
-      />
-      <button
-        type="button"
-        onClick={() => void save()}
-        disabled={saving}
-        aria-label={t("settings.profile.saveAria")}
-        className={`self-start ${buttonClass}`}
-      >
-        {t("settings.profile.save")}
-      </button>
       {error ? <p role="alert" className="text-[12px] text-danger">{error}</p> : null}
     </div>
   );

@@ -245,6 +245,11 @@ process.stdin.on("data", (chunk) => {
               id: msg.id,
               error: { code: -32603, message: "provider returned 503: upstream capacity exceeded" },
             });
+            // a retired attempt keeps talking until its kill lands
+            if (process.env.FAKE_CODEX_LATE_COMPLETE) {
+              const late = setInterval(() => notify("turn/completed", { turn: { status: "completed" } }), 5);
+              setTimeout(() => clearInterval(late), 400);
+            }
             break;
           }
         }

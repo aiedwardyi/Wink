@@ -65,6 +65,7 @@ import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
+import { baseAccount } from "../worker-resume.ts";
 
 const claudeAuthSchema = z.object({ loggedIn: z.boolean(), email: z.unknown().optional(), orgName: z.unknown().optional(), authMethod: z.string().optional(), configDirectory: z.string().optional() });
 
@@ -149,17 +150,17 @@ export interface ClaudeConfig {
 }
 
 // model catalog ported from upstream packages/contracts/src/model.ts
-// Every current Claude model ships a 200k window. Stated here because an
-// option without `contextWindow` falls back to MODEL_CONTEXT_FALLBACK (16k),
-// which compacts a healthy Claude thread after a couple of large pastes.
+// Every current Claude model ships a 1M window. Stated here because an
+// option without `contextWindow` falls back to MODEL_CONTEXT_FALLBACK (128k),
+// which compacts a healthy Claude thread long before Claude would.
 export const STATIC_CLAUDE_MODELS: ModelCatalog = {
   default: "claude-sonnet-5-5",
   options: [
-    { id: "claude-fable-5-1", label: "Claude Fable 5.1", contextWindow: 200_000 },
-    { id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 200_000 },
-    { id: "claude-opus-5-5", label: "Claude Opus 5.5", contextWindow: 200_000 },
-    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", contextWindow: 200_000 },
-    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", contextWindow: 200_000 },
+    { id: "claude-fable-5-1", label: "Claude Fable 5.1", contextWindow: 1_000_000 },
+    { id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 1_000_000 },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5", contextWindow: 1_000_000 },
+    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", contextWindow: 1_000_000 },
+    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", contextWindow: 1_000_000 },
   ],
 };
 
@@ -300,6 +301,8 @@ function askArgs(ask: Ask): string {
 function askSummary(ask: Ask): string {
   return askArgs(ask).slice(0, typeof ask.input?.question === "string" ? 300 : 200);
 }
+
+const brokerGeneration = new Map<string, number>();
 
 export function permissionSocketPath(threadId: string, generation = 1) {
   // A readable prefix alone is not unique: ids that agree on their first
@@ -728,6 +731,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const launchPolicy = input.account ? { account: input.account, accountDriver: DRIVER_KIND } : {};
+    const turnPolicy = input.account ? { ...launchPolicy, accountBaseHome: baseAccount(input.account.of, DRIVER_KIND, { ...process.env, ...input.environment }).home } : launchPolicy;
     let admitted = !input.account;
     let accountBlocked = false;
     let helpers = 0;
@@ -825,7 +829,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       restartTurn?: () => void;
     }
     const sessions = new Map<string, Session>();
-    const brokerGeneration = new Map<string, number>();
     const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
     const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
       ? configuredIdleMinimum
@@ -1252,7 +1255,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           args.splice(args.indexOf("--append-system-prompt"), 2, "--append-system-prompt-file", systemPromptPath);
         }
         child = spawnCli(config.cli, args, {
-          ...launchPolicy,
+          ...(turn.leanStartup === true ? launchPolicy : turnPolicy),
           cwd,
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1613,12 +1616,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
                 const detail = call
                   ? claudeToolDetail(call.name, call.input, firstText(b.content), Boolean(b.is_error))
                   : undefined;
+                const input = call?.input && typeof call.input === "object" ? call.input as Record<string, unknown> : {};
+                const path = input.file_path ?? input.notebook_path;
                 emit({
                   ...base(threadId, currentTurnId()),
                   type: "item.completed",
                   itemType: "tool",
                   itemId: b.tool_use_id,
                   ok: !b.is_error,
+                  ...(!b.is_error && call && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(call.name) && typeof path === "string" ? { writes: [path] } : {}),
                   ...(summary && summary !== call?.summary ? { summary } : {}),
                   ...(call ? { durationMs: Date.now() - call.at } : {}),
                   ...(detail ? { detail } : {}),
@@ -1638,8 +1644,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "control_response":
             session.replies.get(o.response?.request_id)?.(o.response?.subtype === "success");
             break;
-          case "result":
+          case "result": {
             if (o.is_error === true && session.turn && (!session.turn.usageFailure || chatUsageLimit("claude", o, session.turn.usageWindows, !injected.injected))) session.turn.usageFailure = o;
+            const interrupted = Boolean(session.turn?.merging);
             if (session.turn?.merging) {
               const t = session.turn;
               const { held } = t.merging!;
@@ -1687,10 +1694,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               if (classifyError({ text }).reason === "auth") {
                 emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
+              } else if (text.trim() && session.turn && !interrupted && !session.closing
+                && !chatUsageLimit("claude", session.turn.usageFailure, session.turn.usageWindows, !injected.injected)) {
+                // the CLI already retried; a limit gets its own row from settle
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: text.trim() });
               }
             }
             settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null, claudeUsage(o.usage));
             break;
+          }
         }
       };
 
