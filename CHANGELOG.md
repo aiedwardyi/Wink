@@ -2,6 +2,32 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.245] - 2026-11-09
+
+### Added
+- Phone videos get a Wink full screen button.
+- Swipe between a bot's Settings and Memory, and edit Memory on your phone.
+- The model dial shows the run cost at each effort.
+
+### Changed
+- The first paragraph appears as it streams.
+- Long Claude chats compact at Claude's own limit.
+- Precision gets wide bubbles and the Wink font.
+- Usage folds are smoother, and drag handles are easier to grab, with long press on phones.
+- Live Verify replays are calmer and show one cursor per checker.
+- Activity squares settle with a soft glint.
+- The bar repeating a pinned question is gone.
+
+### Fixed
+- The phone usage card opens at full height.
+- A failed phone send survives a reload.
+- Live Verify runs once.
+- Connected account emails no longer open a copy on tap.
+- Closed workers release their memory.
+- Safer, lighter cleanup.
+- A save or spawn that fails no longer loses or repeats work.
+- Security hardening for paired phones.
+
 ## [1.0.244] - 2026-11-08
 
 ### Added
@@ -757,6 +783,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245
 [1.0.244]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.244
 [1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
 [1.0.242]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.242
