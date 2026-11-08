@@ -125,7 +125,7 @@ describe("harness playbook", () => {
   it("writes the built list before building and quotes it in cards", () => {
     const prompt = harnessPlaybookPrompt(true).replace(/\s+/g, " ");
     expect(prompt).toContain("No built.md yet: write it from the code before the first build card.");
-    expect(prompt).toContain("## Already built - The built.md lines this touches and the live files to open first.");
+    expect(prompt).toContain("## Already built - The built.md lines and status-board decisions this touches, and the live files to open first.");
   });
 
   it("logs every walk snag to one shared list", () => {

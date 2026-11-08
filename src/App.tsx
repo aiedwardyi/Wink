@@ -237,7 +237,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const watch = useVerifyWatch();
   const watchChat = group ?? bot;
   const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
-    ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner)
+    ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner, watch.messageId)
     : undefined;
   const watchPanel = (hidden: boolean) => watch && watchChat && watchCard && (
     <LazyView>

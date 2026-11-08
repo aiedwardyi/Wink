@@ -58,10 +58,10 @@ const verifyCalls = new Map<unknown, AbortController>();
 
 const VERIFY_SITE_TOOL = {
   name: "verify_site",
-  description: "After changing files that render in a browser, call verify_site before saying done. Checks a static site in your working folder or workspace, hidden in a real browser on desktop and phone. Fix the reported problems in this turn, then recheck at most twice. Reports page errors, dead links, phone sideways scroll, missing phone menus and leftover copy, with locations and reproduction steps. Not checked means unverified; form delivery is never proved.",
+  description: "After every change that renders in a browser, call verify_site before saying done, unless the user says not to. Checks static files in any folder or a local dev server, hidden in a real browser on desktop and phone. Fix reported problems in this turn, then recheck at most twice. Reports page errors, dead links, phone sideways scroll, missing phone menus and leftover copy, with locations and reproduction steps. Not checked means unverified; form delivery is never proved.",
   inputSchema: {
     type: "object",
-    properties: { entry: { type: "string", description: "The site folder or .html file, absolute or relative to your working folder." } },
+    properties: { entry: { type: "string", description: "A loopback http:// URL, or a site folder/.html file anywhere on this PC (path or file://). Relative paths use your working folder." } },
     required: ["entry"],
     additionalProperties: false,
   },

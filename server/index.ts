@@ -400,8 +400,9 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
-import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
-import { VERIFY_ROUTES } from "../shared/live-verify.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
+import { createVerifyAuto } from "./verify-auto.ts";
+import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
@@ -2274,6 +2275,7 @@ function botTalkedTo(botId: string): boolean {
   return !!bot && [bot.threadId, ...store.tasks(botId).map((task) => task.threadId)].some((threadId) => store.messagesFor(threadId).some((message) => message.role === "user"));
 }
 
+let googleKindsReady = false;
 const googleSync = createGoogleSync({
   dataDir: DATA_DIR,
   account: googleAccount,
@@ -2304,6 +2306,7 @@ const googleSync = createGoogleSync({
     return profileSyncSettings.workspaceId;
   },
   republishing: () => threadSyncV2?.republishing() ?? false,
+  kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
   openThread: () => threadRoutes.openThread(),
 });
@@ -3160,6 +3163,7 @@ async function reviewPermissionCard(args: {
 }
 
 bus.subscribe((event: RuntimeEvent) => {
+  verifyAuto.event(event);
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
   else if (event.type === "request.resolved") watchdog.setWaitingOnHuman(event.threadId, false);
   else if (event.type === "turn.completed") watchdog.settle(event.threadId);
@@ -3855,6 +3859,10 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsage.set(event.threadId, { input: event.input, output: event.output, cachedInput: event.cachedInput });
       break;
     case "turn.completed": {
+      const verifyOwner = event.turnId ? turnRegistry.get(event.turnId) : undefined;
+      const verifyStartedAt = turnStartedAtMs.get(event.threadId) ?? Date.now();
+      const verifyDisposition = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+      const verifyRoutine = routineTurnThreads.has(event.threadId);
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
@@ -4013,6 +4021,12 @@ bus.subscribe((event: RuntimeEvent) => {
           // Channel replies only affect the channel unread state.
         }
       }
+      // Before the queue drain subscribers append the next send.
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      setImmediate(() => {
+        const owner = verifyOwner && store.bot(verifyOwner.botId);
+        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
+      });
       // A delegated turn's terminal state belongs in the A⇄B channel:
       // the request was mirrored there when the delegation drained, and a
       // channel that only ever shows requests is half a record. Mirror the
@@ -4468,7 +4482,7 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -5402,7 +5416,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
-      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -6348,7 +6361,6 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
-  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7170,6 +7182,13 @@ const verifySite = createVerifySite({
   deviceId: () => profileSyncSettings.deviceId,
   appToken: authorizedComms,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+  toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+});
+const verifyAuto = createVerifyAuto({
+  enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
+  startAuto: input => verifySite.startAuto(input),
+  cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  log: line => console.log(line),
 });
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
@@ -8624,6 +8643,7 @@ if (early) {
 phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
+startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")

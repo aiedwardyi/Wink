@@ -6,6 +6,7 @@ import type { Message } from "@/state/store";
 export interface VerifyWatchOpen {
   threadId: string;
   owner: string;
+  messageId?: string;
   /** opened from Watch live, so the panel closes 3 s after the end */
   live: boolean;
 }
@@ -34,8 +35,8 @@ export function useVerifyWatch(): VerifyWatchOpen | null {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, () => open, () => null);
 }
 
-export function verifyCardIn(messages: readonly Message[], owner?: string): VerifyCardData | undefined {
-  return messages.findLast(message => message.kind === "note" && message.verify && (owner === undefined || message.verify.owner === owner))?.verify;
+export function verifyCardIn(messages: readonly Message[], owner?: string, messageId?: string): VerifyCardData | undefined {
+  return messages.findLast(message => message.kind === "note" && message.verify && (owner === undefined || message.verify.owner === owner) && (messageId === undefined || message.id === messageId))?.verify;
 }
 
 export function rerunVerify(card: VerifyCardData, threadId: string): Promise<unknown> {

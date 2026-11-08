@@ -1,14 +1,15 @@
 import type { AppSettingsSection } from "@/state/store";
 
 export function appSettingsNavigation(
-  state: { appSettingsOpen: boolean; appSettingsSection: AppSettingsSection },
+  state: { appSettingsOpen: boolean; appSettingsSection: AppSettingsSection; appSettingsPage: boolean },
   action: { open?: boolean; section?: AppSettingsSection },
 ) {
   const open = action.open ?? !state.appSettingsOpen;
   return {
     appSettingsOpen: open,
     appSettingsSection: action.section ?? (open ? "general" as const : state.appSettingsSection),
-    appSettingsPage: open && action.section !== undefined,
+    // a closing sheet keeps its page painted through the exit fade
+    appSettingsPage: open ? action.section !== undefined : state.appSettingsPage,
   };
 }
 

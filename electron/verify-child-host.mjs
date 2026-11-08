@@ -258,7 +258,7 @@ export function createVerifyChildHost({ send, probe = null, log = () => {}, depe
   }
   async function run(r) {
     try {
-      const serving = d.startSiteServer({ root: r.input.root, entry: r.input.entry, revision: r.input.revision });
+      const serving = d.startSiteServer({ root: r.input.root, entry: r.input.entry, revision: r.input.revision, site: r.input.site });
       void serving.then((server) => { if (r.preparationClosed) return server.close(); }).catch(() => {});
       r.server = await bounded(serving);
       if (r.abort.signal.aborted) return;

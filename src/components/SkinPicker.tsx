@@ -6,13 +6,14 @@
 // drift from what picking it actually does.
 import { useEffect, useId, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
-import { LIGHT_SKIN_IDS, SKINS, SKIN_CHANGE_EVENT, applySkin, readSkin, type SkinId } from "@/lib/skins";
+import { LIGHT_SKIN_IDS, SKINS, SKIN_CHANGE_EVENT, applySkin, readSkin, readTriedSkins, type SkinId } from "@/lib/skins";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
-const FEATURED_SKIN_IDS: readonly SkinId[] = ["wink", "precision", "github-dimmed", "tokyo-night", "kanagawa", "terminal", "wink-day", "notebook"];
+const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "moss", "wink-day", "notebook"];
+const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["inkwell", "graphite", "moss"]);
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected
@@ -82,11 +83,15 @@ export function SkinPicker() {
   // A theme picked from the open fold stays put until the fold closes, so keyboard focus is not lost.
   const [picked, setPicked] = useState<SkinId | null>(null);
   const moreId = useId();
+  const [tried, setTried] = useState(readTriedSkins);
 
   // The theme-cycle hotkey calls applySkin() directly, outside this
   // component's own onClick - without this, the checkmark would go stale.
   useEffect(() => {
-    const onChange = () => setActive((document.documentElement.dataset.skin as SkinId) || readSkin());
+    const onChange = () => {
+      setActive((document.documentElement.dataset.skin as SkinId) || readSkin());
+      setTried(readTriedSkins());
+    };
     window.addEventListener(SKIN_CHANGE_EVENT, onChange);
     return () => window.removeEventListener(SKIN_CHANGE_EVENT, onChange);
   }, []);
@@ -107,6 +112,7 @@ export function SkinPicker() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {skins.map((skin) => {
           const selected = skin.id === active;
+          const isNew = !selected && NEW_SKIN_IDS.has(skin.id) && !tried.includes(skin.id);
           return (
             <button
               key={skin.id}
@@ -125,11 +131,17 @@ export function SkinPicker() {
               )}
             >
               <Miniature skin={skin.id} />
-              <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
-                <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-start gap-1.5 px-0.5 pb-0.5">
+                {/* Auto basis lets the New tag drop to its own line instead of covering a long name. */}
+                <div className={cn("min-w-0", isNew ? "flex-[1_1_auto]" : "flex-1")}>
                   <div className="text-[13px] font-medium text-ink">{skin.name}</div>
                 </div>
                 {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
+                {isNew && (
+                  <span data-skin-new className="shrink-0 rounded-full border border-accent/40 bg-accent/15 px-1.5 text-[10.5px] leading-[17px] font-semibold text-accent-text">
+                    {t("settings.skin.new")}
+                  </span>
+                )}
               </div>
             </button>
           );

@@ -155,6 +155,26 @@ describe("phone Settings navigation", () => {
     expect(dialog()).toBeNull();
   });
 
+  it.each([
+    ["en", "Account", "account", "Close Settings"],
+    ["en", "General", "general", "Close Settings"],
+    ["en", "Connections", "connections", "Close Settings"],
+    ["en", "Usage", "usage", "Close Settings"],
+    ["en", "Devices", "companion", "Close Settings"],
+    ["en", "Themes", "themes", "Close Settings"],
+    ["en", "Model Index", "models-index", "Close Settings"],
+    ["ko", "사용량", "usage", "설정 닫기"],
+  ])("keeps %s %s painted while X closes Settings", async (locale, row, page, close) => {
+    await open(locale);
+    await tap(row);
+    await act(async () => button(close)!.click());
+    expect(dialog()?.parentElement?.hasAttribute("data-closing")).toBe(true);
+    expect(dialog()!.querySelector("[data-settings-page]")?.getAttribute("data-settings-page")).toBe(page);
+    expect(dialog()!.querySelector("[data-settings-list]")?.hasAttribute("inert")).toBe(true);
+    await wait(PRESENCE_EXIT_MS + 40);
+    expect(dialog()).toBeNull();
+  });
+
   it("swipes a section back to the list, then swipes Settings closed", async () => {
     await open();
     await tap("Usage");

@@ -68,6 +68,9 @@ export const SKIN_IDS = [
   "pewter-night",
   "coal",
   "folio",
+  "inkwell",
+  "graphite",
+  "moss",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -138,6 +141,9 @@ export const SKINS: readonly Skin[] = [
   { id: "pewter-night", name: "Pewter Night" },
   { id: "coal", name: "Coal" },
   { id: "folio", name: "Folio" },
+  { id: "inkwell", name: "Inkwell" },
+  { id: "graphite", name: "Graphite" },
+  { id: "moss", name: "Moss" },
 ];
 
 /** Must match electron/skin-overlay.cjs; skins.test.ts pins it. */
@@ -172,6 +178,7 @@ export const DEFAULT_SKIN: SkinId = "precision";
 export const SKIN_CHANGE_EVENT = "orbit-skin-change";
 
 const KEY = "omb-skin";
+const TRIED_KEY = "omb-skins-tried";
 
 // The input is whatever localStorage handed back — a string this app wrote
 // on an earlier run, a value edited by hand, or a leftover from a renamed
@@ -216,6 +223,15 @@ export function readSkin(): SkinId {
   }
 }
 
+export function readTriedSkins(): SkinId[] {
+  try {
+    const value: unknown = JSON.parse(getStore()?.getItem(TRIED_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter(isSkinId) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Point the document at a skin and remember it. Called once before the first
  * paint (main.tsx) and again on every change from the picker — a stamped
@@ -234,6 +250,8 @@ export function applySkin(id: SkinId): void {
   }
   try {
     getStore()?.setItem(KEY, id);
+    const tried = readTriedSkins();
+    if (!tried.includes(id)) getStore()?.setItem(TRIED_KEY, JSON.stringify([...tried, id]));
   } catch {
     /* quota / private mode — the skin still applies for this session */
   }
