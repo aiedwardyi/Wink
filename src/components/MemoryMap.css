@@ -84,7 +84,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-bottom .mm-count { margin: 0; }
 .mm-bottom .mm-count b { font-size: 26px; line-height: 28px; background: none; color: var(--color-ink); }
 
-.mm-live { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden; padding: 16px 18px; border-radius: 16px; border: 1px solid transparent;
+.mm-live { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden auto; padding: 16px 18px; border-radius: 16px; border: 1px solid transparent;
   background: linear-gradient(180deg, color-mix(in srgb, var(--color-card) 92%, rgb(var(--mm-indigo))), var(--color-card)) padding-box,
     linear-gradient(180deg, rgb(var(--mm-cyan) / calc(0.6 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.4 * var(--mem-glow))) 45%, rgb(var(--mm-violet) / calc(0.12 * var(--mem-glow)))) border-box;
   box-shadow: 0 0 40px rgb(99 102 241 / calc(0.22 * var(--mem-glow))), 0 0 90px rgb(var(--mm-purple) / calc(0.12 * var(--mem-glow)));
