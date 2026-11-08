@@ -40,6 +40,8 @@ import { LazyView } from "./LazyView";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { Fold } from "./Fold";
 import { SaveStatus } from "./SaveStatus";
+// the map's CSS comes with Bot details, so a Memory tab open never waits on a stylesheet
+import "./MemoryMap.css";
 
 // One Bot Details is up at a time. A bot switch mounts the next panel (keyed by
 // bot) while the last is still up, and must not replay the slide-in.

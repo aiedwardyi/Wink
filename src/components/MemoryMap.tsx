@@ -7,6 +7,7 @@ import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, formatBytes, NotedLines, type MemoryTopic } from "./MemoryGroups";
 import { closePanel, fadePanel, openMist, openPanel, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { Fold } from "./Fold";
+import { liveHeight, useStage } from "./MemoryMapStage";
 import "./MemoryMap.css";
 
 export interface SleepReadout {
@@ -116,6 +117,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const [closing, setClosing] = useState(false);
   const [mistOn, setMistOn] = useState(false);
   const [still, setStill] = useState(false);
+  // labels and counts, then icons and glow, then Live; an open editor shows at once
+  const stage = useStage(2, editing);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const before = useRef<string | null>(null);
   const quiet = useRef(false);
@@ -234,16 +237,16 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     <div className={cn("mm-slot", kind === "long" ? "mm-left" : "mm-right")}>
       <button ref={panels[kind]} type="button" aria-expanded={open === kind} disabled={failed} className="mm-panel" data-kind={kind} onClick={() => toggle(kind)}>
         <span className="mm-panel-top">
-          <span className="mm-icon">{icon}</span>
-          {stacked
+          <span className="mm-icon">{stage > 0 && icon}</span>
+          {stage > 0 && (stacked
             ? <ChevronDown size={16} aria-hidden="true" className={cn("mm-chev transition-transform motion-reduce:transition-none", open === kind && "rotate-180")} />
-            : <ChevronRight size={16} aria-hidden="true" className="mm-chev" />}
+            : <ChevronRight size={16} aria-hidden="true" className="mm-chev" />)}
         </span>
         <span className="mm-label">
           <span className="mm-name">{name}</span>
           <span className="mm-hint">{hint}</span>
         </span>
-        {viz}
+        {!stacked && stage > 0 && viz}
         <span className="mm-newest">{foot}</span>
         <Count kind={kind} count={count} />
       </button>
@@ -259,22 +262,30 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
 
   return (
     <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-closing={closing || undefined} data-still={still || undefined}>
-      <svg width="0" height="0" className="absolute" aria-hidden="true">
-        <defs>
-          <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#67e8f9" />
-            <stop offset=".5" stopColor="#818cf8" />
-            <stop offset="1" stopColor="#a78bfa" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <div className="mm-glow" aria-hidden="true" />
-      <div className="mm-ray" aria-hidden="true" />
+      {stage > 0 && (
+        <>
+          <svg width="0" height="0" className="absolute" aria-hidden="true">
+            <defs>
+              <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#67e8f9" />
+                <stop offset=".5" stopColor="#818cf8" />
+                <stop offset="1" stopColor="#a78bfa" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <div className="mm-glow" aria-hidden="true" />
+          <div className="mm-ray" aria-hidden="true" />
+        </>
+      )}
       <header className="mm-core">
         <div className="mm-brain" aria-hidden="true">
-          <span className="mm-orbit mm-orbit-near" />
-          <span className="mm-orbit mm-orbit-far" />
-          <Brain size={28} strokeWidth={1.6} stroke={`url(#${gradient})`} />
+          {stage > 0 && (
+            <>
+              <span className="mm-orbit mm-orbit-near" />
+              <span className="mm-orbit mm-orbit-far" />
+              <Brain size={28} strokeWidth={1.6} stroke={`url(#${gradient})`} />
+            </>
+          )}
         </div>
         {failed && (
           <div role="alert" className="mm-failed">
@@ -289,29 +300,33 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
           <span className="mm-dots" aria-hidden="true">
             {map.longTerm.slice(0, DOTS).map((each, index) => <i key={each.line} data-glow={index < 3 ? 3 : index < 10 ? 2 : each.at ? 1 : 0} />)}
           </span>, longList)}
-        <section className="mm-live">
-          <div className="mm-live-tag"><span className="mm-live-dot" />{t("bot.memoryLive")}</div>
-          <div>
-            <div className="mm-sec-head"><Activity size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryWorking")}</span><span className="mm-sec-hint">{t("bot.memoryWorkingHint")}</span></div>
-            {task ? (
-              <div className="mm-task">
-                <div className="mm-task-goal" title={task.goal}>{task.goal}</div>
-                {task.plan.length > 0 && (
-                  <>
-                    <div className="mm-steps" aria-hidden="true">{task.plan.slice(0, 12).map((step, index) => <i key={index} data-done={step.status === "done" || undefined} />)}</div>
-                    <div className="mm-task-meta">{t("bot.memoryTaskSteps", { done, total: task.plan.length })}</div>
-                  </>
-                )}
-                {task.nextAction.trim() && <div className="mm-task-next">{t("bot.memoryTaskNext", { action: task.nextAction })}</div>}
+        <section className="mm-live" style={stage < 2 && stacked ? { minHeight: liveHeight(bot, Math.min(map.learned.length, LEARNED_SHOWN)) } : undefined}>
+          {stage > 1 && (
+            <>
+              <div className="mm-live-tag"><span className="mm-live-dot" />{t("bot.memoryLive")}</div>
+              <div>
+                <div className="mm-sec-head"><Activity size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryWorking")}</span><span className="mm-sec-hint">{t("bot.memoryWorkingHint")}</span></div>
+                {task ? (
+                  <div className="mm-task">
+                    <div className="mm-task-goal" title={task.goal}>{task.goal}</div>
+                    {task.plan.length > 0 && (
+                      <>
+                        <div className="mm-steps" aria-hidden="true">{task.plan.slice(0, 12).map((step, index) => <i key={index} data-done={step.status === "done" || undefined} />)}</div>
+                        <div className="mm-task-meta">{t("bot.memoryTaskSteps", { done, total: task.plan.length })}</div>
+                      </>
+                    )}
+                    {task.nextAction.trim() && <div className="mm-task-next">{t("bot.memoryTaskNext", { action: task.nextAction })}</div>}
+                  </div>
+                ) : <div className="mm-empty">{t("bot.memoryWorkingIdle")}</div>}
               </div>
-            ) : <div className="mm-empty">{t("bot.memoryWorkingIdle")}</div>}
-          </div>
-          <div className="mm-learned">
-            <div className="mm-sec-head"><Sparkle size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryLearned")}</span><span className="mm-sec-hint">{t("bot.memoryLearnedHint")}</span></div>
-            {failed ? null : map.learned.length
-              ? <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} limit={LEARNED_SHOWN} />
-              : <div className="mm-empty">{t("bot.memoryNone")}</div>}
-          </div>
+              <div className="mm-learned">
+                <div className="mm-sec-head"><Sparkle size={16} aria-hidden="true" /><span className="mm-sec-name">{t("bot.memoryLearned")}</span><span className="mm-sec-hint">{t("bot.memoryLearnedHint")}</span></div>
+                {failed ? null : map.learned.length
+                  ? <NotedLines text={text} messages={bot.messages} target={target} botId={bot.id} active={active} limit={LEARNED_SHOWN} />
+                  : <div className="mm-empty">{t("bot.memoryNone")}</div>}
+              </div>
+            </>
+          )}
         </section>
         {panel("knowledge", <BookOpen size={16} aria-hidden="true" />, t("bot.memoryKnowledge"), t("bot.memoryKnowledgeHint"), count(topics.length), topics.length ? topics.map((each) => each.name.replace(/\.md$/, "")).join(" · ") : newest(),
           <span className="mm-bars" aria-hidden="true">
@@ -319,7 +334,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
           </span>, topicList)}
         <div className="mm-slot mm-bottom">
           <div className="mm-panel" data-kind="muscle">
-            <span className="mm-icon"><Repeat size={16} aria-hidden="true" /></span>
+            <span className="mm-icon">{stage > 0 && <Repeat size={16} aria-hidden="true" />}</span>
             <span className="mm-label">
               <span className="mm-name">{t("bot.memoryMuscle")}</span>
               <span className="mm-hint">{t("bot.memoryMuscleHint")}</span>

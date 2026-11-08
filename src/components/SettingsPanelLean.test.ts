@@ -385,7 +385,7 @@ describe("SettingsPanel memory groups", () => {
   it("puts the memory map first, then auto notes and the memory file", async () => {
     await render({ ...claudeBot, tasks });
     await act(async () => tab(host, "Memory").click());
-    await until(() => host.querySelector(".mm"));
+    await until(() => host.querySelector(".mm-live-tag"));
     const text = host.textContent ?? "";
     const order = ["Long-Term Memory", "Working Memory", "Just Learned", "Lives in Seoul", "Auto Notes", "Memory File", "8 lines"];
     expect(text).not.toContain("From Your Chats");

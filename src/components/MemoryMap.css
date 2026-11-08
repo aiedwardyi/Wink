@@ -142,7 +142,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-specks { position: absolute; z-index: 7; inset: 0; pointer-events: none; opacity: 0; }
 .mm-specks i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; box-shadow: 0 0 6px rgb(255 255 255 / 0.9); }
 
-.mm[data-stacked] .mm-ray, .mm[data-stacked] .mm-dots, .mm[data-stacked] .mm-bars, .mm[data-stacked] .mm-newest { display: none !important; }
+.mm[data-stacked] .mm-ray, .mm[data-stacked] .mm-newest { display: none !important; }
 .mm[data-stacked] .mm-glow { height: 620px; }
 .mm[data-stacked] .mm-grid { display: flex; flex-direction: column; gap: 12px; perspective: none; }
 .mm[data-stacked] .mm-live { order: -1; }
