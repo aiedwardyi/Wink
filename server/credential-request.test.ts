@@ -98,7 +98,7 @@ describe("credential request allowlist", () => {
 
 describe("saved keys prompt", () => {
   const acme = { name: "Acme", header: "authorization", prefix: "Bearer ", key: "acme-7f3a" };
-  const line = (keys: string) => ` Saved keys: ${keys}. Use them without asking, through call_api to each key's own API; any other key isn't saved, so request it with request_credential.`;
+  const line = (keys: string) => ` Saved keys: ${keys}. Use saved API keys with call_api on their own host; Box is for Cloud VM. Request missing keys with request_credential, never in chat.`;
 
   it("names saved keys by label and custom host", () => {
     expect(savedKeysPrompt({ tts: { key: "tts-7f3a" }, customKeys: { "api.acme.dev": acme } })).toBe(

@@ -10,7 +10,7 @@ export function loadCredentialPrompt(file: string = PACKAGED_FILES.winkGuide): s
     console.warn(`wink guide: could not find ${file}; the prompt ships without its pointer`);
     return ASK_FOR_KEY;
   }
-  return `${ASK_FOR_KEY} How Wink itself works (engines, keys, workers, sync, phone): ${file}. Read it only when a task is about Wink.`;
+  return `${ASK_FOR_KEY} How Wink itself works (engines, keys, accounts, workers, routines, sync, phone): ${file}. Read it for Wink questions or before asking for setup.`;
 }
 
 export const CREDENTIAL_PROMPT = loadCredentialPrompt();
