@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
-import { VERIFY_ROUTES, verifyCardStale, type VerifyCardData, type VerifyIssue, type VerifyTile } from "../../shared/live-verify";
+import { VERIFY_ROUTES, verifyCardStale, type VerifyCardData, type VerifyCounts, type VerifyIssue, type VerifyTile } from "../../shared/live-verify";
 import { request } from "@/lib/api-request";
 import type { Message } from "@/state/store";
 
 export interface VerifyWatchOpen {
   threadId: string;
   owner: string;
+  messageId?: string;
   /** opened from Watch live, so the panel closes 3 s after the end */
   live: boolean;
 }
@@ -34,8 +35,37 @@ export function useVerifyWatch(): VerifyWatchOpen | null {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, () => open, () => null);
 }
 
-export function verifyCardIn(messages: readonly Message[], owner?: string): VerifyCardData | undefined {
-  return messages.findLast(message => message.kind === "note" && message.verify && (owner === undefined || message.verify.owner === owner))?.verify;
+export interface VerifyShowing {
+  runId: string;
+  checks: number;
+  by: NonNullable<VerifyCounts["by"]>;
+}
+
+let showing: VerifyShowing | null = null;
+
+export function setVerifyShowing(next: VerifyShowing | null) {
+  if (!showing && !next) return;
+  showing = next;
+  emit();
+}
+
+/** The replay of this run while it plays, so the chat card can show its lanes for the same time. */
+export function useVerifyShowing(runId: string): VerifyShowing | null {
+  return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, () => showing?.runId === runId ? showing : null, () => null);
+}
+
+let chosenTab: { runId: string; tile: VerifyTile } | null = null;
+
+export function chooseVerifyTab(runId: string, tile: VerifyTile) {
+  chosenTab = { runId, tile };
+}
+
+export function verifyChosenTab(runId: string): VerifyTile | null {
+  return chosenTab?.runId === runId ? chosenTab.tile : null;
+}
+
+export function verifyCardIn(messages: readonly Message[], owner?: string, messageId?: string): VerifyCardData | undefined {
+  return messages.findLast(message => message.kind === "note" && message.verify && (owner === undefined || message.verify.owner === owner) && (messageId === undefined || message.id === messageId))?.verify;
 }
 
 export function rerunVerify(card: VerifyCardData, threadId: string): Promise<unknown> {

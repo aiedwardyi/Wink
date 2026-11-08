@@ -84,8 +84,8 @@ export function useManualCheck(status: UpdaterState["status"]) {
     setAckAt(0);
     void updaterActions()
       .check()
-      .catch(() => {})
-      .finally(() => setAckAt(Date.now()));
+      .then(() => setAckAt(Date.now()))
+      .catch(() => {});
   }, []);
   useEffect(() => {
     if (!ackAt) return;

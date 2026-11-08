@@ -86,12 +86,12 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
     expect(prepared.compacted).toBe(false);
     const task = store.taskByThread(sender.id, threadId)!;
     const result = await runDispatch({
-      ...context, ...turns, ...mail, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldQueuedSends, tracePart, trace: currentTurnTrace(),
+      ...context, ...turns, ...mail, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: foldQueuedSends, tracePart, trace: currentTurnTrace(),
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
-      compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined,
+      compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
-      clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {},
+      clearUnattended: () => {}, resumePaneWakes: () => {},
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,
       opts: {}, cfg: {}, reactions: {}, threadSyncV2: null, accountNotices: { forTurn: () => ({ text: null, commit: () => {} }) }, modelContextWindow: 200_000,
       taskRecord: undefined, durableTaskRecordText: "", contextCompacted: false,

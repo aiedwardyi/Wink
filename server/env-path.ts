@@ -425,12 +425,9 @@ function resolveWord(cli: string, args: string[]): ResolvedSpawn {
 }
 
 export function resolveCliSpawn(cli: string, args: string[]): ResolvedSpawn {
-  // An EXISTING FILE wins over the tokenizer: paths with spaces come from
-  // our own candidate list unquoted ("/Applications/My Tools/claude"), and
-  // splitting those would shred them. Only a bare word (no spaces) or an
-  // explicitly-quoted/wrapper string reaches the split below.
+  // Candidate paths may contain spaces or apostrophes without shell quoting.
   const trimmed = cli.trim();
-  if (trimmed.includes(" ") && existsSync(trimmed)) return resolveWord(trimmed, args);
+  if (existsSync(trimmed)) return resolveWord(trimmed, args);
   // A `cli` value may carry fixed leading arguments — wrapper scripts like
   // `/usr/local/bin/ag claude agp` are one string in the Engines panel. ONE
   // tokenizer pass, then resolve the head directly (never re-tokenized: a

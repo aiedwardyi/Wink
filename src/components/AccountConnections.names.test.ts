@@ -124,7 +124,7 @@ it("keeps account identities inside Connections account rows", async () => {
       scan();
     }
     if (phone) await click(row()!.querySelector<HTMLElement>('[data-connection-menu]'));
-    await click(button(locale === "en" ? "Name" : "이름", row()!));
+    await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
     expect(host.querySelector<HTMLInputElement>("[data-account-name-editor] input")!.value).toBe("");
     expect(scanForCanary(canary, host.querySelector("[data-account-name-editor]")!)).toEqual([]);
     await input("Studio");
@@ -151,7 +151,7 @@ it("renames an account through the names API", async () => {
   await mount();
   expect(row()?.textContent ?? "").toContain("Claude 1");
   expect(row()?.querySelector("[data-account-number]")?.textContent).toBe("1");
-  await click(button("Name", row()!));
+  await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
   await input("  Studio  ");
   await click(button("Save"));
   expect(calls.find(({ path }) => path.endsWith("/name"))).toMatchObject({ path: "/api/accounts/claude/name", init: { method: "POST", body: '{"nickname":"Studio"}' } });
@@ -168,14 +168,14 @@ it("renames an account through the names API", async () => {
 
 it.each([false, true])("returns focus to the rename opener after Save, Cancel and Escape (phone=%s)", async (phone) => {
   await mount({ phone });
-  for (const inline of [true, false]) {
+  for (const inline of phone ? [true, false] : [true]) {
     for (const action of ["Save", "Cancel", "Escape"]) {
       if (!inline && phone) await click(row()!.querySelector<HTMLElement>("[data-connection-menu]"));
       await click(inline ? row()!.querySelector<HTMLElement>("[data-edit-name]") : button("Name", row()!));
       if (action === "Escape") await act(async () => host.querySelector<HTMLInputElement>("[data-account-name-editor] input")!
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
       else await click(button(action, host.querySelector("[data-account-name-editor]")));
-      const target = inline ? row()!.querySelector("[data-edit-name]") : phone ? row()!.querySelector("[data-connection-menu]") : button("Name", row()!);
+      const target = row()!.querySelector(inline ? "[data-edit-name]" : "[data-connection-menu]");
       expect(document.activeElement, `${inline ? "inline" : "Name action"}: ${action}`).toBe(target);
     }
   }
@@ -189,12 +189,15 @@ it.each(["en", "ko"] as const)("keeps the original number tile beside phone acco
   expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
 });
 
-it.each(["en", "ko"] as const)("distinguishes identity buttons by account name without email in %s", async (locale) => {
+it.each(["en", "ko"] as const)("renders each email as plain text, not a control, in %s", async (locale) => {
   await mount({ locale });
-  const labels = [...host.querySelectorAll('[data-connection-identity]')].map((node) => node.getAttribute("aria-label"));
-  expect(new Set(labels).size).toBe(accounts.length);
-  expect(labels[0]).toContain("Claude 1");
-  for (const label of labels) expect(label).not.toContain(canary.address);
+  const emails = [...host.querySelectorAll<HTMLElement>("[data-account-email]")];
+  expect(emails).toHaveLength(accounts.length);
+  for (const email of emails) {
+    expect(email.textContent).toBe(canary.address);
+    expect(email.closest("button")).toBeNull();
+    expect(email.hasAttribute("title")).toBe(false);
+  }
 });
 
 it("clears a nickname with an empty name", async () => {
@@ -202,7 +205,7 @@ it("clears a nickname with an empty name", async () => {
   board.engines[0]!.accounts[0]!.name = "Studio";
   reply = async () => Response.json({ id: "claude", number: 1, nickname: null, name: "Claude 1" });
   await mount();
-  await click(button("Name", row()!));
+  await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
   expect(host.querySelector<HTMLInputElement>("[data-account-name-editor] input")!.value).toBe("Studio");
   await input("   ");
   await click(button("Save"));
@@ -214,7 +217,7 @@ it("renames a Codex account through its own route", async () => {
   accounts = [{ ...accounts[0]!, instanceId: "codex", accountOf: "codex", driverKind: "codex", displayName: "Codex" }];
   reply = async () => Response.json({ id: "codex", number: 1, nickname: "Studio", name: "Studio" });
   await mount();
-  await click(button("Name"));
+  await click(host.querySelector<HTMLElement>("[data-edit-name]"));
   await input("Studio");
   await click(button("Save"));
   expect(calls.find(({ path }) => path.endsWith("/name"))?.path).toBe("/api/accounts/codex/name");
@@ -224,7 +227,7 @@ it("renames a Codex account through its own route", async () => {
 it("holds update reload while a name save is pending", async () => {
   const { reloadHeld } = await import("@/lib/reload-hold");
   await mount();
-  await click(button("Name"));
+  await click(host.querySelector<HTMLElement>("[data-edit-name]"));
   await input("Studio");
   let finish!: (response: Response) => void;
   reply = () => new Promise((resolve) => { finish = resolve; });
@@ -244,6 +247,7 @@ it.each([["grok", "grokAgent"], ["gemini", "geminiAgent"], ["muse", "museAgent"]
   await mount();
   expect(host.querySelector("[data-account-number]"), "the board row is present").not.toBeNull();
   expect(button("Name")).toBeUndefined();
+  expect(host.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
 });
 
 const errors = [
@@ -255,7 +259,7 @@ const errors = [
 ] as const;
 it.each(["en", "ko"] as const)("shows each names API error in en and ko (%s)", async (locale) => {
   await mount({ locale });
-  await click(button(locale === "en" ? "Name" : "이름", row()!));
+  await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
   await input("Studio");
   for (const [code, en, ko] of errors) {
     reply = async () => Response.json({ code, error: canary.address }, { status: code === "unknown-account" ? 404 : 400 });
@@ -268,7 +272,7 @@ it.each(["en", "ko"] as const)("shows each names API error in en and ko (%s)", a
 it("hides the name editor until the board holds the account", async () => {
   boardReply = () => new Promise(() => {});
   await mount();
-  expect(button("Name")).toBeUndefined();
+  expect(host.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
   expect(host.querySelector("[data-account-number]")).toBeNull();
   expect(host.textContent).toContain(canary.address);
   await unmount();
@@ -278,7 +282,7 @@ it("hides the name editor until the board holds the account", async () => {
   m.i18n = await import("@/lib/i18n");
   boardReply = async () => Response.json({ error: "not found" }, { status: 404 });
   await mount();
-  expect(button("Name")).toBeUndefined();
+  expect(host.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
   expect(host.querySelector("[data-account-number]")).toBeNull();
   await unmount();
   vi.resetModules();
@@ -288,40 +292,33 @@ it("hides the name editor until the board holds the account", async () => {
   boardReply = null;
   board.engines[0]!.accounts = board.engines[0]!.accounts.slice(1);
   await mount();
-  expect(button("Name", row()!)).toBeUndefined();
+  expect(row()?.querySelector<HTMLButtonElement>("[data-edit-name]")?.disabled).toBe(true);
   expect(row()?.querySelector("[data-account-number]") ?? null).toBeNull();
-  expect(button("Name")).toBeDefined();
+  expect(host.querySelector<HTMLButtonElement>(`[data-connection-account="${accounts[1]!.instanceId}"] [data-edit-name]`)?.disabled).toBe(false);
 });
 
-it.each([false, true])("opens a long identity inside its row by keyboard and touch (phone=%s)", async (phone) => {
+it.each([false, true])("shows no second copy when the email is tapped (phone=%s)", async (phone) => {
   await mount({ phone });
-  const trigger = row()?.querySelector<HTMLButtonElement>("[data-connection-identity]");
-  expect(trigger, "identity disclosure").toBeTruthy();
-  expect(trigger?.hasAttribute("title")).toBe(false);
-  expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  const email = row()!.querySelector<HTMLElement>("[data-account-email]")!;
+  const copies = () => row()!.textContent!.split(canary.address).length - 1;
+  expect(copies()).toBe(1);
   await act(async () => {
-    trigger!.focus();
-    trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    trigger!.click();
+    email.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+    email.click();
   });
-  expect(row()?.querySelector("[data-connection-identity-body]")?.textContent).toContain(canary.address);
-  await click(trigger);
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
-  expect(row()?.querySelector("[data-connection-identity-body]")).toBeNull();
-  await act(async () => {
-    trigger!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
-    trigger!.click();
-  });
-  expect(row()?.querySelector("[data-connection-identity-body]")?.textContent).toContain(canary.address);
+  expect(copies()).toBe(1);
+  expect(row()!.textContent!.split("Claude 1")).toHaveLength(2);
+  expect(row()!.querySelector("[aria-expanded=true]")).toBeNull();
 });
 
 it.each([false, true])("gives the address its own line under the name on a phone (phone=%s)", async (phone) => {
   await mount({ phone });
-  const line = row()!.firstElementChild!;
-  const identity = line.querySelector<HTMLElement>("[data-connection-identity]")!;
-  expect(identity.querySelector("[data-account-email]")?.textContent).toBe(canary.address);
-  expect(identity.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
-  expect(identity.parentElement?.className).toContain("flex-col");
+  const line = row()!.querySelector(":scope > div")!;
+  const email = line.querySelector<HTMLElement>("[data-account-email]")!;
+  expect(email.textContent).toBe(canary.address);
+  expect(email.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
+  expect(email.parentElement?.className).toContain("flex-col");
   if (!phone) {
     expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
     return;
@@ -335,9 +332,49 @@ it.each([false, true])("gives the address its own line under the name on a phone
 it("keeps a signed-out account's editor on its name row", async () => {
   accounts[0]!.snapshot.authenticated = false;
   await mount();
-  await click(button("Name", row()!));
+  await click(row()!.querySelector<HTMLElement>("[data-edit-name]"));
   const nameLine = row()!.querySelector("[data-account-number]")!.parentElement!;
   expect(nameLine.querySelector("[data-account-name-editor] input")).not.toBeNull();
+});
+
+it.each([true, false])("renames by name without a desktop Name action (ready=%s)", async (ready) => {
+  accounts[0]!.snapshot.authenticated = ready;
+  await mount();
+  expect(button("Name", row()!)).toBeUndefined();
+  const opener = row()!.querySelector<HTMLButtonElement>("button[data-edit-name]");
+  expect(opener?.disabled).toBe(false);
+  await click(opener);
+  expect(row()!.querySelector("[data-account-name-editor] input")).not.toBeNull();
+  await click(button("Cancel"));
+  expect(document.activeElement).toBe(row()!.querySelector("[data-edit-name]"));
+});
+
+it("persists Connections order in Usage and brings Usage changes back", async () => {
+  await mount({ settings: true });
+  const ids = accounts.map((account) => account.instanceId);
+  const connectionOrder = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount);
+  const usageOrder = () => [...host.querySelectorAll<HTMLElement>('[data-usage-base="claude"] [data-account-row]')].map((node) => node.dataset.accountRow);
+  const move = async (scope: ParentNode | null, key: string) => {
+    const grip = scope?.querySelector<HTMLElement>("[data-usage-grip]");
+    expect(grip, "shared reorder grip").toBeTruthy();
+    await act(async () => grip!.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true })));
+  };
+  await move(row(), "ArrowDown");
+  const changed = [ids[1], ids[0], ids[2]];
+  expect(connectionOrder()).toEqual(changed);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual(changed);
+  await act(async () => store.dispatch({ type: "toggleAppSettings", section: "usage", open: true }));
+  await settle();
+  expect(usageOrder()).toEqual(changed);
+  await move(host.querySelector(`[data-account-row="${ids[0]}"]`), "ArrowUp");
+  expect(usageOrder()).toEqual(ids);
+  await act(async () => store.dispatch({ type: "toggleAppSettings", section: "connections", open: true }));
+  await settle();
+  expect(connectionOrder()).toEqual(ids);
+  await move(row(), "ArrowDown");
+  await unmount();
+  await mount({ settings: true });
+  expect(connectionOrder()).toEqual(changed);
 });
 
 it.each([

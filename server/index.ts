@@ -106,7 +106,7 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, holdWorkerNotes, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { contextWindowFor, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -151,20 +151,21 @@ import type { CommsBus } from "./comms-visibility.ts";
 import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { replyActivity } from "./reply-activity.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
-import { hasPeerWatch, onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
+import { hasPeerWatch, watchPeerTurn, peerInputJoined, takePeerReplyStamp } from "./peer-takeover.ts";
+import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
   clearSendRunning,
   continueQueuedDrainIfIdle,
   drainSteeredMessages,
-  foldQueuedSends,
   hasQueuedSendBefore,
   hasQueuedSends,
   initializeSteerQueue,
@@ -228,6 +229,7 @@ import {
   countSessionToolRounds,
   engineIsFresh,
   nativeSessionTokenBudget,
+  reportedWindow,
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
@@ -266,6 +268,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
+import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
@@ -398,8 +401,9 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
-import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
-import { VERIFY_ROUTES } from "../shared/live-verify.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
+import { createVerifyAuto } from "./verify-auto.ts";
+import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
@@ -2274,6 +2278,7 @@ function botTalkedTo(botId: string): boolean {
   return !!bot && [bot.threadId, ...store.tasks(botId).map((task) => task.threadId)].some((threadId) => store.messagesFor(threadId).some((message) => message.role === "user"));
 }
 
+let googleKindsReady = false;
 const googleSync = createGoogleSync({
   dataDir: DATA_DIR,
   account: googleAccount,
@@ -2304,6 +2309,7 @@ const googleSync = createGoogleSync({
     return profileSyncSettings.workspaceId;
   },
   republishing: () => threadSyncV2?.republishing() ?? false,
+  kindsReady: () => googleKindsReady,
   pull: pullSyncedThread,
   openThread: () => threadRoutes.openThread(),
 });
@@ -2725,7 +2731,7 @@ const summaryBuild = createSummaryBuild({
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
     if (!instance) return null;
-    const contextWindow = contextWindowFor(instance.models, selection.model);
+    const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
     const inlineNotes = instance.adapter.capabilities.transcriptReplay !== true
@@ -2738,6 +2744,8 @@ const summaryBuild = createSummaryBuild({
         "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set(inlineNotes.ids) : undefined,
       reserveTokens: inlineNotes?.tokens,
+      nativeAt: nativeCompactAt(instance.driverKind, selection.model, contextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }),
+      nativePrompt: task.nativePrompt?.cursor === task.resumeCursors[selection.instanceId] ? task.nativePrompt : undefined,
     };
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
@@ -2762,6 +2770,8 @@ const projectNotesCheck = createProjectNotesCheck({
   },
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
+const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
+for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
@@ -2961,6 +2971,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
@@ -3158,6 +3169,7 @@ async function reviewPermissionCard(args: {
 }
 
 bus.subscribe((event: RuntimeEvent) => {
+  verifyAuto.event(event);
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
   else if (event.type === "request.resolved") watchdog.setWaitingOnHuman(event.threadId, false);
   else if (event.type === "turn.completed") watchdog.settle(event.threadId);
@@ -3332,7 +3344,8 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
-  broadcast({ kind: "runtime", event });
+  const visibleEvent = peerUserRuntime(event);
+  if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
@@ -3402,6 +3415,7 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
+        if (persistPeerUserReply(store, event, lastReply)) break;
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
@@ -3851,6 +3865,10 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsage.set(event.threadId, { input: event.input, output: event.output, cachedInput: event.cachedInput });
       break;
     case "turn.completed": {
+      const verifyOwner = event.turnId ? turnRegistry.get(event.turnId) : undefined;
+      const verifyStartedAt = turnStartedAtMs.get(event.threadId) ?? Date.now();
+      const verifyDisposition = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+      const verifyRoutine = routineTurnThreads.has(event.threadId);
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
@@ -3924,8 +3942,16 @@ bus.subscribe((event: RuntimeEvent) => {
           })) {
             store.recordSessionSystem(systemSeed.instanceId, systemSeed.cursor, systemSeed.system);
           }
+          let flushNotes = false;
           if (event.prompt && event.providerInstanceId) {
-            store.recordNativePrompt(bot.id, event.threadId, event.providerInstanceId, event.prompt, event.contextWindow);
+            const before = store.taskByThread(bot.id, event.threadId);
+            const recorded = store.recordNativePrompt(bot.id, event.threadId, event.providerInstanceId, event.prompt, event.contextWindow);
+            const settled = registry.get(event.providerInstanceId);
+            const model = before?.lastModel;
+            if (settled && model && recorded) {
+              const nativeAt = nativeCompactAt(settled.driverKind, model, event.contextWindow ?? contextWindowFor(settled.models, model), { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[event.providerInstanceId]?.environment });
+              flushNotes = nearNativeCompact({ ...recorded, nativeAt });
+            }
           }
           const packet = routineTurnThreads.has(event.threadId) ? null : taskPacketForWrite(event.threadId);
           if (packet) {
@@ -3946,9 +3972,10 @@ bus.subscribe((event: RuntimeEvent) => {
           if (!store.groupByThread(event.threadId)) {
             summaryBuild.onSettled(bot.id, event.threadId);
             summaryRepair.onSettled(bot.id, event.threadId);
-            memoryPass.onSettled(bot.id, event.threadId);
+            memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
+            void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
         }
@@ -4000,6 +4027,12 @@ bus.subscribe((event: RuntimeEvent) => {
           // Channel replies only affect the channel unread state.
         }
       }
+      // Before the queue drain subscribers append the next send.
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      setImmediate(() => {
+        const owner = verifyOwner && store.bot(verifyOwner.botId);
+        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
+      });
       // A delegated turn's terminal state belongs in the A⇄B channel:
       // the request was mirrored there when the delegation drained, and a
       // channel that only ever shows requests is half a record. Mirror the
@@ -4019,7 +4052,7 @@ bus.subscribe(observeTraceEvent);
 // (target threadId → channel) lets the main fold mirror the delegated
 // turn's TERMINAL state into the A⇄B channel when it completes — the
 // channel stays the full record of the handoff, not just its request.
-const delegationWatch = new Map<string, DelegatedTurn & { endTakeover?: () => void; reply: PeerTurnReply }>();
+const delegationWatch = new Map<string, DelegatedTurn & { endPeerWatch?: () => void; reply: PeerTurnReply }>();
 const peerReplies = peerTurnReplies(staleTurnEvent);
 
 /** Consume one delegated-turn watch and mirror exactly one terminal state.
@@ -4035,23 +4068,17 @@ function finalizeDelegationWatch(
   const watched = delegationWatch.get(threadId);
   if (!watched) return false;
   delegationWatch.delete(threadId);
-  watched.endTakeover?.();
+  watched.endPeerWatch?.();
   watched.reply.release();
+  settlePeerUserReplies(threadId);
   return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
-function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void; reply: PeerTurnReply }): void {
+function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endPeerWatch?: () => void; reply: PeerTurnReply }): void {
   delegationWatch.set(targetThreadId, watched);
   peerTurnSource.set(targetThreadId, watched.sourceThreadId);
-  watched.endTakeover = onPeerTakeover(targetThreadId, (afterReply) => {
-    peerTurnSource.delete(targetThreadId);
-    watched.reply.release();
-    // a reply that finished before the read settles now; the turn's later end finds no watch
-    const finished = afterReply ? watched.reply.text() : undefined;
-    if (finished !== undefined) delegationWatch.delete(targetThreadId);
-    settleTakenOverDelegation(commsBus, watched, cfg.profile?.name?.trim() || "User", finished);
-  }, () => {
+  watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {
     watched.answer ??= watched.reply.text() ?? "";
   });
 }
@@ -4148,6 +4175,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   peerTurnSource.delete(event.threadId);
+  settlePeerUserReplies(event.threadId, event.turnId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
@@ -4257,9 +4285,10 @@ const noteSteer = new NoteSteerer({
 });
 
 function drainQueuedSends() {
+  drainPeerUserReplies(store, startTurn, botHasActiveTurn, terminalBridgeAccess);
   taskResumes.settled();
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
-    // a send that never runs leaves no turn.completed to rerun a taken-over handoff
+    // A failed send still frees waiting handoffs.
     const rerunIfIdle = () =>
       continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, runDelegatedTurn), botHasActiveTurn);
     if (room) {
@@ -4461,7 +4490,7 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -4741,7 +4770,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
   // a teammate's turn leaves worker notes pending, for this whole dispatch
   const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
-  const modelContextWindow = contextWindowFor(instance.models, model);
+  const modelContextWindow = contextWindowFor(instance.models, model, instance.driverKind === "claudeAgent" ? reportedWindow(task, model) : null);
+  const nativeAt = nativeCompactAt(instance.driverKind, model, modelContextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment });
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
@@ -4767,6 +4797,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     : "";
   const catalogWindow = knownCatalogContextWindow(instance.models, model);
   let sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
+  const nativePrompt = nativeAt && task.nativePrompt?.cursor === task.resumeCursors[instanceId] ? task.nativePrompt : undefined;
+  const nativeCycle = { nativePrompt, nativeCycleBuilt: summaryBuild.nativeCycleBuilt(threadId, nativePrompt, nativeAt) };
   const notesBeforeSummary = instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(messagesBeforeSummary, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
@@ -4775,12 +4807,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextWindow: modelContextWindow,
     excludeIds: notesBeforeSummary?.ids?.length ? new Set([...skipTranscript, ...notesBeforeSummary.ids]) : skipTranscript,
     reserveTokens: notesBeforeSummary?.tokens,
+    nativeAt,
+    ...nativeCycle,
     userName: cfg.profile?.name?.trim() || "User",
     referenceMessages: store.messagesFor(threadId),
   });
   const reactions = { delivered: task.reactionsDelivered };
   const summaryGrace: SummaryGrace = {
-    knownWindow: catalogWindow,
+    knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
     requestText: composeUserTurnPrompt(text, {
       replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
     }),
@@ -4798,14 +4832,20 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       lastTurnInputTokens: task.usage?.lastInput,
       nativeTokenBudget: instance.adapter.capabilities.turnInputIsPromptSize && catalogWindow ? nativeSessionTokenBudget(catalogWindow) : 0,
       sessionPrompt,
+      ...(nativeAt ? {
+        native: true,
+        reseedTokens: planBeforeSummary.needed ? planBeforeSummary.estimatedTokensBefore : planBeforeSummary.status === "fits" ? planBeforeSummary.estimatedTokens : undefined,
+      } : {}),
     }) || instance.adapter.hasBackgroundWork?.(threadId) === true,
     local: Boolean(decodeInjectId(model)),
+    nativeAt,
     native: instance.adapter.capabilities.transcriptReplay !== true
       ? { instanceId, cursor: task.resumeCursors[instanceId], seed: task.resumeSeed, prompt: sessionPrompt }
       : undefined,
   };
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
-  const summarySkipped = summaryBuild.inflight(threadId) && planSummaryGrace(graceInputs).safe;
+  const sessionResumes = planSummaryGrace(graceInputs).safe;
+  const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
   const logSummaryWait = () => {
@@ -4819,7 +4859,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
-  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace) => {
+  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
       taskRecord = taskPacketForWrite(threadId);
@@ -4844,6 +4884,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       taskRecordText: durableTaskRecordText || "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set([...skipTranscript, ...inlineNotes.ids]) : skipTranscript,
       reserveTokens: inlineNotes?.tokens,
+      nativeAt,
+      ...native,
       summaryGrace: grace,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
@@ -4867,7 +4909,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       } : undefined,
     });
   };
-  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined);
+  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
   if (prepared.status !== "ready") {
     const detail = prepared.status === "unsupported"
       ? `This conversation uses context summary version ${String(prepared.version)}. Update Wink before continuing.`
@@ -4896,6 +4938,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       logSummaryWait();
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
+    if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
   }
   ensureChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id });
   trace?.identify({ messageId: userMessage.id });
@@ -4946,6 +4989,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     latestCompactionId,
     expanded: prepared.expanded,
     supersededIds,
+    native: Boolean(nativeAt),
   });
   // What this turn's session ends up holding: the summary, or the original
   // history a grown window restored in its place.
@@ -4959,6 +5003,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     lastTurnInputTokens: task.usage?.lastInput,
     nativeTokenBudget: knownWindow ? nativeSessionTokenBudget(knownWindow) : 0,
     sessionPrompt,
+    // an unseeded session never got Wink's context, so it still recycles
+    ...(nativeAt ? { native: !unseeded, reseedTokens: prepared.estimatedTokens } : {}),
   });
   // A recycle closes the live CLI and kills its background work. Resume it
   // instead; the first turn after that work settles recycles on the same checks.
@@ -5002,13 +5048,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
-    ? foldQueuedSends(store, bot.id, threadId, claimMark)
+    ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
     for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
-    takeOverPeerTurn(threadId);
   }
   const turnOpts = {
     replyTo: opts?.replyTo,
@@ -5034,11 +5079,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const routineCards = replaysTranscript
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
+  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
+    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
+    : [];
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5089,10 +5137,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   if (currentTurnEpoch(bot.id) !== epoch) {
+    memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     return startedTurn(userMessage);
   }
   if (opts?.sendId && isSendCancelled(opts.sendId)) {
+    memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     return startedTurn(userMessage, { cancelled: true });
   }
@@ -5100,6 +5150,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   dispatchedThreads.set(bot.id, threadId);
   markSendRunning(bot.id, opts?.sendId);
   if (currentTurnEpoch(bot.id) !== epoch) {
+    memoryLookup.release(bot.id, threadId);
     store.setActivity(bot.id, "idle");
     clearSendRunning(bot.id);
     logSummaryWait();
@@ -5132,6 +5183,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (reservation) dispatchingReservations.add(reservation);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
+      memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
       return;
@@ -5388,7 +5440,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
-      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -5427,6 +5478,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const showImagePrompt = canMessage ? ` ${slimStaticText(SHOW_IMAGE_GUIDANCE, instance.driverKind)}` : "";
 
       if (currentTurnEpoch(bot.id) !== epoch) {
+        memoryLookup.release(bot.id, threadId);
         releaseLocalVmThread(threadId);
         if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
         turnSeeds.release(threadId, seed);
@@ -5449,13 +5501,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
-          const queued = foldQueuedSends(store, bot.id, threadId, claimMark);
+          const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
           for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
-          takeOverPeerTurn(threadId);
           // the user joined this turn, so its finish alerts
           paneNoteTurnThreads.delete(threadId);
         };
@@ -5561,7 +5612,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -5653,6 +5704,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       turnUsage.delete(threadId);
       turnSeeds.release(threadId, seed);
       if (systemSeed) systemSeeds.release(threadId, systemSeed);
+      memoryLookup.release(bot.id, threadId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (opts?.limitWaitId && !limitWaits.canDispatch(opts.limitWaitId, selection)) {
         store.setActivity(bot.id, "idle");
@@ -6254,7 +6306,9 @@ async function runClaimedGroupMemberTurn(
   startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
   const taskRecord = taskPacketForWrite(threadId);
   const taskRecordToFlush = taskRecord;
-  const modelContextWindow = contextWindowFor(instance.models, selection.model);
+  const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
+  // A room replays Wink's context every turn, so no native session ever compacts it.
+  const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
   const recovering = isRecoveringPacket(taskRecord);
   const latestUser = lastUserInstruction(store.activePath(threadId));
   const durableTaskRecordText = taskRecord
@@ -6336,7 +6390,6 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
-  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7093,6 +7146,7 @@ const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSe
 const groupRoutes = createGroupRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   store,
+  clientMessage,
   registry,
   createGroupTaskRequestSchema,
   checkedMemberIds,
@@ -7158,6 +7212,13 @@ const verifySite = createVerifySite({
   deviceId: () => profileSyncSettings.deviceId,
   appToken: authorizedComms,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+  toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+});
+const verifyAuto = createVerifyAuto({
+  enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
+  startAuto: input => verifySite.startAuto(input),
+  cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  log: line => console.log(line),
 });
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
@@ -7197,6 +7258,7 @@ const botChatRoutes = createBotChatRoutes({
   threadSyncGate,
   registry,
   store,
+  clientMessage,
   sendSequencer,
   ensureChatLatency,
   markChatLatency,
@@ -7622,6 +7684,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { uses: loadKeyUses(DATA_DIR) });
     }
 
+    if (method === "GET" && path === "/api/activity") {
+      return json(res, 200, replyActivity());
+    }
+
     if (method === "GET" && path === "/api/analytics") {
       return json(res, 200, { enabled: loadAnalyticsConsent(DATA_DIR) });
     }
@@ -7844,10 +7910,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await teamRoutes.github(req, res);
     }
     if (method === "GET" && path === "/api/teams/scout") {
-      return await teamRoutes.scout(res, url);
+      return await teamRoutes.scout(res, url, credentials.bearerOk);
     }
     if (method === "GET" && path === "/api/teams/scout/directory") {
-      return await teamRoutes.directory(res, url);
+      return await teamRoutes.directory(res, url, credentials.bearerOk);
     }
     if (method === "POST" && path === "/api/teams/import") {
       return await teamRoutes.importTeam(req, res, url);
@@ -8608,6 +8674,7 @@ if (early) {
 phoneAccess.start(handleRequest).catch((error) => {
   console.error(`[phone-relay] start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
+startupTiming.afterPaint("googleKinds", async () => { googleKindsReady = true; });
 startupTiming.afterPaint("probes", async () => {
   await startupTiming.waitFor("accounts");
   return describeInstances("refresh")

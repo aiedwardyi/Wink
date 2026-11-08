@@ -57,6 +57,7 @@ const KEY_PREFIXES: RegExp[] = [
   /\bak_[A-Za-z0-9_-]{16,}/g, // composio
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // jwt
   /\b[a-f0-9]{8}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, // mailbox pane grant
+  /\bwk[pd]_[A-Za-z0-9_-]{43,}/g, // wink phone pairing / device token
 ];
 const BEARER = /(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})/gi;
 const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----)/g;
@@ -94,7 +95,7 @@ const PEM_TAIL_HOLD = 96;
 const STREAM_MATCHERS: RegExp[] = [PEM_BLOCK, ...KEY_PREFIXES, BEARER, KEY_VALUE, CONFIG_KEY_FIELD];
 
 /** A literal every content pattern above needs; text with none has nothing to mask. */
-const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
+const SECRET_HINT = /-----BEGIN |sk-|gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|ya29\.|npm_|xai-|[sr]k_|ak_|wk[pd]_|eyJ|\.[A-Za-z0-9_-]{43}|bearer|api[_-]?key|secret|token|passw|authorization|access[_-]?key|private[_-]?key|["']key["']/i;
 
 const WORD_CHAR = /[A-Za-z0-9_]/;
 const JWT_SEG_CHAR = /[A-Za-z0-9_-]/;
@@ -141,6 +142,8 @@ const KEY_STARTERS: Array<readonly [string, RegExp]> = [
   ["sk_", /[A-Za-z0-9]/],
   ["rk_", /[A-Za-z0-9]/],
   ["ak_", /[A-Za-z0-9_-]/],
+  ["wkp_", /[A-Za-z0-9_-]/],
+  ["wkd_", /[A-Za-z0-9_-]/],
 ];
 
 function atWordBoundary(text: string, i: number): boolean {

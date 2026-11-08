@@ -2,10 +2,11 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
+import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
 import { localeTag, useI18n, type Translate } from "@/lib/i18n";
-import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
+import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
@@ -219,7 +220,8 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
   let control: ReactNode = null;
   // While it waits, the sign-in's steps take their own line under the name.
-  if (account.signIn === "signed-out" && instance) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
+  // The small card keeps a Sign In button where the account already reads connected, never a stray "Connected".
+  if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
   else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
   else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
   else if (account.signIn === "ready") control = (
@@ -409,7 +411,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
       {folded ? main && <FoldSummary engine={engine} account={main} clock={clock} /> : arrows && <span className="ml-auto flex shrink-0">{arrows}</span>}
     </div>
   );
-  const group = (content: ReactNode) => <Fold open={!folded} id={id}><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
+  const group = (content: ReactNode) => <Fold open={!folded} id={id} soft><AccountGroup label={label} terminal={terminal}>{content}</AccountGroup></Fold>;
   return (
     <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
@@ -436,8 +438,10 @@ export function UsageDesk() {
   const pending = useRefreshPending();
   const drag = useUsageDrag(state.board?.engines ?? []);
   const desk = useRef<HTMLDivElement>(null);
+  const heads = useRef(new Map<HTMLElement, number>());
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
+  const [museAuthFailed, setMuseAuthFailed] = useState(false);
   const [engineId, setEngineId] = useState<string | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const now = useVisibleClock();
@@ -447,21 +451,27 @@ export function UsageDesk() {
     if (!list) return;
     const layout = () => {
       delete list.dataset.desktopColumns;
+      delete list.dataset.summarySize;
       if (window.innerWidth >= 768) {
         delete list.dataset.phoneColumns;
         const summaries = list.querySelectorAll<HTMLElement>(".usage-summary");
-        const widths: number[] = [];
-        for (const summary of summaries) {
-          [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
-            const index = meter.dataset.window === "week" ? 1 : slot;
-            widths[0] ??= 0;
-            widths[index] = Math.max(widths[index] ?? 0, meter.getBoundingClientRect().width);
-          });
-        }
-        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => name.getBoundingClientRect().width));
-        if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
-          list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
-          list.dataset.desktopColumns = "";
+        const nameWidth = Math.max(0, ...[...list.querySelectorAll<HTMLElement>("[data-engine-fold]")].map((name) => Math.ceil(parseFloat(getComputedStyle(name).width))));
+        for (const size of ["large", "medium", "small"]) {
+          list.dataset.summarySize = size;
+          const widths: number[] = [];
+          // Ignore the entrance scale and round up to keep fractional widths from wrapping.
+          for (const summary of summaries) {
+            [...summary.querySelectorAll<HTMLElement>(".usage-meter-summary")].forEach((meter, slot) => {
+              const index = meter.dataset.window === "week" ? 1 : slot;
+              widths[0] ??= 0;
+              widths[index] = Math.max(widths[index] ?? 0, Math.ceil(parseFloat(getComputedStyle(meter).width)));
+            });
+          }
+          if (widths.length && nameWidth + 12 + widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * 14 <= list.clientWidth) {
+            list.style.setProperty("--usage-summary-columns", widths.map((width) => `${width}px`).join(" "));
+            list.dataset.desktopColumns = "";
+            break;
+          }
         }
         return;
       }
@@ -474,21 +484,35 @@ export function UsageDesk() {
       list.dataset.phoneColumns = "";
       for (const head of heads) head.style.removeProperty("transition-property");
     };
-    let width = list.clientWidth;
-    layout();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
-      if (list.clientWidth === width) return;
-      width = list.clientWidth;
+    let observer: ResizeObserver | null = null;
+    const watch = () => {
+      let width = list.clientWidth;
       layout();
-    });
-    observer?.observe(list);
-    document.fonts?.addEventListener("loadingdone", layout);
+      observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+        if (list.clientWidth === width) return;
+        width = list.clientWidth;
+        layout();
+      });
+      observer?.observe(list);
+      document.fonts?.addEventListener("loadingdone", layout);
+    };
+    // Restyling the whole list here would stall the fold's first frame; measure once it has landed.
+    const moving = list.querySelector('[data-fold="opening"], [data-fold="closing"]');
+    const settled = moving ? setTimeout(watch, MOTION_LARGE_MS - 20) : undefined;
+    if (!moving) watch();
     return () => {
+      clearTimeout(settled);
       observer?.disconnect();
       document.fonts?.removeEventListener("loadingdone", layout);
-      delete list.dataset.phoneColumns;
-      delete list.dataset.desktopColumns;
     };
+  });
+  useLayoutEffect(() => {
+    // The head changes height the moment its summary comes or goes; a margin carries the difference with the body.
+    for (const [head, before] of heads.current) {
+      const delta = before - head.getBoundingClientRect().height;
+      if (delta && !reducedMotion()) head.animate?.([{ marginBottom: `${delta}px` }, { marginBottom: "0px" }], { duration: MOTION_LARGE_MS, easing: EASE_SOFT });
+    }
+    heads.current.clear();
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
   if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
@@ -498,17 +522,24 @@ export function UsageDesk() {
   const folded = (each: UsageBoardEngine) => folds[each.base] ?? !each.accounts.some((account) => account.signIn === "ready");
   const allFolded = board.engines.filter((each) => each.accounts.length).every(folded);
   const fold = (base: string, value: boolean) => {
+    const head = desk.current?.querySelector<HTMLElement>(`[data-usage-base="${base}"] > [data-engine-head]`);
+    if (head) heads.current.set(head, head.getBoundingClientRect().height);
     saveFold(base, value);
     setFolds((before) => ({ ...before, [base]: value }));
   };
   const refresh = async () => {
     setRefreshFailed(false);
+    setMuseAuthFailed(false);
     const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
       && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
       && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
       .map((each) => joinRefresh(each.instanceId, async () => {
-        const result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
+        if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
+          result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
+        }
         if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
+        if (each.driverKind === "museAgent" && result.status === "auth_error") setMuseAuthFailed(true);
         if (result.error) throw new Error("refresh");
         return result;
       })));
@@ -521,13 +552,16 @@ export function UsageDesk() {
           {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}
             onClick={() => setUsageMode(value)}>{t(value === "used" ? "usage.limits.countUp" : "usage.limits.countDown")}</button>)}
         </div>
-        <button type="button" data-fold-all="" onClick={() => { for (const each of board.engines) fold(each.base, !allFolded); }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
+        <button type="button" data-fold-all="" onClick={() => {
+          if ([...desk.current?.querySelectorAll("[data-fold]") ?? []].some((each) => each.getAnimations?.().some((motion) => motion.playState === "running"))) return;
+          for (const each of board.engines) fold(each.base, !allFolded);
+        }}>{t(allFolded ? "usage.desk.expandAll" : "usage.desk.collapseAll")}</button>
         <button type="button" data-usage-refresh="" disabled={pending.size > 0} aria-busy={pending.size > 0}
           aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}>
           <RefreshCw size={14} aria-hidden="true" className={cn(pending.size > 0 && "motion-safe:animate-spin")} />
         </button>
       </div>
-      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.refreshFailed")}</div>}
+      {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
       <div data-usage-sections="" ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className="usage-sections">
       {state.status === "error" && <div role="status" data-board-status="" className="text-[12px] text-ink-secondary">{t("usage.desk.stale")}</div>}
       {ordered(board.engines.filter((each) => each.accounts.length), drag.orders.engines, (each) => each.base).map((each) => <EngineSection key={each.base} engine={each} board={board} state={state} stacked={phone}

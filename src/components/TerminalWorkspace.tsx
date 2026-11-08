@@ -8,6 +8,7 @@ import { api, useStore, visibleMessages } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { readTerminalMatch, terminalTheme, TERMINAL_APPEARANCE_EVENT } from "@/lib/terminal-appearance";
 import { createTerminalLineTracker } from "@/lib/terminal-input";
+import { workerPaneOrder } from "@/lib/terminal-hotkeys";
 import { latestPaneRun, paneProvider, parseWorkerLabel, rosterChip, workerRuns } from "@/lib/worker-runs";
 import { DRAWER_HEADER_LEFT, DRAWER_HEADER_RIGHT } from "@/lib/drawer-button";
 import { useSidebarSide } from "@/lib/sidebar-preferences";
@@ -19,7 +20,7 @@ import "@xterm/xterm/css/xterm.css";
 type SessionInfo = { cwd: string; shell: string };
 type OutputEvent = { id: string; data: string; seq: number };
 type TerminalSnapshot = { id: string; cwd: string; shell: string; output: string; exitCode: number | null; seq: number; launchProject?: string | null; label?: string; cols?: number; rows?: number; alternate?: boolean; modes?: number[]; resetModes?: number[] };
-type BotPane = { id: string; label: string | null; exited?: boolean };
+type BotPane = { id: string; label: string | null; exited?: boolean; changedAt?: number };
 const TERMINAL_FONT_MIN = 8;
 const TERMINAL_FONT_MAX = 128;
 const HEADER_CONTROL = "text-ink-secondary hover:bg-raised hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-text";
@@ -52,15 +53,15 @@ export function TerminalWorkspace({
   onClose,
   focusBlocked,
   visible,
-  paneHotkey,
   paneFocus,
+  onPaneOrder,
 }: {
   bot: Pick<Bot, "id" | "name" | "busy" | "cwd"> & Partial<Pick<Bot, "messages" | "activeLeafId" | "hasMore">>;
   onClose: () => void;
   focusBlocked: boolean;
   visible: boolean;
-  paneHotkey?: { n: number } | null;
-  paneFocus?: { sessionId: string } | null;
+  paneFocus?: { sessionId: string | null } | null;
+  onPaneOrder?: (botId: string, order: string[] | null) => void;
 }) {
   const { t } = useI18n();
   const { dispatch } = useStore();
@@ -137,7 +138,7 @@ export function TerminalWorkspace({
     const closed = new Set<string>();
     void Promise.resolve().then(() => bridge.readBot?.(bot.id)).then((snapshot) => {
       if (!alive || !snapshot?.panes) return;
-      const seeded = snapshot.panes.filter((item) => !item.main && !closed.has(item.sessionId)).map((item) => ({ id: item.sessionId, label: item.label, exited: item.exited }));
+      const seeded = snapshot.panes.filter((item) => !item.main && !closed.has(item.sessionId)).map((item) => ({ id: item.sessionId, label: item.label, exited: item.exited, changedAt: item.changedAt }));
       setPanes((list) => [...seeded, ...list.filter((item) => !seeded.some((seed) => seed.id === item.id))]);
     }).catch(() => {}).finally(() => { if (alive) setSeeded(true); });
     const offOpened = bridge.onOpened?.((event) => {
@@ -636,15 +637,6 @@ export function TerminalWorkspace({
     if (visible && !focusBlocked) terminalRef.current?.focus();
   }, [visible, focusBlocked]);
 
-  useEffect(() => {
-    if (!paneHotkey) return;
-    if (paneHotkey.n === 1) selectPane(null);
-    else {
-      const target = panesRef.current[paneHotkey.n - 2];
-      if (target) selectPane(target.id);
-    }
-  }, [paneHotkey]);
-
   // Each open lands on the last picked pane or Main. Waits for the seed.
   useEffect(() => {
     if (!visible) pickedRef.current = false;
@@ -661,7 +653,7 @@ export function TerminalWorkspace({
   const focusedRef = useRef<typeof paneFocus>(null);
   useEffect(() => {
     if (!paneFocus || focusedRef.current === paneFocus) return;
-    if (!panes.some((item) => item.id === paneFocus.sessionId)) return;
+    if (paneFocus.sessionId !== null && !panes.some((item) => item.id === paneFocus.sessionId)) return;
     focusedRef.current = paneFocus;
     selectPane(paneFocus.sessionId);
   }, [paneFocus, panes]);
@@ -727,12 +719,19 @@ export function TerminalWorkspace({
       setConfirmClose(true);
     }
   };
-  const chip = rosterChip(workers, panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited })));
+  const roster = panes.map((item) => ({ sessionId: item.id, label: item.label, exited: item.exited, changedAt: item.changedAt }));
+  const chip = rosterChip(workers, roster);
+  const paneOrder = workerPaneOrder(roster, workers);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    onPaneOrder?.(bot.id, paneOrder);
+    return () => onPaneOrder?.(bot.id, null);
+  }, [bot.id, visible, onPaneOrder, paneOrder]);
   const watched = pane === null ? null : parseWorkerLabel(panes.find((item) => item.id === pane)?.label).nick ?? pane.slice(0, 8);
   const hotkeyOf = (sessionId: string | null) => {
-    if (sessionId === null) return 1;
-    const index = panes.findIndex((item) => item.id === sessionId);
-    return index >= 0 && index < 8 ? index + 2 : undefined;
+    if (sessionId === null) return undefined;
+    const index = paneOrder.indexOf(sessionId);
+    return index >= 0 && index < 9 ? index + 1 : undefined;
   };
 
   return (

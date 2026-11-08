@@ -63,9 +63,14 @@ export async function isolatePage(ses, contents, { origin, fontUrls = [], logLoo
     });
     ses.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => callback({ requestHeaders: Object.fromEntries(Object.entries(details.requestHeaders).filter(([key]) => !["cookie", "authorization", "proxy-authorization", "referer"].includes(key.toLowerCase()))) }));
     ses.webRequest.onHeadersReceived({ urls: ["<all_urls>"] }, (details, callback) => {
+      const allowEval = localUrl(details.url, origin) && Object.entries(details.responseHeaders ?? {}).some(([key, value]) => key.toLowerCase() === "x-orbit-verify-loopback" && value.length === 1 && value[0] === "1");
+      if (allowEval && Object.entries(details.responseHeaders ?? {}).some(([key, value]) => key.toLowerCase() === "x-orbit-verify-blocked" && value[0] === "1")) {
+        if (blocked.size < 2000) blocked.add(details.url.slice(0, 4096));
+        callback({ cancel: true }); return;
+      }
       const headers = Object.fromEntries(Object.entries(details.responseHeaders ?? {}).filter(([key]) => !["set-cookie", "x-dns-prefetch-control", "content-security-policy"].includes(key.toLowerCase())));
       headers["X-DNS-Prefetch-Control"] = ["off"];
-      headers["Content-Security-Policy"] = ["default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; manifest-src 'self'; connect-src 'self'; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"];
+      headers["Content-Security-Policy"] = [`default-src 'none'; script-src 'self' 'unsafe-inline'${allowEval ? " 'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; manifest-src 'self'; connect-src 'self'; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'`];
       callback({ responseHeaders: headers });
     });
     await ses.protocol.handle("https", async (request) => {

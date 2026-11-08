@@ -36,6 +36,9 @@ const tableSchema = z.object({
   version: z.literal(1), binding: bindingSchema, files: z.record(pathSchema, entrySchema),
   syncedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), changeToken: z.string().min(1).optional(),
 }).strict();
+const kindsSchema = z.object({
+  version: z.literal(1), readerRevision: z.number().int().positive(), binding: bindingSchema, changeToken: z.string().min(1),
+}).strict();
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 5 * 60 * 1_000;
 const TRANSFERS_AT_ONCE = 8;
@@ -52,11 +55,12 @@ export interface DriveMirrorSummary {
   duplicates: Array<{ path: string; selectedId: string; ids: string[] }>;
   retryAfterMs: number | null;
   driveFull: boolean;
+  kindRescan?: true;
 }
 
 /** Local md5s by path, trusted while size and mtime hold; outlives one mirror so later passes skip rehashing. */
 export type DriveHashes = Map<string, { size: bigint; mtimeNs: bigint; md5: string }>;
-type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; chatFirst?: boolean; openThread?: string | null; downloaded?: (path: string) => void; behind?: (paths: ReadonlySet<string>) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
+type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; kindsPath?: string; allowKindRescan?: boolean; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; rateLimit?: { strikes: number }; chatFirst?: boolean; openThread?: string | null; downloaded?: (path: string) => void; behind?: (paths: ReadonlySet<string>) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
 const passes = new Set<string>();
 const samePath = (a: string, b: string) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const md5 = (bytes: Uint8Array) => createHash("md5").update(bytes).digest("hex");
@@ -75,6 +79,9 @@ export function decodeDrivePath(name: string): string | null {
     return null;
   }
 }
+
+// Bump when a sync path kind or payload family becomes readable.
+export const DRIVE_READER_REVISION = 1;
 
 export function drivePathRule(path: string, ids: DriveOwnIds): DrivePathRule {
   if (!validPath(path)) return "unknown";
@@ -173,13 +180,25 @@ export function createDriveMirror(options: Options) {
   const statePath = canonicalPath(options.statePath);
   const stateRelative = relative(canonicalPath(mirrorPath), statePath);
   if (!stateRelative || (!isAbsolute(stateRelative) && stateRelative !== ".." && !stateRelative.startsWith(`..${sep}`))) throw new DriveMirrorError("unsafe-path");
+  const kindsRequested = options.kindsPath ? resolve(options.kindsPath) : null;
+  const kindsPath = kindsRequested ? canonicalPath(kindsRequested) : null;
+  function checkKindsPath(): void {
+    if (!kindsPath || !kindsRequested) return;
+    const path = canonicalPath(kindsRequested);
+    const rel = relative(canonicalPath(mirrorPath), path);
+    const stat = fileStat(kindsRequested);
+    if (!samePath(path, kindsPath) || !rel || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))
+      || samePath(path, statePath) || (stat && (!stat.isFile() || stat.isSymbolicLink()))
+      || (stat && identityOf(stat) === fileIdentity(statePath))) throw new DriveMirrorError("unsafe-path");
+  }
+  checkKindsPath();
   const client = options.client;
   const now = options.now ?? Date.now;
   const hashes: DriveHashes = options.hashes ?? new Map();
   let rootIdentity: { dev: number; ino: number } | null = null;
   let bound: Binding | null = null;
   let inflight: Promise<DriveMirrorSummary> | null = null;
-  let rateStrikes = 0;
+  const rateLimit = options.rateLimit ?? { strikes: 0 };
 
   function checkRoot(): void {
     try {
@@ -334,8 +353,8 @@ export function createDriveMirror(options: Options) {
     }
     function rateWait(error: DriveClientError): number {
       if (error.retryAfterMs !== null) return Math.min(error.retryAfterMs, RETRY_MAX_MS);
-      const wait = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** rateStrikes);
-      if (rateStrikes < 20) rateStrikes += 1;
+      const wait = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** rateLimit.strikes);
+      if (rateLimit.strikes < 20) rateLimit.strikes += 1;
       return wait;
     }
     async function drive<T>(work: () => Promise<T>): Promise<T | null> {
@@ -390,7 +409,29 @@ export function createDriveMirror(options: Options) {
     const roots = listedRoots.some((item) => item.id === rootId) ? listedRoots : [...listedRoots, got].sort((a, b) => Date.parse(a.createdTime) - Date.parse(b.createdTime) || a.id.localeCompare(b.id));
     if (roots[0]?.id !== rootId) throw new DriveMirrorError("split-root");
     if (roots.length > 1) summary.duplicates.push({ path: "", selectedId: roots[0].id, ids: roots.map((item) => item.id) });
+    checkKindsPath();
+    let kindsMatch = false;
+    if (kindsPath) {
+      try {
+        const receipt = kindsSchema.parse(JSON.parse(readFileSync(kindsPath, "utf8")));
+        kindsMatch = receipt.readerRevision === DRIVE_READER_REVISION && sameBinding(receipt.binding, captured) && receipt.changeToken === table.changeToken;
+      } catch {}
+    }
+    const kindRescan = !!kindsPath && !kindsMatch && !!options.allowKindRescan && !!table.changeToken;
+    if (kindRescan) summary.kindRescan = true;
+    const handled = kindRescan ? { ...table.files } : null;
     const remote = new Map<string, ContentFile[]>();
+    function notifyListed(): void {
+      if (!handled) { options.listed?.(remote); return; }
+      const projected = new Map(remote);
+      for (const [path, copies] of projected) {
+        // Only unchanged peer heads: a maintenance rescan must not hold sends for chats it won't download again.
+        if (!path.startsWith("threads-v2") || !path.endsWith("/head.json") || drivePathRule(path, ids) !== "peer") continue;
+        const file = [...copies].sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || Date.parse(b.createdTime) - Date.parse(a.createdTime) || a.id.localeCompare(b.id))[0];
+        if (file && handled[path]?.md5 === file.md5Checksum && handled[path]?.size === file.size) projected.delete(path);
+      }
+      options.listed?.(projected);
+    }
     const remotePaths = new Set<string>();
     const changed = new Set<string>();
     function accept(file: DriveFile): string | null {
@@ -441,10 +482,10 @@ export function createDriveMirror(options: Options) {
       if (path) changed.add(path);
       return path;
     }
-    let fullList = false;
+    let fullList = kindRescan;
     let cursor = "";
     const savedToken = table.changeToken;
-    if (savedToken) {
+    if (savedToken && !kindRescan) {
       try {
         const page = await drive(() => client.listChanges(savedToken));
         if (!page) { options.listed?.(null); return summary; }
@@ -469,7 +510,7 @@ export function createDriveMirror(options: Options) {
       if (!files) return summary;
       for (const file of files) accept(file);
     }
-    options.listed?.(remote);
+    notifyListed();
     const paths = new Set([...remotePaths, ...Object.keys(table.files)]);
     let awake = performance.now();
     async function breathe(): Promise<void> {
@@ -509,6 +550,7 @@ export function createDriveMirror(options: Options) {
     const resolvedPaths = new Set<string>();
     const identities = new Set<string>();
     const stats = new Map<string, BigIntStats>();
+    const kindsIdentity = kindsPath ? fileIdentity(kindsPath) : null;
     for (const path of paths) {
       await breathe();
       const name = process.platform === "win32" ? path.toLowerCase() : path;
@@ -518,6 +560,7 @@ export function createDriveMirror(options: Options) {
       const stat = fileStat(target);
       if (stat) stats.set(path, stat);
       const identity = identityOf(stat);
+      if (identity && identity === kindsIdentity) throw new DriveMirrorError("path-alias");
       if (names.has(name) || resolvedPaths.has(key) || (identity && identities.has(identity))) throw new DriveMirrorError("path-alias");
       const own = ownTargetPath(path);
       if (own && drivePathRule(path, ids) !== "own") {
@@ -607,7 +650,10 @@ export function createDriveMirror(options: Options) {
         summary.uploaded.push(path);
         track(path, updated);
       } else {
-        const downloaded = await client.downloadFile(file.id, file.size);
+        const downloaded = await client.downloadFile(file.id, file.size).catch((error) => {
+          if (error instanceof DriveClientError && error.driveFull) summary.failed.push(path);
+          throw error;
+        });
         check();
         if (!matches(file, downloaded)) throw new DriveMirrorError("content-changed");
         const written = await download(path, downloaded, rule === "once", check, ownPaths);
@@ -690,7 +736,7 @@ export function createDriveMirror(options: Options) {
         if (path) again.push(path);
       }
       cursor = page.newStartPageToken;
-      options.listed?.(remote);
+      notifyListed();
       await each(new Set(again));
       if (stopped) return summary;
     }
@@ -710,8 +756,12 @@ export function createDriveMirror(options: Options) {
       save();
     }
     remember(cursor);
-    if (summary.retryAfterMs === null) rateStrikes = 0;
+    if (summary.retryAfterMs === null) rateLimit.strikes = 0;
     check();
+    if (kindsPath && (fullList || kindsMatch) && summary.retryAfterMs === null && summary.failed.length === 0 && table.changeToken && !(kindsMatch && table.changeToken === savedToken)) {
+      checkKindsPath();
+      writeFileAtomic(kindsPath, `${JSON.stringify({ version: 1, readerRevision: DRIVE_READER_REVISION, binding: table.binding, changeToken: table.changeToken }, null, 2)}\n`, { mode: 0o600 });
+    }
     summary.skipped = [...new Set(summary.skipped)];
     return summary;
   }

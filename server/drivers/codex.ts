@@ -617,6 +617,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               };
               const detail = parsed.success ? codexToolDetail(parsed.data, !ok) : undefined;
               if (detail) event.detail = detail;
+              if (ok && parsed.success && parsed.data.type === "fileChange") event.writes = parsed.data.changes?.filter(change => change.kind.type !== "delete").map(change => change.path).slice(0, 32);
               emit(event);
             } else if (item.type === "reasoning") {
               emit({ ...base(threadId, turnId), type: "item.updated", itemType: "reasoning", tokens: null });
@@ -725,6 +726,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               rpcPending.delete(msg.id);
               msg.error ? pend.reject(Object.assign(new Error(msg.error.message ?? JSON.stringify(msg.error)), { code: msg.error.code })) : pend.resolve(msg.result);
             }
+          } else if (abandoned) {
+            // a retired attempt's late turn/completed would settle its replacement
+            continue;
           } else if (msg.id !== undefined && msg.method) {
             handleServerRequest(msg);
           } else if (msg.method) {

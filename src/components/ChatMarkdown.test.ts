@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -190,6 +190,31 @@ describe("streaming tail", () => {
     } finally {
       await act(async () => root.unmount());
       host.remove();
+    }
+  });
+});
+
+describe("ChatMarkdown first paragraph", () => {
+  it("shows only what the finished paragraph shows, one character at a time", async () => {
+    localStorage.setItem("omb-reply-style", "paragraphs");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const reply = "See [the docs](https://example.com/a_b) and ![cat](cat.png) for ~~old~~ _new_ steps, use `my_var` or **bold** <b>tag</b> now.";
+    const rendered = async (text: string, streaming: boolean) => {
+      await act(async () => root.render(createElement(ChatMarkdown, { text, streaming, whole: 0 })));
+      return host.querySelector(".chat-md")?.textContent ?? "";
+    };
+    try {
+      const final = await rendered(reply, false);
+      for (let at = 1; at <= reply.length; at++) {
+        const partial = await rendered(reply.slice(0, at), true);
+        expect.soft(final.startsWith(partial), `${JSON.stringify(reply.slice(0, at))} -> ${JSON.stringify(partial)}`).toBe(true);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      localStorage.setItem("omb-reply-style", "live");
     }
   });
 });
@@ -707,6 +732,149 @@ describe("relative file links", () => {
       composer.remove();
       vi.unstubAllGlobals();
     }
+  });
+
+  describe("phone video full screen", () => {
+    let host: HTMLDivElement;
+    let root: Root;
+    let shown: Element | null;
+    let layers: WindowEventMap["orbit:back-layer"][];
+    const record = (event: WindowEventMap["orbit:back-layer"]) => layers.push(event);
+    const setFullscreen = (element: Element | null) => {
+      shown = element;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+
+    async function mount(touch = true, supported = true) {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([0]), { status: 206 })));
+      vi.stubGlobal("matchMedia", (query: string) => ({ matches: touch && query === "(pointer: coarse)", addEventListener() {}, removeEventListener() {} }));
+      Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: supported });
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => shown });
+      Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+        configurable: true,
+        value: supported ? vi.fn(async function (this: Element) { setFullscreen(this); }) : undefined,
+      });
+      document.exitFullscreen = vi.fn(async () => setFullscreen(null));
+      await act(async () => root.render(createElement(ChatMarkdown, { text: "[clip.mp4](C:/clips/clip.mp4)", threadId: "t1" })));
+      await act(async () => {
+        await vi.waitFor(() => {
+          expect(host.querySelector("video")).not.toBeNull();
+        });
+      });
+    }
+    const button = () => host.querySelector<HTMLButtonElement>("[data-phone-video-fullscreen]");
+
+    beforeEach(() => {
+      shown = null;
+      layers = [];
+      window.addEventListener("orbit:back-layer", record);
+      host = document.body.appendChild(document.createElement("div"));
+      root = createRoot(host);
+    });
+
+    afterEach(async () => {
+      await act(async () => root.unmount());
+      host.remove();
+      window.removeEventListener("orbit:back-layer", record);
+      Reflect.deleteProperty(document, "fullscreenEnabled");
+      Reflect.deleteProperty(document, "fullscreenElement");
+      Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
+      Reflect.deleteProperty(document, "exitFullscreen");
+      vi.unstubAllGlobals();
+      applyLocale("en");
+    });
+
+    it("puts the wrapper holding the same video into full screen and turns the browser button off", async () => {
+      await mount();
+      const video = host.querySelector("video")!;
+      const play = vi.spyOn(video, "play");
+      const pause = vi.spyOn(video, "pause");
+      expect(video.getAttribute("controlslist")).toBe("nofullscreen");
+      await act(async () => button()!.click());
+      expect(shown).toBe(video.parentElement);
+      expect(shown).not.toBe(video);
+      expect(host.querySelector("video")).toBe(video);
+      expect(button()!.getAttribute("aria-label")).toBe("Exit full screen");
+      expect(play).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+      expect(video.className).toContain("object-contain");
+    });
+
+    it("exits with the same button and keeps the video element", async () => {
+      await mount();
+      const video = host.querySelector("video")!;
+      await act(async () => button()!.click());
+      await act(async () => button()!.click());
+      expect(document.exitFullscreen).toHaveBeenCalledTimes(1);
+      expect(shown).toBeNull();
+      expect(host.querySelector("video")).toBe(video);
+      expect(button()!.getAttribute("aria-label")).toBe("Full screen");
+    });
+
+    it("focuses the video on entry so the browser shows its controls", async () => {
+      await mount();
+      const video = host.querySelector("video")!;
+      video.setAttribute("tabindex", "0");
+      expect(document.activeElement).not.toBe(video);
+      await act(async () => button()!.click());
+      expect(document.activeElement).toBe(video);
+    });
+
+    it("lets phone Back leave full screen first", async () => {
+      await mount();
+      expect(layers).toHaveLength(0);
+      await act(async () => button()!.click());
+      const layer = layers.at(-1)!;
+      expect(layer.detail.close).toBeTypeOf("function");
+      await act(async () => layer.detail.close!());
+      expect(shown).toBeNull();
+      expect(layers.at(-1)!.detail.close).toBeUndefined();
+    });
+
+    it("drops the Back layer when the browser leaves full screen itself", async () => {
+      await mount();
+      await act(async () => button()!.click());
+      await act(async () => setFullscreen(null));
+      expect(layers.at(-1)!.detail.close).toBeUndefined();
+      expect(button()!.getAttribute("aria-label")).toBe("Full screen");
+    });
+
+    it("ignores another element's full screen", async () => {
+      await mount();
+      await act(async () => setFullscreen(document.body));
+      expect(button()!.getAttribute("aria-label")).toBe("Full screen");
+      expect(layers).toHaveLength(0);
+    });
+
+    it("names the button in Korean with a real icon", async () => {
+      applyLocale("ko");
+      await mount();
+      expect(button()!.getAttribute("aria-label")).toBe("전체 화면");
+      expect(button()!.title).toBe("전체 화면");
+      expect(button()!.querySelector("svg")).not.toBeNull();
+      expect(button()!.textContent).toBe("");
+      await act(async () => button()!.click());
+      expect(button()!.getAttribute("aria-label")).toBe("전체 화면 종료");
+    });
+
+    it("sizes the touch target and keeps it off the seek bar", async () => {
+      await mount();
+      const classes = button()!.className;
+      expect(classes).toContain("h-11");
+      expect(classes).toContain("w-11");
+      expect(classes).toContain("bottom-14");
+    });
+
+    it.each([
+      ["a mouse pointer", true, false],
+      ["no element full screen", false, true],
+    ] as const)("renders the plain video with %s", async (_, supported, touch) => {
+      await mount(touch, supported);
+      expect(button()).toBeNull();
+      const video = host.querySelector("video")!;
+      expect(video.hasAttribute("controlslist")).toBe(false);
+      expect(video.parentElement!.tagName).not.toBe("SPAN");
+    });
   });
 
   it.each(["zip", "md", "txt", "docx", "html", "htm"])("opens a linked %s from an authenticated browser without the desktop bridge", async (ext) => {

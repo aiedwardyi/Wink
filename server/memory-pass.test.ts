@@ -184,6 +184,13 @@ describe("memory pass", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
+  it("flushes at once before the engine compacts", async () => {
+    say("t1", "i'm 38");
+    pass.onSettled("bot-t1", "t1", true);
+    await pass.idle();
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
   it("a new user message holds the idle timer until the next turn ends", async () => {
     say("t1", "first");
     pass.onSettled("bot-t1", "t1");
@@ -823,7 +830,7 @@ describe("memory pass wiring", () => {
 
   it("runs every bot's pass on Claude, after 1:1 turns, without a session transcript", () => {
     expect(index).toMatch(/createMemoryPass\(\{[\s\S]*?generate: \(\) => noteGenerator\(registry\.instances\(\), botAccounts\.noteAccount\(\)\),[\s\S]*?botHasActiveTurn/);
-    expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId\);/);
+    expect(index).toMatch(/summaryRepair\.onSettled\(bot\.id, event\.threadId\);\s*memoryPass\.onSettled\(bot\.id, event\.threadId, flushNotes\);/);
     expect(index).toContain("memoryPass.dispose();");
   });
 

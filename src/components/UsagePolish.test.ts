@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MOTION_LARGE_MS } from "@/lib/motion";
 import { usageBoardFixture, usageBoardNow } from "@/lib/usage-board.fixture";
 import type { UsageBoard } from "@/lib/usage-board";
 import { setUsageMode } from "@/lib/usage-preferences";
@@ -24,6 +25,10 @@ import { ChatPlanMeters } from "./ChatPlanMeters";
 let host: HTMLDivElement;
 let root: Root;
 const q = (selector: string) => host.querySelector<HTMLElement>(selector);
+const foldAll = async () => {
+  await click("[data-fold-all]");
+  await act(async () => { await vi.advanceTimersByTimeAsync(MOTION_LARGE_MS); });
+};
 const click = async (selector: string) => {
   expect(q(selector), selector).not.toBeNull();
   await act(async () => q(selector)!.click());
@@ -83,8 +88,20 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
   expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content 70px minmax(0, 1fr)");
   expect(rule("[data-phone-columns] .usage-summary")).toContain("grid-template-columns: subgrid");
   expect(rule("[data-phone-columns] .usage-meter-summary")).toContain("grid-template-columns: subgrid");
+  expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-sections')).toContain("row-gap: 30px");
+  expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar')).toContain("min-height: 44px; margin-bottom: 16px");
+  expect(rule("[data-phone-columns] .usage-meter-summary .usage-figures")).toContain("row-gap: 6px");
+  expect(rule("[data-phone-columns] .usage-meter-summary .usage-figures")).not.toContain("display: grid");
+  expect(rule(".usage-meter-summary [data-left]:empty")).toContain("display: none");
   expect(css).toMatch(/\[data-phone-columns\] \.usage-engine-head:has\(\.usage-summary\) \{[^}]*min-height: var\(--usage-row-height\)/);
   expect(css).not.toContain("@container usage-summary");
+});
+
+it("grows the chat bar's coarse-pointer hit area to 44px without moving its bars", () => {
+  const coarse = css.slice(css.indexOf("@media (pointer: coarse)"));
+  expect(coarse).toContain(".usage-chat-button { position: relative; z-index: 1; }");
+  expect(coarse).toMatch(/\.usage-chat-button::after \{[^}]*inset-inline: 0;[^}]*top: calc\(50% - 22px\);[^}]*height: 44px;/);
+  expect(rule(".usage-chat-button")).not.toContain("min-height");
 });
 
 it("keeps account spacing out of the chat meter above the composer", () => {
@@ -100,13 +117,13 @@ it("measures phone rows before aligning and restores the expanded layout", async
   const size = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 302, 45));
   await mount();
   expect(q("[data-phone-columns]")).toBeNull();
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-phone-columns]")).not.toBeNull();
   for (const head of host.querySelectorAll<HTMLElement>(".usage-engine-head")) {
     expect(head.style.getPropertyValue("--usage-row-height")).toBe("45px");
     expect(head.style.transitionProperty).toBe("");
   }
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-phone-columns]")).toBeNull();
   size.mockRestore();
 });
@@ -128,13 +145,13 @@ it.each(["unknown", "signed-out", "ready"] as const)("keeps %s status text out o
 it("shares desktop window widths and drops them when expanded or too narrow", async () => {
   vi.stubGlobal("innerWidth", 1280);
   h.board!.engines.find((engine) => engine.engine === "codex")!.accounts[0]!.windows = structuredClone(h.board!.engines[0]!.accounts[0]!.windows);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    return new DOMRect(0, 0, this.matches("[data-engine-fold]") ? 100 : this.matches('[data-window="session"]') ? this.closest('[data-usage-engine="codex"]') ? 210 : 180 : 190, 17);
-  });
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => Object.assign(document.createElement("div").style, {
+    width: `${element.matches("[data-engine-fold]") ? 100 : element.matches('[data-window="session"]') ? element.closest('[data-usage-engine="codex"]') ? 210 : 180 : 190}px`,
+  }));
   let width = 628;
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
   await mount();
-  await click("[data-fold-all]");
+  await foldAll();
   const list = q("[data-desktop-columns]")!;
   expect(list).not.toBeNull();
   expect(list.style.getPropertyValue("--usage-summary-columns")).toBe("210px 190px");
@@ -142,8 +159,51 @@ it("shares desktop window widths and drops them when expanded or too narrow", as
   await mount();
   expect(q("[data-desktop-columns]")).toBeNull();
   width = 628;
-  await click("[data-fold-all]");
+  await foldAll();
   expect(q("[data-desktop-columns]")).toBeNull();
+  vi.restoreAllMocks();
+});
+
+it("keeps layout widths while the Settings entrance scales the painted meters", async () => {
+  vi.stubGlobal("innerWidth", 1200);
+  localStorage.setItem("openmausbot.usageFolds.v1", JSON.stringify(Object.fromEntries(h.board!.engines.map((engine) => [engine.base, true]))));
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => Object.assign(document.createElement("div").style, {
+    width: element.matches("[data-engine-fold]") ? "100px" : "184.390625px",
+  }));
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(628);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return new DOMRect(0, 0, (this.matches("[data-engine-fold]") ? 100 : 184.390625) * 0.96, 20 * 0.96);
+  });
+  await mount();
+  expect(q("[data-desktop-columns]")!.style.getPropertyValue("--usage-summary-columns")).toBe("185px 185px");
+  vi.restoreAllMocks();
+});
+
+it("steps every collapsed bar down with its container width and leaves phones unchanged", async () => {
+  vi.stubGlobal("innerWidth", 1280);
+  h.board!.engines = [h.board!.engines[0]!];
+  localStorage.setItem("openmausbot.usageFolds.v1", JSON.stringify({ claude: true }));
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => {
+    const size = element.closest<HTMLElement>("[data-summary-size]")?.dataset.summarySize;
+    const bar = size === "large" ? 120 : size === "medium" ? 95 : 70;
+    return Object.assign(document.createElement("div").style, {
+      width: `${element.matches("[data-engine-fold]") ? 100 : bar + (element.dataset.window === "week" ? 100 : 80)}px`,
+    });
+  });
+  let width = 560;
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
+  for (const [available, size, columns] of [[560, "large", "200px 220px"], [510, "medium", "175px 195px"], [460, "small", "150px 170px"], [560, "large", "200px 220px"]] as const) {
+    width = available;
+    await mount();
+    expect(q("[data-usage-sections]")!.dataset.summarySize).toBe(size);
+    expect(q("[data-desktop-columns]")!.style.getPropertyValue("--usage-summary-columns")).toBe(columns);
+  }
+  vi.stubGlobal("innerWidth", 392);
+  await mount();
+  expect(q("[data-summary-size]")).toBeNull();
+  expect(rule(".usage-sections .usage-cells-mini")).toContain("transition-property: none");
+  expect(rule('.usage-sections[data-summary-size="large"] .usage-cells-mini')).toContain("--cells-w: 120px; --cell-h: 7px");
+  expect(rule('.usage-sections[data-summary-size="medium"] .usage-cells-mini')).toContain("--cells-w: 95px; --cell-h: 5.5px");
   vi.restoreAllMocks();
 });
 

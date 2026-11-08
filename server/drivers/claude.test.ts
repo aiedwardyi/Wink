@@ -522,8 +522,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(recorder.events.filter((e) => e.type === "runtime.error" && e.usageLimit)).toHaveLength(0);
   });
 
-  const capture = async (name: string, input: unknown, content: unknown, is_error = false) => {
-    saveConfig({ features: { toolDetailCapture: true } });
+  const capture = async (name: string, input: unknown, content: unknown, is_error = false, detail = true) => {
+    saveConfig({ features: { toolDetailCapture: detail } });
     const path = join(scratch, "tool-detail.json");
     writeFileSync(path, JSON.stringify([{ name, input, content, is_error }]));
     process.env.FAKE_CLAUDE_TOOL_FIXTURE = path;
@@ -534,6 +534,21 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     if (event?.type !== "item.completed" || event.itemType !== "tool") throw new Error("missing tool completion");
     return event;
   };
+
+  it.each(["Write", "Edit", "MultiEdit", "NotebookEdit"])("emits raw %s writes with tool detail off", async name => {
+    const path = `src/${"long-".repeat(60)}page.html`;
+    const event = await capture(name, name === "NotebookEdit" ? { notebook_path: path } : { file_path: path }, "ok", false, false);
+    expect(event.writes).toEqual([path]);
+    expect(event.detail).toBeUndefined();
+  });
+
+  it.each(["Read", "Bash"])("does not report %s as a native write", async name => {
+    expect((await capture(name, { file_path: "page.html" }, "ok", false, false)).writes).toBeUndefined();
+  });
+
+  it("does not report a failed native write", async () => {
+    expect((await capture("Write", { file_path: "page.html" }, "failed", true, false)).writes).toBeUndefined();
+  });
 
   it("tool detail captures Bash input and three capped lines with more", async () => {
     const command = `echo ${"build ".repeat(12).trim()}`;

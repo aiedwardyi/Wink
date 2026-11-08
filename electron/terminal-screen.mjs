@@ -404,7 +404,7 @@ export function createTerminalScreen({ cols = DEFAULT_COLS, rows = DEFAULT_ROWS,
         wrapPending = false;
         break;
       case "s": if (!/^[?>!=<]/.test(raw)) savedCursor = { x: cursorX, y: cursorY }; break;
-      case "u": if (!/^[?>!=<]/.test(raw)) { cursorX = savedCursor.x; cursorY = savedCursor.y; wrapPending = false; } break;
+      case "u": if (!/^[?>!=<]/.test(raw)) { cursorX = clamp(savedCursor.x, 0, width - 1); cursorY = clamp(savedCursor.y, 0, height - 1); wrapPending = false; } break;
       case "h": if (a === 4) insertMode = true; break;
       case "l": if (a === 4) insertMode = false; break;
       case "m": if (!/^[?>!=<]/.test(raw)) pen = applySgr(pen, parsed.groups); break;
@@ -432,7 +432,7 @@ export function createTerminalScreen({ cols = DEFAULT_COLS, rows = DEFAULT_ROWS,
         else if (char === "]") { parserState = "osc"; osc = ""; }
         else if (char === "P" || char === "^" || char === "_") parserState = "string";
         else if (char === "7") { savedCursor = { x: cursorX, y: cursorY }; parserState = "normal"; }
-        else if (char === "8") { cursorX = savedCursor.x; cursorY = savedCursor.y; wrapPending = false; parserState = "normal"; }
+        else if (char === "8") { cursorX = clamp(savedCursor.x, 0, width - 1); cursorY = clamp(savedCursor.y, 0, height - 1); wrapPending = false; parserState = "normal"; }
         else if (char === "D") { lineFeed(); parserState = "normal"; }
         else if (char === "E") { carriageReturn(); lineFeed(); parserState = "normal"; }
         else if (char === "M") { if (cursorY === scrollTop) scrollDown(); else cursorY -= 1; parserState = "normal"; }

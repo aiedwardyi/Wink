@@ -74,6 +74,25 @@ async function linkedSite(files: Record<string, string>) {
 }
 
 describe("linked files", () => {
+  it("rejects canonical hidden assets while serving normal and pnpm targets", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const site = await linkedSite({ "index.html": "page", ".secrets.json": "private", "normal.json": "public", ".hidden/data.json": "private", "node_modules/.pnpm/pkg/index.js": "package" });
+    try {
+      const page = await site.open("index.html");
+      expect(page.status).toBe(200);
+      const canonical = realpathSync(site.root);
+      for (const [target, status, body] of [[".secrets.json", 404, null], [".hidden/data.json", 404, null], ["normal.json", 200, "public"], ["node_modules/.pnpm/pkg/index.js", 200, "package"]] as const) {
+        const alias = target.endsWith(".js") ? "public.js" : "public.json";
+        vi.mocked(realpathSync).mockImplementation(((path, ...args) => path === join(canonical, alias) ? join(canonical, target) : Reflect.apply(actual.realpathSync, actual, [path, ...args])) as typeof realpathSync);
+        const response = await fetch(new URL(alias, page.url));
+        expect(response.status, target).toBe(status);
+        if (body) expect(await response.text()).toBe(body);
+      }
+    } finally {
+      vi.mocked(realpathSync).mockRestore();
+      await site.server.close();
+    }
+  });
   it("judges a media-named file symlink by its resolved type without Windows link privileges", async () => {
     const root = temp("linked-real-type-", process.cwd());
     const folder = join(root, "bot");

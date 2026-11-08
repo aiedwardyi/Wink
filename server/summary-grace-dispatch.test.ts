@@ -89,7 +89,7 @@ describe("summary grace dispatch", () => {
     }
     const taskRecordText = "Goal: preserve context";
     const generateText = vi.fn(() => new Promise<string>((resolve) => setTimeout(() => resolve("SUMMARY\nretained decisions"), 80_000)));
-    const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000 };
+    const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000, adapter: { capabilities: { queueing: true } } };
     const store = {
       activePath: () => [...messages],
       activeLeaf: () => messages.at(-1)?.id ?? null,
@@ -163,7 +163,7 @@ describe("summary grace dispatch", () => {
           shouldRecycleProviderSession: () => false, rewound: false, recovering: false,
           countLastTurnToolRounds: () => 0, countSessionToolRounds: () => 0,
           messagesBeforeSummary: activeMessages, skipTranscript, task: {},
-          instance: { adapter: live.adapter }, threadId: "thread", catalogWindow: 200_000, sessionPrompt: undefined,
+          instance: { adapter: live.adapter }, threadId: "thread", catalogWindow: 200_000, sessionPrompt: undefined, nativeAt: null,
         });
         expect(planSummaryGrace({ ...graceInputs, grace: { ...summaryGrace, recycle: plannedRecycle } })).toEqual({ safe: false, reason: "session-recycle" });
       }
@@ -177,9 +177,9 @@ describe("summary grace dispatch", () => {
           return live;
         } },
         instanceId: "claude", threadId: "thread", bot: { id: "bot" }, claimMark, store, instance, routineTurnThreads: new Set(),
-        foldQueuedSends, adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
+        turnStartedByUser: () => false, foldPeerQueuedSends: foldQueuedSends, adoptHumanRoot, rootId: null, composeUserTurnPrompt, userTurnReactionKeys, paneNotesForTurn, routineCardsSinceLastUserTurn, withoutTurnNotes,
         buildTurnContext, buildResumeFallback, systemTurnInput, withSystemChanges, planSummaryGrace,
-        clearUnattended: () => {}, resumePaneWakes: () => {}, takeOverPeerTurn: () => {}, paneNoteTurnThreads: new Set(),
+        clearUnattended: () => {}, resumePaneWakes: () => {}, paneNoteTurnThreads: new Set(),
         mailForTurn: () => event === "mail" || event === "held mail" ? [{ id: "reply", text: "folded peer reply", upto: 17 }] : [], markMailRead: vi.fn(), markPaneMailRead: vi.fn(), holdNotes,
         opensHostFiles: () => false, privateWorkspace: false, task: { resumeCursors: { claude: "session" } },
         persona: "system", projectFolderPrompt: () => "", projectNotesPrompt: () => "", cwd: ".",

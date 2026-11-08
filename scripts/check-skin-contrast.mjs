@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const css = readFileSync(join(root, "src/styles.css"), "utf8");
+const css = ["src/styles.css", "src/skins/fresh-dark.css"].map((file) => readFileSync(join(root, file), "utf8")).join("\n");
 
 function declarations(body) {
   const tokens = {};

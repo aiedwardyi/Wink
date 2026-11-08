@@ -11,7 +11,8 @@ import { ensureDirs } from "./config.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
 import { CodexDriver } from "./drivers/codex.ts";
-import { onPeerTakeover, takePeerReplyStamp } from "./peer-takeover.ts";
+import { takePeerReplyStamp, watchPeerTurn } from "./peer-takeover.ts";
+import { persistPeerUserReply } from "./peer-user-reply.ts";
 import { ENGINE_SUMMARY_PREFIX } from "./replies.ts";
 import type { Message } from "./store.ts";
 import { recordEvents } from "./testing/events.ts";
@@ -58,7 +59,7 @@ function chat(threadId: string) {
   const patches: Array<Partial<Message>> = [];
   const peerReplyComm = new Map<string, NonNullable<Message["comm"]>>();
   const deps: Record<string, unknown> = {
-    turnSummaries, takePeerReplyStamp, peerReplyComm, lastReply: new Map(), markChatLatency: () => {},
+    turnSummaries, takePeerReplyStamp, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {},
     store: {
       messagesFor: () => messages,
       patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => {
@@ -168,7 +169,7 @@ describe("a turn's commentary after its final answer", () => {
     const view = chat("t-peer");
     const comm = { groupId: "peer-room", withBotId: "caller", withName: "Caller", withColor: "blue", peer: "reply" } as const;
     view.peerReplyComm.set("t-peer", comm);
-    const unwatch = onPeerTakeover("t-peer", () => {});
+    const unwatch = watchPeerTurn("t-peer");
     for (const event of events) view.feed(event);
     unwatch();
     expect(view.messages.map((message) => message.comm)).toEqual([undefined, comm]);

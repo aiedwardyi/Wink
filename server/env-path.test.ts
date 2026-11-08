@@ -353,6 +353,20 @@ describe("splitCliString", () => {
 });
 
 describe("resolveCli with wrapper commands", () => {
+  it("keeps an existing apostrophe path whole", () => {
+    const root = mkdtempSync(join(tmpdir(), "cli-apostrophe-"));
+    const bin = join(root, "O'Brien");
+    mkdirSync(bin);
+    const cli = join(bin, "claude.exe");
+    writeFileSync(cli, "fixture");
+    try {
+      expect(paths.resolveCliSpawn(cli, ["--help"])).toEqual({ command: cli, args: ["--help"] });
+      expect(paths.resolveCliSpawn(`"${cli}" fixed`, ["--help"])).toEqual({ command: cli, args: ["fixed", "--help"] });
+      expect(paths.resolveCliSpawn("audit-missing-cli", ["--help"])).toEqual({ command: "audit-missing-cli", args: ["--help"] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   posixIt("puts wrapper subcommands BEFORE invocation args", () => {
     const resolved = resolveCli("/usr/local/bin/ag claude agp", ["--help"]);
     expect(resolved.command).toBe("/usr/local/bin/ag");

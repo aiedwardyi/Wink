@@ -14,8 +14,8 @@ export function zoomShortcut(input) {
   return null;
 }
 
-// Chromium zooms 1.2x per level, so half a level is about 10% per press.
-const ZOOM_STEP = 0.5;
+// Chromium zooms 1.2x per level, so a quarter level is about 5% per press.
+const ZOOM_STEP = 0.25;
 
 export function applyZoomShortcut(webContents, input) {
   const action = zoomShortcut(input);

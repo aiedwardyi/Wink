@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { settleStreamTail } from "../components/ChatMarkdown";
 import { splitReplyBlocks } from "./turn-stage";
+
+const frames = (text: string) =>
+  Array.from({ length: text.length }, (_, i) => splitReplyBlocks(text.slice(0, i + 1), false, 0, settleStreamTail)[0] ?? "");
+
+const vanishes = (all: string[]) => all.some((frame, i) => i > 0 && all[i - 1] && !frame);
 
 describe("paragraph reply blocks", () => {
   it("keeps reference definitions with their links", () => {
@@ -23,9 +29,52 @@ describe("paragraph reply blocks", () => {
     expect(splitReplyBlocks(`${text}${text.endsWith("\n") ? "" : "\n"}Unfinished`)).toEqual([block]);
   });
 
-  it("holds an unfinished paragraph and a fence with a blank line inside", () => {
-    expect(splitReplyBlocks("Still writing")).toEqual([]);
+  it("holds a later unfinished paragraph and a fence with a blank line inside", () => {
+    expect(splitReplyBlocks("Done.\n\nStill writing")).toEqual(["Done."]);
     expect(splitReplyBlocks("Done.\n\n```js\nfirst\n\nsecond")).toEqual(["Done."]);
+  });
+
+  it("shows the first paragraph while it is arriving", () => {
+    expect(splitReplyBlocks("Still writing")).toEqual(["Still writing"]);
+    expect(splitReplyBlocks("Still writing ")).toEqual(["Still writing"]);
+  });
+
+  it.each([
+    ["a table header", "| A | B |"],
+    ["a header with half a delimiter row", "A | B\n|--"],
+    ["a list number", "1"],
+    ["a list", "- First"],
+    ["a heading", "## Title"],
+    ["an open fence", "```js\nconst a = 1;"],
+    ["an open link", "["],
+  ])("keeps %s out of sight", (_, text) => {
+    expect(splitReplyBlocks(text)).toEqual([]);
+  });
+
+  it.each([
+    ["a half link", "See [the docs](https://exa", "See"],
+    ["a half link text", "See [the do", "See"],
+    ["a link with no target yet", "See [docs]", "See"],
+    ["a half image", "Look ![a cat](cat.p", "Look"],
+    ["an open tag", "Run <span cla", "Run"],
+    ["open strikethrough", "Drop ~~this one", "Drop"],
+    ["open underscores", "This is _very", "This is"],
+    ["a link inside open strikethrough", "The killer is ~~Alice [profile", "The killer is"],
+    ["open code inside open strikethrough", "The ~~spoiler `code", "The"],
+  ])("never draws %s", (_, text, shown) => {
+    expect(splitReplyBlocks(text)).toEqual([shown]);
+  });
+
+  it.each([
+    "See [the docs](https://example.com) now",
+    "Use my_file_name and `_private` ok",
+    "A ~~gone~~ word and _slanted_ text",
+    "Take a[0] and [x] and 2 < 3",
+    "Mixed <b>bold</b> done",
+    "See [docs](https://host/_private) now",
+    "A | B\ncontinues here",
+  ])("shows closed markup as written in %j", (text) => {
+    expect(splitReplyBlocks(text)).toEqual([text]);
   });
 
   it("releases an unfinished fence and paragraph at turn end", () => {
@@ -47,5 +96,80 @@ describe("paragraph reply blocks", () => {
   ])("holds %s until the next top-level block", (_, text) => {
     expect(splitReplyBlocks(`${text}\n\n`)).toEqual([]);
     expect(splitReplyBlocks(`Intro.\n\n${text}\n\nUnfinished`)).toEqual(["Intro.", text]);
+  });
+});
+
+describe("first paragraph while it types", () => {
+  it.each([
+    ["a dash under a line", "Status\n-"],
+    ["a rule under a line", "Status\n---"],
+    ["an equals under a line", "Status\n="],
+    ["a dash under several lines", "Status\nmore\n-"],
+    ["a list after a line", "Here it is:\n- one"],
+  ])("keeps the lines above %s showing", (_, text) => {
+    const all = frames(text);
+    expect(vanishes(all)).toBe(false);
+    expect(all.at(-1)).toMatch(/^(?:Status|Here it is:)/);
+  });
+
+  it("never draws a paragraph of only rule characters", () => {
+    const all = frames("------\n\nText");
+    expect(all.filter((frame) => /^-{1,5}$/.test(frame))).toEqual([]);
+    expect(vanishes(all)).toBe(false);
+  });
+
+  it.each([
+    "**Now:**\n1. Item",
+    "**Now:**\n 1. Item",
+    "**Now:**\n* Item",
+    "**Now:**\n+ Item",
+    "**Now:**\n> Item",
+    "**Now:**\n```js\ncode",
+    "**Now:**\n~~~\ncode",
+  ])("never ends the first line with a half list start in %j", (text) => {
+    const all = frames(text);
+    expect(vanishes(all)).toBe(false);
+    expect(all.filter((frame) => /\n\s*(?:\d+\.?|[*+>]|`{1,2}|~{1,2})$/.test(frame))).toEqual([]);
+  });
+
+  it.each(["Use A | B here.", "Run `ls | sort` now."])("keeps prose before a pipe in %j", (text) => {
+    const all = frames(text);
+    expect(vanishes(all)).toBe(false);
+    expect(all.filter((frame) => frame.includes("|"))).toEqual([]);
+    expect(all.at(-1)).toBeTruthy();
+  });
+
+  it("never draws a real table", () => {
+    expect(frames("| A | B |\n|---|---|\n| 1 | 2 |").filter((frame) => frame.includes("|"))).toEqual([]);
+    expect(frames("A | B\n|---|---|\n| 1 | 2 |").filter((frame) => frame.includes("|"))).toEqual([]);
+  });
+
+  it("waits for the last parenthesis of a link", () => {
+    const text = "See [wiki](https://en.wikipedia.org/wiki/Foo_(bar)) now.";
+    const all = frames(text);
+    expect(all.filter((frame) => frame.includes("[") && !frame.includes("(bar))"))).toEqual([]);
+    expect(all.at(-1)).toBe(text);
+  });
+
+  it.each(["Call __init__ now.", "Say __bold__ now."])("treats a run of underscores as one in %j", (text) => {
+    const all = frames(text);
+    expect(vanishes(all)).toBe(false);
+    expect(all.filter((frame) => (frame.match(/__/g)?.length ?? 0) % 2 === 1)).toEqual([]);
+    expect(all.at(-1)).toBe(text);
+  });
+
+  it("keeps a word-opening star out of sight until it closes", () => {
+    const text = "Try *bold* now.";
+    const all = frames(text);
+    expect(vanishes(all)).toBe(false);
+    expect(all.filter((frame) => frame.split("*").length % 2 === 0)).toEqual([]);
+    expect(all.at(-1)).toBe(text);
+    expect(frames("Use *args here").at(-1)).toBe("Use");
+  });
+
+  it.each(["Cost is 2 * 3 here.", "Match *.ts files now."])("shows a loose star in %j", (text) => {
+    const all = frames(text);
+    expect(vanishes(all)).toBe(false);
+    expect(all.at(-1)).toBe(text);
   });
 });

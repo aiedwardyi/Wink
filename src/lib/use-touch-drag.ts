@@ -4,8 +4,10 @@ import { hapticTick } from "./phone-swipe";
 
 export const LONG_PRESS_MS = 400;
 export const LONG_PRESS_SLOP = 8;
-const SCROLL_EDGE = 48;
-const SCROLL_STEP = 10;
+export const SCROLL_EDGE = 48;
+export const SCROLL_STEP = 10;
+const QUICK_HOLD_MS = 120;
+const QUICK_SLOP = 3;
 const LIFTED_STYLE: Record<string, string> = {
   position: "relative",
   // under the z-10 drop marker, so the target edge stays visible beneath the finger
@@ -44,6 +46,16 @@ export type TouchDragHandlers = {
   over: (target: Element | null, y: number) => [HTMLElement, TouchDropMark] | null;
   drop: (target: Element | null, y: number) => void;
   cancel: () => void;
+  /** Presses on this lift on the first small move or a short hold, not the long press. */
+  quick?: string;
+  /** A quick press released without moving. */
+  tap?: (x: number, y: number) => void;
+  /** The element that really scrolls, when it is not the list. */
+  scroller?: () => HTMLElement | null;
+  /** A press starting here is the control's own, never a drag. */
+  skip?: string;
+  /** Holds the no-select styles on the pressed node, so a touch that only scrolls never restyles the whole list. */
+  selectPressed?: boolean;
 };
 
 type Press = {
@@ -56,6 +68,8 @@ type Press = {
   scrollTop: number;
   moved: boolean;
   dirty: boolean;
+  quick: boolean;
+  styled: HTMLElement;
   marked: [HTMLElement, TouchDropMark] | null;
   marker: HTMLElement | null;
   // in scroll content coordinates, dropped when the list's DOM changes
@@ -102,8 +116,9 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
     const observer = new MutationObserver(() => {
       if (press) press.targets = null;
     });
+    const scroller = () => latest.current.scroller?.() ?? list;
     const follow = (current: Press) => {
-      current.lifted?.style.setProperty("translate", `0 ${current.lastY - current.y + list.scrollTop - current.scrollTop}px`);
+      current.lifted?.style.setProperty("translate", `0 ${current.lastY - current.y + scroller().scrollTop - current.scrollTop}px`);
     };
     const draw = (marker: HTMLElement, next: [HTMLElement, TouchDropMark] | null) => {
       // an unchanged write can still invalidate paint, and most crossings only move the marker
@@ -150,17 +165,19 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         for (const key of [...Object.keys(LIFTED_STYLE), "translate"]) done.lifted.style.removeProperty(key);
         done.lifted.removeAttribute("data-touch-lifted");
       }
-      for (const key of LIST_STYLE) list.style.removeProperty(key);
+      for (const key of LIST_STYLE) done.styled.style.removeProperty(key);
       return done;
     };
     // one hit test and style write per frame, however many touchmoves arrive
     const tick = () => {
       if (!press?.lifted) return;
-      const rect = list.getBoundingClientRect();
-      const step = press.lastY < rect.top + SCROLL_EDGE ? -SCROLL_STEP : press.lastY > rect.bottom - SCROLL_EDGE ? SCROLL_STEP : 0;
-      const before = list.scrollTop;
-      if (step) list.scrollTop += step;
-      if (press.dirty || list.scrollTop !== before) {
+      const box = scroller();
+      const rect = box.getBoundingClientRect();
+      // a pickup that starts inside the edge band must not scroll before the finger moves
+      const step = !press.moved ? 0 : press.lastY < rect.top + SCROLL_EDGE ? -SCROLL_STEP : press.lastY > rect.bottom - SCROLL_EDGE ? SCROLL_STEP : 0;
+      const before = box.scrollTop;
+      if (step) box.scrollTop += step;
+      if (press.dirty || box.scrollTop !== before) {
         press.dirty = false;
         aim(press);
         follow(press);
@@ -195,7 +212,10 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       const touch = e.touches[0];
       const pressed = e.target instanceof Element ? e.target.closest<HTMLElement>(selector) : null;
       if (e.touches.length !== 1 || !touch || !pressed || !list.contains(pressed)) return;
-      for (const key of LIST_STYLE) list.style.setProperty(key, "none");
+      if (latest.current.skip && e.target instanceof Element && e.target.closest(latest.current.skip)) return;
+      const styled = latest.current.selectPressed ? pressed : list;
+      for (const key of LIST_STYLE) styled.style.setProperty(key, "none");
+      const quick = Boolean(latest.current.quick && pressed.matches(latest.current.quick));
       press = {
         pressed,
         lifted: null,
@@ -203,13 +223,15 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         y: touch.clientY,
         lastX: touch.clientX,
         lastY: touch.clientY,
-        scrollTop: list.scrollTop,
+        scrollTop: scroller().scrollTop,
         moved: false,
         dirty: false,
+        quick,
+        styled,
         marked: null,
         marker: null,
         targets: null,
-        timer: setTimeout(lift, LONG_PRESS_MS),
+        timer: setTimeout(lift, quick ? QUICK_HOLD_MS : LONG_PRESS_MS),
         frame: 0,
         unbind: () => {},
       };
@@ -230,7 +252,11 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
       const touch = e.touches[0];
       if (!press || !touch) return;
       const far = Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > LONG_PRESS_SLOP;
-      if (!press.lifted) {
+      if (!press.lifted && press.quick && Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > QUICK_SLOP) {
+        clearTimeout(press.timer);
+        lift();
+      }
+      if (!press?.lifted) {
         if (far) release();
         return;
       }
@@ -243,7 +269,8 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
     };
     const onEnd = (e: TouchEvent) => {
       if (!press?.lifted) {
-        release();
+        const done = release();
+        if (done?.quick) latest.current.tap?.(done.x, done.y);
         return;
       }
       // cancelling the touchend is what stops the tap's click from opening the chat
@@ -255,6 +282,10 @@ export function useTouchDrag(selector: string, targets: string, handlers: TouchD
         return;
       }
       latest.current.cancel();
+      if (done.quick) {
+        latest.current.tap?.(done.x, done.y);
+        return;
+      }
       // a hold without a move is still the long-press menu
       hit(done.x, done.y)?.dispatchEvent(
         new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: done.x, clientY: done.y }),

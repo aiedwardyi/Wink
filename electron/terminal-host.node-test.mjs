@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import test, { describe } from "node:test";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
+import { createPaneCleanup } from "./pane-cleanup.mjs";
 import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 
@@ -77,6 +79,25 @@ describe("captured worker account projections", () => {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test("retired panes leave one owner listener and destruction closes every live pane", async (t) => {
+  let owner;
+  const f = fixture({ owner: () => owner });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const lifecycle = new EventEmitter();
+  f.owner.once = lifecycle.once.bind(lifecycle);
+  for (let i = 0; i < 12; i++) {
+    const pane = await f.host.openForBot("bot-1");
+    await f.host.close(f.event, pane.sessionId);
+  }
+  assert.ok(lifecycle.listenerCount("destroyed") <= 1);
+  for (let i = 0; i < 3; i++) await f.host.openForBot(`live-${i}`);
+  lifecycle.emit("destroyed");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(f.children.every((child) => child.killed));
+  assert.equal(lifecycle.listenerCount("destroyed"), 0);
+});
 
 test("dispose stops panes one at a time through their shutdown acknowledgements", async () => {
   const f = fixture();
@@ -1073,6 +1094,56 @@ test("closeForBot retires a bot pane, frees its slot and refuses main or foreign
   assert.deepEqual(f.events.find(([channel, value]) => channel === "terminal:closed" && value.id === panes[0].sessionId), ["terminal:closed", { id: panes[0].sessionId, botId: "bot-1" }]);
   assert.equal(f.children[1].killed, true);
   await f.host.openForBot("bot-1", { label: "w8" });
+});
+
+test("a nicked bot pane gets its own scratch folder as temp", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scratch-home-"));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "scratch-root-")));
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(root, "POKKEY-1"));
+  let owner;
+  const paneCleanup = createPaneCleanup({ home, tempRoot: root, worktreeRoot: path.join(home, "orbit-wt") });
+  const f = fixture({ owner: () => owner, scratchRoot: root, paneCleanup, env: { SHELL: "/bin/sh", TEMP: "/orig", tmp: "/orig" } });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "ANIM-3 | anim" });
+  const scratch = path.join(root, "wink-ANIM-3");
+  const { env } = f.children[0].options;
+  assert.deepEqual([env.ORBIT_SCRATCH, env.TEMP, env.TMP, env.TMPDIR, env.tmp], [scratch, scratch, scratch, scratch, undefined]);
+  assert.equal(fs.statSync(scratch).isDirectory(), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, ".orbit", "pane-ledger.json"), "utf8"))[0].tempRoot, root);
+  await f.host.closeForBot("bot-1", pane.sessionId);
+  await paneCleanup.closed({ id: pane.sessionId, reportAt: 1 });
+  assert.deepEqual([fs.existsSync(scratch), fs.existsSync(path.join(root, "POKKEY-1"))], [false, true]);
+  await f.host.openForBot("bot-1", { label: "builder" });
+  await f.host.open(f.event, f.input);
+  for (const child of f.children.slice(1)) assert.deepEqual([child.options.env.ORBIT_SCRATCH, child.options.env.TEMP], [undefined, "/orig"]);
+});
+
+test("closing a bot pane stops only processes it started", async (t) => {
+  const listed = [];
+  const stopped = [];
+  const table = [
+    { pid: 9001, ppid: 101, created: 999_000 },
+    { pid: 9002, ppid: 101, created: 1_000_500 },
+    { pid: 9003, ppid: 9002, created: 1_000_600 },
+    { pid: 9004, ppid: 9001, created: 1_000_700 },
+    { pid: 9005, ppid: 1, created: 1_000_800 },
+    { pid: 9006, ppid: 101, created: 1_003_000 },
+  ];
+  let owner;
+  let time = 1_000_000;
+  const f = fixture({ owner: () => owner, now: () => time, processes: { list: async () => { listed.push(f.children[0].killed); return table; }, stop: (pid) => stopped.push(pid) } });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "LEFT-1" });
+  time = 1_002_000;
+  await f.host.closeForBot("bot-1", pane.sessionId);
+  assert.deepEqual(listed, [false]);
+  table[1] = { ...table[1], created: 1_000_900 };
+  await new Promise((resolve) => setTimeout(resolve, 3_300));
+  assert.deepEqual(listed, [false, true]);
+  assert.deepEqual(stopped, [9003]);
 });
 
 test("closeForBot on an already-closed pane succeeds instead of erroring", async () => {
@@ -3280,6 +3351,61 @@ test("a recorded Claude idle pane with a background shell repeats STALLED", asyn
   assert.match(f.notes[0].text, /^STALLED: /);
   await f.advance(31 * 60_000);
   assert.equal(f.notes.length, 2);
+});
+
+const IDLE_COMPACTION = JSON.parse(fs.readFileSync(new URL("../test/fixtures/recorded/claude/idle-compaction.json", import.meta.url), "utf8")).reply;
+const flatScreen = (data) => data.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, "").replace(/\s+/g, "");
+const replayIdleCompaction = async (f, { report = false } = {}) => {
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go", cols: IDLE_COMPACTION.cols, rows: IDLE_COMPACTION.rows });
+  let at = 0;
+  for (const { t, data } of IDLE_COMPACTION.chunks) {
+    if (t - at >= 1_000) {
+      while (t - at > 60_000) { await f.advance(60_000); at += 60_000; }
+      await f.advance(t - at);
+      at = t;
+    }
+    if (report && flatScreen(data).includes("●DONE")) f.host.attendBot("bot-1", pane.sessionId, "report");
+    f.children[0].data(data);
+  }
+  await f.settle();
+  return pane;
+};
+const advanceMinutes = async (f, minutes) => { for (let minute = 0; minute < minutes; minute++) await f.advance(60_000); };
+
+test("a recorded Claude pane that reported stays quiet through its idle compaction", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await replayIdleCompaction(f, { report: true });
+  await advanceMinutes(f, 120);
+  assert.equal(f.notes.length, 0);
+});
+
+test("a recorded Claude idle compaction does not restart a stalled pane's notes", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await replayIdleCompaction(f);
+  assert.equal(f.notes.length, 2);
+  await advanceMinutes(f, 5);
+  assert.equal(f.notes.length, 2);
+  await advanceMinutes(f, 60);
+  assert.equal(f.notes.length, 3);
+  assert.match(f.notes[2].text, /^STALLED: no screen change for [3-9]\d min and no report\./);
+  assert.match(f.notes[2].text, /Compacted while idle, before the prompt cache expired/);
+});
+
+test("a new task after a recorded idle compaction re-arms STALLED", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await replayIdleCompaction(f, { report: true });
+  const before = f.notes.length;
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "next task\r" });
+  f.children[0].data("next task\r\n");
+  await f.settle();
+  await f.advance(119_000);
+  assert.equal(f.notes.length, before);
+  await f.advance(2_000);
+  assert.equal(f.notes.length, before + 1);
+  assert.match(f.notes[before].text, /^STALLED: no screen change for 2 min and no report\./);
 });
 
 test("a stall receipt counts as delivered when the mailbox response is lost", async (t) => {

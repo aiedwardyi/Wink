@@ -4,8 +4,10 @@ import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VerifyCardData, VerifyIssue } from "../../shared/live-verify";
+import { chunk } from "../../electron/verify-replay.mjs";
 import { applyLocale } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
+import { chooseVerifyTab } from "@/lib/verify-watch";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
 import { VerifyWatchFrame } from "./VerifyWatch";
 
@@ -95,6 +97,95 @@ function animationClock() {
     });
   };
 }
+
+it.each(["en", "ko"] as const)("maximizes and restores with the button and Escape in %s", async locale => {
+  applyLocale(locale);
+  const onClose = vi.fn();
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: true, hidden: false, onClose })));
+  const frame = host.querySelector(".verify-watch-frame")!;
+  const maximize = locale === "en" ? "Maximize" : "크게 보기";
+  const restore = locale === "en" ? "Restore" : "원래 크기";
+  const button = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${frame.hasAttribute("data-maximized") ? restore : maximize}"]`)!;
+  expect(button()?.title).toBe(maximize);
+  await act(async () => button().click());
+  expect(frame.hasAttribute("data-maximized")).toBe(true);
+  expect(button().title).toBe(restore);
+  await act(async () => button().click());
+  expect(frame.hasAttribute("data-maximized")).toBe(false);
+  await act(async () => button().click());
+  const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+  await act(async () => window.dispatchEvent(escape));
+  expect(escape.defaultPrevented).toBe(true);
+  expect(frame.hasAttribute("data-maximized")).toBe(false);
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("keeps phone playback inline without a maximize button", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} })));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose() {} })));
+  expect(host.querySelector('[data-inline="true"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-label="Maximize"]')).toBeNull();
+});
+
+it.each(["en", "ko"] as const)("watches the same replay again from zero without rerunning in %s", async locale => {
+  applyLocale(locale);
+  const tick = animationClock();
+  const onClose = vi.fn();
+  const shows: VerifyWatchShow[] = [];
+  const begin = VerifyWatchShow.prototype.beginRun;
+  vi.spyOn(VerifyWatchShow.prototype, "beginRun").mockImplementation(function (this: VerifyWatchShow) { shows.push(this); begin.call(this); });
+  const fetch = vi.fn(async (_url: string) => bufferedRun());
+  vi.stubGlobal("fetch", fetch);
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose })));
+  await tick(60);
+  expect(shows[0]!.phase).toBe("done");
+  expect(onClose).not.toHaveBeenCalled();
+  const again = host.querySelector<HTMLButtonElement>(".verify-watch-again")!;
+  expect(again?.textContent).toBe(locale === "en" ? "Watch again" : "다시 보기");
+  await act(async () => again.click());
+  expect(shows).toHaveLength(2);
+  expect(shows[1]).not.toBe(shows[0]);
+  expect(shows[1]!.clock).toBe(0);
+  expect(shows[1]!.ms).toBe(0);
+  expect(host.querySelector(".verify-watch-again")).toBeNull();
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/verify/runs/old-1/replay", "/api/verify/runs/old-1/replay"]);
+  await tick(60);
+  expect(shows[1]!.phase).toBe("done");
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it.each(["en", "ko"] as const)("plays silently without sound controls in %s", async locale => {
+  applyLocale(locale);
+  const audio = vi.fn();
+  vi.stubGlobal("AudioContext", audio);
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => bufferedRun()));
+  await render({ live: false, hidden: false });
+  await tick(5);
+  expect(audio).not.toHaveBeenCalled();
+  expect(host.querySelectorAll(".verify-watch-icon")).toHaveLength(3);
+  expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Mute" : "소리 끄기"]));
+  expect([...host.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).not.toEqual(expect.arrayContaining([locale === "en" ? "Sound on" : "소리 켜기"]));
+});
+
+it("switches both viewport tabs after recorded playback finishes", async () => {
+  const tick = animationClock();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ fillRect() {} } as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: { ...card, replay: ["old-1"] }, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(100);
+  expect(host.querySelector(".verify-watch-again")).not.toBeNull();
+  for (const index of [1, 0]) {
+    await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]!.click());
+    await tick(1);
+    expect(host.querySelectorAll('[role="tab"]')[index]!.getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector(".verify-watch-stage")?.getAttribute("data-tile")).toBe(index ? "phone" : "desktop");
+    expect(host.querySelector("canvas")?.width).toBe(index ? 392 : 1280);
+  }
+});
 
 it.each(["en", "ko"] as const)("reuses card rule wording for the %s reel caption", async locale => {
   applyLocale(locale);
@@ -204,7 +295,7 @@ it.each([false, true])("settles an end received before the next frame and finish
   await tick(200);
   expect(calls.map(c => c.url)).toEqual(live ? ["/api/verify/runs/run-1/live"] : ["/api/verify/runs/old-1/replay", "/api/verify/runs/old-2/replay"]);
   expect(finish).toHaveBeenCalledOnce();
-  expect(onClose).toHaveBeenCalledOnce();
+  expect(onClose).toHaveBeenCalledTimes(live ? 1 : 0);
 });
 
 it("plays on past a kept run whose check was blocked to the latest run", async () => {
@@ -299,4 +390,131 @@ it("keeps the tabs on one line at their own width and the phone controls at leas
   }
   for (const tab of tabs) expect(style(tab, 1280, "height")).toBe("100%");
   for (const icon of icons) expect([style(icon, 1280, "width"), style(icon, 1280, "height")]).toEqual(["28px", "28px"]);
+});
+
+const recorded = (...rest: Uint8Array[]) => new Response(new Blob([chunk(0, { runId: "run-1", site: card.site, page: "index.html" }), ...rest, chunk(3, { status: "completed", ms: 0, issues: [], notChecked: [] })] as BlobPart[]).stream());
+const shot = (tile: string) => chunk(1, { tile, ms: 0, data: Buffer.from([255, 216, 255, 217]) });
+const inlineCard = (runId: string) => ({ ...card, runId, replay: [runId] });
+const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(el => el.textContent === name)!;
+
+it("stays open on a click inside the inline player and closes on X, Escape or a click outside", async () => {
+  const onClose = vi.fn();
+  const trigger = document.createElement("div");
+  trigger.setAttribute("data-verify-card", "");
+  trigger.innerHTML = "<button data-verify-watch></button>";
+  document.body.append(trigger);
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose })));
+  await act(async () => host.querySelector<HTMLElement>(".verify-watch-stage")!.click());
+  await act(async () => host.querySelector<HTMLCanvasElement>("canvas")!.click());
+  await act(async () => trigger.querySelector("button")!.click());
+  trigger.remove();
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await act(async () => document.body.click());
+  expect(onClose).toHaveBeenCalledTimes(2);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
+  expect(onClose).toHaveBeenCalledTimes(3);
+});
+
+it("stays open when a button inside the inline player unmounts on its own click", async () => {
+  const onClose = vi.fn();
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, inline: true, onClose })));
+  const button = document.createElement("button");
+  host.querySelector(".verify-watch-bar")!.append(button);
+  button.addEventListener("click", () => button.remove());
+  await act(async () => button.click());
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("keeps the chosen Phone tab through Watch again and a reopen", async () => {
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"))));
+  const data = inlineCard("run-phone-tab");
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: data, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(60);
+  await act(async () => tab("Phone").click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".verify-watch-again")!.click());
+  await tick(3);
+  expect(tab("Phone").getAttribute("aria-selected")).toBe("true");
+  await tick(60);
+  expect(tab("Phone").getAttribute("aria-selected")).toBe("true");
+  await act(async () => root.render(createElement("div")));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: data, threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(3);
+  expect(tab("Phone").getAttribute("aria-selected")).toBe("true");
+});
+
+it("offers no Phone tab when the run has no phone view", async () => {
+  const tick = animationClock();
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: inlineCard("run-no-phone"), threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(5);
+  expect([...host.querySelectorAll('[role="tab"]')].map(el => el.textContent)).toEqual(["Desktop"]);
+});
+
+it("never draws check lines on a stage with no picture, and draws them once it has one", async () => {
+  const tick = animationClock();
+  const strokes = vi.fn();
+  const ctx = new Proxy({ strokeRect: strokes }, { get: (target, key) => key in target ? target[key as "strokeRect"] : () => {}, set: () => true });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  let decoded = (_image: unknown) => {};
+  vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise(resolve => { decoded = resolve; })));
+  const mark = chunk(2, { ms: 0, kind: "result", ev: { tile: "desktop", checker: "LINKS", result: "ok", box: [10, 20, 80, 30], where: "a#one" } });
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new Blob([chunk(0, { runId: "run-1", site: card.site, page: "index.html" }), shot("desktop"), mark, chunk(3, { status: "completed", ms: 2000, issues: [], notChecked: [] })] as BlobPart[]).stream())));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: inlineCard("run-no-picture"), threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(6);
+  expect(strokes).not.toHaveBeenCalled();
+  await act(async () => decoded({ close() {} }));
+  await tick(2);
+  expect(strokes).toHaveBeenCalled();
+});
+
+it.each([[false, "desktop"], [true, "desktop"], [false, "phone"], [true, "phone"]] as const)("keeps the stage hidden and the clock at zero until the first picture decodes (inline=%s, %s)", async (inline, tabName) => {
+  const tick = animationClock();
+  const drawImage = vi.fn();
+  const ctx = new Proxy({ drawImage }, { get: (target, key) => key in target ? target[key as "drawImage"] : () => {}, set: () => true });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  let decoded = (_image: unknown) => {};
+  vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise(resolve => { decoded = resolve; })));
+  const clocks: number[] = [];
+  const advance = VerifyWatchShow.prototype.advance;
+  vi.spyOn(VerifyWatchShow.prototype, "advance").mockImplementation(function (this: VerifyWatchShow, ms: number) { const changed = advance.call(this, ms); clocks.push(this.clock); return changed; });
+  const data = inlineCard(`run-first-picture-${inline}-${tabName}`);
+  chooseVerifyTab(data.runId, tabName);
+  const mark = chunk(2, { ms: 0, kind: "result", ev: { tile: tabName, checker: "LINKS", result: "ok", box: [10, 20, 80, 30], where: "a#one" } });
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"), shot("phone"), mark)));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: data, threadId: "t", live: false, hidden: false, inline, onClose() {} })));
+  await tick(8);
+  const stage = host.querySelector(".verify-watch-stage")!;
+  expect(stage.hasAttribute("data-pending")).toBe(true);
+  expect(drawImage).not.toHaveBeenCalled();
+  expect(Math.max(...clocks)).toBe(0);
+  await act(async () => decoded({ close() {} }));
+  expect(stage.hasAttribute("data-pending")).toBe(false);
+  expect(drawImage).toHaveBeenCalled();
+  await tick(3);
+  expect(Math.max(...clocks)).toBeGreaterThan(0);
+});
+
+it("keeps the last picture up while watching again", async () => {
+  const tick = animationClock();
+  const drawImage = vi.fn();
+  const ctx = new Proxy({ drawImage }, { get: (target, key) => key in target ? target[key as "drawImage"] : () => {}, set: () => true });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ close() {} })));
+  vi.stubGlobal("fetch", vi.fn(async () => recorded(shot("desktop"))));
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card: inlineCard("run-again-picture"), threadId: "t", live: false, hidden: false, onClose() {} })));
+  await tick(120);
+  const again = host.querySelector<HTMLButtonElement>(".verify-watch-again")!;
+  const before = drawImage.mock.calls.length;
+  await act(async () => again.click());
+  expect(host.querySelector(".verify-watch-stage")!.hasAttribute("data-pending")).toBe(false);
+  expect(drawImage.mock.calls.length).toBeGreaterThan(before);
+});
+
+it.each([["en", "Phone fit"], ["ko", "휴대폰 맞춤"]] as const)("names the phone width check so the list never cuts it in %s", async (locale, label) => {
+  applyLocale(locale);
+  await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, onClose() {} })));
+  expect(host.textContent).toContain(label);
 });

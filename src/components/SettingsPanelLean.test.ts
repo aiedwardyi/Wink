@@ -10,6 +10,12 @@ import type { Bot, Task, TaskResumePacket } from "@/state/store";
 const { mockDispatch, mockConfig } = vi.hoisted(() => ({ mockDispatch: vi.fn(), mockConfig: { current: {} as { features?: { memoryNotes?: boolean } } } }));
 const chrome = vi.hoisted(() => ({ voiceAndStartupSettings: false }));
 const keepGoing = vi.hoisted(() => ({ request: 0 }));
+const mapLoads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./MemoryMap", async (importOriginal) => {
+  mapLoads.count += 1;
+  return importOriginal();
+});
 
 vi.mock("@/lib/friends-chrome", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/friends-chrome")>()),
@@ -68,6 +74,8 @@ vi.mock("./LocalComputerAutoWarning", () => ({
 
 import { SettingsPanel } from "./SettingsPanel";
 
+const mapLoadsAtImport = mapLoads.count;
+
 const claudeBot = {
   id: "bot-1",
   threadId: "t1",
@@ -86,6 +94,11 @@ const memoryRow = (host: HTMLElement) =>
 const tab = (host: HTMLElement, label: string) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === label)!;
 const shown = (node: Element | null | undefined) => Boolean(node && !node.closest("[hidden]"));
+// the map is a lazy chunk
+async function until(found: () => Element | null | undefined) {
+  for (let tries = 0; tries < 100 && !found(); tries++) await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
+  return found();
+}
 const topicsRow = (host: HTMLElement) =>
   Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.startsWith("Topic Files"))!;
 
@@ -287,8 +300,75 @@ describe("SettingsPanel memory and order", () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, shareTerminalWithChat: true } })));
     });
     const switches = Array.from(host.querySelectorAll('[role="switch"]'));
-    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Bot Notifications", "Terminal Access", "Agentic Mode", "Auto Notes"]);
+    expect(switches.map((each) => each.getAttribute("aria-label"))).toEqual(["Agentic Mode", "Bot Notifications", "Terminal Access", "Auto Notes"]);
     for (const each of switches) expect(each.className).toContain("h-6 w-11");
+  });
+});
+
+describe("SettingsPanel Agentic Mode card", () => {
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  const words = {
+    en: { title: "Agentic Mode", help: "On: keeps going alone for nights, days, even weeks.\nOff: answers and waits.", paused: "Paused: two tries made no progress", avatar: "Avatar" },
+    ko: { title: "에이전트 모드", help: "켜면 밤낮으로 며칠, 몇 주도 혼자 계속해요.\n끄면 답하고 기다려요.", paused: "일시 중지됨: 두 번 시도에 진전 없음", avatar: "아바타" },
+  };
+  const states = [
+    { name: "off", keepGoing: null, checked: "false" },
+    { name: "on", keepGoing: { paused: null }, checked: "true" },
+    { name: "paused", keepGoing: { paused: "no-progress" }, checked: "true" },
+  ] as const;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    root.unmount();
+    host.remove();
+    localStorage.removeItem("omb-locale");
+    vi.unstubAllGlobals();
+  });
+
+  for (const lang of ["en", "ko"] as const) {
+    for (const state of states) {
+      it(`puts the ${state.name} card first in Settings in ${lang}`, async () => {
+        localStorage.setItem("omb-locale", lang);
+        await act(async () => {
+          root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, keepGoing: state.keepGoing } })));
+        });
+        const text = words[lang];
+        const cards = host.querySelectorAll("[data-settings-keep-going]");
+        expect(cards).toHaveLength(1);
+        const card = cards[0];
+        expect(card.parentElement?.firstElementChild).toBe(card);
+        expect(shown(card)).toBe(true);
+        expect(card.nextElementSibling?.textContent).toContain(text.avatar);
+        const [head, line] = Array.from(card.firstElementChild!.children);
+        expect(head.textContent).toBe(text.title);
+        expect(head.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe(state.checked);
+        const mark = head.querySelector("svg")!;
+        expect(head.firstElementChild?.firstElementChild).toBe(mark);
+        if (state.name === "paused") expect(mark.querySelector("circle")?.getAttribute("fill")).toBe("none");
+        else expect(mark.querySelector("circle[mask]")?.getAttribute("fill")).toBe("currentColor");
+        expect(mark.getAttribute("class")).toContain(state.name === "off" ? "text-ink-secondary" : "text-accent-text");
+        expect(line.textContent).toBe(state.name === "paused" ? text.paused : text.help);
+        expect(host.querySelectorAll(`[role="switch"][aria-label="${text.title}"]`)).toHaveLength(1);
+      });
+    }
+  }
+
+  it("turns Agentic Mode on with one tap", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ text: "", truncated: false, topics: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-settings-keep-going] [role="switch"]')!.click());
+    const calls = fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/bots/bot-1/keep-going"));
+    expect(calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ on: true }]);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 });
 
@@ -342,15 +422,44 @@ describe("SettingsPanel memory groups", () => {
     vi.unstubAllGlobals();
   });
 
-  it("puts noted facts first, then the task and the memory file", async () => {
+  it("loads the memory map with the Memory tab, not before", async () => {
     await render({ ...claudeBot, tasks });
+    expect(mapLoadsAtImport).toBe(0);
+    expect(host.querySelector(".mm")).toBeNull();
+    await act(async () => tab(host, "Memory").click());
+    expect(await until(() => host.querySelector(".mm"))).not.toBeNull();
+    await act(async () => tab(host, "Settings").click());
+    expect(host.querySelector(".mm")).toBeNull();
+  });
+
+  it("shows a failed read with Retry, never as empty memory", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    await act(async () => {
+      root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: claudeBot })));
+    });
+    await act(async () => tab(host, "Memory").click());
+    const alert = await until(() => host.querySelector(".mm [role=\"alert\"]"));
+    expect(alert?.textContent).toBe("Couldn't load memory.Retry");
+    const counts = () => Array.from(host.querySelectorAll(".mm-count")).map((count) => count.textContent);
+    expect(counts()).toEqual(["–", "–", "–"]);
+    expect(host.querySelector(".mm")?.textContent).not.toContain("Nothing yet.");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: memory, truncated: false, topics: [{ name: "phone.md", bytes: 900 }] }))));
+    await act(async () => alert!.querySelector("button")!.click());
+    await until(() => (host.querySelector(".mm [role=\"alert\"]") ? null : host.querySelector(".mm")));
+    expect(counts()).toEqual(["4facts", "1file", "0lessons"]);
+  });
+
+  it("puts the memory map first, then auto notes and the memory file", async () => {
+    await render({ ...claudeBot, tasks });
+    await act(async () => tab(host, "Memory").click());
+    await until(() => host.querySelector(".mm-live-tag"));
     const text = host.textContent ?? "";
-    const order = ["Lives in Seoul", "+1 more", "Auto Notes", "Current Task", "Memory File", "8 lines"];
+    const order = ["Long-Term Memory", "Working Memory", "Just Learned", "Lives in Seoul", "Auto Notes", "Memory File", "8 lines"];
     expect(text).not.toContain("From Your Chats");
     const at = order.map((label) => text.indexOf(label));
     expect(at).not.toContain(-1);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
-    expect(text).toContain("Prefers pnpm");
+    expect(text).toContain("Short answers");
     expect(text).not.toContain("Uses Windows");
     expect(text).toContain("1 of 3 steps done");
     expect(text).toContain("Next: Tag the release");
@@ -369,6 +478,35 @@ describe("SettingsPanel memory groups", () => {
     // the file folds away on the shared motion, then unmounts
     await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
     expect(host.querySelector("textarea[aria-label=\"Memory\"]")).toBeNull();
+  });
+
+  it("keeps exactly one memory editor, text intact, when the window resizes", async () => {
+    let width = 1200;
+    const watchers: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class { constructor(run: () => void) { watchers.push(run); } observe() {} disconnect() {} });
+    const measured = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? width : 0; });
+    const resize = async (next: number) => {
+      width = next;
+      await act(async () => watchers.forEach((run) => run()));
+      await act(async () => { await new Promise((done) => setTimeout(done, PRESENCE_EXIT_MS + 40)); });
+    };
+    const editors = () => Array.from(host.querySelectorAll<HTMLTextAreaElement>("textarea[aria-label=\"Memory\"]"));
+    await render({ ...claudeBot, id: "bot-resize" });
+    await act(async () => tab(host, "Memory").click());
+    await until(() => host.querySelector(".mm-live-tag"));
+    await act(async () => memoryRow(host).click());
+    const typed = `${memory}
+- typed before resize`;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editors()[0], typed);
+      editors()[0].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(editors().map((box) => [box.closest(".mm-sheet") !== null, box.value])).toEqual([[true, typed]]);
+    await resize(500);
+    expect(editors().map((box) => [box.closest(".mm-sheet") !== null, box.value])).toEqual([[false, typed]]);
+    await resize(1200);
+    expect(editors().map((box) => [box.closest(".mm-sheet") !== null, box.value])).toEqual([[true, typed]]);
+    measured.mockRestore();
   });
 
   it("hides the task when there is none", async () => {
@@ -412,7 +550,9 @@ describe("SettingsPanel memory groups", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, tasks } })));
     });
-    expect(host.textContent).toContain("Current Task");
+    await act(async () => tab(host, "Memory").click());
+    await until(() => host.querySelector(".mm"));
+    expect(host.textContent).toContain("1 of 3 steps done");
     expect(host.textContent).not.toContain("Memory fills in as you chat.");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ text: "", truncated: false, topics: [{ name: "phone.md", bytes: 900 }] }))));
     await act(async () => {
@@ -455,9 +595,11 @@ describe("SettingsPanel memory groups", () => {
   it("labels the groups in Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
     await render({ ...claudeBot, tasks });
+    await act(async () => tab(host, "메모리").click());
+    await until(() => host.querySelector(".mm"));
     const text = host.textContent ?? "";
     expect(text).not.toContain("채팅에서");
-    for (const label of ["메모리 파일", "8줄", "+1개 더", "현재 작업", "3단계 중 1단계 완료", "다음: Tag the release"]) {
+    for (const label of ["메모리 파일", "8줄", "방금 배운 것", "작업 기억", "3단계 중 1단계 완료", "다음: Tag the release"]) {
       expect(text).toContain(label);
     }
   });
@@ -721,6 +863,32 @@ describe("SettingsPanel memory autosave", () => {
     } finally {
       width.mockRestore();
       height.mockRestore();
+    }
+  });
+
+  it("refits Description after a post-open font override", async () => {
+    let contentHeight = 185;
+    const width = vi.spyOn(HTMLTextAreaElement.prototype, "clientWidth", "get").mockReturnValue(323);
+    const height = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockImplementation(() => contentHeight);
+    const ready = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", { configurable: true, value: Object.assign(new EventTarget(), { ready: Promise.resolve() }) });
+    try {
+      const description = "Quarterly Research Synthesis Assistant 분기별 리서치 종합 도우미 " + "X".repeat(80) + " Research 한국어 메모. ".repeat(8);
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { bot: { ...claudeBot, description } }))));
+      const area = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!;
+      expect(area.style.height).toBe("185px");
+      contentHeight = 206;
+      await act(async () => {
+        area.style.fontFamily = "Verdana";
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(area.style.height).toBe("206px");
+      expect(area.className).toContain("overflow-hidden");
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
+      if (ready) Object.defineProperty(document, "fonts", ready);
+      else Reflect.deleteProperty(document, "fonts");
     }
   });
 
@@ -1080,12 +1248,13 @@ describe("SettingsPanel memory autosave", () => {
     });
     await render("bot-offline");
     expect(box().readOnly).toBe(true);
-    expect(host.querySelector(".text-danger")?.firstChild?.textContent).toBe("Couldn't load memory.");
+    await act(async () => tab(host, "Memory").click());
+    expect((await until(() => host.querySelector(".mm-failed")))?.firstChild?.textContent).toBe("Couldn't load memory.");
     vi.mocked(fetch).mockImplementation(serve);
     await act(async () => button("Retry").click());
     expect(box().readOnly).toBe(false);
     expect(box().value).toBe("important synced notes");
-    expect(host.querySelector(".text-danger")).toBeNull();
+    expect(host.querySelector(".mm-failed")).toBeNull();
     expect(readMemoryFile("bot-offline").text).toBe("important synced notes");
   });
 

@@ -306,6 +306,312 @@ test("natural exit starts retention without removing a visible pane's scratch", 
   assert.equal(fs.existsSync(target), false);
 });
 
+test("scratch reopened during a throttled walk retains its files and links", async (t) => {
+  const f = fixture(t);
+  const marker = path.join(f.scratch, "next");
+  const link = path.join(f.scratch, "z-link");
+  fs.writeFileSync(marker, "keep");
+  fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  let time = Date.now();
+  t.mock.method(Date, "now", () => time);
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  let reopened = false;
+  t.mock.method(promises.default, "lstat", async (...args) => {
+    const stat = await lstat(...args);
+    if (args[0] === marker) {
+      reopened = true;
+      f.open([{ id: "other", label: "OTHER", cwd: f.scratch }]);
+      time += 250;
+    }
+    if (args[0] === link) f.open([]);
+    return stat;
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(reopened, true);
+  assert.equal(fs.readFileSync(marker, "utf8"), "keep");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("scratch reopened inside the throttle window keeps its links", async (t) => {
+  const f = fixture(t);
+  const marker = path.join(f.scratch, "next");
+  const link = path.join(f.scratch, "z-link");
+  fs.writeFileSync(marker, "keep");
+  fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  let reopened = false;
+  t.mock.method(promises.default, "lstat", async (...args) => {
+    const stat = await lstat(...args);
+    if (args[0] === marker && !reopened) {
+      reopened = true;
+      f.open([{ id: "other", label: "OTHER", cwd: f.scratch }]);
+    }
+    return stat;
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(reopened, true);
+  assert.equal(fs.readFileSync(marker, "utf8"), "keep");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("large scratch cleanup bounds synchronous filesystem calls with a full ledger", async (t) => {
+  const f = fixture(t);
+  for (let index = 0; index < 20_000; index++) fs.writeFileSync(path.join(f.scratch, `file-${index}`), "");
+  f.cleanup.opened(f.session);
+  const entries = f.ledger();
+  for (let index = 0; index < 999; index++) entries.push({ ...entries[0], id: `old-${index}`, scratch: path.join(f.tempRoot, `wink-OLD-${index}`) });
+  fs.writeFileSync(path.join(f.home, ".orbit", "pane-ledger.json"), JSON.stringify(entries));
+  const cleanup = createPaneCleanup(f.options);
+  cleanup.start(() => [{ id: "other", label: "OTHER", cwd: f.home }]);
+  t.after(() => cleanup.dispose());
+  let calls = 0;
+  const lstatSync = fs.lstatSync;
+  const realpathSync = fs.realpathSync.native;
+  t.after(() => { fs.lstatSync = lstatSync; fs.realpathSync.native = realpathSync; });
+  fs.lstatSync = (...args) => { calls++; return lstatSync(...args); };
+  fs.realpathSync.native = (...args) => { calls++; return realpathSync(...args); };
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (calls > 500_000) throw new Error("cleanup sync filesystem budget exceeded");
+    return lstat(...args);
+  });
+  await cleanup.closed(f.session);
+  t.diagnostic(`sync filesystem calls: ${calls}`);
+  assert.ok(calls < 500_000, `${calls} sync filesystem calls`);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("superseded scratch entries do not scan roots before the eligible owner", async (t) => {
+  const f = fixture(t);
+  for (let index = 0; index < 49; index++) {
+    const session = { ...f.session, id: `old-${index}` };
+    f.cleanup.opened(session);
+    await f.cleanup.closed(session, true);
+  }
+  f.advance(4 * DAY_MS);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session, true);
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  const readdir = promises.default.readdir;
+  let stats = 0;
+  let reads = 0;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === f.worktreeRoot) stats++;
+    return lstat(...args);
+  });
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.worktreeRoot) reads++;
+    return readdir(...args);
+  });
+  await f.cleanup.sweep();
+  assert.ok(stats <= 1, `${stats} root stats`);
+  assert.equal(reads, 0);
+  assert.equal(fs.existsSync(f.scratch), true);
+  const first = stats;
+  f.advance(4 * DAY_MS);
+  await f.cleanup.sweep();
+  assert.ok(stats > first && stats - first <= 10, `${stats - first} root stats`);
+  assert.equal(reads, 1);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a large worktree scan bounds synchronous calls across queued scratch entries", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const folders = 20;
+  const queued = 50;
+  const hosts = [];
+  for (let index = 0; index < folders; index++) {
+    const folder = path.join(f.worktreeRoot, `host-${index}`);
+    fs.mkdirSync(folder);
+    hosts.push(folder);
+    for (let file = 0; file < 2_000; file++) fs.writeFileSync(path.join(folder, `file-${file}`), "");
+  }
+  fs.symlinkSync(target, path.join(hosts.at(-1), "z-link"), process.platform === "win32" ? "junction" : "dir");
+  for (let index = 0; index < queued; index++) {
+    const session = { ...f.session, id: `queued-${index}`, label: `QUEUED-${index}` };
+    fs.mkdirSync(path.join(f.tempRoot, `wink-${session.label}`));
+    f.cleanup.opened(session);
+    await f.cleanup.closed(session, true);
+  }
+  f.advance(4 * DAY_MS);
+  const budget = 2_000 * (folders + queued);
+  let calls = 0;
+  let reads = 0;
+  const lstatSync = fs.lstatSync;
+  const realpathSync = fs.realpathSync.native;
+  t.after(() => { fs.lstatSync = lstatSync; fs.realpathSync.native = realpathSync; });
+  fs.lstatSync = (...args) => { calls++; return lstatSync(...args); };
+  fs.realpathSync.native = (...args) => { calls++; return realpathSync(...args); };
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (calls > budget) throw new Error("cleanup sync filesystem budget exceeded");
+    return lstat(...args);
+  });
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (hosts.includes(args[0])) reads++;
+    return readdir(...args);
+  });
+  await f.cleanup.sweep();
+  t.diagnostic(`sync filesystem calls: ${calls}; unrelated folder reads: ${reads}`);
+  assert.ok(calls < budget, `${calls} sync filesystem calls`);
+  assert.equal(reads, folders);
+  assert.equal(fs.existsSync(target), true);
+  assert.equal(fs.readdirSync(f.tempRoot).filter((name) => name.startsWith("wink-QUEUED-")).length, 0);
+  assert.deepEqual(f.warnings, []);
+});
+
+for (const phase of ["before cleanup", "during traversal"]) {
+  test(`an incoming link ${phase} preserves scratch`, async (t) => {
+    const f = fixture(t);
+    const host = path.join(f.worktreeRoot, "host");
+    fs.mkdirSync(host);
+    const link = path.join(host, "incoming");
+    const create = () => fs.symlinkSync(path.join(f.scratch, "missing"), link, process.platform === "win32" ? "junction" : "dir");
+    if (phase === "before cleanup") create();
+    else {
+      const promises = await import("node:fs/promises");
+      const readdir = promises.default.readdir;
+      let created = false;
+      t.mock.method(promises.default, "readdir", async (...args) => {
+        if (args[0] === f.scratch && !created) { created = true; create(); }
+        return readdir(...args);
+      });
+    }
+    f.cleanup.opened(f.session);
+    await f.cleanup.closed(f.session);
+    assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.deepEqual(f.warnings, []);
+    fs.unlinkSync(link);
+  });
+}
+
+test("overlapping TEMP roots preserve incoming links in unrestricted subfolders", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const host = path.join(f.tempRoot, "wink-HOST");
+  const folder = path.join(host, "project");
+  fs.mkdirSync(folder, { recursive: true });
+  const link = path.join(folder, "incoming");
+  fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, tempRoot: host });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.equal(fs.realpathSync(link), fs.realpathSync(target));
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+for (const claim of ["ledger row", "open pane"]) {
+  test(`a scratch ${claim} during async ownership checks preserves its links`, async (t) => {
+    const f = fixture(t);
+    const link = path.join(f.scratch, "link");
+    fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+    f.cleanup.opened(f.session);
+    const other = { ...f.session, id: "other", label: "OTHER" };
+    f.cleanup.opened(other);
+    await f.cleanup.closed(other, true);
+    const marker = path.join(f.tempRoot, "wink-OTHER");
+    const promises = await import("node:fs/promises");
+    const lstat = promises.default.lstat;
+    const resolve = path.resolve;
+    let claimed = false;
+    let armed = false;
+    t.mock.method(promises.default, "lstat", async (...args) => {
+      const stat = await lstat(...args);
+      if (args[0] === link) armed = true;
+      return stat;
+    });
+    t.mock.method(path, "resolve", (...args) => {
+      const file = resolve(...args);
+      if (args[0] === marker && armed && !claimed) {
+        claimed = true;
+        queueMicrotask(() => {
+          const next = { ...f.session, id: "next", label: "NEXT", cwd: f.scratch };
+          if (claim === "ledger row") f.cleanup.opened({ ...next, label: f.session.label });
+          else f.open([next]);
+        });
+      }
+      return file;
+    });
+    await f.cleanup.closed(f.session);
+    assert.equal(claimed, true);
+    assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.deepEqual(f.warnings, []);
+  });
+}
+
+test("a missing worktree root does not block reported scratch cleanup", async (t) => {
+  const f = fixture(t);
+  fs.rmdirSync(f.worktreeRoot);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a link appearing in the final scratch walk aborts removal", async (t) => {
+  const f = fixture(t);
+  const link = path.join(f.scratch, "late-link");
+  const promises = await import("node:fs/promises");
+  const readdir = promises.default.readdir;
+  let visits = 0;
+  t.mock.method(promises.default, "readdir", async (...args) => {
+    if (args[0] === f.scratch && ++visits === 2) fs.symlinkSync(f.home, link, process.platform === "win32" ? "junction" : "dir");
+    return readdir(...args);
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.match(f.warnings[0]?.message ?? "", /link appeared during cleanup/);
+});
+
+test("a new incoming link during backup invalidates the sweep scan", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const link = path.join(host, "incoming");
+  const promises = await import("node:fs/promises");
+  const original = promises.default.link;
+  let created = false;
+  t.mock.method(promises.default, "link", async (...args) => {
+    const result = await original(...args);
+    if (!created) {
+      created = true;
+      fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    }
+    return result;
+  });
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(created, true);
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.equal(f.ledger().some((entry) => !entry.worktreeDone), true);
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false);
+});
+
 test("reported scratch is removed and its junction target survives", async (t) => {
   const f = fixture(t);
   const target = path.join(f.home, "user-files");
@@ -595,6 +901,53 @@ test("a saved, clean, idle ledger worktree is removed without its branch or link
   assert.doesNotMatch(git(main, "worktree", "list"), /worktrees[\\/]worker/);
 });
 
+test("removing a worktree leaves another worktree's registration untouched", async (t) => {
+  const f = fixture(t);
+  const { main, target } = repo(f);
+  const away = path.join(f.home, "away");
+  fs.mkdirSync(away);
+  git(main, "worktree", "add", "--quiet", "-b", "test-offline", path.join(away, "offline"));
+  fs.renameSync(path.join(away, "offline"), path.join(away, "unplugged"));
+  const admin = (name) => path.join(main, ".git", "worktrees", name);
+  assert.equal(fs.existsSync(admin("offline")), true);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.equal(fs.existsSync(admin("worker")), false);
+  assert.equal(fs.existsSync(admin("offline")), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a pin on the volume root protects every worktree under it", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, pinned: [path.parse(target).root] });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(f.warnings, []);
+});
+
+test("scratch that a live worktree links into keeps its own junctions", async (t) => {
+  const f = fixture(t);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const incoming = path.join(host, "incoming");
+  const outgoing = path.join(f.scratch, "outgoing");
+  const kind = process.platform === "win32" ? "junction" : "dir";
+  fs.symlinkSync(f.scratch, incoming, kind);
+  fs.symlinkSync(f.home, outgoing, kind);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.equal(fs.lstatSync(outgoing).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(incoming);
+  fs.unlinkSync(outgoing);
+});
+
 test("a candidate's own link does not count as an incoming link", async (t) => {
   const f = fixture(t);
   const { target } = repo(f);
@@ -809,8 +1162,8 @@ for (const pin of ["bot", "bot task", "room", "room pin", "room task", "unreadab
     const module = await import("./pane-cleanup.mjs");
     const env = { ORBIT_WORKTREE_ROOT: f.worktreeRoot };
     if (pin !== "bot") env.OMB_DATA_DIR = dataDir;
-    const options = new Function("app", "process", "path", "readCleanupPins", "slog", "createPaneCleanup", `return ${expression};`)(
-      { getPath: () => f.home }, { env }, path, module.readCleanupPins, () => {}, (value) => value,
+    const options = new Function("app", "process", "path", "readCleanupPins", "slog", "createPaneCleanup", "scratchRoot", `return ${expression};`)(
+      { getPath: () => f.home }, { env }, path, module.readCleanupPins, () => {}, (value) => value, f.options.tempRoot,
     );
     const cleanup = createPaneCleanup({ ...f.options, ...options });
     cleanup.start(() => []);
@@ -1011,3 +1364,273 @@ for (const action of ["keep", "no report", "dispose", "natural exit"]) {
     assert.equal(fs.existsSync(f.scratch), true);
   });
 }
+
+const events = (f) => {
+  try { return fs.readFileSync(path.join(f.home, ".orbit", "cleanup.log"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)); } catch { return []; }
+};
+
+async function crashBeforeRemoval(t, f) {
+  const promises = await import("node:fs/promises");
+  const mkdtemp = promises.default.mkdtemp;
+  let crash;
+  const crashed = new Promise((resolve) => { crash = resolve; });
+  let armed = true;
+  t.mock.method(promises.default, "mkdtemp", (...args) => {
+    if (!armed) return mkdtemp(...args);
+    armed = false;
+    crash();
+    return new Promise(() => {});
+  });
+  const first = createPaneCleanup(f.options);
+  first.start(() => []);
+  void first.sweep();
+  await crashed;
+  first.dispose();
+}
+
+test("a worktree sweep with a full ledger makes no synchronous path calls", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  for (let folder = 0; folder < 20; folder++) {
+    fs.mkdirSync(path.join(target, "src", `folder-${folder}`), { recursive: true });
+    for (let file = 0; file < 100; file++) fs.writeFileSync(path.join(target, "src", `folder-${folder}`, `file-${file}`), "");
+  }
+  git(target, "add", ".");
+  git(target, "commit", "--quiet", "-m", "tracked");
+  git(target, "update-ref", "refs/remotes/test/main", "HEAD");
+  assert.equal(git(target, "ls-files").split("\n").length, 2_002);
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, pinned: Array.from({ length: 20 }, (_, index) => path.join(f.home, "pins", `${index}`)) });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  for (let index = 0; index < 500; index++) cleanup.opened({ ...f.session, id: `open-${index}`, label: `OPEN-${index}`, cwd: path.join(f.home, "open", `${index}`) });
+  let calls = 0;
+  const lstatSync = fs.lstatSync;
+  const realpathSync = fs.realpathSync.native;
+  t.after(() => { fs.lstatSync = lstatSync; fs.realpathSync.native = realpathSync; });
+  fs.lstatSync = (...args) => { calls++; return lstatSync(...args); };
+  fs.realpathSync.native = (...args) => { calls++; return realpathSync(...args); };
+  await cleanup.sweep();
+  fs.lstatSync = lstatSync;
+  fs.realpathSync.native = realpathSync;
+  t.diagnostic(`sync filesystem calls: ${calls}`);
+  assert.equal(calls, 0);
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.deepEqual(f.warnings, []);
+});
+
+test("the incoming link scan stays within a few calls per link", async (t) => {
+  const f = fixture(t);
+  f.session.label = "worker";
+  const { target } = repo(f);
+  const deep = path.join(f.home, "deep");
+  const folder = path.join(deep, "a", "b", "c", "d", "e", "f", "g");
+  fs.mkdirSync(folder, { recursive: true });
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  for (let index = 0; index < 500; index++) fs.symlinkSync(folder, path.join(host, `link-${index}`), process.platform === "win32" ? "junction" : "dir");
+  await eligible(f);
+  const watched = [host, deep].map((root) => root.toLowerCase());
+  const promises = await import("node:fs/promises");
+  let calls = 0;
+  for (const method of ["lstat", "realpath", "readlink", "readdir"]) {
+    const original = promises.default[method];
+    t.mock.method(promises.default, method, (...args) => {
+      const file = path.resolve(String(args[0])).toLowerCase();
+      if (watched.some((root) => file === root || file.startsWith(`${root}${path.sep}`))) calls++;
+      return original(...args);
+    });
+  }
+  await f.cleanup.sweep();
+  const stats = events(f).findLast((line) => line.kind === "links") ?? { dirs: 0, links: 0 };
+  t.diagnostic(`link scan fs calls: ${calls}; dirs ${stats.dirs}; links ${stats.links}; ${stats.ms} ms`);
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.equal(stats.links, 1_000);
+  assert.ok(calls <= stats.dirs + 6 * stats.links, `${calls} fs calls`);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a crash between marking a worktree deleting and removing it resumes after restart", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  await crashBeforeRemoval(t, f);
+  assert.equal(fs.existsSync(target), true);
+  assert.equal(f.ledger().some((entry) => !entry.worktreeDone), true);
+  const restarted = createPaneCleanup(f.options);
+  restarted.start(() => []);
+  t.after(() => restarted.dispose());
+  await restarted.sweep();
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.deepEqual(f.ledger(), []);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a crash before removal never deletes a different worktree at the same path", async (t) => {
+  const f = fixture(t);
+  const { main, target } = repo(f);
+  await eligible(f);
+  await crashBeforeRemoval(t, f);
+  git(main, "worktree", "remove", target);
+  git(main, "worktree", "add", "--quiet", "-b", "unrelated", target);
+  fs.writeFileSync(path.join(target, "file"), "unrelated");
+  git(target, "commit", "--quiet", "-am", "replacement");
+  git(target, "update-ref", "refs/remotes/test/replacement", "HEAD");
+  const restarted = createPaneCleanup(f.options);
+  restarted.start(() => []);
+  t.after(() => restarted.dispose());
+  f.advance(4 * DAY_MS);
+  await restarted.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "unrelated");
+  assert.deepEqual(f.ledger(), []);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a commit made after the first unpushed check keeps the worktree", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  const promises = await import("node:fs/promises");
+  const link = promises.default.link;
+  let committed = false;
+  t.mock.method(promises.default, "link", async (...args) => {
+    const value = await link(...args);
+    if (!committed) {
+      committed = true;
+      fs.writeFileSync(path.join(target, "late"), "late");
+      git(target, "add", "late");
+      git(target, "commit", "--quiet", "-m", "late");
+    }
+    return value;
+  });
+  await f.cleanup.sweep();
+  assert.equal(committed, true);
+  assert.equal(fs.readFileSync(path.join(target, "late"), "utf8"), "late");
+  assert.notEqual(git(target, "rev-list", "HEAD", "--not", "--remotes"), "");
+  assert.equal(f.ledger().every((entry) => !entry.worktreeDone && !entry.deleting), true);
+  assert.deepEqual(events(f).filter((line) => line.kind === "kept").map((line) => line.reason), ["unpushed"]);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("another instance's load leaves this instance's open rows open", async (t) => {
+  const f = fixture(t);
+  const release = createPaneCleanup({ ...f.options, instance: "release" });
+  release.start(() => []);
+  t.after(() => release.dispose());
+  release.opened(f.session);
+  const dev = createPaneCleanup({ ...f.options, instance: "dev" });
+  dev.start(() => []);
+  t.after(() => dev.dispose());
+  assert.equal(f.ledger()[0].closedAt, null);
+  f.advance(4 * DAY_MS);
+  await dev.sweep();
+  assert.equal(f.ledger()[0].closedAt, null);
+  assert.equal(fs.existsSync(f.scratch), true);
+});
+
+test("a dirty worktree swept twice is listed as kept once", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  fs.writeFileSync(path.join(target, "file"), "unsaved");
+  await eligible(f);
+  await f.cleanup.sweep();
+  await f.cleanup.sweep();
+  const kept = events(f).filter((line) => line.kind === "kept");
+  assert.deepEqual(kept.map((line) => line.reason), ["dirty"]);
+  assert.equal(fs.realpathSync.native(kept[0].path), fs.realpathSync.native(target));
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "unsaved");
+});
+
+test("the default instance survives a changed executable path", (t) => {
+  const f = fixture(t);
+  f.cleanup.opened(f.session);
+  const execPath = process.execPath;
+  process.execPath = path.join(f.home, "new-mount", "wink");
+  const restarted = createPaneCleanup(f.options);
+  process.execPath = execPath;
+  restarted.start(() => []);
+  t.after(() => restarted.dispose());
+  assert.ok(f.ledger()[0].closedAt);
+});
+
+test("a dev launch leaves the packaged app's open rows open", (t) => {
+  const f = fixture(t);
+  f.cleanup.opened(f.session);
+  process.defaultApp = true;
+  const dev = createPaneCleanup(f.options);
+  delete process.defaultApp;
+  dev.start(() => []);
+  t.after(() => dev.dispose());
+  assert.equal(f.ledger()[0].closedAt, null);
+});
+
+test("live-pane rechecks stay within a few filesystem calls per pane", async (t) => {
+  const f = fixture(t);
+  const shared = path.join(f.home, "live", "a", "b", "c", "d", "e");
+  const panes = Array.from({ length: 60 }, (_, index) => ({ id: `live-${index}`, label: `LIVE-${index}`, cwd: path.join(shared, `pane-${index}`) }));
+  for (const pane of panes) fs.mkdirSync(pane.cwd, { recursive: true });
+  f.open(panes);
+  const watched = fs.realpathSync.native(path.join(f.home, "live")).toLowerCase();
+  const promises = await import("node:fs/promises");
+  let calls = 0;
+  for (const method of ["lstat", "realpath"]) {
+    const original = promises.default[method];
+    t.mock.method(promises.default, method, (...args) => {
+      const file = path.resolve(String(args[0])).toLowerCase();
+      if (file === watched || file.startsWith(`${watched}${path.sep}`)) calls++;
+      return original(...args);
+    });
+  }
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  t.diagnostic(`live-pane recheck fs calls: ${calls}`);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.ok(calls <= 12 * 4 * panes.length, `${calls} fs calls`);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a pane cwd re-pointed at scratch between rechecks keeps it", async (t) => {
+  const f = fixture(t);
+  const alias = path.join(f.home, "alias");
+  fs.mkdirSync(alias);
+  f.open([{ id: "other", label: "OTHER", cwd: alias }]);
+  const promises = await import("node:fs/promises");
+  const readdir = promises.default.readdir;
+  let swapped = false;
+  t.mock.method(promises.default, "readdir", async (...args) => {
+    if (path.resolve(String(args[0])) === path.resolve(f.scratch) && !swapped) {
+      swapped = true;
+      fs.rmdirSync(alias);
+      fs.symlinkSync(f.scratch, alias, process.platform === "win32" ? "junction" : "dir");
+    }
+    return readdir(...args);
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(swapped, true);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(alias);
+});
+
+test("overlapping sweeps run one at a time and each logs its CPU", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  let running = 0;
+  let peak = 0;
+  const cleanup = createPaneCleanup({ ...f.options, pinned: async () => {
+    peak = Math.max(peak, ++running);
+    await new Promise((resolve) => setImmediate(resolve));
+    running--;
+    return [];
+  } });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await Promise.all([cleanup.sweep(), cleanup.sweep()]);
+  assert.equal(peak, 1);
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  const logged = events(f).filter((line) => line.kind === "sweep");
+  assert.equal(logged.length, 2);
+  assert.ok(logged.every((line) => Number.isInteger(line.cpuMs) && line.cpuMs >= 0));
+});

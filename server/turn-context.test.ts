@@ -541,6 +541,16 @@ describe("shouldRecycleProviderSession", () => {
     expect(shouldRecycleProviderSession({ compacted: true })).toBe(true);
   });
 
+  it("keeps a native engine's session through a Wink compaction", () => {
+    expect(shouldRecycleProviderSession({ compacted: true, native: true })).toBe(false);
+  });
+
+  it("recycles at the prompt cap only when the reseed halves the prompt", () => {
+    const sessionPrompt = { first: 40_000, last: 300_000, contextWindow: 1_000_000 };
+    expect(shouldRecycleProviderSession({ compacted: false, sessionPrompt, native: true, reseedTokens: 117_000 })).toBe(true);
+    expect(shouldRecycleProviderSession({ compacted: false, sessionPrompt, native: true, reseedTokens: 270_000 })).toBe(false);
+  });
+
   it("leaves native resume in place before compaction and after a rewind", () => {
     expect(shouldRecycleProviderSession({ compacted: false, rewound: false })).toBe(false);
     expect(shouldRecycleProviderSession({ compacted: true, rewound: true })).toBe(false);
@@ -697,6 +707,19 @@ describe("resumeSessionUnseeded", () => {
   };
 
   const seeded = (compactionId: string | null, cursor = "session-1", instanceId = "claude") => ({ instanceId, cursor, compactionId });
+
+  it("a native session stays seeded through a newer Wink summary", () => {
+    const input = { instanceId: "claude", cursor: "session-1", seed: seeded("c1"), latestCompactionId: "c2" };
+    expect(resumeSessionUnseeded(input)).toBe(true);
+    expect(resumeSessionUnseeded({ ...input, native: true })).toBe(false);
+    expect(resumeSessionUnseeded({ ...input, native: true, seed: seeded("c1", "session-0") })).toBe(true);
+  });
+
+  it("a native session seeded on a summary replays once its window grows", () => {
+    const input = { instanceId: "claude", cursor: "session-1", latestCompactionId: "c1", native: true, expanded: true };
+    expect(resumeSessionUnseeded({ ...input, seed: seeded("c1") })).toBe(true);
+    expect(resumeSessionUnseeded({ ...input, seed: seeded(null) })).toBe(false);
+  });
 
   it("resumes a session a successful turn seeded with the current summary", () => {
     expect(resumeSessionUnseeded({ instanceId: "claude", cursor: "session-1", seed: seeded("c1"), latestCompactionId: "c1" })).toBe(false);

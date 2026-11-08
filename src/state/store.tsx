@@ -34,7 +34,7 @@ import { readSnapshotCache, writeSnapshotCache } from "./snapshot-cache";
 import { completedReopenDismissals } from "@/lib/task-recovery";
 import { markUnreadReadAt } from "@/lib/unread";
 import { firstBotsHeader, noteCacheLoaded } from "@/lib/cold-open-timing";
-import { openLiveEvents } from "@/lib/live-events";
+import { LIVE_EVENTS_WAKE_QUIET_MS, openLiveEvents } from "@/lib/live-events";
 import { holdReload } from "@/lib/reload-hold";
 import { usageBoardFrame, usageBoardReconnected } from "@/lib/usage-board-client";
 import { botDraftId, returnSendsToComposer, takeQueuedDraft } from "@/lib/drafts";
@@ -2363,6 +2363,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
+      wakeQuietMs: window.ogb ? 0 : LIVE_EVENTS_WAKE_QUIET_MS,
       onOpen: () => {
         rawDispatch({ type: "connected", value: true });
         usageBoardReconnected();
