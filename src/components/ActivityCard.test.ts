@@ -182,7 +182,7 @@ it("waves once per Settings open when the card remounts", async () => {
   }
 });
 
-it("waves the squares in by column, and not at all under reduced motion", async () => {
+it("settles each square down with one glint inside 700 ms, and not at all under reduced motion", async () => {
   const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => undefined);
   Object.defineProperty(HTMLElement.prototype, "animate", { value: animate, configurable: true, writable: true });
   const matchMedia = (reduce: boolean) => vi.fn((query: string) => ({ matches: reduce && query.includes("reduce"), addEventListener() {}, removeEventListener() {} }));
@@ -190,16 +190,33 @@ it("waves the squares in by column, and not at all under reduced motion", async 
     vi.stubGlobal("matchMedia", matchMedia(false));
     localStorage.setItem("omb-activity", JSON.stringify(activityOf(weeks(() => 1))));
     let card = await renderCard(weeks(() => 1));
-    const delays = animate.mock.calls.map(([, options]) => options);
-    expect(delays.length).toBe(squaresOf(card.host).length);
-    expect(Math.max(...delays.map(({ delay = 0, duration = 0 }) => delay + Number(duration)))).toBeLessThanOrEqual(450);
-    expect(delays[0]!.delay).toBe(0);
-    expect(delays[7]!.delay).toBeGreaterThan(0);
+    const calls = animate.mock.calls;
+    expect(calls.length).toBe(squaresOf(card.host).length);
+    expect(Math.max(...calls.map(([, { delay = 0, duration = 0 }]) => delay + Number(duration)))).toBeLessThanOrEqual(700);
+    expect(calls[0]![1].delay).toBe(0);
+    expect(calls[7]![1].delay).toBeGreaterThan(0);
+    expect(calls[0]![0][0]).toMatchObject({ opacity: 0.35, transform: "translateY(-3px)" });
+    expect(calls[0]![0].at(-1)).toMatchObject({ opacity: 1, transform: "none" });
+    expect(calls[0]![0].some(({ filter }) => filter !== "brightness(1)")).toBe(true);
     await card.unmount();
     animate.mockClear();
     vi.stubGlobal("matchMedia", matchMedia(true));
     card = await renderCard(weeks(() => 1));
     expect(animate).not.toHaveBeenCalled();
+    await card.unmount();
+  } finally {
+    Reflect.deleteProperty(HTMLElement.prototype, "animate");
+  }
+});
+
+it("keeps the glint gentle on a light skin so pale squares stay visible", async () => {
+  const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => undefined);
+  Object.defineProperty(HTMLElement.prototype, "animate", { value: animate, configurable: true, writable: true });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+  localStorage.setItem("omb-skin", "wink-day");
+  try {
+    const card = await renderCard(weeks(() => 1));
+    expect(animate.mock.calls[0]![0].map(({ filter }) => filter)).toContain("brightness(1.05)");
     await card.unmount();
   } finally {
     Reflect.deleteProperty(HTMLElement.prototype, "animate");
