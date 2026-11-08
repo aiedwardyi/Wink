@@ -6,6 +6,7 @@
 // readable.
 
 import type { ToolDetail } from "../shared/tool-detail.ts";
+import type { TurnTrace, UsageObserver } from "./turn-timing.ts";
 
 export type DriverKind = string;
 export type InstanceId = string;
@@ -188,6 +189,7 @@ export type RequestOutcome = "allowed-once" | "rejected" | "answered" | "unavail
 // the first turn (the agentcal per-turn-process model) with resumeCursor
 // carrying the provider-native continuation (e.g. a claude session id).
 export interface SendTurnInput {
+  trace?: TurnTrace;
   threadId: ThreadId;
   text: string;
   model?: string;
@@ -460,7 +462,7 @@ export interface ProviderInstance {
   snapshot(opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot>;
   /** Cheap one-shot text call (upstream TextGeneration) — titles, summaries. */
   /** `ephemeral` asks the CLI not to keep a session transcript, `lean` to skip the owner's customizations, where it can. */
-  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string }): Promise<string>;
+  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string; onUsage?: UsageObserver }): Promise<string>;
   /** the model and default deadline generateText runs on, for telemetry */
   readonly textModel?: string;
   readonly textTimeoutMs?: number;

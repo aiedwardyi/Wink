@@ -1,8 +1,10 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { startTurnTimer } from "./turn-timing.ts";
+import ts from "typescript";
+import { experimentalAgents, slimStaticText } from "./drivers/tool-catalog.ts";
+import { currentTurnTrace, recordToolSchemas, startTurnTimer, startTurnTrace, traceClaimedTurn, traceHelperCall, tracePart } from "./turn-timing.ts";
 
 describe("turn-timing", () => {
   const dir = join(tmpdir(), `orbit-turn-timing-${process.pid}`);
@@ -20,8 +22,10 @@ describe("turn-timing", () => {
     else process.env.ORBIT_TURN_TIMING = prevTiming;
     if (prevData === undefined) delete process.env.OMB_DATA_DIR;
     else process.env.OMB_DATA_DIR = prevData;
-    const p = join(dir, "turn-timing.jsonl");
-    if (existsSync(p)) unlinkSync(p);
+    for (const name of ["turn-timing.jsonl", "turn-traces.jsonl"]) {
+      const path = join(dir, name);
+      if (existsSync(path)) unlinkSync(path);
+    }
   });
 
   it("is a no-op when ORBIT_TURN_TIMING is off", () => {
@@ -52,5 +56,189 @@ describe("turn-timing", () => {
     expect(typeof row.firstVisibleMs).toBe("number");
     expect(typeof row.turnDoneMs).toBe("number");
     expect(row.systemPromptChars).toBe(100);
+  });
+
+  it("does not evaluate identity, clock or writer with tracing off", () => {
+    process.env.ORBIT_TURN_TIMING = "0";
+    const identity = vi.fn(() => ({ botId: "private" }));
+    const now = vi.fn(() => 0);
+    const write = vi.fn();
+    expect(startTurnTrace(identity, { now, write })).toBeUndefined();
+    expect(identity).not.toHaveBeenCalled();
+    expect(now).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    const schemas = vi.fn(() => []);
+    recordToolSchemas(schemas);
+    expect(schemas).not.toHaveBeenCalled();
+  });
+
+  it("keeps overlapping phases inclusive and flushes once on failure", () => {
+    let now = 10;
+    const write = vi.fn();
+    const trace = startTurnTrace({ sendId: "send", threadId: "thread" }, { now: () => now, write })!;
+    const build = trace.span("prompt_build");
+    now = 12;
+    const read = trace.span("memory_read");
+    now = 15;
+    read("missing");
+    now = 20;
+    build();
+    trace.finish("cancelled");
+    trace.finish();
+    const row = write.mock.calls[0]![0];
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(row.spans).toContainEqual({ phase: "prompt_build", start: 0, end: 10 });
+    expect(row.spans).toContainEqual({ phase: "memory_read", start: 2, end: 5, reason: "missing" });
+    expect(row.spans).toContainEqual({ phase: "hooks", start: null, end: null, reason: "CLI-owned/unobservable" });
+    expect(row.reason).toBe("cancelled");
+  });
+
+  it("counts disjoint assembled and delivered parts without retaining contents", () => {
+    const write = vi.fn();
+    const trace = startTurnTrace({}, { write })!;
+    const memory = trace.part("memory", "secret-memory");
+    const playbook = trace.part("playbook", "worker");
+    trace.input("hello", ["notice"], "task");
+    trace.assembled(`system${memory}${playbook}`, "tasknoticehello");
+    trace.delivered("start", () => ({ system: `system${memory}${playbook}` }));
+    trace.delivered("resume-input", () => ({ current_input: "tasknoticehello" }));
+    trace.finish();
+    const row = write.mock.calls[0]![0];
+    expect(row.assembled.system.chars).toBe(6);
+    expect(row.assembled.memory.chars).toBe(13);
+    expect(row.assembled.playbook.chars).toBe(6);
+    expect(row.assembled.notes.chars).toBe(6);
+    expect(row.assembled.current_input.chars).toBe(5);
+    expect(row.assembled.history.chars).toBe(4);
+    expect(row.deliveries[1].parts.system.chars).toBe(0);
+    expect(row.deliveries[1].durableTaskStateChars).toBe(4);
+    expect(JSON.stringify(row)).not.toContain("secret-memory");
+    expect(row.nativeInstructions).toEqual({ chars: null, coverage: "native-owned" });
+  });
+
+  it("deduplicates request identities and keeps nested usage outside foreground sums", () => {
+    const write = vi.fn();
+    const trace = startTurnTrace({}, { write })!;
+    trace.request("request", { input: 30, output: 1, cachedInput: 20, cacheCreation: 5 });
+    trace.request("request", { input: 30, output: 2, cachedInput: 20, cacheCreation: 5 });
+    trace.request("agent", { input: 10, output: 1 }, true);
+    trace.reconcile({ input: 30, output: 2 });
+    trace.finish();
+    const row = write.mock.calls[0]![0];
+    expect(row.requests).toHaveLength(2);
+    expect(row.requests[0].usage.output).toBe(2);
+    expect(row.requests[1].nested).toBe(true);
+    expect(row.reconciliation.result).toEqual({ input: 30, output: 2 });
+  });
+
+  it("deduplicates Codex snapshots and excludes restored spend", () => {
+    const write = vi.fn();
+    const trace = startTurnTrace({}, { write })!;
+    trace.codexUsage("old", { total: { inputTokens: 100, outputTokens: 10 } }, false);
+    const usage = { total: { inputTokens: 140, outputTokens: 15 }, last: { inputTokens: 40, outputTokens: 5 } };
+    trace.codexUsage("new", usage, true);
+    trace.codexUsage("new", usage, true);
+    trace.finish();
+    const row = write.mock.calls[0]![0];
+    expect(row.requests).toHaveLength(1);
+    expect(row.reconciliation.delta).toEqual({ input: 40, output: 5 });
+  });
+
+  it("closes failed and retried RPC spans with their attempt and request IDs", () => {
+    const write = vi.fn();
+    const trace = startTurnTrace({}, { write })!;
+    trace.rpc("thread/resume", 2, 0)("error");
+    trace.rpc("thread/start", 3, 0)("reply");
+    trace.rpc("initialize", 1, 1)("reply");
+    trace.finish();
+    expect(write.mock.calls[0]![0].spans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "resume", reason: "error", attempt: 0, requestId: 2 }),
+      expect.objectContaining({ phase: "start", reason: "reply", attempt: 0, requestId: 3 }),
+      expect.objectContaining({ phase: "initialize", attempt: 1, requestId: 1 }),
+    ]));
+  });
+
+  it("preserves return values and isolates concurrent preparation contexts", async () => {
+    const seen: unknown[] = [];
+    await Promise.all(["a", "b"].map((botId) => traceClaimedTurn({ botId }, async () => {
+      const trace = currentTurnTrace();
+      await Promise.resolve();
+      expect(currentTurnTrace()).toBe(trace);
+      seen.push(trace);
+      return botId;
+    })));
+    expect(seen[0]).not.toBe(seen[1]);
+    expect(currentTurnTrace()).toBeUndefined();
+  });
+
+  it("never fails the caller when the trace sink fails", () => {
+    const trace = startTurnTrace({}, { write: () => { throw new Error("disk full"); } })!;
+    expect(() => trace.finish()).not.toThrow();
+  });
+
+  it("attributes helper retries to their source without another inference", async () => {
+    const work = vi.fn(async (onUsage?: (usage: undefined, id?: string) => void) => {
+      onUsage?.(undefined, "attempt-1");
+      onUsage?.(undefined, "attempt-2");
+      return "unchanged helper text";
+    });
+    const text = await traceClaimedTurn({ botId: "bot", threadId: "thread", sendId: "send", messageId: "message" }, () => traceHelperCall("claude", undefined, work));
+    expect(text).toBe("unchanged helper text");
+    expect(work).toHaveBeenCalledTimes(1);
+    const rows = readFileSync(join(dir, "turn-traces.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const helper = rows.find((row) => row.batchId);
+    expect(helper).toMatchObject({ botId: "bot", threadId: "thread", sourceSendIds: ["send"], sourceMessageIds: ["message"], requests: [{ id: "attempt-1", usage: null, nested: false }, { id: "attempt-2", usage: null, nested: false }] });
+    expect(helper.endpoints.runnerReceipt).toBeNull();
+  });
+});
+
+describe("flags off", () => {
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const section = (from: string, to: string) => {
+    const start = source.indexOf(from);
+    const end = source.indexOf(to, start);
+    if (start < 0 || end < start) throw new Error(`Missing section: ${from}`);
+    return source.slice(start, end);
+  };
+  const names = ["ORBIT_TURN_TIMING", "ORBIT_WINK_TOOL_CATALOG", "ORBIT_WINK_STATIC_SLIM"];
+  const saved = names.map((name) => process.env[name]);
+
+  beforeEach(() => { for (const name of names) delete process.env[name]; });
+  afterEach(() => names.forEach((name, i) => { if (saved[i] === undefined) delete process.env[name]; else process.env[name] = saved[i]; }));
+
+  const stub = (name: string): unknown => new Proxy(() => name, {
+    get: (_t, key) => key === Symbol.toPrimitive ? () => name : key === "map" ? () => [] : key === "length" ? 0 : stub(`${name}.${String(key)}`),
+    apply: () => name,
+  });
+  const scope = {
+    tracePart, slimStaticText, privateWorkspace: true, canMessage: true, tagged: [], opts: {}, cfg: {},
+    integrations: {}, instance: { driverKind: "claudeAgent" }, SHOW_IMAGE_GUIDANCE: "show. To create a new image, call generate_image.",
+  } as Record<string | symbol, unknown>;
+  const build = (body: string) => {
+    const run = new Function(`${ts.transpileModule(`function run(scope) { with (scope) { ${body} } }`, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.None },
+    }).outputText}\nreturn run;`)() as (scope: object) => string;
+    return run(new Proxy(scope, {
+      has: (target, key) => key in target || (typeof key === "string" && !(key in globalThis)),
+      get: (target, key) => key === Symbol.unscopables ? undefined : key in target ? target[key] : stub(String(key)),
+    }));
+  };
+
+  it("builds the real system prompt as the untraced source does", () => {
+    const head = "        const system =\n";
+    const system = section(head, "\n        // a rewound, Orbit-compacted").slice(head.length);
+    const image = section("      const showImagePrompt =", "\n");
+    const untraced = (code: string) => code.replace(/tracePart\("\w+", (.*)\) \+$/gm, "($1) +").replace(/slimStaticText\((\w+), [\w.]+\)/, "$1");
+    expect(untraced(system)).not.toContain("tracePart");
+    const wrapped = build(`${image}\nconst system = ${system};\nreturn system;`);
+    expect(wrapped).toBe(build(`${untraced(image)}\nconst system = ${untraced(system)};\nreturn system;`));
+    expect(wrapped).toContain("call generate_image.");
+  });
+
+  it("leaves the turn flow, mount and static text alone", async () => {
+    const mount = { command: "node", args: ["a"], env: { A: "1" } };
+    expect(await traceClaimedTurn({ botId: "b" }, async () => currentTurnTrace())).toBeUndefined();
+    expect(experimentalAgents(mount)).toBe(mount);
+    expect(slimStaticText("x To create a new image, call generate_image.", "codex")).toBe("x To create a new image, call generate_image.");
   });
 });

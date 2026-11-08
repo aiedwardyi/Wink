@@ -18,6 +18,8 @@ import { computerProxyEnv } from "../container-computer.ts";
 import { describeSpawnFailure, execCli, spawnCli } from "../procs.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { captureToolDetail } from "../tool-detail.ts";
+import { startTurnTrace, traceHelperCall, traceRuntimeEvent } from "../turn-timing.ts";
+import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 
 import type {
   DriverCreateInput,
@@ -249,10 +251,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     }
     const active = new Map<string, Turn>();
 
-    const emit = (event: RuntimeEvent) => {
+    const emit = (event: RuntimeEvent) => traceRuntimeEvent(event, () => {
       finishNative(event);
       for (const l of [...listeners]) l(event);
-    };
+    });
     const base = (threadId: string, turnId: string) => ({
       eventId: newEventId(),
       provider: DRIVER_KIND,
@@ -271,9 +273,13 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
       const turnId = newId();
+      const trace = turn.trace ?? startTurnTrace({ engine: "codex", threadId, turnId });
+      trace?.identify({ threadId, turnId, engine: "codex" });
       // Reserve the thread across the retirement wait so Stop lands here.
       active.set(threadId, { stop: () => { stopRequested = true; }, steer: async () => false, turnId, asks: new Map() });
+      const endRetirement = trace?.span("retirement_wait");
       await awaitDyingAppServers(2_000, retirementHome);
+      endRetirement?.();
       if (stopRequested) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
         active.delete(threadId);
@@ -296,7 +302,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
         if (turn.integrations?.agents) {
-          mountMcpServer(appServerArgs, env, "agents", turn.integrations.agents, AGENTS_TOOL_TIMEOUT_SEC);
+          mountMcpServer(appServerArgs, env, "agents", experimentalAgents(turn.integrations.agents), AGENTS_TOOL_TIMEOUT_SEC);
         }
         if (turn.integrations?.computer) {
           const proxyEnv = computerProxyEnv(turn.integrations.computer);
@@ -328,6 +334,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           mountMcpServer(appServerArgs, env, "openmausbot_phone", turn.integrations.phone);
         }
 
+        const endSpawn = trace?.span("spawn", "cold", attempt);
         const child = spawnCli(config.cli, appServerArgs, {
           ...turnPolicy,
           cwd: turn.cwd ?? homedir(),
@@ -335,6 +342,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           stdio: ["pipe", "pipe", "pipe"],
         });
 
+      child.once("spawn", () => endSpawn?.("spawned"));
+      child.once("error", () => endSpawn?.("error"));
       let abandoned = false;
       let initialized = false;
       const spend: TurnSpend = {};
@@ -375,19 +384,25 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const request = (method: string, params: unknown, timeoutMs = 60_000) =>
         new Promise<any>((resolve, reject) => {
           const id = nextId++;
+          const endRequest = trace?.rpc(method, id, attempt);
           // a wedged app-server can accept stdin and never reply; without this
           // the handshake await hangs forever and the bot stays busy for good
           const timer = setTimeout(() => {
-            if (rpcPending.delete(id)) reject(new Error(`codex ${method} timed out after ${timeoutMs}ms`));
+            if (rpcPending.delete(id)) {
+              endRequest?.("timeout");
+              reject(new Error(`codex ${method} timed out after ${timeoutMs}ms`));
+            }
           }, timeoutMs);
           if (typeof timer.unref === "function") timer.unref();
           rpcPending.set(id, {
             resolve: (v) => {
               clearTimeout(timer);
+              endRequest?.("reply");
               resolve(v);
             },
             reject: (e) => {
               clearTimeout(timer);
+              endRequest?.("error");
               reject(e);
             },
           });
@@ -523,9 +538,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const handleNotification = (msg: any) => {
         const p = msg.params ?? {};
+        if (state.turnRequested && p.turnId === nativeTurnId && nativeTurnId) trace?.mark("first_event");
         switch (msg.method) {
           case "turn/started":
             nativeTurnId = p.turn?.id ?? null;
+            trace?.identify({ nativeTurnId: nativeTurnId ?? undefined });
+            if (state.turnRequested) trace?.mark("first_event");
             break;
           // token-level chat text; the item/completed frame follows with the
           // whole message, so its delta is only a fallback when none streamed
@@ -554,7 +572,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                 : item.type === "fileChange"
                   ? "edit"
                   : item.type === "mcpToolCall"
-                    ? (item.tool ?? item.name ?? "mcp")
+                    ? originalCatalogCall(item.tool ?? item.name ?? "mcp", item.arguments, item.server).name
                     : item.type === "webSearch"
                       ? "web_search"
                       : null;
@@ -614,6 +632,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             // previous call before this turn's first one. This turn's reports
             // follow turn/started, so its id is known by the time they land.
             const counts = state.turnRequested && (p.turnId === undefined || p.turnId === nativeTurnId);
+            trace?.codexUsage(p.turnId, p.tokenUsage ?? {}, counts);
             if (counts) {
               state.usage = accrueTurnUsage(state.spend, p.tokenUsage) ?? state.usage;
               // `last` is one model call (checked against rollouts), cache hits included
@@ -645,6 +664,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             break;
           }
           case "turn/completed": {
+            trace?.mark("native_completion");
             const t = p.turn ?? {};
             const limit = t.status === "failed" && !stopRequested ? usageFailure(t.error) : null;
             if (limit && !usageLimitReported) {
@@ -797,6 +817,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             codexThreadId = resumed?.thread?.id ?? cursor;
           } catch {
             resumeFailed = true;
+            trace?.mark("resume_fallback");
           }
         }
         if (!codexThreadId) {
@@ -812,6 +833,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ephemeral: false,
             config: { web_search: "live" },
           });
+          trace?.delivered("thread/start", () => ({ system: turn.system ?? "" }));
           codexThreadId = started?.thread?.id ?? null;
           startedModel = started?.model ?? null;
         }
@@ -824,6 +846,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               threadId: codexThreadId,
               items: [{ type: "message", role: "developer", content: [{ type: "input_text", text: turn.systemUpdate.trimEnd() }] }],
             });
+            trace?.delivered("system-update", () => ({ system: turn.systemUpdate!.trimEnd() }));
           } catch (error) {
             if ((error as { code?: number }).code !== -32601) console.warn("[codex] thread/inject_items failed", error);
             prompt = `${turn.systemUpdate}${prompt}`;
@@ -832,6 +855,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         nativeThreadId = codexThreadId;
         nativeTurnId = null;
         state.turnRequested = true;
+        trace?.delivered(resumeFailed ? "fallback-input" : "turn/start", () => ({ current_input: prompt }));
         const startedTurn = await request("turn/start", {
           threadId: codexThreadId,
           input: [{ type: "text", text: prompt }],
@@ -847,6 +871,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           ...(turn.effort ? { effort: turn.effort } : {}),
         });
         nativeTurnId = startedTurn?.turn?.id ?? nativeTurnId;
+        trace?.identify({ nativeTurnId: nativeTurnId ?? undefined });
         state.promptAccepted = true;
       } catch (e) {
         if (abandoned) return;
@@ -940,7 +965,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     loginConfig: () => ({ cli: config.cli, env: childEnv() }),
     generateText: (prompt, options) => {
       if (!admitted || accountBlocked) return Promise.reject(new Error("Sign in to this Codex account before using helpers"));
-      return text.generateText(prompt, options);
+      return traceHelperCall("codex", options?.onUsage, () => text.generateText(prompt, options));
     },
     get textModel() { return models.default; },
     textTimeoutMs: CODEX_TEXT_TIMEOUT_MS,

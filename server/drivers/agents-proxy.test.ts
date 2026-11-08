@@ -39,6 +39,7 @@ let lastShowImageBody: any = null;
 let lastAskUserBody: any = null;
 let lastGenerateImageBody: any = null;
 let lastCallApiBody: any = null;
+let lastReactBody: any = null;
 let lastRoutineQuery = "";
 let routinesResponse: unknown = {
   now: "2026-08-28T10:30:00.000Z",
@@ -172,6 +173,16 @@ beforeAll(async () => {
           return res.end(JSON.stringify({ alreadyConfigured: true, label: "OpenAI API Key" }));
         }
         res.end(JSON.stringify({ messageId: "msg-key", label: "Gemini API Key" }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/internal/react") {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => {
+        lastReactBody = JSON.parse(data);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
       });
       return;
     }
@@ -1205,6 +1216,73 @@ describe("agents-proxy identity gate", () => {
     expect(call.result.isError).toBeFalsy();
   });});
 
+describe("agents-proxy catalog", () => {
+  const identity = (depth = 0) => ({ OMB_BOT_ID: "bot-asker", OMB_THREAD_ID: "thread-asker-routine", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: String(depth), OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`, OMB_WINK_TOOL_CATALOG: "1" });
+  const names = (list: any): string[] => list.result.tools.map((tool: { name: string }) => tool.name);
+
+  it("replaces only the ten optional definitions with the bounded pair", async () => {
+    const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "ask_user", "set_keep_going", "find_wink_tool", "call_wink_tool"]);
+    expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
+    expect(17 + names(list).length).toBe(27);
+  });
+
+  it.each([
+    ["create_bot", { name: "Pixel", role: "Designer", instructions: "Draw things." }],
+    ["create_channel", { name: "Design", member_ids: ["bot-helper"] }],
+    ["react", { emoji: "👍" }],
+    ["show_image", { path: "/proj/image.png", caption: "Preview" }],
+    ["generate_image", { prompt: "A test image", show: true }],
+    ["call_api", { credential_id: "ttsKey", method: "POST", url: "https://api.example.com/audio" }],
+    ["request_credential", { credential_id: "geminiApiKey", reason: "Task needs it" }],
+    ["list_routines", {}],
+    ["propose_routine", { name: "Brief", instructions: "Check things.", schedule: { type: "daily", time: "09:00" } }],
+    ["propose_routine_action", { routine_id: "routine-1", action: "delete" }],
+  ])("runs %s through its original handler and returns the same artifact or card", async (name, args) => {
+    const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name as string, args);
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: args });
+    expect(gateway.call.result).toMatchObject({ ...direct.call.result, _meta: { winkTool: name } });
+    expect(gateway.call.result.isError).toBeFalsy();
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
+    if (name === "react") expect(lastReactBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", emoji: "👍" });
+  });
+
+  it("retains the original routine argument normalization", async () => {
+    const args = { name: "Brief", instructions: "Check things.", schedule: JSON.stringify({ type: "daily", time: "09:00" }) };
+    const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name: "propose_routine", arguments: args });
+    expect(call.result.isError).toBeFalsy();
+    expect(lastRoutineRequestBody.routine.schedule.type).toBe("weekly");
+  });
+
+  it.each(["create_bot", "create_channel", "react", "show_image", "generate_image", "request_credential", "propose_routine", "propose_routine_action"])("preserves %s argument refusals", async (name) => {
+    const direct = await probeWithIdentity({ ...identity(), OMB_WINK_TOOL_CATALOG: "0" }, name, {});
+    const gateway = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
+    expect(gateway.call.result.content).toEqual(direct.call.result.content);
+    expect(gateway.call.result.isError).toBe(true);
+  });
+
+  it.each([1, 2])("reveals only list_routines among optional tools at depth %s", async (depth) => {
+    const { list, call } = await probeWithIdentity(identity(depth), "find_wink_tool", { query: "routine bot image api credential" });
+    expect(names(list).sort()).toEqual(["check_delegation", "list_bots", "update_task_state", "wait_delegation", "find_wink_tool", "call_wink_tool"].sort());
+    expect(JSON.parse(call.result.content[0].text).tools.map((tool: { name: string }) => tool.name)).toEqual(["list_routines"]);
+    const refused = await probeWithIdentity(identity(depth), "call_wink_tool", { name: "create_bot", arguments: { name: "X", role: "Y", instructions: "Z" } });
+    expect(refused.call.result.isError).toBe(true);
+  });
+
+  it("keeps missing grants, unknown names and recursive calls closed", async () => {
+    const missing = await probeWithIdentity({ OMB_WINK_TOOL_CATALOG: "1" }, "find_wink_tool", { query: "images" });
+    expect(missing.list.result.tools).toEqual([]);
+    expect(missing.call.error.code).toBe(-32602);
+    for (const name of ["missing", "find_wink_tool", "call_wink_tool", "ask_user", "__proto__"]) {
+      const { call } = await probeWithIdentity(identity(), "call_wink_tool", { name, arguments: {} });
+      expect(call.result.isError).toBe(true);
+    }
+    const unauthorized = await probeWithIdentity({ ...identity(), OMB_COMMS_TOKEN: "wrong-token" }, "call_wink_tool", { name: "list_routines", arguments: {} });
+    expect(unauthorized.call.result.isError).toBe(true);
+    expect(unauthorized.call.result.content[0].text).toContain("unauthorized");
+  });
+});
+
 describe("agents-proxy verify_site", () => {
   let verifyProxy: string;
   let enabledRoot: string;
@@ -1252,6 +1330,10 @@ describe("agents-proxy verify_site", () => {
     [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 19, true],
     [{ OMB_TEAM_REPORTS: "1" }, 19, false],
     [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 20, true],
+    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 10, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 11, true],
+    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 11, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
     const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);
@@ -1283,10 +1365,10 @@ describe("agents-proxy verify_site", () => {
     expect(Boolean(call.result.isError)).toBe(isError);
   });
 
-  it("drops the harness request on notifications/cancelled and sends no reply", async () => {
+  it.each(["0", "1"])("preserves cancellation with catalog flag %s", async (catalog) => {
     lastVerify = null;
     const dropped = new Promise<boolean>((resolve) => (verifyHold = resolve));
-    const proxy = spawn(process.execPath, [verifyProxy], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1" }) }, stdio: ["pipe", "pipe", "inherit"] });
+    const proxy = spawn(process.execPath, [verifyProxy], { windowsHide: true, env: { ...process.env, ...identity(0, { OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: catalog }) }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     proxy.stdout!.on("data", (chunk) => (out += chunk));
     try {
