@@ -112,6 +112,21 @@ it("skips a broken saved result and hides the card when the server has none", as
   }
 });
 
+it("treats an array start as broken, saved or fetched", async () => {
+  const broken = { ...activityOf(weeks(() => 1)), start: ["2026-05-10"] };
+  localStorage.setItem("omb-activity", JSON.stringify(broken));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(broken))));
+  const { host, unmount } = mount();
+  try {
+    expect(squaresOf(host).every((square) => square.className.includes("bg-control"))).toBe(true);
+    await act(async () => {});
+    expect(host.textContent).toBe("");
+    expect(localStorage.getItem("omb-activity")).toBe(JSON.stringify(broken));
+  } finally {
+    await unmount();
+  }
+});
+
 it.each([
   ["en", 7, "May 17 · 923 replies"],
   ["en", 8, "May 18 · No replies"],

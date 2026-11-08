@@ -19,7 +19,7 @@ const WAVE_STEP_MS = 8;
 let last: ReplyActivity | null = null;
 
 const isActivity = (body: Partial<ReplyActivity> | null | undefined): body is ReplyActivity =>
-  Array.isArray(body?.counts) && /^\d{4}-\d{2}-\d{2}$/.test(String(body.start)) && Number.isFinite(body.streak) && Number.isFinite(body.total);
+  Array.isArray(body?.counts) && String(body.start) === body.start && /^\d{4}-\d{2}-\d{2}$/.test(body.start) && Number.isFinite(body.streak) && Number.isFinite(body.total);
 
 function cachedActivity(): ReplyActivity | null {
   if (last) return last;
