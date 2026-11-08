@@ -106,7 +106,7 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, holdWorkerNotes, knownCatalogContextWindow, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { contextWindowFor, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -229,6 +229,7 @@ import {
   countSessionToolRounds,
   engineIsFresh,
   nativeSessionTokenBudget,
+  reportedWindow,
   resumeSessionUnseeded,
   sessionPromptFor,
   shouldRecycleProviderSession,
@@ -2728,7 +2729,7 @@ const summaryBuild = createSummaryBuild({
     const selection = await resolvedBotSelection(bot, task);
     const instance = registry.get(selection.instanceId);
     if (!instance) return null;
-    const contextWindow = contextWindowFor(instance.models, selection.model);
+    const contextWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(task, selection.model) : null);
     const record = taskPacketForWrite(threadId);
     // The send's inline-note rule, so the plan's budget and history match its prepareModelContext.
     const inlineNotes = instance.adapter.capabilities.transcriptReplay !== true
@@ -2741,6 +2742,8 @@ const summaryBuild = createSummaryBuild({
         "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set(inlineNotes.ids) : undefined,
       reserveTokens: inlineNotes?.tokens,
+      nativeAt: nativeCompactAt(instance.driverKind, selection.model, contextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }),
+      nativePrompt: task.nativePrompt?.cursor === task.resumeCursors[selection.instanceId] ? task.nativePrompt : undefined,
     };
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
@@ -3937,8 +3940,16 @@ bus.subscribe((event: RuntimeEvent) => {
           })) {
             store.recordSessionSystem(systemSeed.instanceId, systemSeed.cursor, systemSeed.system);
           }
+          let flushNotes = false;
           if (event.prompt && event.providerInstanceId) {
-            store.recordNativePrompt(bot.id, event.threadId, event.providerInstanceId, event.prompt, event.contextWindow);
+            const before = store.taskByThread(bot.id, event.threadId);
+            const recorded = store.recordNativePrompt(bot.id, event.threadId, event.providerInstanceId, event.prompt, event.contextWindow);
+            const settled = registry.get(event.providerInstanceId);
+            const model = before?.lastModel;
+            if (settled && model && recorded) {
+              const nativeAt = nativeCompactAt(settled.driverKind, model, event.contextWindow ?? contextWindowFor(settled.models, model), { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[event.providerInstanceId]?.environment });
+              flushNotes = nearNativeCompact({ ...recorded, nativeAt });
+            }
           }
           const packet = routineTurnThreads.has(event.threadId) ? null : taskPacketForWrite(event.threadId);
           if (packet) {
@@ -3959,7 +3970,7 @@ bus.subscribe((event: RuntimeEvent) => {
           if (!store.groupByThread(event.threadId)) {
             summaryBuild.onSettled(bot.id, event.threadId);
             summaryRepair.onSettled(bot.id, event.threadId);
-            memoryPass.onSettled(bot.id, event.threadId);
+            memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
             void memoryLookup.settled(bot.id, event.threadId, cursor);
@@ -4753,7 +4764,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
   // a teammate's turn leaves worker notes pending, for this whole dispatch
   const holdNotes = hasPeerWatch(threadId) ? (messages: Message[]) => holdWorkerNotes(messages, skipTranscript, task.paneNotesDeliveredId ?? undefined) : undefined;
-  const modelContextWindow = contextWindowFor(instance.models, model);
+  const modelContextWindow = contextWindowFor(instance.models, model, instance.driverKind === "claudeAgent" ? reportedWindow(task, model) : null);
+  const nativeAt = nativeCompactAt(instance.driverKind, model, modelContextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[instanceId]?.environment });
   const messagesBeforeSummary = store.activePath(threadId);
   holdNotes?.(messagesBeforeSummary);
   let rewound = threadId === bot.threadId && Boolean(bot.rewound);
@@ -4779,6 +4791,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     : "";
   const catalogWindow = knownCatalogContextWindow(instance.models, model);
   let sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
+  const nativePrompt = nativeAt && task.nativePrompt?.cursor === task.resumeCursors[instanceId] ? task.nativePrompt : undefined;
+  const nativeCycle = { nativePrompt, nativeCycleBuilt: summaryBuild.nativeCycleBuilt(threadId, nativePrompt, nativeAt) };
   const notesBeforeSummary = instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(messagesBeforeSummary, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
@@ -4787,12 +4801,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     contextWindow: modelContextWindow,
     excludeIds: notesBeforeSummary?.ids?.length ? new Set([...skipTranscript, ...notesBeforeSummary.ids]) : skipTranscript,
     reserveTokens: notesBeforeSummary?.tokens,
+    nativeAt,
+    ...nativeCycle,
     userName: cfg.profile?.name?.trim() || "User",
     referenceMessages: store.messagesFor(threadId),
   });
   const reactions = { delivered: task.reactionsDelivered };
   const summaryGrace: SummaryGrace = {
-    knownWindow: catalogWindow,
+    knownWindow: catalogWindow === null ? null : Math.min(catalogWindow, modelContextWindow),
     requestText: composeUserTurnPrompt(text, {
       replyTo: opts?.replyTo, messages: messagesBeforeSummary, userName: cfg.profile?.name?.trim() || "User", ...reactions,
     }),
@@ -4810,14 +4826,20 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       lastTurnInputTokens: task.usage?.lastInput,
       nativeTokenBudget: instance.adapter.capabilities.turnInputIsPromptSize && catalogWindow ? nativeSessionTokenBudget(catalogWindow) : 0,
       sessionPrompt,
+      ...(nativeAt ? {
+        native: true,
+        reseedTokens: planBeforeSummary.needed ? planBeforeSummary.estimatedTokensBefore : planBeforeSummary.status === "fits" ? planBeforeSummary.estimatedTokens : undefined,
+      } : {}),
     }) || instance.adapter.hasBackgroundWork?.(threadId) === true,
     local: Boolean(decodeInjectId(model)),
+    nativeAt,
     native: instance.adapter.capabilities.transcriptReplay !== true
       ? { instanceId, cursor: task.resumeCursors[instanceId], seed: task.resumeSeed, prompt: sessionPrompt }
       : undefined,
   };
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
-  const summarySkipped = summaryBuild.inflight(threadId) && planSummaryGrace(graceInputs).safe;
+  const sessionResumes = planSummaryGrace(graceInputs).safe;
+  const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
   const logSummaryWait = () => {
@@ -4831,7 +4853,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
-  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace) => {
+  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
       taskRecord = taskPacketForWrite(threadId);
@@ -4856,6 +4878,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       taskRecordText: durableTaskRecordText || "No durable task record is available.",
       excludeIds: inlineNotes?.ids?.length ? new Set([...skipTranscript, ...inlineNotes.ids]) : skipTranscript,
       reserveTokens: inlineNotes?.tokens,
+      nativeAt,
+      ...native,
       summaryGrace: grace,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
@@ -4879,7 +4903,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       } : undefined,
     });
   };
-  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined);
+  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
   if (prepared.status !== "ready") {
     const detail = prepared.status === "unsupported"
       ? `This conversation uses context summary version ${String(prepared.version)}. Update Wink before continuing.`
@@ -4908,6 +4932,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       logSummaryWait();
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
+    if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
   }
   ensureChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id });
   markChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id }, "prepare.completed");
@@ -4957,6 +4982,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     latestCompactionId,
     expanded: prepared.expanded,
     supersededIds,
+    native: Boolean(nativeAt),
   });
   // What this turn's session ends up holding: the summary, or the original
   // history a grown window restored in its place.
@@ -4970,6 +4996,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     lastTurnInputTokens: task.usage?.lastInput,
     nativeTokenBudget: knownWindow ? nativeSessionTokenBudget(knownWindow) : 0,
     sessionPrompt,
+    // an unseeded session never got Wink's context, so it still recycles
+    ...(nativeAt ? { native: !unseeded, reseedTokens: prepared.estimatedTokens } : {}),
   });
   // A recycle closes the live CLI and kills its background work. Resume it
   // instead; the first turn after that work settles recycles on the same checks.
@@ -6268,7 +6296,9 @@ async function runClaimedGroupMemberTurn(
   startingHolds.set(bot.id, accountRuntime.holdStarting(selection.instanceId, selectedInstance?.account?.generation ?? 0));
   const taskRecord = taskPacketForWrite(threadId);
   const taskRecordToFlush = taskRecord;
-  const modelContextWindow = contextWindowFor(instance.models, selection.model);
+  const catalogWindow = contextWindowFor(instance.models, selection.model, instance.driverKind === "claudeAgent" ? reportedWindow(store.taskByThread(bot.id, threadId) ?? {}, selection.model) : null);
+  // A room replays Wink's context every turn, so no native session ever compacts it.
+  const modelContextWindow = nativeCompactAt(instance.driverKind, selection.model, catalogWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }) ? Math.min(catalogWindow, NATIVE_SUMMARY_WINDOW) : catalogWindow;
   const recovering = isRecoveringPacket(taskRecord);
   const latestUser = lastUserInstruction(store.activePath(threadId));
   const durableTaskRecordText = taskRecord

@@ -88,7 +88,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       ...context, ...turns, ...mail, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: foldQueuedSends,
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
-      compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined,
+      compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,
       currentTurnEpoch: () => 1, epoch: 1, claimMark: queueMark(), isSendCancelled: () => false,
       clearUnattended: () => {}, resumePaneWakes: () => {},
       rewound: false, recovering: false, unsettled: "", recoveryLatestUserText: text,

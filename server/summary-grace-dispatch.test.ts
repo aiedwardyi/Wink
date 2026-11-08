@@ -162,7 +162,7 @@ describe("summary grace dispatch", () => {
           shouldRecycleProviderSession: () => false, rewound: false, recovering: false,
           countLastTurnToolRounds: () => 0, countSessionToolRounds: () => 0,
           messagesBeforeSummary: activeMessages, skipTranscript, task: {},
-          instance: { adapter: live.adapter }, threadId: "thread", catalogWindow: 200_000, sessionPrompt: undefined,
+          instance: { adapter: live.adapter }, threadId: "thread", catalogWindow: 200_000, sessionPrompt: undefined, nativeAt: null,
         });
         expect(planSummaryGrace({ ...graceInputs, grace: { ...summaryGrace, recycle: plannedRecycle } })).toEqual({ safe: false, reason: "session-recycle" });
       }

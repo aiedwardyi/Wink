@@ -44,8 +44,8 @@ export interface MemoryPassDeps {
 }
 
 export interface MemoryPass {
-  /** Call when a 1:1 turn settles. */
-  onSettled(botId: string, threadId: string): void;
+  /** Call when a 1:1 turn settles; `flush` runs the pass now, before the engine compacts. */
+  onSettled(botId: string, threadId: string, flush?: boolean): void;
   /** Call after a config change: bots switched off drop pending ids and any running pass. */
   onConfigChanged(): void;
   /** Notes turned away because MEMORY.md was full, since the last save. */
@@ -463,10 +463,10 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
   }
 
   return {
-    onSettled(botId, threadId) {
+    onSettled(botId, threadId, flush) {
       const count = pending.get(threadId)?.length ?? 0;
       if (disposed || !count || !deps.enabled(botId)) return;
-      if (count >= BATCH_MESSAGES || held.has(threadId)) enqueue(botId, threadId);
+      if (flush || count >= BATCH_MESSAGES || held.has(threadId)) enqueue(botId, threadId);
       else arm(botId, threadId);
     },
     onConfigChanged() {

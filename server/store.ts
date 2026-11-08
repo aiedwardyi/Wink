@@ -1732,11 +1732,12 @@ export class Store {
   ) {
     const task = this.taskByThread(botId, threadId);
     const cursor = task?.resumeCursors[instanceId];
-    if (!task || cursor === undefined) return;
+    if (!task || cursor === undefined) return undefined;
     const same = task.nativePrompt?.cursor === cursor ? task.nativePrompt : undefined;
     const window = contextWindow && task.lastModel ? { model: task.lastModel, tokens: contextWindow } : task.nativePrompt?.window;
-    task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, window };
+    task.nativePrompt = { cursor, first: same?.first ?? prompt.first, last: prompt.last, growth: prompt.last - (same?.last ?? prompt.first), window };
     this.saveBots();
+    return task.nativePrompt;
   }
 
   /** Repoint saved bot selections and task continuity from a retired model id. */
