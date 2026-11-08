@@ -5,7 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { verifyProblem } from "@/lib/verify-copy";
+import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { closeVerifyWatch, rerunVerify, verifyLiveGate } from "@/lib/verify-watch";
 import { BANNER_MS, VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
@@ -16,8 +16,6 @@ const copy = {
   ko: { desktop: "데스크톱", phone: "휴대폰", live: "실시간", parts: { loads: "페이지 로드", links: "링크", phone: "휴대폰" }, s: "초", checks: (n: number) => `확인 ${n}개`, problems: (n: number) => `문제 ${n}개`, clean: "문제 없음", fixed: "봇이 고쳤어요", waiting: "다른 확인을 기다리는 중", expired: "다시보기가 만료됐어요", failed: "다시보기를 불러오지 못했어요", unfinished: "페이지를 확인하지 못했어요", rerun: "다시 확인", retry: "다시 확인하지 못했어요. 다시 시도하세요.", close: "닫기", maximize: "크게 보기", restore: "원래 크기", again: "다시 보기", watch: "확인 과정 보기", rules: { PAGE_ERRORS: "페이지 오류", LINKS: "링크", FIT: "휴대폰 가로 스크롤", NAV: "휴대폰 메뉴", TEXT_A: "남은 임시 문구" } as Record<string, string> },
 };
 const RULES = ["PAGE_ERRORS", "LINKS", "FIT", "NAV", "TEXT_A"];
-const ROLE: Record<string, string> = { PAGE_ERRORS: "#8c95dc", LINKS: "#8db88a", FIT: "#94a3b8", NAV: "#6aa9d8", TEXT_A: "#5eb5a6" };
-const TAG: Record<string, string> = { PAGE_ERRORS: "ERRORS", LINKS: "LINKS", FIT: "FIT", NAV: "MENU", TEXT_A: "TEXT" };
 const RED = "#f05d5d";
 const PARTS: Part[] = ["loads", "links", "phone"];
 const ARROW = typeof Path2D === "undefined" ? null : new Path2D("M1.5 1.5 L1.5 17 L5.6 13.2 L8.5 19.6 L11.3 18.4 L8.5 12.2 L13.8 12.2 Z");

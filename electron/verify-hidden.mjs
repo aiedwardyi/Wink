@@ -18,6 +18,8 @@ const fault = code => Object.assign(new Error(code), { code });
 export function runHiddenVerify(input) {
   const started = Date.now(), adapters = {}, disposers = [], problems = [], notChecked = new Set(), details = [];
   const counts = { planned: 0, completed: 0, passed: 0, failed: 0, blocked: 0, notRun: 0 };
+  // [done, planned] per checker and tile; planned grows when a rule's list is known, so it rides on the next progress.
+  const by = {}, tally = (checker, tile) => (by[checker] ??= {})[tile] ??= [0, 0];
   const casts = {};
   let batch = [];
   let rejectFailure, ended = false, seq = 0, eventBytes = 0, runFailure;
@@ -44,10 +46,12 @@ export function runHiddenVerify(input) {
     counts.completed++;
     counts[blocked ? "blocked" : count ? "failed" : "passed"]++;
     if (event) {
+      const row = tally(event.checker, event.tile);
+      row[1] = Math.max(row[1], ++row[0]);
       batch.push({ ...event, result: blocked ? "blocked" : count ? "issue" : "ok", count: counts.completed });
       if (batch.length === 32) flushChecks();
     }
-    input.progress({ ...counts });
+    input.progress({ ...counts, by: structuredClone(by) });
   }
   async function observe(cdp, rule, tile) {
     if (ended) throw fault("cancelled");
@@ -214,6 +218,7 @@ export function runHiddenVerify(input) {
           const checked = rule === menuRule ? tile === "phone" && nav.desktop ? rule.check(data, nav.desktop) : { problems: [], notChecked: [] } : rule.check(data);
           if (rule === menuRule && tile === "phone" && !nav.desktop) notChecked.add("phone menu (desktop navigation unavailable)");
           const candidates = rule === errorsRule ? [...data.images, ...data.errors, ...data.loads] : rule === linksRule ? data.links : rule === copyRule ? checked.checks.map(row => ({ ...data.texts.find(item => item.where === row.where), ...row })) : rule === menuRule ? data.links : rule === detailsRule ? data.rows : [data];
+          tally(rule.id, tile)[1] += candidates.length;
           const decorate = row => {
             const element = candidates.find(item => item.where === row.where) ?? (rule === menuRule ? data : null);
             return { checker: rule.id, tile, rule: plain(row.rule, 80), where: plain(row.where, 120), measured: plain(row.measured, 160), ...(element?.box ? { box: element.box, scrollY: element.scrollY ?? 0 } : {}) };

@@ -1,5 +1,8 @@
 import type { VerifyIssue } from "../../shared/live-verify";
 
+export const VERIFY_ROLE: Record<string, string> = { PAGE_ERRORS: "#8c95dc", LINKS: "#8db88a", FIT: "#94a3b8", NAV: "#6aa9d8", TEXT_A: "#5eb5a6" };
+export const VERIFY_TAG: Record<string, string> = { PAGE_ERRORS: "ERRORS", LINKS: "LINKS", FIT: "FIT", NAV: "MENU", TEXT_A: "TEXT" };
+
 export function verifyProblem(issue: VerifyIssue, locale: "en" | "ko"): string {
   if (locale !== "ko") return issue.measured;
   const text = issue.measured;

@@ -41,6 +41,8 @@ export interface VerifyCounts {
   failed: number;
   blocked: number;
   notRun: number;
+  /** [done, planned] per checker and tile while a run goes; planned grows as each rule's list is known. */
+  by?: Partial<Record<VerifyChecker, Partial<Record<VerifyTile, [done: number, planned: number]>>>>;
 }
 
 export interface VerifyIssue {

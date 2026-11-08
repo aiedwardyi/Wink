@@ -155,6 +155,17 @@ it("counts actual per-element trials, carries boxes and records every detail che
   expect(events.filter(event => event.kind === "part").map(event => event.part)).toEqual(["loads", "links", "phone"]);
 });
 
+it("tallies done and planned per checker and tile on the existing progress calls", async () => {
+  f.values.set("copy", { texts: [{ where: "p#unfinished", text: "undefined NaN", box: [1, 2, 30, 40], scrollY: 0 }] });
+  const i = input(), result = await runHiddenVerify(i).done;
+  const calls = i.progress.mock.calls.map(([counts]) => counts), by = calls.at(-1).by;
+  expect(calls).toHaveLength(result.counts.completed);
+  expect(calls.some(counts => counts.by.TEXT_A?.desktop?.[0] < counts.by.TEXT_A?.desktop?.[1])).toBe(true);
+  expect(by.TEXT_A).toEqual({ desktop: [5, 5], phone: [5, 5] });
+  expect(Object.values(by).flatMap(Object.values).reduce((n, [done, planned]) => { expect(done).toBe(planned); return n + done; }, 0)).toBe(result.counts.completed);
+  expect(result.counts.by).toBeUndefined();
+});
+
 it("emits actual click targets through CDP without native window input", async () => {
   f.targets = [{ index: 0, where: "button#menu", key: "menu" }];
   const i = input(); await runHiddenVerify(i).done;

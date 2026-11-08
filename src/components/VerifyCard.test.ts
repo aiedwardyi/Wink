@@ -23,7 +23,7 @@ it("renders running, clean, problems and coverage in both languages without chec
     applyLocale(locale);
     const running = render(card({ status: "running", offeredAt: Date.now(), startedAt: Date.now() }));
     expect(running).toContain(locale === "en" ? "Checking in a real browser" : "실제 브라우저에서 확인 중");
-    expect(running).toContain(locale === "en" ? "Loads" : "페이지 로드");
+    expect(running).toContain(locale === "en" ? "Reads text, headings and links" : "글, 제목, 링크를 읽어요");
     const clean = render(card({ notChecked: ["form delivery"] }));
     expect(clean).toContain(locale === "en" ? "no problems" : "문제 없음");
     expect(clean).toContain(locale === "en" ? "Not checked: form delivery" : "확인하지 못함: 폼 전송");
@@ -84,10 +84,13 @@ it("localizes Korean problem lines by rule while retaining destinations and meas
     { checker: "TEXT_A", tile: "desktop", rule: "placeholder contact", where: "a#contact", measured: "Link goes to placeholder \"mailto:hello@example.com\"; open the link" },
     { checker: "FIT", tile: "phone", rule: "future rule", where: "main", measured: "Future English explanation" },
   ];
-  applyLocale("ko");
   const host = document.createElement("div");
-  host.innerHTML = render(card({ issues }));
-  const lines = [...host.querySelectorAll(".verify-card-problems li > div:nth-child(2)")].map(row => row.textContent);
+  const measured = () => Array.from({ length: Math.ceil(issues.length / 5) }, (_, i) => {
+    host.innerHTML = render(card({ issues: issues.slice(i * 5, i * 5 + 5) }));
+    return [...host.querySelectorAll(".verify-card-measure")].map(row => row.textContent);
+  }).flat();
+  applyLocale("ko");
+  const lines = measured();
   expect(lines).toHaveLength(issues.length);
   for (const line of lines) expect(line).toMatch(/[가-힣]+.*요/);
   expect(lines[0]).toContain("#pricing");
@@ -101,8 +104,7 @@ it("localizes Korean problem lines by rule while retaining destinations and meas
   expect(lines[8]).toContain("#pricing, #faq");
   expect(lines[14]).toContain("mailto:hello@example.com");
   applyLocale("en");
-  host.innerHTML = render(card({ issues }));
-  expect([...host.querySelectorAll(".verify-card-problems li > div:nth-child(2)")].map(row => row.textContent)).toEqual(issues.map(issue => issue.measured));
+  expect(measured()).toEqual(issues.map(issue => issue.measured));
 });
 
 it("keeps the phone Rerun and Watch targets at least 44 px without enlarging desktop", () => {
@@ -131,9 +133,9 @@ it("keeps the phone Rerun and Watch targets at least 44 px without enlarging des
   expect(height(1280, card({ replay: ["a"] }))).toBe(32);
 });
 
-it("shows one button: Watch live while streaming, Watch with kept replays, else Rerun", () => {
+it("shows one button: Watch while streaming, Watch with kept replays, else Rerun", () => {
   const live = render(card({ status: "running", live: true, offeredAt: Date.now(), startedAt: Date.now() }));
-  expect(live).toContain("Watch live");
+  expect(live).toContain('data-verify-watch="live"');
   expect(live).not.toContain("Rerun");
   const watch = render(card({ replay: ["a"] }));
   expect(watch).toContain(">Watch<");
@@ -142,9 +144,11 @@ it("shows one button: Watch live while streaming, Watch with kept replays, else 
   expect(render(card({ status: "waiting", offeredAt: Date.now(), startedAt: Date.now() }))).not.toMatch(/Rerun|Watch/);
 });
 
-it("never offers Watch live on a phone", () => {
+it("never offers Watch live on a phone, pointing at the computer instead", () => {
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} }));
-  expect(render(card({ status: "running", live: true, offeredAt: Date.now(), startedAt: Date.now() }))).not.toContain("Watch");
+  const live = render(card({ status: "running", live: true, offeredAt: Date.now(), startedAt: Date.now() }));
+  expect(live).not.toContain("data-verify-watch");
+  expect(live).toContain("Watch on your computer");
   expect(render(card({ replay: ["a"] }))).toContain(">Watch<");
 });
 
@@ -158,4 +162,81 @@ it("says waiting, counts checks and says fixed after a same-turn recheck, in bot
     expect(render(card({ counts }))).toContain(locale === "en" ? "312 checks · desktop + phone · no problems · 12 s" : "확인 312개 · 데스크톱 + 휴대폰 · 문제 없음 · 12초");
     expect(render(card({ counts, details: [{ checker: "FIT", tile: "phone", rule: "tap size", where: "a.small", measured: "30 px" }] }))).toContain(locale === "en" ? "1 detail" : "참고 1개");
   }
+});
+
+const running = (patch: Partial<VerifyCardData> = {}) => card({ status: "running", offeredAt: Date.now(), startedAt: Date.now(), ...patch });
+const dom = (data: VerifyCardData) => Object.assign(document.createElement("div"), { innerHTML: render(data) });
+const counts = (by?: NonNullable<VerifyCardData["counts"]>["by"]) => ({ planned: 9, completed: 9, passed: 9, failed: 0, blocked: 0, notRun: 0, ...(by ? { by } : {}) });
+
+it.each(["en", "ko"] as const)("heads every state with Live Verify and the site, with the desktop and phone note in %s", locale => {
+  applyLocale(locale);
+  for (const data of [running(), card({ status: "waiting", offeredAt: Date.now(), startedAt: Date.now() }), card(), card({ status: "blocked", errorCode: "timeout" })]) {
+    expect(dom(data).querySelector(".verify-card-title")?.textContent).toBe("Live Verify · index.html");
+  }
+  expect(dom(card()).querySelector(".verify-card-side")?.textContent).toBe(locale === "en" ? "Desktop 1280 · phone 392" : "데스크톱 1280 · 휴대폰 392");
+  expect(dom(running({ counts: counts() })).querySelector(".verify-card-side")?.textContent).toBe(locale === "en" ? "9 checks" : "확인 9개");
+});
+
+it.each(["en", "ko"] as const)("counts passed, issues, blocked and not run, leaving out zeros, in %s", locale => {
+  applyLocale(locale);
+  const issue = { checker: "FIT" as const, tile: "phone" as const, rule: "sideways scroll", where: "div.glow", measured: "542 px page at 392 px" };
+  const strip = (data: VerifyCardData) => dom(data).querySelector(".verify-card-strip")?.textContent;
+  expect(strip(card({ counts: { planned: 223, completed: 221, passed: 214, failed: 6, blocked: 1, notRun: 2 }, issues: Array(6).fill(issue) }))).toBe(locale === "en" ? "214 passed6 issues1 blocked2 not run" : "214 통과6 문제1 막힘2 실행 안 됨");
+  expect(strip(card({ counts: counts() }))).toBe(locale === "en" ? "9 passed" : "9 통과");
+  expect(dom(card({ counts: counts() })).querySelector(".verify-card-problems")).toBeNull();
+  expect(strip(card({ fixed: 2, counts: counts() }))).toBe(locale === "en" ? "Fixed 2 problems9 passed" : "문제 2개 해결9 통과");
+});
+
+it("lights plan rows and checker lanes from per-checker counts", () => {
+  const html = dom(running({ counts: counts({ TEXT_A: { desktop: [4, 4] }, LINKS: { desktop: [3, 10] }, PAGE_ERRORS: { desktop: [2, 2], phone: [2, 2] } }) }));
+  expect([...html.querySelectorAll(".verify-card-plan li")].map(row => row.getAttribute("data-state"))).toEqual(["running", "waiting", "waiting"]);
+  const lanes = [...html.querySelectorAll(".verify-card-lanes > div")];
+  expect(lanes.map(lane => lane.textContent)).toEqual(["TEXT", "LINKS", "ERRORS", "MENU", "FIT"]);
+  expect(lanes.map(lane => lane.hasAttribute("data-on"))).toEqual([false, true, false, false, false]);
+  const lit = (lane: Element) => [...lane.querySelectorAll(".verify-card-seg i")].map(seg => Number((seg as HTMLElement).style.getPropertyValue("--k")));
+  expect(lit(lanes[0]!)).toEqual([1, 1, 1, 1, 1, 0, 0, 0, 0, 0]);
+  expect(lit(lanes[1]!).map(k => Math.round(k * 10) / 10)).toEqual([1, 0.5, 0, 0, 0, 0, 0, 0, 0, 0]);
+  expect(lit(lanes[2]!).every(k => k === 1)).toBe(true);
+  expect(lanes[1]!.querySelectorAll("[data-lead]")).toHaveLength(1);
+  const done = dom(running({ counts: counts({ TEXT_A: { desktop: [4, 4] }, NAV: { desktop: [2, 2] } }) }));
+  expect([...done.querySelectorAll(".verify-card-plan li")].map(row => row.getAttribute("data-state"))).toEqual(["done", "done", "waiting"]);
+  expect(done.querySelector("[data-lead]")).toBeNull();
+});
+
+it("falls back to totals when the runner sends no per-checker counts", () => {
+  const old = dom(running({ counts: counts() }));
+  expect([...old.querySelectorAll(".verify-card-plan li")].map(row => row.hasAttribute("data-state"))).toEqual([false, false, false]);
+  expect(old.querySelector(".verify-card-lanes")).toBeNull();
+  const fresh = dom(running());
+  expect([...fresh.querySelectorAll(".verify-card-plan li")].map(row => row.getAttribute("data-state"))).toEqual(["waiting", "waiting", "waiting"]);
+  expect(fresh.querySelectorAll(".verify-card-lanes > div")).toHaveLength(5);
+});
+
+it("lays out each problem in fixed columns, five rows then Show all, measured under the place on phones", () => {
+  const issues: NonNullable<VerifyCardData["issues"]> = Array.from({ length: 6 }, (_, i) => ({ checker: i % 2 ? "NAV" : "LINKS", tile: i % 2 ? "phone" : "desktop", rule: "missing target", where: `a#link-${i}`, measured: `#link-${i} has no target` }));
+  const html = dom(card({ issues }));
+  const rows = [...html.querySelectorAll(".verify-card-problems li")];
+  expect(rows).toHaveLength(5);
+  expect([...rows[1]!.children].map(cell => cell.className)).toEqual(["verify-card-tag", "verify-card-tile", "verify-card-where", "verify-card-measure"]);
+  expect([...rows[1]!.children].map(cell => cell.textContent)).toEqual(["MENU", "Phone", "Phone · a#link-1", "#link-1 has no target"]);
+  expect(html.querySelector(".verify-card-more")?.textContent).toBe("Show all 6");
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(readFileSync("src/components/VerifyCard.css", "utf8"));
+  const value = (width: number, el: Element, prop: string) => {
+    let out = "";
+    const visit = (rules: CSSRuleList) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSMediaRule) { const max = /max-width:\s*(\d+)px/.exec(rule.conditionText); if (max && width <= Number(max[1])) visit(rule.cssRules); }
+        else if (rule instanceof CSSStyleRule && el.matches(rule.selectorText) && rule.style.getPropertyValue(prop)) out = rule.style.getPropertyValue(prop);
+      }
+    };
+    visit(sheet.cssRules);
+    return out;
+  };
+  document.body.append(html);
+  expect(value(1280, rows[0]!, "grid-template-columns").split(/ (?![^(]*\))/)).toHaveLength(4);
+  expect(value(392, rows[0]!, "grid-template-columns").split(/ (?![^(]*\))/)).toHaveLength(2);
+  expect(value(392, rows[0]!.querySelector(".verify-card-measure")!, "grid-column")).toBe("2");
+  expect(value(392, rows[0]!.querySelector(".verify-card-tile")!, "display")).toBe("none");
+  html.remove();
 });
