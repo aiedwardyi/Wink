@@ -126,7 +126,8 @@ export function FitTextarea({ className, watchMetrics = false, ...props }: Texta
     if (!watchMetrics || !ref.current) return;
     const box = ref.current;
     const scroller = box.closest<HTMLElement>(".overflow-y-auto");
-    const refit = () => fit(box);
+    // a box in a hidden tab would force layout of the tab being opened; its ResizeObserver fits it on show
+    const refit = () => { if (!box.closest("[hidden]")) fit(box); };
     const check = () => { if (box.scrollHeight > box.clientHeight) fit(box); };
     const unwatch = watchStyleMetrics(refit);
     scroller?.addEventListener("scroll", check, { passive: true });

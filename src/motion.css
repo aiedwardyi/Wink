@@ -56,6 +56,19 @@
 [data-side-panel][data-closing] {
   animation-name: panel-out;
 }
+/* useCoverChat scales this backdrop instead of the panel, so the content never stretches */
+[data-side-panel][data-cover-motion] {
+  background: transparent;
+  border-color: transparent;
+}
+[data-side-panel][data-cover-motion]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--color-panel);
+  transform-origin: right;
+}
 
 /* Fold: content opens and closes by its height, with a fade. It is clipped
    only while it moves, so focus rings and popovers inside are never cut. */

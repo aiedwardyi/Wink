@@ -678,6 +678,97 @@ describe("Usage desk", () => {
     }],
   });
 
+  it.each([false, true])("checks Muse once after a manual refresh has no observation (phone=%s)", async (phone) => {
+    server.board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
+    await mount({ phone });
+    const api = h.api;
+    const check = deferred<unknown>();
+    const report = { observedAt: new Date(usageBoardNow).toISOString(), windows: [
+      { ...accountOf(server.board, "muse").windows[0]!, usedPercent: 0 },
+      { ...accountOf(server.board, "muse").windows[1]!, usedPercent: 20 },
+    ] };
+    h.api = async (path, init) => {
+      if (path === "/api/usage/refresh/muse" || path === "/api/usage/check/muse") {
+        server.calls.push(`${init?.method} ${path}`);
+        return path.includes("/check/") ? check.promise : { status: "no_observation" };
+      }
+      return api(path, init);
+    };
+    await click(q("[data-usage-refresh]"));
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.filter((call) => call === "POST /api/usage/check/muse")).toHaveLength(1);
+    expect(q("[data-usage-refresh]")?.hasAttribute("disabled")).toBe(true);
+    accountOf(server.board, "muse").windows = report.windows;
+    accountOf(server.board, "muse").observedAt = usageBoardNow;
+    server.board.revision++;
+    await act(async () => {
+      check.resolve({ status: "fresh", report });
+      (await client()).usageBoardFrame(server.board.revision);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(h.dispatched).toContainEqual({ type: "rateLimits", instanceId: "muse", report, identity: canary.address });
+    expect(left("muse", "five_hour")).toBe("100% left");
+    expect(left("muse", "seven_day")).toBe("80% left");
+    expect(q("[role=alert]")).toBeNull();
+    expect(q("[data-usage-refresh]")?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("spends no Muse turn when manual refresh returns a fresh reading", async () => {
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount();
+    const api = h.api;
+    h.api = async (path, init) => path === "/api/usage/refresh/muse" ? { status: "fresh" } : api(path, init);
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it("never checks Muse automatically on mount, tab return or reopen", async () => {
+    server.board.engines.push(museEngine(usageBoardNow - 2 * 60 * MIN));
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (!path.startsWith("/api/usage/refresh/")) return api(path, init);
+      server.calls.push(`${init?.method} ${path}`);
+      return { status: "no_observation" };
+    };
+    await mount();
+    const { useAutoRefresh } = await import("@/lib/usage-auto-refresh");
+    function QuickRefresh() { useAutoRefresh(server.board); return null; }
+    await act(async () => root.render(createElement(QuickRefresh)));
+    await settle();
+    expect(server.calls).toContain("POST /api/usage/refresh/muse");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await unmount();
+    await mount();
+    expect(server.calls.some((call) => call.includes("/api/usage/check/"))).toBe(false);
+  });
+
+  it.each(["transport_error", "auth_error", "no_observation", "limit_reached", "reject", "auth_error_ko"])("keeps Muse's reading when its check returns %s", async (outcome) => {
+    const locale = outcome === "auth_error_ko" ? "ko" : "en";
+    const status = outcome === "auth_error_ko" ? "auth_error" : outcome;
+    server.board.engines.push(museEngine(usageBoardNow));
+    await mount({ locale });
+    const api = h.api;
+    h.api = async (path, init) => {
+      if (path === "/api/usage/refresh/muse") return { status: "no_observation" };
+      if (path === "/api/usage/check/muse") {
+        server.calls.push(`${init?.method} ${path}`);
+        if (status === "reject") throw new Error("offline");
+        return { status, ...(status.endsWith("error") ? { error: status === "auth_error" ? "Sign in again in Muse" : "Could not refresh Muse limits" } : {}) };
+      }
+      return api(path, init);
+    };
+    await click(q("[data-usage-refresh]"));
+    expect(server.calls.filter((call) => call === "POST /api/usage/check/muse")).toHaveLength(1);
+    expect(left("muse", "seven_day")).toBe(locale === "ko" ? "39% 남음" : "39% left");
+    expect(h.dispatched).toEqual([]);
+    expect(Boolean(q("[role=alert]"))).toBe(status.endsWith("error") || status === "reject");
+    if (status === "auth_error") expect(text(q("[role=alert]"))).toBe(locale === "ko" ? "Muse에서 다시 로그인하세요" : "Sign in again in Muse");
+  });
+
   it("keeps every reported window and Muse", async () => {
     const board = fresh();
     accountOf(board, "claude").windows.push({ id: "seven_day_opus", kind: "week", usedPercent: 75, resetsAt: usageBoardNow + 2 * 1440 * MIN, windowMinutes: 10080 });

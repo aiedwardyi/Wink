@@ -49,6 +49,7 @@ async function saveInput() {
 }
 
 async function removeSavedKey() {
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')?.click());
   await act(async () => (host.querySelector('button[aria-label]') as HTMLButtonElement).click());
   await act(async () => document.querySelector('[role="dialog"]')!.querySelectorAll("button")[1].click());
 }

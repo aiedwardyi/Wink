@@ -55,8 +55,9 @@ export const coldOpenRecordSchema = z
   .object({
     desktop: z.literal(true).optional(),
     openId: z.string().regex(OPEN_ID).optional(),
-    label: z.enum(["notification", "open", "warm"]),
+    label: z.enum(["notification", "open", "warm", "resume"]),
     t0: ms.optional(),
+    hiddenMs: ms.optional(),
     nav: nav.optional(),
     firstPaint: ms.optional(),
     firstContentfulPaint: ms.optional(),

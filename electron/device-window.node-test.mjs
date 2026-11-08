@@ -5,6 +5,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import vm from "node:vm";
+
+import { contextMenuTemplate } from "./context-menu.mjs";
+import { saveImageCopy } from "./open-file.mjs";
 
 const require = createRequire(import.meta.url);
 const { DEVICE_WINDOW_PARTITION, deviceLinkPage, deviceLinkedFileName, deviceTailnet, deviceUnreachablePage, deviceWindowTitle, deviceWindowUrl, openOrFocus, saveDeviceLinkedFile, tailnetFromStatus, watchDeviceLoad } = require("./device-window.cjs");
@@ -15,6 +19,77 @@ function openDeviceWindowSource(main) {
   assert.ok(start >= 0 && end > start, "openDeviceWindow slice bounds not found");
   return main.slice(start, end);
 }
+
+// Run the real device-window listener without opening a native window or menu.
+function remoteImageMenu({ canceled = false, status = 200 } = {}) {
+  const source = openDeviceWindowSource(readFileSync(new URL("./main.mjs", import.meta.url), "utf8"));
+  const listener = /win\.webContents\.on\("context-menu", ([\s\S]*?\n    \})\);/.exec(source)?.[1];
+  assert.ok(listener, "remote device windows must register a context-menu listener");
+  const copies = [], fetches = [], writes = [], errors = [], popups = [];
+  const bytes = Buffer.from("remote image bytes");
+  const devices = {
+    async fetch(url) {
+      assert.equal(this, devices, "fetch must use the remote cookie session");
+      fetches.push(url);
+      return new Response(bytes, { status });
+    },
+  };
+  const win = { webContents: { copyImageAt: (...point) => copies.push(point) } };
+  let items;
+  const callback = vm.runInNewContext(`(${listener})`, {
+    win, devices, contextMenuTemplate, nativeText: (key) => key,
+    clipboard: { writeText: () => {} },
+    Menu: { buildFromTemplate: (template) => { items = template; return { popup: (options) => popups.push(options) }; } },
+    app: { getPath: () => "downloads" },
+    dialog: { showSaveDialog: async () => ({ canceled, filePath: "saved.png" }), showErrorBox: (...args) => errors.push(args) },
+    saveImageCopy: (url, options) => saveImageCopy(url, { ...options, fsp: { writeFile: async (...args) => writes.push(args) } }),
+  });
+  return { callback, win, copies, fetches, writes, errors, popups, bytes, items: () => items };
+}
+
+const remoteImageParams = { mediaType: "image", srcURL: "https://home.tail1234.ts.net/api/attachments/shot.png", x: 32, y: 47, frame: {} };
+
+test("remote image menu copies the clicked chat or viewer image", () => {
+  const menu = remoteImageMenu();
+  menu.callback({}, remoteImageParams);
+  assert.deepEqual(menu.items().map((item) => item.label), ["native.copyImage", "native.saveImage"]);
+  menu.items()[0].click();
+  assert.deepEqual(menu.copies, [[32, 47]]);
+  assert.equal(menu.popups[0].window, menu.win);
+  assert.equal(menu.popups[0].frame, remoteImageParams.frame);
+});
+
+test("remote image menu saves through its authenticated cookie session", async () => {
+  const menu = remoteImageMenu();
+  menu.callback({}, remoteImageParams);
+  await menu.items()[1].click();
+  assert.deepEqual(menu.fetches, [remoteImageParams.srcURL]);
+  assert.equal(menu.writes[0][0], "saved.png");
+  assert.deepEqual(Buffer.from(menu.writes[0][1]), menu.bytes);
+});
+
+test("remote image menu cancellation fetches and writes nothing", async () => {
+  const menu = remoteImageMenu({ canceled: true });
+  menu.callback({}, remoteImageParams);
+  await menu.items()[1].click();
+  assert.deepEqual(menu.fetches, []);
+  assert.deepEqual(menu.writes, []);
+});
+
+test("remote image menu reports download failures without writing", async () => {
+  const menu = remoteImageMenu({ status: 401 });
+  menu.callback({}, remoteImageParams);
+  await menu.items()[1].click();
+  assert.deepEqual(menu.writes, []);
+  assert.deepEqual(menu.errors, [["native.saveCopyFailed", "That image could not be downloaded (401)"]]);
+});
+
+test("remote image menu ignores non-image targets", () => {
+  const menu = remoteImageMenu();
+  menu.callback({}, { mediaType: "none", selectionText: "remote text" });
+  assert.equal(menu.items(), undefined);
+  assert.deepEqual(menu.popups, []);
+});
 
 class FakeWindow extends EventEmitter {
   destroyed = false;

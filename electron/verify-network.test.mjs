@@ -29,6 +29,20 @@ function fixture() {
 }
 function callback(fn, ...args) { let value; fn(...args, (v) => { value = v; }); return value; }
 
+it("allows eval only on the admitted loopback proxy, never static or foreign responses", async () => {
+  const f = fixture(), origin = "http://127.0.0.1:12345";
+  const guard = await isolatePage(f.ses, f.contents, { origin }); cleanup.push(guard.close);
+  const policy = (url, responseHeaders) => callback(f.handlers.onHeadersReceived, { url, responseHeaders }).responseHeaders["Content-Security-Policy"][0];
+  expect(policy(origin + "/", { "x-orbit-verify-loopback": ["1"] })).toContain("'unsafe-eval'");
+  expect(policy(origin + "/", {})).not.toContain("'unsafe-eval'");
+  const limited = origin + "/slow.js";
+  expect(callback(f.handlers.onHeadersReceived, { url: limited, responseHeaders: { "x-orbit-verify-loopback": ["1"], "x-orbit-verify-blocked": ["1"] } }).cancel).toBe(true);
+  expect(guard.blockedUrls()).toContain(limited);
+  for (const url of ["https://example.com/", "http://192.168.1.2/", "http://127.0.0.1:9999/", "http://localhost:12345/", "http://[::1]:12345/"]) {
+    expect(policy(url, { "x-orbit-verify-loopback": ["1"] }), url).not.toContain("'unsafe-eval'");
+  }
+});
+
 it("S01-S08/S10/S16 installs denial, headers, proxy and audio policies before load", async () => {
   const f = fixture(); const guard = await isolatePage(f.ses, f.contents, { origin: "http://127.0.0.1:12345" }); cleanup.push(guard.close);
   expect(VERIFY_PAGE_PREFERENCES).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInWorker: false, nodeIntegrationInSubFrames: false, webviewTag: false, spellcheck: false, devTools: false, backgroundThrottling: false });

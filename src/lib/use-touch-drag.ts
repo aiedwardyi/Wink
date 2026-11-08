@@ -4,8 +4,8 @@ import { hapticTick } from "./phone-swipe";
 
 export const LONG_PRESS_MS = 400;
 export const LONG_PRESS_SLOP = 8;
-const SCROLL_EDGE = 48;
-const SCROLL_STEP = 10;
+export const SCROLL_EDGE = 48;
+export const SCROLL_STEP = 10;
 const LIFTED_STYLE: Record<string, string> = {
   position: "relative",
   // under the z-10 drop marker, so the target edge stays visible beneath the finger

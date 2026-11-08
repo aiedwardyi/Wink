@@ -115,7 +115,8 @@ describe("keep going mark", () => {
       const mark = () => host.querySelector<HTMLButtonElement>("[data-chat-keep-going]");
       await vi.waitFor(() => expect(mark()).not.toBeNull());
       expect(mark()?.getAttribute("data-chat-keep-going")).toBe("on");
-      expect(mark()?.getAttribute("aria-label")).toBe("Agentic Mode on");
+      expect(mark()?.getAttribute("aria-label")).toBe("Agentic Mode on. Turn it off in Bot Details.");
+      expect(mark()?.getAttribute("title")).toBe("Agentic Mode on. Turn it off in Bot Details.");
       expect(host.querySelector("[data-settings-keep-going]")).toBeNull();
       const scrolled: Element[] = [];
       vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) {
@@ -134,7 +135,9 @@ describe("keep going mark", () => {
     const paused = await mountApp([bot("paused", { keepGoing: { paused: "bot-paused" } })]);
     try {
       await vi.waitFor(() => expect(paused.host.querySelector("[data-chat-keep-going]")).not.toBeNull());
-      expect(paused.host.querySelector("[data-chat-keep-going]")?.getAttribute("aria-label")).toBe("Agentic Mode paused");
+      const mark = paused.host.querySelector("[data-chat-keep-going]");
+      expect(mark?.getAttribute("aria-label")).toBe("Agentic Mode paused. Turn it off in Bot Details.");
+      expect(mark?.getAttribute("title")).toBe("Agentic Mode paused. Turn it off in Bot Details.");
     } finally {
       await paused.unmount();
     }
@@ -144,6 +147,29 @@ describe("keep going mark", () => {
       expect(off.host.querySelector("[data-chat-keep-going]")).toBeNull();
     } finally {
       await off.unmount();
+    }
+  });
+
+  it("says where to turn the header mark off in Korean", async () => {
+    window.localStorage.setItem("omb-locale", "ko");
+    try {
+      for (const [state, text] of [
+        ["on", "에이전트 모드 켜짐. 봇 세부 정보에서 끌 수 있어요."],
+        ["paused", "에이전트 모드 일시 중지됨. 봇 세부 정보에서 끌 수 있어요."],
+      ] as const) {
+        const app = await mountApp([bot(state, { keepGoing: { paused: state === "paused" ? "no-progress" : null } })]);
+        try {
+          await vi.waitFor(() => expect(app.host.querySelector("[data-chat-keep-going]")).not.toBeNull());
+          const mark = app.host.querySelector("[data-chat-keep-going]");
+          expect(mark?.getAttribute("data-chat-keep-going")).toBe(state);
+          expect(mark?.getAttribute("aria-label")).toBe(text);
+          expect(mark?.getAttribute("title")).toBe(text);
+        } finally {
+          await app.unmount();
+        }
+      }
+    } finally {
+      window.localStorage.removeItem("omb-locale");
     }
   });
 });

@@ -2,6 +2,65 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.243] - 2026-11-08
+
+### Added
+- Live Verify checks sites built by bots and shows results with Rerun and Watch.
+- Inkwell, Graphite and Moss dark themes, with all existing themes kept.
+- Agentic Mode appears first in Bot Details.
+
+### Changed
+- Bots check past builds and decisions before planning.
+- The bot guide matches the app.
+
+### Fixed
+- Type immediately after picking a model.
+- Swipe right to close Bot Details on phones.
+- Copy and save images from another PC's chat.
+- Reaction chips stay clear of reply text.
+- Servo bot bubbles no longer show a side line.
+- Finished workers no longer show a false stalled notice.
+- Gemini and Grok usage records include cached input.
+- Muse refresh gets a fresh reading and says when to sign in again.
+- Sync picks up files it previously skipped.
+
+## [1.0.242] - 2026-11-08
+
+### Added
+- An activity grid per account in Usage.
+- Drag accounts to reorder them in Connections. Usage follows the same order.
+- Tap the usage bar to open the small limits card.
+- Ctrl+number switches bots, Alt+number opens that worker's terminal, and Ctrl+` opens Main.
+
+### Changed
+- Ctrl+plus/minus zooms in smaller steps.
+- The quick usage card follows your Usage order.
+
+### Fixed
+- Wink no longer lags at startup on PCs with many old worker folders.
+- A message you send while a bot is answering another bot gets its own reply.
+- Single-account Connections rows show the signed-in email.
+
+## [1.0.241] - 2026-11-07
+
+### Fixed
+- Startup lag on PCs with many old worker folders, first pass.
+
+## [1.0.240] - 2026-11-07
+
+### Added
+- Watch website done-checks live or replay their desktop and phone checks.
+- Pick a worker's account by name without changing Main.
+
+### Changed
+- Usage has clearer spacing and bars, a busy refresh indicator, and account-switch feedback.
+
+### Fixed
+- Signing out of Grok, Muse, Claude or Codex in Connections works on the first click.
+- Usage numbers refresh correctly after switching accounts.
+- Clicking empty space in the chat box focuses your draft.
+- Memory and Description text stays reachable after fonts load.
+
 ## [1.0.239] - 2026-11-06
 
 ### Added
@@ -681,6 +740,10 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
+[1.0.242]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.242
+[1.0.241]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.241
+[1.0.240]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.240
 [1.0.239]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.239
 [1.0.238]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.238
 [1.0.237]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.237
