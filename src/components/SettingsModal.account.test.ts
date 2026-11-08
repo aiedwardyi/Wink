@@ -87,23 +87,23 @@ describe("Account settings", () => {
     ]);
   });
 
-  it("keeps Profile and Sync without phone sections or their requests", async () => {
+  it("keeps Profile and Sync in one band without phone sections or their requests", async () => {
     const pane = await render();
     const cards = [...pane.children];
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(1);
     expect(cards[0].querySelector("#settings-profile-name")).not.toBeNull();
-    expect(cards[0].textContent).toContain("Profile");
-    expect(cards[1].firstElementChild?.textContent).toBe("Sync");
-    expect(cards[1].textContent).toContain("Syncing across your PCs is off.");
+    expect(cards[0].querySelector<HTMLElement>('[style*="width: 56px"]')).not.toBeNull();
+    expect(cards[0].textContent).not.toContain("Profile");
+    expect(cards[0].textContent).toContain("SyncSyncing across your PCs is off.");
     expect(pane.querySelector("[data-phone-settings]")).toBeNull();
     expect(pane.querySelector("[data-phone-access-setup]")).toBeNull();
     expect(request.mock.calls.some(([path]) => path === "/api/remote-link?setup=1" || path === "/api/phone-relay/status")).toBe(false);
   });
 
-  it("renders Sync as one card, not a card inside a card", async () => {
+  it("renders Sync as a column of the band, not a card inside a card", async () => {
     const pane = await render();
-    const sync = pane.children[1];
-    expect(sync.querySelector(".bg-card")).toBeNull();
+    expect(pane.children[0].querySelector(".bg-card")).toBeNull();
+    const sync = pane.querySelector(".border-l > div")!;
     expect(sync.children[1]?.textContent).toBe("Syncing across your PCs is off.");
   });
 
