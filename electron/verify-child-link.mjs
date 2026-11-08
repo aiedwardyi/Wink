@@ -3,6 +3,7 @@ import { VERIFY_BODY_LIMIT, VERIFY_RUN_STATES } from "./verify-protocol.mjs";
 export const RESOLVER_RULES = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1";
 export const SYSTEM_ENV = ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "SYSTEMDRIVE"];
 export const CHILD_PATHS = ["appData", "userData", "sessionData", "temp", "logs", "crashDumps"];
+const CHECKERS = ["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"];
 export const ERROR_CODES = ["needs-approval", "denied", "desktop-required", "outside-folders", "not-a-site", "busy", "page-failed", "timeout", "cancelled", "site-changed", "resource-limit", "isolation-failed", "internal"];
 
 const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -12,6 +13,7 @@ const runId = (v) => typeof v === "string" && /^[a-z0-9-]{8,64}$/.test(v);
 const locale = (v) => v === "en" || v === "ko";
 const bool = (v) => typeof v === "boolean";
 const error = (v) => ERROR_CODES.includes(v);
+const tally = (v) => Array.isArray(v) && v.length === 2 && v.every(integer) && v[0] <= v[1];
 const nullable = (f) => (v) => v === null || f(v);
 const optional = (f) => (v) => v === undefined || f(v);
 const display = (v) => record(v) && Object.keys(v).sort().join() === "height,width,x,y" && [v.x, v.y, v.width, v.height].every(Number.isFinite) && v.width > 0 && v.height > 0;
@@ -21,7 +23,8 @@ function shape(value, fields) {
 }
 
 export function validCounts(v) {
-  return shape(v, { planned: integer, completed: integer, passed: integer, failed: integer, blocked: integer, notRun: integer })
+  const by = (b) => shape(b, Object.fromEntries(CHECKERS.map((c) => [c, optional((t) => shape(t, { desktop: optional(tally), phone: optional(tally) }))])));
+  return shape(v, { planned: integer, completed: integer, passed: integer, failed: integer, blocked: integer, notRun: integer, by: optional(by) })
     && v.completed === v.passed + v.failed + v.blocked && v.planned === v.completed + v.notRun;
 }
 
@@ -29,7 +32,7 @@ export function validResult(v) {
   return shape(v, {
     v: (n) => n === 1, runId, site: (s) => text(s, 512), counts: validCounts,
     issues: (issues) => Array.isArray(issues) && issues.length <= 40 && issues.every((issue) => shape(issue, {
-      checker: (c) => ["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"].includes(c),
+      checker: (c) => CHECKERS.includes(c),
       tile: (t) => ["desktop", "phone"].includes(t), rule: (s) => text(s, 120), where: (s) => text(s, 120), measured: (s) => text(s, 160), scrollY: optional(Number.isFinite),
       box: optional(v => Array.isArray(v) && v.length === 4 && v.every(Number.isFinite) && v[2] >= 0 && v[3] >= 0),
     })),

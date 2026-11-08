@@ -1,5 +1,4 @@
 import type { VerifyIssue, VerifyReplayEnd, VerifyReplayHead, VerifyTile } from "../../shared/live-verify";
-import { BEAT_MS, SIXTEENTH_MS } from "./verify-beat";
 import type { VerifyReplayChunk, VerifyReplayMark } from "./verify-replay";
 import { verifyEndTab, verifyReel } from "./verify-watch";
 
@@ -7,9 +6,11 @@ export const FRAME_FLOOR_MS = 120;
 export const REEL_MS = 1500;
 export const BANNER_MS = 1500;
 export const LIVE_CLOSE_MS = 3000;
-const OUTLINE_MS = 2 * BEAT_MS;
-const GLIDE_MS = BEAT_MS / 2;
-const ROW_MS = SIXTEENTH_MS / 8;
+const MARK_TICK_MS = 60_000 / 174 / 4;
+const OUTLINE_MS = 8 * MARK_TICK_MS;
+const GLIDE_MS = 600;
+const LIVE_GLIDE_MS = 250;
+const ROW_MS = MARK_TICK_MS / 8;
 
 // A batched check row's box is viewport px at its scrollY; outlines keep document px.
 function checkRow(value: unknown) {
@@ -24,7 +25,7 @@ export type Part = "loads" | "links" | "phone";
 export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "between" | "done" | "expired" | "failed";
 
 export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number }
-export interface Cursor { tile: VerifyTile; from: { x: number; y: number }; to: { x: number; y: number }; at: number }
+export interface Cursor { checker: string; tile: VerifyTile; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
 export interface Ring { tile: VerifyTile; x: number; y: number; at: number }
 interface Stored { jpeg: Uint8Array; scrollY: number; ms: number }
 
@@ -37,7 +38,7 @@ const rect = (value: unknown): Rect | null => {
   return null;
 };
 const tileOf = (value: unknown): VerifyTile => value === "phone" ? "phone" : "desktop";
-const up16 = (ms: number) => Math.ceil(ms / SIXTEENTH_MS - 1e-6) * SIXTEENTH_MS;
+const up16 = (ms: number) => Math.ceil(ms / MARK_TICK_MS - 1e-6) * MARK_TICK_MS;
 
 /** One watch session: chunks come in, a virtual clock lets them out at their show time. */
 export class VerifyWatchShow {
@@ -147,14 +148,14 @@ export class VerifyWatchShow {
     this.clock += Math.max(0, Math.min(ms, 250));
     this.queue.sort((a, b) => a.due - b.due);
     while (this.queue.length && this.queue[0]!.due <= this.clock) {
-      const { chunk, at, scrollY } = this.queue.shift()!;
-      this.apply(chunk, at, scrollY);
+      const { chunk, at, scrollY, due } = this.queue.shift()!;
+      this.apply(chunk, at, scrollY, due);
     }
     this.step();
     for (const wait of this.waits.filter(w => w.at <= this.clock)) wait.resolve();
     this.waits = this.waits.filter(w => w.at > this.clock);
-    if (this.outlines.some(o => !o.issue && this.clock - o.at > OUTLINE_MS + SIXTEENTH_MS)) {
-      this.outlines = this.outlines.filter(o => o.issue || this.clock - o.at <= OUTLINE_MS + SIXTEENTH_MS);
+    if (this.outlines.some(o => !o.issue && this.clock - o.at > OUTLINE_MS + MARK_TICK_MS)) {
+      this.outlines = this.outlines.filter(o => o.issue || this.clock - o.at <= OUTLINE_MS + MARK_TICK_MS);
       this.version++;
     }
     if (this.moving()) this.version++;
@@ -202,19 +203,45 @@ export class VerifyWatchShow {
     return { ...outline.box, y: outline.box.y - top };
   }
 
-  cursorAt(cursor: Cursor) {
-    const k = Math.min(1, Math.max(0, (this.clock - cursor.at) / GLIDE_MS)), e = 1 - (1 - k) ** 3;
-    return { x: cursor.from.x + (cursor.to.x - cursor.from.x) * e, y: cursor.from.y + (cursor.to.y - cursor.from.y) * e };
+  cursorAt(cursor: Cursor, reduced = false, clock = this.clock) {
+    if (reduced) return cursor.to;
+    const move = this.cursorMove(cursor);
+    const k = move.duration ? Math.min(1, Math.max(0, (clock - move.at) / move.duration)) : 1;
+    const e = k * k * k * (10 + k * (-15 + 6 * k));
+    return { x: move.from.x + (move.to.x - move.from.x) * e, y: move.from.y + (move.to.y - move.from.y) * e };
+  }
+
+  private cursorMove(cursor: Cursor): Cursor {
+    if (this.live) return cursor;
+    let next: { due: number; index: number; ev: Record<string, unknown>; box: Rect } | null = null;
+    for (const [index, item] of this.queue.entries()) {
+      if (item.due <= cursor.at || item.chunk.kind !== "mark" || item.chunk.mark.kind !== "result") continue;
+      const ev = (item.chunk.mark.ev ?? {}) as Record<string, unknown>;
+      const box = rect(ev.box);
+      if (!box || ev.result === "skip" || (typeof ev.checker === "string" ? ev.checker : "CHECK") !== cursor.checker) continue;
+      if (!next || item.due <= next.due) next = { due: item.due, index, ev, box };
+    }
+    if (!next || tileOf(next.ev.tile) !== cursor.tile) return cursor;
+    let scrollY = this.scroll[cursor.tile];
+    for (const item of this.queue.slice(0, next.index)) {
+      if (item.chunk.kind !== "mark") continue;
+      const mark = item.chunk.mark;
+      if (mark.kind === "scroll" && tileOf(mark.tile) === cursor.tile && Number.isFinite(mark.y)) scrollY = mark.y as number;
+    }
+    const top = next.ev.pin ? typeof next.ev.mscroll === "number" ? next.ev.mscroll : 0 : scrollY;
+    const to = { x: next.box.x + Math.min(next.box.w * 0.3, 12), y: next.box.y - top + Math.min(next.box.h * 0.6, 10) };
+    const at = Math.max(cursor.at, next.due - GLIDE_MS);
+    return { ...cursor, from: cursor.to, to, at, duration: next.due - at };
   }
 
   outlineAlpha(outline: Outline): number {
     if (outline.issue) return 1;
     const age = this.clock - outline.at;
-    return age <= OUTLINE_MS ? 1 : Math.max(0, 1 - (age - OUTLINE_MS) / SIXTEENTH_MS);
+    return age <= OUTLINE_MS ? 1 : Math.max(0, 1 - (age - OUTLINE_MS) / MARK_TICK_MS);
   }
 
   private moving() {
-    return [...this.cursors.values()].some(c => this.clock - c.at < GLIDE_MS) || (this.ring !== null && this.clock - this.ring.at < 2 * SIXTEENTH_MS + 50) || this.outlines.some(o => !o.issue && this.clock - o.at > OUTLINE_MS - 20);
+    return [...this.cursors.values()].some(c => { const move = this.cursorMove(c); return this.clock >= move.at && this.clock < move.at + move.duration; }) || (this.ring !== null && this.clock - this.ring.at < 2 * MARK_TICK_MS + 50) || this.outlines.some(o => !o.issue && this.clock - o.at > OUTLINE_MS - 20);
   }
 
   private set(phase: ShowPhase) {
@@ -233,7 +260,7 @@ export class VerifyWatchShow {
     } else if (this.phase === "clean" && this.clock - this.phaseAt >= BANNER_MS) this.set("after");
   }
 
-  private apply(chunk: VerifyReplayChunk, at: number, scrollY: number) {
+  private apply(chunk: VerifyReplayChunk, at: number, scrollY: number, due: number) {
     this.version++;
     if (chunk.kind !== "frame") this.ui++;
     const ms = chunk.kind === "frame" ? chunk.ms : chunk.kind === "mark" ? chunk.mark.ms : chunk.kind === "end" ? chunk.end.ms : 0;
@@ -254,10 +281,10 @@ export class VerifyWatchShow {
       this.set(chunk.end.status === "blocked" ? "failed" : this.reel.length ? "reel" : "clean");
       return;
     }
-    this.mark(chunk.mark, at);
+    this.mark(chunk.mark, at, due);
   }
 
-  private mark(mark: VerifyReplayMark, at: number) {
+  private mark(mark: VerifyReplayMark, at: number, due: number) {
     if (mark.kind === "part" && (mark.part === "loads" || mark.part === "links" || mark.part === "phone")) this.parts.add(mark.part);
     else if (mark.kind === "scroll" && Number.isFinite(mark.y)) this.scroll[tileOf(mark.tile)] = mark.y as number;
     else if (mark.kind === "point") {
@@ -283,7 +310,9 @@ export class VerifyWatchShow {
       if (this.outlines.length > 400) this.outlines.splice(this.outlines.findIndex(o => !o.issue), 1);
       const target = this.view(outline), last = this.cursors.get(checker);
       const to = { x: target.x + Math.min(target.w * 0.3, 12), y: target.y + Math.min(target.h * 0.6, 10) };
-      this.cursors.set(checker, { tile: outline.tile, from: last && last.tile === outline.tile ? this.cursorAt(last) : to, to, at });
+      const start = this.live ? due : at;
+      const from = this.live && last?.tile === outline.tile ? this.cursorAt(last, false, start) : to;
+      this.cursors.set(checker, { checker, tile: outline.tile, from, to, at: start, duration: this.live && last?.tile === outline.tile ? LIVE_GLIDE_MS : 0 });
     }
   }
 }

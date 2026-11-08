@@ -58,6 +58,8 @@ it("checks parent caps, extra fields and count identities", () => {
   expect(validCounts(counts)).toBe(true);
   expect(validCounts({ ...counts, notRun: 1 })).toBe(false);
   expect(validCounts({ ...counts, passed: NaN })).toBe(false);
+  expect(validCounts({ ...counts, by: { LINKS: { desktop: [3, 8] }, FIT: { phone: [0, 0] } } })).toBe(true);
+  for (const by of [{ LINKS: { desktop: [9, 8] } }, { LINKS: { tablet: [1, 1] } }, { NOPE: {} }, { FIT: { phone: [1] } }]) expect(validCounts({ ...counts, by })).toBe(false);
   const result = { v: 1, runId: "run-123456", site: "fixture", counts, issues: [], issueTotal: 0, durationMs: 1 };
   expect(validResult(result)).toBe(true);
   expect(validResult({ ...result, issues: Array(41).fill({}) })).toBe(false);

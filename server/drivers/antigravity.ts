@@ -187,6 +187,8 @@ export const ANTIGRAVITY_AGENTS_MCP_KEY = "openmausbot-agents";
 export const ANTIGRAVITY_TERMINAL_MCP_KEY = "openmausbot-terminal";
 const WINK_MCP_KEY_PREFIX = "openmausbot-";
 
+type TurnUsage = { input: number; output: number; cachedInput?: number };
+
 export interface AntigravityComputerMcpServer {
   command: string;
   args: string[];
@@ -569,7 +571,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
 
     // A resume fallback relaunch is the same logical turn: the harness holds
     // the first id as live and drops events from any other.
-    const sendTurn = async (turn: SendTurnInput, relaunchOf?: string, busyResumes = 0, priorUsage = { input: 0, output: 0 }, shownResponses = new Set<string>()) => {
+    const sendTurn = async (turn: SendTurnInput, relaunchOf?: string, busyResumes = 0, priorUsage: TurnUsage = { input: 0, output: 0 }, shownResponses = new Set<string>()) => {
       const { threadId } = turn;
       if (disposed) throw new Error("Antigravity instance is disposed");
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
@@ -626,7 +628,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
         ok: boolean,
         stopReason: string | null,
         cost: number | null = null,
-        usage?: { input: number; output: number },
+        usage?: TurnUsage,
       ) => {
         if (!endAttempt()) return;
         active.delete(threadId);
@@ -839,13 +841,16 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
       let lastStepState: string | undefined;
 
       // A busy resume is the same logical turn, so its usage carries forward.
-      const withPriorUsage = (usage: { input_tokens?: number; cache_read_tokens?: number; output_tokens?: number }) => ({
+      const withPriorUsage = (usage: { input_tokens?: number; cache_read_tokens?: number; output_tokens?: number }): TurnUsage => ({
         input: priorUsage.input + (usage.input_tokens || 0) + (usage.cache_read_tokens || 0),
         output: priorUsage.output + (usage.output_tokens || 0),
+        ...(typeof usage.cache_read_tokens === "number" || priorUsage.cachedInput !== undefined
+          ? { cachedInput: (priorUsage.cachedInput ?? 0) + (usage.cache_read_tokens || 0) }
+          : {}),
       });
 
       // The thread stays held through the wait so Stop or a new message cancels it.
-      const resumeWhenFree = (conversation: string, reason: string, attemptUsage: { input: number; output: number }) => {
+      const resumeWhenFree = (conversation: string, reason: string, attemptUsage: TurnUsage) => {
         endAttempt();
         const abort = new AbortController();
         active.set(threadId, { stop: () => abort.abort(), interrupt: () => abort.abort(), turnId });
@@ -964,6 +969,7 @@ export const AntigravityDriver: ProviderDriver<AntigravityConfig> = {
                 ? {
                     input: (payload.usage.input_tokens || 0) + (payload.usage.cache_read_tokens || 0),
                     output: payload.usage.output_tokens || 0,
+                    ...(typeof payload.usage.cache_read_tokens === "number" ? { cachedInput: payload.usage.cache_read_tokens } : {}),
                   }
                 : undefined,
             );

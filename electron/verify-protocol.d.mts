@@ -2,6 +2,7 @@
 import type { VerifyCounts, VerifyErrorCode, VerifyResult, VerifyTile } from "../shared/live-verify";
 
 export declare const VERIFY_GRANT_PREFIX: "orbit-verify-v1";
+export declare function verifyLoopbackUrl(value: unknown): URL | null;
 export declare const VERIFY_BRIDGE_ROUTES: { start: string; poll: string; cast: string; watch: string; cancel: string };
 export declare const VERIFY_BODY_LIMIT: number;
 export declare const VERIFY_POLL_MAX_MS: number;

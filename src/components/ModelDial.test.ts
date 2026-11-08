@@ -859,6 +859,10 @@ describe("ModelDial confirm", () => {
     expect(fills(button)).toHaveLength(1);
     expect(rings()).toHaveLength(1);
     expect(dispatch.mock.invocationCallOrder.at(-1)).toBeLessThan(animate.mock.invocationCallOrder[0]!);
+    if (path === "Enter") {
+      expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+      return;
+    }
     await click("[data-dial-pick]");
     await click('.dial-card[aria-pressed="true"]');
     await key("Enter");
@@ -868,6 +872,22 @@ describe("ModelDial confirm", () => {
     expect(document.querySelector("[data-model-picker-content]")).not.toBeNull();
     await wait(1);
     expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+  });
+
+  it("closes at once on Enter so the next keys reach the composer", async () => {
+    mouse(1200);
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    document.body.append(composer);
+    await mount();
+    await key("ArrowDown");
+    await key("Enter");
+    expect(document.querySelector("[data-model-picker-content]")).toBeNull();
+    const letter = new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true });
+    await act(async () => (document.activeElement ?? document.body).dispatchEvent(letter));
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+    expect(letter.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(composer);
   });
 
   it("does nothing for a disabled selection through every commit path", async () => {
@@ -896,7 +916,7 @@ describe("ModelDial confirm", () => {
     await mount();
     const button = document.querySelector("[data-dial-pick]")!;
     animate.mockClear();
-    await key("Enter");
+    await click("[data-dial-pick]");
     expect(saves()).toHaveLength(1);
     expect(fills(button)).toHaveLength(1);
     expect(rings()).toHaveLength(0);

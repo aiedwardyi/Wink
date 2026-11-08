@@ -183,7 +183,7 @@ export function savedKeysPrompt(config: CredentialConfig): string {
   // By host only: a custom key's name is bot-proposed text and must never reach other bots' prompts.
   const hosts = Object.keys(config.customKeys ?? {}).sort().map(customCredentialId).filter((id) => credentialIsConfigured(config, id));
   const saved = [...targets.map((id) => `${CREDENTIAL_TARGETS[id].label} (${id})`), ...hosts];
-  return saved.length ? ` Saved keys: ${saved.join(", ")}. Use them without asking; any other key isn't saved, so request it with request_credential.` : "";
+  return saved.length ? ` Saved keys: ${saved.join(", ")}. Use them without asking, with call_api on their own host; Box is for Cloud VM. Request missing keys with request_credential, never in chat.` : "";
 }
 
 export function isReusableCredentialRequest(
