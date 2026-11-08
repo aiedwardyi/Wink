@@ -169,7 +169,7 @@ describe("SettingsModal friends chrome", () => {
     for (const name of ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Moss", "Wink Day", "Notebook"]) {
       expect(html).toContain(`>${name}<`);
     }
-    expect(html).toContain(`More themes (${SKINS.length - 12})`);
+    expect(html).toContain(`More themes (${SKINS.length - 9})`);
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('data-skin="catppuccin-frappe"');
     expect(html).not.toContain('data-skin="servo-gray"');

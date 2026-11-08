@@ -13,8 +13,6 @@ import { Section } from "./SettingsPrimitives";
 import { Fold } from "./Fold";
 
 const FEATURED_SKIN_IDS: readonly SkinId[] = ["precision", "github-dimmed", "tokyo-night", "terminal", "inkwell", "graphite", "moss", "wink-day", "notebook"];
-// Kept working for anyone already on one; never offered.
-const HIDDEN_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["wink-violet", "wink-black", "pewter"]);
 const NEW_SKIN_IDS: ReadonlySet<SkinId> = new Set<SkinId>(["inkwell", "graphite", "moss"]);
 
 /**
@@ -103,7 +101,7 @@ export function SkinPicker() {
     const current = SKINS.find((skin) => skin.id === active);
     if (current) featured.push(current);
   }
-  const extra = SKINS.filter((skin) => !featured.includes(skin) && (!HIDDEN_SKIN_IDS.has(skin.id) || skin.id === active));
+  const extra = SKINS.filter((skin) => !featured.includes(skin));
   const groups = (skins: typeof SKINS) => [
     { key: "settings.skin.dark", skins: skins.filter((skin) => !LIGHT_SKIN_IDS.has(skin.id)) },
     { key: "settings.skin.light", skins: skins.filter((skin) => LIGHT_SKIN_IDS.has(skin.id)) },

@@ -709,7 +709,7 @@ const FRESH_SKINS = [
 describe("Inkwell, Graphite and Moss", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
-  it("registers the three dark skins and keeps the hidden ones and the default", () => {
+  it("registers the three dark skins and keeps Wink Violet, Wink Black, Pewter and the default", () => {
     for (const skin of FRESH_SKINS) {
       expect(SKINS.some((entry) => entry.id === skin.id && entry.name === skin.name)).toBe(true);
       expect(LIGHT_SKIN_IDS.has(skin.id)).toBe(false);
@@ -1550,7 +1550,7 @@ describe("skin persistence", () => {
     expect(readTriedSkins()).toEqual([]);
   });
 
-  it.each(["wink-violet", "wink-black", "pewter"] as const)("still applies and restores hidden %s", (id) => {
+  it.each(["wink-violet", "wink-black", "pewter"] as const)("applies and restores %s", (id) => {
     applySkin(id);
     expect(dataset.skin).toBe(id);
     expect(readSkin()).toBe(id);

@@ -9,7 +9,7 @@ import { SkinPicker } from "./SkinPicker";
 
 let root: Root;
 const featured = ["Precision", "GitHub Dimmed", "Tokyo Night", "Terminal", "Inkwell", "Graphite", "Moss", "Wink Day", "Notebook"];
-const hidden = ["Wink Violet", "Wink Black", "Pewter"];
+const kept = ["Wink Violet", "Wink Black", "Pewter"];
 const tiles = () => [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
 const names = () => tiles().map((button) => button.querySelector(".font-medium")?.textContent);
 const tagged = () => tiles().filter((button) => button.querySelector("[data-skin-new]")).map((button) => button.querySelector(".font-medium")?.textContent);
@@ -46,13 +46,13 @@ describe("featured themes", () => {
     const more = document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     expect(more).not.toBeNull();
     expect(more.textContent).toContain(locale === "en" ? "More themes" : "더 많은 테마");
-    expect(more.textContent).toContain(String(SKINS.length - featured.length - hidden.length));
+    expect(more.textContent).toContain(String(SKINS.length - featured.length));
     expect(more.getAttribute("aria-expanded")).toBe("false");
     await act(async () => more.click());
     expect(more.getAttribute("aria-expanded")).toBe("true");
-    expect(names()).toHaveLength(SKINS.length - hidden.length);
-    expect(new Set(names()).size).toBe(SKINS.length - hidden.length);
-    for (const name of hidden) expect(names()).not.toContain(name);
+    expect(names()).toHaveLength(SKINS.length);
+    expect(new Set(names()).size).toBe(SKINS.length);
+    for (const name of kept) expect(names()).toContain(name);
     await act(async () => more.click());
     expect(more.getAttribute("aria-expanded")).toBe("false");
     await folded();
@@ -68,7 +68,7 @@ describe("featured themes", () => {
     expect(names()).toContain("Blueprint Gray");
     expect(names()).not.toContain("Pewter Night");
     const more = document.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
-    expect(more.textContent).toContain(String(SKINS.length - featured.length - 1 - hidden.length));
+    expect(more.textContent).toContain(String(SKINS.length - featured.length - 1));
     await act(async () => more.click());
     const servo = [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((button) => button.textContent === "Servo Gray")!;
     expect(servo).toBeTruthy();
@@ -103,7 +103,7 @@ describe("featured themes", () => {
     expect(names()).not.toContain("Wink");
   });
 
-  it.each(["wink-violet", "wink-black", "pewter"] as const)("keeps hidden %s applyable and shows it up front while on", async (id) => {
+  it.each(["wink-violet", "wink-black", "pewter"] as const)("applies %s and shows it up front while on", async (id) => {
     await mount(id);
     expect(document.documentElement.dataset.skin).toBe(id);
     const name = SKINS.find((skin) => skin.id === id)!.name;
