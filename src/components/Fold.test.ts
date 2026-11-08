@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { readFileSync } from "node:fs";
+
 import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { Fold } from "./Fold";
 
@@ -111,6 +113,21 @@ describe("Fold", () => {
     expect(fold()?.hasAttribute("inert")).toBe(false);
     await act(async () => vi.advanceTimersByTime(PRESENCE_EXIT_MS * 2));
     expect(body()).toBe(shown);
+  });
+
+  it("opens by fade alone and settles when that fade ends, closing by height as usual", async () => {
+    const faded = (open: boolean) => act(async () => root.render(createElement(Fold, { open, fade: true, children: createElement("p", { "data-body": "" }, "Notes") })));
+    await faded(false);
+    await faded(true);
+    expect(fold()?.dataset.fold).toBe("opening");
+    expect(fold()?.hasAttribute("data-fold-fade")).toBe(true);
+    await settle("fade-fold-open");
+    expect(fold()?.dataset.fold).toBe("open");
+    await faded(false);
+    expect(fold()?.dataset.fold).toBe("closing");
+    const css = readFileSync("src/motion.css", "utf8");
+    expect(css).toMatch(/\[data-fold-fade\]\[data-fold="opening"\] \{\s*animation-name: fade-fold-open;/);
+    expect(css).toMatch(/@keyframes fade-fold-open \{\s*from \{ opacity: 0; \}\s*\}/);
   });
 
   it("opens and closes at once when instant", async () => {

@@ -172,7 +172,7 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
           <Fold open={detailsOpen}><ul className="verify-card-details">{details.map((row, i) => <li key={`${row.checker}-${row.where}-${i}`}>{tile(row.tile)} · {row.where} · {row.measured}</li>)}</ul></Fold>
         </>}
       </Fold>
-      {phone && action === "watch" && <Fold open={inline}><LazyView><VerifyWatchFrame card={card} threadId={threadId} live={false} hidden={false} inline onClose={() => setInline(false)} /></LazyView></Fold>}
+      {phone && action === "watch" && <Fold open={inline} fade><LazyView><VerifyWatchFrame card={card} threadId={threadId} live={false} hidden={false} inline onClose={() => setInline(false)} /></LazyView></Fold>}
       {error && <div role="alert" className="verify-card-unchecked">{c.retry}</div>}
     </section>
   );

@@ -368,6 +368,7 @@ it("keeps the phone replay mounted while it folds shut", async () => {
     await act(async () => watch().click());
     await settle();
     expect(folded(view.host, "opening", ".verify-watch-frame[data-inline]")).not.toBeNull();
+    expect(view.host.querySelector("[data-fold-fade]")).not.toBeNull();
     await act(async () => watch().click());
     expect(folded(view.host, "closing", ".verify-watch-frame[data-inline]")).not.toBeNull();
     expect(watch().getAttribute("aria-expanded")).toBe("false");

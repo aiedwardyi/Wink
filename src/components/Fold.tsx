@@ -4,8 +4,8 @@ import { MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { usePresence } from "@/lib/use-presence";
 
-/** Opens and closes its content by its height on the shared fold motion (motion.css); closed, the content unmounts. Open at mount, it shows at once. `className` places the fold in its parent; a margin there stays put while the content folds. With an `id`, an empty hidden box keeps that id while closed, so `aria-controls` always has a target. `soft` is the longer, flat-landing motion for a fold whose rows below travel far. `keep` shows the last open content while it closes, for content that empties the moment it closes. `instant` opens and closes with no motion. */
-export function Fold({ open, id, className, soft, keep, instant, children }: { open: boolean; id?: string; className?: string; soft?: boolean; keep?: boolean; instant?: boolean; children: ReactNode }) {
+/** Opens and closes its content by its height on the shared fold motion (motion.css); closed, the content unmounts. Open at mount, it shows at once. `className` places the fold in its parent; a margin there stays put while the content folds. With an `id`, an empty hidden box keeps that id while closed, so `aria-controls` always has a target. `soft` is the longer, flat-landing motion for a fold whose rows below travel far. `keep` shows the last open content while it closes, for content that empties the moment it closes. `instant` opens and closes with no motion. `fade` opens by opacity only, so the rows below never move per frame. */
+export function Fold({ open, id, className, soft, keep, instant, fade, children }: { open: boolean; id?: string; className?: string; soft?: boolean; keep?: boolean; instant?: boolean; fade?: boolean; children: ReactNode }) {
   const { mounted, closing } = usePresence(open, soft ? MOTION_LARGE_MS : undefined);
   const [was, setWas] = useState(open);
   const [opening, setOpening] = useState(false);
@@ -23,6 +23,7 @@ export function Fold({ open, id, className, soft, keep, instant, children }: { o
       id={id}
       data-fold={closing ? "closing" : opening ? "opening" : "open"}
       data-fold-soft={soft || undefined}
+      data-fold-fade={fade || undefined}
       data-fold-done={landed || undefined}
       className={className}
       inert={closing || undefined}
