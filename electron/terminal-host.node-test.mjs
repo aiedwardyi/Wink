@@ -1109,12 +1109,15 @@ test("closing a bot pane stops only processes it started", async (t) => {
     { pid: 9003, ppid: 9002, created: 1_000_600 },
     { pid: 9004, ppid: 9001, created: 1_000_700 },
     { pid: 9005, ppid: 1, created: 1_000_800 },
+    { pid: 9006, ppid: 101, created: 1_003_000 },
   ];
   let owner;
-  const f = fixture({ owner: () => owner, now: () => 1_000_000, processes: { list: async () => { listed.push(f.children[0].killed); return table; }, stop: (pid) => stopped.push(pid) } });
+  let time = 1_000_000;
+  const f = fixture({ owner: () => owner, now: () => time, processes: { list: async () => { listed.push(f.children[0].killed); return table; }, stop: (pid) => stopped.push(pid) } });
   owner = f.owner;
   t.after(() => f.host.dispose());
   const pane = await f.host.openForBot("bot-1", { label: "LEFT-1" });
+  time = 1_002_000;
   await f.host.closeForBot("bot-1", pane.sessionId);
   assert.deepEqual(listed, [false]);
   table[1] = { ...table[1], created: 1_000_900 };

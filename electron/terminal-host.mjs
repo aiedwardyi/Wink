@@ -484,13 +484,13 @@ export async function listProcesses(platform = process.platform, env = process.e
 
 export const paneProcesses = { list: () => listProcesses(), stop: (pid) => process.kill(pid) };
 
-// A pid whose parent is younger than it is a reused pid, not a descendant.
-function paneDescendants(table, root, since, slack) {
+// A pid whose parent is younger than it is a reused pid, not a descendant; so is a child of the root born after the shell died.
+function paneDescendants(table, root, since, until, slack) {
   const born = new Map([[root, -Infinity]]);
   for (let added = true; added;) {
     added = false;
     for (const row of table) {
-      if (born.has(row.pid) || !born.has(row.ppid) || row.created + slack < since || row.created < born.get(row.ppid)) continue;
+      if (born.has(row.pid) || !born.has(row.ppid) || row.created + slack < since || row.created < born.get(row.ppid) || (row.ppid === root && row.created > until)) continue;
       born.set(row.pid, row.created);
       added = true;
     }
@@ -918,7 +918,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const root = session.pty.pid;
     if (!processes || !session.botPane || !Number.isInteger(root)) return null;
     const slack = platform === "win32" ? 0 : 999;
-    const snapshot = Promise.resolve().then(() => processes.list()).then((table) => paneDescendants(table, root, session.startedAt, slack));
+    const until = session.exitedAt ?? now();
+    const snapshot = Promise.resolve().then(() => processes.list()).then((table) => paneDescendants(table, root, session.startedAt, until, slack));
     void snapshot.then(async (before) => {
       if (!before.size) return;
       await new Promise((resolve) => setTimeout(resolve, LEFTOVER_MS));
@@ -964,6 +965,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (session.botPane) paneRuns?.ended(session.id);
     if (session.exitCode === null) {
       session.exitCode = exitCode;
+      session.exitedAt = now();
       paneCleanup?.exited?.(session);
       if (session.botPane && session.mail && exitCode !== 0 && !(session.reportAt && session.reportAt >= session.stallArmedAt)) session.exitNote = { text: exitNoteText(session.screen.text(), exitCode), tries: 0, retryAt: 0 };
     }
