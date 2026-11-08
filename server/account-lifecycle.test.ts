@@ -142,7 +142,7 @@ describe("account lifecycle", () => {
   it("starts sign-in on a signed-out account while its stopped worker panes are still open", async () => {
     const f = await fixture();
     const account = await f.add();
-    const panesBusy = vi.fn(async () => true);
+    const panesBusy = vi.fn(async () => false);
     (f.controller as unknown as { hooks: { panesBusy(id: string): Promise<boolean> } }).hooks.panesBusy = panesBusy;
     await f.controller.signedOut?.(account.id);
     await f.controller.signedOut?.("claude");
@@ -151,7 +151,8 @@ describe("account lifecycle", () => {
     await f.controller.settled(account.id);
     await expect(f.controller.signIn("claude")).resolves.toBeDefined();
     expect(f.start.mock.calls.map(([id]) => id)).toEqual([account.id, "claude"]);
-    expect(panesBusy).not.toHaveBeenCalled();
+    expect(panesBusy).toHaveBeenCalledWith(account.id, true);
+    expect(panesBusy).toHaveBeenCalledWith("claude", true);
     f.references.add(account.id);
     await f.controller.signedOut?.(account.id);
     await expect(f.controller.signIn(account.id)).rejects.toThrow(/active work/);
@@ -198,6 +199,74 @@ describe("account lifecycle", () => {
     expect(f.registry.accountBlocked("claude")).toBe(true);
     expect(f.changed).toHaveBeenCalledExactlyOnceWith();
     expect(f.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("marks a base account only once until sign-in clears it", async () => {
+    const f = await fixture();
+    await f.controller.signedOut("claude");
+    await f.controller.signedOut("claude");
+    expect(f.changed).toHaveBeenCalledTimes(1);
+    expect(f.registry.accountAvailable("claude")).toBe(false);
+    await f.controller.signIn("claude");
+    await f.controller.settled("claude");
+    expect(f.registry.accountAvailable("claude")).toBe(true);
+  });
+
+  it("persists the sign-in recovery row before marking and catches a rejected mark", async () => {
+    const ts = await import("typescript");
+    const { runtimeErrorTool } = await import("./chat-error.ts");
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const branch = source.split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0];
+    const javascript = ts.transpileModule(`switch (event.type) { case "runtime.error": ${branch} }`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+    const order: string[] = [];
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const signedOut = vi.fn(async () => { order.push("mark"); throw new Error("fixture"); });
+    const event = { type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true, providerInstanceId: "account" };
+    const run = new Function("event", "unreadTurns", "store", "pushMessage", "bot", "runtimeErrorTool", "accounts", "accountRuntime", "INCOMPLETE_LOG_MESSAGE", javascript);
+    let row: { tool: ReturnType<typeof runtimeErrorTool> } | undefined;
+    run(event, { start() {} }, { messagesFor: () => [] }, (value: typeof row) => { order.push("row"); row = value; }, null, runtimeErrorTool, new Map([["account", {}]]), { signedOut }, "incomplete fixture");
+    await Promise.resolve();
+    expect(order).toEqual(["row", "mark"]);
+    expect(row?.tool).toMatchObject({ signIn: true, accountId: "account" });
+    expect(error).toHaveBeenCalledExactlyOnceWith("Signed-out account could not be saved");
+  });
+
+  it("does not stop an account when sign-in starts ahead of the queued mark", async () => {
+    const f = await fixture();
+    const account = await f.add();
+    let release!: () => void;
+    f.wait(new Promise<void>((done) => { release = done; }));
+    const signingIn = f.controller.signIn(account.id);
+    const marked = f.controller.signedOut(account.id);
+    await signingIn;
+    await marked;
+    expect(f.accounts.get(account.id)?.state).toBe("ready");
+    release();
+    await f.controller.settled(account.id);
+    expect(f.registry.accountAvailable(account.id)).toBe(true);
+  });
+
+  it.each(["base", "added"])("guards a signed-out %s account against active and unknown worker runs", async (kind) => {
+    const f = await fixture(vi.fn());
+    const account = await f.add();
+    const id = kind === "base" ? "claude" : account.id;
+    const fetch = vi.mocked(globalThis.fetch);
+    await f.controller.signedOut(id);
+    const start = vi.spyOn(f.registry, "startSignIn");
+    for (const state of ["busy", "starting", "unknown"] as const) {
+      fetch.mockImplementation(async (url) => String(url).includes("account-runs")
+        ? state === "unknown" ? Response.json({}, { status: 404 }) : Response.json({ runs: [{ botId: "fixture", paneId: "fixture", label: null, engine: "claude", accountId: id, accountGeneration: kind === "base" ? 0 : account.generation, state }] })
+        : Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
+      await expect(f.controller.signIn(id)).rejects.toMatchObject({ code: state === "unknown" ? "host-unknown" : "account-busy" });
+      expect(start).not.toHaveBeenCalled();
+      expect(f.registry.accountBlocked(id)).toBe(true);
+    }
+    fetch.mockImplementation(async (url) => String(url).includes("account-runs")
+      ? Response.json({ runs: [{ botId: "fixture", paneId: "fixture", label: null, engine: "claude", accountId: id, accountGeneration: kind === "base" ? 0 : account.generation, state: "idle" }] })
+      : Response.json({ count: 1, unknown: 0, generations: { "0": 1 } }));
+    await expect(f.controller.signIn(id)).resolves.toBeDefined();
+    await f.controller.settled(id);
+    expect(f.registry.accountAvailable(id)).toBe(true);
   });
 
   it("omits stale live account rows during reload without spinning", async () => {

@@ -9,7 +9,7 @@ type Hooks = {
   invalidate(id: string): void;
   changed?(usageId?: string): void;
   configBusy?(): boolean;
-  panesBusy?(id: string): Promise<boolean>;
+  panesBusy?(id: string, activeOnly?: boolean): Promise<boolean>;
   onMainChanged?(change: MainChange): void;
 };
 
@@ -117,11 +117,11 @@ export class AccountLifecycle {
       if (!account) {
         if (!this.accounts.list().some((row) => row.id === id && row.existing)) throw new AccountError("Unknown account", 404);
         const blocked = this.registry.accountBlocked(id);
-        const guarded = this.accounts.snapshot.length > 0 || destinations.length > 0;
+        const guarded = blocked || this.accounts.snapshot.length > 0 || destinations.length > 0;
         if (guarded) {
           this.registry.blockAccount(id, true);
           try {
-            if (await this.hooks.referenced(id, true) || ((!blocked || destinations.length > 0) && await this.hooks.panesBusy?.(id))) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
+            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, blocked && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
           } catch (error) {
             this.registry.blockAccount(id, blocked);
             throw error;
@@ -147,7 +147,7 @@ export class AccountLifecycle {
       if (this.jobs.has(id)) return this.registry.logins.capture(id);
       this.registry.blockAccount(id, true);
       try {
-        if (await this.hooks.referenced(id, true) || ((account.state !== "stopped" || destinations.length > 0) && await this.hooks.panesBusy?.(id))) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
+        if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id, account.state === "stopped" && destinations.length === 0)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
         return await this.begin(account, device);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);
@@ -161,6 +161,7 @@ export class AccountLifecycle {
   async signedOut(id: string) {
     const account = this.accounts.get(id);
     if (this.jobs.has(id) || this.pending.has(id) || this.registry.logins.state(id) === "pending" || this.accounts.drains[id] || (account && account.state !== "ready")) return;
+    if (!account && this.registry.accountBlocked(id)) return;
     this.registry.blockAccount(id, true);
     if (!account) {
       this.hooks.changed?.();
@@ -168,6 +169,7 @@ export class AccountLifecycle {
     }
     await this.exclusive(async () => {
       const current = this.accounts.get(id);
+      if (this.jobs.has(id) || this.pending.has(id) || this.registry.logins.state(id) === "pending" || this.accounts.drains[id]) return;
       if (current?.generation === account.generation && current.state === "ready") await this.accounts.stop(id);
     }, false).catch(() => { console.error("Signed-out account could not be saved"); });
   }

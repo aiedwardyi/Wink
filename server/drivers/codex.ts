@@ -43,6 +43,7 @@ import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, codexRateLimitWindows } from "./rate-limits.ts";
 import { cachedSignIn } from "./auth-status.ts";
+import { isSignOut } from "./signout.ts";
 import { accountLaunch } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount } from "./codex-account.ts";
@@ -84,7 +85,6 @@ function codexToolDetail(item: z.infer<typeof toolItemSchema>, isError: boolean)
 
 // unit variants arrive as their name, the rest as {name: details}
 const codexErrorKind = z.union([z.string(), z.record(z.string(), z.unknown()).transform((info) => Object.keys(info)[0])]);
-const authRequired = (message: unknown) => /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(String(message ?? ""));
 
 export interface CodexConfig {
   cli: string;
@@ -284,6 +284,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // a retry relaunches the whole app-server; the backoff is scaled down in
       // tests so a fake's transient failures don't stall real seconds
       const retryScale = Number(process.env.FAKE_CODEX_RETRY_SCALE ?? "1");
+      const authRequired = (message: unknown) => [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && isSignOut(message);
 
       const launchAttempt = async (attempt: number): Promise<void> => {
         const env = childEnv();
@@ -359,8 +360,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let usageLimitReported = false;
       let signedOutReported = false;
       const signedOut = () => {
-        if (!signedOutReported) emit({ ...base(threadId, turnId), type: "runtime.error", message: "Codex is not signed in.", setup: true, signedOut: true });
+        if (signedOutReported) return;
         signedOutReported = true;
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Codex is not signed in.", setup: true, signIn: true, signedOut: true });
       };
       const apiKeyAccount = input.account ? engineAccount.type === "apiKey" : codexApiKeyAccount(env);
       const usageFailure = (failure: unknown) => chatUsageLimit("codex", failure, usageWindows,
@@ -656,7 +658,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             if (limit && !usageLimitReported) {
               emit({ ...base(threadId, turnId), type: "runtime.error", ...limit });
               usageLimitReported = true;
-            } else if (t.status === "failed" && !stopRequested && !usageLimitReported && authRequired(t.error?.message)) signedOut();
+            } else if (t.status === "failed" && !stopRequested && !usageLimitReported && isSignOut(t.error?.message)) {
+              if (authRequired(t.error?.message)) signedOut();
+              else emit({ ...base(threadId, turnId), type: "runtime.error", message: String(t.error.message).slice(0, 400) });
+            }
             settle(t.status === "completed" && !usageLimitReported, usageLimitReported ? "usage_limit" : t.status === "completed" ? null : (t.error?.message ?? t.status ?? "failed"));
             break;
           }
@@ -892,7 +897,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ...base(threadId, turnId),
             type: "runtime.error",
             message,
-            ...(needsAuth ? { setup: true, signedOut: true } : {}),
+            ...(needsAuth ? { setup: true, signIn: true, signedOut: true } : {}),
           });
           settle(false, needsAuth ? "auth_required" : "rpc_error");
         }

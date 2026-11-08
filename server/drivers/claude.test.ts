@@ -1956,8 +1956,25 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-signed-out-flag", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
-      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signedOut: true }),
+      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
     ]);
+  });
+
+  it.each([
+    ["network", "Network error: connection reset after 401 files", undefined],
+    ["usage", "Invalid API key: usage limit reached", undefined],
+    ["rate", "HTTP 429 Too Many Requests", undefined],
+    ["forbidden", "HTTP 403 Forbidden by organization policy", undefined],
+    ["tool", "tool unauthorized to read this directory", undefined],
+    ["custom", "unexpected status 401 Unauthorized", "unsloth::local-model"],
+  ])("does not mark a Claude account signed out for a %s error", async (_kind, result, model) => {
+    const fixture = join(scratch, "ordinary-auth-error.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create(undefined, { UNSLOTH_STUDIO_AUTH_TOKEN: "fixture" });
+    await instance.adapter.sendTurn({ threadId: "ordinary-auth-error", text: "hi", model });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.some((e) => e.type === "runtime.error" && e.signedOut)).toBe(false);
   });
 
   it("refuses a turn on a blocked base Claude instance", async () => {
