@@ -42,7 +42,8 @@ What to build or fix, and why. Two to five lines.
 - Delete by absolute path, never `cd` then relative `rm`: no rule skips its approval prompt.
 
 ## Already built
-- The built.md lines this touches and the live files to open first.
+- The built.md lines and status-board decisions this touches, and the live
+  files to open first.
 
 ## Files
 - The files it should start from.
