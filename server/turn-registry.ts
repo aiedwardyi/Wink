@@ -4,10 +4,11 @@ export interface LiveTurn {
   owner: "user" | "peer" | "room";
   depth: number;
   rootId: string | null;
+  userKeys: string[];
   nowWatch: unknown[];
 }
 
-type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId"> & { rootId?: string | null };
+type TurnStart = Omit<LiveTurn, "nowWatch" | "rootId" | "userKeys"> & { rootId?: string | null; userKeys?: string[] };
 
 export class TurnRegistry {
   private readonly turns = new Map<string, LiveTurn>();
@@ -15,7 +16,7 @@ export class TurnRegistry {
   private readonly starting = new Map<string, Omit<LiveTurn, "nowWatch">>();
 
   prepare(turn: TurnStart): void {
-    this.starting.set(turn.threadId, { ...turn, rootId: turn.rootId ?? null });
+    this.starting.set(turn.threadId, { ...turn, rootId: turn.rootId ?? null, userKeys: [...(turn.userKeys ?? [])] });
   }
 
   started(turnId: string, threadId: string): void {
@@ -33,7 +34,7 @@ export class TurnRegistry {
   start(turnId: string, turn: TurnStart): void {
     const previous = this.threads.get(turn.threadId);
     if (previous && previous !== turnId) this.turns.delete(previous);
-    this.turns.set(turnId, { ...turn, rootId: turn.rootId ?? null, nowWatch: [] });
+    this.turns.set(turnId, { ...turn, rootId: turn.rootId ?? null, userKeys: [...(turn.userKeys ?? [])], nowWatch: [] });
     this.threads.set(turn.threadId, turnId);
   }
 
@@ -47,12 +48,18 @@ export class TurnRegistry {
     return turnId && turn ? { turnId, ...turn } : undefined;
   }
 
-  adoptRoot(threadId: string, rootId: string): void {
+  adoptRoot(threadId: string, rootId: string, messageKey?: string): void {
     const starting = this.starting.get(threadId);
-    if (starting) starting.rootId = rootId;
+    if (starting) {
+      starting.rootId = rootId;
+      if (messageKey && !starting.userKeys.includes(messageKey)) starting.userKeys.push(messageKey);
+    }
     const turnId = this.threads.get(threadId);
     const turn = turnId ? this.turns.get(turnId) : undefined;
-    if (turn) turn.rootId = rootId;
+    if (turn) {
+      turn.rootId = rootId;
+      if (messageKey && !turn.userKeys.includes(messageKey)) turn.userKeys.push(messageKey);
+    }
   }
 
   settle(turnId: string): void {

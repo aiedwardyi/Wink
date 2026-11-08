@@ -102,7 +102,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
       commsDepth: 0, MAX_COMMS_DEPTH: 1,
       taskStatePrompt: "", reactPrompt: "", showImagePrompt: "", detailedRepliesEnabled: () => false,
       ALWAYS_REPLY_INSTRUCTIONS: "", CORPUS_SEARCH_INSTRUCTIONS: "", keepGoing: { rules: () => "" },
-      skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", tagged: [],
+      skillInstructions: "", packagePlaybooks: "", harnessPlaybookPrompt: () => "", autoRouting: { state: { get: () => undefined } }, userKeys: [], tagged: [],
       graceInputs: {}, summaryGrace: {}, summarySkipped: false, logSummaryWait: () => {},
       seed: {}, systemSeed: undefined, systemSeeds: { set: () => ({}) },
       pendingInterruptThreads: { started: () => {} }, effort: undefined, leanStartup: false, isUnattended: () => false,

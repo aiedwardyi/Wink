@@ -2,6 +2,7 @@ import type { AccountContext } from "./account-policy.ts";
 import type { ProviderInstance } from "./contracts.ts";
 
 export interface WorkerTurn {
+  readonly threadId?: string;
   readonly instanceId: string;
   readonly driverKind: string;
   readonly account?: AccountContext;
@@ -14,7 +15,7 @@ export function createWorkerTurns() {
   const active = new Map<string, string>();
   return {
     capture(botId: string, threadId: string, instance: Pick<ProviderInstance, "instanceId" | "driverKind" | "account">) {
-      const turn = Object.freeze({ instanceId: instance.instanceId, driverKind: instance.driverKind,
+      const turn = Object.freeze({ threadId, instanceId: instance.instanceId, driverKind: instance.driverKind,
         ...(instance.account ? { account: Object.freeze({ ...instance.account }) } : {}),
       });
       turns.set(threadId, { botId, turn });

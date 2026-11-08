@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { applicableWindows, usageEngine, windowKind, windowScopeKnown } from "../shared/usage-windows.ts";
 import type { ModelSelection } from "./contracts.ts";
 import { LimitWaitStore, type LimitWait, type UsageWaitView } from "./limit-wait-store.ts";
 import { wakeClock } from "./pc-wake.ts";
@@ -153,13 +154,14 @@ export class LimitWaits {
       const result = await this.deps.usage(row).catch(() => ({ retryAt: this.now() + MARGIN }));
       if (this.store.get(row.id) !== row || this.faulted.has(row.id) || !this.valid(row) || this.deps.current(row.botId, row.selection.instanceId)?.busy) continue;
       const report = "report" in result ? result.report : undefined;
-      const windows = report?.windows.filter((window) => applicable(window.id, row.selection.model)) ?? [];
+      const engine = usageEngine(row.selection.model);
+      const windows = applicableWindows(engine, row.selection.model, report?.windows ?? []);
       const observed = Date.parse(report?.observedAt ?? "");
       const fresh = !("error" in result && result.error) && observed >= started && observed <= this.now()
-        && windows.length > 0 && row.requiredWindows.filter((id) => applicable(id, row.selection.model)).every((id) => windows.some((window) => window.id === id))
-        && windows.every((window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 0);
+        && windows.length > 0 && applicableWindows(engine, row.selection.model, row.requiredWindows.map((id) => ({ id }))).every(({ id }) => windows.some((window) => window.id === id))
+        && windows.every((window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && windowScopeKnown(engine, window));
       const spent = windows.filter((window) => window.usedPercent >= 100);
-      const evidence = { ...row, requiredWindows: fresh ? [...new Set([...row.requiredWindows, ...windows.map((window) => window.id)])] : row.requiredWindows };
+      const evidence = { ...row, requiredWindows: [...new Set([...row.requiredWindows, ...windows.filter((window) => fresh || window.usedPercent >= 100).map((window) => window.id)])] };
       if (fresh && spent.length === 0) {
         const claimed = { ...evidence, state: "dispatching" as const, attempts: row.attempts + 1 };
         if (!this.save(claimed) || !this.canDispatch(row.id, row.selection)) continue;
@@ -168,20 +170,14 @@ export class LimitWaits {
         catch { if (this.store.get(row.id) === claimed) this.save({ ...claimed, state: "manual" }); }
       } else if (fresh && spent.length && spent.every((window) => window.resetsAt !== null && window.resetsAt + MARGIN > this.now())) {
         const resetsAt = Math.max(...spent.map((window) => window.resetsAt!));
-        this.save({ ...evidence, resetsAt, nextCheckAt: resetsAt + MARGIN, weekly: spent.some((window) => window.id.startsWith("seven_day") || (window.windowMinutes ?? 0) >= 10080) });
+        this.save({ ...evidence, resetsAt, nextCheckAt: resetsAt + MARGIN, weekly: spent.some((window) => windowKind(window) === "weekly") });
       } else if (!fresh && row.resetsAt !== null) {
-        this.save({ ...row, nextCheckAt: Math.max(this.now() + MARGIN, result.retryAt) });
+        this.save({ ...evidence, nextCheckAt: Math.max(this.now() + MARGIN, result.retryAt) });
       } else {
         const probe = row.resetsAt === null ? row.probe + 1 : row.probe;
         const delay = probe === 0 ? PROBES[0]! : (PROBES[probe] ?? PROBES.at(-1)!) - PROBES[probe - 1]!;
-        this.save({ ...row, resetsAt: null, probe, state: probe >= PROBES.length ? "manual" : "waiting", nextCheckAt: Math.max(this.now() + delay * MINUTE, result.retryAt) });
+        this.save({ ...evidence, resetsAt: null, probe, state: probe >= PROBES.length ? "manual" : "waiting", nextCheckAt: Math.max(this.now() + delay * MINUTE, result.retryAt) });
       }
     }
   }
-}
-
-function applicable(id: string, model: string): boolean {
-  if (id === "seven_day_opus" && /sonnet|haiku/i.test(model)) return false;
-  if (id === "seven_day_sonnet" && /opus|haiku/i.test(model)) return false;
-  return true;
 }

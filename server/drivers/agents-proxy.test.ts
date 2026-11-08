@@ -1168,6 +1168,17 @@ function probeWithIdentity(identity: Record<string, string>, name = "react", arg
 }
 
 describe("agents-proxy identity gate", () => {
+  it("exposes auto_rule only for local Auto opt-in on a top-level turn", async () => {
+    const identity = { OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" };
+    const off = await probeWithIdentity({ ...identity, OMB_AUTO_ROUTING: "0" });
+    expect(off.list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("auto_rule");
+    const noTerminal = await probeWithIdentity({ ...identity, OMB_AUTO_ROUTING: "1" });
+    expect(noTerminal.list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("auto_rule");
+    const on = await probeWithIdentity({ ...identity, OMB_AUTO_ROUTING: "1", OMB_TERMINAL_SHARED: "1" });
+    expect(on.list.result.tools.map((tool: { name: string }) => tool.name)).toContain("auto_rule");
+    const peer = await probeWithIdentity({ ...identity, OMB_AUTO_ROUTING: "1", OMB_TERMINAL_SHARED: "1", OMB_TURN_DEPTH: "1" });
+    expect(peer.list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("auto_rule");
+  });
   it.each([
     ["no identity", {}],
     ["a terminal-only identity", { OMB_BOT_ID: "bot-asker", OMB_COMMS_TOKEN: TOKEN }],

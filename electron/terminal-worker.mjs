@@ -1,16 +1,24 @@
 import path from "node:path";
 import { claudeSessionArgs, codexSessionArgs } from "./worker-session.mjs";
 
-export async function resolveWorkerLaunch(access, bridge, input, fetchImpl = fetch) {
+async function workerPost(access, bridge, route, input, fetchImpl) {
   if (!access?.token || !bridge?.token) throw new Error("Worker launch service is unavailable");
-  const response = await fetchImpl(`${access.url}/api/internal/worker-launch`, {
+  const response = await fetchImpl(`${access.url}/api/internal/${route}`, {
     method: "POST", redirect: "error",
     headers: { authorization: `Bearer ${access.token}`, "content-type": "application/json", "x-orbit-terminal-host": bridge.token },
     body: JSON.stringify(input), signal: AbortSignal.timeout(10_000),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || "Worker launch was refused");
-  return body.launch;
+  return body;
+}
+
+export async function resolveWorkerLaunch(access, bridge, input, fetchImpl = fetch) {
+  return (await workerPost(access, bridge, "worker-launch", input, fetchImpl)).launch;
+}
+
+export async function reportWorkerAuto(access, bridge, input, fetchImpl = fetch) {
+  await workerPost(access, bridge, "worker-auto", input, fetchImpl);
 }
 
 const quoteWindows = (value) => `'${value.replace(/['\u2018\u2019\u201a\u201b]/g, (mark) => mark + mark)}'`;

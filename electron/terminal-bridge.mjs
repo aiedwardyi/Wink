@@ -209,6 +209,11 @@ export function createTerminalBridge({ host, updater, errorReports, saveCredenti
         } catch {}
         return json(res, 503, { error: "Worker account runs are unavailable" });
       }
+      if (parsed.pathname === "/v1/terminal/auto-runs") {
+        if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });
+        if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });
+        return host.liveAutoRuns ? json(res, 200, { runs: host.liveAutoRuns() }) : json(res, 503, { error: "Auto worker runs are unavailable" });
+      }
       if (parsed.pathname === "/v1/terminal/account-panes") {
         if (!grantMatches(req.headers.authorization, terminalPaneCountsGrant(token))) return json(res, 401, { error: "Unauthorized" });
         if (req.method !== "GET") return json(res, 405, { error: "Method not allowed" });

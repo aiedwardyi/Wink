@@ -73,7 +73,7 @@ describe("codexRateLimitWindows", () => {
         secondary: { usedPercent: 76, windowDurationMins: 10_080, resetsAt: 1_790_172_800 },
       }),
     ).toEqual([
-      { id: "five_hour", usedPercent: 12.3, resetsAt: 1_790_000_000_000, windowMinutes: 300 },
+      { id: "five_hour", usedPercent: 12.34, resetsAt: 1_790_000_000_000, windowMinutes: 300 },
       { id: "seven_day", usedPercent: 76, resetsAt: 1_790_172_800_000, windowMinutes: 10_080 },
     ]);
     expect(codexRateLimitWindows({ primary: { usedPercent: 5, windowDurationMins: 60 } })).toEqual([
@@ -105,7 +105,7 @@ describe("grokRateLimitWindows", () => {
         },
       }),
     ).toEqual([
-      { id: "seven_day", usedPercent: 42.3, resetsAt: Date.parse("2026-09-15T12:00:00Z"), windowMinutes: 10_080 },
+      { id: "seven_day", usedPercent: 42.34, resetsAt: Date.parse("2026-09-15T12:00:00Z"), windowMinutes: 10_080 },
     ]);
     expect(
       grokRateLimitWindows({
@@ -136,7 +136,7 @@ describe("grokRateLimitWindows", () => {
       },
     });
     expect(windows).toEqual([
-      { id: "seven_day", usedPercent: 99.9, resetsAt: Date.parse("2026-09-15T12:00:00Z"), windowMinutes: 10_080 },
+      { id: "seven_day", usedPercent: 99.96, resetsAt: Date.parse("2026-09-15T12:00:00Z"), windowMinutes: 10_080 },
     ]);
     expect(exhaustedWindow(windows, Date.parse("2026-09-14T00:00:00Z"))).toBeNull();
   });
@@ -191,7 +191,7 @@ describe("antigravityRateLimitWindows", () => {
         now,
       ),
     ).toEqual([
-      { id: "five_hour", usedPercent: 42, resetsAt: now + 5_400_000, windowMinutes: 300 },
+      { id: "five_hour", usedPercent: expect.closeTo(42, 12), resetsAt: now + 5_400_000, windowMinutes: 300 },
       { id: "seven_day", usedPercent: 19, resetsAt: now + 518_400_000, windowMinutes: 10_080 },
       { id: "daily", usedPercent: 30, resetsAt: now + 3_600_000, windowMinutes: 1440 },
     ]);

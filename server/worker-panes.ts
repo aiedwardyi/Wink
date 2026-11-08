@@ -3,12 +3,12 @@ import { z } from "zod";
 
 import { isInstanceId } from "./accounts.ts";
 import { terminalPaneCountsGrant } from "./terminal-grant.ts";
+import { autoSpawnSchema, type AutoSignal } from "./auto-worker-launch.ts";
 import type { TerminalBridgeAccess } from "./terminal-snapshot.ts";
-import type { createWorkerLaunch } from "./worker-launch.ts";
 
 const inputSchema = z.object({
   botId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/), label: z.string().max(40).optional(),
-  command: z.string().max(64 * 1024), environment: z.record(z.string(), z.string()), mode: z.literal("send").optional(), unrouted: z.literal(true).optional(),
+  command: z.string().max(64 * 1024), environment: z.record(z.string(), z.string()), mode: z.literal("send").optional(), unrouted: z.literal(true).optional(), auto: autoSpawnSchema.optional(), cwd: z.string().max(4096).optional(),
   resume: z.object({ engine: z.enum(["claude", "codex"]), nativeId: z.string().uuid(), accountId: z.string().refine(isInstanceId),
     accountGeneration: z.number().int().nonnegative(), template: z.object({ executable: z.string().max(32), args: z.array(z.string().max(64 * 1024)).max(1024) }),
     unrouted: z.literal(true).optional() }).optional(),
@@ -43,11 +43,41 @@ export async function liveWorkerRuns(access: TerminalBridgeAccess | null, filter
   return { known: false, reason: "error" };
 }
 
-export async function workerLaunchResponse(access: TerminalBridgeAccess | null, token: unknown, input: unknown, prepare: ReturnType<typeof createWorkerLaunch>) {
-  if (typeof token !== "string" || !access) return { status: 401, body: { error: "Unauthorized worker launch" } };
+const autoRunsSchema = z.object({ runs: z.array(z.object({ routeId: z.string().min(1), nativeId: z.string().min(1), paneId: z.string().min(1) })) });
+const autoSignalSchema = z.object({ routeId: z.string().regex(/^[a-f0-9]{32}$/), event: z.enum(["accepted", "rejected", "uncertain", "closed", "limit", "stalled", "recovered"]),
+  paneId: z.string().min(1).max(128).optional(), nativeId: z.string().uuid().optional() }).strict();
+
+function hostTokenMatches(access: TerminalBridgeAccess | null, token: unknown): access is TerminalBridgeAccess {
+  if (typeof token !== "string" || !access) return false;
   const received = Buffer.from(token);
   const expected = Buffer.from(access.token);
-  if (received.length !== expected.length || !timingSafeEqual(received, expected)) return { status: 401, body: { error: "Unauthorized worker launch" } };
+  return received.length === expected.length && timingSafeEqual(received, expected);
+}
+
+export async function liveAutoRuns(access: TerminalBridgeAccess | null, fetchImpl: typeof fetch = fetch) {
+  if (!access) return { known: false as const };
+  try {
+    const response = await fetchImpl(`${access.url}/v1/terminal/auto-runs`, { headers: { authorization: `Bearer ${terminalPaneCountsGrant(access.token)}` }, redirect: "error", signal: AbortSignal.timeout(5_000) });
+    const parsed = autoRunsSchema.safeParse(await response.json());
+    if (response.ok && parsed.success) return { known: true as const, runs: parsed.data.runs };
+  } catch {}
+  return { known: false as const };
+}
+
+export async function workerAutoResponse(access: TerminalBridgeAccess | null, token: unknown, input: unknown, signal: (input: AutoSignal) => Promise<void>) {
+  if (!hostTokenMatches(access, token)) return { status: 401, body: { error: "Unauthorized worker launch" } };
+  const parsed = autoSignalSchema.safeParse(input);
+  if (!parsed.success) return { status: 400, body: { error: "Invalid worker signal" } };
+  try {
+    await signal(parsed.data);
+    return { status: 200, body: { ok: true } };
+  } catch (error) {
+    return { status: 409, body: { error: error instanceof Error ? error.message : "Worker signal was refused" } };
+  }
+}
+
+export async function workerLaunchResponse<T>(access: TerminalBridgeAccess | null, token: unknown, input: unknown, prepare: (input: z.infer<typeof inputSchema>) => Promise<T>) {
+  if (!hostTokenMatches(access, token)) return { status: 401, body: { error: "Unauthorized worker launch" } };
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) return { status: 400, body: { error: "Invalid worker launch" } };
   try {

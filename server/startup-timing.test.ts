@@ -225,7 +225,7 @@ describe("startup timing", () => {
     const workerLaunchResponse = vi.fn(async () => ({ status: 200, body: {} }));
     const pending = runInNewContext(`(async () => { ${route} })()`, {
       method: "POST", path: "/api/internal/worker-launch", startupTiming, workerLaunchResponse,
-      terminalBridgeAccess: null, req: { headers: {} }, readBody: async () => ({}), workerLaunch: {}, res: {}, json() {},
+      terminalBridgeAccess: null, req: { headers: {} }, readBody: async () => ({}), autoWorkers: {}, res: {}, json() {},
     }) as Promise<void>;
     expect(workerLaunchResponse).not.toHaveBeenCalled();
     startupTiming.paint();

@@ -29,9 +29,9 @@ describe("turn setup", () => {
     const script = ts.transpileModule(integration.getText(source), {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
-    const agentsIntegration = new Function("process", "agentsProxyPath", "AGENTS_NODE_FLAG", "PORT", "commsCallers", "teamReports", `${script}; return agentsIntegration;`)(
+    const agentsIntegration = new Function("process", "agentsProxyPath", "AGENTS_NODE_FLAG", "PORT", "commsCallers", "teamReports", "autoRouting", `${script}; return agentsIntegration;`)(
       process, "/agents-proxy.ts", { ELECTRON_RUN_AS_NODE: "1" }, 8799,
-      { token: () => "fixture-token" }, { prompt: () => "" },
+      { token: () => "fixture-token" }, { prompt: () => "" }, { state: { get: () => undefined } },
     );
     const integrations: Record<string, { env: Record<string, string> }> = {};
     const run = new Function("integrations", "instance", "bot", "threadId", "commsDepth", "hop", "MAX_COMMS_DEPTH", "agentsIntegration", mounts[index]!.getText(source));
@@ -61,10 +61,10 @@ describe("turn setup", () => {
     }).outputText;
     const dispatchAdapterTurn = vi.fn(async () => true);
     const snapshot = vi.fn(() => new Promise(() => {}));
-    const run = new Function("deps", `return (async () => { const { checkpoints, checkpointCwd, bot, threadId, currentTurnEpoch, epoch, rewound, watchdog, turnRegistry, commsDepth, rootId, dispatchAdapterTurn } = deps; ${script} })();`);
+    const run = new Function("deps", `return (async () => { const { checkpoints, checkpointCwd, bot, threadId, currentTurnEpoch, epoch, rewound, watchdog, turnRegistry, commsDepth, rootId, userKeys, dispatchAdapterTurn } = deps; ${script} })();`);
     const pending = run({
       checkpoints: { snapshot }, checkpointCwd: "/project", bot: { id: "bot" }, threadId: "thread",
-      currentTurnEpoch: () => 1, epoch: 1, rewound: false, watchdog: { watch: vi.fn() }, turnRegistry: { prepare: vi.fn() }, commsDepth: 0, rootId: null, dispatchAdapterTurn,
+      currentTurnEpoch: () => 1, epoch: 1, rewound: false, watchdog: { watch: vi.fn() }, turnRegistry: { prepare: vi.fn() }, commsDepth: 0, rootId: null, userKeys: [], dispatchAdapterTurn,
     });
     await Promise.resolve();
     expect(snapshot).not.toHaveBeenCalled();

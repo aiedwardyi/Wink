@@ -137,7 +137,7 @@ it.each(["folded", "queued"])("adopts every human at the production %s fold and 
   expect(loop).toBeTruthy();
   const script = ts.transpileModule(loop.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const run = new Function("scope", `with (scope) { ${script}; return rootId; }`);
-  const adopted = run({ store, threadId, rootId, folded, queued: folded, adoptHumanRoot });
+  const adopted = run({ store, threadId, rootId, folded, queued: folded, userKeys: [], adoptHumanRoot });
   expect(adopted).toBe(rootForStart(threadId, { kind: "human", messageKey: "fold-last-000001" }));
   expect(callerSnapshot(bot.id, threadId)?.rootId).toBe(adopted);
   expect(snapshot?.rootId).toBe(rootId);

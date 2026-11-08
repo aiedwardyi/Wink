@@ -15,7 +15,7 @@ import { registerEngineInstall } from "./engine-install.mjs";
 import { createGoogleAccountController, createGoogleSessionPush, googleClient, googleServerEnv, watchDevServer } from "./google-signin.mjs";
 import { createTerminalHost, paneProcesses, trustedTerminalSender } from "./terminal-host.mjs";
 import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
-import { resolveWorkerLaunch } from "./terminal-worker.mjs";
+import { reportWorkerAuto, resolveWorkerLaunch } from "./terminal-worker.mjs";
 import { installOrbitMsg, postPaneNote, readMailboxSecret } from "./terminal-mailbox.mjs";
 import { createPaneRuns } from "./pane-runs.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
@@ -327,6 +327,7 @@ const terminalHost = createTerminalHost({
   mailbox: paneMailbox,
   workerAccountsEnabled: false,
   workerLaunch: (input) => resolveWorkerLaunch({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
+  workerAuto: (input) => reportWorkerAuto({ url: `http://127.0.0.1:${app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT)}`, token: serverToken }, terminalBridgeAccess, input),
   paneRuns,
   sessionBridge: () => terminalBridgeAccess?.url,
   scratchRoot,
