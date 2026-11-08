@@ -268,6 +268,7 @@ import {
 import { MEMORY_SAVE_TOOL, peekMemory, rememberMemoryWrite } from "./memory-save.ts";
 import { createMemoryPass, noteGenerator } from "./memory-pass.ts";
 import { createMemoryHealthCheck } from "./memory-health.ts";
+import { createMemoryLookup } from "./memory-lookup.ts";
 import { createProjectNotesCheck, validateProjectNotes, workerReportTimes } from "./project-notes.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { LocalVmIdleTimer } from "./local-vm-idle.ts";
@@ -2767,6 +2768,8 @@ const projectNotesCheck = createProjectNotesCheck({
   },
 });
 for (const bot of store.bots) if (bot.projectNotes) void projectNotesCheck.refresh(bot.id);
+const memoryLookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: (botId) => store.bot(botId)?.projectNotes });
+for (const bot of store.bots) void memoryLookup.refresh(bot.id);
 const memoryHealthCheck = createMemoryHealthCheck({ health: memoryHealth, dropped: (botId) => memoryPass.droppedNotes(botId) });
 void startupTiming.track("memoryHealth", () => memoryHealthCheck.refreshAll(store.bots.map((bot) => bot.id)));
 // Room thread → the instruction id its running turn was dispatched against.
@@ -3970,6 +3973,7 @@ bus.subscribe((event: RuntimeEvent) => {
             memoryPass.onSettled(bot.id, event.threadId, flushNotes);
             const cursor = event.providerInstanceId ? store.taskByThread(bot.id, event.threadId)?.resumeCursors[event.providerInstanceId] : undefined;
             void projectNotesCheck.settled(bot.id, event.threadId, cursor);
+            void memoryLookup.settled(bot.id, event.threadId, cursor);
             memoryHealthCheck.settled(bot.id, event.threadId, cursor);
           }
         }
@@ -5068,11 +5072,14 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const routineCards = replaysTranscript
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
+  const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
+    ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
+    : [];
   const syncNotes = threadSyncV2?.notes(threadId) ?? [];
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5123,10 +5130,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   if (currentTurnEpoch(bot.id) !== epoch) {
+    memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     return startedTurn(userMessage);
   }
   if (opts?.sendId && isSendCancelled(opts.sendId)) {
+    memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     return startedTurn(userMessage, { cancelled: true });
   }
@@ -5134,6 +5143,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   dispatchedThreads.set(bot.id, threadId);
   markSendRunning(bot.id, opts?.sendId);
   if (currentTurnEpoch(bot.id) !== epoch) {
+    memoryLookup.release(bot.id, threadId);
     store.setActivity(bot.id, "idle");
     clearSendRunning(bot.id);
     logSummaryWait();
@@ -5166,6 +5176,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (reservation) dispatchingReservations.add(reservation);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
+      memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
       return;
@@ -5460,6 +5471,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
 
       if (currentTurnEpoch(bot.id) !== epoch) {
+        memoryLookup.release(bot.id, threadId);
         releaseLocalVmThread(threadId);
         if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
         turnSeeds.release(threadId, seed);
@@ -5593,7 +5605,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -5682,6 +5694,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       turnUsage.delete(threadId);
       turnSeeds.release(threadId, seed);
       if (systemSeed) systemSeeds.release(threadId, systemSeed);
+      memoryLookup.release(bot.id, threadId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (opts?.limitWaitId && !limitWaits.canDispatch(opts.limitWaitId, selection)) {
         store.setActivity(bot.id, "idle");
