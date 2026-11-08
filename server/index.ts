@@ -411,7 +411,7 @@ import { createBotRoutes } from "./bot-routes.ts";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
-import { currentTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
 
@@ -5182,6 +5182,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
 
   const reservation = opts?.reservation;
   if (reservation) dispatchingReservations.add(reservation);
+  const settleTrace = holdTurnTrace(trace);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
       memoryLookup.release(bot.id, threadId);
@@ -5696,6 +5697,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         startScreenPoller(bot.id, previewCapture, { screenIsTheWork: instance.driverKind === "boxAgent" });
       }
     } catch (e) {
+      trace?.finish("send-failed");
       pendingInterruptThreads.bind(threadId, bot.id, epoch);
       turnRegistry.cancel(threadId);
       providerReload.settled(threadId);
@@ -5744,6 +5746,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       logSummaryWait();
     }
   })().finally(() => {
+    settleTrace?.();
     if (!reservation) return;
     dispatchingReservations.delete(reservation);
     release(reservation);

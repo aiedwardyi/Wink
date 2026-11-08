@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import ts from "typescript";
 import { experimentalAgents, slimStaticText } from "./drivers/tool-catalog.ts";
-import { currentTurnTrace, recordToolSchemas, startTurnTimer, startTurnTrace, traceClaimedTurn, traceHelperCall, tracePart } from "./turn-timing.ts";
+import { collectTurnTraces } from "../scripts/turn-trace-collector.mjs";
+import { currentTurnTrace, holdTurnTrace, observeTraceEvent, recordToolSchemas, startTurnTimer, startTurnTrace, traceClaimedTurn, traceHelperCall, tracePart, traceRuntimeEvent } from "./turn-timing.ts";
 
 describe("turn-timing", () => {
   const dir = join(tmpdir(), `orbit-turn-timing-${process.pid}`);
@@ -189,6 +190,91 @@ describe("turn-timing", () => {
     const helper = rows.find((row) => row.batchId);
     expect(helper).toMatchObject({ botId: "bot", threadId: "thread", sourceSendIds: ["send"], sourceMessageIds: ["message"], requests: [{ id: "attempt-1", usage: null, nested: false }, { id: "attempt-2", usage: null, nested: false }] });
     expect(helper.endpoints.runnerReceipt).toBeNull();
+  });
+});
+
+describe("hosted trace across a late send", () => {
+  const dir = join(tmpdir(), `orbit-turn-timing-late-${process.pid}`);
+  const file = join(dir, "turn-traces.jsonl");
+  const prevTiming = process.env.ORBIT_TURN_TIMING;
+  const prevData = process.env.OMB_DATA_DIR;
+  const rows = () => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
+  const event = (type: string, turnId: string, extra: object = {}) => ({ type, threadId: "thread", turnId, ...extra }) as never;
+  const claim = async (turnId: string, send: ((trace: NonNullable<ReturnType<typeof currentTurnTrace>>) => Promise<void>) | null, release = true) => {
+    let detached: Promise<void> = Promise.resolve();
+    await traceClaimedTurn({ botId: "bot", threadId: "thread", sendId: turnId }, async () => {
+      const trace = currentTurnTrace()!;
+      if (!send) return "early";
+      const done = release ? holdTurnTrace(trace) : undefined;
+      detached = (async () => { await new Promise((resolve) => setImmediate(resolve)); await send(trace); })().catch(() => {}).finally(() => done?.());
+      return "started";
+    });
+    await detached;
+  };
+
+  beforeEach(() => {
+    mkdirSync(dir, { recursive: true });
+    process.env.OMB_DATA_DIR = dir;
+    process.env.ORBIT_TURN_TIMING = "1";
+  });
+  afterEach(() => {
+    if (prevTiming === undefined) delete process.env.ORBIT_TURN_TIMING;
+    else process.env.ORBIT_TURN_TIMING = prevTiming;
+    if (prevData === undefined) delete process.env.OMB_DATA_DIR;
+    else process.env.OMB_DATA_DIR = prevData;
+    if (existsSync(file)) unlinkSync(file);
+  });
+
+  it("writes provider stages to the one row of a send that starts after the claim returns", async () => {
+    await claim("t1", async (trace) => {
+      trace.assembled("system", "input");
+      trace.identify({ threadId: "thread", turnId: "t1", engine: "codex" });
+      trace.span("memory_read", "topics")();
+      trace.span("retirement_wait")();
+      trace.span("spawn", "cold", 0)();
+      trace.rpc("initialize", 1, 0)("reply");
+      trace.rpc("thread/start", 2, 0)("reply");
+      trace.rpc("turn/start", 3, 0)("reply");
+      traceRuntimeEvent(event("content.delta", "t1", { streamKind: "assistant_text", delta: "hi" }), () => {});
+      trace.mark("native_completion");
+      trace.request("r1", { input: 3, output: 1 });
+      traceRuntimeEvent(event("turn.completed", "t1", { ok: true, usage: { input: 3, output: 1 } }), () => {});
+      observeTraceEvent(event("turn.completed", "t1", { ok: true, usage: { input: 3, output: 1 } }));
+    });
+    const [row, ...rest] = rows();
+    expect(rest).toEqual([]);
+    expect(row.reason).toBe("completed");
+    expect(Object.keys(row.marks)).toEqual(expect.arrayContaining(["first_event", "first_visible_text", "native_completion", "driver_completion"]));
+    for (const phase of ["spawn", "initialize", "start", "dispatch", "first_event"]) {
+      expect(row.spans.find((span: { phase: string }) => span.phase === phase)).toMatchObject({ start: expect.any(Number), end: expect.any(Number) });
+    }
+    const [summary] = collectTurnTraces(rows());
+    expect(summary).toMatchObject({ incomplete: false, unknownPhases: [] });
+  });
+
+  it.each([
+    ["an early return", null, true, "no-provider-turn"],
+    ["a joined turn with no send", async () => {}, true, "no-provider-turn"],
+    ["a dropped detached task", async () => {}, true, "no-provider-turn"],
+    ["a failed send", async (trace: { identify: (patch: object) => void; finish: (reason: string) => void }) => {
+      trace.identify({ threadId: "thread", turnId: "t2" });
+      trace.finish("send-failed");
+      throw new Error("send failed");
+    }, true, "send-failed"],
+  ] as const)("closes the trace once for %s", async (_name, send, release, reason) => {
+    await claim("t2", send as never, release);
+    expect(rows().map((row) => row.reason)).toEqual([reason]);
+  });
+
+  it("does not grow the live map over 1,000 turns of every path", async () => {
+    const ids = Array.from({ length: 1000 }, (_, i) => `turn-${i}`);
+    for (const [i, turnId] of ids.entries()) {
+      await claim(turnId, [null, async () => {}, async (trace: { identify: (patch: object) => void; finish: (reason: string) => void }) => { trace.identify({ threadId: "thread", turnId }); trace.finish("send-failed"); }][i % 3] as never);
+    }
+    expect(rows()).toHaveLength(1000);
+    // a leaked entry would hand back its finished trace, whose finish writes nothing
+    for (const turnId of ids) startTurnTrace({ threadId: "thread", turnId })!.finish();
+    expect(rows()).toHaveLength(2000);
   });
 });
 

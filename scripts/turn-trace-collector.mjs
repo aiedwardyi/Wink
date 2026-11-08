@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+// A turn resumes or starts a Codex thread, never both.
+const untaken = (spans, span) => ["resume", "start"].includes(span.phase) && spans.some((other) => other.phase === (span.phase === "resume" ? "start" : "resume") && other.start !== null);
+
 export function collectTurnTraces(records) {
   const traces = new Map(records.filter((row) => row.version === 2 && row.traceId).map((row) => [row.traceId, row]));
   return [...traces.values()].map((row) => {
@@ -23,7 +26,7 @@ export function collectTurnTraces(records) {
       reconciled: sum && result ? sum.input === result.input && sum.output === result.output : null,
       nested: row.requests.filter((call) => call.nested),
       incomplete: !sum || !result || Boolean(row.batchId && !row.sourceMessageIds?.length),
-      unknownPhases: row.spans.filter((span) => span.start === null || span.end === null).map((span) => ({ phase: span.phase, reason: span.reason })),
+      unknownPhases: row.spans.filter((span) => (span.start === null || span.end === null) && !span.reason?.endsWith("/unobservable") && !untaken(row.spans, span)).map((span) => ({ phase: span.phase, reason: span.reason })),
     };
   });
 }

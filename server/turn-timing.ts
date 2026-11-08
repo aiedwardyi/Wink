@@ -35,6 +35,7 @@ const context = new AsyncLocalStorage<TurnTrace>();
 const live = new Map<string, TurnTrace>();
 const hosted = new WeakSet<TurnTrace>();
 const identities = new WeakMap<TurnTrace, Identity>();
+const claims = new WeakMap<TurnTrace, { end: () => void; held: boolean }>();
 let sequence = 0;
 
 export function currentTurnTrace(): TurnTrace | undefined {
@@ -106,7 +107,7 @@ export function startTurnTrace(identity: Identity | (() => Identity), options: {
     identify(patch) {
       info = { ...info, ...patch };
       identities.set(trace, info);
-      if (info.threadId && info.turnId) live.set(`${info.threadId}:${info.turnId}`, trace);
+      if (!finished && info.threadId && info.turnId) live.set(`${info.threadId}:${info.turnId}`, trace);
     },
     span(phase, reason, attempt) {
       const span: Span = { phase, start: elapsed(), end: null, ...(reason ? { reason } : {}), ...(attempt === undefined ? {} : { attempt }) };
@@ -214,16 +215,27 @@ export async function traceHelperCall<T>(engine: string, observer: UsageObserver
   }
 }
 
+function closeUnstarted(trace: TurnTrace): void {
+  claims.get(trace)?.end();
+  if (![...live.values()].includes(trace)) trace.finish("no-provider-turn");
+}
+
+/** Keeps a claimed trace open past the claim for a send that runs later; call the result when that send settles. */
+export function holdTurnTrace(trace: TurnTrace | undefined): (() => void) | undefined {
+  const claim = trace && claims.get(trace);
+  if (!trace || !claim) return;
+  claim.held = true;
+  return () => closeUnstarted(trace);
+}
+
 export async function traceClaimedTurn<T>(identity: Identity | (() => Identity), work: () => Promise<T>): Promise<T> {
   const trace = startTurnTrace(identity, { hosted: true });
   if (!trace) return work();
-  const end = trace.span("prompt_build");
+  const claim = { end: trace.span("prompt_build"), held: false };
+  claims.set(trace, claim);
   try { return await context.run(trace, work); }
-  catch (error) { end(); trace.finish("preparation-failed"); throw error; }
-  finally {
-    end();
-    if (![...live.values()].includes(trace)) trace.finish("no-provider-turn");
-  }
+  catch (error) { claim.end(); trace.finish("preparation-failed"); throw error; }
+  finally { if (!claim.held) closeUnstarted(trace); }
 }
 
 export function traceRuntimeEvent(event: RuntimeEvent, publish: () => void): void {
