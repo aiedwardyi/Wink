@@ -715,6 +715,12 @@ describe("resumeSessionUnseeded", () => {
     expect(resumeSessionUnseeded({ ...input, native: true, seed: seeded("c1", "session-0") })).toBe(true);
   });
 
+  it("a native session seeded on a summary replays once its window grows", () => {
+    const input = { instanceId: "claude", cursor: "session-1", latestCompactionId: "c1", native: true, expanded: true };
+    expect(resumeSessionUnseeded({ ...input, seed: seeded("c1") })).toBe(true);
+    expect(resumeSessionUnseeded({ ...input, seed: seeded(null) })).toBe(false);
+  });
+
   it("resumes a session a successful turn seeded with the current summary", () => {
     expect(resumeSessionUnseeded({ instanceId: "claude", cursor: "session-1", seed: seeded("c1"), latestCompactionId: "c1" })).toBe(false);
     expect(resumeSessionUnseeded({ instanceId: "claude", cursor: "session-1", seed: seeded(null), latestCompactionId: null })).toBe(false);

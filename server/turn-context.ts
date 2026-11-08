@@ -295,7 +295,7 @@ export function resumeSessionUnseeded(input: {
   if (input.cursor === undefined) return false;
   const { seed } = input;
   if (!seed || seed.instanceId !== input.instanceId || seed.cursor !== input.cursor) return true;
-  if (input.native) return false;
+  if (input.native && !(input.expanded && seed.compactionId !== null)) return false;
   const expected = input.expanded ? null : input.latestCompactionId;
   if (seed.compactionId === expected) return false;
   return !(expected !== null && seed.compactionId !== null && input.supersededIds?.has(seed.compactionId));
