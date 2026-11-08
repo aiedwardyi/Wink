@@ -6,11 +6,16 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "./contracts.ts";
 import { createVerifyAuto, scanVerifyWrites, type VerifyAutoTurn } from "./verify-auto.ts";
+import { resolveVerifySite } from "./verify-site.ts";
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, stat: vi.fn(actual.stat), opendir: vi.fn(actual.opendir) };
+});
+vi.mock("./verify-site.ts", async importOriginal => {
+  const actual = await importOriginal<typeof import("./verify-site.ts")>();
+  return { ...actual, resolveVerifySite: vi.fn(actual.resolveVerifySite) };
 });
 
 let root: string;
@@ -128,6 +133,46 @@ it.each(["reply", "humanText"] as const)("uses a named loopback URL from %s for 
     await auto.settled({ ...turn, [source]: `Ready: ${url}` });
     expect(start.mock.calls[0]![0].entry).toBe(url);
   } finally { await new Promise<void>(done => server.close(() => done())); }
+});
+
+it("keeps the named localhost authority for a package candidate", async () => {
+  await writeFile(join(root, "package.json"), "{}");
+  const server = createServer(socket => socket.end());
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  try {
+    const url = `http://localhost:${(server.address() as { port: number }).port}/`;
+    auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
+    await auto.settled({ ...turn, reply: `Ready: ${url}` });
+    expect(start.mock.calls[0]![0].entry).toBe(url);
+  } finally { await new Promise<void>(done => server.close(() => done())); }
+});
+
+it("probes a named loopback URL once per turn across package candidates", async () => {
+  await writeFile(join(root, "package.json"), "{}");
+  await writeFile(join(root, "a.css"), "h1{color:red}");
+  vi.mocked(resolveVerifySite).mockClear();
+  vi.mocked(resolveVerifySite).mockImplementation(async (entry, roots) => {
+    if (entry.startsWith("http")) throw Object.assign(new Error("down"), { code: "page-failed" });
+    return (await vi.importActual<typeof import("./verify-site.ts")>("./verify-site.ts")).resolveVerifySite(entry, roots);
+  });
+  try {
+    auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html", "a.css"] }));
+    await auto.settled({ ...turn, reply: "Open http://localhost:5173/ (http://localhost:5173/)." });
+    expect(vi.mocked(resolveVerifySite).mock.calls.filter(([entry]) => entry.startsWith("http"))).toHaveLength(1);
+    expect(start).not.toHaveBeenCalled();
+  } finally { vi.mocked(resolveVerifySite).mockReset(); }
+});
+
+it("tries older changed files when the newest has no static entry", async () => {
+  const owned = join(root, "owned");
+  await mkdir(join(owned, "site"), { recursive: true });
+  await mkdir(join(owned, "scripts"));
+  await writeFile(join(owned, "site", "index.html"), "<h1>Site</h1>");
+  await writeFile(join(owned, "scripts", "helper.js"), "export {}");
+  await utimes(join(owned, "site", "index.html"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["site/index.html", "scripts/helper.js"] }));
+  await auto.settled({ ...turn, roots: [owned] });
+  expect(start.mock.calls[0]![0].entry).toBe(join(owned, "site", "index.html"));
 });
 
 it("ignores URLs without a package candidate and ignores non-web writes", async () => {

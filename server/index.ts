@@ -4008,9 +4008,10 @@ bus.subscribe((event: RuntimeEvent) => {
           // Channel replies only affect the channel unread state.
         }
       }
+      // Before the queue drain subscribers append the next send.
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
       setImmediate(() => {
         const owner = verifyOwner && store.bot(verifyOwner.botId);
-        const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
         void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
       });
       // A delegated turn's terminal state belongs in the A⇄B channel:

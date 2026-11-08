@@ -43,7 +43,9 @@ it("rewrites redirects to the original localhost authority without admitting oth
     const redirect = await get("/");
     expect(redirect.status).toBe(302);
     expect(redirect.headers.location).toBe(server.origin + "/dashboard");
-    expect((await get("/foreign")).status).toBe(403);
+    const foreign = await get("/foreign");
+    expect(foreign.status).toBe(403);
+    expect(foreign.headers["x-orbit-verify-blocked"]).toBe("1");
   } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
 });
 
@@ -156,6 +158,18 @@ it("bounds stalled loopback responses and closes active sockets", async () => {
     expect(await server.revisionUnchanged()).toBe(true);
     await server.close();
     expect(server.counts().sockets).toBe(0);
+  } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
+});
+
+it("retries a loopback load that timed out on first compile", async () => {
+  let hits = 0;
+  const upstream = createServer((_req, res) => { if (hits++) res.writeHead(200, { "content-type": "text/html" }).end("<h1>Compiled</h1>"); });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    const root = `http://127.0.0.1:${upstream.address().port}/`, entry = "index.html";
+    server = await startSiteServer({ root, entry, revision: await siteRevision({ root, entry }) });
+    expect((await get("/")).status).toBe(403);
+    expect((await get("/")).body).toBe("<h1>Compiled</h1>");
   } finally { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
 });
 

@@ -58,7 +58,7 @@ const share = (by: By, checker: VerifyChecker) => TILES.reduce((sum, tile) => {
 const rowState = (by: By | undefined, checkers: VerifyChecker[]) => !by ? undefined : active(by, checkers) ? "running" : pairs(by, checkers).length ? "done" : "waiting";
 const dot = (checker: VerifyChecker) => <i key={checker} style={{ background: VERIFY_ROLE[checker] ?? VERIFY_ROLE.FIT }} />;
 
-export function VerifyCard({ card, threadId, fixerRunning = false }: { card: VerifyCardData; threadId: string; fixerRunning?: boolean }) {
+export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: { card: VerifyCardData; threadId: string; messageId?: string; fixerRunning?: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
   const [pending, setPending] = useState(false);
@@ -112,7 +112,7 @@ export function VerifyCard({ card, threadId, fixerRunning = false }: { card: Ver
   };
   const watch = () => {
     if (phone) setInline(!inline);
-    else openVerifyWatch({ threadId, owner: card.owner, live: action === "live" });
+    else openVerifyWatch({ threadId, owner: card.owner, messageId, live: action === "live" });
   };
   return (
     <section ref={ref} className="verify-card" data-active={running || waiting || undefined} aria-label={title} data-verify-card>

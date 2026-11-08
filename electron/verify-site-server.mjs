@@ -184,7 +184,7 @@ async function startLoopbackServer(root, site) {
     let status = response.status;
     if (response.headers.has("location")) {
       const next = new URL(response.headers.get("location"), url);
-      if (next.origin !== target.origin && next.origin !== original || next.username || next.password) status = 403;
+      if (next.origin !== target.origin && next.origin !== original || next.username || next.password) { status = 403; headers["x-orbit-verify-blocked"] = "1"; }
       else headers.location = origin + next.pathname + next.search + next.hash;
     }
     if (status === 200 && /^(?:text\/(?:html|css)|application\/xhtml\+xml)(?:;|$)/i.test(headers["content-type"])) {
@@ -205,7 +205,9 @@ async function startLoopbackServer(root, site) {
       }
       if (!files.has(key)) {
         if (files.size >= 512) throw error("resource-limit");
-        files.set(key, load(req.url, "GET", requestHeaders));
+        const pending = load(req.url, "GET", requestHeaders);
+        files.set(key, pending);
+        pending.catch(err => { if (err.code !== "resource-limit" && files.get(key) === pending) files.delete(key); });
       }
       const file = await files.get(key);
       reply(file.status, file.headers, file.bytes);

@@ -75,16 +75,21 @@ async function entryFor(paths: string[], turn: VerifyAutoTurn): Promise<string |
     return info?.isFile() ? { path: full, mtime: info.mtimeMs } : null;
   }))).filter(row => row !== null).sort((a, b) => b.mtime - a.mtime);
   if (!candidates.length) return;
-  const urls = `${turn.reply}\n${turn.humanText}`.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
+  const urls = [...new Set((`${turn.reply}\n${turn.humanText}`.match(/https?:\/\/[^\s<>"'`]+/gi) ?? []).map(url => url.replace(/[),.;]+$/, "")))];
+  let served: Promise<string | undefined> | undefined;
+  const servedUrl = () => served ??= (async () => {
+    for (const url of urls) {
+      try {
+        const site = await resolveVerifySite(url, turn.roots);
+        if (typeof site !== "string" && /^https?:/.test(site.root)) return site.site;
+      } catch {}
+    }
+  })();
   for (const candidate of candidates) {
     for (let folder = dirname(candidate.path); owned(folder);) {
       if ((await stat(join(folder, "package.json")).catch(() => null))?.isFile()) {
-        for (const url of urls) {
-          try {
-            const site = await resolveVerifySite(url.replace(/[),.;]+$/, ""), turn.roots);
-            if (typeof site !== "string" && /^https?:/.test(site.root)) return site.root;
-          } catch {}
-        }
+        const site = await servedUrl();
+        if (site) return site;
         break;
       }
       const parent = dirname(folder);
@@ -92,15 +97,18 @@ async function entryFor(paths: string[], turn: VerifyAutoTurn): Promise<string |
       folder = parent;
     }
   }
-  const newest = candidates[0]!;
-  if (/\.html?$/i.test(newest.path) && !/^index\.html?$/i.test(newest.path.split(/[\\/]/).at(-1)!)) {
-    if (typeof await resolveVerifySite(newest.path, turn.roots) !== "string") return newest.path;
-  }
-  for (let folder = dirname(newest.path); owned(folder);) {
-    if ((await stat(join(folder, "index.html")).catch(() => null))?.isFile() && typeof await resolveVerifySite(folder, turn.roots) !== "string") return join(folder, "index.html");
-    const parent = dirname(folder);
-    if (parent === folder) break;
-    folder = parent;
+  const tried = new Set<string>();
+  for (const candidate of candidates) {
+    if (/\.html?$/i.test(candidate.path) && !/^index\.html?$/i.test(candidate.path.split(/[\\/]/).at(-1)!)) {
+      if (typeof await resolveVerifySite(candidate.path, turn.roots) !== "string") return candidate.path;
+    }
+    for (let folder = dirname(candidate.path); owned(folder) && !tried.has(folder);) {
+      tried.add(folder);
+      if ((await stat(join(folder, "index.html")).catch(() => null))?.isFile() && typeof await resolveVerifySite(folder, turn.roots) !== "string") return join(folder, "index.html");
+      const parent = dirname(folder);
+      if (parent === folder) break;
+      folder = parent;
+    }
   }
 }
 
