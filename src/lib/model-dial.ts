@@ -8,10 +8,18 @@ export type DialStat = "intelligence" | "coding";
 const tierOf = (model: string) => model.match(/^gemini-.+-(high|medium|low)$/)?.[1];
 const indexId = (model: string) => model.replace(/^(gemini-.+)-(high|medium|low)$/, "$1");
 
-export function dialScore(model: string, effort: string | undefined, index: DialStat): number | undefined {
+const dialEntry = (model: string, effort: string | undefined, index: DialStat) => {
   const id = indexId(model);
   const level = tierOf(model) ?? effort;
-  return MODEL_INDEX_ENTRIES.find((entry) => entry.index === index && entry.model === id && (entry.effort === "all" || entry.effort === level))?.score;
+  return MODEL_INDEX_ENTRIES.find((entry) => entry.index === index && entry.model === id && (entry.effort === "all" || entry.effort === level));
+};
+
+export const dialScore = (model: string, effort: string | undefined, index: DialStat) => dialEntry(model, effort, index)?.score;
+
+/** USD per task from the Intelligence Index run at this effort. */
+export function dialRunCost(model: string, effort: string | undefined): number | undefined {
+  const cost = dialEntry(model, effort, "intelligence")?.cost;
+  return cost !== undefined && cost >= 0.005 ? cost : undefined;
 }
 
 export function dialPrice(model: string, today = modelIndexToday()) {
@@ -30,7 +38,7 @@ const intDigits = (values: number[]) => Math.max(1, ...values.map((value) => Str
 export const DIAL_DIGITS: Record<DialStat | "cost", number> = {
   intelligence: intDigits(MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "intelligence").map((entry) => entry.score)),
   coding: intDigits(MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "coding").map((entry) => entry.score)),
-  cost: intDigits(MODEL_INDEX_ENTRIES.filter((entry) => entry.index === "cost").map((entry) => entry.score)),
+  cost: intDigits(MODEL_INDEX_ENTRIES.flatMap((entry) => entry.index === "cost" ? [entry.score] : entry.index === "intelligence" && entry.cost ? [entry.cost] : [])),
 };
 
 export function dialStep(rows: PickerRow[], current: ModelSelection, dir: number): ModelSelection {
