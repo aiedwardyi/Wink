@@ -649,7 +649,7 @@ export function SettingsPanel({
       </div>
 
       <div ref={pagesRef} className="relative min-h-0 flex-1 overflow-hidden">
-        <div hidden={memoryTab && !paging} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
+        <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
           <KeepGoingCard bot={bot} />
           <div className={DETAILS_BOX}>
             <div ref={avatarSectionRef} className={DETAILS_ROW}>
@@ -762,7 +762,7 @@ export function SettingsPanel({
 
           {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
         </div>
-        <div hidden={!memoryTab && !paging} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
+        <div hidden={!memoryTab && !paging} inert={!memoryTab} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
           <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />
         </div>
       </div>

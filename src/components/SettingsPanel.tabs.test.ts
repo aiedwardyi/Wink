@@ -164,6 +164,22 @@ describe("Bot details tab pass", () => {
     expect(memory!.hidden).toBe(true);
   });
 
+  it("keeps the outgoing page from taking taps during the pass", async () => {
+    await open();
+    const [settings, memory] = pages();
+    expect(settings!.hasAttribute("inert")).toBe(false);
+    expect(memory!.hasAttribute("inert")).toBe(true);
+    await act(async () => tab(1).click());
+    expect(settings!.hidden).toBe(false);
+    expect(settings!.hasAttribute("inert")).toBe(true);
+    expect(memory!.hasAttribute("inert")).toBe(false);
+    await finishPasses();
+    await act(async () => tab(0).click());
+    expect(memory!.hidden).toBe(false);
+    expect(memory!.hasAttribute("inert")).toBe(true);
+    expect(settings!.hasAttribute("inert")).toBe(false);
+  });
+
   it("never shows both pages at once on a phone", async () => {
     await open();
     for (const to of [1, 0]) {

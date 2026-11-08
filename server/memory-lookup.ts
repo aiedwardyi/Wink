@@ -32,6 +32,7 @@ const MIN_COVER = 0.5;
 const RARE_IDF = 3;
 const TITLE_CHARS = 140;
 const YIELD_EVERY = 200;
+const DEADLINE_EVERY = 256;
 
 const STOP = new Set("a an and are as at be but by can could did do does for from had has have how i if in into is it its me my no not of on or our should so than that the their them then there these they this to too us was we were what when where which who why will with would you your ok okay yes yeah please thanks thank hey hi just let lets go some".split(" "));
 const CHAT = new Set("u ur ya im ive id ill youre dont doesnt didnt cant wont isnt arent wasnt werent thats whats hows theres heres lol haha btw pls plz thx ty idk imo tldr cool nice great good sweet sure right really actually maybe probably also still already again now today tomorrow yesterday later soon first next last back way thing things stuff something anything everything nothing one two three more most much many very all any each every both other another same new old big little think thought know knew see saw seen look looks looking looked want wanted need needed needs wait waiting waited mean means meant say said says tell told ask asked asking give gave given get got getting make made making take took taken put use used using try tried trying come came going gone went like lot lots bit kind sort done sent send ready happen happened help".split(" "));
@@ -51,7 +52,7 @@ export type RecallHit = Piece & { score: number };
 type Terms = { list: string[]; groups: string[][] };
 
 export interface RecallIndex {
-  terms(query: string): Terms;
+  terms(query: string, expired?: () => boolean): Terms;
   hits(terms: Terms): RecallHit[];
   gate(terms: Terms, hits: RecallHit[]): RecallHit[];
   close(): void;
@@ -193,11 +194,12 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   };
   const rareBar = Math.min(RARE_IDF, idfOf(1));
 
-  const repair = (term: string): string[] => {
+  const repair = (term: string, expired?: () => boolean): string[] => {
     if (term.length < 4 || documents.has(term)) return [term];
     const limit = term.length <= 5 ? 1 : 2;
     const near: Array<{ word: string; distance: number; count: number }> = [];
-    for (const word of vocabulary) {
+    for (const [at, word] of vocabulary.entries()) {
+      if (at % DEADLINE_EVERY === 0 && expired?.()) break;
       if ((word[0] !== term[0] && word[1] !== term[1]) || skipped(word)) continue;
       const distance = editDistance(term, word, limit);
       if (distance <= limit) near.push({ word, distance, count: documents.get(word)! });
@@ -207,8 +209,8 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   };
 
   return {
-    terms(query) {
-      const all = words(query);
+    terms(query, expired) {
+      const all = words(redactSecretsInText(query));
       const parts = new Set<string>();
       const joined: string[] = [];
       for (let i = 0; i + 1 < all.length; i++) {
@@ -220,7 +222,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
       }
       const base = [...new Set(all.filter((word) => !skipped(word) && !parts.has(word) && !/^\d+$/.test(word) && word.length <= MAX_WORD))];
       const list = [...base, ...joined].sort((a, b) => idf(b) - idf(a)).slice(0, MAX_TERMS);
-      return { list, groups: list.map(repair) };
+      return { list, groups: list.map((term) => repair(term, expired)) };
     },
     hits({ groups }) {
       const match = [...new Set(groups.flat())].map((term) => `"${term}"`).join(" OR ");
@@ -266,6 +268,8 @@ export interface MemoryLookup {
   refresh(botId: string): Promise<void>;
   /** The recall note for a typed turn, or nothing. No I/O and no build. */
   take(botId: string, threadId: string, cursor: unknown, text: string): string[];
+  /** The provider took the last take's turn, so its rows now count as shown. */
+  accepted(botId: string, threadId: string): void;
   /** The last take never reached the provider, so its rows are still unseen. */
   release(botId: string, threadId: string): void;
   settled(botId: string, threadId: string, cursor: unknown): Promise<void>;
@@ -322,7 +326,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const indexes = new Map<string, { index: RecallIndex; signature: string }>();
   const runs = new Map<string, number>();
   const shown = new Map<string, { cursor: string; rows: Set<string> }>();
-  const pending = new Map<string, string[]>();
+  const pending = new Map<string, { session: string; rows: string[] }>();
   const markKey = (botId: string, threadId: string) => `${botId}\0${threadId}`;
 
   const loadFlags = async () => {
@@ -391,6 +395,15 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     return fresh;
   };
 
+  const commit = (botId: string, threadId: string) => {
+    const key = markKey(botId, threadId);
+    const staged = pending.get(key);
+    pending.delete(key);
+    if (!staged) return;
+    const mark = sessionMark(botId, threadId, staged.session);
+    for (const row of staged.rows) mark.rows.add(row);
+  };
+
   const logged = (hits: RecallHit[]) => hits.map((hit) => ({ row: hit.ref, score: Number(hit.score.toFixed(3)) }));
 
   const lookup = (entry: LookupLog, botId: string, threadId: string, session: string, text: string): string[] => {
@@ -406,7 +419,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       entry.reason = "no-index";
       return [];
     }
-    const terms = index.terms(userTyping(text));
+    const terms = index.terms(userTyping(text), over);
     entry.words = terms.list;
     if (over()) return [];
     if (!terms.list.length) {
@@ -435,8 +448,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       picked.push(hit);
       chars += hit.text.length;
     }
-    for (const hit of picked) mark.rows.add(hit.key);
-    pending.set(markKey(botId, threadId), picked.map((hit) => hit.key));
+    pending.set(markKey(botId, threadId), { session, rows: picked.map((hit) => hit.key) });
     entry.rows = logged(picked);
     entry.fired = true;
     entry.reason = "fired";
@@ -460,14 +472,13 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
         writeLog(entry);
       }
     },
+    accepted: commit,
     release(botId, threadId) {
-      const key = markKey(botId, threadId);
-      for (const row of pending.get(key) ?? []) shown.get(key)?.rows.delete(row);
-      pending.delete(key);
+      pending.delete(markKey(botId, threadId));
     },
     settled(botId, threadId, cursor) {
       const key = markKey(botId, threadId);
-      pending.delete(key);
+      commit(botId, threadId);
       // a fresh session has a cursor only once the turn that carried the lines ran
       const mark = shown.get(key);
       if (mark?.cursor === "") mark.cursor = cursorKey(cursor);
