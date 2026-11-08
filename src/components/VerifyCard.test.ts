@@ -168,12 +168,12 @@ const running = (patch: Partial<VerifyCardData> = {}) => card({ status: "running
 const dom = (data: VerifyCardData) => Object.assign(document.createElement("div"), { innerHTML: render(data) });
 const counts = (by?: NonNullable<VerifyCardData["counts"]>["by"]) => ({ planned: 9, completed: 9, passed: 9, failed: 0, blocked: 0, notRun: 0, ...(by ? { by } : {}) });
 
-it.each(["en", "ko"] as const)("heads every state with Live Verify and the site, with the desktop and phone note in %s", locale => {
+it.each(["en", "ko"] as const)("heads every state with Live Verify and the site, with the action top right in %s", locale => {
   applyLocale(locale);
   for (const data of [running(), card({ status: "waiting", offeredAt: Date.now(), startedAt: Date.now() }), card(), card({ status: "blocked", errorCode: "timeout" })]) {
     expect(dom(data).querySelector(".verify-card-title")?.textContent).toBe("Live Verify · index.html");
   }
-  expect(dom(card()).querySelector(".verify-card-side")?.textContent).toBe(locale === "en" ? "Desktop 1280 · phone 392" : "데스크톱 1280 · 휴대폰 392");
+  expect(dom(card()).querySelector(".verify-card-side")?.textContent).toBe(locale === "en" ? "Rerun" : "다시 확인");
   expect(dom(running({ counts: counts() })).querySelector(".verify-card-side")?.textContent).toBe(locale === "en" ? "9 checks" : "확인 9개");
 });
 

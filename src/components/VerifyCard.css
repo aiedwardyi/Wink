@@ -5,8 +5,9 @@
 .verify-card-title { min-width: 0; }
 .verify-card-side { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 12px; color: var(--color-ink-secondary); font-size: 12.5px; font-weight: 500; }
 .verify-card-count { color: var(--color-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
-.verify-card-side button { margin-block: -6px; padding: 6px 12px; border-radius: 8px; background: var(--color-raised-hover); color: var(--color-ink); cursor: pointer; }
+.verify-card-side button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; margin-block: -6px; padding: 6px 12px; border-radius: 8px; background: var(--color-raised-hover); color: var(--color-ink); cursor: pointer; }
 .verify-card-side button:hover { background: var(--color-control); }
+.verify-card-side button:disabled { opacity: .5; cursor: default; }
 .verify-card-dots, .verify-card-tag { display: flex; align-items: center; gap: 3px; }
 .verify-card-dots i, .verify-card-tag i { width: 6px; height: 6px; flex: none; border-radius: 999px; }
 .verify-card-plan { display: grid; gap: 4px; list-style: none; margin: 8px 0 0; padding: 0; color: var(--color-ink-secondary); }
@@ -42,17 +43,13 @@
 .verify-card-more { margin-top: 8px; color: var(--color-accent-text); font-size: 12.5px; font-weight: 500; cursor: pointer; }
 .verify-card-more:hover { text-decoration: underline; }
 .verify-card-unchecked { color: var(--color-ink-secondary); font-size: 12px; margin-top: 6px; }
-.verify-card-actions { min-height: 28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 6px; }
-.verify-card-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 4px 8px; border-radius: 6px; color: var(--color-ink-secondary); cursor: pointer; }
-.verify-card-actions button:hover { background: var(--color-raised); color: var(--color-ink); }
-.verify-card-actions button:disabled { opacity: .5; cursor: default; }
 .verify-card-details-toggle { margin-top: 8px; padding: 0; color: var(--color-ink-secondary); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .verify-card-details { list-style: none; margin: 4px 0 0; padding: 0; color: var(--color-ink-secondary); font-size: 12px; }
 .verify-card-details li { padding: 2px 0; }
 @keyframes verify-card-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 @keyframes verify-card-tick { 0%, 100% { opacity: 0; } 50% { opacity: .45; } }
 @media (max-width: 767px) {
-  .verify-card-actions .verify-card-rerun, .verify-card-actions [data-verify-watch] { min-height: 44px; }
+  .verify-card-side button { min-height: 44px; margin-block: -10px; }
   .verify-card-lanes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .verify-card-problems li, :lang(ko) .verify-card-problems li { grid-template-columns: 80px minmax(0, 1fr); row-gap: 1px; }
   .verify-card-tile { display: none; }
