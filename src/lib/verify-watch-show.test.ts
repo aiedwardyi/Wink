@@ -233,8 +233,30 @@ it("honors a tab picked during the reel", () => {
   expect(show.tile).toBe("phone");
   expect(show.reelIssue()?.where).toBe("b");
   show.pin("desktop");
-  expect(show.phase).toBe("after");
+  expect(show.phase).toBe("reel");
+  expect(show.reelIssue()?.where).toBe("a");
   expect(show.tile).toBe("desktop");
+});
+
+it("keeps a problem's own outline when unboxed or left-out checks count on it", () => {
+  const unboxed = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "issue", where: "/index.html:9" } });
+  const broken = mark(1, "result", { ev: { tile: "desktop", checker: "LINKS", result: "issue", box: [10, 20, 80, 30], where: "a#broken" } });
+  const show = replay(frame(0), unboxed, broken, end(5, [issue("a#broken", "desktop")]));
+  expect(show.outlines.map(o => [o.checker, o.issue, o.box.y])).toEqual([["LINKS", true, 20]]);
+  expect(show.checks).toBe(2);
+});
+
+it("plays the clicks that follow a tile's checks before the end", () => {
+  const click = (ms: number, x: number) => mark(ms, "point", { inp: { tile: "desktop", type: "click", x, y: 30 }, scrollY: 0 });
+  const show = replay(frame(0), ...page(4), click(40, 20), click(41, 300), end(50));
+  const rings: number[] = [];
+  while (show.phase === "play") {
+    show.advance(16);
+    if (show.phase === "play" && show.ring && rings.at(-1) !== show.ring.x) rings.push(show.ring.x);
+  }
+  expect(rings).toEqual([20, 300]);
+  expect(show.clock).toBeLessThan(SHOW_MIN_MS + 16);
+  expect(show.checks).toBe(4);
 });
 
 it("offers no Phone tab when the run has no phone view", () => {

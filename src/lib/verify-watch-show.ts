@@ -88,7 +88,7 @@ function shownThings(all: Thing[]): Thing[] {
   let carry = all.filter(thing => !thing.box).flatMap(thing => thing.rows), next = 0;
   boxed.forEach((thing, i) => {
     if (i + 1e-6 < next && !thing.issue) { carry.push(...thing.rows); return; }
-    kept.push({ ...thing, rows: [...carry, ...thing.rows] });
+    kept.push({ ...thing, rows: [...thing.rows, ...carry] });
     carry = [];
     if (i + 1e-6 >= next) next += step;
   });
@@ -172,7 +172,7 @@ export class VerifyWatchShow {
   pin(tile: VerifyTile) {
     this.pinned = tile;
     if (this.phase === "reel") {
-      this.reel = this.reel.filter(issue => issue.tile === tile);
+      this.reel = verifyReel((this.end?.issues ?? []).filter(issue => issue.tile === tile));
       this.phaseAt = this.clock;
       this.reelIndex = 0;
       if (!this.reel.length) this.set("after");
@@ -223,6 +223,11 @@ export class VerifyWatchShow {
     const lists = (["desktop", "phone"] as const).map(tile => ({ tile, things: shownThings(thingsOf(rows.filter(row => tileOf(row.tile) === tile))) }));
     const count = Math.max(...lists.map(list => list.things.length));
     const total = count ? Math.min(SHOW_MAX_MS, Math.max(SHOW_MIN_MS, count * THING_MS)) : 0, start = this.clock;
+    // A tile's clicks come after its checks, so they get their own time or the end swallows them.
+    const pointTile = (m: typeof marks[number]) => tileOf((m.mark.inp as { tile?: unknown } | undefined)?.tile);
+    const atEnd = (m: typeof marks[number]) => m.mark.kind === "point" && m.tileSeen === seen[pointTile(m)];
+    const tail = Math.max(...(["desktop", "phone"] as const).map(tile => marks.filter(m => atEnd(m) && pointTile(m) === tile).length)) * RING_MS;
+    const play = Math.max(0, total - tail), clicks = { desktop: 0, phone: 0 };
     const add = (at: number, chunk: VerifyReplayChunk) => this.queue.push({ due: start + at, chunk, at: start + at, scrollY: 0 });
     const view = (at: number, tile: VerifyTile, y: number) => {
       if (this.history[tile].length) add(at, { kind: "mark", mark: { ms: 0, kind: "view", tile, frame: nearest(this.history[tile], y) } });
@@ -233,19 +238,19 @@ export class VerifyWatchShow {
         this.frames[tile] = first;
         this.scroll[tile] = first.scrollY;
       }
-      const slot = things.length ? total / things.length : 0;
+      const slot = things.length ? play / things.length : 0;
       things.forEach((thing, i) => {
         view(i * slot, tile, thing.scrollY);
         for (const ev of outlineOnce(thing, { hold: slot })) add(i * slot, { kind: "mark", mark: { ms: ev.ms as number, kind: "result", ev } });
       });
     }
-    for (const { mark, seen: before, tileSeen } of marks) {
-      const inp = mark.inp as { tile?: unknown } | undefined, tile = tileOf(inp?.tile);
-      const at = (mark.kind === "point" ? (seen[tile] ? tileSeen / seen[tile] : 0) : rows.length ? before / rows.length : 0) * total;
+    for (const m of marks) {
+      const { mark, seen: before, tileSeen } = m, tile = pointTile(m);
+      const at = atEnd(m) ? play + clicks[tile]++ * RING_MS : (mark.kind === "point" ? tileSeen / seen[tile]! : rows.length ? before / rows.length : 0) * play;
       if (mark.kind === "point") view(at, tile, typeof mark.scrollY === "number" ? mark.scrollY : 0);
       add(at, { kind: "mark", mark });
     }
-    if (end) add(total, end);
+    if (end) add(play + tail, end);
     this.set("play");
   }
 

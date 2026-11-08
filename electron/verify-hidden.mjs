@@ -12,6 +12,7 @@ import { blockedGuard } from "./verify-rules/blocked.mjs";
 
 const rules = [errorsRule, linksRule, scrollRule, menuRule, copyRule, detailsRule];
 const fatal = new Set(["resource-limit", "isolation-failed", "cancelled", "timeout"]);
+const SHOT_MS = 2000;
 const plain = (value, cap) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, cap);
 const fault = code => Object.assign(new Error(code), { code });
 
@@ -35,7 +36,7 @@ export function runHiddenVerify(input) {
   async function shot(tile, y) {
     if (!casts[tile] || shots.has(`${tile}:${y}`)) return;
     shots.add(`${tile}:${y}`);
-    await race(casts[tile].shot().catch(() => {}));
+    await race(Promise.race([casts[tile].shot().catch(() => {}), new Promise(resolve => setTimeout(resolve, SHOT_MS))]));
   }
   const emit = value => {
     const event = { ...value, seq: seq + 1, emittedAt: performance.timeOrigin + performance.now() }, size = Buffer.byteLength(JSON.stringify(event));

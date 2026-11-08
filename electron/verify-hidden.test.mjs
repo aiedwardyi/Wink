@@ -304,3 +304,13 @@ it("records a picture of every new scroll stop before moving on, even on a fast 
   expect(order[order.indexOf("scroll") + 1]).toBe("frame");
   expect(order.indexOf("frame")).toBeLessThan(order.indexOf("checks"));
 });
+
+it("does not let a hung capture fail the run", async () => {
+  vi.useFakeTimers();
+  const i = input();
+  for (const page of Object.values(i.pages)) page.capturePage = () => new Promise(() => {});
+  i.frame = () => {};
+  const run = runHiddenVerify(i);
+  await vi.advanceTimersByTimeAsync(10000);
+  expect((await run.done).errorCode).toBeUndefined();
+});
