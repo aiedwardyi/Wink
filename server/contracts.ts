@@ -6,6 +6,7 @@
 // readable.
 
 import type { ToolDetail } from "../shared/tool-detail.ts";
+import type { TurnTrace, UsageObserver } from "./turn-timing.ts";
 
 export type DriverKind = string;
 export type InstanceId = string;
@@ -159,7 +160,8 @@ export type RuntimeEvent = RuntimeEventBase &
     // the snapshot has no authenticated field.
     // `usageLimit` marks the expected one: the account spent its
     // subscription window. `resetsAt` is epoch ms, null when unreported.
-    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; folder?: string; usageLimit?: { resetsAt: number | null } }
+    // `signedOut` marks a confirmed sign-out of this account (Claude and Codex only).
+    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null } }
   );
 
 /** One subscription usage window (a 5-hour session, a week) as the provider
@@ -188,6 +190,7 @@ export type RequestOutcome = "allowed-once" | "rejected" | "answered" | "unavail
 // the first turn (the agentcal per-turn-process model) with resumeCursor
 // carrying the provider-native continuation (e.g. a claude session id).
 export interface SendTurnInput {
+  trace?: TurnTrace;
   threadId: ThreadId;
   text: string;
   model?: string;
@@ -460,7 +463,7 @@ export interface ProviderInstance {
   snapshot(opts?: { rescan?: boolean; refresh?: boolean }): Promise<ProviderSnapshot>;
   /** Cheap one-shot text call (upstream TextGeneration) — titles, summaries. */
   /** `ephemeral` asks the CLI not to keep a session transcript, `lean` to skip the owner's customizations, where it can. */
-  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string }): Promise<string>;
+  generateText?(prompt: string, opts?: { timeoutMs?: number; signal?: AbortSignal; ephemeral?: boolean; lean?: boolean; model?: string; onUsage?: UsageObserver }): Promise<string>;
   /** the model and default deadline generateText runs on, for telemetry */
   readonly textModel?: string;
   readonly textTimeoutMs?: number;

@@ -13,6 +13,7 @@ import { _resetSteerQueue, foldQueuedSends, queueMark } from "./steer-queue.ts";
 import { Store } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import * as turns from "./turn-context.ts";
+import { currentTurnTrace, tracePart } from "./turn-timing.ts";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 function section(from: string, to: string): string {
@@ -85,7 +86,7 @@ it.each([false, true])("delivers a full reply once after session recycle (arrive
     expect(prepared.compacted).toBe(false);
     const task = store.taskByThread(sender.id, threadId)!;
     const result = await runDispatch({
-      ...context, ...turns, ...mail, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: foldQueuedSends,
+      ...context, ...turns, ...mail, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys, foldPeerQueuedSends: foldQueuedSends, tracePart, trace: currentTurnTrace(),
       store, bot: sender, threadId, task, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, transcript: prepared.transcript, prepared,
       compactedThisTurn: false, latestCompactionId: null, sessionPrompt: undefined, nativeAt: null,

@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
+import { currentTurnTrace } from "./turn-timing.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
 
@@ -61,9 +62,12 @@ export function loadMemory(
   botId: string,
 ): { text: string; truncated: boolean; bytes: number; lines: number } | null {
   let raw: string;
+  const end = currentTurnTrace()?.span("memory_read", "MEMORY.md");
   try {
     raw = readFileSync(join(workspaceDir(botId), "MEMORY.md"), "utf8");
-  } catch {
+    end?.("read");
+  } catch (error) {
+    end?.((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error");
     return null;
   }
   if (!raw.trim() || raw === MEMORY_SEED) return null;
@@ -156,12 +160,14 @@ export function isMemoryTopicName(name: string): boolean {
  * one at a time so listing stays cheap however large the notes grow. */
 export function listMemoryTopics(botId: string): Array<{ name: string; bytes: number }> {
   let entries: string[];
+  const end = currentTurnTrace()?.span("memory_read", "topics");
   try {
     entries = readdirSync(join(workspaceDir(botId), "memory"));
-  } catch {
+  } catch (error) {
+    end?.((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error");
     return [];
   }
-  return entries
+  const topics = entries
     .filter(isMemoryTopicName)
     .flatMap((name) => {
       try {
@@ -172,6 +178,8 @@ export function listMemoryTopics(botId: string): Array<{ name: string; bytes: nu
       }
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+  end?.(topics.length ? "listed" : "absent");
+  return topics;
 }
 
 export const MEMORY_LINE_MAX_BYTES = 300;

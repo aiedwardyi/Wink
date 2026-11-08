@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AccountLifecycle } from "./account-lifecycle.ts";
+import { AccountLifecycle } from "./account-lifecycle.ts";
 import { AccountNameError, createAccountNames, type AccountNames } from "./account-names.ts";
 import { createAccountRoutes } from "./account-routes.ts";
 import { AccountService } from "./accounts.ts";
-import { DATA_DIR } from "./config.ts";
-import type { ProviderRegistry } from "./harness/registry.ts";
+import { DATA_DIR, instanceConfigs } from "./config.ts";
+import { ProviderRegistry } from "./harness/registry.ts";
+import { makeFakeDriver } from "./testing/fake-driver.ts";
 import { createUsageBoard } from "./usage-board.ts";
 import { createUsageHistory } from "./usage-history.ts";
 
@@ -160,5 +161,52 @@ describe("account names routes", () => {
     expect(readFileSync(join(dir, "account-names.json"), "utf8")).toBe(before);
     expect(f.onNamesChanged).toHaveBeenCalledOnce();
     expect(await f.request("POST", "/api/accounts/acct-one/name", { nickname: " " })).toMatchObject({ status: 200, data: { nickname: null, name: "Claude 2" } });
+  });
+});
+
+describe("lone base sign-in", () => {
+  it("signs a lone signed-out base account in again through the account routes and clears its mark", async () => {
+    const dir = join(DATA_DIR, "lone-base-sign-in");
+    mkdirSync(dir, { recursive: true });
+    const bases = { claude: { driver: "claudeAgent" } };
+    const accounts = new AccountService(dir, () => bases);
+    const fake = makeFakeDriver({ kind: "claudeAgent" }).driver;
+    const registry = new ProviderRegistry([{ ...fake, create: async (input) => ({ ...await fake.create(input),
+      snapshot: async () => ({ state: "available" as const, authenticated: true }) }) }]);
+    await registry.load(instanceConfigs({ instances: bases }, []));
+    const startSignIn = vi.spyOn(registry, "startSignIn").mockResolvedValue({ url: "https://claude.com/cai/oauth/authorize?fixture" });
+    const cancelSignIn = vi.spyOn(registry, "cancelSignIn").mockResolvedValue(true);
+    vi.spyOn(registry.logins, "wait").mockResolvedValue();
+    const changed = vi.fn();
+    const lifecycle = new AccountLifecycle(accounts, registry, { reload: async () => {}, referenced: async () => false, invalidate: vi.fn(), changed });
+    const routes = createAccountRoutes(lifecycle, registry);
+    const request = async (method: string, path: string) => {
+      let status = 0;
+      let data: any;
+      const req = Readable.from([JSON.stringify({})]) as IncomingMessage;
+      req.headers = { "content-type": "application/json" };
+      const res = { writeHead: (code: number) => { status = code; }, end: (raw: string) => { data = JSON.parse(raw); } } as unknown as ServerResponse;
+      const handled = await routes(req, res, method, path);
+      return { handled, status, data };
+    };
+    try {
+      registry.blockAccount("claude", true);
+      expect(await request("POST", "/api/instances/claude/sign-out")).toMatchObject({ handled: false });
+      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: { url: "https://claude.com/cai/oauth/authorize?fixture" } });
+      await lifecycle.settled("claude");
+      expect(registry.accountBlocked("claude")).toBe(false);
+      expect(changed).toHaveBeenCalled();
+      expect(changed.mock.calls.every((call) => call[0] === undefined)).toBe(true);
+      expect(await request("POST", "/api/instances/claude/sign-in")).toMatchObject({ handled: false });
+      registry.blockAccount("claude", true);
+      expect(await request("DELETE", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 200, data: {} });
+      expect(cancelSignIn).toHaveBeenCalledExactlyOnceWith("claude");
+      startSignIn.mockResolvedValue(null);
+      expect(await request("POST", "/api/instances/claude/sign-in")).toEqual({ handled: true, status: 404, data: { error: "Unknown engine sign-in" } });
+      expect(registry.accountBlocked("claude")).toBe(true);
+    } finally {
+      lifecycle.dispose();
+      await registry.disposeAll();
+    }
   });
 });

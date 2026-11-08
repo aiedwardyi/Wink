@@ -278,7 +278,7 @@ describe("show-image route", () => {
   });
 
   it("tells bots about show_image only when the agents integration is mounted", () => {
-    expect(indexSource).toContain('const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";');
+    expect(indexSource).toContain('const showImagePrompt = canMessage ? ` ${slimStaticText(SHOW_IMAGE_GUIDANCE, instance.driverKind)}` : "";');
     expect(indexSource).toContain("canMessage && SHOW_IMAGE_GUIDANCE");
   });
 
