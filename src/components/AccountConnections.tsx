@@ -88,7 +88,6 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   const phone = useIsPhone();
   const terminal = isTerminalSkin(useSkin());
   const id = useId();
-  const [expanded, setExpanded] = useState(false);
   const [menu, setMenu] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState<(SavedAccountName & { revision: number }) | null>(null);
@@ -158,17 +157,10 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
                 : <button ref={inlineNameButton} type="button" data-edit-name="" disabled={!canName || busy} onClick={() => { inlineEditor.current = true; setEditing(true); }}
                   className="min-w-0 max-w-full truncate text-left text-[13px] text-ink">{name?.name}</button>}
             </div>
-            <button type="button" data-connection-identity="" aria-label={name ? `${t("connections.identity")}: ${name.name}` : t("connections.identity")} aria-expanded={expanded} aria-controls={`${id}-identity`}
-              onClick={() => afterFold(`${id}-identity`, () => setExpanded(!expanded))} className={cn("min-w-0 max-w-full text-left text-[11px] text-ink-secondary", stacked && "-mt-1.5")}>
-              <span data-account-email="" className="block min-w-0 truncate">{label}</span>
-            </button>
+            <span data-account-email="" className={cn("block min-w-0 max-w-full break-words text-[11px] text-ink-secondary", stacked && "-mt-1.5")}>{label}</span>
           </div>
         </>}
-        actions={draining ? <span role="status">{t("accounts.removing")}</span> : stacked ? undefined : phone ? more : controls}>
-        <Fold open={expanded} id={`${id}-identity`}>
-          <div data-connection-identity-body="" className="py-1 text-[13px] text-ink">{name && <div className="truncate">{name.name}</div>}<div className="truncate">{label}</div></div>
-        </Fold>
-      </ConnectionRow>}
+        actions={draining ? <span role="status">{t("accounts.removing")}</span> : stacked ? undefined : phone ? more : controls} />}
       {stacked && <span className="absolute right-0 top-0 flex h-9 items-center [@media(pointer:coarse)]:h-11">{more}</span>}
       <Fold open={menu} id={`${id}-actions`}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pb-2 pl-6"

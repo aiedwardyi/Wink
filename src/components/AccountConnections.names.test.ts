@@ -189,12 +189,15 @@ it.each(["en", "ko"] as const)("keeps the original number tile beside phone acco
   expect(tile?.nextElementSibling?.getAttribute("data-edit-name")).toBe("");
 });
 
-it.each(["en", "ko"] as const)("distinguishes identity buttons by account name without email in %s", async (locale) => {
+it.each(["en", "ko"] as const)("renders each email as plain text, not a control, in %s", async (locale) => {
   await mount({ locale });
-  const labels = [...host.querySelectorAll('[data-connection-identity]')].map((node) => node.getAttribute("aria-label"));
-  expect(new Set(labels).size).toBe(accounts.length);
-  expect(labels[0]).toContain("Claude 1");
-  for (const label of labels) expect(label).not.toContain(canary.address);
+  const emails = [...host.querySelectorAll<HTMLElement>("[data-account-email]")];
+  expect(emails).toHaveLength(accounts.length);
+  for (const email of emails) {
+    expect(email.textContent).toBe(canary.address);
+    expect(email.closest("button")).toBeNull();
+    expect(email.hasAttribute("title")).toBe(false);
+  }
 });
 
 it("clears a nickname with an empty name", async () => {
@@ -294,35 +297,28 @@ it("hides the name editor until the board holds the account", async () => {
   expect(host.querySelector<HTMLButtonElement>(`[data-connection-account="${accounts[1]!.instanceId}"] [data-edit-name]`)?.disabled).toBe(false);
 });
 
-it.each([false, true])("opens a long identity inside its row by keyboard and touch (phone=%s)", async (phone) => {
+it.each([false, true])("shows no second copy when the email is tapped (phone=%s)", async (phone) => {
   await mount({ phone });
-  const trigger = row()?.querySelector<HTMLButtonElement>("[data-connection-identity]");
-  expect(trigger, "identity disclosure").toBeTruthy();
-  expect(trigger?.hasAttribute("title")).toBe(false);
-  expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  const email = row()!.querySelector<HTMLElement>("[data-account-email]")!;
+  const copies = () => row()!.textContent!.split(canary.address).length - 1;
+  expect(copies()).toBe(1);
   await act(async () => {
-    trigger!.focus();
-    trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    trigger!.click();
+    email.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+    email.click();
   });
-  expect(row()?.querySelector("[data-connection-identity-body]")?.textContent).toContain(canary.address);
-  await click(trigger);
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
-  expect(row()?.querySelector("[data-connection-identity-body]")).toBeNull();
-  await act(async () => {
-    trigger!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
-    trigger!.click();
-  });
-  expect(row()?.querySelector("[data-connection-identity-body]")?.textContent).toContain(canary.address);
+  expect(copies()).toBe(1);
+  expect(row()!.textContent!.split("Claude 1")).toHaveLength(2);
+  expect(row()!.querySelector("[aria-expanded=true]")).toBeNull();
 });
 
 it.each([false, true])("gives the address its own line under the name on a phone (phone=%s)", async (phone) => {
   await mount({ phone });
   const line = row()!.querySelector(":scope > div")!;
-  const identity = line.querySelector<HTMLElement>("[data-connection-identity]")!;
-  expect(identity.querySelector("[data-account-email]")?.textContent).toBe(canary.address);
-  expect(identity.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
-  expect(identity.parentElement?.className).toContain("flex-col");
+  const email = line.querySelector<HTMLElement>("[data-account-email]")!;
+  expect(email.textContent).toBe(canary.address);
+  expect(email.parentElement?.firstElementChild?.querySelector("[data-edit-name]")?.textContent).toBe("Claude 1");
+  expect(email.parentElement?.className).toContain("flex-col");
   if (!phone) {
     expect(row()!.querySelector("[data-connection-menu]")).toBeNull();
     return;
