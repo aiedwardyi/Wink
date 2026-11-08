@@ -125,6 +125,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_DUMP;
     delete process.env.FAKE_CODEX_TRANSIENTS;
     delete process.env.FAKE_CODEX_PARTIAL_FAILS;
+    delete process.env.FAKE_CODEX_LATE_COMPLETE;
     delete process.env.FAKE_CODEX_EARLY_EXITS;
     delete process.env.FAKE_CODEX_EARLY_EXIT_MESSAGE;
     delete process.env.FAKE_CODEX_STATE;
@@ -1100,6 +1101,23 @@ describe("CodexDriver turns (fake app-server)", () => {
     // exactly one settled reply across all three app-server launches
     const replies = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
     expect(replies).toHaveLength(1);
+  }, 20_000);
+
+  it("ignores a retired attempt's late turn/completed and finishes on the replacement", async () => {
+    const state = join(scratch, "codex-launches-late");
+    process.env.FAKE_CODEX_TRANSIENTS = "1";
+    process.env.FAKE_CODEX_LATE_COMPLETE = "1";
+    process.env.FAKE_CODEX_STATE = state;
+    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-codex-late", text: "hi" });
+    const done = await recorder.until((e) => e.type === "turn.completed");
+
+    expect(done).toMatchObject({ ok: true });
+    expect(readFileSync(state, "utf8")).toBe("2");
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(recorder.events.filter((e) => e.type === "turn.completed")).toHaveLength(1);
+    expect(recorder.events.filter((e) => e.type === "turn.retrying")).toHaveLength(1);
   }, 20_000);
 
   it("stops retrying at the attempt cap and settles as failed", async () => {
