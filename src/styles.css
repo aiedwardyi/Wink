@@ -171,6 +171,11 @@
   justify-content: flex-end;
 }
 
+/* These skins zero the bot padding the chips pull up into. */
+:is([data-skin="claude"], [data-skin="notebook"]) [data-orbit-message="bot"] [data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
+  padding-bottom: 0.875rem;
+}
+
 [data-room-transcript] [data-orbit-message-body]:has(> [data-message-reactions]) {
   padding-bottom: 0;
 }
