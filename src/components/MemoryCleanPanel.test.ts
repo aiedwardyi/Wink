@@ -15,6 +15,11 @@ vi.mock("./VoiceSettings", () => ({ VoiceSettings: () => null }));
 const bot: Bot = { id: "b", threadId: "t", name: "Atlas", title: "", description: "", color: "blue", unread: false, notifications: false, modelSelection: { instanceId: "i", model: "m" }, messages: [{ id: "s", role: "bot", kind: "activity", at: 1, tool: { name: "memory.save", spoken: "Seoul", lines: ["- Seoul"] } }] };
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
+// the map is a lazy chunk
+async function until(found: () => Element | null | undefined) {
+  for (let tries = 0; tries < 100 && !found(); tries++) await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
+  return found();
+}
 afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); applyLocale("en"); vi.unstubAllGlobals(); });
 
 describe("Memory tab targets", () => {
@@ -27,7 +32,7 @@ describe("Memory tab targets", () => {
     host = document.createElement("div"); document.body.append(host); root = createRoot(host);
     await act(async () => root.render(createElement(SettingsPanel, { bot })));
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(locale === "en" ? "Memory" : "메모리");
-    const first = host.querySelector(".mc-tint"); expect(first).not.toBeNull();
+    const first = await until(() => host.querySelector(".mc-tint")); expect(first).not.toBeNull();
     expect(scroll).toHaveBeenCalledWith({ block: "center", behavior: "instant" });
     mock.state = reducer(mock.state, { type: "toggleSettings", open: true, memory: { line: "- Seoul" } });
     await act(async () => root.render(createElement(SettingsPanel, { bot })));
@@ -45,7 +50,7 @@ describe("Memory tab targets", () => {
     text = "- Seoul";
     mock.state = reducer(mock.state, { type: "toggleSettings", open: true, memory: { line: "- Seoul" } });
     await act(async () => root.render(createElement(SettingsPanel, { bot })));
-    expect(host.querySelector(".mc-tint")?.parentElement?.textContent).toContain("Seoul");
+    expect((await until(() => host.querySelector(".mc-tint")))?.parentElement?.textContent).toContain("Seoul");
   });
 
 });
