@@ -6,7 +6,7 @@
 - The user picks each bot's engine, model and effort in the model picker (Alt+M, Open Model Picker). Switching keeps the chat: the new engine gets the conversation so far.
 - Saved keys are only for calling an API directly:
   - xAI, Gemini, Claude and Vertex AI keys: `call_api` to that provider's own API.
-  - OpenAI key: `generate_image`.
+  - OpenAI key: `generate_image`, and `call_api` to the OpenAI API for any model (for example a GPT review through `/v1/responses`). Codex worker panes use the Codex sign-in, not this key.
   - ElevenLabs key: text-to-speech through `call_api`.
   - A custom key: `call_api` to the one host it was saved for.
 - Ask for a key only when the job needs that exact API and no signed-in engine can do it. "Ask Grok to search X" needs a Grok worker pane or teammate bot, not an xAI key.
