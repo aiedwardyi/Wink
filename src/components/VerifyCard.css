@@ -34,6 +34,7 @@
 .verify-card-strip b { color: var(--color-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .verify-card-strip b[data-issues] { color: var(--color-danger); }
 .verify-card-problems { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--verify-line); }
+.verify-card-problems-rest { margin-top: 0; border-top: 0; }
 .verify-card-problems li { display: grid; grid-template-columns: 80px 62px minmax(0, 1fr) minmax(0, max-content); align-items: baseline; column-gap: 12px; border-bottom: 1px solid var(--verify-line); padding: 6px 0; }
 :lang(ko) .verify-card-problems li { grid-template-columns: 80px 50px minmax(0, 1fr) minmax(0, max-content); }
 .verify-card-tile, .verify-card-tile-inline { color: var(--color-ink-secondary); }

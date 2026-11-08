@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
@@ -439,6 +439,7 @@ export function UsageDesk() {
   const drag = useUsageDrag(state.board?.engines ?? []);
   const desk = useRef<HTMLDivElement>(null);
   const heads = useRef(new Map<HTMLElement, number>());
+  const waited = useRef(false);
   const [folds, setFolds] = useState(() => loadFolds());
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [museAuthFailed, setMuseAuthFailed] = useState(false);
@@ -515,7 +516,10 @@ export function UsageDesk() {
     heads.current.clear();
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
-  if (!board) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
+  useEffect(() => { if (!board) waited.current = true; });
+  if (!board) {
+    return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
+  }
   if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
   const engine = board.engines.find((each) => each.base === engineId) ?? board.engines[0]!;
   const account = engine.accounts.find((each) => each.id === viewed[engine.base]) ?? engine.accounts.find((each) => each.id === engine.mainId) ?? engine.accounts[0];
@@ -546,7 +550,7 @@ export function UsageDesk() {
     setRefreshFailed(results.some((each) => each.status === "rejected"));
   };
   return (
-    <div ref={desk} data-usage-desk="" className="usage-desk min-w-0">
+    <div ref={desk} data-usage-desk="" className={cn("usage-desk min-w-0", waited.current && "animate-fade-in")}>
       <div className="usage-toolbar">
         <div className="usage-count-switch" role="group" aria-label={t("usage.limits.direction")}>
           {(["used", "remaining"] as const).map((value) => <button key={value} type="button" data-count-mode={value} aria-pressed={mode === value}

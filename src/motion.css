@@ -100,6 +100,12 @@
   /* clip, where supported, also keeps scrollIntoView from scrolling the fold itself */
   overflow: clip;
 }
+[data-fold-fade][data-fold="opening"] {
+  animation-name: fade-fold-open;
+}
+@keyframes fade-fold-open {
+  from { opacity: 0; }
+}
 @keyframes fold-open {
   from { grid-template-rows: 0fr; opacity: 0; }
 }

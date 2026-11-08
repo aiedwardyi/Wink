@@ -183,3 +183,38 @@ describe("Usage account cap", () => {
     expect(quick.querySelector("[data-accounts-cap]")).toBeNull();
   });
 });
+
+describe("motion", () => {
+  const quick = (closing: boolean) => {
+    const anchor = document.createElement("button");
+    host.append(anchor);
+    anchor.getBoundingClientRect = () => ({ top: 700, left: 24, right: 300, bottom: 730, width: 276, height: 30, x: 24, y: 700, toJSON: () => ({}) });
+    return act(async () => root.render(createElement(I18nProvider, null, createElement(UsageQuickView, {
+      engine: engine(), account: engine().accounts[0]!, board, state: h.state, anchor: { current: anchor }, onClose: vi.fn(), closing,
+    }))));
+  };
+  const scrim = () => document.querySelector<HTMLElement>('body > div[aria-hidden="true"].bg-black\\/45');
+
+  it("fades the phone scrim in, and out with the view, taking no taps while it goes", async () => {
+    await quick(false);
+    expect(scrim()?.classList.contains("animate-fade-in")).toBe(true);
+    expect(scrim()?.hasAttribute("data-closing")).toBe(false);
+    await quick(true);
+    for (const part of [scrim(), document.querySelector("[data-usage-quick]")]) {
+      expect(part?.hasAttribute("data-closing")).toBe(true);
+      expect(part?.hasAttribute("inert")).toBe(true);
+    }
+  });
+
+  it("fades the desk in when the board arrives after loading, not when it is already there", async () => {
+    const desk = () => host.querySelector("[data-usage-desk]")!;
+    h.state = { board: null, status: "loading", pending: {}, failed: new Set() } as unknown as UsageBoardState;
+    await render();
+    expect(desk().classList.contains("animate-fade-in")).toBe(false);
+    h.state = { board, status: "ready", pending: {}, failed: new Set() };
+    await render();
+    expect(desk().classList.contains("animate-fade-in")).toBe(true);
+    await reopen();
+    expect(desk().classList.contains("animate-fade-in")).toBe(false);
+  });
+});

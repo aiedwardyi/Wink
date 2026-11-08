@@ -49,7 +49,7 @@ const text = (node: Element | null | undefined) => {
   return (clone?.textContent ?? "").replace(/\s+/g, " ").trim();
 };
 const q = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
-const quick = () => q("[data-usage-quick]");
+const quick = () => q("[data-usage-quick]:not([data-closing])");
 const meter = () => q<HTMLButtonElement>("[data-usage-meter]");
 const boardGets = () => server.calls.filter((call) => call.startsWith("GET /api/usage/board"));
 const mainPosts = () => server.calls.filter((call) => call.startsWith("POST /api/accounts/"));

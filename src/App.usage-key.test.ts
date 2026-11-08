@@ -50,7 +50,7 @@ const botOn = (instanceId: string): Bot => ({
   messages: [{ id: "q", at: usageBoardNow - MIN, role: "user", kind: "text", text: "Still going" }],
 });
 
-const quick = () => document.body.querySelector("[data-usage-quick]");
+const quick = () => document.body.querySelector("[data-usage-quick]:not([data-closing])");
 const settings = () => h.store!.state.appSettingsOpen ? h.store!.state.appSettingsSection : null;
 const settle = () => act(async () => { for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); });
 let cleanup: (() => Promise<void>) | null = null;

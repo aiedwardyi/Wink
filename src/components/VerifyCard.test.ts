@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { VerifyCardData } from "../../shared/live-verify";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { setVerifyShowing } from "@/lib/verify-watch";
 import type { Message } from "@/state/store";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
@@ -256,6 +257,7 @@ it("shows the lanes for as long as this run's replay plays, then its result", as
   expect(host.querySelector(".verify-card-lanes")).not.toBeNull();
   expect(host.querySelector(".verify-card-count")?.textContent).toContain("12");
   await act(async () => setVerifyShowing(null));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, PRESENCE_EXIT_MS + 30)); });
   expect(host.querySelector(".verify-card-lanes")).toBeNull();
   expect(host.textContent).toContain("no problems");
   await act(async () => root.unmount());
@@ -268,4 +270,109 @@ it("uses the card title's click-cursor mark in the chat header, keeping its labe
   expect(icon.querySelector(".lucide-app-window")).toBeNull();
   expect(icon.querySelector("button")?.getAttribute("aria-label")).toBe("Watch the check");
   expect(dom(card()).querySelector(".lucide-mouse-pointer-click")).not.toBeNull();
+});
+
+const media = (phone: boolean) => vi.stubGlobal("matchMedia", (query: string) => ({ matches: phone && query.includes("max-width"), addEventListener() {}, removeEventListener() {} }));
+async function mounted(data: VerifyCardData, phone = false) {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  media(phone);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const host = document.body.appendChild(document.createElement("div")), root = createRoot(host);
+  const show = (next: VerifyCardData) => act(async () => root.render(createElement(VerifyCard, { card: next, threadId: "thread" })));
+  const pass = () => act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
+  await show(data);
+  return { host, show, pass, close: async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); } };
+}
+const folded = (host: Element, phase: string, selector: string) => host.querySelector(`[data-fold="${phase}"] ${selector}`);
+
+it("folds the running body out and the result in when a run ends, and back when it reruns", async () => {
+  const view = await mounted(running({ counts: counts({ LINKS: { desktop: [1, 4] } }) }));
+  try {
+    expect(folded(view.host, "open", ".verify-card-plan")).not.toBeNull();
+    expect(view.host.querySelector(".verify-card-strip")).toBeNull();
+    await view.show(card({ counts: counts() }));
+    expect(folded(view.host, "closing", ".verify-card-plan")).not.toBeNull();
+    expect(folded(view.host, "opening", ".verify-card-strip")?.textContent).toBe("9 passed");
+    await view.pass();
+    expect(view.host.querySelector(".verify-card-plan")).toBeNull();
+    expect(folded(view.host, "opening", ".verify-card-strip")).not.toBeNull();
+    await view.show(running());
+    expect(folded(view.host, "closing", ".verify-card-strip")?.textContent).toBe("9 passed");
+    expect(folded(view.host, "opening", ".verify-card-plan")).not.toBeNull();
+    await view.pass();
+    expect(view.host.querySelector(".verify-card-strip")).toBeNull();
+  } finally { await view.close(); }
+});
+
+it("swaps to the lanes and back at once while the Watch replay plays, with no fold motion", async () => {
+  const view = await mounted(card({ replay: ["a"], counts: counts() }));
+  try {
+    await act(async () => setVerifyShowing({ runId: "run-123456", checks: 12, by: { LINKS: { desktop: [3, 10] } } }));
+    expect(view.host.querySelector(".verify-card-lanes")).not.toBeNull();
+    expect(view.host.querySelector(".verify-card-strip")).toBeNull();
+    expect(view.host.querySelector('[data-fold="opening"], [data-fold="closing"]')).toBeNull();
+    await act(async () => setVerifyShowing(null));
+    expect(view.host.querySelector(".verify-card-lanes")).toBeNull();
+    expect(folded(view.host, "open", ".verify-card-strip")).not.toBeNull();
+    expect(view.host.querySelector('[data-fold="opening"], [data-fold="closing"]')).toBeNull();
+  } finally { await view.close(); }
+});
+
+it("shows a finished card at once, with no fold motion", async () => {
+  const view = await mounted(card({ counts: counts() }));
+  try {
+    expect(folded(view.host, "open", ".verify-card-strip")).not.toBeNull();
+    expect(view.host.querySelector('[data-fold="opening"]')).toBeNull();
+  } finally { await view.close(); }
+});
+
+it("folds in the rest of the problems and folds Show all away", async () => {
+  const issues: NonNullable<VerifyCardData["issues"]> = Array.from({ length: 7 }, (_, i) => ({ checker: "LINKS", tile: "desktop", rule: "missing target", where: `a#link-${i}`, measured: "No target" }));
+  const view = await mounted(card({ issues }));
+  try {
+    expect(view.host.querySelectorAll(".verify-card-problems li")).toHaveLength(5);
+    await act(async () => view.host.querySelector<HTMLButtonElement>(".verify-card-more")!.click());
+    expect(view.host.querySelectorAll(".verify-card-problems li")).toHaveLength(7);
+    expect(folded(view.host, "opening", ".verify-card-problems-rest")?.querySelectorAll("li")).toHaveLength(2);
+    expect(folded(view.host, "closing", ".verify-card-more")).not.toBeNull();
+    await view.pass();
+    expect(view.host.querySelector(".verify-card-more")).toBeNull();
+    expect(view.host.querySelectorAll(".verify-card-problems li")).toHaveLength(7);
+  } finally { await view.close(); }
+});
+
+it("folds the details open and shut", async () => {
+  const detail = { checker: "FIT" as const, tile: "phone" as const, rule: "tap size", where: "a.small", measured: "30 px" };
+  const view = await mounted(card({ counts: counts(), details: [detail] }));
+  const toggle = () => view.host.querySelector<HTMLButtonElement>(".verify-card-details-toggle")!;
+  try {
+    expect(view.host.querySelector(".verify-card-details")).toBeNull();
+    await act(async () => toggle().click());
+    expect(folded(view.host, "opening", ".verify-card-details")).not.toBeNull();
+    await act(async () => toggle().click());
+    expect(folded(view.host, "closing", ".verify-card-details")).not.toBeNull();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    await view.pass();
+    expect(view.host.querySelector(".verify-card-details")).toBeNull();
+  } finally { await view.close(); }
+});
+
+it("keeps the phone replay mounted while it folds shut", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))));
+  await import("./VerifyWatch");
+  const view = await mounted(card({ replay: ["a"] }), true);
+  const watch = () => view.host.querySelector<HTMLButtonElement>("[data-verify-watch]")!;
+  const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  try {
+    expect(view.host.querySelector(".verify-watch-frame")).toBeNull();
+    await act(async () => watch().click());
+    await settle();
+    expect(folded(view.host, "opening", ".verify-watch-frame[data-inline]")).not.toBeNull();
+    expect(view.host.querySelector("[data-fold-fade]")).not.toBeNull();
+    await act(async () => watch().click());
+    expect(folded(view.host, "closing", ".verify-watch-frame[data-inline]")).not.toBeNull();
+    expect(watch().getAttribute("aria-expanded")).toBe("false");
+    await view.pass();
+    expect(view.host.querySelector(".verify-watch-frame")).toBeNull();
+  } finally { await view.close(); }
 });

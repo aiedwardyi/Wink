@@ -4,6 +4,7 @@ import { useI18n, type Translate } from "@/lib/i18n";
 import { usageAccount } from "@/lib/accounts";
 import { planMeterWindows, windowExpired, windowKind } from "@/lib/usage";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardWindow } from "@/lib/usage-board";
+import { Presence } from "@/lib/use-presence";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore, type InstanceInfo } from "@/state/store";
@@ -131,9 +132,9 @@ function MeterLine({ windows, now, onOpen, identity = "", hidden, target, board 
           {barSlots(target?.engine.engine ?? "", { windows: shown }, t).map((slot) => <WindowBar key={`${target?.account.id ?? "today"}:${slot.key}`} slot={slot} now={clock} t={t} chat />)}
         </span>}
       </button>
-      {open && target && board?.board && (
-        <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} />
-      )}
+      <Presence open={Boolean(open && target && board?.board)}>
+        {(closing) => target && board?.board && <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} closing={closing} />}
+      </Presence>
     </div>
   );
 }

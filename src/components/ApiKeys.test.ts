@@ -2,9 +2,10 @@
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale, I18nProvider, persistPreference } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 
 const { mockState, mockApi } = vi.hoisted(() => {
   return {
@@ -170,5 +171,59 @@ describe("relativeTimeLabel", () => {
     expect(relativeTimeLabel("2026-09-27T11:59:30Z", "en", now)).toBe("this minute");
     expect(relativeTimeLabel("2026-09-27T09:00:00Z", "en", now)).toBe("3 hours ago");
     expect(relativeTimeLabel("2026-09-26T12:00:00Z", "en", now)).toBe("yesterday");
+  });
+});
+
+describe("SavedKeys motion", () => {
+  let host: HTMLDivElement;
+  let root: ReturnType<typeof createRoot>;
+  const show = () => act(async () => root.render(createElement(I18nProvider, null, createElement(SavedKeys))));
+  const pass = () => act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    localStorage.setItem("omb-keys-open", "1");
+    mockApi.mockReset().mockImplementation(async () => ({ uses: {} }));
+    host = document.body.appendChild(document.createElement("div"));
+    root = createRoot(host);
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the removal dialog on screen, inert, while it fades out", async () => {
+    mockState.config = { imageGen: { configured: true } };
+    await show();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Remove the Saved Key"]')!.click());
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "Cancel")!;
+    await act(async () => cancel.click());
+    const leaving = document.querySelector("[data-closing]");
+    expect(leaving?.textContent).toContain("Remove the saved OpenAI API Key?");
+    expect(leaving?.hasAttribute("inert")).toBe(true);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await pass();
+    expect(document.querySelector("[data-closing]")).toBeNull();
+  });
+
+  it("folds a removed key's row away, then the whole section with the last key", async () => {
+    mockState.config = { imageGen: { configured: true }, customKeys: [{ host: "api.acme.dev", name: "Acme" }] };
+    await show();
+    expect(host.textContent).toContain("OpenAI");
+    mockState.config = { customKeys: [{ host: "api.acme.dev", name: "Acme" }] };
+    await show();
+    expect(host.querySelector('[data-fold="closing"]')?.textContent).toContain("OpenAI");
+    expect(host.textContent).toContain("Keys1 saved");
+    await pass();
+    expect(host.textContent).not.toContain("OpenAI");
+    expect(host.textContent).toContain("Acme · api.acme.dev");
+    mockState.config = {};
+    await show();
+    expect(host.querySelector('[data-fold="closing"] button[aria-expanded]')).not.toBeNull();
+    expect(host.textContent).toContain("Acme · api.acme.dev");
+    await pass();
+    expect(host.textContent).toBe("");
   });
 });

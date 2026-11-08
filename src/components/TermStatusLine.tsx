@@ -7,6 +7,7 @@ import { shortPath } from "@/lib/short-path";
 import { museReading } from "@/lib/usage";
 import { chartSeries, leftOf, pace, splitWindows } from "@/lib/usage-pace";
 import { termModelLabel } from "@/lib/terminal-skin";
+import { Presence } from "@/lib/use-presence";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { PHONE_QUERY } from "@/lib/phone-swipe";
@@ -126,9 +127,9 @@ function TermTicker({ hidden, identity, instance, instanceId, tightest, phone }:
         {!tightest && second && <span aria-hidden="true" className="text-ink-secondary"> │ {second}</span>}
         <span id={summaryId} className="sr-only">{summary}</span>
       </button>
-      {open && target && board.board && (
-        <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} />
-      )}
+      <Presence open={Boolean(open && target && board.board)}>
+        {(closing) => target && board.board && <UsageQuickView engine={target.engine} account={target.account} board={board.board} state={board} anchor={button} onClose={() => setOpen(false)} closing={closing} />}
+      </Presence>
     </div>
   );
 }

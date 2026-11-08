@@ -17,6 +17,7 @@ vi.mock("@/state/store", async (original) => ({
 vi.mock("@/lib/use-usage-board", () => ({ useUsageBoard: () => ({ board: h.board, status: "ready", pending: {}, failed: new Set() }) }));
 vi.mock("@/lib/usage-auto-refresh", async (original) => ({ ...await original<typeof import("@/lib/usage-auto-refresh")>(), useAutoRefresh: () => {} }));
 import { I18nProvider, persistPreference } from "@/lib/i18n";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import { UsageDesk } from "./UsageDesk";
 import { ChatPlanMeters } from "./ChatPlanMeters";
 import { AccountPicker } from "./UsageAccounts";
@@ -363,7 +364,7 @@ it.each(["en", "ko"] as const)("toggles the chat card on click and preserves bot
   expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("true");
   expect(document.querySelector("[data-usage-quick] [data-usage-refresh]")).toBeNull();
   await click("[data-usage-meter]");
-  expect(document.querySelector("[data-usage-quick]")).toBeNull();
+  expect(document.querySelector("[data-usage-quick]:not([data-closing])")).toBeNull();
   const first = new Event("orbit:usage-key", { cancelable: true });
   await act(async () => { window.dispatchEvent(first); });
   expect(first.defaultPrevented).toBe(true);
@@ -371,7 +372,7 @@ it.each(["en", "ko"] as const)("toggles the chat card on click and preserves bot
   const second = new Event("orbit:usage-key", { cancelable: true });
   await act(async () => { window.dispatchEvent(second); });
   expect(second.defaultPrevented).toBe(false);
-  expect(document.querySelector("[data-usage-quick]")).toBeNull();
+  expect(document.querySelector("[data-usage-quick]:not([data-closing])")).toBeNull();
 });
 
 it.each(["en", "ko"] as const)("shows a Sign In button, not Connected, for a signed-out account in the chat card (%s)", async (locale) => {
@@ -533,4 +534,16 @@ it("leaves a press on Switch and a scrolling touch alone", async () => {
   await held(500);
   expect(scroll.defaultPrevented).toBe(false);
   expect(lifted()).toBe(0);
+});
+
+it("holds the quick view on screen, inert and fading, until its exit has run", async () => {
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: vi.fn() }));
+  await click("[data-usage-meter]");
+  const view = () => document.querySelector("[data-usage-quick]");
+  expect(view()?.hasAttribute("data-closing")).toBe(false);
+  await click("[data-usage-meter]");
+  expect(view()?.hasAttribute("data-closing")).toBe(true);
+  expect(view()?.hasAttribute("inert")).toBe(true);
+  await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
+  expect(view()).toBeNull();
 });
