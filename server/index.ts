@@ -5678,6 +5678,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       markMailRead(store, threadId, mailParts, started.turnId ?? "");
       accountNote.commit();
       markPaneMailRead(store, threadId, paneNoteIds ?? [], started.turnId ?? "", "fold");
+      if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);
       store.markPaneNotesDelivered(bot.id, threadId, newestPaneNoteId);
       store.markReactionsDelivered(bot.id, threadId, reactionsSeen);
       boardTurnStarted(bot.id, threadId, started.turnId);

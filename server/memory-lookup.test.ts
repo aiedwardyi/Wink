@@ -215,8 +215,17 @@ describe("placement", () => {
   it("shows a row once per session and again in the next", async () => {
     const { botId, lookup } = await lookupFor(FIXTURE);
     expect(ask(lookup, botId, "OpenAI credit", "s1")[0]).toContain("no setup needed");
+    lookup.accepted(botId, "t1");
     expect(ask(lookup, botId, "OpenAI credit", "s1")).toEqual([]);
     expect(ask(lookup, botId, "OpenAI credit", "s2")[0]).toContain("no setup needed");
+  });
+
+  it("leaves a row unmarked until the prompt is accepted", async () => {
+    const { botId, lookup } = await lookupFor(FIXTURE);
+    expect(ask(lookup, botId, "OpenAI credit", "s1")).toHaveLength(1);
+    expect(ask(lookup, botId, "OpenAI credit", "s1")).toHaveLength(1);
+    lookup.accepted(botId, "t1");
+    expect(ask(lookup, botId, "OpenAI credit", "s1")).toEqual([]);
   });
 
   it("gives rows back when the dispatch fails", async () => {
@@ -261,6 +270,14 @@ describe("planted text", () => {
     const { botId, lookup } = await lookupFor(planted);
     expect(ask(lookup, botId, "deploy rule")[0]).not.toContain("abcdefghijklmnopqrstuvwxyz012345");
   });
+
+  it("redacts a key-shaped word before it becomes a term", async () => {
+    const index = await buildRecallIndex([{ source: "n.md", tier: 0, text: FIXTURE, mtime: Date.now() }]);
+    const { list } = index.terms("OpenAI credit sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345");
+    index.close();
+    expect(list).toContain("openai");
+    expect(list.join(" ")).not.toContain("abcdefghijklmnopqrstuvwxyz");
+  });
 });
 
 describe("budget", () => {
@@ -293,6 +310,16 @@ describe("budget", () => {
     flag(botId);
     const lookup = createMemoryLookup({ dataDir: DATA_DIR, notesPath: () => undefined });
     expect(ask(lookup, botId, "OpenAI credit")).toEqual([]);
+  });
+});
+
+describe("deadline", () => {
+  it("stops repairing a misspelled word once the budget is spent", async () => {
+    const index = await buildRecallIndex([{ source: "n.md", tier: 0, text: FIXTURE, mtime: Date.now() }]);
+    const repaired = (expired?: () => boolean) => index.terms("opnai credit", expired).groups.flat();
+    expect(repaired()).toContain("openai");
+    expect(repaired(() => true)).not.toContain("openai");
+    index.close();
   });
 });
 
@@ -406,6 +433,10 @@ describe("send path wiring", () => {
     expect(failed).toContain("memoryLookup.release(bot.id, threadId)");
     const stopped = section("  // hang the HTTP request\n", "      // a rewound turn never resumes");
     expect(stopped.match(/memoryLookup\.release\(bot\.id, threadId\)/g)).toHaveLength(5);
+  });
+
+  it("marks rows shown only after the provider took the turn", () => {
+    expect(section("      markPaneMailRead(store, threadId, paneNoteIds", "      boardTurnStarted")).toContain("if (recallNotes.length) memoryLookup.accepted(bot.id, threadId);");
   });
 
   it("builds after a reply settles, never at send", () => {
