@@ -29,7 +29,17 @@ const text = (value: unknown, max: number) => typeof value === "string" ? redact
 function counts(value: unknown): VerifyCounts | undefined {
   if (!record(value)) return undefined;
   const keys = ["planned", "completed", "passed", "failed", "blocked", "notRun"] as const;
-  return keys.every((key) => count(value[key])) ? Object.fromEntries(keys.map((key) => [key, value[key]])) as unknown as VerifyCounts : undefined;
+  if (!keys.every((key) => count(value[key]))) return undefined;
+  const out = Object.fromEntries(keys.map((key) => [key, value[key]])) as unknown as VerifyCounts;
+  const by: NonNullable<VerifyCounts["by"]> = {};
+  for (const [checker, tiles] of record(value.by) ? Object.entries(value.by) : []) {
+    if (!CHECKERS.has(checker as VerifyChecker) || !record(tiles)) continue;
+    for (const [tile, pair] of Object.entries(tiles)) {
+      if (TILES.has(tile as VerifyTile) && Array.isArray(pair) && pair.length === 2 && pair.every(count) && pair[0] <= pair[1]) (by[checker as VerifyChecker] ??= {})[tile as VerifyTile] = [pair[0], pair[1]];
+    }
+  }
+  if (Object.keys(by).length) out.by = by;
+  return out;
 }
 
 function issue(value: unknown): VerifyIssue | null {

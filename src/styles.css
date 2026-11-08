@@ -171,6 +171,11 @@
   justify-content: flex-end;
 }
 
+/* These skins zero the bot padding the chips pull up into. */
+:is([data-skin="claude"], [data-skin="notebook"]) [data-orbit-message="bot"] [data-orbit-message-body]:has(> [data-message-reactions]) > [data-orbit-message-content] {
+  padding-bottom: 0.875rem;
+}
+
 [data-room-transcript] [data-orbit-message-body]:has(> [data-message-reactions]) {
   padding-bottom: 0;
 }
@@ -2316,6 +2321,17 @@ html:lang(ko) {
   --radius-lg: 4px;
   --radius-xl: 8px;
   --hud-composer-background: linear-gradient(160deg, #414850, #353c44 60%, #2d333b);
+}
+
+@scope ([data-skin="mono-hud"]) to ([data-skin]) {
+  [data-orbit-message="bot"] [data-orbit-message-content] {
+    background: var(--color-card);
+    padding: 10px 14px;
+  }
+
+  [data-orbit-message="user"] [data-orbit-message-content] {
+    box-shadow: none;
+  }
 }
 
 @scope ([data-skin="servo-gray"]) to ([data-skin]) {

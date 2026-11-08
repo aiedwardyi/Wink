@@ -151,20 +151,21 @@ import type { CommsBus } from "./comms-visibility.ts";
 import "./message-db.ts";
 import "./turn-index.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
+import { replyActivity } from "./reply-activity.ts";
 import { reactionSystemGuidance, reactionToolGuidance } from "../shared/reactions.ts";
 import { CommsCallers } from "./comms-caller.ts";
 import { adoptHumanRoot, commit, release, rootForStart, type Reservation } from "./comms-root.ts";
 import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneMailRead, markSteeredMail, settleMail } from "./mail.ts";
 import { turnRegistry } from "./turn-registry.ts";
-import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, settleTakenOverDelegation, type DelegatedTurn } from "./delegations.ts";
-import { hasPeerWatch, onPeerTakeover, peerInputJoined, takeOverPeerTurn, takePeerReplyStamp } from "./peer-takeover.ts";
+import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
+import { hasPeerWatch, watchPeerTurn, peerInputJoined, takePeerReplyStamp } from "./peer-takeover.ts";
+import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
 import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
   clearSendRunning,
   continueQueuedDrainIfIdle,
   drainSteeredMessages,
-  foldQueuedSends,
   hasQueuedSendBefore,
   hasQueuedSends,
   initializeSteerQueue,
@@ -398,8 +399,9 @@ import { webManifestForUserAgent } from "./web-manifest.ts";
 import { createTeamRoutes } from "./team-routes.ts";
 import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
-import { createVerifySite, verifyBridgeClient, verifyDecisionRunId, verifyToolEnv } from "./verify-site.ts";
-import { VERIFY_ROUTES } from "../shared/live-verify.ts";
+import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
+import { createVerifyAuto } from "./verify-auto.ts";
+import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
 import { requestError, unknownRoute } from "./request-error.ts";
@@ -3157,6 +3159,7 @@ async function reviewPermissionCard(args: {
 }
 
 bus.subscribe((event: RuntimeEvent) => {
+  verifyAuto.event(event);
   if (event.type === "request.opened") watchdog.setWaitingOnHuman(event.threadId, true);
   else if (event.type === "request.resolved") watchdog.setWaitingOnHuman(event.threadId, false);
   else if (event.type === "turn.completed") watchdog.settle(event.threadId);
@@ -3331,7 +3334,8 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
-  broadcast({ kind: "runtime", event });
+  const visibleEvent = peerUserRuntime(event);
+  if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {
     markChatLatency({ threadId: event.threadId, turnId: event.turnId }, "provider.started", { turnId: event.turnId });
   } else if (event.type === "content.delta") {
@@ -3401,6 +3405,7 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
+        if (persistPeerUserReply(store, event, lastReply)) break;
         // a peer turn's first shown text keeps its channel, so the Reply-to label survives a user row between ask and answer
         const stamp = takePeerReplyStamp(peerReplyComm, event.threadId, { text: event.text, summarized: event.summarized || event.phase === "commentary" });
         // the line answering a direct steer stays shown: the final does not repeat it
@@ -3850,6 +3855,10 @@ bus.subscribe((event: RuntimeEvent) => {
       turnUsage.set(event.threadId, { input: event.input, output: event.output, cachedInput: event.cachedInput });
       break;
     case "turn.completed": {
+      const verifyOwner = event.turnId ? turnRegistry.get(event.turnId) : undefined;
+      const verifyStartedAt = turnStartedAtMs.get(event.threadId) ?? Date.now();
+      const verifyDisposition = turnCompletionDisposition({ eventTurnId: event.turnId, liveTurnId: liveTurnIdByThread.get(event.threadId), interruptedTurnIds, interruptedAt: turnInterruptedAt.get(event.threadId) ?? 0, dispatchedAt: turnDispatchedAt.get(event.threadId) ?? 0, stopReason: event.stopReason });
+      const verifyRoutine = routineTurnThreads.has(event.threadId);
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
@@ -3999,6 +4008,12 @@ bus.subscribe((event: RuntimeEvent) => {
           // Channel replies only affect the channel unread state.
         }
       }
+      // Before the queue drain subscribers append the next send.
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      setImmediate(() => {
+        const owner = verifyOwner && store.bot(verifyOwner.botId);
+        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
+      });
       // A delegated turn's terminal state belongs in the A⇄B channel:
       // the request was mirrored there when the delegation drained, and a
       // channel that only ever shows requests is half a record. Mirror the
@@ -4016,7 +4031,7 @@ bus.subscribe((event: RuntimeEvent) => {
 // (target threadId → channel) lets the main fold mirror the delegated
 // turn's TERMINAL state into the A⇄B channel when it completes — the
 // channel stays the full record of the handoff, not just its request.
-const delegationWatch = new Map<string, DelegatedTurn & { endTakeover?: () => void; reply: PeerTurnReply }>();
+const delegationWatch = new Map<string, DelegatedTurn & { endPeerWatch?: () => void; reply: PeerTurnReply }>();
 const peerReplies = peerTurnReplies(staleTurnEvent);
 
 /** Consume one delegated-turn watch and mirror exactly one terminal state.
@@ -4032,23 +4047,17 @@ function finalizeDelegationWatch(
   const watched = delegationWatch.get(threadId);
   if (!watched) return false;
   delegationWatch.delete(threadId);
-  watched.endTakeover?.();
+  watched.endPeerWatch?.();
   watched.reply.release();
+  settlePeerUserReplies(threadId);
   return finishDelegatedTurn(commsBus, watched, ok, reply, failureName);
 }
 
 /** Watch a peer turn on `targetThreadId` until it ends: a drained handoff, or an ask that outlived its wait. */
-function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endTakeover?: () => void; reply: PeerTurnReply }): void {
+function watchDelegatedTurn(targetThreadId: string, watched: DelegatedTurn & { sourceThreadId: string; endPeerWatch?: () => void; reply: PeerTurnReply }): void {
   delegationWatch.set(targetThreadId, watched);
   peerTurnSource.set(targetThreadId, watched.sourceThreadId);
-  watched.endTakeover = onPeerTakeover(targetThreadId, (afterReply) => {
-    peerTurnSource.delete(targetThreadId);
-    watched.reply.release();
-    // a reply that finished before the read settles now; the turn's later end finds no watch
-    const finished = afterReply ? watched.reply.text() : undefined;
-    if (finished !== undefined) delegationWatch.delete(targetThreadId);
-    settleTakenOverDelegation(commsBus, watched, cfg.profile?.name?.trim() || "User", finished);
-  }, () => {
+  watched.endPeerWatch = watchPeerTurn(targetThreadId, () => {
     watched.answer ??= watched.reply.text() ?? "";
   });
 }
@@ -4145,6 +4154,7 @@ const runDelegatedTurn: Parameters<typeof drainDelegations>[3] = (toBotId, text,
 bus.subscribe((event: RuntimeEvent) => {
   if (event.type !== "turn.completed") return;
   peerTurnSource.delete(event.threadId);
+  settlePeerUserReplies(event.threadId, event.turnId);
   const sourceBotId = store.botByThread(event.threadId)?.id ?? settledGroupSpeakers.get(event.threadId);
   if (event.turnId) {
     if (settleMail(store, event.threadId, event.turnId, event.ok, event.stopReason ?? undefined)) paneWake.noteArrived(sourceBotId ?? "", event.threadId);
@@ -4254,9 +4264,10 @@ const noteSteer = new NoteSteerer({
 });
 
 function drainQueuedSends() {
+  drainPeerUserReplies(store, startTurn, botHasActiveTurn, terminalBridgeAccess);
   taskResumes.settled();
   drainSteeredMessages(store, (botId, threadId, prompt, userMessage, excludeIds, room) => {
-    // a send that never runs leaves no turn.completed to rerun a taken-over handoff
+    // A failed send still frees waiting handoffs.
     const rerunIfIdle = () =>
       continueQueuedDrainIfIdle(store, botId, () => drainWaitingOn(commsBus, approvalBus, runDelegatedTurn), botHasActiveTurn);
     if (room) {
@@ -4996,13 +5007,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // flipped yet. Fold it in as steer would have, or it drains after this
   // turn's replies. Synchronous through the busy flip, so nothing slips past.
   const folded = currentTurnEpoch(bot.id) === epoch && !(opts?.sendId && isSendCancelled(opts.sendId))
-    ? foldQueuedSends(store, bot.id, threadId, claimMark)
+    ? foldPeerQueuedSends(store, bot.id, threadId, claimMark, instance.adapter.capabilities.queueing === true)
     : [];
   if (folded.length) {
     for (const message of store.activePath(threadId).slice(-folded.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
     clearUnattended(bot.id);
     resumePaneWakes(bot.id);
-    takeOverPeerTurn(threadId);
   }
   const turnOpts = {
     replyTo: opts?.replyTo,
@@ -5382,7 +5392,6 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       if (instance.adapter.capabilities.agentsMcp === true) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
-      if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
       const canMessage = Boolean(integrations.agents) && commsDepth < MAX_COMMS_DEPTH;
       // @mentions in the user's message (the composer's tagging UI) become
       // an explicit delegation nudge — the agent still does the ask_bot call
@@ -5443,13 +5452,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
         // Sends during the setup awaits had no provider turn to steer, so they queued; they join here.
         const late: string[] = [];
         const foldLate = () => {
-          const queued = foldQueuedSends(store, bot.id, threadId, claimMark);
+          const queued = foldPeerQueuedSends(store, bot.id, threadId, claimMark, live.adapter.capabilities.queueing === true);
           if (!queued.length) return;
           for (const message of store.activePath(threadId).slice(-queued.length)) rootId = adoptHumanRoot(threadId, message.sendId ?? message.id);
           late.push(...queued);
           clearUnattended(bot.id);
           resumePaneWakes(bot.id);
-          takeOverPeerTurn(threadId);
           // the user joined this turn, so its finish alerts
           paneNoteTurnThreads.delete(threadId);
         };
@@ -6327,7 +6335,6 @@ async function runClaimedGroupMemberTurn(
   if (instance.adapter.capabilities.agentsMcp === true) {
     integrations.agents = agentsIntegration(bot.id, threadId, hop);
   }
-  if (integrations.agents) Object.assign(integrations.agents.env, verifyToolEnv(Boolean(terminalBridgeAccess)));
   const canMessage = Boolean(integrations.agents) && hop < MAX_COMMS_DEPTH;
   const selectedSkills = selectBundledSkills(
     roomContext,
@@ -7149,6 +7156,13 @@ const verifySite = createVerifySite({
   deviceId: () => profileSyncSettings.deviceId,
   appToken: authorizedComms,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
+  toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+});
+const verifyAuto = createVerifyAuto({
+  enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
+  startAuto: input => verifySite.startAuto(input),
+  cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  log: line => console.log(line),
 });
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
@@ -7611,6 +7625,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (method === "GET" && path === "/api/key-uses") {
       return json(res, 200, { uses: loadKeyUses(DATA_DIR) });
+    }
+
+    if (method === "GET" && path === "/api/activity") {
+      return json(res, 200, replyActivity());
     }
 
     if (method === "GET" && path === "/api/analytics") {

@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { installCommandFor, installSignsIn, openEngineInstallOrCopy } from "./EngineSetup";
 import { isFriendsCliEngine, orderFriendsEngines } from "@/lib/engine-rail";
 import { useI18n } from "@/lib/i18n";
+import { useIsPhone } from "@/lib/use-phone-swipe";
 import { Fold } from "./Fold";
 
 export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boolean {
@@ -18,6 +19,7 @@ export function isEngineConnected(instance: Pick<InstanceInfo, "snapshot">): boo
 export function EngineRow({ instance, onConnected, onUpdated }: { instance: InstanceInfo; onConnected?: () => void; onUpdated?: (instance: InstanceInfo) => void }) {
   const { t } = useI18n();
   const dispatch = useOptionalStoreDispatch();
+  const phone = useIsPhone();
   const [current, setCurrent] = useState(instance);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -69,7 +71,10 @@ export function EngineRow({ instance, onConnected, onUpdated }: { instance: Inst
             )}
           </div>} />
       ) : isEngineConnected(current) ? (
-        <ConnectionRow mark={mark} label={name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
+        <ConnectionRow mark={mark} label={current.snapshot.account ? <div className={cn("flex min-w-0 flex-1 flex-col items-start", !phone && "py-1")}>
+          <div className={phone ? "flex h-9 min-w-0 items-center [@media(pointer:coarse)]:h-11" : "contents"}>{name}</div>
+          <span data-account-email="" className={cn("block min-w-0 max-w-full truncate text-[11px] text-ink-secondary", phone && "-mt-1.5")}>{current.snapshot.account}</span>
+        </div> : name} actions={canSignOut ? <button type="button" onClick={() => void signOut()} disabled={busy}
           className={ROW_BUTTON}>{t("engines.signOut")}</button> : <span>{t("connections.connected")}</span>}>
           {error && <span role="alert">{t("engines.didntFinish")}</span>}
         </ConnectionRow>

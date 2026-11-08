@@ -719,7 +719,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (session.stallDirty) {
         session.stallDirty = false;
         const signature = limitKey ?? stallSignature(text);
-        if (signature !== session.stallText) {
+        if (signature !== session.stallText && !session.idleCompacting) {
           session.stallText = signature;
           session.stallChangedAt = at;
           session.stallScreenAt = at;
@@ -998,7 +998,10 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           // Past the trust menu, so stop scanning every chunk for it.
           if (session.engine !== "agy" || !/^[ \t]*[\u2800-\u28ff]\s+Signing in\.\.\.[ \t]*$/mu.test(session.screen.text())) session.claudeTrustAnswered = true;
           session.autoNote = null;
-          const resumed = session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt
+          // Claude compacts an idle pane on its own before its prompt cache expires; that is not the worker moving.
+          if (session.engine !== "claude" || !CLAUDE_COMPACTING_RE.test(session.screen.text())) session.idleCompacting = false;
+          else if (!session.agentBusy) session.idleCompacting = true;
+          const resumed = !session.idleCompacting && session.worker && session.reportAt >= session.stallArmedAt && now() > session.reportAt
             && (!session.agentBusy || now() - session.reportAt >= REPORT_WRAP_MS);
           if (!session.agentBusy || resumed) {
             session.autoDelivered = false;
@@ -1100,7 +1103,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       outputParser: createTerminalOutputParser(), screen: createTerminalScreen({ cols: input.cols, rows: input.rows }), cols: input.cols ?? 80, pendingInputEcho: "", truncated: false,
       workerReady: false, mail, compactSignal: paneEnv.ORBIT_COMPACT_SIGNAL ?? null, reportSignal: paneEnv.ORBIT_REPORT_SIGNAL ?? null, reportLost: null, teacher: folder.teacher ?? input.botId, worker: false, engine: null, stallArmedAt: 0, stallChangedAt: 0, stallScreenAt: 0, stallText: null,
       stallDirty: false, stallFired: false, stallTries: 0, stallRetryAt: 0, stallPosts: 0, stallRepeatAt: Infinity, stallNotes: [], stallSnagAt: Infinity, stallReceiptAt: -Infinity, capacityContinuedAt: -Infinity, userInputAt: -Infinity, limitsNoted: new Set(), resizedAt: -Infinity, reportAt: 0, noteAt: 0, prestartedAt: null,
-      commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, agentSeen: false, contextNote: null, contextCompactPending: false,
+      commandInputs: [], commandInput: "", commandUserInput: false, runningCommand: null, shellExecuting: false, historyId: null, finished: [], exitNote: null, autoNote: null, autoDelivered: false, autoReported: false, agentBusy: false, idleCompacting: false, agentSeen: false, contextNote: null, contextCompactPending: false,
       claudeTrust: false, claudeTrustMoved: false, claudeTrustAnswered: false, claudeTrustTimer: null,
     };
     session.outputParser = createTerminalOutputParser((osc) => {
@@ -1189,6 +1192,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       session.activityCooldownUntil = 0;
       session.stallArmedAt = now();
       session.stallChangedAt = session.stallArmedAt;
+      session.idleCompacting = false;
       const launched = session.botPane ? WORKER_CLI_RE.exec(text) : null;
       if (launched) {
         session.engine = launched[1].toLowerCase();
@@ -1362,6 +1366,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (session.botPane && !session.runningCommand) session.commandUserInput = true;
         clearActivityTimer(session);
         session.userInputAt = now();
+        session.idleCompacting = false;
       }
       if (submit) session.activityArmed = true;
       if (echo) session.pendingInputEcho = `${session.pendingInputEcho}${echo}`.slice(-INPUT_ECHO_LIMIT);

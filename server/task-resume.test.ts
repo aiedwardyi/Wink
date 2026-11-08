@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as recovery from "./task-recovery-flush.ts";
 import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import { rootForStart } from "./comms-root.ts";
+import { watchPeerTurn } from "./peer-takeover.ts";
+import { _resetPeerUserReplies, beginPeerUserReply, cancelPeerUserReplies, drainPeerUserReplies, settlePeerUserReplies } from "./peer-user-reply.ts";
 import {
   _resetSteerQueue,
   cancelQueuedSends,
@@ -121,6 +123,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   const store = {
     bot: () => bot,
     botByThread: () => bot,
+    taskByThread: () => ({ threadId: bot.threadId }),
     conversationForBot: () => ({ bot, group: options.room ? group : undefined }),
     group: () => group,
     groups: [],
@@ -192,7 +195,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     },
   });
   drainQueuedSends = load("drainQueuedSends", {
-    taskResumes, store, drainSteeredMessages, continueQueuedDrainIfIdle, startTurn, botHasActiveTurn,
+    taskResumes, store, drainPeerUserReplies, drainSteeredMessages, continueQueuedDrainIfIdle, startTurn, botHasActiveTurn,
     startQueuedTurn, writeChatError, terminalBridgeAccess: null, isSendCancelled: () => false,
     markChatLatency: noop, drainWaitingOn: noop, commsBus: {}, approvalBus: {}, runDelegatedTurn: noop,
   });
@@ -215,7 +218,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   };
   const invoke = route('/^\\/api\\/bots\\/([\\w-]+)\\/tasks\\/([\\w-]+)\\/resume$/', { ...resumeDeps, botChatRoutes: { resumeTask: botChatRoute("resumeTask", resumeDeps) } });
   const stopDeps = {
-    store, taskResumes, botHasActiveTurn, cancelQueuedSends,
+    store, taskResumes, botHasActiveTurn, cancelPeerUserReplies, cancelQueuedSends,
     broadcast: (frame: Record<string, unknown>) => frames.push(frame),
     readBody: async () => ({}),
     routines: {
@@ -289,7 +292,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
       groupQueues.set(group.id, next);
     },
     finishPreparation: async () => { finishPreparation(); await original; await flush(); },
-    settle: async () => { live = false; bot.busy = false; finishRoom?.(); settle({ type: "turn.completed", threadId: bot.threadId }); await flush(); },
+    settle: async () => { live = false; bot.busy = false; finishRoom?.(); settlePeerUserReplies(bot.threadId); settle({ type: "turn.completed", threadId: bot.threadId }); await flush(); },
     summarized: () => summarized,
   };
 }
@@ -298,9 +301,21 @@ async function flush() {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
-afterEach(_resetSteerQueue);
+afterEach(() => { _resetSteerQueue(); _resetPeerUserReplies(); });
 
 describe("task resume during cancelled preparation", () => {
+  it.each([false, true])("Stop cancels an unanswered user message in a peer turn (routine: %s)", async (routine) => {
+    const f = rig({ live: true, routine });
+    const end = watchPeerTurn(f.bot.threadId);
+    try {
+      const input = beginPeerUserReply(f.bot.id, f.bot.threadId, "User question")!;
+      input.accept({ id: "user-1", at: 0, role: "user", kind: "text", text: "User question" });
+      await f.stop();
+      await f.settle();
+      expect(f.starts).toEqual([]);
+    } finally { end(); }
+  });
+
   it("holds Resume until the stopped preparation releases its claim and keeps its summary", async () => {
     const f = rig({ preparing: true });
     await f.stop();

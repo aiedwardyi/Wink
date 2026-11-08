@@ -77,6 +77,7 @@
 .usage-empty { font-size: 11px; line-height: 17px; color: var(--color-ink-secondary); }
 .usage-grip { position: absolute; left: -18px; top: 0; display: flex; align-items: center; justify-content: center; width: 14px; height: 20px; color: var(--color-ink-secondary); opacity: 0.4; cursor: grab; touch-action: none; }
 [data-account-row] > .usage-grip { left: 4px; top: 8px; height: 22px; }
+[data-connection-account][data-account-row] > .usage-grip { left: -18px; }
 .usage-grip:hover, .usage-grip:focus-visible { opacity: 1; }
 [data-usage-lifted] { z-index: 5; background: var(--color-panel); border-radius: var(--radius-lg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); scale: 1.03; transition: scale 140ms ease-out, box-shadow 140ms ease-out; }
 [data-usage-lifted] .usage-grip { cursor: grabbing; opacity: 1; }
@@ -137,7 +138,7 @@
   .usage-toolbar { flex-wrap: wrap; }
   .usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-toolbar { height: 22px; }
   .account-name-inline input { height: 32px; }
-  .usage-chat-button { position: relative; }
+  .usage-chat-button { position: relative; z-index: 1; }
   .usage-chat-button::after { content: ""; position: absolute; inset-inline: 0; top: calc(50% - 22px); height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { acceptedSendMatch, parseSendId, SendSequencer, sendFingerprint } from "./send-idempotency.ts";
 import { steersSend } from "./send-deliver.ts";
 import { sendPostReceipt, startedTurn } from "./send-receipt.ts";
+import { hasPeerWatch, watchPeerTurn } from "./peer-takeover.ts";
+import { _resetPeerUserReplies, beginPeerUserReply, drainPeerUserReplies, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
+import type { RuntimeEvent } from "./contracts.ts";
 import * as queue from "./steer-queue.ts";
 import type { BotRecord, Message } from "./store.ts";
 
@@ -15,9 +18,9 @@ const route = ts.transpileModule(source.slice(start, end), { compilerOptions: { 
 // Run only the POST body; importing the server would boot its listeners.
 const runPost = new Function("scope", `return (async () => { with (scope) { ${route} } })();`) as (scope: object) => Promise<{ status: number; body: any }>;
 
-afterEach(() => { queue._resetSteerQueue(); vi.restoreAllMocks(); });
+afterEach(() => { queue._resetSteerQueue(); _resetPeerUserReplies(); vi.restoreAllMocks(); });
 
-function harness(steer = vi.fn(async () => true)) {
+function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = true) {
   const bot = { id: "bot", threadId: "thread", busy: true, modelSelection: { instanceId: "fake", model: "fake" } } as BotRecord;
   const messages: Message[] = [];
   const appendMessage = (_thread: string, message: Omit<Message, "id" | "at">) => {
@@ -25,7 +28,7 @@ function harness(steer = vi.fn(async () => true)) {
     messages.push(saved);
     return saved;
   };
-  const store = { bot: () => bot, taskByThread: () => ({}), messagesFor: () => messages, activePath: () => messages, appendMessage, patchMessage: vi.fn() };
+  const store = { bot: () => bot, taskByThread: () => ({ threadId: bot.threadId, title: "", createdAt: 0, resumeCursors: {} }), messagesFor: () => messages, activePath: () => messages, appendMessage, patchMessage: vi.fn() };
   const startTurn = vi.fn(async (_bot: string, text: string, opts: { sendId?: string; replyTo?: Message }) => {
     bot.busy = true;
     return startedTurn(appendMessage(bot.threadId, { role: "user", kind: "text", text, sendId: opts.sendId, replyToId: opts.replyTo?.id }));
@@ -41,11 +44,11 @@ function harness(steer = vi.fn(async () => true)) {
     readBody: async () => ({}), json: (_res: unknown, status: number, body: unknown) => ({ status, body }),
     noteTalked: noop, threadSyncGate: { enabled: false }, pullSyncedThread: noop,
     ensureChatLatency: noop, markChatLatency: noop, resolveReplyTarget: (_thread: string, id?: string) => messages.find((m) => m.id === id),
-    botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing: true }, steer, interruptTurn } }]]),
-    instanceForBot: () => ({ adapter: { capabilities: { queueing: true }, steer, interruptTurn } }),
-    steerTakeover: () => ({ consumed: noop, accepted: noop }), cfg: {},
+    botHasActiveTurn: () => false, registry: new Map([["fake", { adapter: { capabilities: { queueing }, steer, interruptTurn } }]]),
+    instanceForBot: () => ({ adapter: { capabilities: { queueing }, steer, interruptTurn } }),
+    beginPeerUserReply, cfg: {},
     composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text,
-    userTurnReactionKeys: () => [], hasPeerWatch: () => false, clearUnattended: noop,
+    userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
     resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain,
   };
   const hold = (text: string) => {
@@ -58,6 +61,47 @@ function harness(steer = vi.fn(async () => true)) {
 }
 
 describe("queued send through the message POST", () => {
+  it.each([true, false])("splits the user's live reply or follows its original row (marked: %s)", async (marked) => {
+    const h = harness();
+    const end = watchPeerTurn(h.bot.threadId);
+    try {
+      const receipt = await h.post({ text: "User question" });
+      expect(receipt.body.message).toMatchObject({ role: "user", text: "User question", steered: true });
+      expect(h.steer.mock.calls[0]![1]).toContain("one short line");
+      const prompt = h.steer.mock.calls[0]![1] as string;
+      const tag = prompt.match(/<user\d+>/)![0];
+      const event = { provider: "claude", eventId: "reply", createdAt: new Date().toISOString(), threadId: h.bot.threadId, type: "item.completed", itemType: "assistant_text", text: marked ? `${tag}Short answer.${tag.replace("<", "</")}` : "Peer answer." } as RuntimeEvent;
+      peerUserRuntime(event);
+      persistPeerUserReply(h.store, event);
+      expect(hasPeerWatch(h.bot.threadId)).toBe(true);
+      settlePeerUserReplies(h.bot.threadId);
+      h.bot.busy = false;
+      const follow = vi.fn(async () => {});
+      drainPeerUserReplies(h.store, follow, () => false);
+      if (marked) {
+        expect(h.messages.map((message) => message.text)).toEqual(["User question", "Short answer."]);
+        expect(follow).not.toHaveBeenCalled();
+      } else {
+        expect(follow).toHaveBeenCalledExactlyOnceWith(h.bot.id, "User question", expect.objectContaining({ userMessage: receipt.body.message }));
+        expect(h.messages.map((message) => message.text)).toEqual(["User question"]);
+      }
+    } finally { end(); }
+  });
+
+  it("holds a peer-turn user send for an engine without mid-turn input", async () => {
+    const h = harness(undefined, false);
+    const end = watchPeerTurn(h.bot.threadId);
+    try {
+      expect((await h.post({ text: "User question" })).body).toMatchObject({ queued: true });
+      expect(h.steer).not.toHaveBeenCalled();
+      expect(h.messages).toEqual([]);
+      h.bot.busy = false;
+      h.drain();
+      expect(h.drainRun).toHaveBeenCalledOnce();
+      expect(h.messages.map((message) => message.text)).toEqual(["User question"]);
+    } finally { end(); }
+  });
+
   it("uses the same live steer as Enter and consumes only the selected queue receipt", async () => {
     const h = harness();
     h.hold("first");

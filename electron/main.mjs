@@ -1227,6 +1227,21 @@ async function openDeviceWindow(rawHost, rawName) {
       if (open) void shell.openExternal(open);
       return { action: "deny" };
     });
+    win.webContents.on("context-menu", (_event, params) => {
+      if (params.mediaType !== "image") return;
+      const menuItems = contextMenuTemplate(params, nativeText, {
+        copyLink: (href) => clipboard.writeText(href),
+        copyImage: () => win.webContents.copyImageAt(params.x, params.y),
+        saveImage: () => saveImageCopy(params.srcURL, {
+          dialog,
+          downloads: app.getPath("downloads"),
+          window: win,
+          // The remote PC's login cookie belongs to this session, not node fetch.
+          fetchImpl: (href) => devices.fetch(href),
+        }).catch((error) => dialog.showErrorBox(nativeText("native.saveCopyFailed"), error?.message ?? String(error))),
+      });
+      Menu.buildFromTemplate(menuItems).popup({ window: win, frame: params.frame });
+    });
     win.webContents.on("before-input-event", (event, input) => {
       routeWindowZoomKeys(event, input, win.webContents);
     });

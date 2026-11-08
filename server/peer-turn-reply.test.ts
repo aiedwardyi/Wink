@@ -19,6 +19,16 @@ function rig(staleTurns: string[] = []) {
 }
 
 describe("peerTurnReplies", () => {
+  it.each([undefined, "commentary", "final_answer"] as const)("excludes marked user text with phase %s", (phase) => {
+    const r = rig();
+    const reply = r.replies.start("wink");
+    r.started("wink", "t1");
+    r.text("wink", "t1", "<user1>네, 확인할게요.</user1>", phase);
+    r.text("wink", "t1", "The peer answer.");
+    r.completed("wink", "t1");
+    expect(reply.text()).toBe("The peer answer.");
+  });
+
   it("keeps every text item of the turn, not only the last", () => {
     const r = rig();
     const wink = r.replies.start("wink");

@@ -469,7 +469,7 @@ export const Transcript = memo(function Transcript({
           // only accepts an "answer", so routing it here would offer an
           // Allow the broker rejects
           m.kind === "note" && m.verify ? (
-            <VerifyCard card={m.verify} threadId={group.threadId} />
+            <VerifyCard card={m.verify} threadId={group.threadId} messageId={m.id} />
           ) : m.kind === "secret" && m.secret && m.from?.botId ? (
             <SecretRequestCard botId={m.from.botId} threadId={group.threadId} message={m} />
           ) : m.kind === "connector" && m.connector && m.from?.botId ? (

@@ -94,7 +94,7 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
 
 it("grows the chat bar's coarse-pointer hit area to 44px without moving its bars", () => {
   const coarse = css.slice(css.indexOf("@media (pointer: coarse)"));
-  expect(coarse).toContain(".usage-chat-button { position: relative; }");
+  expect(coarse).toContain(".usage-chat-button { position: relative; z-index: 1; }");
   expect(coarse).toMatch(/\.usage-chat-button::after \{[^}]*inset-inline: 0;[^}]*top: calc\(50% - 22px\);[^}]*height: 44px;/);
   expect(rule(".usage-chat-button")).not.toContain("min-height");
 });
