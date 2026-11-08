@@ -39,6 +39,11 @@ export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "betwe
 
 export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number; hold: number }
 export interface Cursor { checker: string; tile: VerifyTile; extra?: number; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
+/** Where a cursor's tag sits (arrow units, 14 tall); none on a spare, and it flips to stay inside the view. */
+export function tagSpot(c: Cursor, p: { x: number; y: number }, width: number, view: readonly [number, number], px: number) {
+  if (c.extra) return null;
+  return { x: p.x + (11 + width) * px > view[0] ? -width : 11, y: p.y + 29 * px > view[1] ? -16 : 15 };
+}
 const cursorKey = (c: Cursor) => `${c.tile}:${c.extra ? `+${c.extra}` : c.checker}`;
 export interface Ring { tile: VerifyTile; x: number; y: number; at: number }
 interface Stored { jpeg: Uint8Array; scrollY: number; ms: number }

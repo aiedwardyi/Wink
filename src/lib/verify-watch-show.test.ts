@@ -4,7 +4,7 @@ import { createReplay } from "../../server/verify-replay.ts";
 import { readReplay } from "./verify-replay";
 import type { VerifyIssue } from "../../shared/live-verify";
 import type { VerifyReplayChunk } from "./verify-replay";
-import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow } from "./verify-watch-show";
+import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow, tagSpot } from "./verify-watch-show";
 
 const head: VerifyReplayChunk = { kind: "head", head: { v: 1, runId: "r", site: "luna/index.html", page: "index.html", startedAt: 0, tiles: { desktop: [1280, 720], phone: [392, 800] } } };
 const frame = (ms: number, tile: "desktop" | "phone" = "desktop"): VerifyReplayChunk => ({ kind: "frame", tile, ms, jpeg: new Uint8Array([ms & 255]) });
@@ -597,5 +597,26 @@ it("never lands two cursors on the same spot when checkers share boxes", () => {
     show.advance(16);
     const landed = swarm(show).filter(c => show.clock >= c.at + c.duration && c.to.y >= 0).map(c => c.to);
     landed.forEach((p, i) => landed.slice(i + 1).forEach(q => expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(20)));
+  }
+});
+
+it("labels only a checker's own cursor, never its spares", () => {
+  const show = replay(frame(0), ...boxes("LINKS", 2), ...boxes("TEXT_A", 29), ...boxes("FIT", 19), end(90));
+  toClock(show, 1000);
+  const all = swarm(show), p = { x: 100, y: 100 };
+  expect(all.filter(c => c.extra).length).toBeGreaterThan(0);
+  for (const c of all) expect(tagSpot(c, p, 40, [1280, 720], 1) === null).toBe(Boolean(c.extra));
+});
+
+it("keeps a tag inside the view by flipping it off the right and bottom edge", () => {
+  const cursor = { checker: "LINKS", tile: "desktop", from: { x: 0, y: 0 }, to: { x: 0, y: 0 }, at: 0, duration: 0 } as const;
+  const view = [1280, 720] as const, width = 38;
+  for (const px of [1, 1.5, 3]) for (const [x, y] of [[100, 100], [1270, 100], [100, 715], [1275, 719], [1280 - 14 * px, 720 - 20 * px]] as const) {
+    const spot = tagSpot(cursor, { x, y }, width, view, px)!;
+    const left = x + spot.x * px, top = y + spot.y * px;
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(left + width * px).toBeLessThanOrEqual(view[0]);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(top + 14 * px).toBeLessThanOrEqual(view[1]);
   }
 });

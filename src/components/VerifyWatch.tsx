@@ -8,7 +8,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/verify-copy";
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { chooseVerifyTab, closeVerifyWatch, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
-import { BANNER_MS, VerifyWatchShow, type Part } from "@/lib/verify-watch-show";
+import { BANNER_MS, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
 import "./VerifyWatch.css";
 
 const copy = {
@@ -234,9 +234,12 @@ export function VerifyWatchFrame({ card, threadId, live, hidden, inline = false,
       ctx.scale(px, px);
       ctx.fillStyle = color; ctx.strokeStyle = "#f8fafc"; ctx.lineWidth = 1.2;
       ctx.fill(ARROW); ctx.stroke(ARROW);
-      ctx.fillRect(11, 15, tag.length * TAG_CHAR + 8, 14);
-      ctx.fillStyle = "#0a0d14";
-      ctx.fillText(tag, 15, 25);
+      const width = tag.length * TAG_CHAR + 8, spot = tagSpot(cursor, p, width, [w, h], px);
+      if (spot) {
+        ctx.fillRect(spot.x, spot.y, width, 14);
+        ctx.fillStyle = "#0a0d14";
+        ctx.fillText(tag, spot.x + 4, spot.y + 10);
+      }
       ctx.restore();
     }
   }
