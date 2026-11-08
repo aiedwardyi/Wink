@@ -16,6 +16,7 @@
 /* ── Inkwell ───────────────────────────────────────────────────────────────
    Near-black for long sessions: body text near 12:1, never white, dim lines.
    ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="inkwell"],
 [data-skin="inkwell"] {
   --color-app: #0a0b0d;
   --color-panel: #0f1013;
@@ -52,6 +53,7 @@
 /* ── Graphite ──────────────────────────────────────────────────────────────
    Neutral mid gray, no blue cast, with the Memory tab's blue as the accent.
    ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="graphite"],
 [data-skin="graphite"] {
   --color-app: #26282c;
   --color-panel: #202225;
@@ -88,6 +90,7 @@
 /* ── Moss ──────────────────────────────────────────────────────────────────
    Deep forest floor, cream ink and a sage accent, in rounded Nunito.
    ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="moss"],
 [data-skin="moss"] {
   --color-app: #171c18;
   --color-panel: #131714;

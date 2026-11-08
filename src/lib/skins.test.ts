@@ -727,6 +727,11 @@ describe("Inkwell, Graphite and Moss", () => {
     }
   });
 
+  it.each(FRESH_SKINS)("lets $id's root-level tokens outrank the :root defaults", ({ id }) => {
+    const rule = css.match(new RegExp(`:root\\[data-skin="${id}"\\],\\s*\\[data-skin="${id}"\\]\\s*\\{([^}]*)\\}`));
+    expect(rule?.[1]).toContain("--color-accent-ink");
+  });
+
   it("puts both sides in wide bubbles", () => {
     const scope = '@scope (:is([data-skin="inkwell"], [data-skin="graphite"], [data-skin="moss"])) to ([data-skin]) {';
     const body = css.slice(css.indexOf(scope), css.indexOf("\n}\n", css.indexOf(scope)));
