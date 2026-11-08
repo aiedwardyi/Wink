@@ -12,8 +12,16 @@ const MAX_THINGS = SHOW_MAX_MS / THING_MS;
 const LIVE_OUTLINE_MS = 700;
 const FADE_MS = 90;
 const RING_MS = 220;
-const GLIDE_MS = 600;
 const LIVE_GLIDE_MS = 250;
+const CURSOR_MS = 900;
+const CURSOR_REST_MS = 180;
+const CURSOR_GAP = 110;
+const CURSOR_NEAR = 40;
+const CURSOR_REACH = 1100;
+const CURSOR_ALONG = [0, 0.6, 0.3];
+const CURSOR_MAX = 6;
+const CURSOR_EXTRA = 3;
+const CURSOR_ROOM = 4;
 
 type Row = Record<string, unknown> & { result?: unknown; box: number[] | null };
 
@@ -30,7 +38,13 @@ export type Part = "loads" | "links" | "phone";
 export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "between" | "done" | "expired" | "failed";
 
 export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number; hold: number }
-export interface Cursor { checker: string; tile: VerifyTile; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
+export interface Cursor { checker: string; tile: VerifyTile; extra?: number; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
+/** Where a cursor's tag sits (arrow units, 14 tall); none on a spare, and it flips to stay inside the view. */
+export function tagSpot(c: Cursor, p: { x: number; y: number }, width: number, view: readonly [number, number], px: number) {
+  if (c.extra) return null;
+  return { x: p.x + (11 + width) * px > view[0] ? -width : 11, y: p.y + 29 * px > view[1] ? -16 : 15 };
+}
+const cursorKey = (c: Cursor) => `${c.tile}:${c.extra ? `+${c.extra}` : c.checker}`;
 export interface Ring { tile: VerifyTile; x: number; y: number; at: number }
 interface Stored { jpeg: Uint8Array; scrollY: number; ms: number }
 
@@ -98,6 +112,83 @@ function shownThings(all: Thing[]): Thing[] {
 
 const nearest = (list: Stored[], y: number) => list.reduce((best, f) => Math.abs(f.scrollY - y) <= Math.abs(best.scrollY - y) ? f : best);
 
+interface Spot { x: number; y: number; w: number; thing: number; top: number | null; visits: number }
+
+function spotsOf(things: Thing[], [w, h]: readonly number[]) {
+  const spots = new Map<string, Map<string, Spot>>();
+  things.forEach((thing, i) => {
+    for (const row of thing.rows) {
+      if (row.result === "skip") continue;
+      const checker = typeof row.checker === "string" ? row.checker : "CHECK", own = spots.get(checker) ?? new Map<string, Spot>(), box = row.box;
+      spots.set(checker, own);
+      if (!box) continue;
+      const x = box[0]! + Math.min(box[2]! * 0.3, 12), y = box[1]! + Math.min(box[3]! * 0.6, 10);
+      own.set(`${x},${y}`, { x, y, w: box[2]!, thing: i, top: row.pin ? typeof row.mscroll === "number" ? row.mscroll : 0 : null, visits: 0 });
+    }
+  });
+  // A check with no box looked at the page as a whole.
+  for (const own of spots.values()) {
+    if (own.size) continue;
+    for (const [x, y] of [[0.35, 0.4], [0.65, 0.6]] as const) own.set(`${x}`, { x: w! * x, y: h! * y, w: 0, thing: 0, top: 0, visits: 0 });
+  }
+  return new Map([...spots].map(([checker, own]) => [checker, [...own.values()]]));
+}
+
+interface Lane { id: string; checker: string; extra: number }
+
+/** Each checker's glides over its own checks in view, arriving one cursor at a time; spare cursors join the checker with the most boxes left to visit. */
+function cursorRoutes(tile: VerifyTile, things: Thing[], size: readonly number[], slot: number, play: number, scrollAt: (at: number) => number): Cursor[] {
+  const spots = spotsOf(things, size), route: Cursor[] = [], h = size[1]!;
+  const lanes: Lane[] = [...spots.keys()].map(checker => ({ id: checker, checker, extra: 0 }));
+  if (!lanes.length) return route;
+  const shown = (spot: Spot, top: number) => { const y = spot.y - (spot.top ?? top); return y >= 0 && y <= h - 16; };
+  const richest = [...spots].map(([checker, own]) => ({ checker, n: own.filter(s => s.w).length })).sort((a, b) => b.n - a.n)[0]!;
+  // A spare cursor needs boxes of its own to visit, so a check with no box (or a few) lends none.
+  const spare = Math.min(CURSOR_EXTRA, CURSOR_MAX - lanes.length, Math.floor(richest.n / CURSOR_ROOM));
+  for (let extra = 1; extra <= spare; extra++) lanes.push({ id: `+${extra}`, checker: richest.checker, extra });
+  const now = new Map<string, { x: number; y: number }>(), arrived = new Map<string, number>(), last = new Map<string, Spot>();
+  const aim = (lane: Lane, at: number) => {
+    const top = scrollAt(at), lit = slot ? Math.floor(at / slot) : 0, others = [...now].filter(([id]) => id !== lane.id).map(([, p]) => p), from = now.get(lane.id);
+    if (lane.extra) {
+      const fresh = (checker: string) => spots.get(checker)!.filter(s => s.w && !s.visits && shown(s, top)).length;
+      const pick = [...spots.keys()].sort((a, b) => fresh(b) - fresh(a))[0]!;
+      if (!fresh(lane.checker) && fresh(pick)) lane.checker = pick;
+    }
+    let best: { spot: Spot; x: number; y: number; score: number } | null = null;
+    for (const spot of spots.get(lane.checker)!) {
+      if (!shown(spot, top) || (lane.extra && !spot.w)) continue;
+      const y = spot.y - (spot.top ?? top);
+      const x = spot.x + Math.max(0, spot.w - 30) * CURSOR_ALONG[spot.visits % CURSOR_ALONG.length]!;
+      const gap = Math.min(Infinity, ...others.map(p => Math.hypot(p.x - x, p.y - y)));
+      if (gap < CURSOR_NEAR) continue;
+      const far = from ? Math.max(0, Math.hypot(x - from.x, y - from.y) - CURSOR_REACH) : 0;
+      const score = (gap < CURSOR_GAP ? 1e6 - gap : 0) + spot.visits * 1000 + Math.abs(spot.thing - lit) + far * 10;
+      if (!best || score < best.score) best = { spot, x, y, score };
+    }
+    if (best) { best.spot.visits++; last.set(lane.id, best.spot); return { x: best.x, y: best.y }; }
+    // Nothing free of its own in this view: it waits just off the page, on the side its last check went.
+    const gone = last.get(lane.id) ?? spots.get(lane.checker)![0]!;
+    return { x: gone.x, y: gone.y - (gone.top ?? top) < 0 ? -40 : h + 8 };
+  };
+  const cursor = (lane: Lane, fields: Pick<Cursor, "from" | "to" | "at" | "duration">): Cursor => ({ checker: lane.checker, tile, ...(lane.extra ? { extra: lane.extra } : {}), ...fields });
+  for (const lane of lanes) {
+    const to = aim(lane, 0);
+    now.set(lane.id, to);
+    arrived.set(lane.id, 0);
+    route.push(cursor(lane, { from: to, to, at: 0, duration: 0 }));
+  }
+  const step = CURSOR_MS / lanes.length, lead = Math.max(0, CURSOR_MS * 2 / 3 - step);
+  // Everyone is under way within one rest of the start, and the route runs past the end so nobody sits still waiting for the show to close.
+  for (let turn = 1; lead + turn * step < play + CURSOR_MS; turn++) {
+    const lane = lanes[(turn - 1) % lanes.length]!, due = lead + turn * step, from = now.get(lane.id)!;
+    const free = due - (CURSOR_MS - CURSOR_REST_MS), at = Math.max(arrived.get(lane.id)!, turn <= lanes.length ? Math.min(free, CURSOR_REST_MS) : free), to = aim(lane, due);
+    now.set(lane.id, to);
+    arrived.set(lane.id, due);
+    route.push(cursor(lane, { from, to, at, duration: due - at }));
+  }
+  return route;
+}
+
 /** One watch session. Live chunks play as they come; a replay is paced one real thing at a time. */
 export class VerifyWatchShow {
   clock = 0;
@@ -126,6 +217,8 @@ export class VerifyWatchShow {
   /** [done, planned] per checker and tile, the shape the card's lanes read while a check runs */
   lanes: NonNullable<VerifyCounts["by"]> = {};
   private queue: Array<{ due: number; chunk: VerifyReplayChunk; at: number; scrollY: number }> = [];
+  /** a replay's cursor glides, by start time */
+  private route: Cursor[] = [];
   private held: VerifyReplayChunk[] = [];
   private planned = false;
   /** scroll in stream order, so each frame knows the stop it was shot at */
@@ -151,6 +244,7 @@ export class VerifyWatchShow {
     this.frames = { desktop: null, phone: null };
     this.history = { desktop: [], phone: [] };
     this.queue = [];
+    this.route = [];
     this.set("loading");
   }
 
@@ -229,8 +323,12 @@ export class VerifyWatchShow {
     const tail = Math.max(...(["desktop", "phone"] as const).map(tile => marks.filter(m => atEnd(m) && pointTile(m) === tile).length)) * RING_MS;
     const play = Math.max(0, total - tail), clicks = { desktop: 0, phone: 0 };
     const add = (at: number, chunk: VerifyReplayChunk) => this.queue.push({ due: start + at, chunk, at: start + at, scrollY: 0 });
+    const views: Record<VerifyTile, Array<{ at: number; y: number }>> = { desktop: [], phone: [] };
     const view = (at: number, tile: VerifyTile, y: number) => {
-      if (this.history[tile].length) add(at, { kind: "mark", mark: { ms: 0, kind: "view", tile, frame: nearest(this.history[tile], y) } });
+      if (!this.history[tile].length) return;
+      const frame = nearest(this.history[tile], y);
+      views[tile].push({ at, y: frame.scrollY });
+      add(at, { kind: "mark", mark: { ms: 0, kind: "view", tile, frame } });
     };
     for (const { tile, things } of lists) {
       if (this.history[tile].length) {
@@ -251,6 +349,10 @@ export class VerifyWatchShow {
       add(at, { kind: "mark", mark });
     }
     if (end) add(play + tail, end);
+    this.route = lists.flatMap(({ tile, things }) => {
+      const size = this.head?.tiles[tile] ?? (tile === "phone" ? [392, 800] : [1280, 720]), scrollAt = (at: number) => views[tile].filter(v => v.at <= at).sort((a, b) => a.at - b.at).at(-1)?.y ?? this.scroll[tile];
+      return cursorRoutes(tile, things, size, things.length ? play / things.length : 0, play, scrollAt);
+    }).map(c => ({ ...c, at: start + c.at })).sort((a, b) => a.at - b.at);
     this.set("play");
   }
 
@@ -259,12 +361,17 @@ export class VerifyWatchShow {
 
   /** Moves the clock; false while nothing changed. */
   advance(ms: number): boolean {
-    const before = this.version;
+    const before = this.version, from = this.clock;
     this.clock += Math.max(0, Math.min(ms, 250));
     this.queue.sort((a, b) => a.due - b.due);
     while (this.queue.length && this.queue[0]!.due <= this.clock) {
       const { chunk, at, scrollY, due } = this.queue.shift()!;
       this.apply(chunk, at, scrollY, due);
+    }
+    while (this.route.length && this.route[0]!.at <= this.clock) {
+      const cursor = this.route.shift()!;
+      this.cursors.set(cursorKey(cursor), cursor);
+      this.version++;
     }
     this.step();
     for (const wait of this.waits.filter(w => w.at <= this.clock)) wait.resolve();
@@ -273,7 +380,7 @@ export class VerifyWatchShow {
       this.outlines = this.outlines.filter(o => o.issue || this.clock - o.at <= o.hold + FADE_MS);
       this.version++;
     }
-    if (this.moving()) this.version++;
+    if (this.moving(from)) this.version++;
     return this.version !== before;
   }
 
@@ -317,34 +424,10 @@ export class VerifyWatchShow {
   }
 
   cursorAt(cursor: Cursor, reduced = false, clock = this.clock) {
-    if (reduced) return cursor.to;
-    const move = this.cursorMove(cursor);
-    const k = move.duration ? Math.min(1, Math.max(0, (clock - move.at) / move.duration)) : 1;
+    if (reduced) return this.live || clock >= cursor.at + cursor.duration ? cursor.to : cursor.from;
+    const k = cursor.duration ? Math.min(1, Math.max(0, (clock - cursor.at) / cursor.duration)) : 1;
     const e = k * k * k * (10 + k * (-15 + 6 * k));
-    return { x: move.from.x + (move.to.x - move.from.x) * e, y: move.from.y + (move.to.y - move.from.y) * e };
-  }
-
-  private cursorMove(cursor: Cursor): Cursor {
-    if (this.live) return cursor;
-    let next: { due: number; index: number; ev: Record<string, unknown>; box: Rect } | null = null;
-    for (const [index, item] of this.queue.entries()) {
-      if (item.due <= cursor.at || item.chunk.kind !== "mark" || item.chunk.mark.kind !== "result") continue;
-      const ev = (item.chunk.mark.ev ?? {}) as Record<string, unknown>;
-      const box = rect(ev.box);
-      if (!box || ev.result === "skip" || tileOf(ev.tile) !== cursor.tile) continue;
-      if (!next || item.due <= next.due) next = { due: item.due, index, ev, box };
-    }
-    if (!next) return cursor;
-    let scrollY = this.scroll[cursor.tile];
-    for (const item of this.queue.slice(0, next.index)) {
-      if (item.chunk.kind !== "mark") continue;
-      const mark = item.chunk.mark;
-      if (mark.kind === "view" && tileOf(mark.tile) === cursor.tile) scrollY = (mark.frame as Stored).scrollY;
-    }
-    const top = next.ev.pin ? typeof next.ev.mscroll === "number" ? next.ev.mscroll : 0 : scrollY;
-    const to = { x: next.box.x + Math.min(next.box.w * 0.3, 12), y: next.box.y - top + Math.min(next.box.h * 0.6, 10) };
-    const at = Math.max(cursor.at, next.due - GLIDE_MS);
-    return { ...cursor, from: cursor.to, to, at, duration: next.due - at };
+    return { x: cursor.from.x + (cursor.to.x - cursor.from.x) * e, y: cursor.from.y + (cursor.to.y - cursor.from.y) * e };
   }
 
   outlineAlpha(outline: Outline): number {
@@ -353,8 +436,8 @@ export class VerifyWatchShow {
     return age <= outline.hold ? 1 : Math.max(0, 1 - (age - outline.hold) / FADE_MS);
   }
 
-  private moving() {
-    return [...this.cursors.values()].some(c => { const move = this.cursorMove(c); return this.clock >= move.at && this.clock < move.at + move.duration; }) || (this.ring !== null && this.clock - this.ring.at < RING_MS) || this.outlines.some(o => !o.issue && this.clock - o.at > o.hold - 20);
+  private moving(from: number) {
+    return [...this.cursors.values()].some(c => this.clock >= c.at && from < c.at + c.duration) || (this.ring !== null && this.clock - this.ring.at < RING_MS) || this.outlines.some(o => !o.issue && this.clock - o.at > o.hold - 20);
   }
 
   private set(phase: ShowPhase) {
@@ -390,6 +473,7 @@ export class VerifyWatchShow {
       this.end = chunk.end;
       this.outlines = this.outlines.filter(o => o.issue);
       this.cursors.clear();
+      this.route = [];
       this.reel = verifyReel(this.pinned ? chunk.end.issues.filter(issue => issue.tile === this.pinned) : chunk.end.issues);
       this.set(chunk.end.status === "blocked" ? "failed" : this.reel.length ? "reel" : chunk.end.issues.length ? "after" : "clean");
       return;
@@ -427,11 +511,11 @@ export class VerifyWatchShow {
       const outline: Outline = { tile: tileOf(ev.tile), checker, issue, box, pin: Boolean(ev.pin), mscroll: typeof ev.mscroll === "number" ? ev.mscroll : 0, at, hold: typeof ev.hold === "number" ? ev.hold : LIVE_OUTLINE_MS };
       this.outlines.push(outline);
       if (this.outlines.length > 400) this.outlines.splice(this.outlines.findIndex(o => !o.issue), 1);
-      const key = this.live ? checker : outline.tile, target = this.view(outline), last = this.cursors.get(key);
+      if (!this.live) return;
+      const target = this.view(outline), last = this.cursors.get(checker);
       const to = { x: target.x + Math.min(target.w * 0.3, 12), y: target.y + Math.min(target.h * 0.6, 10) };
-      const start = this.live ? due : at;
-      const from = this.live && last?.tile === outline.tile ? this.cursorAt(last, false, start) : to;
-      this.cursors.set(key, { checker, tile: outline.tile, from, to, at: start, duration: this.live && last?.tile === outline.tile ? LIVE_GLIDE_MS : 0 });
+      const from = last?.tile === outline.tile ? this.cursorAt(last, false, due) : to;
+      this.cursors.set(checker, { checker, tile: outline.tile, from, to, at: due, duration: last?.tile === outline.tile ? LIVE_GLIDE_MS : 0 });
     }
   }
 }

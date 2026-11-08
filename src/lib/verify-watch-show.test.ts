@@ -4,7 +4,7 @@ import { createReplay } from "../../server/verify-replay.ts";
 import { readReplay } from "./verify-replay";
 import type { VerifyIssue } from "../../shared/live-verify";
 import type { VerifyReplayChunk } from "./verify-replay";
-import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow } from "./verify-watch-show";
+import { BANNER_MS, LIVE_CLOSE_MS, REEL_MS, SHOW_MAX_MS, SHOW_MIN_MS, THING_MS, VerifyWatchShow, tagSpot } from "./verify-watch-show";
 
 const head: VerifyReplayChunk = { kind: "head", head: { v: 1, runId: "r", site: "luna/index.html", page: "index.html", startedAt: 0, tiles: { desktop: [1280, 720], phone: [392, 800] } } };
 const frame = (ms: number, tile: "desktop" | "phone" = "desktop"): VerifyReplayChunk => ({ kind: "frame", tile, ms, jpeg: new Uint8Array([ms & 255]) });
@@ -14,7 +14,7 @@ const end = (ms: number, issues: VerifyIssue[] = []): VerifyReplayChunk => ({ ki
 const run = (show: VerifyWatchShow, until: number, step = 10) => { while (show.clock < until) show.advance(step); };
 const toClock = (show: VerifyWatchShow, until: number, step = 16) => { while (show.clock < until) show.advance(Math.min(step, until - show.clock)); };
 const result = (ms: number, x: number, y: number, extra: Record<string, unknown> = {}) => mark(ms, "result", { ev: { tile: "desktop", checker: "LINKS", result: "ok", box: [x, y, 40, 20], where: `a#x${x}y${y}`, ...extra } });
-const position = (show: VerifyWatchShow, reduced = false) => show.cursorAt(show.cursors.get(show.live ? "LINKS" : "desktop")!, reduced);
+const position = (show: VerifyWatchShow, reduced = false) => show.cursorAt(show.cursors.get(show.live ? "LINKS" : "desktop:LINKS")!, reduced);
 const replay = (...chunks: VerifyReplayChunk[]) => {
   const show = new VerifyWatchShow(false);
   show.beginRun();
@@ -97,14 +97,13 @@ it("has no beat: live marks land at once with no grid", () => {
   expect(show.checks).toBe(1);
 });
 
-it("glides between things, stays continuous at 16 ms frames and arrives as the next thing starts", () => {
+it("glides to the checker's own next thing, stays continuous at 16 ms frames and leaves the outlines on their beat", () => {
   const show = replay(result(0, 0, 0), result(1200, 1000, 500), end(1300));
-  const at = SHOW_MIN_MS / 2;
   let last = position(show);
-  toClock(show, at - 600);
+  toClock(show, 180);
   expect(position(show)).toEqual(last);
-  while (show.clock < at) {
-    show.advance(Math.min(16, at - show.clock));
+  while (show.clock < 900) {
+    show.advance(Math.min(16, 900 - show.clock));
     const p = position(show);
     expect(Math.hypot(p.x - last.x, p.y - last.y)).toBeLessThan(60);
     expect(p.x).toBeGreaterThanOrEqual(last.x);
@@ -112,31 +111,39 @@ it("glides between things, stays continuous at 16 ms frames and arrives as the n
     last = p;
   }
   expect(position(show)).toEqual({ x: 1012, y: 510 });
+  expect(show.checks).toBe(1);
+  toClock(show, SHOW_MIN_MS / 2);
   expect(show.checks).toBe(2);
 });
 
-it("jumps only on the thing with reduced motion, keeping check timing unchanged", () => {
+it("jumps only on arrival with reduced motion, keeping check timing unchanged", () => {
   const show = replay(result(0, 0, 0), result(1200, 1000, 0), end(1300));
-  const at = SHOW_MIN_MS / 2;
-  toClock(show, at - 100);
+  toClock(show, 800);
   expect(position(show).x).toBeGreaterThan(900);
   expect(position(show, true)).toEqual({ x: 12, y: 10 });
-  expect(show.checks).toBe(1);
-  toClock(show, at);
+  toClock(show, 900);
   expect(position(show, true)).toEqual({ x: 1012, y: 10 });
+  expect(show.checks).toBe(1);
+  toClock(show, SHOW_MIN_MS / 2);
   expect(show.checks).toBe(2);
 });
 
-it("aims for the next thing at the scroll stop it plays at", () => {
+it("redraws on the frame a cursor arrives so a reduced-motion jump shows on time", () => {
+  const show = replay(result(0, 0, 0), result(1200, 1000, 0), end(1300));
+  toClock(show, 899);
+  expect(show.advance(2)).toBe(true);
+  expect(position(show, true)).toEqual({ x: 1012, y: 10 });
+  expect(show.advance(2)).toBe(false);
+});
+
+it("aims only at things in the view it plays at", () => {
   const show = replay(frame(0), result(0, 0, 0), mark(1100, "scroll", { tile: "desktop", y: 500 }), frame(1110), result(1200, 600, 700, { scrollY: 500 }), end(1300));
-  const at = SHOW_MIN_MS / 2;
-  toClock(show, at - 200);
-  expect(show.scroll.desktop).toBe(0);
-  expect(position(show).y).toBeGreaterThan(100);
-  expect(position(show).y).toBeLessThan(210);
-  toClock(show, at);
+  toClock(show, 1080);
+  expect(position(show)).toEqual({ x: 18, y: 10 });
+  toClock(show, SHOW_MIN_MS / 2);
   expect(show.scroll.desktop).toBe(500);
-  expect(position(show).y).toBe(210);
+  toClock(show, 1800);
+  expect(position(show)).toEqual({ x: 612, y: 210 });
 });
 
 it("derives the same positions from the clock with 8 ms and 16 ms frames", () => {
@@ -178,7 +185,7 @@ it("plays desktop and phone on one clock so neither tab sits idle", () => {
   show.pin("phone");
   toClock(show, 1600);
   expect(show.outlines.some(o => o.tile === "phone")).toBe(true);
-  expect(show.cursors.get("phone")).toBeDefined();
+  expect(show.cursors.get("phone:FIT")).toBeDefined();
   expect(show.outlines.some(o => o.tile === "desktop")).toBe(true);
 });
 
@@ -434,5 +441,182 @@ it.each([false, true])("keeps snapshot frames at their captured scroll on open a
     expect(show.frames.phone?.scrollY).toBe(300);
     expect(show.scroll.desktop).toBe(900);
     if (ended) expect(show.frame()).toMatchObject({ ms: 130, scrollY: 600 });
+  }
+});
+
+const CHECKERS = ["LINKS", "TEXT_A", "FIT", "NAV", "PAGE_ERRORS"];
+const crew = (checkers: string[], things = 30, tile = "desktop") => checkers.flatMap((checker, c) => Array.from({ length: things }, (_, i) => result(i, 40 + c * 220 + (i % 5) * 30, 20 + (i % 20) * 32, { tile, checker, where: `a#x${i}` })));
+const swarm = (show: VerifyWatchShow, tile: "desktop" | "phone" = "desktop") => [...show.cursors.values()].filter(c => c.tile === tile);
+const who = (c: { checker: string; extra?: number }) => c.extra ? `+${c.extra}` : c.checker;
+const arrivals = (show: VerifyWatchShow) => {
+  const seen = new Map<string, { checker: string; due: number; to: { x: number; y: number } }>();
+  while (show.phase === "play") {
+    for (const c of swarm(show)) seen.set(`${who(c)}@${c.at + c.duration}`, { checker: c.checker, due: c.at + c.duration, to: c.to });
+    show.advance(16);
+  }
+  return [...seen.values()].filter(a => a.due > 0).sort((a, b) => a.due - b.due);
+};
+
+it("gives each real checker its own cursor on each tile", () => {
+  const show = replay(frame(0), frame(1, "phone"), ...crew(CHECKERS), ...crew(["LINKS", "FIT"], 10, "phone"), end(90));
+  toClock(show, 100);
+  expect(swarm(show).filter(c => !c.extra).map(c => c.checker).sort()).toEqual([...CHECKERS].sort());
+  expect(swarm(show, "phone").filter(c => !c.extra).map(c => c.checker).sort()).toEqual(["FIT", "LINKS"]);
+});
+
+it("shows only the checkers that really ran, with no stand-ins", () => {
+  const show = replay(frame(0), ...crew(["LINKS", "TEXT_A", "FIT"]), end(90));
+  toClock(show, 2000);
+  expect([...new Set(swarm(show).map(c => c.checker))].sort()).toEqual(["FIT", "LINKS", "TEXT_A"]);
+});
+
+it("sends each cursor only to things its own checker checked", () => {
+  const rows = crew(CHECKERS.slice(0, 4), 12), own = new Map<string, number[][]>();
+  for (const row of rows) {
+    const ev = (row as unknown as { mark: { ev: { checker: string; box: number[] } } }).mark.ev;
+    own.set(ev.checker, [...(own.get(ev.checker) ?? []), ev.box]);
+  }
+  const seen = arrivals(replay(frame(0), ...rows, end(90)));
+  expect(seen.length).toBeGreaterThan(8);
+  for (const { checker, to } of seen) expect(own.get(checker)!.some(([x, y, w, h]) => to.x >= x! && to.x <= x! + w! && to.y >= y! && to.y <= y! + h!)).toBe(true);
+});
+
+it("staggers arrivals so the cursors never move in lockstep", () => {
+  const seen = arrivals(replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90)));
+  const dues = seen.map(a => a.due);
+  expect(new Set(dues).size).toBe(dues.length);
+  expect(Math.min(...dues.slice(1).map((due, i) => due - dues[i]!))).toBeGreaterThanOrEqual(150);
+});
+
+it("never teleports a cursor and keeps them apart when they land", () => {
+  const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4)), end(90));
+  const last = new Map<string, { x: number; y: number }>();
+  while (show.phase === "play") {
+    show.advance(16);
+    if (show.phase !== "play") break;
+    const now = swarm(show).map(c => ({ c, p: show.cursorAt(c) }));
+    for (const { c, p } of now) {
+      const was = last.get(who(c));
+      if (was) expect(Math.hypot(p.x - was.x, p.y - was.y)).toBeLessThan(60);
+      last.set(who(c), p);
+      if (show.clock >= c.at + c.duration) for (const other of now) if (other.c !== c && show.clock >= other.c.at + other.c.duration) expect(Math.hypot(other.p.x - p.x, other.p.y - p.y)).toBeGreaterThan(40);
+    }
+  }
+});
+
+it("rests only a moment on a thing before moving on", () => {
+  const show = replay(frame(0), ...crew(CHECKERS.slice(0, 3)), end(90));
+  const still = new Map<string, number>();
+  let longest = 0;
+  while (show.phase === "play" && show.clock < SHOW_MAX_MS) {
+    show.advance(16);
+    for (const c of swarm(show)) {
+      const rest = show.clock >= c.at && show.clock < c.at + c.duration ? 0 : (still.get(who(c)) ?? 0) + 16;
+      still.set(who(c), rest);
+      longest = Math.max(longest, rest);
+    }
+  }
+  expect(longest).toBeLessThanOrEqual(500);
+});
+
+it("aims a page-level check at the page only when its result exists", () => {
+  const failed = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "issue", where: "/index.html:9" } });
+  const show = replay(frame(0), failed, ...crew(["LINKS"], 12), end(90, [issue("a", "desktop")]));
+  const cursor = show.cursors.get("desktop:PAGE_ERRORS")!;
+  expect(cursor.to.x).toBeGreaterThan(0);
+  expect(cursor.to.x).toBeLessThan(1280);
+  expect(replay(frame(0), ...crew(["LINKS"], 12), end(90)).cursors.has("desktop:PAGE_ERRORS")).toBe(false);
+});
+
+it("takes a cursor off the page when nothing of its own is in view", () => {
+  const nav = result(0, 20, 15, { checker: "NAV", where: "nav > a:nth-child(1)" });
+  const low = Array.from({ length: 12 }, (_, i) => result(i + 1, 40 + i * 60, 1600 + i, { checker: "FIT", scrollY: 1500 }));
+  const show = replay(frame(0), nav, result(1, 200, 60, { checker: "FIT" }), mark(5, "scroll", { tile: "desktop", y: 1500 }), frame(6), ...low, end(90));
+  expect(show.cursorAt(show.cursors.get("desktop:NAV")!).y).toBe(25);
+  while (show.phase === "play" && show.clock < SHOW_MIN_MS - 16) show.advance(16);
+  expect(show.scroll.desktop).toBe(1500);
+  expect(show.cursorAt(show.cursors.get("desktop:NAV")!).y).toBeLessThan(0);
+});
+
+it("keeps the same show length and the same counts with the swarm", () => {
+  const show = replay(frame(0), ...crew(CHECKERS.slice(0, 4), 8), end(90));
+  toClock(show, SHOW_MIN_MS - 1);
+  expect(show.phase).toBe("play");
+  toClock(show, SHOW_MIN_MS * 1.3);
+  expect(show.phase).toBe("clean");
+  expect(show.checks).toBe(32);
+});
+
+it("clears the swarm with the run and starts the next one fresh", () => {
+  const show = replay(frame(0), ...crew(["LINKS", "FIT"], 3), end(20));
+  toClock(show, 500);
+  expect(show.cursors.size).toBe(2);
+  toClock(show, SHOW_MIN_MS + 20);
+  expect(show.cursors.size).toBe(0);
+  show.beginRun();
+  show.advance(16);
+  expect(show.cursors.size).toBe(0);
+});
+
+const boxes = (checker: string, n: number, tile = "desktop") => Array.from({ length: n }, (_, i) => result(i, 40 + (i % 5) * 200, 20 + i * 24, { tile, checker, where: `a#${checker}${i}` }));
+
+it("adds spare cursors in the busiest checker's color, 4 to 6 in all", () => {
+  const show = replay(frame(0), ...boxes("LINKS", 2), ...boxes("TEXT_A", 29), ...boxes("FIT", 19), end(90));
+  toClock(show, 1000);
+  const spares = swarm(show).filter(c => c.extra);
+  expect(swarm(show).length).toBeGreaterThanOrEqual(4);
+  expect(swarm(show).length).toBeLessThanOrEqual(6);
+  expect(spares.length).toBeGreaterThan(0);
+  for (const c of spares) expect(c.checker).toBe("TEXT_A");
+});
+
+it("never goes past six cursors a tile", () => {
+  const show = replay(frame(0), ...crew([...CHECKERS, "MENU", "ERRORS"], 20), end(90));
+  toClock(show, 1000);
+  expect(swarm(show)).toHaveLength(7);
+  expect(swarm(show).filter(c => c.extra)).toHaveLength(0);
+  const some = replay(frame(0), ...crew(CHECKERS.slice(0, 3), 20), end(90));
+  toClock(some, 1000);
+  expect(swarm(some)).toHaveLength(6);
+});
+
+it("gives no spare cursor to a check with no box or a few boxes", () => {
+  const page = mark(0, "result", { ev: { tile: "desktop", checker: "PAGE_ERRORS", result: "ok", where: "/index.html" } });
+  const flat = replay(frame(0), page, ...boxes("LINKS", 3), end(90));
+  toClock(flat, 1000);
+  expect(swarm(flat)).toHaveLength(2);
+  const rich = replay(frame(0), page, ...boxes("LINKS", 12), end(90));
+  toClock(rich, 1000);
+  for (const c of swarm(rich).filter(c => c.extra)) expect(c.checker).toBe("LINKS");
+});
+
+it("never lands two cursors on the same spot when checkers share boxes", () => {
+  const rows = ["LINKS", "FIT", "TEXT_A"].flatMap(checker => Array.from({ length: 12 }, (_, i) => result(i, 40 + (i % 3) * 30, 20 + i * 24, { checker })));
+  const show = replay(frame(0), ...rows, end(90));
+  while (show.phase === "play") {
+    show.advance(16);
+    const landed = swarm(show).filter(c => show.clock >= c.at + c.duration && c.to.y >= 0).map(c => c.to);
+    landed.forEach((p, i) => landed.slice(i + 1).forEach(q => expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(20)));
+  }
+});
+
+it("labels only a checker's own cursor, never its spares", () => {
+  const show = replay(frame(0), ...boxes("LINKS", 2), ...boxes("TEXT_A", 29), ...boxes("FIT", 19), end(90));
+  toClock(show, 1000);
+  const all = swarm(show), p = { x: 100, y: 100 };
+  expect(all.filter(c => c.extra).length).toBeGreaterThan(0);
+  for (const c of all) expect(tagSpot(c, p, 40, [1280, 720], 1) === null).toBe(Boolean(c.extra));
+});
+
+it("keeps a tag inside the view by flipping it off the right and bottom edge", () => {
+  const cursor = { checker: "LINKS", tile: "desktop", from: { x: 0, y: 0 }, to: { x: 0, y: 0 }, at: 0, duration: 0 } as const;
+  const view = [1280, 720] as const, width = 38;
+  for (const px of [1, 1.5, 3]) for (const [x, y] of [[100, 100], [1270, 100], [100, 715], [1275, 719], [1280 - 14 * px, 720 - 20 * px]] as const) {
+    const spot = tagSpot(cursor, { x, y }, width, view, px)!;
+    const left = x + spot.x * px, top = y + spot.y * px;
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(left + width * px).toBeLessThanOrEqual(view[0]);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(top + 14 * px).toBeLessThanOrEqual(view[1]);
   }
 });
