@@ -88,7 +88,7 @@ it("reserves before spawn, starts lazily, scrubs env and pins production argv", 
   expect(f.frames.find((v) => v.type === "start").locale).toBe("ko");
 });
 
-it("mirrors once per changing frame, long polls and reuses a live child", async () => {
+it("mirrors once per changing frame, long polls and retires a hidden child", async () => {
   const f = fixture(); f.host.start(input());
   await until(() => f.frames.some((v) => v.type === "start"));
   const state = { type: "state", runId: input().runId, state: "running", counts, result: null };
@@ -103,7 +103,7 @@ it("mirrors once per changing frame, long polls and reuses a live child", async 
   await expect(f.host.watch(input().runId)).rejects.toMatchObject({ status: 404 });
   f.host.start(input("run-234567"));
   await until(() => f.frames.filter((v) => v.type === "start").length === 2);
-  expect(f.children).toHaveLength(1);
+  expect(f.children).toHaveLength(2);
 });
 
 it.each([[false, true, "internal", 10001], [true, false, "internal", 5001]])("kills a child with no ready or no ack", async (ready, respond, code, ms) => {

@@ -354,7 +354,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   };
 
   const commit = (fromKeyboard = false, button = stage.current?.querySelector("[data-dial-pick]")) => {
-    if (!pickable || !onSave(draft, fromKeyboard, 140)) return;
+    if (!pickable || !onSave(draft, fromKeyboard, fromKeyboard ? 0 : 140)) return;
     quench();
     if (phone && window.matchMedia(PHONE_DIAL_QUERY).matches) hapticTick();
     const face = stage.current!;

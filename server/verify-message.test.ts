@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { verifyReplyText } from "./verify-message.ts";
+import { redactVerifyCard, verifyReplyText } from "./verify-message.ts";
 import type { VerifyResult } from "../shared/live-verify.ts";
 
 it("caps bot feedback and excludes design details from defects", () => {
@@ -31,4 +31,11 @@ it("keeps long Korean problem text within the feedback budget", () => {
   expect(text).toMatch(/20 items|\d+ more not checked/);
   expect(text.length).toBeLessThanOrEqual(1200);
   expect([...text].reduce((n, c) => n + (c.charCodeAt(0) < 128 ? 1 / 3 : 2), 0)).toBeLessThanOrEqual(400);
+});
+
+it("keeps valid per-checker tallies on a card and drops malformed ones", () => {
+  const counts = { planned: 5, completed: 3, passed: 3, failed: 0, blocked: 0, notRun: 2 };
+  const card = { v: 1, runId: "run-123456", owner: "bot", site: "index.html", status: "running", mode: "auto", decisionNonce: "nonce", offeredAt: 1, counts };
+  expect(redactVerifyCard({ ...card, counts: { ...counts, by: { LINKS: { desktop: [3, 5], tablet: [1, 1] }, NOPE: { desktop: [1, 1] }, FIT: { phone: [4, 2] } } } })?.counts).toEqual({ ...counts, by: { LINKS: { desktop: [3, 5] } } });
+  expect(redactVerifyCard(card)?.counts).toEqual(counts);
 });

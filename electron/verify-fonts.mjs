@@ -10,16 +10,17 @@ function fontUrl(raw, host) {
 }
 
 export function createVerifyFonts({ fontUrls, logLookup = () => {}, request = https.request, lookup = dns.lookup }) {
-  const sheets = new Set(fontUrls.filter((url) => fontUrl(url, "fonts.googleapis.com") && /^\/css2?$/.test(new URL(url).pathname)));
+  // Loopback sheets are pinned as local HTML/CSS responses arrive.
+  const isSheet = (raw) => fontUrls.includes(raw) && fontUrl(raw, "fonts.googleapis.com") && /^\/css2?$/.test(new URL(raw).pathname);
   const fonts = new Set();
   const cache = new Map();
   const pending = new Set();
   let total = 0;
   let closed = false;
-  const allowed = (raw) => sheets.has(raw) || fonts.has(raw);
+  const allowed = (raw) => isSheet(raw) || fonts.has(raw);
   function fetchFont(raw) {
     return new Promise((resolve, reject) => {
-      const sheet = sheets.has(raw);
+      const sheet = isSheet(raw);
       const cap = sheet ? 128 * 1024 : 2 * 1024 * 1024;
       let timer;
       let req;

@@ -372,8 +372,11 @@ describe("ModelPicker cross navigation", () => {
     expect(document.querySelector('[data-model-cell="grok-4.7"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("returns focus to the trigger after a pointer model commit", async () => {
+  it("focuses the composer after a pointer model commit", async () => {
     mock.instances = [engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"])];
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    document.body.append(composer);
     await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false);
     await act(async () => {
       const trigger = document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
@@ -386,7 +389,46 @@ describe("ModelPicker cross navigation", () => {
     await act(async () => {
       document.querySelector<HTMLButtonElement>('[data-model-cell="grok-4.6"]')!.click();
     });
-    expect(document.activeElement).toBe(document.querySelector('[aria-haspopup="dialog"]'));
+    await nextFrame();
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("gives focus back to the opener when Settings blocks the composer", async () => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"])];
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    const settings = document.createElement("div");
+    settings.setAttribute("data-settings-panel", "");
+    const opener = document.createElement("button");
+    document.body.append(composer, settings, opener);
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false);
+    await act(async () => {
+      opener.focus();
+      document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!.click();
+    });
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-model-cell="grok-4.6"]')!.click();
+    });
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-model-cell="grok-4.6"]')!.click();
+    });
+    await nextFrame();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("focuses the composer after a mouse-opened picker commits with Enter", async () => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"])];
+    const composer = document.createElement("textarea");
+    composer.setAttribute("data-orbit-composer", "");
+    document.body.append(composer);
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned" }, false);
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+    await act(async () => { trigger.focus(); trigger.click(); });
+    await key("ArrowDown");
+    await key("Enter");
+    await nextFrame();
+    expect(mock.dispatch).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(composer);
   });
 
   it("opens with Alt+M even when a foreign dialog (Settings) is open", async () => {

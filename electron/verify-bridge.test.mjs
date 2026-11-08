@@ -58,6 +58,13 @@ it("authenticates frozen grants before lazy import and consumes starts once", as
   expect((await f.call()).status).toBe(409);
 });
 
+it.each(["http://127.0.0.1:3000/dashboard?q=1", "http://localhost:8080/", "http://[::1]:4242/"])("authenticates a loopback grant for %s", async root => {
+  const f = await fixture(), scope = [...f.scope]; scope[3] = root;
+  expect((await f.call({ ...f.body, root }, signed(scope))).status).toBe(202);
+  expect(f.host.start).toHaveBeenCalledWith(expect.objectContaining({ root }));
+  expect((await f.call({ ...f.body, root: root.replace(/:\d+/, ":9999") }, signed(scope))).status).toBe(401);
+});
+
 it("bounds bodies, validates scope and refuses path aliases", async () => {
   const f = await fixture();
   expect((await f.call("x".repeat(65537))).status).toBe(413);
