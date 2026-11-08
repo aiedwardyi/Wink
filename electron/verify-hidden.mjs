@@ -30,6 +30,13 @@ export function runHiddenVerify(input) {
   const deadline = setTimeout(() => stop("timeout"), VERIFY_RUN_MS - 2500);
   input.signal.addEventListener("abort", abort, { once: true });
   const race = promise => Promise.race([promise, failed]);
+  const shots = new Set();
+  // Awaited so the frame shows this scroll stop; a fast run leaves the screencast no time to.
+  async function shot(tile, y) {
+    if (!casts[tile] || shots.has(`${tile}:${y}`)) return;
+    shots.add(`${tile}:${y}`);
+    await race(casts[tile].shot().catch(() => {}));
+  }
   const emit = value => {
     const event = { ...value, seq: seq + 1, emittedAt: performance.timeOrigin + performance.now() }, size = Buffer.byteLength(JSON.stringify(event));
     if (seq >= 1998 && value.kind !== "end" || eventBytes + size > 2 * 1024 * 1024 - (value.kind === "end" ? 0 : 32768)) return;
@@ -128,6 +135,7 @@ export function runHiddenVerify(input) {
       if (runFailure || fatal.has(error.code)) throw fault(runFailure ?? error.code);
       notChecked.add(`fonts (${tile})`);
     }
+    await shot(tile, 0);
     return { cdp, events, loads, aborted, blocked, requests, hmr };
   }
   async function head(urls) {
@@ -238,7 +246,7 @@ export function runHiddenVerify(input) {
                 flushChecks();
                 y = await race(cdp.ev(`(() => { scrollTo({ top: ${target}, behavior: "instant" }); void document.body.offsetWidth; return scrollY; })()`));
                 lastTarget = target;
-                emit({ kind: "scroll", tile, y }); casts[tile]?.readerStop();
+                emit({ kind: "scroll", tile, y }); await shot(tile, y);
               }
               element.box = [element.box[0], documentY - y, element.box[2], element.box[3]];
               element.scrollY = y;

@@ -2,10 +2,14 @@
 import { createElement } from "react";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { applyLocale } from "@/lib/i18n";
 import type { VerifyCardData } from "../../shared/live-verify";
-import { VerifyCard } from "./VerifyCard";
+import { setVerifyShowing } from "@/lib/verify-watch";
+import type { Message } from "@/state/store";
+import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
 
 const flag = vi.hoisted(() => ({ on: true }));
 vi.mock("../../shared/live-verify", async importOriginal => ({ ...await importOriginal<typeof import("../../shared/live-verify")>(), get LIVE_VERIFY_V0() { return flag.on; } }));
@@ -239,4 +243,29 @@ it("lays out each problem in fixed columns, five rows then Show all, measured un
   expect(value(392, rows[0]!.querySelector(".verify-card-measure")!, "grid-column")).toBe("2");
   expect(value(392, rows[0]!.querySelector(".verify-card-tile")!, "display")).toBe("none");
   html.remove();
+});
+
+it("shows the lanes for as long as this run's replay plays, then its result", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div"), root = createRoot(host);
+  await act(async () => root.render(createElement(VerifyCard, { card: card({ replay: ["a"] }), threadId: "thread" })));
+  expect(host.querySelector(".verify-card-lanes")).toBeNull();
+  await act(async () => setVerifyShowing({ runId: "other-run", checks: 3, by: { LINKS: { desktop: [1, 3] } } }));
+  expect(host.querySelector(".verify-card-lanes")).toBeNull();
+  await act(async () => setVerifyShowing({ runId: "run-123456", checks: 12, by: { LINKS: { desktop: [3, 10] } } }));
+  expect(host.querySelector(".verify-card-lanes")).not.toBeNull();
+  expect(host.querySelector(".verify-card-count")?.textContent).toContain("12");
+  await act(async () => setVerifyShowing(null));
+  expect(host.querySelector(".verify-card-lanes")).toBeNull();
+  expect(host.textContent).toContain("no problems");
+  await act(async () => root.unmount());
+});
+
+it("uses the card title's click-cursor mark in the chat header, keeping its label", () => {
+  const messages = [{ id: "m", kind: "note", verify: card({ replay: ["a"] }) }] as unknown as Message[];
+  const icon = Object.assign(document.createElement("div"), { innerHTML: renderToStaticMarkup(createElement(VerifyWatchIcon, { messages, threadId: "thread" })) });
+  expect(icon.querySelector(".lucide-mouse-pointer-click")).not.toBeNull();
+  expect(icon.querySelector(".lucide-app-window")).toBeNull();
+  expect(icon.querySelector("button")?.getAttribute("aria-label")).toBe("Watch the check");
+  expect(dom(card()).querySelector(".lucide-mouse-pointer-click")).not.toBeNull();
 });

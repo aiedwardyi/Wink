@@ -291,3 +291,16 @@ it("confirms an aborted local stylesheet and leaves scripts and phone layout unc
   expect(result.notChecked).toEqual(expect.arrayContaining(["scripts (code from cdn.tailwindcss.com is blocked in the check)", "phone layout (styles from cdn.tailwindcss.com are blocked in the check)"]));
   expect(f.observations).not.toContain("phone:scroll");
 });
+
+it("records a picture of every new scroll stop before moving on, even on a fast run", async () => {
+  f.values.set("copy", { texts: [{ where: "p#far", text: "undefined", box: [1, 900, 30, 40], scrollY: 0 }], viewport: { y: 0, height: 720, maxScroll: 2000 } });
+  const i = input(), order = [];
+  for (const page of Object.values(i.pages)) page.capturePage = vi.fn(async () => ({ resize: () => ({ toJPEG: () => Buffer.from([255, 216, 255, 217]) }) }));
+  i.frame = () => order.push("frame");
+  i.emit.mockImplementation(event => order.push(event.kind));
+  const result = await runHiddenVerify(i).done;
+  expect(result.errorCode).toBeUndefined();
+  expect(order.filter(kind => kind === "scroll").length).toBeGreaterThan(0);
+  expect(order[order.indexOf("scroll") + 1]).toBe("frame");
+  expect(order.indexOf("frame")).toBeLessThan(order.indexOf("checks"));
+});

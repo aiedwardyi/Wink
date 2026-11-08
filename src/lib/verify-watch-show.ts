@@ -1,19 +1,24 @@
-import type { VerifyIssue, VerifyReplayEnd, VerifyReplayHead, VerifyTile } from "../../shared/live-verify";
+import type { VerifyChecker, VerifyCounts, VerifyIssue, VerifyReplayEnd, VerifyReplayHead, VerifyTile } from "../../shared/live-verify";
 import type { VerifyReplayChunk, VerifyReplayMark } from "./verify-replay";
 import { verifyEndTab, verifyReel } from "./verify-watch";
 
-export const FRAME_FLOOR_MS = 120;
 export const REEL_MS = 1500;
 export const BANNER_MS = 1500;
 export const LIVE_CLOSE_MS = 3000;
-const MARK_TICK_MS = 60_000 / 174 / 4;
-const OUTLINE_MS = 8 * MARK_TICK_MS;
+export const THING_MS = 300;
+export const SHOW_MIN_MS = 3000;
+export const SHOW_MAX_MS = 12_000;
+const MAX_THINGS = SHOW_MAX_MS / THING_MS;
+const LIVE_OUTLINE_MS = 700;
+const FADE_MS = 90;
+const RING_MS = 220;
 const GLIDE_MS = 600;
 const LIVE_GLIDE_MS = 250;
-const ROW_MS = MARK_TICK_MS / 8;
+
+type Row = Record<string, unknown> & { result?: unknown; box: number[] | null };
 
 // A batched check row's box is viewport px at its scrollY; outlines keep document px.
-function checkRow(value: unknown) {
+function checkRow(value: unknown): Row {
   const row = (value ?? {}) as Record<string, unknown>;
   const box = Array.isArray(row.box) && row.box.length === 4 && row.box.every(Number.isFinite) ? row.box as number[] : null;
   const y = typeof row.scrollY === "number" ? row.scrollY : 0;
@@ -24,7 +29,7 @@ export type Rect = { x: number; y: number; w: number; h: number };
 export type Part = "loads" | "links" | "phone";
 export type ShowPhase = "loading" | "play" | "reel" | "clean" | "after" | "between" | "done" | "expired" | "failed";
 
-export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number }
+export interface Outline { tile: VerifyTile; checker: string; issue: boolean; box: Rect; pin: boolean; mscroll: number; at: number; hold: number }
 export interface Cursor { checker: string; tile: VerifyTile; from: { x: number; y: number }; to: { x: number; y: number }; at: number; duration: number }
 export interface Ring { tile: VerifyTile; x: number; y: number; at: number }
 interface Stored { jpeg: Uint8Array; scrollY: number; ms: number }
@@ -38,9 +43,62 @@ const rect = (value: unknown): Rect | null => {
   return null;
 };
 const tileOf = (value: unknown): VerifyTile => value === "phone" ? "phone" : "desktop";
-const up16 = (ms: number) => Math.ceil(ms / MARK_TICK_MS - 1e-6) * MARK_TICK_MS;
 
-/** One watch session: chunks come in, a virtual clock lets them out at their show time. */
+interface Thing { tile: VerifyTile; rows: Row[]; box: number[] | null; y: number; scrollY: number; issue: boolean }
+const OWN_THING = /^(a|button|img|input|select|textarea|summary|label)\b/;
+const SECTION = /^(section|header|footer|nav|article|aside)\b/;
+
+function thingKey(where: unknown) {
+  const path = String(where ?? "page").split(" > ");
+  if (OWN_THING.test(path.at(-1)!)) return path.join(" > ");
+  const section = path.findIndex(part => SECTION.test(part));
+  return path.slice(0, section < 0 ? 1 : section + 1).join(" > ");
+}
+
+function union(a: number[], b: number[]) {
+  const x = Math.min(a[0]!, b[0]!), y = Math.min(a[1]!, b[1]!);
+  return [x, y, Math.max(a[0]! + a[2]!, b[0]! + b[2]!) - x, Math.max(a[1]! + a[3]!, b[1]! + b[3]!) - y];
+}
+
+/** Checks grouped by the real thing they looked at; a problem stays its own thing. */
+function thingsOf(rows: Row[]): Thing[] {
+  const found = new Map<string, Thing>();
+  for (const row of rows) {
+    const issue = row.result === "issue", tile = tileOf(row.tile), box = row.box;
+    const key = issue ? `issue:${found.size}` : `${tile}|${thingKey(row.where)}`;
+    const thing = found.get(key);
+    if (!thing) found.set(key, { tile, rows: [row], box, y: box?.[1] ?? 0, scrollY: typeof row.scrollY === "number" ? row.scrollY : 0, issue });
+    else {
+      thing.rows.push(row);
+      if (box) thing.box = thing.box ? union(thing.box, box) : box;
+      thing.y = thing.box?.[1] ?? 0;
+    }
+  }
+  return [...found.values()];
+}
+
+/** One outline for the thing; every other check only counts. */
+const outlineOnce = (thing: Thing, extra: object = {}): Row[] => thing.rows.map((row, i) => ({ ...row, ...extra, box: i ? null : thing.box }));
+
+/** At most MAX_THINGS, top to bottom; the things left out still count on the next one shown. */
+function shownThings(all: Thing[]): Thing[] {
+  const boxed = all.filter(thing => thing.box).sort((a, b) => a.y - b.y);
+  if (!boxed.length) return all;
+  const step = Math.max(1, boxed.length / MAX_THINGS), kept: Thing[] = [];
+  let carry = all.filter(thing => !thing.box).flatMap(thing => thing.rows), next = 0;
+  boxed.forEach((thing, i) => {
+    if (i + 1e-6 < next && !thing.issue) { carry.push(...thing.rows); return; }
+    kept.push({ ...thing, rows: [...carry, ...thing.rows] });
+    carry = [];
+    if (i + 1e-6 >= next) next += step;
+  });
+  kept.at(-1)!.rows.push(...carry);
+  return kept;
+}
+
+const nearest = (list: Stored[], y: number) => list.reduce((best, f) => Math.abs(f.scrollY - y) <= Math.abs(best.scrollY - y) ? f : best);
+
+/** One watch session. Live chunks play as they come; a replay is paced one real thing at a time. */
 export class VerifyWatchShow {
   clock = 0;
   phase: ShowPhase = "loading";
@@ -65,24 +123,26 @@ export class VerifyWatchShow {
   version = 0;
   /** bumps when the text around the canvas changes */
   ui = 0;
+  /** [done, planned] per checker and tile, the shape the card's lanes read while a check runs */
+  lanes: NonNullable<VerifyCounts["by"]> = {};
   private queue: Array<{ due: number; chunk: VerifyReplayChunk; at: number; scrollY: number }> = [];
-  /** scroll in stream order; marks play later on the grid than the frames shot after them */
+  private held: VerifyReplayChunk[] = [];
+  private planned = false;
+  /** scroll in stream order, so each frame knows the stop it was shot at */
   private fedScroll: Record<VerifyTile, number> = { desktop: 0, phone: 0 };
   private history: Record<VerifyTile, Stored[]> = { desktop: [], phone: [] };
-  private runStart = 0;
-  private shift = 0;
-  private lastFrame: Record<VerifyTile, number> = { desktop: -Infinity, phone: -Infinity };
-  private lastDue = 0;
   private liveMs = 0;
   private phaseAt = 0;
   private reelIndex = 0;
   private waits: Array<{ at: number; resolve: () => void }> = [];
 
-  constructor(readonly live: boolean) {}
+  constructor(readonly live: boolean, pinned: VerifyTile | null = null) {
+    this.pinned = pinned;
+  }
 
   /** Starts the next run of a replay chain, or a fresh live stream after the gate reopens. */
   beginRun() {
-    Object.assign(this, { head: null, end: null, checks: 0, ms: 0, outlines: [], ring: null, reel: [], liveMs: 0, shift: 0 });
+    Object.assign(this, { head: null, end: null, checks: 0, ms: 0, outlines: [], ring: null, reel: [], liveMs: 0, held: [], planned: false, lanes: {} });
     this.parts = new Set();
     this.byChecker = new Map();
     this.cursors = new Map();
@@ -90,53 +150,103 @@ export class VerifyWatchShow {
     this.fedScroll = { desktop: 0, phone: 0 };
     this.frames = { desktop: null, phone: null };
     this.history = { desktop: [], phone: [] };
-    this.lastFrame = { desktop: -Infinity, phone: -Infinity };
     this.queue = [];
-    this.runStart = this.lastDue = up16(this.clock);
     this.set("loading");
   }
 
   get tile(): VerifyTile {
     if (this.phase === "reel" && this.reel.length) return this.reelIssue()!.tile;
-    if (this.pinned) return this.pinned;
+    if (this.pinned && this.tabs.includes(this.pinned)) return this.pinned;
     return this.end ? verifyEndTab(this.end.issues) : "desktop";
+  }
+
+  get tabs(): VerifyTile[] {
+    return (this.planned || this.end) && !this.history.phone.length ? ["desktop"] : ["desktop", "phone"];
+  }
+
+  /** A replay still playing, which is when the chat card shows its lanes. */
+  get showing() {
+    return !this.live && !["after", "done", "expired", "failed"].includes(this.phase);
   }
 
   pin(tile: VerifyTile) {
     this.pinned = tile;
+    if (this.phase === "reel") {
+      this.reel = this.reel.filter(issue => issue.tile === tile);
+      this.phaseAt = this.clock;
+      this.reelIndex = 0;
+      if (!this.reel.length) this.set("after");
+    }
     this.version++;
     this.ui++;
   }
 
   feed(chunk: VerifyReplayChunk) {
     if (chunk.kind === "mark" && chunk.mark.kind === "checks" && Array.isArray(chunk.mark.checks)) {
-      const { ms } = chunk.mark;
-      chunk.mark.checks.forEach((row: unknown, i: number) => this.feed({ kind: "mark", mark: { ms: ms + i * ROW_MS, kind: "result", ev: checkRow(row) } }));
+      const { ms } = chunk.mark, rows = chunk.mark.checks.map(checkRow);
+      for (const ev of this.live ? thingsOf(rows).flatMap(thing => outlineOnce(thing)) : rows) this.feed({ kind: "mark", mark: { ms, kind: "result", ev } });
+      return;
+    }
+    if (!this.live) {
+      this.held.push(chunk);
+      if (chunk.kind === "end") this.plan();
       return;
     }
     if (chunk.kind === "mark" && chunk.mark.kind === "scroll" && Number.isFinite(chunk.mark.y)) this.fedScroll[tileOf(chunk.mark.tile)] = chunk.mark.y as number;
     const scrollY = chunk.kind === "frame" ? this.fedScroll[chunk.tile] : 0;
-    if (this.live) {
-      const ms = chunk.kind === "frame" ? chunk.ms : chunk.kind === "mark" ? chunk.mark.ms : chunk.kind === "end" ? chunk.end.ms : 0;
-      this.liveMs = Math.max(this.liveMs, ms);
-      const at = this.clock - Math.max(0, this.liveMs - ms);
-      this.queue.push({ due: chunk.kind === "mark" ? this.runStart + up16(this.clock - this.runStart) : this.clock, chunk, at, scrollY });
-      return;
-    }
-    let due = this.lastDue;
-    if (chunk.kind === "frame") {
-      due = this.runStart + chunk.ms + this.shift;
-      const floor = this.lastFrame[chunk.tile] + FRAME_FLOOR_MS;
-      if (due < floor) {
-        if (chunk.tile === this.tile) this.shift += floor - due;
-        due = floor;
+    const ms = chunk.kind === "frame" ? chunk.ms : chunk.kind === "mark" ? chunk.mark.ms : chunk.kind === "end" ? chunk.end.ms : 0;
+    this.liveMs = Math.max(this.liveMs, ms);
+    this.queue.push({ due: this.clock, chunk, at: this.clock - Math.max(0, this.liveMs - ms), scrollY });
+  }
+
+  /** The whole replay is here: frames up front, then each tile's things evenly over one show length. */
+  private plan() {
+    const rows: Row[] = [], marks: Array<{ mark: VerifyReplayMark; seen: number; tileSeen: number }> = [], seen = { desktop: 0, phone: 0 };
+    let end: VerifyReplayChunk | undefined;
+    for (const chunk of this.held) {
+      if (chunk.kind === "head") this.head = chunk.head;
+      else if (chunk.kind === "end") end = chunk;
+      else if (chunk.kind === "frame") this.history[chunk.tile].push({ jpeg: chunk.jpeg, scrollY: this.fedScroll[chunk.tile], ms: chunk.ms });
+      else if (chunk.mark.kind === "scroll" && Number.isFinite(chunk.mark.y)) this.fedScroll[tileOf(chunk.mark.tile)] = chunk.mark.y as number;
+      else if (chunk.mark.kind === "result") {
+        const ev = (chunk.mark.ev ?? {}) as Record<string, unknown>, box = rect(ev.box), row: Row = { ...ev, ms: chunk.mark.ms, box: box && [box.x, box.y, box.w, box.h] };
+        rows.push(row);
+        seen[tileOf(row.tile)]++;
+        if (row.result !== "skip") ((this.lanes[(row.checker ?? "CHECK") as VerifyChecker] ??= {})[tileOf(row.tile)] ??= [0, 0])[1]++;
+      } else if (chunk.mark.kind === "part" || chunk.mark.kind === "point") {
+        const tile = tileOf((chunk.mark.inp as { tile?: unknown } | undefined)?.tile);
+        marks.push({ mark: chunk.mark, seen: rows.length, tileSeen: seen[tile] });
       }
-      this.lastFrame[chunk.tile] = due;
-    } else if (chunk.kind === "mark") due = this.runStart + up16(chunk.mark.ms + this.shift);
-    else if (chunk.kind === "end") due = Math.max(this.lastDue, this.runStart + chunk.end.ms + this.shift);
-    due = Math.max(due, this.runStart);
-    if (chunk.kind !== "frame") this.lastDue = Math.max(this.lastDue, due);
-    this.queue.push({ due, chunk, at: due, scrollY });
+    }
+    this.held = [];
+    this.planned = true;
+    const lists = (["desktop", "phone"] as const).map(tile => ({ tile, things: shownThings(thingsOf(rows.filter(row => tileOf(row.tile) === tile))) }));
+    const count = Math.max(...lists.map(list => list.things.length));
+    const total = count ? Math.min(SHOW_MAX_MS, Math.max(SHOW_MIN_MS, count * THING_MS)) : 0, start = this.clock;
+    const add = (at: number, chunk: VerifyReplayChunk) => this.queue.push({ due: start + at, chunk, at: start + at, scrollY: 0 });
+    const view = (at: number, tile: VerifyTile, y: number) => {
+      if (this.history[tile].length) add(at, { kind: "mark", mark: { ms: 0, kind: "view", tile, frame: nearest(this.history[tile], y) } });
+    };
+    for (const { tile, things } of lists) {
+      if (this.history[tile].length) {
+        const first = nearest(this.history[tile], 0);
+        this.frames[tile] = first;
+        this.scroll[tile] = first.scrollY;
+      }
+      const slot = things.length ? total / things.length : 0;
+      things.forEach((thing, i) => {
+        view(i * slot, tile, thing.scrollY);
+        for (const ev of outlineOnce(thing, { hold: slot })) add(i * slot, { kind: "mark", mark: { ms: ev.ms as number, kind: "result", ev } });
+      });
+    }
+    for (const { mark, seen: before, tileSeen } of marks) {
+      const inp = mark.inp as { tile?: unknown } | undefined, tile = tileOf(inp?.tile);
+      const at = (mark.kind === "point" ? (seen[tile] ? tileSeen / seen[tile] : 0) : rows.length ? before / rows.length : 0) * total;
+      if (mark.kind === "point") view(at, tile, typeof mark.scrollY === "number" ? mark.scrollY : 0);
+      add(at, { kind: "mark", mark });
+    }
+    if (end) add(total, end);
+    this.set("play");
   }
 
   expire() { this.set("expired"); }
@@ -154,8 +264,8 @@ export class VerifyWatchShow {
     this.step();
     for (const wait of this.waits.filter(w => w.at <= this.clock)) wait.resolve();
     this.waits = this.waits.filter(w => w.at > this.clock);
-    if (this.outlines.some(o => !o.issue && this.clock - o.at > OUTLINE_MS + MARK_TICK_MS)) {
-      this.outlines = this.outlines.filter(o => o.issue || this.clock - o.at <= OUTLINE_MS + MARK_TICK_MS);
+    if (this.outlines.some(o => !o.issue && this.clock - o.at > o.hold + FADE_MS)) {
+      this.outlines = this.outlines.filter(o => o.issue || this.clock - o.at <= o.hold + FADE_MS);
       this.version++;
     }
     if (this.moving()) this.version++;
@@ -192,9 +302,7 @@ export class VerifyWatchShow {
     const issue = this.reelIssue();
     if (!issue) return this.frames[this.tile];
     const list = this.history[issue.tile];
-    if (!list.length) return null;
-    const y = issue.scrollY ?? 0;
-    return list.reduce((best, f) => Math.abs(f.scrollY - y) <= Math.abs(best.scrollY - y) ? f : best);
+    return list.length ? nearest(list, issue.scrollY ?? 0) : null;
   }
 
   /** Box in tile CSS px for the current scroll. */
@@ -218,15 +326,15 @@ export class VerifyWatchShow {
       if (item.due <= cursor.at || item.chunk.kind !== "mark" || item.chunk.mark.kind !== "result") continue;
       const ev = (item.chunk.mark.ev ?? {}) as Record<string, unknown>;
       const box = rect(ev.box);
-      if (!box || ev.result === "skip" || (typeof ev.checker === "string" ? ev.checker : "CHECK") !== cursor.checker) continue;
+      if (!box || ev.result === "skip" || tileOf(ev.tile) !== cursor.tile) continue;
       if (!next || item.due <= next.due) next = { due: item.due, index, ev, box };
     }
-    if (!next || tileOf(next.ev.tile) !== cursor.tile) return cursor;
+    if (!next) return cursor;
     let scrollY = this.scroll[cursor.tile];
     for (const item of this.queue.slice(0, next.index)) {
       if (item.chunk.kind !== "mark") continue;
       const mark = item.chunk.mark;
-      if (mark.kind === "scroll" && tileOf(mark.tile) === cursor.tile && Number.isFinite(mark.y)) scrollY = mark.y as number;
+      if (mark.kind === "view" && tileOf(mark.tile) === cursor.tile) scrollY = (mark.frame as Stored).scrollY;
     }
     const top = next.ev.pin ? typeof next.ev.mscroll === "number" ? next.ev.mscroll : 0 : scrollY;
     const to = { x: next.box.x + Math.min(next.box.w * 0.3, 12), y: next.box.y - top + Math.min(next.box.h * 0.6, 10) };
@@ -237,11 +345,11 @@ export class VerifyWatchShow {
   outlineAlpha(outline: Outline): number {
     if (outline.issue) return 1;
     const age = this.clock - outline.at;
-    return age <= OUTLINE_MS ? 1 : Math.max(0, 1 - (age - OUTLINE_MS) / MARK_TICK_MS);
+    return age <= outline.hold ? 1 : Math.max(0, 1 - (age - outline.hold) / FADE_MS);
   }
 
   private moving() {
-    return [...this.cursors.values()].some(c => { const move = this.cursorMove(c); return this.clock >= move.at && this.clock < move.at + move.duration; }) || (this.ring !== null && this.clock - this.ring.at < 2 * MARK_TICK_MS + 50) || this.outlines.some(o => !o.issue && this.clock - o.at > OUTLINE_MS - 20);
+    return [...this.cursors.values()].some(c => { const move = this.cursorMove(c); return this.clock >= move.at && this.clock < move.at + move.duration; }) || (this.ring !== null && this.clock - this.ring.at < RING_MS) || this.outlines.some(o => !o.issue && this.clock - o.at > o.hold - 20);
   }
 
   private set(phase: ShowPhase) {
@@ -277,8 +385,8 @@ export class VerifyWatchShow {
       this.end = chunk.end;
       this.outlines = this.outlines.filter(o => o.issue);
       this.cursors.clear();
-      this.reel = verifyReel(chunk.end.issues);
-      this.set(chunk.end.status === "blocked" ? "failed" : this.reel.length ? "reel" : "clean");
+      this.reel = verifyReel(this.pinned ? chunk.end.issues.filter(issue => issue.tile === this.pinned) : chunk.end.issues);
+      this.set(chunk.end.status === "blocked" ? "failed" : this.reel.length ? "reel" : chunk.end.issues.length ? "after" : "clean");
       return;
     }
     this.mark(chunk.mark, at, due);
@@ -286,7 +394,11 @@ export class VerifyWatchShow {
 
   private mark(mark: VerifyReplayMark, at: number, due: number) {
     if (mark.kind === "part" && (mark.part === "loads" || mark.part === "links" || mark.part === "phone")) this.parts.add(mark.part);
-    else if (mark.kind === "scroll" && Number.isFinite(mark.y)) this.scroll[tileOf(mark.tile)] = mark.y as number;
+    else if (mark.kind === "view") {
+      const frame = mark.frame as Stored, tile = tileOf(mark.tile);
+      this.frames[tile] = frame;
+      this.scroll[tile] = frame.scrollY;
+    } else if (mark.kind === "scroll" && Number.isFinite(mark.y)) this.scroll[tileOf(mark.tile)] = mark.y as number;
     else if (mark.kind === "point") {
       const inp = (mark.inp ?? {}) as Record<string, unknown>;
       if (typeof inp.x === "number" && typeof inp.y === "number") {
@@ -303,16 +415,18 @@ export class VerifyWatchShow {
       if (issue) row.issues++;
       this.byChecker.set(checker, row);
       this.checks++;
+      const pair = this.lanes[checker as VerifyChecker]?.[tileOf(ev.tile)];
+      if (pair) pair[0]++;
       const box = rect(ev.box);
       if (!box) return;
-      const outline: Outline = { tile: tileOf(ev.tile), checker, issue, box, pin: Boolean(ev.pin), mscroll: typeof ev.mscroll === "number" ? ev.mscroll : 0, at };
+      const outline: Outline = { tile: tileOf(ev.tile), checker, issue, box, pin: Boolean(ev.pin), mscroll: typeof ev.mscroll === "number" ? ev.mscroll : 0, at, hold: typeof ev.hold === "number" ? ev.hold : LIVE_OUTLINE_MS };
       this.outlines.push(outline);
       if (this.outlines.length > 400) this.outlines.splice(this.outlines.findIndex(o => !o.issue), 1);
-      const target = this.view(outline), last = this.cursors.get(checker);
+      const key = this.live ? checker : outline.tile, target = this.view(outline), last = this.cursors.get(key);
       const to = { x: target.x + Math.min(target.w * 0.3, 12), y: target.y + Math.min(target.h * 0.6, 10) };
       const start = this.live ? due : at;
       const from = this.live && last?.tile === outline.tile ? this.cursorAt(last, false, start) : to;
-      this.cursors.set(checker, { checker, tile: outline.tile, from, to, at: start, duration: this.live && last?.tile === outline.tile ? LIVE_GLIDE_MS : 0 });
+      this.cursors.set(key, { checker, tile: outline.tile, from, to, at: start, duration: this.live && last?.tile === outline.tile ? LIVE_GLIDE_MS : 0 });
     }
   }
 }
