@@ -6,7 +6,7 @@
  * this supervisor uses it as liveness, owns reconnects itself, and carries an
  * explicit replay cursor whenever it replaces the native EventSource.
  */
-import { COLD_OPEN_QUERY, firstStreamId, markColdOpen, noteSse } from "./cold-open-timing";
+import { COLD_OPEN_QUERY, firstStreamId, markColdOpen, noteResumeCurrent, noteSse } from "./cold-open-timing";
 
 export const LIVE_EVENTS_PATH = "/api/events";
 export const LIVE_EVENTS_STALE_MS = 40_000;
@@ -370,7 +370,10 @@ export function openLiveEvents(
             // hello boundary when no application frame arrived meanwhile.
             cursor = pending.newestFrameCursor ?? pending.boundaryCursor;
             pendingSnapshot = null;
+            noteResumeCurrent();
           })();
+        } else {
+          noteResumeCurrent();
         }
       } else if (event.lastEventId) {
         if (pendingSnapshot?.source === current) {

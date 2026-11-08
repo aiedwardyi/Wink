@@ -123,6 +123,9 @@ describe("cold-open timing", () => {
     timing.mark("sseOpen");
     fake.at(63_010);
     timing.mark("hello");
+    fake.paint();
+    expect(fake.sent).toEqual([]);
+    timing.resumeCurrent();
     fake.at(63_030);
     fake.paint();
     expect(fake.sent).toEqual([

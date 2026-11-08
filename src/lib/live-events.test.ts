@@ -11,8 +11,8 @@ import {
   type LiveEventsPlatform,
 } from "./live-events";
 
-const { firstStreamId, noteSse } = vi.hoisted(() => ({ firstStreamId: vi.fn(), noteSse: vi.fn() }));
-vi.mock("./cold-open-timing", async (importOriginal) => ({ ...(await importOriginal<object>()), firstStreamId, noteSse }));
+const { firstStreamId, noteResumeCurrent, noteSse } = vi.hoisted(() => ({ firstStreamId: vi.fn(), noteResumeCurrent: vi.fn(), noteSse: vi.fn() }));
+vi.mock("./cold-open-timing", async (importOriginal) => ({ ...(await importOriginal<object>()), firstStreamId, noteResumeCurrent, noteSse }));
 
 class FakeTarget {
   private readonly listeners = new Map<string, Set<(event?: unknown) => void>>();
@@ -96,6 +96,7 @@ function harness(options?: { online?: boolean; visible?: boolean; now?: number }
 beforeEach(() => {
   vi.useFakeTimers();
   noteSse.mockClear();
+  noteResumeCurrent.mockClear();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -413,6 +414,35 @@ describe("live events supervisor", () => {
 
       expect(onError).not.toHaveBeenCalled();
       expect(onFrame.mock.calls.map(([frame]) => frame.n)).toEqual([6, 7]);
+      stop();
+    });
+
+    it("counts a replayed chat as current at its hello", () => {
+      const { test, stop, hide, resume } = resumable();
+      noteResumeCurrent.mockClear();
+      hide();
+      resume(300_000);
+      test.sources[1].open();
+      expect(noteResumeCurrent).not.toHaveBeenCalled();
+      test.sources[1].message({ kind: "hello", resumed: true, cursor: "run00000:5" });
+      expect(noteResumeCurrent).toHaveBeenCalledOnce();
+      stop();
+    });
+
+    it.each([
+      [true, 1],
+      [false, 0],
+    ])("counts a refused replay as current only once its snapshot loads (loaded %s)", async (loaded, calls) => {
+      let finishLoad!: (value: boolean) => void;
+      const test = harness();
+      const onSnapshotRequired = vi.fn(() => new Promise<boolean>((resolve) => (finishLoad = resolve)));
+      const stop = openLiveEvents({ onFrame: vi.fn(), onSnapshotRequired, wakeQuietMs: LIVE_EVENTS_WAKE_QUIET_MS }, test.platform);
+      test.sources[0].open();
+      test.sources[0].message({ kind: "hello", resumed: false, cursor: "run00000:4" });
+      expect(noteResumeCurrent).not.toHaveBeenCalled();
+      finishLoad(loaded);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(noteResumeCurrent).toHaveBeenCalledTimes(calls);
       stop();
     });
 

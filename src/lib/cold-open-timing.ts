@@ -235,9 +235,13 @@ export function createColdOpenTiming(page: ColdOpenPage) {
   return {
     mark(name: ColdOpenMark) {
       if (!pending || pending.label === "warm" || pending.marks[name] !== undefined) return;
+      pending.marks[name] = Math.round(page.now() - pending.since);
+    },
+    /** A resumed page's chat has caught up with the server. */
+    resumeCurrent() {
       const open = pending;
-      open.marks[name] = Math.round(page.now() - open.since);
-      if (name !== "hello" || open.label !== "resume") return;
+      if (open?.label !== "resume" || open.painting) return;
+      open.painting = true;
       page.afterPaint(() => {
         if (pending === open) finish(Math.round(page.now() - open.since));
       });
@@ -290,7 +294,7 @@ export function createColdOpenTiming(page: ColdOpenPage) {
     },
     /** The thread whose fresh messages are on screen, if any. */
     chatShown(threadId: string | undefined) {
-      // A resumed page shows its chat all along; hello is what makes it current.
+      // A resumed page shows its chat all along; resumeCurrent says when it is fresh.
       if (!pending || pending.label === "resume" || pending.painting || !threadId) return;
       if (pending.threadId && pending.threadId !== threadId) return;
       pending.painting = true;
@@ -351,6 +355,10 @@ export function markColdOpen(name: ColdOpenMark) {
 
 export function noteChatShown(threadId: string | undefined) {
   active?.chatShown(threadId);
+}
+
+export function noteResumeCurrent() {
+  active?.resumeCurrent();
 }
 
 export function noteCacheLoaded(hit: boolean) {
