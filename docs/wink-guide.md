@@ -45,7 +45,7 @@
 - Sync is under Settings > Account. Google Sign-in syncs through a folder in the user's own Google Drive. Drive Folder syncs through a folder the user picks instead.
 - What syncs: bot profiles, sections and their order, chats, memory and chat pictures. Project folders, computer permissions, routines, keys and engine sign-ins stay on each PC.
 - If a chat changed on two PCs at once, Wink keeps both and the chat says "This chat also changed on another PC. Both versions were kept." A memory file edited on two PCs keeps the other copy beside it as `memory/<name>.conflict-<hash>.md`.
-- The phone's browser reaches a PC running Wink and that PC's chats. Set it up under Settings > Phone using Tailscale, or the relay's Phone Access > Add a Phone pairing code. With sync on, the phone can switch between reachable PCs.
+- The phone's browser reaches a PC running Wink and that PC's chats. Set it up under Settings > Devices using Tailscale, or the relay's Phone Access > Add a Phone pairing code. With sync on, the phone can switch between reachable PCs.
 
 ## Keyboard shortcuts
 
