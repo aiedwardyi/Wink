@@ -29,6 +29,8 @@ const FOOTER_KEPT = 51;
 const SHOW_QUICK_HERO = false;
 /** Phone heights under this drop the header and seat Close beside All usage. */
 const TIGHT = 320;
+/** Phone heights from this up are limited by the 60% cap alone; the last message may sit under the view. */
+const ROOMY = 600;
 
 type Spot = { left: number; bottom: number; width: number; maxHeight: number; dimBottom: number };
 
@@ -64,7 +66,7 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   const bottom = window.innerHeight - rect.top + gap;
   if (phone) {
     const cap = height * 0.6;
-    const room = rect.top - gap - keptTop(top);
+    const room = rect.top - gap - (height >= ROOMY ? top : keptTop(top));
     const maxHeight = Math.max(FOOTER_KEPT, Math.floor(Math.min(cap, room)));
     const edge = terminal ? 0 : 16;
     return { left: edge, bottom, width: window.innerWidth - 2 * edge, maxHeight, dimBottom: window.innerHeight - rect.top };

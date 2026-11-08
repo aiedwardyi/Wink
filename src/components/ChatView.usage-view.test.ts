@@ -436,6 +436,25 @@ describe("chat usage meter, quick view and wait card", () => {
     }
   });
 
+  it("opens at its full height on a tall phone with a short last message right above the meter", async () => {
+    const vv = viewport(390, 780);
+    const meterTop = seatMeter(vv);
+    vi.spyOn(Range.prototype, "getBoundingClientRect").mockImplementation(() => {
+      const top = meterTop() - 40;
+      return { x: 0, y: top, top, bottom: top + 30, left: 0, right: vv.width, width: vv.width, height: 30, toJSON: () => ({}) } as DOMRect;
+    });
+    const short: Message = { id: "short", at: usageBoardNow - MIN, role: "user", kind: "text", text: "I mean rt" };
+    await mount(makeBot("bot-atlas", "Atlas", "claude", [short]), { phone: true });
+    const transcript = q("[data-orbit-transcript]");
+    expect(q("[data-orbit-transcript] [data-mid='short']"), "the short last row").not.toBeNull();
+    transcript!.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, bottom: meterTop() - 4, left: 0, right: vv.width, width: vv.width, height: meterTop() - 4, toJSON: () => ({}) }) as DOMRect;
+    await click(meter());
+    const view = quick();
+    expect(view, "quick view").not.toBeNull();
+    expect(parseFloat(view!.style.maxHeight), "60% of the visual viewport").toBe(Math.floor(0.6 * 780));
+    expect(view!.querySelector("[data-engine-name]"), "a roomy view keeps its header").not.toBeNull();
+  });
+
   it.each([
     [false, "en"], [true, "en"], [false, "ko"], [true, "ko"],
   ] as const)("shows Today's bars for every account of the chat's engine (phone=%s, %s)", async (phone, locale) => {
