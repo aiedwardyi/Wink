@@ -1364,6 +1364,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                 type: "thread.token-usage.updated",
                 input: usage.inputTokens ?? 0,
                 output: usage.outputTokens ?? 0,
+                ...(typeof usage.cachedReadTokens === "number" ? { cachedInput: usage.cachedReadTokens } : {}),
               });
             }
             while (result?.stopReason === "end_turn" && queuedSteers.size) {
