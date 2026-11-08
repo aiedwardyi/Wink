@@ -71,6 +71,9 @@ const SKIN_CHROME = Object.freeze({
   "pewter-night": Object.freeze({ color: "#18191b", symbolColor: "#b1b7be" }),
   coal: Object.freeze({ color: "#121315", symbolColor: "#a8adb3" }),
   folio: Object.freeze({ color: "#232528", symbolColor: "#b5b8bd" }),
+  inkwell: Object.freeze({ color: "#0a0b0d", symbolColor: "#8a929e" }),
+  graphite: Object.freeze({ color: "#26282c", symbolColor: "#abb0b7" }),
+  moss: Object.freeze({ color: "#171c18", symbolColor: "#adb3a4" }),
 });
 
 const DEFAULT_SKIN = "ledger";
@@ -79,7 +82,7 @@ const SKIN_PREFERENCE_FILE = "skin-preference.json";
 const LOCAL_STORAGE_DIR = path.join("Local Storage", "leveldb");
 const OMB_SKIN_MARKER = Buffer.from("omb-skin");
 const KNOWN_SKIN_RE =
-  /^(wink-cyber|wink-violet|wink-black|wink-day|wink|midnight|atelier|foundry|lagoon|ledger|catppuccin-frappe|catppuccin-mocha|tokyo-night|vesper|onyx|peach|coral|dracula|cobalt|gruvbox|kanagawa|hurtado|rose-pine|nord|github-dimmed|tui-black|tui-amber|tui-ice|tui-slate|tui-smoke|tui|terminal-dracula|terminal-ice|terminal|paper-tape|logfile|multiplexer|modal|vscode-dark|studio-gray|steel-gray|claude|precision|mono-hud|servo-gray|notebook|messenger|community-light|community|code-review|blueprint|blueprint-gray|blueprint-charcoal|instrument|matte|carbon|pewter|pewter-dusk|pewter-night|coal|folio)(?![A-Za-z0-9_-])/;
+  /^(wink-cyber|wink-violet|wink-black|wink-day|wink|midnight|atelier|foundry|lagoon|ledger|catppuccin-frappe|catppuccin-mocha|tokyo-night|vesper|onyx|peach|coral|dracula|cobalt|gruvbox|kanagawa|hurtado|rose-pine|nord|github-dimmed|tui-black|tui-amber|tui-ice|tui-slate|tui-smoke|tui|terminal-dracula|terminal-ice|terminal|paper-tape|logfile|multiplexer|modal|vscode-dark|studio-gray|steel-gray|claude|precision|mono-hud|servo-gray|notebook|messenger|community-light|community|code-review|blueprint|blueprint-gray|blueprint-charcoal|instrument|matte|carbon|pewter|pewter-dusk|pewter-night|coal|folio|inkwell|graphite|moss)(?![A-Za-z0-9_-])/;
 const MAX_SKIN_ID_LEN = Math.max(...Object.keys(SKIN_CHROME).map((id) => id.length));
 
 function migrateSkin(skin) {
