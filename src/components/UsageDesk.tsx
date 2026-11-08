@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
@@ -516,8 +516,8 @@ export function UsageDesk() {
     heads.current.clear();
   });
   const board = state.board && { ...state.board, engines: state.board.engines.map((engine) => ({ ...engine, accounts: usageAccounts(engine) })) };
+  useEffect(() => { if (!board) waited.current = true; });
   if (!board) {
-    waited.current = true;
     return <div data-usage-desk="" className="min-w-0"><EmptyState>{t(state.status === "error" ? "usage.desk.unavailable" : "usage.desk.loading")}</EmptyState></div>;
   }
   if (!board.engines.some((each) => each.accounts.length)) return <div data-usage-desk="" className="min-w-0"><EmptyState>{t("usage.limits.empty")}</EmptyState></div>;
