@@ -18,11 +18,11 @@ const activityOf = (counts: number[], start = "2026-05-10") => {
   return { start, counts, streak: 1, busiest: { day: start, count: Math.max(...counts) }, total };
 };
 
-function mount() {
+function mount(waved?: { current: boolean }) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  act(() => root.render(createElement(I18nProvider, null, createElement(ActivityCard))));
+  act(() => root.render(createElement(I18nProvider, null, createElement(ActivityCard, { waved }))));
   return { host, unmount: () => act(async () => { root.unmount(); host.remove(); }) };
 }
 
@@ -157,6 +157,28 @@ it("shows a tapped day's tip until a tap lands elsewhere", async () => {
     expect(document.querySelector("[data-activity-tip]")).toBeNull();
   } finally {
     await unmount();
+  }
+});
+
+it("waves once per Settings open when the card remounts", async () => {
+  const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => undefined);
+  Object.defineProperty(HTMLElement.prototype, "animate", { value: animate, configurable: true, writable: true });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(activityOf(weeks(() => 1))))));
+  localStorage.setItem("omb-activity", JSON.stringify(activityOf(weeks(() => 1))));
+  try {
+    const waved = { current: false };
+    let card = mount(waved);
+    await act(async () => {});
+    expect(animate).toHaveBeenCalled();
+    await card.unmount();
+    animate.mockClear();
+    card = mount(waved);
+    await act(async () => {});
+    expect(animate).not.toHaveBeenCalled();
+    await card.unmount();
+  } finally {
+    Reflect.deleteProperty(HTMLElement.prototype, "animate");
   }
 });
 

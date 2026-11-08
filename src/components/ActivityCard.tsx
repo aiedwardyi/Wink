@@ -59,7 +59,7 @@ function emptyActivity(): ReplyActivity {
   return { start, counts: Array<number>(25 * 7 + today.getDay() + 1).fill(0), since: null, streak: 0, busiest: null, total: 0 };
 }
 
-export function ActivityCard() {
+export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
   const { t, locale } = useI18n();
   const [fetched, setFetched] = useState<ReplyActivity | null>(cachedActivity);
   const [failed, setFailed] = useState(false);
@@ -78,7 +78,8 @@ export function ActivityCard() {
     return () => { gone = true; };
   }, []);
   useLayoutEffect(() => {
-    if (reducedMotion()) return;
+    if (waved?.current || reducedMotion()) return;
+    if (waved) waved.current = true;
     const squares = grid.current?.querySelectorAll<HTMLElement>("[data-day]") ?? [];
     for (const [day, square] of [...squares].entries()) square.animate?.(
       [{ opacity: 0, transform: "scale(0.4)" }, { opacity: 1, transform: "none" }],
