@@ -5,7 +5,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ModelCatalog } from "../contracts.ts";
-import { TERMINAL_KEYS, type TerminalKey } from "../terminal-keys.ts";
+import { AUTO_ENGINES, AUTO_TASKS, type TaskData } from "../../shared/auto-routing.ts";
+import { TERMINAL_KEYS,type TerminalKey } from "../terminal-keys.ts";
 import { grokSupport, STATIC_GROK_MODELS } from "./acp/grok.ts";
 import { STATIC_CLAUDE_MODELS } from "./claude.ts";
 import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
@@ -179,9 +180,67 @@ export const TOOLS = [
   },
 ] as const;
 
-type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string | undefined };
+const AUTO_RISKS = ["low", "high", "protected", "unknown"] satisfies readonly NonNullable<TaskData["risk"]>[];
+const AUTO_SCOPES = ["bounded", "mechanical", "multi-source", "large", "unknown"] satisfies readonly NonNullable<TaskData["scope"]>[];
+const AUTO_SPAWN_DESCRIPTION =
+  "Open a labeled pane (a terminal-view tab) in cwd. Max 16 live panes per bot; a new pane needs up to 0.6 GB free. The shell is PowerShell on Windows. " +
+  "To run a worker: cwd is a git worktree, never the live checkout, except one editing worker in place for a plain folder or a checkout with uncommitted changes, after a safety copy (a read-only review of a plain folder runs in a scratch copy of it, never in place); label is \"NICKNAME | MODEL | EFFORT\". " +
+  "Pass task, not command: Auto picks the engine, model and effort. Pin only what the user's own words name, quoted in userQuote. " +
+  "Only when the user requests an account, prefix a command with $env:CODEX_HOME='Usage name or known home'; or $env:CLAUDE_CONFIG_DIR='Usage name or known home'; otherwise Auto picks, Main first. " +
+  `Else command runs as given. Claude: claude --model <id> --effort <effort> --dangerously-skip-permissions ${REPORT_TEXT.claude}'<prompt>'. ` +
+  `Codex: codex --model <id> -c model_reasoning_effort=<effort> -c "projects={'<cwd>'={trust_level='trusted'}}" --dangerously-bypass-approvals-and-sandbox ${REPORT_TEXT.env}${REPORT_TEXT.notify}'<prompt>'. ` +
+  "Muse: muse --model <id> --reasoning-effort <effort> --yolo '<prompt>'. " +
+  "Grok: grok -m <id> --effort <effort> --always-approve --trust '<prompt>'. " +
+  `Gemini: ${REPORT_TEXT.agy}agy --model <id> --dangerously-skip-permissions -i '<prompt>'. ` +
+  `Model ids: ${[STATIC_CLAUDE_MODELS, STATIC_CODEX_MODELS, MSP_MUSE_MODELS, STATIC_GROK_MODELS].map((catalog) => catalog.options.map((option) => option.id).join(", ")).join("; ")}; Gemini ${WORKER_GEMINI_FAMILIES.map((family) => `${family.id}-<effort>`).join(", ")}. ` +
+  REPORT_TEXT.spawn;
+const AUTO_SPAWN_PROPERTIES = {
+  task: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "What the worker is told." },
+      kind: { type: "string", enum: AUTO_TASKS },
+      risk: { type: "string", enum: AUTO_RISKS },
+      scope: { type: "string", enum: AUTO_SCOPES },
+      tools: { type: "array", items: { type: "string" } },
+      reviewOf: {
+        type: "object",
+        properties: { engine: { type: "string", enum: AUTO_ENGINES }, model: { type: "string" }, effort: { type: "string" } },
+        required: ["engine", "model", "effort"],
+        additionalProperties: false,
+      },
+    },
+    required: ["prompt", "kind", "risk", "scope"],
+    additionalProperties: false,
+  },
+  pin: {
+    type: "object",
+    properties: {
+      model: { type: "string" },
+      effort: { type: "string" },
+      userQuote: { type: "string", description: "The user's exact words." },
+    },
+    required: ["userQuote"],
+    additionalProperties: false,
+  },
+} as const;
+
+const AUTO_TOOLS = TOOLS.map((tool) => tool.name !== "terminal_spawn" ? tool : {
+  ...tool,
+  description: AUTO_SPAWN_DESCRIPTION,
+  inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, ...AUTO_SPAWN_PROPERTIES } },
+});
+
+export function terminalTools(auto: boolean) {
+  return auto ? AUTO_TOOLS : TOOLS;
+}
+
+const autoOn = (config: TerminalConfig) => config.auto ?? process.env.OMB_AUTO_ROUTING === "1";
+
+type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; auto?: boolean; nameOf?: (id: string) => string | undefined };
 type SendInput = { sessionId: string; generation: number; text: string };
-type SpawnInput = { label: string; cwd?: string; command?: string };
+type AutoSpawn = { task: unknown; pin?: unknown };
+type SpawnInput = { label: string; cwd?: string; command?: string; auto?: AutoSpawn };
 type Pane = { sessionId: string; generation: number; label: string | null; main?: boolean; exited?: boolean; screenText?: string; context?: { tokens?: number; left: number }; account?: { id: string; generation: number } };
 
 type Snapshot = {
@@ -282,14 +341,47 @@ export function readTerminalSnapshot(fetchImpl: typeof fetch = fetch, config: Te
   return terminalRequest(fetchImpl, config, { sessionId, waitFor, timeoutMs, observe });
 }
 
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters -- Tool arguments are untyped model input.
+function plain(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
+  return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
+}
+
+// oxlint-disable-next-line anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters -- Tool arguments are untyped model input.
+const filled = (value: unknown) => typeof value === "string" && value.trim() !== "";
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Tool arguments are untyped model input.
+function autoSpawnError(task: unknown, pin: unknown): string | undefined {
+  if (!plain(task, ["prompt", "kind", "risk", "scope", "tools", "reviewOf"]) || !filled(task.prompt)
+    || !AUTO_TASKS.some((kind) => kind === task.kind) || !AUTO_RISKS.some((risk) => risk === task.risk) || !AUTO_SCOPES.some((scope) => scope === task.scope)
+    || (task.tools !== undefined && !(Array.isArray(task.tools) && task.tools.every(filled)))) {
+    return "terminal_spawn task needs prompt, kind, risk and scope from the schema, with optional tools and reviewOf";
+  }
+  const review = task.reviewOf;
+  if (review !== undefined && !(plain(review, ["engine", "model", "effort"]) && AUTO_ENGINES.some((engine) => engine === review.engine) && filled(review.model) && filled(review.effort))) {
+    return "terminal_spawn task reviewOf needs engine, model and effort";
+  }
+  if (pin !== undefined && !(plain(pin, ["model", "effort", "userQuote"]) && filled(pin.userQuote) && (pin.model !== undefined || pin.effort !== undefined)
+    && (pin.model === undefined || filled(pin.model)) && (pin.effort === undefined || filled(pin.effort)))) {
+    return "terminal_spawn pin needs the user's exact words in userQuote and a model or effort";
+  }
+  return undefined;
+}
+
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
 export function spawnTerminalPane(args: Record<string, unknown>, fetchImpl: typeof fetch = fetch, config: TerminalConfig = {}): Promise<{ sessionId: string; generation: number; hold?: string; line?: string }> {
-  const { label, cwd, command } = args;
+  const { label, cwd, command, task, pin } = args;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Tool arguments are untyped model input.
   if (typeof label !== "string" || !label.trim() || (cwd !== undefined && typeof cwd !== "string") || (command !== undefined && typeof command !== "string")) {
     return Promise.reject(new Error("terminal_spawn needs a label, with optional string cwd and command"));
   }
-  return terminalRequest(fetchImpl, config, { spawn: { label, cwd, command } });
+  if (!autoOn(config)) return terminalRequest(fetchImpl, config, { spawn: { label, cwd, command } });
+  if (task === undefined) {
+    return pin === undefined ? terminalRequest(fetchImpl, config, { spawn: { label, cwd, command } }) : Promise.reject(new Error("terminal_spawn pin needs a task"));
+  }
+  if (command !== undefined) return Promise.reject(new Error("terminal_spawn takes a task or command, not both"));
+  const bad = autoSpawnError(task, pin);
+  return bad ? Promise.reject(new Error(bad)) : terminalRequest(fetchImpl, config, { spawn: { label, cwd, auto: { task, pin } } });
 }
 
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Tool arguments are untyped JSON-RPC input validated here.
@@ -427,7 +519,7 @@ export async function callTool(
   if (!TOOL_NAMES.has(name)) return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
   try {
     if (name === "terminal_spawn") {
-      const usage = await spawnUsage(fetchImpl, config, args);
+      const usage = autoOn(config) && args.task !== undefined ? {} : await spawnUsage(fetchImpl, config, args);
       if (usage.hold) return { content: [{ type: "text", text: usage.hold }] };
       const pane = await spawnTerminalPane(args, fetchImpl, config);
       if (pane.hold) return { content: [{ type: "text", text: pane.hold }] };
@@ -483,7 +575,7 @@ async function handle(message: Json) {
   } else if (method === "ping") {
     ok(id, {});
   } else if (method === "tools/list") {
-    ok(id, { tools: TOOLS_ENABLED ? TOOLS : [] });
+    ok(id, { tools: TOOLS_ENABLED ? terminalTools(autoOn({})) : [] });
   } else if (method === "tools/call") {
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- JSON-RPC tool name is untyped input.
     if (!TOOLS_ENABLED || typeof params.name !== "string" || !TOOL_NAMES.has(params.name)) return rpcError(id, -32602, `Unknown tool: ${String(params.name ?? "")}`);

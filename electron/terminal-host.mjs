@@ -506,7 +506,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAuto = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
   const sessions = new Map();
   const active = new Map();
   const generations = new Map();
@@ -581,6 +581,19 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const botSessions = (botId) => [...sessions.values()].filter((candidate) => candidate.botId === botId && !candidate.retired && active.get(candidate.key) === candidate.id);
   const paneSummary = (session) => ({ sessionId: session.id, generation: session.generation, label: session.label ?? null, cwd: session.cwd, main: !session.botPane, exited: session.exitCode !== null, changedAt: session.stallScreenAt,
     ...(session.botPane && session.workerAccount ? { account: session.workerAccount } : {}) });
+  const autoSignal = async (route, event, extra = {}) => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try { await workerAuto?.({ routeId: route.routeId, event, ...extra }); return; }
+      catch { await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1))); }
+    }
+  };
+  const autoClosed = (session) => {
+    if (!session.autoRoute || session.autoClosed || disposed) return;
+    session.autoClosed = true;
+    void autoSignal(session.autoRoute, "closed");
+  };
+  const liveAutoRuns = () => [...sessions.values()].filter((session) => session.autoRoute && !session.retired && session.exitCode === null)
+    .map((session) => ({ routeId: session.autoRoute.routeId, nativeId: session.autoRoute.nativeId, paneId: session.id }));
   const liveAccountRuns = ({ botId, engine } = {}) => {
     const runs = [];
     for (const session of sessions.values()) {
@@ -819,6 +832,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         session.stallNotes.push(now());
         if (session.stallPosts > STALL_REPEATS) session.stallSnagAt = now() + SNAG_AFTER_MS;
       };
+      if (session.autoRoute) void autoSignal(session.autoRoute, limit ? "limit" : "stalled");
       void Promise.resolve().then(() => notePane(session.mail, scope, stallNoteText(text, elapsed, session.cwd, session.engine, session.cols))).then(delivered).catch(() => {
         // The mailbox can store the note and send its receipt even when the response is lost.
         if (session.stallReceiptAt >= sentAt) return delivered();
@@ -875,6 +889,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     clearActivityTimer(session);
     clearTimeout(session.claudeTrustTimer);
     if (active.get(session.key) === session.id) active.delete(session.key);
+    autoClosed(session);
     if (!wasRetired) emit(session, "terminal:closed", { id: session.id, botId: session.botId });
     const exited = session.pty.exited;
     if (exited) {
@@ -963,6 +978,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       return;
     }
     if (session.botPane) paneRuns?.ended(session.id);
+    autoClosed(session);
     if (session.exitCode === null) {
       session.exitCode = exitCode;
       session.exitedAt = now();
@@ -1508,6 +1524,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       };
     },
     liveAccountRuns,
+    liveAutoRuns,
     readBot(botId, options = {}) {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Bot ids cross the local proxy boundary.
       if (typeof botId !== "string" || !BOT_ID_RE.test(botId)) throw new Error("Invalid bot");
@@ -1699,7 +1716,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       const botReserved = paneReservations.get(botId) ?? 0;
       if (botSessions(botId).filter((session) => session.botPane && session.exitCode === null).length + botReserved >= BOT_PANE_LIMIT) throw new Error(`Too many bot terminals (limit ${BOT_PANE_LIMIT})`);
       if (active.size + reservedPanes >= SESSION_LIMIT) reclaimExited();
-      const floor = paneMemoryFloor(input.command);
+      const floor = paneMemoryFloor(input.auto ? "claude" : input.command);
       const free = freeMemory();
       if (free < floor) {
         const names = await Promise.resolve().then(botNames).catch(() => ({}));
@@ -1710,21 +1727,35 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       let session;
       let worker;
       let claimed = false;
+      let paneLabelText = label;
+      let folder = null;
       try {
         if (recovery) {
           claimed = paneRuns?.claim(recovery.id);
           if (!claimed) throw new Error("Worker recovery already claimed or unavailable");
         }
         const launchInput = { botId, label, command: input.command ?? "", environment: terminalEnvironment(env) };
+        if (input.auto) {
+          folder = await resolveFolder({ botId, cwd: input.cwd });
+          if (folder.needsFolder) throw new Error("Terminal folder is unavailable");
+          launchInput.auto = input.auto;
+          launchInput.cwd = folder.cwd;
+        }
         if (recovery) launchInput.resume = recovery.session;
         // Capture is best effort here: any failure leaves the launch exactly as it was without accounts.
         else if (!workerAccountsEnabled && workerLaunch && platform === "win32" && input.command) launchInput.unrouted = true;
         if (launchInput.unrouted) worker = await Promise.resolve(launchInput).then(workerLaunch).then((launch) => launch?.kind === "unrouted" ? launch : null, () => null);
-        else worker = (workerAccountsEnabled || recovery) && workerLaunch ? await workerLaunch(launchInput) : null;
+        else worker = (workerAccountsEnabled || recovery || input.auto) && workerLaunch ? await workerLaunch(launchInput) : null;
         if (worker?.kind === "hold") return { hold: worker.hold };
+        if (worker?.kind === "existing") {
+          const pane = sessions.get(worker.sessionId);
+          return pane && !pane.retired && pane.exitCode === null ? { sessionId: pane.id, generation: pane.generation } : { hold: "Auto held this worker: its pane has already closed." };
+        }
+        if (input.auto && worker?.kind !== "managed") throw new Error("Auto launch is unavailable");
+        if (worker?.label) paneLabelText = paneLabel(worker.label);
         if (recovery && worker?.kind !== "managed" && worker?.kind !== "unrouted") throw new Error("Worker resume service is unavailable");
         if (recovery && worker.session) worker.session.recoveredFrom = recovery.id;
-        const folder = await resolveFolder({ botId, cwd: input.cwd });
+        folder ??= await resolveFolder({ botId, cwd: input.cwd });
         if (recovery) folder.teacher = recovery.teacher ?? botId;
         if (folder.needsFolder) throw new Error("Terminal folder is unavailable");
         const cwd = folder.cwd;
@@ -1735,7 +1766,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (disposed) throw new Error("Terminal host is shutting down");
         if (deletedBots.has(botId)) throw new Error("Terminal bot was deleted");
         const key = `${sender.id}:${botId}:pane:${randomUUID()}`;
-        session = await start({ key, event: { sender }, input: { botId, label, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true, worker });
+        session = await start({ key, event: { sender }, input: { botId, label: paneLabelText, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true, worker });
         if (disposed) {
           await retire(session, true);
           throw new Error("Terminal host is shutting down");
@@ -1745,10 +1776,14 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
           throw new Error("Terminal bot was deleted");
         }
         session.botPane = true;
-        session.label = label;
+        session.label = paneLabelText;
+        session.autoRoute = worker?.auto ?? recovery?.session?.auto ?? null;
         paneCleanup?.opened(session);
         session.spawnedAt = now();
         active.set(key, session.id);
+      } catch (error) {
+        if (worker?.auto) await autoSignal(worker.auto, "rejected");
+        throw error;
       } finally {
         if (claimed && (!session || session.retired)) paneRuns.releaseClaim(recovery.id);
         reservedPanes -= 1;
@@ -1756,14 +1791,20 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (left) paneReservations.set(botId, left);
         else paneReservations.delete(botId);
       }
-      emit(session, "terminal:opened", { id: session.id, botId, label: label ?? null, generation: session.generation });
-      if (input.command) {
+      emit(session, "terminal:opened", { id: session.id, botId, label: paneLabelText ?? null, generation: session.generation });
+      if (recovery?.session?.auto) await autoSignal(recovery.session.auto, "recovered", { paneId: session.id, nativeId: recovery.session.auto.nativeId });
+      if (input.command || worker?.auto) {
         // A fresh unrouted pane types the bot's own text; every other worker types its rendered argv.
         const rendered = worker?.kind === "managed" || (recovery && worker?.kind === "unrouted") ? worker : null;
         const command = normalizeTerminalText(rendered ? managedWorkerCommand(rendered, session.workerEnvironment, platform, session.mail?.binDir)
           : worker?.kind === "unrouted" ? unroutedWorkerCommand(worker, input.command, session.mail?.binDir) : input.command);
         session.command = command.endsWith("\r") ? command : `${command}\r`;
-        await botWrite(session, session.command, rendered);
+        try { await botWrite(session, session.command, rendered); }
+        catch (error) {
+          if (worker?.auto) await autoSignal(worker.auto, "uncertain");
+          throw error;
+        }
+        if (worker?.auto) await autoSignal(worker.auto, "accepted", { paneId: session.id });
       }
       return { sessionId: session.id, generation: session.generation, ...(worker?.line ? { line: worker.line } : {}) };
     },

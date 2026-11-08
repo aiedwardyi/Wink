@@ -117,19 +117,24 @@ function unroutedLaunch(text: string) {
   }
 }
 
+type SpawnUsage = ReturnType<typeof createSpawnUsage>;
+type AutoLaunch = { executable: string; args: string[]; environment: Record<string, string>; account: string; generation: number };
+
 export function createWorkerLaunch(deps: {
   enabled(): boolean; resolveWorkerTurn: WorkerTurnResolver; bases(): InstanceConfigMap;
-  available(id: string, generation: number): boolean; usage: ReturnType<typeof createSpawnUsage>;
+  available(id: string, generation: number): boolean; usage: (...args: Parameters<SpawnUsage>) => ReturnType<SpawnUsage>;
   resumeAccount?(id: string, generation: number): AccountContext | undefined | Promise<AccountContext | undefined>;
   mainAccount?(of: string): AccountContext | undefined | null;
   nameOf?(id: string, engine: string): string;
   accounts?(): readonly AccountContext[];
 }) {
-  return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
+  return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true; autoLaunch?: AutoLaunch }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
-    if (!deps.enabled() && !input.resume) return null;
+    const auto = input.autoLaunch;
+    if (!deps.enabled() && !input.resume && !auto) return null;
     const resume = input.resume;
-    const command = resume ? { ...workerCommand(resume.engine), args: resumeArgs(resume) } : workerCommand(input.command, input.mode === "send");
+    const command = auto ? { kind: "managed" as const, ...ENGINES.get(auto.executable)!, executable: auto.executable, args: auto.args, environment: auto.environment, home: undefined }
+      : resume ? { ...workerCommand(resume.engine), args: resumeArgs(resume) } : workerCommand(input.command, input.mode === "send");
     if (command.kind !== "managed") return command;
     if (input.mode === "send") throw new Error("Managed worker launches require a new terminal_spawn pane");
     const resumedAccount = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
@@ -144,6 +149,10 @@ export function createWorkerLaunch(deps: {
       ...(deps.accounts?.() ?? []).filter((account) => bases[account.of]?.enabled !== false && bases[account.of]?.driver === command.driver),
     ];
     let selected: AccountContext | undefined;
+    if (auto) {
+      selected = candidates().find((account) => account.id === auto.account && account.generation === auto.generation);
+      if (!selected) throw new Error("Worker account is unavailable");
+    }
     if (command.home) {
       const value = command.home.value;
       const matches = candidates().filter((account) => deps.available(account.id, account.generation)
@@ -198,7 +207,7 @@ export function createWorkerLaunch(deps: {
       if (command.executable === "grok") policy.env.GROK_HOME ??= join(policy.env.HOME, ".grok");
     }
     const captured = Object.freeze({ id: account.id, generation: account.generation, name: selected ? deps.nameOf?.(account.id, command.name) ?? command.name : command.name });
-    const usage = await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
+    const usage = auto ? { hold: undefined, line: undefined } : await deps.usage(input.botId, input.label ?? "", input.command, captured, Boolean(resume));
     if (usage.hold) return { kind: "hold" as const, hold: usage.hold };
     const current = resume ? await deps.resumeAccount?.(resume.accountId, resume.accountGeneration) : undefined;
     const nowMain = sameEngine || selected ? undefined : deps.mainAccount?.(baseId);
@@ -208,6 +217,6 @@ export function createWorkerLaunch(deps: {
     if (managedEngine && account.generation > 0) shareUserSetup(command.driver, account, baseAccount(baseId, command.driver, baseEnvironment).home);
     return { kind: "managed" as const, account: captured, executable: command.executable, args: policy.args,
       environment: policy.env, workerSettings, session,
-      line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line ?? (selected ? `Worker account: ${captured.name}.` : undefined) };
+      line: mainDown ? [`${command.name} Main is signed out, so this worker uses ${deps.nameOf?.(captured.id, command.name) ?? "your default account"}.`, usage.line].filter(Boolean).join(" ") : usage.line ?? (selected && !auto ? `Worker account: ${captured.name}.` : undefined) };
   };
 }

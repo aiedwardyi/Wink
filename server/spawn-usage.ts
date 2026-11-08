@@ -99,7 +99,7 @@ export function createSpawnUsage(deps: Deps) {
     if (!recovery) held.delete(key);
     return { line: `${name} usage left: ${text("")}.` };
   };
-  return Object.assign(usage, { invalidate: (instanceId: string) => {
+  return Object.assign(usage, { refresh: refreshed, invalidate: (instanceId: string) => {
     for (const [key, hold] of held) if (hold.instanceId === instanceId) held.delete(key);
   } });
 }
