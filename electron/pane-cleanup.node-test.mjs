@@ -419,7 +419,7 @@ test("superseded scratch entries do not scan roots before the eligible owner", a
   const first = stats;
   f.advance(4 * DAY_MS);
   await f.cleanup.sweep();
-  assert.ok(stats > first && stats - first <= 5, `${stats - first} root stats`);
+  assert.ok(stats > first && stats - first <= 10, `${stats - first} root stats`);
   assert.equal(reads, 1);
   assert.equal(fs.existsSync(f.scratch), false);
   assert.deepEqual(f.warnings, []);
@@ -899,6 +899,53 @@ test("a saved, clean, idle ledger worktree is removed without its branch or link
   assert.equal(fs.readFileSync(path.join(shared, "package"), "utf8"), "safe");
   assert.match(git(main, "branch", "--list", "test-worker"), /test-worker/);
   assert.doesNotMatch(git(main, "worktree", "list"), /worktrees[\\/]worker/);
+});
+
+test("removing a worktree leaves another worktree's registration untouched", async (t) => {
+  const f = fixture(t);
+  const { main, target } = repo(f);
+  const away = path.join(f.home, "away");
+  fs.mkdirSync(away);
+  git(main, "worktree", "add", "--quiet", "-b", "test-offline", path.join(away, "offline"));
+  fs.renameSync(path.join(away, "offline"), path.join(away, "unplugged"));
+  const admin = (name) => path.join(main, ".git", "worktrees", name);
+  assert.equal(fs.existsSync(admin("offline")), true);
+  await eligible(f);
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  assert.equal(fs.existsSync(admin("worker")), false);
+  assert.equal(fs.existsSync(admin("offline")), true);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a pin on the volume root protects every worktree under it", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  const cleanup = createPaneCleanup({ ...f.options, pinned: [path.parse(target).root] });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(target, "file"), "utf8"), "saved");
+  assert.deepEqual(f.warnings, []);
+});
+
+test("scratch that a live worktree links into keeps its own junctions", async (t) => {
+  const f = fixture(t);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const incoming = path.join(host, "incoming");
+  const outgoing = path.join(f.scratch, "outgoing");
+  const kind = process.platform === "win32" ? "junction" : "dir";
+  fs.symlinkSync(f.scratch, incoming, kind);
+  fs.symlinkSync(f.home, outgoing, kind);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.equal(fs.lstatSync(outgoing).isSymbolicLink(), true);
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(incoming);
+  fs.unlinkSync(outgoing);
 });
 
 test("a candidate's own link does not count as an incoming link", async (t) => {

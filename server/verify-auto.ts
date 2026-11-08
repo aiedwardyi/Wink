@@ -131,8 +131,9 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     if (event.itemId) turn.names.delete(event.itemId);
     if (name === undefined) turn.tools++;
     if (!event.ok || name?.title.includes("verify_site")) return;
+    if (!event.writes?.length && name?.readOnly) return;
     turn.sequence++;
-    if (!event.writes?.length && !name?.readOnly) turn.opaque = true;
+    if (!event.writes?.length) turn.opaque = true;
     for (const path of event.writes?.slice(0, 32) ?? []) turn.writes.add(path);
   };
   const checkStarted = (threadId: string, turnId: string) => {

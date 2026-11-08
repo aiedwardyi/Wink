@@ -93,6 +93,26 @@ it("skips a manual check after the last write and rechecks a later write", async
   expect(start).toHaveBeenCalledTimes(1);
 });
 
+it.each(["Read", "Grep"])("does not recheck after %s follows a check", async title => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
+  auto.checkStarted("thread", "turn")();
+  auto.event(event({ type: "item.started", itemType: "tool", itemId: "read", title }));
+  auto.event(event({ type: "item.completed", itemType: "tool", itemId: "read", ok: true }));
+  await auto.settled(turn);
+  expect(start).not.toHaveBeenCalled();
+});
+
+it.each(["write", "shell"])("rechecks after a %s follows a check and a read", async kind => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
+  auto.checkStarted("thread", "turn")();
+  auto.event(event({ type: "item.started", itemType: "tool", itemId: "read", title: "Read" }));
+  auto.event(event({ type: "item.completed", itemType: "tool", itemId: "read", ok: true }));
+  if (kind === "shell") shell();
+  else auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
+  await auto.settled(turn);
+  expect(start).toHaveBeenCalledOnce();
+});
+
 it("scans once for an opaque shell alongside native writes", async () => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html"] }));
   shell();
