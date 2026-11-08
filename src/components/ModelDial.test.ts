@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { modelDialEnabled } from "@/lib/feature-flags";
-import { I18nProvider } from "@/lib/i18n";
+import { I18nProvider, persistPreference } from "@/lib/i18n";
 import * as phoneSwipe from "@/lib/phone-swipe";
 import type { Bot, InstanceInfo } from "@/state/store";
 import { ModelPickerControl } from "./ModelPicker";
@@ -257,12 +257,42 @@ describe("ModelDial", () => {
   });
 
   it.each([
-    ["claude-opus-5-5", ["53.6", "54.0", "2.94"]],
+    ["claude-opus-5-5", ["53.6", "54.0", "1.82"]],
     ["unlisted-model", ["Unavailable", "Unavailable", "Unavailable"]],
   ])("exposes formatted stats without rolling digits for %s", async (model, values) => {
     media();
     await mount({ model });
     expect(Array.from(document.querySelectorAll(".dial-odo"), spoken)).toEqual(values);
+  });
+
+  it.each([
+    ["en", "/Task"],
+    ["ko", "/작업"],
+  ] as const)("rolls the cost with effort in %s", async (locale, unit) => {
+    persistPreference(locale);
+    media();
+    await mount();
+    const cost = () => document.querySelector(".dial-cost");
+    const shown = () => [spoken(cost()!.querySelector(".dial-odo")!), cost()!.querySelector(".unit")!.textContent];
+    expect(shown()).toEqual(["1.82", unit]);
+    expect(cost()!.parentElement!.querySelector(".dial-src")!.textContent).toContain("$");
+    await key("ArrowLeft");
+    expect(shown()).toEqual(["1.34", unit]);
+    await key("ArrowLeft");
+    await key("ArrowLeft");
+    expect(shown()).toEqual(["0.55", unit]);
+    for (let i = 0; i < 4; i++) await key("ArrowRight");
+    expect(shown()).toEqual(["5.98", unit]);
+  });
+
+  it("keeps the price per 1M where an effort has no run cost", async () => {
+    persistPreference("en");
+    media();
+    await mount({ model: "gpt-6-luna" });
+    for (let i = 0; i < 4; i++) await key("ArrowLeft");
+    expect(effort()).toBe("low");
+    expect(document.querySelector(".dial-cost .unit")!.textContent).toBe("/1M");
+    expect(spoken(document.querySelector(".dial-cost .dial-odo")!)).not.toBe("0.00");
   });
 
   it("jumps by typed name and lands with Enter", async () => {

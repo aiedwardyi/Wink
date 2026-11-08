@@ -2,7 +2,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type
 import { ArrowDown, ArrowUp, Lock, Square } from "lucide-react";
 import type { ModelSelection } from "@/state/store";
 import { pickerEfforts, pickerModels, selectPickerEffort, selectPickerModel, type PickerRow } from "@/lib/cross-model-picker";
-import { DIAL_DIGITS, dialFind, dialPrice, dialScore, dialShift, dialSource, dialStep, dialTier, type DialStat } from "@/lib/model-dial";
+import { DIAL_DIGITS, dialFind, dialPrice, dialRunCost, dialScore, dialShift, dialSource, dialStep, dialTier, type DialStat } from "@/lib/model-dial";
 import { formatUsd, pickerPrice } from "@/lib/model-index";
 import { MODEL_INDEX_AS_OF } from "../../shared/model-index-data.ts";
 import { engineBadgeText, modelEffortLabel, modelFamilyAccent } from "@/lib/model-chip";
@@ -184,6 +184,8 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const intel = item ? dialScore(draft.model, effort?.effort, "intelligence") : undefined;
   const coding = item ? dialScore(draft.model, effort?.effort, "coding") : undefined;
   const price = item ? dialPrice(draft.model) : undefined;
+  const runCost = item ? dialRunCost(draft.model, effort?.effort) : undefined;
+  const bigCost = runCost ?? price?.blend;
   const ms = 170;
 
   // Turn counters only grow, so the bezel and lab ring always take the short way round.
@@ -216,7 +218,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
   const bar = useRef<{ timer: number; anims: Animation[] }>({ timer: 0, anims: [] });
   const ring = useRef({ from: 0, to: 0, start: 0, ms: 0, anims: [] as Animation[] });
   const wave = useRef(0);
-  const shown = useRef<{ i?: number; effort?: string; blend?: number }>({});
+  const shown = useRef<{ i?: number; effort?: string; cost?: number }>({});
 
   useEffect(() => {
     let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setBoot(false)); });
@@ -324,12 +326,12 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
     quench();
     if (landed && !reducedMotion()) overdrive();
     if (intel != null && intel * 3.6 !== ring.current.to) sweep(intel * 3.6);
-    if (shown.current.blend !== undefined && price?.blend !== shown.current.blend) {
+    if (shown.current.cost !== undefined && bigCost !== shown.current.cost) {
       wave.current = (wave.current + 14) % 40;
       squiggle.current?.style.setProperty("--wave", `${-wave.current}px`);
       flip(squiggle.current, "w");
     }
-    shown.current = { i: index, effort: effort?.label, blend: price?.blend };
+    shown.current = { i: index, effort: effort?.label, cost: bigCost };
     const settle = window.setTimeout(() => setLive(`${item?.label ?? ""} ${names[index]?.name ?? ""}, ${t("model.effort")}: ${effort ? modelEffortLabel(effort.label, t) : "-"}`), 220);
     return () => clearTimeout(settle);
   }, [index, effort?.id, labLocked]);
@@ -604,7 +606,7 @@ export function ModelDial({ rows, draft, canCommit, onDraft, onSave, handle, sta
           <div className="dial-stat-text">
             <span className="dial-label">{t("modelIndex.index.cost")}</span>
             <span className="dial-big dial-cost">
-              $<Odometer value={price?.blend} int={DIAL_DIGITS.cost} dec={2} /><span className="unit">/1M</span>
+              $<Odometer value={bigCost} int={DIAL_DIGITS.cost} dec={2} /><span className="unit">{runCost != null ? t("model.dial.perTask") : "/1M"}</span>
               <span ref={squiggle} className="dial-squiggle" aria-hidden><span className="wipe"><svg viewBox="0 -3 240 16"><path d={`M1 5${SQUIGGLE}`} /></svg></span></span>
             </span>
             <span className="dial-src">{pickerPrice(draft.model) ? `${pickerPrice(draft.model)} ${t("model.pricePerMillion")}` : "-"}</span>
