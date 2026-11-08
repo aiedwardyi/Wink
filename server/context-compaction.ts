@@ -161,9 +161,21 @@ export function nativeCompactAt(
   return Math.max(contextBudget(window), window - (CLAUDE_NATIVE_WINDOW - CLAUDE_NATIVE_COMPACT_AT));
 }
 
+export interface NativePromptSize {
+  last: number;
+  growth?: number;
+}
+
+const nextPromptSize = ({ last, growth }: NativePromptSize) => last + Math.max(0, growth ?? 0);
+
 /** The turn after this one would pass Wink's summary point. */
-export function nearNativeCompact(input: { last: number; growth: number; nativeAt: number | null }): boolean {
-  return input.nativeAt !== null && input.last + Math.max(0, input.growth) >= Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
+export function nearNativeCompact(input: NativePromptSize & { nativeAt: number | null }): boolean {
+  return input.nativeAt !== null && nextPromptSize(input) >= Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
+}
+
+/** The prompt moved past the gap to the engine's point: it compacted or really grew. */
+export function nativeCycleMoved(input: { last: number; builtAt: number; nativeAt: number }): boolean {
+  return Math.abs(input.last - input.builtAt) >= input.nativeAt - Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
 }
 
 function textTokens(text: string): number {
@@ -750,6 +762,12 @@ function summaryMessage(summary: string, coveredAt: number): ModelContextMessage
   };
 }
 
+/** The estimate misses the CLI's own prompt, so scale the tail by the transcript's real share. */
+function nativeTailBudget(units: ReplayUnit[], tailBudget: number, estimate: number, prompt: NativePromptSize): number {
+  const lastTurn = estimateContextTokens(units.slice(units.findLastIndex((unit) => unit.turn)));
+  return Math.max(lastTurn, Math.floor(tailBudget * Math.min(1, estimate / nextPromptSize(prompt))));
+}
+
 function selectTail(units: ReplayUnit[], budgetTokens: number): TailSelection {
   let used = 0;
   let kept = 0;
@@ -997,6 +1015,10 @@ export function planCompaction(input: {
   reserveTokens?: number;
   /** the engine's own compaction point; Wink's summary lands just before it */
   nativeAt?: number | null;
+  /** the engine's last reported prompt; with nativeAt it replaces the estimate */
+  nativePrompt?: NativePromptSize;
+  /** this native cycle already has its summary */
+  nativeCycleBuilt?: boolean;
 }): CompactionPlan {
   const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
@@ -1036,15 +1058,17 @@ export function planCompaction(input: {
   // Counting bot bubbles made compaction a function of the bot's chattiness;
   // ack-first doubled it overnight.
   const currentTurns = units.filter((unit) => unit.turn).length;
-  if (currentTokens <= budgetTokens && currentTurns <= MAX_CONTEXT_MESSAGES) {
-    return { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
-  }
+  const real = input.nativeAt ? input.nativePrompt : undefined;
+  const near = real && !input.nativeCycleBuilt && nearNativeCompact({ ...real, nativeAt: input.nativeAt ?? null }) ? real : undefined;
+  const fits: CompactionPlan = { needed: false, status: "fits", previous, transcript: currentTranscript, budgetTokens, estimatedTokens: currentTokens };
+  if ((real ? !near : currentTokens <= budgetTokens) && currentTurns <= MAX_CONTEXT_MESSAGES) return fits;
   const summaryBudget = Math.max(
     1,
     Math.min(MAX_SUMMARY_TOKENS, budgetTokens, Math.floor(budgetTokens * SUMMARY_BUDGET_SHARE)),
   );
   const tailBudget = budgetTokens - summaryBudget;
-  let { old, tail } = selectTail(units, tailBudget);
+  let { old, tail } = selectTail(units, near ? nativeTailBudget(units, tailBudget, currentTokens, near) : tailBudget);
+  if (near && !old.length) return fits;
   if (!old.length && !previous && units.length) {
     old = units;
     tail = [];

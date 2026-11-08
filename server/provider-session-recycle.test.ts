@@ -454,6 +454,16 @@ describe("provider session recycle by native prompt size", () => {
     expect(recycleOnSend(store, bot.id, bot.threadId, send("four"), "claude", model)).toBe(false);
   });
 
+  it("records each report's growth over the session's last call", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "claude-opus-5-5" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.setResumeCursor(bot.id, "claude", "session-1", bot.threadId);
+    expect(store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 33_741, last: 33_741 })).toMatchObject({ last: 33_741, growth: 0 });
+    expect(store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 40_000, last: 58_114 })).toMatchObject({ first: 33_741, last: 58_114, growth: 24_373 });
+    store.setResumeCursor(bot.id, "claude", "session-2", bot.threadId);
+    expect(store.recordNativePrompt(bot.id, bot.threadId, "claude", { first: 20_000, last: 26_000 })).toMatchObject({ first: 20_000, last: 26_000, growth: 6_000 });
+  });
+
   it("keeps the 24/48 tool rules for an engine that reports no prompt size", () => {
     const store = new Store(() => ({ instanceId: "grok", model: "grok-4.6" }));
     const bot = store.createBot({}, { seedMessages: false });

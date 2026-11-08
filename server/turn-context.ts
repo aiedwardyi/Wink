@@ -135,6 +135,8 @@ export interface NativePrompt {
   first: number;
   /** its latest call */
   last: number;
+  /** the latest call's rise over the one before; older records have none */
+  growth?: number;
   /** the window the engine reported, and the model it was reported for */
   window?: { model: string; tokens: number };
 }

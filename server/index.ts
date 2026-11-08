@@ -2742,6 +2742,7 @@ const summaryBuild = createSummaryBuild({
       excludeIds: inlineNotes?.ids?.length ? new Set(inlineNotes.ids) : undefined,
       reserveTokens: inlineNotes?.tokens,
       nativeAt: nativeCompactAt(instance.driverKind, selection.model, contextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }),
+      nativePrompt: task.nativePrompt?.cursor === task.resumeCursors[selection.instanceId] ? task.nativePrompt : undefined,
     };
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
@@ -3939,13 +3940,12 @@ bus.subscribe((event: RuntimeEvent) => {
           let flushNotes = false;
           if (event.prompt && event.providerInstanceId) {
             const before = store.taskByThread(bot.id, event.threadId);
-            const priorLast = before?.nativePrompt?.cursor === before?.resumeCursors[event.providerInstanceId] ? before?.nativePrompt?.last : undefined;
-            store.recordNativePrompt(bot.id, event.threadId, event.providerInstanceId, event.prompt, event.contextWindow);
+            const recorded = store.recordNativePrompt(bot.id, event.threadId, event.providerInstanceId, event.prompt, event.contextWindow);
             const settled = registry.get(event.providerInstanceId);
             const model = before?.lastModel;
-            if (settled && model) {
+            if (settled && model && recorded) {
               const nativeAt = nativeCompactAt(settled.driverKind, model, event.contextWindow ?? contextWindowFor(settled.models, model), { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[event.providerInstanceId]?.environment });
-              flushNotes = nearNativeCompact({ last: event.prompt.last, growth: event.prompt.last - (priorLast ?? event.prompt.first), nativeAt });
+              flushNotes = nearNativeCompact({ ...recorded, nativeAt });
             }
           }
           const packet = routineTurnThreads.has(event.threadId) ? null : taskPacketForWrite(event.threadId);

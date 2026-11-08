@@ -1,4 +1,4 @@
-import { applicableCompaction, buildCompaction, planCompaction, planSummaryGrace, repairTarget } from "./context-compaction.ts";
+import { applicableCompaction, buildCompaction, nativeCycleMoved, planCompaction, planSummaryGrace, repairTarget, type NativePromptSize } from "./context-compaction.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import type { Message, Store } from "./store.ts";
 import { abortable, logSummaryCall, type SummaryCallContext } from "./summary-repair.ts";
@@ -22,6 +22,7 @@ export interface SendInputs {
   excludeIds?: ReadonlySet<string>;
   reserveTokens?: number;
   nativeAt?: number | null;
+  nativePrompt?: NativePromptSize;
 }
 
 export interface SummaryBuildDeps {
@@ -66,6 +67,7 @@ interface Built {
   prefix: string;
   coveredIndex: number;
   compaction: ContextCompactionV1;
+  nativeLast?: number;
 }
 
 interface BuildJob {
@@ -105,6 +107,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
   const held = new Map<string, Built>();
   const queue: BuildJob[] = [];
   const graceThreads = new Set<string>();
+  const nativeBuiltAt = new Map<string, number>();
   const retries = new Set<ReturnType<typeof setTimeout>>();
   let active: ActiveRun | null = null;
   let disposed = false;
@@ -138,10 +141,13 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       return false;
     }
     deps.store.appendCompaction(built.threadId, built.compaction);
+    if (built.nativeLast !== undefined) nativeBuiltAt.set(built.threadId, built.nativeLast);
     return true;
   };
 
   const land = (built: Built): boolean => {
+    // The engine compacts at the start of its next turn, so a held row would land after that.
+    if (built.nativeLast !== undefined) return place(built, false);
     if (deps.busy(built.botId, built.threadId)) {
       held.set(built.threadId, built);
       return true;
@@ -166,12 +172,17 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     const inputs = await deps.sendInputs(botId, threadId, messages);
     if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return;
     const { instance } = inputs;
+    const nativePrompt = inputs.nativeAt ? inputs.nativePrompt : undefined;
+    const builtAt = nativeBuiltAt.get(threadId);
+    if (nativePrompt && builtAt !== undefined && nativeCycleMoved({ last: nativePrompt.last, builtAt, nativeAt: inputs.nativeAt! })) nativeBuiltAt.delete(threadId);
     const plan = planCompaction({
       messages,
       contextWindow: inputs.contextWindow,
       excludeIds: inputs.excludeIds,
       reserveTokens: inputs.reserveTokens,
       nativeAt: inputs.nativeAt,
+      nativePrompt,
+      nativeCycleBuilt: nativeBuiltAt.has(threadId),
       userName: deps.userName(),
       referenceMessages: deps.store.messagesFor(threadId),
     });
@@ -202,7 +213,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     }).finally(() => clearTimeout(timer));
     if (disposed) return;
     if (result.status === "ready") {
-      land({ botId, threadId, leafId, leafIndex: messages.length - 1, previousId: plan.previous?.messageId ?? null, previousValue, prefix, coveredIndex, compaction: result.compaction });
+      land({ botId, threadId, leafId, leafIndex: messages.length - 1, previousId: plan.previous?.messageId ?? null, previousValue, prefix, coveredIndex, compaction: result.compaction, nativeLast: nativePrompt?.last });
       return;
     }
     graceThreads.delete(threadId);
@@ -288,6 +299,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       queue.length = 0;
       held.clear();
       graceThreads.clear();
+      nativeBuiltAt.clear();
       for (const timer of retries) clearTimeout(timer);
       retries.clear();
       active?.controller.abort();

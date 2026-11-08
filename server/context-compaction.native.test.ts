@@ -61,6 +61,20 @@ describe("native compaction wiring", () => {
     expect(run(path, 1_000_000).nativeAt).toBe(67_000);
   });
 
+  it("hands the background build the real prompt of the session it would resume", () => {
+    const expression = background.match(/      nativePrompt: (.*),/)![1];
+    const read = (cursor: string) => new Function("task", "selection", `return ${expression};`)(
+      { nativePrompt: { cursor: "s1", first: 10, last: 20, growth: 5 }, resumeCursors: { claude: cursor } },
+      { instanceId: "claude" },
+    );
+    expect(read("s1")).toMatchObject({ last: 20, growth: 5 });
+    expect(read("s2")).toBeUndefined();
+  });
+
+  it("flushes notes from the growth the store recorded", () => {
+    expect(source).toContain("flushNotes = nearNativeCompact({ ...recorded, nativeAt });");
+  });
+
   it("bounds the grace window by Claude's reported window", () => {
     const expression = source.match(/    knownWindow: (.*),/)![1];
     expect(new Function("catalogWindow", "modelContextWindow", `return ${expression};`)(1_000_000, 200_000)).toBe(200_000);
@@ -107,6 +121,44 @@ describe("native compaction plan", () => {
   it("queues the summary before Claude compacts under a 100k override", () => {
     const nativeAt = nativeCompactAt("claudeAgent", "claude-opus-5-5", 1_000_000, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" });
     expect(nearNativeCompact({ last: 58_047, growth: 24_000, nativeAt })).toBe(true);
+  });
+
+  it("reads a record with no growth as none", () => {
+    expect(nearNativeCompact({ last: 60_300, nativeAt: 67_000 })).toBe(true);
+    expect(nearNativeCompact({ last: 60_299, nativeAt: 67_000 })).toBe(false);
+  });
+
+  describe("cut near the real prompt", () => {
+    const turn = (id: string, text: string) => [message(`${id}-u`, text), message(`${id}-b`, "noted", { role: "bot" })];
+    const harbor = (tokens: number) => "the harbor lights came on early and the tide was calm.\n".repeat(Math.ceil((tokens * 3) / 55));
+    const native = { contextWindow: 100_000, nativeAt: 67_000 };
+    const nativePrompt = { last: 58_114, growth: 24_373 };
+    const messages = [...turn("a", harbor(9_000)), ...turn("b", harbor(9_000)), ...turn("c", harbor(9_000))];
+    const ids = (units: Array<{ id: string }>) => units.map((unit) => unit.id);
+
+    it("covers a sensible prefix when the estimate fits and the real prompt does not", () => {
+      expect(planCompaction({ messages, ...native })).toMatchObject({ needed: false });
+      const plan = planCompaction({ messages, ...native, nativePrompt });
+      if (!plan.needed) throw new Error("expected a plan");
+      expect(ids(plan.old)).toEqual(["a-u", "a-b", "b-u", "b-b"]);
+      expect(ids(plan.tail)).toEqual(["c-u", "c-b"]);
+    });
+
+    it("keeps the last turn even when its share of the real prompt is smaller", () => {
+      const plan = planCompaction({ messages: [...turn("plant", "remember"), ...turn("fill", harbor(22_800))], ...native, nativePrompt });
+      if (!plan.needed) throw new Error("expected a plan");
+      expect(ids(plan.old)).toEqual(["plant-u", "plant-b"]);
+      expect(ids(plan.tail)).toEqual(["fill-u", "fill-b"]);
+    });
+
+    it("leaves only the turn cap once the cycle has its summary", () => {
+      expect(planCompaction({ messages, ...native, nativePrompt, nativeCycleBuilt: true })).toMatchObject({ needed: false });
+      expect(planCompaction({ messages: longThread(), ...native, nativePrompt, nativeCycleBuilt: true })).toMatchObject({ needed: true });
+    });
+
+    it("ignores the real prompt without a native point", () => {
+      expect(planCompaction({ messages, contextWindow: 100_000, nativePrompt })).toEqual(planCompaction({ messages, contextWindow: 100_000 }));
+    });
   });
 
   it("resumes a native session with no inline summary; a reseed still compacts", async () => {
