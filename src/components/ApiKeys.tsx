@@ -101,7 +101,7 @@ export function SavedKeys() {
   };
 
   const rows = withGone(shown.current, saved);
-  shown.current = rows;
+  useEffect(() => { shown.current = rows; });
   const section = (
     <>
       <button type="button" aria-expanded={open} onClick={toggle} className="flex min-h-[44px] w-full items-center gap-2 text-left">
