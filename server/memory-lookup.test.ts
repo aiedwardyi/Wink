@@ -154,6 +154,26 @@ describe("corpus", () => {
     expect(note).not.toContain("Tuesdays");
   });
 
+  it("never shows a row with a newer same-topic row, even when the newer one fails the gate", async () => {
+    const { botId, lookup } = await lookupFor(`${FILLER}\n- OLIVE TRAM: Tuesday morning airport (2026-10-01)\n- OLIVE TRAM: Friday evening downtown (2026-11-01)\n`);
+    expect(ask(lookup, botId, "olive tram Tuesday morning airport").join("")).not.toContain("Tuesday");
+  });
+
+  it("lets a word that occurs once count as rare in a small corpus", async () => {
+    const small = Array.from({ length: 28 }, (_, n) => `- Filler kettle${n} harbor${n} note`).join("\n");
+    const { botId, lookup } = await lookupFor(`${small}\n- COBALT WALRUS: invoice goes to the north office\n`);
+    expect(ask(lookup, botId, "cobalt walrus")[0]).toContain("north office");
+  });
+
+  it("reads a project-notes file named MEMORY.md whole", async () => {
+    const dir = join(DATA_DIR, randomUUID());
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "MEMORY.md");
+    writeFileSync(file, `- AMBER LOCKET: the project note on line one\n${FILLER}\n`);
+    const { botId, lookup } = await lookupFor(undefined, { notesPath: () => file });
+    expect(ask(lookup, botId, "amber locket")[0]).toContain("the project note on line one");
+  });
+
   it("puts memory above notes", async () => {
     const botId = `bot-${randomUUID()}`;
     sideFile(botId, "topic.md", "- BRASS HERON: memory says the heron is brass\n");
@@ -197,6 +217,21 @@ describe("placement", () => {
     expect(ask(lookup, botId, "OpenAI credit", "s1")[0]).toContain("no setup needed");
     expect(ask(lookup, botId, "OpenAI credit", "s1")).toEqual([]);
     expect(ask(lookup, botId, "OpenAI credit", "s2")[0]).toContain("no setup needed");
+  });
+
+  it("gives rows back when the dispatch fails", async () => {
+    const { botId, lookup } = await lookupFor(FIXTURE);
+    expect(ask(lookup, botId, "OpenAI credit", "s1")).toHaveLength(1);
+    lookup.release(botId, "t1");
+    expect(ask(lookup, botId, "OpenAI credit", "s1")[0]).toContain("no setup needed");
+  });
+
+  it("keeps a delivered row used after a later failed dispatch", async () => {
+    const { botId, lookup } = await lookupFor(FIXTURE);
+    expect(ask(lookup, botId, "OpenAI credit", "s1")).toHaveLength(1);
+    await lookup.settled(botId, "t1", "s1");
+    lookup.release(botId, "t1");
+    expect(ask(lookup, botId, "OpenAI credit", "s1")).toEqual([]);
   });
 
   it("carries a fresh session's marks onto its first cursor", async () => {
@@ -364,6 +399,13 @@ describe("send path wiring", () => {
 
   it("survives the summary rebuild", () => {
     expect(section("              const notes = [", "\n              turnPrompt = notes.length")).toContain("...recallNotes");
+  });
+
+  it("gives rows back on every path that stops before the provider", () => {
+    const failed = section("    } catch (e) {\n      pendingInterruptThreads.bind(threadId, bot.id, epoch);", "if (currentTurnEpoch(bot.id) !== epoch) return;");
+    expect(failed).toContain("memoryLookup.release(bot.id, threadId)");
+    const stopped = section("  // hang the HTTP request\n", "      // a rewound turn never resumes");
+    expect(stopped.match(/memoryLookup\.release\(bot\.id, threadId\)/g)).toHaveLength(5);
   });
 
   it("builds after a reply settles, never at send", () => {

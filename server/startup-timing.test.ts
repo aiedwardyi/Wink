@@ -331,7 +331,7 @@ describe("startup timing", () => {
     const pending = runInNewContext(`(async () => { ${ts.transpile(`${prefix}\n${folded}\n${stopped}\ndispatch(folded);`, { target: ts.ScriptTarget.ES2022 })} })()`, {
       botId: bot.id, bot, threadId, opts: {}, store, startupTiming, queueMark, foldPeerQueuedSends, isSendCancelled,
       instance: { adapter: { capabilities: { queueing: false } } },
-      currentTurnEpoch: () => epoch, logSummaryWait() {}, startedTurn() {}, userMessage: {}, dispatch,
+      currentTurnEpoch: () => epoch, logSummaryWait() {}, startedTurn() {}, userMessage: {}, dispatch, memoryLookup: { release() {} },
     }) as Promise<void>;
     try {
       startupTiming.paint();

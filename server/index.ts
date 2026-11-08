@@ -5102,10 +5102,12 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // in the background — box provisioning can take ~90s and must never
   // hang the HTTP request
   if (currentTurnEpoch(bot.id) !== epoch) {
+    memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     return startedTurn(userMessage);
   }
   if (opts?.sendId && isSendCancelled(opts.sendId)) {
+    memoryLookup.release(bot.id, threadId);
     logSummaryWait();
     return startedTurn(userMessage, { cancelled: true });
   }
@@ -5113,6 +5115,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   dispatchedThreads.set(bot.id, threadId);
   markSendRunning(bot.id, opts?.sendId);
   if (currentTurnEpoch(bot.id) !== epoch) {
+    memoryLookup.release(bot.id, threadId);
     store.setActivity(bot.id, "idle");
     clearSendRunning(bot.id);
     logSummaryWait();
@@ -5145,6 +5148,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   if (reservation) dispatchingReservations.add(reservation);
   void (async () => {
     if (currentTurnEpoch(bot.id) !== epoch) {
+      memoryLookup.release(bot.id, threadId);
       turnSeeds.release(threadId, seed);
       logSummaryWait();
       return;
@@ -5439,6 +5443,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       const showImagePrompt = canMessage ? ` ${SHOW_IMAGE_GUIDANCE}` : "";
 
       if (currentTurnEpoch(bot.id) !== epoch) {
+        memoryLookup.release(bot.id, threadId);
         releaseLocalVmThread(threadId);
         if (activeVpsThreads.get(bot.id) === threadId) activeVpsThreads.delete(bot.id);
         turnSeeds.release(threadId, seed);
@@ -5661,6 +5666,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       turnUsage.delete(threadId);
       turnSeeds.release(threadId, seed);
       if (systemSeed) systemSeeds.release(threadId, systemSeed);
+      memoryLookup.release(bot.id, threadId);
       if (currentTurnEpoch(bot.id) !== epoch) return;
       if (opts?.limitWaitId && !limitWaits.canDispatch(opts.limitWaitId, selection)) {
         store.setActivity(bot.id, "idle");

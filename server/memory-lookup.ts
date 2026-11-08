@@ -165,7 +165,10 @@ function hasNearPair(positions: number[][]): boolean {
 }
 
 export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> {
-  const rows = files.flatMap(piecesOfFile);
+  const parsed = files.flatMap(piecesOfFile);
+  const latest = new Map<string, string>();
+  for (const piece of parsed.flat()) if (piece.date > (latest.get(piece.topic) ?? "")) latest.set(piece.topic, piece.date);
+  const rows = parsed.filter((row) => row.every((piece) => piece.date === latest.get(piece.topic)));
   const pieces = rows.flat();
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE VIRTUAL TABLE notes USING fts5(text, tokenize='porter unicode61')");
@@ -183,10 +186,12 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
   const vocabulary = [...documents.keys()].filter((word) => word.length >= 3);
   const total = rows.length;
   const maxIdf = Math.log(1 + (total + 0.5) / 0.5);
+  const idfOf = (count: number) => Math.log(1 + (total - count + 0.5) / (count + 0.5));
   const idf = (word: string) => {
     const count = documents.get(word) ?? 0;
-    return count ? Math.log(1 + (total - count + 0.5) / (count + 0.5)) : maxIdf;
+    return count ? idfOf(count) : maxIdf;
   };
+  const rareBar = Math.min(RARE_IDF, idfOf(1));
 
   const repair = (term: string): string[] => {
     if (term.length < 4 || documents.has(term)) return [term];
@@ -237,7 +242,7 @@ export async function buildRecallIndex(files: NoteFile[]): Promise<RecallIndex> 
           if (!at.length) continue;
           const value = weight(options);
           cover += value;
-          if (value >= RARE_IDF) rare++;
+          if (value >= rareBar) rare++;
           positions.push(at);
         }
         if (positions.length < 2 || rare < 1 || cover / whole < MIN_COVER || !hasNearPair(positions)) return false;
@@ -261,6 +266,8 @@ export interface MemoryLookup {
   refresh(botId: string): Promise<void>;
   /** The recall note for a typed turn, or nothing. No I/O and no build. */
   take(botId: string, threadId: string, cursor: unknown, text: string): string[];
+  /** The last take never reached the provider, so its rows are still unseen. */
+  release(botId: string, threadId: string): void;
   settled(botId: string, threadId: string, cursor: unknown): Promise<void>;
 }
 
@@ -296,7 +303,7 @@ async function readNoteFiles(botId: string, sources: Source[]): Promise<NoteFile
   for (const { source, tier, path, mtime, size } of sources) {
     if (bytes + size > MAX_CORPUS_BYTES) continue;
     bytes += size;
-    if (source === "MEMORY.md") {
+    if (tier === 0 && source === "MEMORY.md") {
       const past = pastTheCut(botId);
       if (past) files.push({ source, tier, mtime, ...past });
       continue;
@@ -315,6 +322,8 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   const indexes = new Map<string, { index: RecallIndex; signature: string }>();
   const runs = new Map<string, number>();
   const shown = new Map<string, { cursor: string; rows: Set<string> }>();
+  const pending = new Map<string, string[]>();
+  const markKey = (botId: string, threadId: string) => `${botId}\0${threadId}`;
 
   const loadFlags = async () => {
     const parsed = await readFile(join(deps.dataDir, FLAG_FILE), "utf8")
@@ -374,7 +383,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
   };
 
   const sessionMark = (botId: string, threadId: string, cursor: string) => {
-    const key = `${botId}\0${threadId}`;
+    const key = markKey(botId, threadId);
     const mark = shown.get(key);
     if (mark?.cursor === cursor) return mark;
     const fresh = { cursor, rows: new Set<string>() };
@@ -412,10 +421,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     if (!passed.length) return [];
 
     const newest = new Map<string, RecallHit>();
-    for (const hit of passed) {
-      const current = newest.get(hit.topic);
-      if (!current || hit.date > current.date) newest.set(hit.topic, hit);
-    }
+    for (const hit of passed) if (!newest.has(hit.topic)) newest.set(hit.topic, hit);
     const mark = sessionMark(botId, threadId, session);
     const unseen = [...newest.values()].filter((hit) => !mark.rows.has(hit.key)).sort((a, b) => a.tier - b.tier);
     if (!unseen.length) {
@@ -430,6 +436,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
       chars += hit.text.length;
     }
     for (const hit of picked) mark.rows.add(hit.key);
+    pending.set(markKey(botId, threadId), picked.map((hit) => hit.key));
     entry.rows = logged(picked);
     entry.fired = true;
     entry.reason = "fired";
@@ -440,6 +447,7 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
     refresh,
     take(botId, threadId, cursor, text) {
       if (!flagged.has(botId)) return [];
+      pending.delete(markKey(botId, threadId));
       const entry: LookupLog = { at: now(), botId, words: [], rows: [], ms: 0, fired: false, reason: "no-match" };
       try {
         return lookup(entry, botId, threadId, cursorKey(cursor), text);
@@ -452,9 +460,16 @@ export function createMemoryLookup(deps: MemoryLookupDeps): MemoryLookup {
         writeLog(entry);
       }
     },
+    release(botId, threadId) {
+      const key = markKey(botId, threadId);
+      for (const row of pending.get(key) ?? []) shown.get(key)?.rows.delete(row);
+      pending.delete(key);
+    },
     settled(botId, threadId, cursor) {
+      const key = markKey(botId, threadId);
+      pending.delete(key);
       // a fresh session has a cursor only once the turn that carried the lines ran
-      const mark = shown.get(`${botId}\0${threadId}`);
+      const mark = shown.get(key);
       if (mark?.cursor === "") mark.cursor = cursorKey(cursor);
       return refresh(botId);
     },
