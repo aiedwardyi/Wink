@@ -867,10 +867,11 @@ describe("summary build wiring", () => {
 
   it("builds first in the main fold, settles before prepare, and disposes on shutdown", () => {
     expect(index).toMatch(/summaryBuild\.onSettled\(bot\.id, event\.threadId\);\s*summaryRepair\.onSettled\(bot\.id, event\.threadId\);/);
-    expect(index).toContain("const summarySkipped = summaryBuild.inflight(threadId) && planSummaryGrace(graceInputs).safe;");
+    expect(index).toContain("const sessionResumes = planSummaryGrace(graceInputs).safe;");
+    expect(index).toContain("const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));");
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
     expect(index.indexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
-    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined);");
+    expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
     expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");
     expect(index).toContain("const finalGrace = summarySkipped ? planSummaryGrace(finalGraceInputs) : null;");
     expect(index).toMatch(/summaryBuild\.dispose\(\);\s*summaryRepair\.dispose\(\);/);

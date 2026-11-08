@@ -1158,6 +1158,20 @@ export function planSummaryGrace(input: {
   return tokens <= budgetTokens ? { safe: true, budgetTokens } : { safe: false, reason: "headroom" };
 }
 
+/** The real prompt cleared what the estimate alone would have summarized. */
+export function fitsOnNativePrompt(plan: CompactionPlan): boolean {
+  return !plan.needed && plan.status === "fits" && plan.estimatedTokens > plan.budgetTokens;
+}
+
+// A rejected resume replays this transcript, so it has to fit even when the real prompt does.
+function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, summarized: boolean): ModelContextMessage[] {
+  const head = transcript.slice(0, summarized ? 1 : 0);
+  let left = budgetTokens - estimateContextTokens(head);
+  let start = transcript.length;
+  while (start > head.length && left >= messageTokens(transcript[start - 1]!)) left -= messageTokens(transcript[--start]!);
+  return [...head, ...transcript.slice(start)];
+}
+
 function compactionRecord(plan: CompactionNeeded, summary: string): ContextCompactionV1 {
   const compaction: ContextCompactionV1 = {
     v: CONTEXT_COMPACTION_VERSION,
@@ -1185,6 +1199,8 @@ export async function prepareModelContext(input: {
   includeSpeakers?: boolean;
   reserveTokens?: number;
   nativeAt?: number | null;
+  nativePrompt?: NativePromptSize;
+  nativeCycleBuilt?: boolean;
   summaryGrace?: SummaryGrace;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {
@@ -1193,7 +1209,7 @@ export async function prepareModelContext(input: {
   if (grace?.safe && (plan.needed || plan.status === "fits")) {
     return {
       status: "ready",
-      transcript: plan.transcript,
+      transcript: newestWithin(plan.transcript, grace.budgetTokens, Boolean(plan.previous)),
       budgetTokens: grace.budgetTokens,
       estimatedTokens: plan.needed ? plan.estimatedTokensBefore : plan.estimatedTokens,
       compacted: Boolean(plan.previous),

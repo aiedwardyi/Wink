@@ -44,6 +44,9 @@ export interface SummaryBuild {
   /** Call when a 1:1 turn settles; a path under budget returns without a provider call. */
   onSettled(botId: string, threadId: string): void;
   inflight(threadId: string): boolean;
+  /** This native cycle has its summary; a real prompt that moved starts a new cycle. */
+  nativeCycleBuilt(threadId: string, nativePrompt: NativePromptSize | undefined, nativeAt: number | null | undefined): boolean;
+  markNativeBuilt(threadId: string, last: number): void;
   /** Waits within the inline deadline, or preserves the build for a safe grace turn. */
   settle(
     threadId: string,
@@ -112,6 +115,12 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
   let active: ActiveRun | null = null;
   let disposed = false;
 
+  const nativeCycleBuilt: SummaryBuild["nativeCycleBuilt"] = (threadId, nativePrompt, nativeAt) => {
+    const builtAt = nativeBuiltAt.get(threadId);
+    if (nativePrompt && nativeAt && builtAt !== undefined && nativeCycleMoved({ last: nativePrompt.last, builtAt, nativeAt })) nativeBuiltAt.delete(threadId);
+    return nativeBuiltAt.has(threadId);
+  };
+
   const eligible = (leafId: string | null) => {
     if (!leafId) return false;
     const budget = budgets.get(leafId);
@@ -173,8 +182,6 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return;
     const { instance } = inputs;
     const nativePrompt = inputs.nativeAt ? inputs.nativePrompt : undefined;
-    const builtAt = nativeBuiltAt.get(threadId);
-    if (nativePrompt && builtAt !== undefined && nativeCycleMoved({ last: nativePrompt.last, builtAt, nativeAt: inputs.nativeAt! })) nativeBuiltAt.delete(threadId);
     const plan = planCompaction({
       messages,
       contextWindow: inputs.contextWindow,
@@ -182,7 +189,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       reserveTokens: inputs.reserveTokens,
       nativeAt: inputs.nativeAt,
       nativePrompt,
-      nativeCycleBuilt: nativeBuiltAt.has(threadId),
+      nativeCycleBuilt: nativeCycleBuilt(threadId, nativePrompt, inputs.nativeAt),
       userName: deps.userName(),
       referenceMessages: deps.store.messagesFor(threadId),
     });
@@ -252,6 +259,8 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
   return {
     onSettled,
     inflight: (threadId) => active?.threadId === threadId || queue.some((item) => item.threadId === threadId),
+    nativeCycleBuilt,
+    markNativeBuilt: (threadId, last) => { nativeBuiltAt.set(threadId, last); },
     async settle(threadId, instance, capMs, summarizes, options) {
       const queued = queue.findIndex((item) => item.threadId === threadId);
       const current = active?.threadId === threadId ? active : null;

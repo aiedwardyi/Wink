@@ -106,7 +106,7 @@ import { createWorkerLaunch } from "./worker-launch.ts";
 import { createResumeAccount } from "./worker-resume.ts";
 import { enableWorkerAccounts, liveWorkerRuns, workerLaunchResponse } from "./worker-panes.ts";
 import { ComputerControl } from "./computer-control.ts";
-import { contextWindowFor, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
+import { contextWindowFor, fitsOnNativePrompt, holdWorkerNotes, knownCatalogContextWindow, NATIVE_SUMMARY_WINDOW, nativeCompactAt, nearNativeCompact, paneNotesForTurn, paneNotesSinceLastUserTurn, planCompaction, planSummaryGrace, prepareModelContext, routineCardsSinceLastUserTurn, supersededCompactionIds, withoutTurnNotes, type SummaryGrace } from "./context-compaction.ts";
 import { decodeInjectId } from "./drivers/local-inject.ts";
 import { createSummaryBuild, inlineDeadlineMs, inlineSummarizer, type SummaryWait } from "./summary-build.ts";
 import { createSummaryRepair, logSummaryCall } from "./summary-repair.ts";
@@ -4787,6 +4787,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     : "";
   const catalogWindow = knownCatalogContextWindow(instance.models, model);
   let sessionPrompt = sessionPromptFor({ report: task.nativePrompt, cursor: task.resumeCursors[instanceId], model, catalogWindow });
+  const nativePrompt = nativeAt && task.nativePrompt?.cursor === task.resumeCursors[instanceId] ? task.nativePrompt : undefined;
+  const nativeCycle = { nativePrompt, nativeCycleBuilt: summaryBuild.nativeCycleBuilt(threadId, nativePrompt, nativeAt) };
   const notesBeforeSummary = instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(messagesBeforeSummary, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
@@ -4796,6 +4798,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
     excludeIds: notesBeforeSummary?.ids?.length ? new Set([...skipTranscript, ...notesBeforeSummary.ids]) : skipTranscript,
     reserveTokens: notesBeforeSummary?.tokens,
     nativeAt,
+    ...nativeCycle,
     userName: cfg.profile?.name?.trim() || "User",
     referenceMessages: store.messagesFor(threadId),
   });
@@ -4831,7 +4834,8 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       : undefined,
   };
   const graceInputs = { plan: planBeforeSummary, grace: summaryGrace, taskRecordText: durableTaskRecordText || "No durable task record is available.", reserveTokens: notesBeforeSummary?.tokens };
-  const summarySkipped = summaryBuild.inflight(threadId) && planSummaryGrace(graceInputs).safe;
+  const sessionResumes = planSummaryGrace(graceInputs).safe;
+  const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));
   let summaryWait: SummaryWait | undefined;
   const onSummaryWait = (wait: SummaryWait) => { summaryWait = { ...wait, waitedMs: (summaryWait?.waitedMs ?? 0) + wait.waitedMs }; };
   const logSummaryWait = () => {
@@ -4845,7 +4849,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   let inlineNotes = summarySkipped ? notesBeforeSummary : instance.adapter.capabilities.transcriptReplay !== true
     ? paneNotesForTurn(activeMessages, skipTranscript, task.paneNotesDeliveredId ?? undefined, true, true, modelContextWindow)
     : null;
-  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace) => {
+  const prepareContext = (messages: Message[], waitedMs: number, grace?: SummaryGrace, native?: typeof nativeCycle) => {
     if (!grace) {
       rewound = threadId === bot.threadId && Boolean(bot.rewound);
       taskRecord = taskPacketForWrite(threadId);
@@ -4871,6 +4875,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       excludeIds: inlineNotes?.ids?.length ? new Set([...skipTranscript, ...inlineNotes.ids]) : skipTranscript,
       reserveTokens: inlineNotes?.tokens,
       nativeAt,
+      ...native,
       summaryGrace: grace,
       userName: cfg.profile?.name?.trim() || "User",
       referenceMessages: store.messagesFor(threadId),
@@ -4894,7 +4899,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       } : undefined,
     });
   };
-  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined);
+  const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);
   if (prepared.status !== "ready") {
     const detail = prepared.status === "unsupported"
       ? `This conversation uses context summary version ${String(prepared.version)}. Update Wink before continuing.`
@@ -4923,6 +4928,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       logSummaryWait();
       return startedTurn(userMessage, { dispatchFailed: true, error: detail });
     }
+    if (nativePrompt && sessionResumes) summaryBuild.markNativeBuilt(threadId, nativePrompt.last);
   }
   ensureChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id });
   markChatLatency({ sendId: latencySendId, threadId, userMessageId: userMessage.id }, "prepare.completed");
