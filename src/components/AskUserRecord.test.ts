@@ -36,12 +36,9 @@ describe("AskUserRecord", () => {
     expect(render(question, [question, ask("q2")])).toContain("Superseded by a newer question");
   });
 
-  it("shrinks to one line while the composer pins the question", () => {
+  it("renders nothing while the composer pins the question", () => {
     const question = ask("q1");
-    const markup = render(question, [question], true);
-    expect(markup).toContain("Ada is waiting for your answer below");
-    expect(markup).not.toContain("Ada asks");
-    expect(markup).not.toContain("Prod or staging?");
+    expect(render(question, [question], true)).toBe("");
   });
 
   it("keeps the full record once settled, even if still flagged pinned", () => {

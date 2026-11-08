@@ -480,7 +480,7 @@ export const Transcript = memo(function Transcript({
               <ApprovalCard bot={memberOf(m.from?.botId)} message={m} />
             </div>
           ) : isAskUserCard(m) ? (
-            <div className="flex justify-start">
+            <div className="flex justify-start empty:hidden">
               <AskUserRecord
                 message={m}
                 transcript={transcript}
