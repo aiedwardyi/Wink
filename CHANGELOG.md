@@ -2,6 +2,23 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.244] - 2026-11-08
+
+### Added
+- A memory map on each bot's Memory tab.
+- Drag to reorder group answers.
+
+### Changed
+- Profile and Sync share one photo band in Account.
+- Saved keys fold into one row.
+- The Activity card opens at once, shows each day on hover or tap, and counts Day Streak, Best Day and Total Replies from your first day.
+
+### Fixed
+- Phones no longer show Reconnecting on a normal resume.
+- Phone Settings pages stay painted while closing.
+- Each worker gets its own temp folder, and its leftovers stop when the pane closes.
+- The cleanup sweep no longer freezes the app.
+
 ## [1.0.243] - 2026-11-08
 
 ### Added
@@ -740,6 +757,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.244]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.244
 [1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
 [1.0.242]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.242
 [1.0.241]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.241
