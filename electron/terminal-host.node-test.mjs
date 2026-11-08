@@ -3282,6 +3282,61 @@ test("a recorded Claude idle pane with a background shell repeats STALLED", asyn
   assert.equal(f.notes.length, 2);
 });
 
+const IDLE_COMPACTION = JSON.parse(fs.readFileSync(new URL("../test/fixtures/recorded/claude/idle-compaction.json", import.meta.url), "utf8")).reply;
+const flatScreen = (data) => data.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, "").replace(/\s+/g, "");
+const replayIdleCompaction = async (f, { report = false } = {}) => {
+  const pane = await f.host.openForBot("bot-1", { label: "W", command: "claude go", cols: IDLE_COMPACTION.cols, rows: IDLE_COMPACTION.rows });
+  let at = 0;
+  for (const { t, data } of IDLE_COMPACTION.chunks) {
+    if (t - at >= 1_000) {
+      while (t - at > 60_000) { await f.advance(60_000); at += 60_000; }
+      await f.advance(t - at);
+      at = t;
+    }
+    if (report && flatScreen(data).includes("●DONE")) f.host.attendBot("bot-1", pane.sessionId, "report");
+    f.children[0].data(data);
+  }
+  await f.settle();
+  return pane;
+};
+const advanceMinutes = async (f, minutes) => { for (let minute = 0; minute < minutes; minute++) await f.advance(60_000); };
+
+test("a recorded Claude pane that reported stays quiet through its idle compaction", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await replayIdleCompaction(f, { report: true });
+  await advanceMinutes(f, 120);
+  assert.equal(f.notes.length, 0);
+});
+
+test("a recorded Claude idle compaction does not restart a stalled pane's notes", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  await replayIdleCompaction(f);
+  assert.equal(f.notes.length, 2);
+  await advanceMinutes(f, 5);
+  assert.equal(f.notes.length, 2);
+  await advanceMinutes(f, 60);
+  assert.equal(f.notes.length, 3);
+  assert.match(f.notes[2].text, /^STALLED: no screen change for [3-9]\d min and no report\./);
+  assert.match(f.notes[2].text, /Compacted while idle, before the prompt cache expired/);
+});
+
+test("a new task after a recorded idle compaction re-arms STALLED", async (t) => {
+  const f = stallFixture();
+  t.after(() => f.host.dispose());
+  const pane = await replayIdleCompaction(f, { report: true });
+  const before = f.notes.length;
+  f.host.sendBot("bot-1", { sessionId: pane.sessionId, generation: pane.generation, text: "next task\r" });
+  f.children[0].data("next task\r\n");
+  await f.settle();
+  await f.advance(119_000);
+  assert.equal(f.notes.length, before);
+  await f.advance(2_000);
+  assert.equal(f.notes.length, before + 1);
+  assert.match(f.notes[before].text, /^STALLED: no screen change for 2 min and no report\./);
+});
+
 test("a stall receipt counts as delivered when the mailbox response is lost", async (t) => {
   const f = stallFixture({ notePane: async (mail, scope, text) => {
     f.notes.push({ text });
