@@ -24,7 +24,7 @@ const normalize = (file) => {
   }
   return current.toLowerCase();
 };
-const contains = (root, file) => file === root || file.startsWith(`${root}${path.sep}`);
+const contains = (root, file) => file === root || file.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
 const canonical = (file) => process.platform === "win32" ? file.toLowerCase() : file;
 async function normalizeAsync(file, parents = null) {
   const resolved = path.resolve(file);
@@ -303,6 +303,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
         return;
       }
       if (!await directory(target)) return;
+      if (await linkedInto(target, context)) return kept(entry, target, "linked");
       if (!await unlinkLinks(target, new Set(), current)) return;
       if (!await directory(target) || !await current()) return;
       if (await linkedInto(target, context)) return kept(entry, target, "linked");
@@ -495,7 +496,6 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     release();
     save();
     await record("worktree", target);
-    await git(common, ["worktree", "prune"]);
   };
   const sweep = () => enqueue(async () => {
     const context = scope();
