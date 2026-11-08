@@ -125,11 +125,11 @@ describe("Bot details swipe", () => {
     expect(host.querySelector<HTMLTextAreaElement>("[data-draft]")!.value).toBe("Keep this draft");
   });
 
-  it.each([[15, 0], [30, 120], [40, 40], [-160, 0]])("keeps details open for a rejected drag (%i, %i)", async (dx, dy) => {
+  it.each([[15, 0], [30, 120], [40, 40], [-30, 0]])("keeps details open for a rejected drag (%i, %i)", async (dx, dy) => {
     await act(async () => root.render(createElement(Harness)));
     touch("touchstart", 80);
     const move = touch("touchmove", 80 + dx, 200 + dy);
-    if (dy || dx < 0) expect(move.defaultPrevented).toBe(false);
+    if (dy) expect(move.defaultPrevented).toBe(false);
     await release();
     expect(dispatch).not.toHaveBeenCalled();
     expect(vibrate).not.toHaveBeenCalled();

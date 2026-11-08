@@ -21,13 +21,15 @@ import {
 } from "@/lib/memory-drafts";
 import { requestNotificationPermission } from "@/lib/notify";
 import { shortPath } from "@/lib/short-path";
-import { hapticTick } from "@/lib/phone-swipe";
+import { MOTION_MODERATE_MS } from "@/lib/motion";
+import { hapticTick, reducedMotion } from "@/lib/phone-swipe";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useSettingsSwipe } from "@/lib/use-settings-swipe";
+import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, TopicFiles, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, type MemoryTopic } from "./MemoryGroups";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
@@ -242,7 +244,7 @@ let loadedMap: typeof import("./MemoryMap").MemoryMap | null = null;
  * what the bot believes. Fetched on expand, not on mount: settings opens for
  * every bot and most visits never look at memory — and an expand also
  * re-reads, so notes the bot wrote mid-session show up on the next open. */
-function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
+function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: boolean }) {
   const { t } = useI18n();
   const { state, dispatch } = useStore();
   const { run, undo } = useMemoryClean(bot.id, bot.messages, active);
@@ -256,9 +258,6 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const [truncated, setTruncated] = useState(false);
   const [topics, setTopics] = useState<MemoryTopic[]>([]);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const [topic, setTopic] = useState<{ name: string; text: string } | null>(null);
-  const [topicError, setTopicError] = useState<string | null>(null);
-  const topicRequest = useRef(0);
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
@@ -274,6 +273,26 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   useEffect(() => {
     if (conflict) openFile(true);
   }, [conflict]);
+  // the map stays up through the pass away, so the page only folds once it is out of sight
+  const up = active || warm;
+  useEffect(() => {
+    if (!up && !conflict) setOpen(false);
+  }, [up]);
+  // a collapse unmounts the editor without a blur
+  useEffect(() => {
+    if (active) return () => void flushMemory(botId);
+  }, [active]);
+  const [toFile, setToFile] = useState(0);
+  const editFile = (next: boolean) => {
+    openFile(next);
+    if (next && !wide) setToFile((count) => count + 1);
+  };
+  // waits for the fold: until it has grown the page may be too short to bring the file up
+  useEffect(() => {
+    if (!toFile) return;
+    const opened = setTimeout(() => fileRow.current?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "instant" : "smooth" }), MOTION_MODERATE_MS);
+    return () => clearTimeout(opened);
+  }, [toFile]);
   const fileRow = useRef<HTMLButtonElement>(null);
   const MapView = loadedMap ?? MemoryMap;
   const empty = !loading && !loadFailed && !text.trim() && topics.length === 0 && !currentTask(bot);
@@ -284,7 +303,6 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
   const load = async () => {
     setLoading(true);
     setError(null);
-    setTopic(null);
     try {
       const result = await read();
       setTruncated(result.truncated);
@@ -350,24 +368,10 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
     setText(latest.text);
   };
 
-  const openTopic = async (name: string) => {
-    const request = ++topicRequest.current;
-    setTopicError(null);
-    if (topic?.name === name) {
-      setTopic(null);
-      return;
-    }
-    try {
-      const result: { name: string; text: string } = await api(`/api/bots/${bot.id}/memory/topics/${encodeURIComponent(name)}`);
-      if (request === topicRequest.current) setTopic(result);
-    } catch (e) {
-      if (request === topicRequest.current) setTopicError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   useEffect(() => {
     void load();
-    if (window.innerWidth >= STACK_BELOW) void import("./MemoryMap").then((m) => { loadedMap = m.MemoryMap; }).catch(() => {});
+    // a phone keeps the lazy render, so its first tab frame stays light, but never waits on the network
+    void import("./MemoryMap").then((m) => { if (window.innerWidth >= STACK_BELOW) loadedMap = m.MemoryMap; }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -447,9 +451,9 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
       <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
         {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
       </span>
-      {empty && !(expanded && inMap) ? <MemoryEmpty /> : active && (!loading || loadFailed) && (
+      {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (!loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={active} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={openFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -470,7 +474,6 @@ function MemoryCard({ bot, active }: { bot: Bot; active: boolean }) {
         </Fold>
         {error && <div className="px-4 pb-4 pt-2 text-[12px] text-danger">{error}</div>}
       </MemoryFile>
-      <TopicFiles topics={topics} shown={topic} error={topicError} onOpen={(name) => void openTopic(name)} />
     </div>
   );
 }
@@ -498,7 +501,7 @@ export function SettingsPanel({
   const [avatarOpen, setAvatarOpen] = useState(avatarRequest > 0);
   const seenAvatarRequest = useRef(0);
   const avatarSectionRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const pagesRef = useRef<HTMLDivElement>(null);
   const keepGoingRequest = state.settingsKeepGoingRequest ?? 0;
   // a new Agentic Mode request (the chat header mark) lands on its row in Settings
   const [memoryAt, setMemoryAt] = useState<number | null>(null);
@@ -514,8 +517,8 @@ export function SettingsPanel({
   const showTab = (memory: boolean) => {
     if (memory === memoryTab) return;
     setMemoryAt(memory ? keepGoingRequest : null);
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
+  const paging = useDetailsTabs(pagesRef, phone, closing, memoryTab, showTab);
   const [localAutoWarning, setLocalAutoWarning] = useState<"auto" | null>(null);
   const patch = (
     p: Partial<
@@ -560,7 +563,7 @@ export function SettingsPanel({
     restoreFocusOnClose.current = true;
     dispatch({ type: "toggleSettings", open: false });
   };
-  useSettingsSwipe(panelRef, phone && !closing, false, () => {
+  useSettingsSwipe(panelRef, phone && !closing && !memoryTab, false, () => {
     hapticTick();
     // The swipe already settled offscreen; do not replay the panel exit.
     if (panelRef.current) panelRef.current.style.animation = "none";
@@ -645,8 +648,8 @@ export function SettingsPanel({
         ))}
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 pb-5">
-        <div hidden={memoryTab} className="flex flex-col gap-3 pt-4">
+      <div ref={pagesRef} className="relative min-h-0 flex-1 overflow-hidden">
+        <div hidden={memoryTab && !paging} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
           <KeepGoingCard bot={bot} />
           <div className={DETAILS_BOX}>
             <div ref={avatarSectionRef} className={DETAILS_ROW}>
@@ -759,8 +762,8 @@ export function SettingsPanel({
 
           {showBotVoiceAndStartupSettings() && <VoiceSettings bot={bot} onPatch={patch} />}
         </div>
-        <div hidden={!memoryTab} className="pt-4">
-          <MemoryCard key={bot.id} bot={bot} active={memoryTab} />
+        <div hidden={!memoryTab && !paging} className="absolute inset-0 overflow-y-auto px-5 pb-5 pt-4">
+          <MemoryCard key={bot.id} bot={bot} active={memoryTab} warm={paging} />
         </div>
       </div>
     </aside>

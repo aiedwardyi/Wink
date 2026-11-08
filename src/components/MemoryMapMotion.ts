@@ -77,6 +77,19 @@ export function fadePanel({ sheet, content }: Pick<OpenParts, "sheet" | "content
   for (const el of content) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: MOTION_FAST_MS, delay: 60, easing: "ease-out", fill: "backwards" });
 }
 
+// a phone fold takes its height at once, so what sits below slides down from where it was
+export function openFold(fold: HTMLElement, below: HTMLElement[], sweep: HTMLElement | null) {
+  if (reducedMemoryMotion()) return;
+  const height = fold.offsetHeight;
+  // a fold taller than the screen sends these off it at once, and its deferred rows' estimates would make them jump
+  if (height < window.innerHeight) for (const el of below) el.animate([{ transform: `translateY(${-height}px)` }, { transform: "none" }], { duration: MOTION_LARGE_MS, easing: EASE_STANDARD });
+  sweep?.animate([
+    { transform: "translateX(-100%)", opacity: 0 },
+    { offset: 0.3, opacity: 1 },
+    { transform: "translateX(190%)", opacity: 0 },
+  ], { duration: 420, delay: 30, easing: EASE_STANDARD, fill: "backwards" });
+}
+
 export function closePanel({ sheet, from, side }: OpenParts): Promise<unknown> {
   if (reducedMemoryMotion()) return Promise.resolve();
   for (const running of sheet.getAnimations({ subtree: true })) running.cancel();

@@ -25,7 +25,7 @@ export function Fold({ open, id, className, soft, children }: { open: boolean; i
       className={className}
       inert={closing || undefined}
       onAnimationEnd={(event) => {
-        if (event.target === event.currentTarget && event.animationName === "fold-open") setOpening(false);
+        if (event.target === event.currentTarget && event.animationName.endsWith("fold-open")) setOpening(false);
         if (event.target === event.currentTarget && event.animationName === "fold-close") setLanded(true);
       }}
     >

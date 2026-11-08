@@ -4,8 +4,9 @@ import type { AppState, Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
-import { currentTask, formatBytes, NotedLines, type MemoryTopic } from "./MemoryGroups";
-import { closePanel, fadePanel, openMist, openPanel, softwareRender, type OpenParts } from "./MemoryMapMotion";
+import { currentTask, NotedLines, type MemoryTopic } from "./MemoryGroups";
+import { closePanel, fadePanel, openFold, openMist, openPanel, softwareRender, type OpenParts } from "./MemoryMapMotion";
+import { TopicRows } from "./MemoryTopics";
 import { Fold } from "./Fold";
 import { liveHeight, STACK_BELOW, useStage } from "./MemoryMapStage";
 import "./MemoryMap.css";
@@ -73,19 +74,6 @@ function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTi
   );
 }
 
-function TopicList({ topics }: { topics: MemoryTopic[] }) {
-  return (
-    <ul className="mm-list">
-      {topics.map((each) => (
-        <li key={each.name}>
-          <span className="mm-list-text">{each.name}</span>
-          <span className="mm-date">{formatBytes(each.bytes)}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, editing = false, onEditing, onStack }: {
   bot: Bot;
   text: string;
@@ -124,6 +112,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const day = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" });
   const task = currentTask(bot);
   const done = task?.plan.filter((step) => step.status === "done").length ?? 0;
+  const now = task?.plan.findIndex((step) => step.status !== "done") ?? -1;
   const biggest = Math.max(1, ...topics.map((each) => each.bytes));
 
   // the GPU probe makes a WebGL context, so it waits until the wide open has played
@@ -170,6 +159,17 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     const body = sheet.current?.querySelector<HTMLElement>(".mm-sheet-body");
     const row = body?.querySelector<HTMLElement>("[data-fresh]");
     if (body && row) body.scrollTop = row.offsetTop - body.offsetTop - body.clientHeight / 2;
+  }, [open, stacked]);
+
+  useLayoutEffect(() => {
+    if (!open || !stacked) return;
+    const slot = panels[open].current?.parentElement;
+    const fold = slot?.querySelector<HTMLElement>("[data-fold]");
+    if (!slot || !fold || !root.current) return;
+    const slots = [...root.current.querySelectorAll<HTMLElement>(".mm-slot")];
+    const after: HTMLElement[] = [];
+    for (let next = root.current.nextElementSibling; next instanceof HTMLElement; next = next.nextElementSibling) after.push(next);
+    openFold(fold, [...slots.slice(slots.indexOf(slot) + 1), ...after], mist.current);
   }, [open, stacked]);
 
   const editingHere = editing && !stacked;
@@ -248,14 +248,22 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
         <span className="mm-newest">{foot}</span>
         <Count kind={kind} count={count} />
       </button>
-      {stacked && <Fold open={open === kind}><div className="mm-fold">{list}</div></Fold>}
+      {stacked && (
+        <Fold open={open === kind}>
+          <div className="mm-fold">
+            {mistOn && open === kind && <div ref={mist} className="mm-sweep" aria-hidden="true" />}
+            {kind === "long" && onEditing && <button type="button" className="mm-action mm-fold-edit" onClick={() => onEditing(true)}><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</button>}
+            {list}
+          </div>
+        </Fold>
+      )}
     </div>
   );
 
   const newest = (fact?: string) => (fact ? <><em>{t("bot.memoryNewest")}</em>{fact}</> : failed ? null : t("bot.memoryNone"));
   const count = (value: number) => (failed ? null : value);
   const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} />;
-  const topicList = <TopicList topics={topics} />;
+  const topicList = <TopicRows botId={bot.id} topics={topics} />;
   const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
@@ -309,7 +317,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
                     <div className="mm-task-goal" title={task.goal}>{task.goal}</div>
                     {task.plan.length > 0 && (
                       <>
-                        <div className="mm-steps" aria-hidden="true">{task.plan.slice(0, 12).map((step, index) => <i key={index} data-done={step.status === "done" || undefined} />)}</div>
+                        <div className="mm-steps" aria-hidden="true">{task.plan.slice(0, 12).map((step, index) => <i key={index} data-done={step.status === "done" || undefined} data-now={index === now || undefined} />)}</div>
                         <div className="mm-task-meta">{t("bot.memoryTaskSteps", { done, total: task.plan.length })}</div>
                       </>
                     )}

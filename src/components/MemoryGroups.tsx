@@ -8,7 +8,6 @@ import { DETAILS_BOX, DetailsLabel } from "./BotDetailsRows";
 import { memoryLineText, memoryTargetLine, recentLines } from "@/lib/memory-recent";
 import { watchMemoryArrival } from "@/lib/memory-clean-events";
 import { MemoryCleanTint, reducedMemoryMotion } from "./MemoryCleanMotion";
-import { Fold } from "./Fold";
 
 // the stamp memory-pass.ts appendNotes puts on every Auto notes line
 const NOTED = /^\s*[-*+]\s+(.+?)\s+\(noted (\d{4})-(\d{2})-(\d{2})\)\s*$/;
@@ -93,65 +92,6 @@ export interface MemoryTopic {
 }
 
 export const formatBytes = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 102.4) / 10} KB`);
-
-/** Topic files keep their own list and a file opens under its row, so nothing needs a Back. */
-export function TopicFiles({ topics, shown, error, onOpen }: {
-  topics: MemoryTopic[];
-  shown: { name: string; text: string } | null;
-  error?: string | null;
-  onOpen: (name: string) => void;
-}) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const list = useRef<HTMLDivElement>(null);
-  const picked = useRef<string | null>(null);
-  // show the file just opened; closing one above it also moves its row, maybe out of view
-  useLayoutEffect(() => {
-    if (picked.current === null) return;
-    const row = [...(list.current?.querySelectorAll<HTMLElement>("[data-topic]") ?? [])].find((each) => each.dataset.topic === picked.current);
-    picked.current = null;
-    row?.parentElement?.scrollIntoView({ block: "nearest" });
-  }, [shown]);
-  if (!topics.length) return null;
-  return (
-    <MemoryFold
-      title={t("bot.memoryTopics")}
-      hint={t("bot.memoryTopicsHelp")}
-      meta={t(topics.length === 1 ? "bot.memoryFileTopicsOne" : "bot.memoryFileTopics", { count: topics.length })}
-      open={open}
-      onToggle={() => setOpen(!open)}
-    >
-      <Fold open={open}>
-        <div ref={list}>
-          {topics.map((entry) => {
-            const here = shown?.name === entry.name;
-            return (
-              // the margin keeps a row clear of the sticky header above it
-              <div key={entry.name} className="scroll-mt-20 border-t border-hairline/40 first:border-t-0">
-                <button
-                  type="button"
-                  data-topic={entry.name}
-                  aria-expanded={here}
-                  onClick={() => { picked.current = entry.name; onOpen(entry.name); }}
-                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none"
-                >
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{entry.name}</span>
-                  <span className="shrink-0 text-[12px] text-ink-secondary">{formatBytes(entry.bytes)}</span>
-                </button>
-                {here && (
-                  <div className="mx-4 mb-3 animate-fade-in whitespace-pre-wrap break-words rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] leading-relaxed text-ink">
-                    {shown.text}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {error && <div className="border-t border-hairline/40 px-4 py-2.5 text-[12px] text-danger">{error}</div>}
-        </div>
-      </Fold>
-    </MemoryFold>
-  );
-}
 
 function RecentLine({ line, day, nonce, fresh }: { line: ReturnType<typeof recentLines>[number]; day: Intl.DateTimeFormat; nonce?: number; fresh: boolean }) {
   const row = useRef<HTMLLIElement>(null);

@@ -99,8 +99,7 @@ async function until(found: () => Element | null | undefined) {
   for (let tries = 0; tries < 100 && !found(); tries++) await act(async () => { await new Promise((done) => setTimeout(done, 10)); });
   return found();
 }
-const topicsRow = (host: HTMLElement) =>
-  Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find((button) => button.textContent?.startsWith("Topic Files"))!;
+const knowledgeRow = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="knowledge"]')!;
 
 describe("SettingsPanel lean startup switch", () => {
   let host: HTMLDivElement;
@@ -558,7 +557,8 @@ describe("SettingsPanel memory groups", () => {
     await act(async () => {
       root.render(createElement(I18nProvider, null, createElement(SettingsPanel, { key: "topics", bot: claudeBot })));
     });
-    expect(topicsRow(host).textContent).toContain("1 file");
+    await act(async () => tab(host, "Memory").click());
+    expect((await until(() => knowledgeRow(host)))?.textContent).toContain("1file");
     expect(host.textContent).not.toContain("Memory fills in as you chat.");
   });
 
@@ -636,6 +636,11 @@ describe("SettingsPanel memory autosave", () => {
   const notice = () => host.querySelector('[role="alert"]')?.firstElementChild?.textContent ?? "";
   const button = (label: string) => Array.from(host.querySelectorAll("button")).find((each) => each.textContent === label)!;
   const topic = (name: string) => host.querySelector<HTMLButtonElement>(`button[data-topic="${name}"]`)!;
+  const openKnowledge = async () => {
+    await act(async () => tab(host, "Memory").click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => knowledgeRow(host).click());
+  };
   const stored = (id: string) => JSON.parse(localStorage.getItem(`omb-memory-draft:${id}`) ?? "null");
   const type = async (value: string) => {
     await act(async () => {
@@ -754,7 +759,7 @@ describe("SettingsPanel memory autosave", () => {
     await act(async () => {
       box().dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     });
-    await act(async () => topicsRow(host).click());
+    await openKnowledge();
     await act(async () => topic("prefs.md").click());
     expect(topic("prefs.md").parentElement?.textContent).toContain("tea");
     await act(async () => topic("prefs.md").click());
@@ -771,8 +776,8 @@ describe("SettingsPanel memory autosave", () => {
 
   it("keeps the editor and the topic list while a topic file is open", async () => {
     await render("bot-1");
-    await act(async () => topicsRow(host).click());
-    expect(topicsRow(host).getAttribute("aria-expanded")).toBe("true");
+    await openKnowledge();
+    expect(knowledgeRow(host).getAttribute("aria-expanded")).toBe("true");
     await act(async () => topic("prefs.md").click());
     expect(topic("prefs.md").getAttribute("aria-expanded")).toBe("true");
     expect(topic("prefs.md").parentElement?.textContent).toContain("tea");
@@ -793,7 +798,7 @@ describe("SettingsPanel memory autosave", () => {
       return Response.json({ ...memory, topics: [{ name: "prefs.md", bytes: 3 }, { name: "work.md", bytes: 4 }] });
     });
     await render("bot-1");
-    await act(async () => topicsRow(host).click());
+    await openKnowledge();
     await act(async () => topic("prefs.md").click());
     await act(async () => topic("work.md").click());
     await act(async () => pending[1](Response.json({ name: "work.md", text: "code" })));
@@ -818,10 +823,10 @@ describe("SettingsPanel memory autosave", () => {
     });
     try {
       await render("bot-1");
-      await act(async () => topicsRow(host).click());
+      await openKnowledge();
       expect(scrolled).toEqual([]);
       await act(async () => topic("prefs.md").click());
-      expect(scrolled).toEqual([topic("prefs.md").parentElement]);
+      expect(scrolled).toEqual([topic("prefs.md").nextElementSibling]);
       expect(scrolled[0]?.textContent).toContain("tea");
     } finally {
       spy.mockRestore();
