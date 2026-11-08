@@ -350,6 +350,26 @@ describe("summary build after settle", () => {
     expect(lines.join("\n")).not.toContain("large request");
   });
 
+  it("a native engine's send never waits on the build, even on a reseed", async () => {
+    const { calls, generateText } = deferred();
+    const { threads, state, build } = setup(generateText);
+    threads.set("t", overBudgetThread("a"));
+    build.onSettled("bot", "t");
+    await tick();
+    state.busy = true;
+    const inputs = graceInputs(threads.get("t")!);
+    let waited: number | undefined;
+    void build.settle("t", claudeSend, 90_000, () => true, { grace: { ...inputs, grace: { ...grace, fresh: true, nativeAt: 967_000 } } })
+      .then((ms) => { waited = ms; });
+    await tick();
+    expect(waited).toBe(0);
+    expect(calls[0]!.signal?.aborted).toBe(false);
+    calls[0]!.resolve("SUMMARY\nbuilt");
+    await build.idle();
+    const lines = vi.mocked(console.info).mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("[summary-wait] "));
+    expect(lines.join("\n")).not.toContain("\"mode\":\"waited\"");
+  });
+
   it.each(["rewind", "covered edit", "prior compaction"])("summary grace drops a build after %s", async (change) => {
     const { calls, generateText } = deferred();
     const { threads, appended, state, build } = setup(generateText);

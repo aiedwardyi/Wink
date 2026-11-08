@@ -113,6 +113,8 @@ const NATIVE_SESSION_BUDGET_SHARE = 0.5;
 // text plus a replay of up to ~92k.
 export const NATIVE_PROMPT_BUDGET_CAP = 250_000;
 const NATIVE_PROMPT_GROWTH = 100_000;
+// Past this share a reseed costs about what the fat session does.
+const RESEED_PROMPT_SHARE = 0.5;
 
 export function nativeSessionTokenBudget(contextWindow: number): number {
   return Number.isSafeInteger(contextWindow) && contextWindow > 0
@@ -156,11 +158,17 @@ export function sessionPromptFor(input: {
   return contextWindow ? { first: report.first, last: report.last, contextWindow } : undefined;
 }
 
+/** The window the engine last reported for `model`. */
+export function reportedWindow(task: { nativePrompt?: NativePrompt }, model: string): number | null {
+  return task.nativePrompt?.window?.model === model ? task.nativePrompt.window.tokens : null;
+}
+
 // A session must also outgrow its own first prompt, or a replay that alone
 // passes a small window's budget would recycle every send.
-function sessionPromptOverBudget({ first, last, contextWindow }: SessionPrompt): boolean {
+function sessionPromptOverBudget({ first, last, contextWindow }: SessionPrompt, reseedTokens?: number): boolean {
   const budget = nativePromptBudget(contextWindow);
-  return budget > 0 && last > budget && last - first >= Math.min(NATIVE_PROMPT_GROWTH, Math.floor(budget / 2));
+  return budget > 0 && last > budget && last - first >= Math.min(NATIVE_PROMPT_GROWTH, Math.floor(budget / 2)) &&
+    (reseedTokens === undefined || reseedTokens <= last * RESEED_PROMPT_SHARE);
 }
 
 export interface SessionFatMessage {
@@ -241,13 +249,17 @@ export function shouldRecycleProviderSession(input: {
   nativeTokenBudget?: number;
   /** the session's own prompt sizes; they replace the tool-count rules */
   sessionPrompt?: SessionPrompt;
+  /** the engine compacts its own session, so a Wink summary leaves it running */
+  native?: boolean;
+  /** what a reseed would replay */
+  reseedTokens?: number;
 }): boolean {
   if (input.rewound) return false;
   // Compaction always forces a recycle regardless of recovery state: a
   // recovered session that was then compacted must start fresh.
-  if (input.compacted) return true;
+  if (input.compacted && !input.native) return true;
   if (input.recovering) return false;
-  if (input.sessionPrompt) return sessionPromptOverBudget(input.sessionPrompt);
+  if (input.sessionPrompt) return sessionPromptOverBudget(input.sessionPrompt, input.reseedTokens);
   if ((input.lastTurnToolRounds ?? 0) >= PRE_COMPACT_TOOL_ROUND_LIMIT) return true;
   if ((input.sessionToolRounds ?? 0) >= PRE_COMPACT_SESSION_TOOL_ROUND_LIMIT) return true;
   const budget = input.nativeTokenBudget ?? 0;
@@ -277,10 +289,13 @@ export function resumeSessionUnseeded(input: {
   expanded?: boolean;
   /** rows the latest one repaired; a session seeded on one already holds that span */
   supersededIds?: ReadonlySet<string>;
+  /** the session holds the history any later summary covers */
+  native?: boolean;
 }): boolean {
   if (input.cursor === undefined) return false;
   const { seed } = input;
   if (!seed || seed.instanceId !== input.instanceId || seed.cursor !== input.cursor) return true;
+  if (input.native) return false;
   const expected = input.expanded ? null : input.latestCompactionId;
   if (seed.compactionId === expected) return false;
   return !(expected !== null && seed.compactionId !== null && input.supersededIds?.has(seed.compactionId));

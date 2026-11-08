@@ -19,6 +19,13 @@ export const MODEL_CONTEXT_FALLBACK = 128_000;
 export const LOCAL_MODEL_CONTEXT_FALLBACK = 16_384;
 
 const CONTEXT_BUDGET_SHARE = 0.5;
+// Claude Code's own point on a 1M window; CLAUDE_CODE_AUTO_COMPACT_WINDOW moves it within 100k..window.
+const CLAUDE_NATIVE_COMPACT_AT = 967_000;
+const CLAUDE_NATIVE_WINDOW = 1_000_000;
+const CLAUDE_COMPACT_WINDOW_MIN = 100_000;
+const NATIVE_SUMMARY_SHARE = 0.9;
+// Summary calls and flat room replays keep the sizing they had at 200k; only the trigger moves.
+export const NATIVE_SUMMARY_WINDOW = 200_000;
 // A grace turn leaves a quarter window for output and further native growth.
 const SUMMARY_GRACE_INPUT_SHARE = 0.75;
 const SUMMARY_BUDGET_SHARE = 0.35;
@@ -137,6 +144,24 @@ export function knownCatalogContextWindow(catalog: ModelCatalog, model: string):
 export function contextWindowFor(catalog: ModelCatalog, model: string): number {
   return knownCatalogContextWindow(catalog, model) ??
     (decodeInjectId(model) ? LOCAL_MODEL_CONTEXT_FALLBACK : MODEL_CONTEXT_FALLBACK);
+}
+
+/** Where the engine compacts its own session; null leaves compaction to Wink. */
+export function nativeCompactAt(
+  driverKind: string,
+  model: string,
+  contextWindow: number,
+  env: Record<string, string | undefined> = process.env,
+): number | null {
+  if (driverKind !== "claudeAgent" || decodeInjectId(model) || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return null;
+  const set = /^(\d+)(k?)$/i.exec(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW?.trim() ?? "");
+  if (set) return Math.min(contextWindow, Math.max(CLAUDE_COMPACT_WINDOW_MIN, Number(set[1]) * (set[2] ? 1_000 : 1)));
+  return contextWindow >= CLAUDE_NATIVE_WINDOW ? CLAUDE_NATIVE_COMPACT_AT : null;
+}
+
+/** The turn after this one would pass Wink's summary point. */
+export function nearNativeCompact(input: { last: number; growth: number; nativeAt: number | null }): boolean {
+  return input.nativeAt !== null && input.last + Math.max(0, input.growth) >= Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE);
 }
 
 function textTokens(text: string): number {
@@ -968,11 +993,17 @@ export function planCompaction(input: {
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
   reserveTokens?: number;
+  /** the engine's own compaction point; Wink's summary lands just before it */
+  nativeAt?: number | null;
 }): CompactionPlan {
-  const contextWindow = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
+  const window = Number.isSafeInteger(input.contextWindow) && input.contextWindow > 0
     ? input.contextWindow
     : MODEL_CONTEXT_FALLBACK;
-  const budgetTokens = Math.max(1, contextBudget(contextWindow) - (input.reserveTokens ?? 0));
+  const contextWindow = input.nativeAt ? Math.min(window, NATIVE_SUMMARY_WINDOW) : window;
+  const budgetTokens = Math.max(
+    1,
+    (input.nativeAt ? Math.floor(input.nativeAt * NATIVE_SUMMARY_SHARE) : contextBudget(contextWindow)) - (input.reserveTokens ?? 0),
+  );
   const found = applicableCompaction(input.messages);
   if (found && "unsupported" in found) {
     return { needed: false, status: "unsupported", messageId: found.messageId, version: found.version };
@@ -1052,6 +1083,8 @@ export interface SummaryGrace {
   recycle: boolean;
   local: boolean;
   overheadTokens?: number | null;
+  /** the engine compacts its own session here; a resumed one never waits on Wink */
+  nativeAt?: number | null;
   native?: {
     instanceId: string;
     cursor: unknown;
@@ -1067,6 +1100,13 @@ export function planSummaryGrace(input: {
   reserveTokens?: number;
 }): { safe: true; budgetTokens: number } | { safe: false; reason: string } {
   const { plan, grace } = input;
+  if (grace.nativeAt) {
+    if (grace.rewound || grace.fresh || grace.recycle) return { safe: false, reason: "session-recycle" };
+    if (!plan.needed && plan.status !== "fits") return { safe: false, reason: "invalid-context" };
+    const { instanceId, cursor, seed } = grace.native ?? {};
+    if (cursor === undefined || !seed || seed.instanceId !== instanceId || seed.cursor !== cursor) return { safe: false, reason: "unseeded" };
+    return { safe: true, budgetTokens: plan.budgetTokens };
+  }
   if (!grace.knownWindow || !Number.isSafeInteger(grace.knownWindow)) return { safe: false, reason: "unknown-window" };
   if (grace.local || grace.knownWindow <= MODEL_CONTEXT_FALLBACK) return { safe: false, reason: "small-or-local" };
   if (grace.rewound || grace.fresh || grace.recycle) return { safe: false, reason: "session-recycle" };
@@ -1118,6 +1158,7 @@ export async function prepareModelContext(input: {
   referenceMessages?: Message[];
   includeSpeakers?: boolean;
   reserveTokens?: number;
+  nativeAt?: number | null;
   summaryGrace?: SummaryGrace;
   onSummaryCall?: (record: SummaryCallRecord) => void;
 }): Promise<PreparedModelContext> {

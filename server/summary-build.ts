@@ -21,6 +21,7 @@ export interface SendInputs {
   taskRecordText: string;
   excludeIds?: ReadonlySet<string>;
   reserveTokens?: number;
+  nativeAt?: number | null;
 }
 
 export interface SummaryBuildDeps {
@@ -170,6 +171,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       contextWindow: inputs.contextWindow,
       excludeIds: inputs.excludeIds,
       reserveTokens: inputs.reserveTokens,
+      nativeAt: inputs.nativeAt,
       userName: deps.userName(),
       referenceMessages: deps.store.messagesFor(threadId),
     });
@@ -248,7 +250,8 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
         else console.info(`[summary-wait] ${JSON.stringify(wait)}`);
       };
       const grace = options?.grace ? planSummaryGrace(options.grace) : null;
-      if ((current || queued >= 0) && grace?.safe) {
+      // The engine compacts its own session, so the build lands under this turn instead.
+      if (options?.grace?.grace.nativeAt || ((current || queued >= 0) && grace?.safe)) {
         graceThreads.add(threadId);
         logWait({ threadId, sendId: options?.sendId, mode: "skipped", waitedMs: 0 });
         return 0;
