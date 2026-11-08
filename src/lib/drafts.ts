@@ -8,6 +8,7 @@ const KEY = "omb-drafts";
 const ATTACHMENTS_KEY = "omb-draft-attachments";
 const SEND_IDS_KEY = "omb-draft-send-ids";
 const ROOM_HOLDS_KEY = "omb-room-holds";
+const FAILED_SENDS_KEY = "omb-failed-sends";
 // A task can be unmounted and mounted again while its POST is still in
 // flight. Keep the edit generation outside React so a late failure from the
 // old component cannot overwrite a newer draft created by the new one.
@@ -328,8 +329,39 @@ function publishFailedSends(id: string): void {
   for (const listener of failedSendListeners.get(id) ?? []) listener(sends);
 }
 
+function isFailedSend(value: unknown): value is FailedComposerSend {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const send = value as Record<string, unknown>;
+  return (
+    typeof send.id === "string" &&
+    typeof send.sendId === "string" &&
+    typeof send.text === "string" &&
+    typeof send.requestText === "string" &&
+    typeof send.threadId === "string" &&
+    (send.replyToId === undefined || typeof send.replyToId === "string") &&
+    (send.after === undefined || typeof send.after === "boolean")
+  );
+}
+
+function storeFailedSends(id: string, sends: FailedComposerSend[]): void {
+  const store = getStore();
+  const all = read(store, FAILED_SENDS_KEY);
+  if (sends.length > 0) all[id] = sends;
+  else delete all[id];
+  try {
+    store?.setItem(FAILED_SENDS_KEY, JSON.stringify(all));
+  } catch {
+    /* quota / private mode - the row just doesn't outlive the page */
+  }
+}
+
 export function failedComposerSends(id: string): FailedComposerSend[] {
-  return failedSends.get(id) ?? [];
+  const live = failedSends.get(id);
+  if (live) return live;
+  const stored = read(getStore(), FAILED_SENDS_KEY)[id];
+  const sends = Array.isArray(stored) ? stored.filter(isFailedSend) : [];
+  if (sends.length > 0) failedSends.set(id, sends);
+  return sends;
 }
 
 export function rememberFailedComposerSend(
@@ -337,7 +369,9 @@ export function rememberFailedComposerSend(
   input: FailedComposerSendInput,
 ): FailedComposerSend {
   const failed = { ...input, id: `${Date.now().toString(36)}-${++failedSendSequence}` };
-  failedSends.set(id, [...failedComposerSends(id), failed]);
+  const sends = [...failedComposerSends(id), failed];
+  failedSends.set(id, sends);
+  storeFailedSends(id, sends);
   publishFailedSends(id);
   return failed;
 }
@@ -371,6 +405,7 @@ export function forgetFailedComposerSend(id: string, failedId: string): void {
   const remaining = failedComposerSends(id).filter((failed) => failed.id !== failedId);
   if (remaining.length > 0) failedSends.set(id, remaining);
   else failedSends.delete(id);
+  storeFailedSends(id, remaining);
   publishFailedSends(id);
 }
 
