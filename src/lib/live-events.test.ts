@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   LIVE_EVENTS_STALE_MS,
+  LIVE_EVENTS_WAKE_QUIET_MS,
   isLivePing,
   liveEventsUrl,
   openLiveEvents,
@@ -10,8 +11,8 @@ import {
   type LiveEventsPlatform,
 } from "./live-events";
 
-const { firstStreamId, noteSse } = vi.hoisted(() => ({ firstStreamId: vi.fn(), noteSse: vi.fn() }));
-vi.mock("./cold-open-timing", async (importOriginal) => ({ ...(await importOriginal<object>()), firstStreamId, noteSse }));
+const { firstStreamId, noteResumeCurrent, noteSse } = vi.hoisted(() => ({ firstStreamId: vi.fn(), noteResumeCurrent: vi.fn(), noteSse: vi.fn() }));
+vi.mock("./cold-open-timing", async (importOriginal) => ({ ...(await importOriginal<object>()), firstStreamId, noteResumeCurrent, noteSse }));
 
 class FakeTarget {
   private readonly listeners = new Map<string, Set<(event?: unknown) => void>>();
@@ -95,6 +96,7 @@ function harness(options?: { online?: boolean; visible?: boolean; now?: number }
 beforeEach(() => {
   vi.useFakeTimers();
   noteSse.mockClear();
+  noteResumeCurrent.mockClear();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -363,6 +365,138 @@ describe("live events supervisor", () => {
     expect(test.sources).toHaveLength(3);
     expect(onError).toHaveBeenCalledOnce();
     stop();
+  });
+
+  describe("phone resume", () => {
+    function resumable() {
+      const test = harness();
+      const onError = vi.fn();
+      const onFrame = vi.fn();
+      const stop = openLiveEvents({ onFrame, onError, onSnapshotRequired: async () => true, wakeQuietMs: LIVE_EVENTS_WAKE_QUIET_MS }, test.platform);
+      test.sources[0].open();
+      test.sources[0].message({ kind: "hello", resumed: false, cursor: "run00000:4" });
+      test.sources[0].message({ kind: "message" }, "run00000:5");
+      const hide = () => {
+        test.setVisible(false);
+        test.documentTarget.emit("visibilitychange");
+      };
+      const resume = (hiddenMs: number) => {
+        test.setNow(hiddenMs);
+        test.setVisible(true);
+        test.documentTarget.emit("visibilitychange");
+      };
+      return { test, onError, onFrame, stop, hide, resume };
+    }
+
+    it.each([
+      [30_000, 500, "error"],
+      [30_000, 3_000, "error"],
+      [300_000, 500, "error"],
+      [300_000, 3_000, "error"],
+      [300_000, 500, "silent"],
+      [300_000, 3_000, "silent"],
+    ])("stays quiet after %d ms hidden with the link back at +%d ms (%s drop)", async (hiddenMs, backMs, drop) => {
+      const { test, onError, onFrame, stop, hide, resume } = resumable();
+      await vi.advanceTimersByTimeAsync(0);
+      onFrame.mockClear();
+      hide();
+      if (drop === "error") test.sources[0].error();
+      resume(hiddenMs);
+
+      expect(test.sources).toHaveLength(2);
+      expect(test.sources[1].url).toContain("since=run00000%3A5");
+      vi.advanceTimersByTime(backMs);
+      test.sources[1].open();
+      test.sources[1].message({ kind: "hello", resumed: true, cursor: "run00000:7" });
+      test.sources[1].message({ kind: "message", n: 6 }, "run00000:6");
+      test.sources[1].message({ kind: "message", n: 7 }, "run00000:7");
+      vi.advanceTimersByTime(LIVE_EVENTS_WAKE_QUIET_MS * 2);
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(onFrame.mock.calls.map(([frame]) => frame.n)).toEqual([6, 7]);
+      stop();
+    });
+
+    it("counts a replayed chat as current at its hello", () => {
+      const { test, stop, hide, resume } = resumable();
+      noteResumeCurrent.mockClear();
+      hide();
+      resume(300_000);
+      test.sources[1].open();
+      expect(noteResumeCurrent).not.toHaveBeenCalled();
+      test.sources[1].message({ kind: "hello", resumed: true, cursor: "run00000:5" });
+      expect(noteResumeCurrent).toHaveBeenCalledOnce();
+      stop();
+    });
+
+    it.each([
+      [true, 1],
+      [false, 0],
+    ])("counts a refused replay as current only once its snapshot loads (loaded %s)", async (loaded, calls) => {
+      let finishLoad!: (value: boolean) => void;
+      const test = harness();
+      const onSnapshotRequired = vi.fn(() => new Promise<boolean>((resolve) => (finishLoad = resolve)));
+      const stop = openLiveEvents({ onFrame: vi.fn(), onSnapshotRequired, wakeQuietMs: LIVE_EVENTS_WAKE_QUIET_MS }, test.platform);
+      test.sources[0].open();
+      test.sources[0].message({ kind: "hello", resumed: false, cursor: "run00000:4" });
+      expect(noteResumeCurrent).not.toHaveBeenCalled();
+      finishLoad(loaded);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(noteResumeCurrent).toHaveBeenCalledTimes(calls);
+      stop();
+    });
+
+    it("shows a link still down when the hold runs out", () => {
+      const { test, onError, stop, hide, resume } = resumable();
+      hide();
+      test.sources[0].error();
+      resume(300_000);
+      vi.advanceTimersByTime(LIVE_EVENTS_WAKE_QUIET_MS - 1);
+      expect(onError).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onError).toHaveBeenCalledOnce();
+      stop();
+    });
+
+    it("shows a resume with no network when the hold runs out", () => {
+      const { test, onError, stop, hide, resume } = resumable();
+      hide();
+      test.sources[0].error();
+      test.setOnline(false);
+      resume(300_000);
+      vi.advanceTimersByTime(LIVE_EVENTS_WAKE_QUIET_MS);
+      expect(onError).toHaveBeenCalledOnce();
+      stop();
+    });
+
+    it("reports a drop once the link is back", () => {
+      const { test, onError, stop, hide, resume } = resumable();
+      hide();
+      resume(300_000);
+      test.sources[1].open();
+      test.sources[1].error();
+      expect(onError).toHaveBeenCalledOnce();
+      stop();
+    });
+
+    it("drops the hold when the page hides again", () => {
+      const { test, onError, stop, hide, resume } = resumable();
+      hide();
+      resume(300_000);
+      hide();
+      vi.advanceTimersByTime(LIVE_EVENTS_WAKE_QUIET_MS * 2);
+      expect(onError).not.toHaveBeenCalled();
+      test.sources[1].error();
+      expect(onError).not.toHaveBeenCalled();
+      stop();
+    });
+
+    it("still reports a drop on a page that never left the screen", () => {
+      const { test, onError, stop } = resumable();
+      test.sources[0].error();
+      expect(onError).toHaveBeenCalledOnce();
+      stop();
+    });
   });
 
   it.each(["online", "pageshow"])("forces replay on %s while visible", (event) => {
