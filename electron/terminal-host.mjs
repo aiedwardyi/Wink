@@ -508,6 +508,7 @@ function paneLabel(value) {
 
 export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
   const sessions = new Map();
+  const watchedOwners = new WeakSet();
   const active = new Map();
   const generations = new Map();
   const pending = new Map();
@@ -933,6 +934,14 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
   const retireQuietly = (session, forceKill = false, keepNotes = false) => {
     void retire(session, forceKill, keepNotes).catch(() => {});
   };
+  const watchOwner = (owner) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Electron sender mocks may omit lifecycle events.
+    if (typeof owner.once !== "function" || watchedOwners.has(owner)) return;
+    watchedOwners.add(owner);
+    owner.once("destroyed", () => {
+      for (const live of sessions.values()) if (live.owner === owner) retireQuietly(live, true);
+    });
+  };
   const reclaimExited = () => {
     for (const [id, session] of sessions) {
       if (session.exitCode !== null || session.owner.isDestroyed?.()) {
@@ -1213,10 +1222,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     if (workerSession) workerSession.run.generation = session.generation;
     generations.set(key, session.generation);
     sessions.set(session.id, session);
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Electron sender mocks may omit lifecycle events.
-    if (typeof event.sender.once === "function") {
-      event.sender.once("destroyed", () => { retireQuietly(session, true); });
-    }
+    watchOwner(event.sender);
     attach(session);
     try {
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- PTY adapters may expose readiness only when worker-backed.

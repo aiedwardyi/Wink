@@ -166,6 +166,7 @@ export function createGoogleSync(options: Options) {
   // Peer files the open-or-wake catch-up still lacks; null until its first listing.
   let behind: ReadonlySet<string> | null = null;
   const pulling = new Map<string, number>();
+  const rateLimit = { strikes: 0 };
 
   const mirrorPath = () => {
     const path = join(dataDir, GOOGLE_MIRROR_DIR);
@@ -376,7 +377,7 @@ export function createGoogleSync(options: Options) {
       }
       ids = ownIds();
       summary = await createDriveMirror({
-        owner, mirrorPath: bound.mirrorPath, statePath, ownIds: ids, client, now, uploads, hashes, chatFirst,
+        owner, mirrorPath: bound.mirrorPath, statePath, ownIds: ids, client, now, uploads, hashes, rateLimit, chatFirst,
         kindsPath: join(dataDir, GOOGLE_KINDS_FILE), allowKindRescan: quiet && bound.phase === "ready" && !busy,
         openThread: chatFirst ? options.openThread?.() : null,
         behind: (paths) => { behind = paths; },

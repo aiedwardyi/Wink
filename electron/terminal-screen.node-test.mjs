@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 
+for (const [name, save, restore] of [["CSI", "\x1b[s", "\x1b[u"], ["DECSC", "\x1b7", "\x1b8"], ["alternate", "\x1b[?1049h", "\x1b[?1049l"]]) {
+  test(`${name} restores a saved cursor within a resized screen`, () => {
+    const screen = createTerminalScreen({ cols: 80, rows: 30 });
+    screen.consume(`\x1b[30;80H${save}`);
+    screen.resize(20, 10);
+    assert.doesNotThrow(() => screen.consume(`${restore}X`));
+    assert.equal(screen.snapshot().screenText.split("\n")[9], " ".repeat(19) + "X");
+  });
+}
+
 test("models cursor movement, erase, resize, and wrapped text", () => {
   const screen = createTerminalScreen({ cols: 5, rows: 3 });
   screen.consume("abc\x1b[2J\x1b[Hxy\x1b[2;2Hz\x1b[2K\x1b[2;2Hwide!");

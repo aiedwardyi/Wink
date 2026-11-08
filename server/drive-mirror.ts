@@ -60,7 +60,7 @@ export interface DriveMirrorSummary {
 
 /** Local md5s by path, trusted while size and mtime hold; outlives one mirror so later passes skip rehashing. */
 export type DriveHashes = Map<string, { size: bigint; mtimeNs: bigint; md5: string }>;
-type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; kindsPath?: string; allowKindRescan?: boolean; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; chatFirst?: boolean; openThread?: string | null; downloaded?: (path: string) => void; behind?: (paths: ReadonlySet<string>) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
+type Options = { owner: DriveOwner; mirrorPath: string; statePath: string; kindsPath?: string; allowKindRescan?: boolean; ownIds: DriveOwnIds; client: DriveClient; now?: () => number; uploads?: boolean; hashes?: DriveHashes; rateLimit?: { strikes: number }; chatFirst?: boolean; openThread?: string | null; downloaded?: (path: string) => void; behind?: (paths: ReadonlySet<string>) => void; listed?: (files: ReadonlyMap<string, readonly DriveFile[]> | null) => void };
 const passes = new Set<string>();
 const samePath = (a: string, b: string) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const md5 = (bytes: Uint8Array) => createHash("md5").update(bytes).digest("hex");
@@ -198,7 +198,7 @@ export function createDriveMirror(options: Options) {
   let rootIdentity: { dev: number; ino: number } | null = null;
   let bound: Binding | null = null;
   let inflight: Promise<DriveMirrorSummary> | null = null;
-  let rateStrikes = 0;
+  const rateLimit = options.rateLimit ?? { strikes: 0 };
 
   function checkRoot(): void {
     try {
@@ -353,8 +353,8 @@ export function createDriveMirror(options: Options) {
     }
     function rateWait(error: DriveClientError): number {
       if (error.retryAfterMs !== null) return Math.min(error.retryAfterMs, RETRY_MAX_MS);
-      const wait = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** rateStrikes);
-      if (rateStrikes < 20) rateStrikes += 1;
+      const wait = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** rateLimit.strikes);
+      if (rateLimit.strikes < 20) rateLimit.strikes += 1;
       return wait;
     }
     async function drive<T>(work: () => Promise<T>): Promise<T | null> {
@@ -756,7 +756,7 @@ export function createDriveMirror(options: Options) {
       save();
     }
     remember(cursor);
-    if (summary.retryAfterMs === null) rateStrikes = 0;
+    if (summary.retryAfterMs === null) rateLimit.strikes = 0;
     check();
     if (kindsPath && (fullList || kindsMatch) && summary.retryAfterMs === null && summary.failed.length === 0 && table.changeToken && !(kindsMatch && table.changeToken === savedToken)) {
       checkKindsPath();

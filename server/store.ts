@@ -1269,10 +1269,17 @@ export class Store {
       }
     }
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
+    const previousLeaf = t.activeLeafId;
     t.messages.push(full);
     t.activeLeafId = full.id;
     this.beforeWrite(threadId);
-    this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    try {
+      this.persistThread(threadId, [{ kind: "row", value: full }, { kind: "head", value: full.id }], () => mdb.appendMessage(threadId, full));
+    } catch (error) {
+      t.messages.pop();
+      t.activeLeafId = previousLeaf;
+      throw error;
+    }
     if (full.comm?.mailKey && full.comm.peer === "reply") this.indexMail(threadId, full);
     if (full.kind === "screen") {
       for (const pruned of this.pruneScreenFrames(t)) {
