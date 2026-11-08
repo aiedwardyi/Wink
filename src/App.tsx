@@ -43,7 +43,7 @@ import { webPushTarget } from "@/lib/web-push";
 import { useDrawerSwipe, useIsPhone, usePhoneSwipe } from "@/lib/use-phone-swipe";
 import { BackNavigation, backDepth, followSelection, trailTarget, type BackLayer } from "@/lib/back-navigation";
 import { SKINS, applySkin, nextSkin, readSkin, type SkinId } from "@/lib/skins";
-import { Presence } from "@/lib/use-presence";
+import { Presence, usePresence } from "@/lib/use-presence";
 import { lazyView, useStaleBuildReload } from "@/lib/stale-build";
 import { markColdOpen, noteCacheShown, noteChatShown, startWarmOpenTiming } from "@/lib/cold-open-timing";
 import { startIdleMotion } from "@/lib/idle-motion";
@@ -239,9 +239,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
   const watchCard = LIVE_VERIFY_V0 && watch && watchChat && watch.threadId === watchChat.threadId && !phoneMenuVisible
     ? verifyCardIn(group ? group.messages : visibleMessages(bot!), watch.owner, watch.messageId)
     : undefined;
-  const watchPanel = (hidden: boolean) => watch && watchChat && watchCard && (
+  const watchShown = usePresence(watch && watchChat && watchCard ? { card: watchCard, threadId: watchChat.threadId, live: watch.live } : null);
+  const watchDock = watchShown.mounted ? " verify-watch-dock" : "";
+  const watchPanel = (hidden: boolean) => watchShown.value && (
     <LazyView>
-      <VerifyWatchPanel card={watchCard} threadId={watchChat.threadId} live={watch.live} hidden={hidden} />
+      <VerifyWatchPanel {...watchShown.value} hidden={hidden} closing={watchShown.closing} />
     </LazyView>
   );
 
@@ -680,7 +682,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         </LazyView>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
-          <div className={`relative flex min-h-0 min-w-0 flex-1${watchCard ? " verify-watch-dock" : ""}`}>
+          <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
             <GroupView key={group.id} group={group} />
             {watchPanel(nativeViewOverlayOpen)}
           </div>
@@ -689,7 +691,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         )
       ) : bot ? (
         <div ref={conversationRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip">
-          <div ref={swipeStageRef} className={`flex min-h-0 flex-1${watchCard ? " verify-watch-dock" : ""}`} inert={terminalOpen} aria-hidden={terminalOpen}>
+          <div ref={swipeStageRef} className={`flex min-h-0 flex-1${watchDock}`} inert={terminalOpen} aria-hidden={terminalOpen}>
             <ChatView
               bot={bot}
               hidden={terminalOpen || nativeViewOverlayOpen}

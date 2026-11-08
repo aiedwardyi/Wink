@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { persistPreference, I18nProvider } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { PRESENCE_EXIT_MS } from "@/lib/use-presence";
 import type { InstanceInfo } from "@/state/store";
 
 const { state, request, refreshInstances } = vi.hoisted(() => ({
@@ -398,7 +399,7 @@ it("puts computer-only guidance under the engine name, never beside it, and keep
   const [line, under] = [...header.children];
   expect(line!.textContent).toBe("Claude");
   expect(under!.textContent).toBe("Sign in on a computer");
-  expect(under!.className).toContain("pl-6");
+  expect(under!.querySelector(".pl-6")?.textContent).toBe("Sign in on a computer");
   for (const slot of host.querySelectorAll("[data-connection-account] .justify-end")) expect(slot.classList.contains("whitespace-nowrap")).toBe(true);
 });
 
@@ -435,4 +436,21 @@ it("shows an accepted account as soon as the server pushes its signed-in row", a
   await update();
   expect(host.textContent).toContain("new@example.com");
   expect(request).not.toHaveBeenCalledWith("/api/accounts");
+});
+
+it("folds the sign-in guidance open and shut, keeping its words while it closes", async () => {
+  await render(2);
+  const guidance = (phase: string) => host.querySelector(`[data-engine-row="claude"] [data-fold="${phase}"]`);
+  expect(guidance("opening")).toBeNull();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let phone = true;
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: phone && query.includes("max-width") }) as MediaQueryList);
+  state.instances[0]!.install = { login: { args: ["auth", "login"] } };
+  await update();
+  expect(guidance("opening")?.textContent).toBe("Sign in on a computer");
+  phone = false;
+  await update();
+  expect(guidance("closing")?.textContent).toBe("Sign in on a computer");
+  await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS + 5); });
+  expect(host.querySelector('[data-engine-row="claude"] [data-fold]')).toBeNull();
 });

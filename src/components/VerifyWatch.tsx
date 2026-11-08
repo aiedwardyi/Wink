@@ -336,9 +336,9 @@ function handles(ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
 }
 
 /** Docked right inside the chat column; the chat stays usable beside it. */
-export function VerifyWatchPanel({ card, threadId, live, hidden }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean }) {
+export function VerifyWatchPanel({ card, threadId, live, hidden, closing = false }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean }) {
   return (
-    <aside className="verify-watch" data-verify-watch>
+    <aside className="verify-watch animate-panel-in" data-verify-watch data-side-panel="" data-closing={closing || undefined} inert={closing || undefined}>
       <VerifyWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} onClose={closeVerifyWatch} />
     </aside>
   );

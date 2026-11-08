@@ -56,6 +56,17 @@ describe("Fold", () => {
     expect(body()?.textContent).toBe("Notes");
   });
 
+  it("shows the last open content while a keep fold closes", async () => {
+    const keep = (open: boolean, label: string) =>
+      act(async () => root.render(createElement(Fold, { open, keep: true, children: createElement("p", { "data-body": "" }, label) })));
+    await keep(true, "Notes");
+    await keep(false, "");
+    expect(fold()?.dataset.fold).toBe("closing");
+    expect(body()?.textContent).toBe("Notes");
+    await act(async () => { vi.advanceTimersByTime(PRESENCE_EXIT_MS); });
+    expect(fold()).toBeNull();
+  });
+
   it("renders nothing while closed, or an empty hidden box that keeps its id", async () => {
     await render(false);
     expect(host.innerHTML).toBe("");

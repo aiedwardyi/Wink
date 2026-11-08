@@ -7,6 +7,7 @@ import { lazyView } from "@/lib/stale-build";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyShowing, useVerifyWatch, verifyCardAction, verifyCardIn } from "@/lib/verify-watch";
 import type { Message } from "@/state/store";
+import { Fold } from "./Fold";
 import { LazyView } from "./LazyView";
 import "./VerifyCard.css";
 
@@ -107,6 +108,12 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
     const parts = /^(.*) \((desktop|phone)\)$/.exec(reason);
     return parts && coverageKo[parts[1]!] ? `${coverageKo[parts[1]!]} (${parts[2] === "phone" ? c.phone : c.desktop})` : reason;
   };
+  const problem = (issue: NonNullable<VerifyCardData["issues"]>[number], i: number) => <li key={`${issue.checker}-${issue.where}-${i}`}>
+    <span className="verify-card-tag">{dot(issue.checker)}{VERIFY_TAG[issue.checker] ?? issue.checker}</span>
+    <span className="verify-card-tile">{tile(issue.tile)}</span>
+    <span className="verify-card-where"><span className="verify-card-tile-inline">{tile(issue.tile)} · </span>{issue.where}</span>
+    <span className="verify-card-measure">{verifyProblem(issue, locale)}</span>
+  </li>;
   const rerun = async () => {
     if (pending) return;
     setPending(true); setError(false);
@@ -130,7 +137,7 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
           {action === "watch" && <button type="button" data-verify-watch={action} aria-expanded={phone ? inline : undefined} onClick={watch}><Play size={13} />{c.watch}</button>}
         </span>}
       </div>
-      {moving || waiting ? <>
+      <Fold open={moving || waiting} keep>
         {waiting && <div className="verify-card-strip">{c.waiting}</div>}
         <ul className="verify-card-plan">{c.plan.map((text, i) => <li key={text} data-state={waiting ? "waiting" : rowState(by, PLAN[i]!)}>
           <span className="verify-card-dots">{DOTS[i]!.map(dot)}</span><span>{text}</span>
@@ -143,26 +150,25 @@ export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: 
           </div>;
         })}</div>}
         {phone && running && card.live && <div className="verify-card-phone-watch"><Monitor size={14} />{c.watchPhone}</div>}
-      </> : <>
+      </Fold>
+      <Fold open={!moving && !waiting} keep>
         <div className="verify-card-strip">{tally.length ? <>
           {card.fixed ? <span>{c.fixedOnly(card.fixed)}</span> : null}
           {tally.map(([key, n]) => <span key={key}><b data-issues={key === "issues" || undefined}>{n}</b> {c.tally[key](n)}</span>)}
         </> : title}</div>
-        {issues.length > 0 && <ol className="verify-card-problems">{(all ? issues : issues.slice(0, SHOWN)).map((issue, i) => <li key={`${issue.checker}-${issue.where}-${i}`}>
-          <span className="verify-card-tag">{dot(issue.checker)}{VERIFY_TAG[issue.checker] ?? issue.checker}</span>
-          <span className="verify-card-tile">{tile(issue.tile)}</span>
-          <span className="verify-card-where"><span className="verify-card-tile-inline">{tile(issue.tile)} · </span>{issue.where}</span>
-          <span className="verify-card-measure">{verifyProblem(issue, locale)}</span>
-        </li>)}</ol>}
-        {!all && issues.length > SHOWN && <button type="button" className="verify-card-more" onClick={() => setAll(true)}>{c.showAll(issues.length)}</button>}
+        {issues.length > 0 && <ol className="verify-card-problems">{issues.slice(0, SHOWN).map(problem)}</ol>}
+        {issues.length > SHOWN && <>
+          <Fold open={all}><ol className="verify-card-problems verify-card-problems-rest">{issues.slice(SHOWN).map((issue, i) => problem(issue, i + SHOWN))}</ol></Fold>
+          <Fold open={!all}><button type="button" className="verify-card-more" onClick={() => setAll(true)}>{c.showAll(issues.length)}</button></Fold>
+        </>}
         {(card.notChecked ?? []).map(reason => <div className="verify-card-unchecked" key={reason}>{c.unchecked}: {coverage(reason)}</div>)}
         {!complete && <div className="verify-card-unchecked">{c.unchecked}: {(Object.hasOwn(errors, card.errorCode ?? "timeout") ? errors[card.errorCode ?? "timeout"] : errors.internal)[locale]}</div>}
         {details.length > 0 && <>
           <button type="button" className="verify-card-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)}>{c.details(details.length)}</button>
-          {detailsOpen && <ul className="verify-card-details">{details.map((row, i) => <li key={`${row.checker}-${row.where}-${i}`}>{tile(row.tile)} · {row.where} · {row.measured}</li>)}</ul>}
+          <Fold open={detailsOpen}><ul className="verify-card-details">{details.map((row, i) => <li key={`${row.checker}-${row.where}-${i}`}>{tile(row.tile)} · {row.where} · {row.measured}</li>)}</ul></Fold>
         </>}
-      </>}
-      {phone && inline && action === "watch" && <LazyView><VerifyWatchFrame card={card} threadId={threadId} live={false} hidden={false} inline onClose={() => setInline(false)} /></LazyView>}
+      </Fold>
+      {phone && action === "watch" && <Fold open={inline}><LazyView><VerifyWatchFrame card={card} threadId={threadId} live={false} hidden={false} inline onClose={() => setInline(false)} /></LazyView></Fold>}
       {error && <div role="alert" className="verify-card-unchecked">{c.retry}</div>}
     </section>
   );

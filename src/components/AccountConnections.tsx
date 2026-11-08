@@ -35,7 +35,9 @@ export function ConnectionRow({ mark, label, actions, children }: { mark?: React
         <div className={`${LINE} min-w-0 flex-1 gap-2`}>{label}</div>
         {actions && <div className={`${LINE} max-w-[65%] shrink-0 justify-end gap-2 whitespace-nowrap`}>{actions}</div>}
       </div>
-      {children && <div className="flex min-w-0 flex-col items-stretch gap-2 pb-2 pl-6 has-[>[hidden]]:pb-0">{children}</div>}
+      <Fold open={Boolean(children)} keep>
+        <div className="flex min-w-0 flex-col items-stretch gap-2 pb-2 pl-6 has-[>[hidden]]:pb-0">{children}</div>
+      </Fold>
     </div>
   );
 }

@@ -76,9 +76,9 @@ function place(anchor: HTMLElement, phone: boolean, terminal: boolean): Spot {
   return { left, bottom, width, maxHeight: Math.max(0, Math.floor(rect.top - gap - top - 12)), dimBottom: 0 };
 }
 
-export function UsageQuickView({ engine, account, board, state, anchor, onClose }: {
+export function UsageQuickView({ engine, account, board, state, anchor, onClose, closing = false }: {
   engine: UsageBoardEngine; account: UsageBoardAccount; board: UsageBoard; state: UsageBoardState;
-  anchor: RefObject<HTMLElement | null>; onClose: () => void;
+  anchor: RefObject<HTMLElement | null>; onClose: () => void; closing?: boolean;
 }) {
   const { t, locale } = useI18n();
   useAutoRefresh(board);
@@ -101,7 +101,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   };
   const closeRef = useRef(close);
   useLayoutEffect(() => { closeRef.current = close; });
-  useBackLayer(true, close);
+  useBackLayer(!closing, close);
 
   useLayoutEffect(() => {
     const update = () => {
@@ -131,6 +131,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   }, [Boolean(spot)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (closing) return;
     const away = (event: PointerEvent) => {
       const target = event.target as Node;
       if (box.current?.contains(target) || anchor.current?.contains(target)) return;
@@ -149,7 +150,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
       document.removeEventListener("pointerdown", away, true);
       document.removeEventListener("keydown", key);
     };
-  }, [anchor]);
+  }, [anchor, closing]);
 
   const settings = (section: "usage" | "connections") => {
     close(false);
@@ -168,8 +169,8 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose 
   );
   return createPortal(
     <>
-      {phone && <div aria-hidden="true" className="fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
-      <div ref={box} role="dialog" aria-label={t("usage.chat.quickTitle")} data-usage-quick="" data-usage-desk=""
+      {phone && <div aria-hidden="true" data-closing={closing || undefined} inert={closing || undefined} className="animate-fade-in fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
+      <div ref={box} role="dialog" aria-label={t("usage.chat.quickTitle")} data-usage-quick="" data-usage-desk="" data-closing={closing || undefined} inert={closing || undefined}
         className={cn("fixed z-50 flex flex-col overflow-hidden border border-hairline/60 bg-panel shadow-2xl",
           terminal ? "rounded-none" : "rounded-[6px] [corner-shape:bevel]")}
         style={{ left: spot.left, bottom: spot.bottom, width: spot.width, maxHeight: spot.maxHeight }}>

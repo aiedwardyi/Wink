@@ -93,3 +93,10 @@ it("Cancel calls the scoped route and a foreign owner's projection stays read-on
     expect(actions(view.host)).toHaveLength(0);
   } finally { await view.close(); }
 });
+
+it("fades the wait card in as it arrives", async () => {
+  const view = await mount("en", base);
+  try {
+    expect(view.host.querySelector("[data-usage-wait]")!.parentElement!.classList.contains("animate-fade-in")).toBe(true);
+  } finally { await view.close(); }
+});

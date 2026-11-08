@@ -25,7 +25,7 @@ export function UsageWaitCard({ message, botId, usageLimit, usageWait, onRetry, 
   const time = usageWait?.resumesAt == null ? "" : new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", ...(usageWait.weekly ? { weekday: "short" } : {}) }).format(usageWait.resumesAt);
   const details = safeProviderText(message, identities);
   return (
-    <div className="flex justify-start">
+    <div className="animate-fade-in flex justify-start">
       <div data-usage-wait="" className="w-fit max-w-[min(42rem,78%)] rounded-xl border border-hairline/50 bg-inset px-3.5 py-2.5 text-[13.5px] text-ink">
         <div className="flex items-start gap-2">
           <Gauge size={15} className="mt-0.5 shrink-0 text-warning" />

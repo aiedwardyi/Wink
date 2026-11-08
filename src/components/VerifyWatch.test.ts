@@ -9,7 +9,7 @@ import { applyLocale } from "@/lib/i18n";
 import { EASE_STANDARD, MOTION_LARGE_MS } from "@/lib/motion";
 import { chooseVerifyTab } from "@/lib/verify-watch";
 import { VerifyWatchShow } from "@/lib/verify-watch-show";
-import { VerifyWatchFrame } from "./VerifyWatch";
+import { VerifyWatchFrame, VerifyWatchPanel } from "./VerifyWatch";
 
 const flag = vi.hoisted(() => ({ on: true }));
 vi.mock("../../shared/live-verify", async importOriginal => ({ ...await importOriginal<typeof import("../../shared/live-verify")>(), get LIVE_VERIFY_V0() { return flag.on; } }));
@@ -517,4 +517,42 @@ it.each([["en", "Phone fit"], ["ko", "휴대폰 맞춤"]] as const)("names the p
   applyLocale(locale);
   await act(async () => root.render(createElement(VerifyWatchFrame, { card, threadId: "t", live: false, hidden: false, onClose() {} })));
   expect(host.textContent).toContain(label);
+});
+
+it("slides the docked panel in and keeps it mounted, inert and click-through, while it closes", async () => {
+  const panel = (closing: boolean) => act(async () => root.render(createElement(VerifyWatchPanel, { card, threadId: "t", live: false, hidden: false, closing })));
+  const aside = () => host.querySelector("aside.verify-watch")!;
+  await panel(false);
+  expect(aside().classList.contains("animate-panel-in")).toBe(true);
+  expect(aside().hasAttribute("data-side-panel")).toBe(true);
+  expect(aside().hasAttribute("data-closing")).toBe(false);
+  await panel(true);
+  expect(aside().hasAttribute("data-closing")).toBe(true);
+  expect(aside().hasAttribute("inert")).toBe(true);
+  expect(host.querySelector(".verify-watch-frame")).not.toBeNull();
+});
+
+const watchCss = readFileSync("src/components/VerifyWatch.css", "utf8");
+const watchRule = (selector: string) => {
+  const start = watchCss.indexOf(`\n${selector} {`);
+  return start < 0 ? "" : watchCss.slice(start, watchCss.indexOf("}", start));
+};
+
+it("holds the docked panel for its exit and gives the chat its column back at once", () => {
+  const app = readFileSync("src/App.tsx", "utf8");
+  expect(app).toContain("usePresence(watch && watchChat && watchCard");
+  expect(app).toContain("closing={watchShown.closing}");
+  expect(app).not.toContain('watchCard ? " verify-watch-dock"');
+  expect(watchCss).toMatch(/\.verify-watch\[data-closing\] \{[^}]*margin-left: calc\(-1 \* var\(--dock\)\); transition: none;/);
+});
+
+it("grows and shrinks the maximized panel on the shared tokens, never switching between flow and absolute", () => {
+  const dock = watchRule(".verify-watch");
+  for (const prop of ["width", "margin-left"]) expect(dock).toContain(`${prop} var(--motion-large) var(--ease-standard)`);
+  const maximized = watchRule(".verify-watch:has(> .verify-watch-frame[data-maximized])");
+  expect(maximized).toContain("width: 100cqi;");
+  expect(maximized).not.toMatch(/position:|inset:|align-items/);
+  expect(watchRule(".verify-watch-frame")).toContain("transition: min-height var(--motion-large) var(--ease-standard);");
+  expect(watchRule(".verify-watch-frame[data-maximized]")).toContain("min-height: calc(100% - 24px);");
+  expect(watchCss).not.toMatch(/\d\s?ms\b/);
 });
