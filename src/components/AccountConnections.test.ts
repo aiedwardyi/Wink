@@ -77,22 +77,21 @@ it("keeps main-account sign-out disabled when no other account is ready", async 
   expect(buttons("Sign In")).toHaveLength(1);
 });
 
-it.each([false, true])("keeps a long email on one line with row disclosure and phone %s", async (phone) => {
+it.each([false, true])("shows a long email whole as plain text with phone %s", async (phone) => {
   vi.spyOn(window, "matchMedia").mockReturnValue({ matches: phone } as MediaQueryList);
   await render();
   const label = "averyveryverylongname@example-company.com";
   state.instances[0]!.snapshot.account = label;
   await update();
-  const identity = [...host.querySelectorAll("span")].find((node) => node.textContent === label)!;
-  expect(identity.innerHTML).toBe(label);
-  expect(identity.title).toBe("");
-  expect([...identity.classList]).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
-  expect(identity.classList.contains("break-words")).toBe(false);
-  const disclosure = identity.closest<HTMLButtonElement>("button")!;
-  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-  await act(async () => disclosure.click());
-  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-  expect(disclosure.closest("[data-connection-account]")!.querySelector("[data-connection-identity-body]")?.textContent).toBe(label);
+  const email = host.querySelector<HTMLElement>("[data-account-email]")!;
+  expect(email.innerHTML).toBe(label);
+  expect(email.title).toBe("");
+  expect([...email.classList]).toEqual(expect.arrayContaining(["min-w-0", "break-words"]));
+  expect(email.classList.contains("truncate")).toBe(false);
+  expect(email.closest("button")).toBeNull();
+  await act(async () => email.click());
+  expect(host.querySelectorAll("[data-account-email]")).toHaveLength(2);
+  expect(host.textContent!.split(label)).toHaveLength(2);
   expect(host.textContent).not.toContain("Main");
 });
 
@@ -401,16 +400,6 @@ it("puts computer-only guidance under the engine name, never beside it, and keep
   expect(under!.textContent).toBe("Sign in on a computer");
   expect(under!.className).toContain("pl-6");
   for (const slot of host.querySelectorAll("[data-connection-account] .justify-end")) expect(slot.classList.contains("whitespace-nowrap")).toBe(true);
-});
-
-it("shows an opened identity on single lines, never broken mid-address", async () => {
-  await render(1);
-  const disclosure = host.querySelector<HTMLButtonElement>("[data-connection-identity]")!;
-  await act(async () => disclosure.click());
-  const body = host.querySelector("[data-connection-identity-body]")!;
-  expect(body.className).not.toMatch(/break-all|break-words|wrap-anywhere|wrap-break-word/);
-  expect(body.textContent).toContain("claude@example.com");
-  for (const line of body.children) expect(line.classList.contains("truncate")).toBe(true);
 });
 
 it("offers recovery for a stopped account whose credentials remain valid", async () => {
