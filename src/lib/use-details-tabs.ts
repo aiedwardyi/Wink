@@ -38,7 +38,9 @@ export function useDetailsTabs(pages: RefObject<HTMLElement | null>, phone: bool
     for (const each of running.current) each.cancel();
     const sign = memory ? 1 : -1;
     const pass = { duration: MOTION_LARGE_MS, easing: EASE_STANDARD, fill: "both" } as const;
-    const moving = [incoming.animate([{ transform: `translate3d(${sign * PASS_PX}px, 0, 0)`, opacity: 0 }, { transform: "none", opacity: 1 }], pass)];
+    const from = { transform: `translate3d(${sign * PASS_PX}px, 0, 0)`, opacity: 0 };
+    // waits past the outgoing page's 0.5, plus the frame it starts late, so the two never show together
+    const moving = [incoming.animate(phone ? [from, { ...from, offset: 0.6 }, { transform: "none", opacity: 1 }] : [from, { transform: "none", opacity: 1 }], pass)];
     running.current = moving;
     void moving[0]!.finished.then(() => setPaging(false), () => undefined);
     // a wide window's cover fades the outgoing page itself; a frame late, so the commit that mounts the map doesn't also promote this page

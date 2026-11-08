@@ -164,12 +164,27 @@ describe("Bot details tab pass", () => {
     expect(memory!.hidden).toBe(true);
   });
 
+  it("never shows both pages at once on a phone", async () => {
+    await open();
+    for (const to of [1, 0]) {
+      passes = [];
+      await act(async () => tab(to).click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+      const incoming = passes.find((each) => each.element === pages()[to])!;
+      const outgoing = passes.find((each) => each.element === pages()[1 - to])!;
+      expect(incoming.keyframes[1]).toMatchObject({ transform: incoming.keyframes[0]!.transform, opacity: 0 });
+      expect(incoming.keyframes[1]!.offset).toBeGreaterThan(outgoing.keyframes[1]!.offset as number);
+      await finishPasses();
+    }
+  });
+
   it("moves only the incoming page on a wide window, under the cover", async () => {
     width(1440);
     await open();
     await act(async () => tab(1).click());
     const [settings, memory] = pages();
     expect(passes.filter((each) => each.element === memory)).toHaveLength(1);
+    expect(passes.find((each) => each.element === memory)!.keyframes).toHaveLength(2);
     expect(passes.filter((each) => each.element === settings)).toHaveLength(0);
     expect(settings!.hidden).toBe(true);
   });
