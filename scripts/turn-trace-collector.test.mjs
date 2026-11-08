@@ -20,6 +20,11 @@ describe("turn trace collector", () => {
     expect(collectTurnTraces([{ ...row, spans: [...spans.slice(0, 4), gap("start", "unobserved"), ...spans.slice(5)] }])[0].unknownPhases).toEqual([{ phase: "start", reason: "unobserved" }, { phase: "resume", reason: "unobserved" }]);
   });
 
+  it("keeps a resume that started and never ended as unknown beside a fallback start", () => {
+    const spans = [{ phase: "resume", start: 1, end: null, reason: "thread/resume" }, { phase: "start", start: 3, end: 4, reason: "thread/start" }];
+    expect(collectTurnTraces([{ ...row, spans }])[0].unknownPhases).toEqual([{ phase: "resume", reason: "thread/resume" }]);
+  });
+
   it("leaves unattributed or unmetered helpers incomplete", () => {
     expect(collectTurnTraces([{ ...row, batchId: "batch", requests: [{ id: "helper", usage: null }] }])[0]).toMatchObject({ scope: "helper", sum: null, incomplete: true });
   });

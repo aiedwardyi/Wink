@@ -266,6 +266,11 @@ describe("hosted trace across a late send", () => {
     expect(rows().map((row) => row.reason)).toEqual([reason]);
   });
 
+  it("ends prompt_build when a held send fails before the prompt is assembled", async () => {
+    await claim("t3", async (trace) => { trace.finish("send-failed"); });
+    expect(rows()[0].spans.find((span: { phase: string }) => span.phase === "prompt_build")).toMatchObject({ end: expect.any(Number) });
+  });
+
   it("does not grow the live map over 1,000 turns of every path", async () => {
     const ids = Array.from({ length: 1000 }, (_, i) => `turn-${i}`);
     for (const [i, turnId] of ids.entries()) {

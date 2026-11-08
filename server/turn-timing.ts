@@ -177,6 +177,7 @@ export function startTurnTrace(identity: Identity | (() => Identity), options: {
     reconcile(usage) { result = usage; },
     finish(reason = "settled") {
       if (finished) return;
+      claims.get(trace)?.end();
       finished = true;
       if (info.threadId && info.turnId) live.delete(`${info.threadId}:${info.turnId}`);
       const required: Phase[] = ["prompt_build", "memory_read", "hooks", "spawn", "retirement_wait", "initialize", "resume", "start", "dispatch", "first_event", "completion", "note_wait"];
