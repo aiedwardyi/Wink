@@ -244,7 +244,7 @@ export function SyncPanel({ onAccountEmail }: { onAccountEmail?: (email: string 
       <div className="mt-0.5 text-[13px] leading-relaxed text-ink-secondary">{t(off ? "settings.sync.offSubtitle" : "settings.sync.subtitle")}</div>
       {shown || (ready && desktop && (main || quiets.length > 0)) ? (
         <div className="mt-4 flex flex-col gap-2">
-          {shown ? <div role="status" className="text-[13px] text-ink">{shown}</div> : null}
+          {shown ? <div role="status" className="text-[13px] text-ink [overflow-wrap:anywhere]">{shown}</div> : null}
           {ready && desktop && (main || quiets.length > 0) ? (
             // A quiet first button keeps its text on the column edge.
             <div className={`flex flex-wrap items-center gap-2 ${main ? "" : "-ml-3"}`}>

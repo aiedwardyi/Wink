@@ -606,7 +606,7 @@ export function SettingsModal({
               <>
                 <Card>
                   <div className="flex items-center gap-6">
-                    <div className="min-w-0 flex-1 md:min-w-[19rem]"><ProfileFields /></div>
+                    <div className="min-w-0 flex-1 md:min-w-[13rem] lg:min-w-[19rem]"><ProfileFields /></div>
                     {!phone && (
                       <div className="min-w-0 self-stretch border-l border-hairline/40 pl-6">
                         <SyncPanel onAccountEmail={setAccountEmail} />
