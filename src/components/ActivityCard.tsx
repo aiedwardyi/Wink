@@ -18,11 +18,14 @@ const WAVE_STEP_MS = 8;
 
 let last: ReplyActivity | null = null;
 
+const isActivity = (body: Partial<ReplyActivity> | null | undefined): body is ReplyActivity =>
+  Array.isArray(body?.counts) && /^\d{4}-\d{2}-\d{2}$/.test(String(body.start)) && Number.isFinite(body.streak) && Number.isFinite(body.total);
+
 function cachedActivity(): ReplyActivity | null {
   if (last) return last;
   try {
     const body = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (Array.isArray(body?.counts)) last = body;
+    if (isActivity(body)) last = body;
   } catch {
     /* A fresh fetch fills it in. */
   }
@@ -59,17 +62,19 @@ function emptyActivity(): ReplyActivity {
 export function ActivityCard() {
   const { t, locale } = useI18n();
   const [fetched, setFetched] = useState<ReplyActivity | null>(cachedActivity);
+  const [failed, setFailed] = useState(false);
   const [tip, setTip] = useState<{ day: number; anchor: DOMRect } | null>(null);
   const grid = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const pointer = useRef("");
   useEffect(() => {
     let gone = false;
-    void api("/api/activity").then((body: ReplyActivity) => {
-      if (gone || !Array.isArray(body?.counts)) return;
+    void api("/api/activity").then((body: Partial<ReplyActivity> | null) => {
+      if (gone) return;
+      if (!isActivity(body)) return setFailed(true);
       keepActivity(body);
       setFetched(body);
-    }).catch(() => {});
+    }).catch(() => { if (!gone) setFailed(true); });
     return () => { gone = true; };
   }, []);
   useLayoutEffect(() => {
@@ -102,6 +107,7 @@ export function ActivityCard() {
     el.style.left = `${box.left}px`;
     el.style.visibility = "visible";
   }, [tip]);
+  if (!fetched && failed) return null;
   const activity = fetched ?? emptyActivity();
   const tag = localeTag(locale);
   const month = new Intl.DateTimeFormat(tag, { month: "short" });

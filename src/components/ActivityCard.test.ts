@@ -99,6 +99,19 @@ it("holds the card's place with an empty grid before the first answer", async ()
   }
 });
 
+it("skips a broken saved result and hides the card when the server has none", async () => {
+  localStorage.setItem("omb-activity", JSON.stringify({ counts: [1, 2] }));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response("{}")));
+  const { host, unmount } = mount();
+  try {
+    expect(squaresOf(host).every((square) => square.className.includes("bg-control"))).toBe(true);
+    await act(async () => {});
+    expect(host.textContent).toBe("");
+  } finally {
+    await unmount();
+  }
+});
+
 it.each([
   ["en", 7, "May 17 · 923 replies"],
   ["en", 8, "May 18 · No replies"],
