@@ -565,3 +565,7 @@ it("grows and shrinks the maximized panel on the shared tokens, never switching 
   expect(watchRule(".verify-watch-frame[data-maximized]")).toContain("min-height: calc(100% - 24px);");
   expect(watchCss).not.toMatch(/\d\s?ms\b/);
 });
+
+it("lets the phone inline frame take its content height inside the replay fold", () => {
+  expect(watchRule(".verify-watch-frame[data-inline]")).toContain("max-height: none;");
+});

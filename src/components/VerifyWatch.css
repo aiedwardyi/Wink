@@ -15,7 +15,7 @@
 
 .verify-watch-frame { flex: 1; min-width: 0; min-height: 0; max-height: calc(100% - 24px); display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--color-hairline); border-radius: 10px; overflow: hidden; background: var(--color-panel); color: var(--color-ink); font-size: 12px; transition: min-height var(--motion-large) var(--ease-standard); }
 .verify-watch-frame[data-maximized] { min-height: calc(100% - 24px); }
-.verify-watch-frame[data-inline] { margin: 8px 0 0; }
+.verify-watch-frame[data-inline] { margin: 8px 0 0; max-height: none; }
 .verify-watch-bar { display: flex; flex-shrink: 0; align-items: center; gap: 10px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--color-hairline); background: var(--color-raised); }
 .verify-watch-dots { display: flex; gap: 6px; }
 .verify-watch-dots i { width: 10px; height: 10px; border-radius: 50%; background: #f05d5d; }
