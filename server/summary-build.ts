@@ -2,6 +2,7 @@ import { applicableCompaction, buildCompaction, nativeCycleMoved, planCompaction
 import type { ProviderInstance } from "./contracts.ts";
 import type { Message, Store } from "./store.ts";
 import { abortable, logSummaryCall, type SummaryCallContext } from "./summary-repair.ts";
+import type { NativePrompt } from "./turn-context.ts";
 import type { ContextCompactionV1 } from "../shared/context-compaction.ts";
 
 const MAX_BUILD_RUNS = 2;
@@ -22,11 +23,12 @@ export interface SendInputs {
   excludeIds?: ReadonlySet<string>;
   reserveTokens?: number;
   nativeAt?: number | null;
-  nativePrompt?: NativePromptSize;
+  /** the live session a job's captured prompt must still belong to */
+  cursor?: unknown;
 }
 
 export interface SummaryBuildDeps {
-  store: Pick<Store, "activePath" | "activeLeaf" | "messagesFor" | "appendCompaction">;
+  store: Pick<Store, "activePath" | "activeLeaf" | "messagesFor" | "appendCompaction" | "taskByThread">;
   sendInputs(botId: string, threadId: string, messages: Message[]): Promise<SendInputs | null | undefined>;
   busy(botId: string, threadId: string): boolean;
   userName(): string;
@@ -78,6 +80,8 @@ interface BuildJob {
   threadId: string;
   messages: Message[];
   leafId: string | null;
+  /** read with `messages`: a queued job can outlast the engine's compaction, and a later size would cancel it */
+  settledPrompt: NativePrompt | undefined;
 }
 
 interface ActiveRun {
@@ -174,14 +178,14 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     retries.add(timer);
   };
 
-  const run = async ({ botId, threadId, messages, leafId }: BuildJob, controller: AbortController) => {
+  const run = async ({ botId, threadId, messages, leafId, settledPrompt }: BuildJob, controller: AbortController) => {
     if (deps.busy(botId, threadId) && !graceThreads.has(threadId)) return;
     // a build would chain from the fallback and void its repair
     if (!leafId || !eligible(leafId) || repairTarget(messages)) return;
     const inputs = await deps.sendInputs(botId, threadId, messages);
     if (disposed || controller.signal.aborted || !inputs?.instance.generateText) return;
     const { instance } = inputs;
-    const nativePrompt = inputs.nativeAt ? inputs.nativePrompt : undefined;
+    const nativePrompt = inputs.nativeAt && settledPrompt?.cursor === inputs.cursor ? settledPrompt : undefined;
     const plan = planCompaction({
       messages,
       contextWindow: inputs.contextWindow,
@@ -252,7 +256,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
     if (active?.threadId === threadId || queue.some((item) => item.threadId === threadId)) return;
     if (deps.busy(botId, threadId)) return;
     if (!eligible(deps.store.activeLeaf(threadId))) return;
-    queue.push({ botId, threadId, messages: structuredClone(deps.store.activePath(threadId)), leafId: deps.store.activeLeaf(threadId) });
+    queue.push({ botId, threadId, messages: structuredClone(deps.store.activePath(threadId)), leafId: deps.store.activeLeaf(threadId), settledPrompt: deps.store.taskByThread(botId, threadId)?.nativePrompt });
     pump();
   };
 
@@ -271,7 +275,7 @@ export function createSummaryBuild(deps: SummaryBuildDeps): SummaryBuild {
       };
       const grace = options?.grace ? planSummaryGrace(options.grace) : null;
       // The engine compacts its own session, so the build lands under this turn instead.
-      if (options?.grace?.grace.nativeAt || ((current || queued >= 0) && grace?.safe)) {
+      if (grace?.safe && (options?.grace?.grace.nativeAt || current || queued >= 0)) {
         graceThreads.add(threadId);
         logWait({ threadId, sendId: options?.sendId, mode: "skipped", waitedMs: 0 });
         return 0;

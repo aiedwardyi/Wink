@@ -90,6 +90,7 @@ describe("summary grace dispatch", () => {
     const generateText = vi.fn(() => new Promise<string>((resolve) => setTimeout(() => resolve("SUMMARY\nretained decisions"), 80_000)));
     const instance = { driverKind: "claude", generateText, textTimeoutMs: 90_000, adapter: { capabilities: { queueing: true } } };
     const store = {
+      taskByThread: () => undefined,
       activePath: () => [...messages],
       activeLeaf: () => messages.at(-1)?.id ?? null,
       messagesFor: () => messages,

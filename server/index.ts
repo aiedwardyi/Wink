@@ -2743,7 +2743,7 @@ const summaryBuild = createSummaryBuild({
       excludeIds: inlineNotes?.ids?.length ? new Set(inlineNotes.ids) : undefined,
       reserveTokens: inlineNotes?.tokens,
       nativeAt: nativeCompactAt(instance.driverKind, selection.model, contextWindow, { ...process.env, ...instanceConfigs(cfg, accounts.snapshot)[selection.instanceId]?.environment }),
-      nativePrompt: task.nativePrompt?.cursor === task.resumeCursors[selection.instanceId] ? task.nativePrompt : undefined,
+      cursor: task.resumeCursors[selection.instanceId],
     };
   },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),

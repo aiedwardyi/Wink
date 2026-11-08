@@ -61,14 +61,12 @@ describe("native compaction wiring", () => {
     expect(run(path, 1_000_000).nativeAt).toBe(67_000);
   });
 
-  it("hands the background build the real prompt of the session it would resume", () => {
-    const expression = background.match(/      nativePrompt: (.*),/)![1];
-    const read = (cursor: string) => new Function("task", "selection", `return ${expression};`)(
-      { nativePrompt: { cursor: "s1", first: 10, last: 20, growth: 5 }, resumeCursors: { claude: cursor } },
-      { instanceId: "claude" },
-    );
-    expect(read("s1")).toMatchObject({ last: 20, growth: 5 });
-    expect(read("s2")).toBeUndefined();
+  it("hands the background build the session it would resume, never a live prompt size", () => {
+    const expression = background.match(/      cursor: (.*),/)![1];
+    const read = (cursor: string) => new Function("task", "selection", `return ${expression};`)({ resumeCursors: { claude: cursor } }, { instanceId: "claude" });
+    expect(read("s1")).toBe("s1");
+    expect(read("s2")).toBe("s2");
+    expect(background).not.toContain("nativePrompt:");
   });
 
   it("flushes notes from the growth the store recorded", () => {

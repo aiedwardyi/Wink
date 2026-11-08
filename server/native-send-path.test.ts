@@ -41,6 +41,7 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
   const appended: Message[] = [];
   const generateText = vi.fn(async (): Promise<string> => "SUMMARY\nthe harbor decisions");
   const store = {
+    taskByThread: () => task as never,
     activePath: () => [...rows],
     activeLeaf: () => rows.at(-1)?.id ?? null,
     messagesFor: () => rows,
@@ -80,7 +81,7 @@ function setup({ messages, nativePrompt, driverKind = "claudeAgent", model = MOD
         contextWindow,
         taskRecordText: "Goal: hold the line",
         nativeAt: compaction.nativeCompactAt(driverKind, model, contextWindow, env),
-        nativePrompt: task.nativePrompt?.cursor === task.resumeCursors.claude ? task.nativePrompt : undefined,
+        cursor: task.resumeCursors.claude,
       };
     },
     busy: () => false,
@@ -176,6 +177,27 @@ describe("native send path", () => {
     expect(h.generateText).toHaveBeenCalledOnce();
     finish("SUMMARY\nk10a");
     await h.build.idle();
+    expect(h.appended).toHaveLength(1);
+  });
+
+  it("waits for the running build when the send cannot resume, so one call covers the history", async () => {
+    const h = setup({
+      messages: Array.from({ length: 70 }, (_, index) => turn(`t${index}`, `request ${index}`)).flat(),
+      nativePrompt: { cursor: "s1", first: 11_254, last: 118_622, growth: 68_400, window: { model: MODEL, tokens: 1_000_000 } },
+    });
+    let finish!: (text: string) => void;
+    h.generateText.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    h.build.onSettled("bot", THREAD);
+    await vi.waitFor(() => expect(h.generateText).toHaveBeenCalledOnce());
+    h.task.resumeSeed = undefined;
+    const sending = h.send();
+    await Promise.resolve();
+    finish("SUMMARY\nthe harbor decisions");
+    const { prepared, summarySkipped } = await sending;
+    expect(summarySkipped).toBe(false);
+    expect(prepared).toMatchObject({ status: "ready", compactionId: "summary-0" });
+    expect(prepared.compaction).toBeUndefined();
+    expect(h.generateText).toHaveBeenCalledOnce();
     expect(h.appended).toHaveLength(1);
   });
 
