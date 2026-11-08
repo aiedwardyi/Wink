@@ -1114,8 +1114,8 @@ for (const pin of ["bot", "bot task", "room", "room pin", "room task", "unreadab
     const module = await import("./pane-cleanup.mjs");
     const env = { ORBIT_WORKTREE_ROOT: f.worktreeRoot };
     if (pin !== "bot") env.OMB_DATA_DIR = dataDir;
-    const options = new Function("app", "process", "path", "readCleanupPins", "slog", "createPaneCleanup", `return ${expression};`)(
-      { getPath: () => f.home }, { env }, path, module.readCleanupPins, () => {}, (value) => value,
+    const options = new Function("app", "process", "path", "readCleanupPins", "slog", "createPaneCleanup", "scratchRoot", `return ${expression};`)(
+      { getPath: () => f.home }, { env }, path, module.readCleanupPins, () => {}, (value) => value, f.options.tempRoot,
     );
     const cleanup = createPaneCleanup({ ...f.options, ...options });
     cleanup.start(() => []);

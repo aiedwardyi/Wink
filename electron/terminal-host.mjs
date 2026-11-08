@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import fs from "node:fs";
@@ -78,6 +79,10 @@ export const PRESTART_LIMIT = 3;
 export const PRESTART_IDLE_MS = 10 * 60_000;
 // A stray Enter on an empty Claude prompt submits its suggestion as a real turn.
 const BOT_PANE_ENV = { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: "false" };
+// Same rule as pane-cleanup's nick, so the ledger finds the folder this makes.
+const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
+// Survivors of a closed pane get this long to exit on their own.
+const LEFTOVER_MS = 3_000;
 // STATUS_DLL_INIT_FAILED: the shell died loading, before it ran anything.
 const DLL_INIT_FAILED = 0xC0000142;
 const RESPAWN_MS = 5_000;
@@ -455,6 +460,45 @@ function paneMemoryFloor(command) {
   return ENGINE_MEMORY_FLOOR[engine] ?? OTHER_MEMORY_FLOOR;
 }
 
+function paneNick(label) {
+  const first = label?.split("|")[0].trim();
+  return NICK_RE.test(first ?? "") ? first : null;
+}
+
+const execText = (file, args, options) => new Promise((resolve, reject) => {
+  execFile(file, args, { windowsHide: true, timeout: 15_000, maxBuffer: 16 * 1024 * 1024, ...options }, (error, stdout) => error ? reject(error) : resolve(stdout));
+});
+
+/** Every process as { pid, ppid, created } in epoch ms; POSIX creation times are whole seconds. */
+export async function listProcesses(platform = process.platform, env = process.env) {
+  if (platform === "win32") {
+    const script = "Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } }";
+    const shell = path.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const text = await execText(shell, ["-NoProfile", "-NonInteractive", "-Command", script]);
+    return text.split(/\r?\n/).map((line) => line.trim().split(" ").map(Number)).filter((row) => row.length === 3 && row.every(Number.isFinite)).map(([pid, ppid, created]) => ({ pid, ppid, created }));
+  }
+  const text = await execText("ps", ["-A", "-o", "pid=,ppid=,lstart="], { env: { ...env, LC_ALL: "C" } });
+  return text.split("\n").map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/)).filter(Boolean)
+    .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), created: Date.parse(match[3]) })).filter((row) => Number.isFinite(row.created));
+}
+
+export const paneProcesses = { list: () => listProcesses(), stop: (pid) => process.kill(pid) };
+
+// A pid whose parent is younger than it is a reused pid, not a descendant.
+function paneDescendants(table, root, since, slack) {
+  const born = new Map([[root, -Infinity]]);
+  for (let added = true; added;) {
+    added = false;
+    for (const row of table) {
+      if (born.has(row.pid) || !born.has(row.ppid) || row.created + slack < since || row.created < born.get(row.ppid)) continue;
+      born.set(row.pid, row.created);
+      added = true;
+    }
+  }
+  born.delete(root);
+  return born;
+}
+
 function paneLabel(value) {
   if (value === undefined || value === null) return undefined;
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Labels cross the local proxy and IPC boundaries.
@@ -462,7 +506,7 @@ function paneLabel(value) {
   return value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, LABEL_LIMIT) || undefined;
 }
 
-export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
+export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = () => null, mailbox = async () => null, loadPty = () => ({ spawn: (shell, args, options) => spawnTerminalPty(require.resolve("node-pty"), shell, args, options) }), env = process.env, platform = process.platform, readyTimeoutMs = terminalReadyTimeoutMs(platform), activityCoalesceMs = TERMINAL_ACTIVITY_COALESCE_MS, attentionCooldownMs = TERMINAL_ACTIVITY_ACK_COOLDOWN_MS, stallMs = TERMINAL_STALL_MS, stallCheckMs = STALL_CHECK_MS, prestartIdleMs = PRESTART_IDLE_MS, notePane = postPaneNote, now = () => Date.now(), freeMemory = () => os.freemem(), setPriority = os.setPriority, paneRuns = null, paneCleanup = null, scratchRoot = null, processes = null, botNames = async () => ({}), snag = () => {}, workerLaunch = null, workerAccountsEnabled = true, sessionBridge = () => null }) {
   const sessions = new Map();
   const active = new Map();
   const generations = new Map();
@@ -839,6 +883,8 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       Promise.resolve(exited).then(drop, drop);
     }
     session.stopPromise = (async () => {
+      const leftovers = stopLeftovers(session);
+      if (leftovers && platform !== "win32") await timeout(leftovers, SHUTDOWN_TIMEOUT_MS, "Process snapshot timed out").catch(() => {});
       if (forceKill || session.exitCode === null) {
         try {
           if (!session.workerReady) {
@@ -866,6 +912,22 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       if (sessions.get(session.id) === session) sessions.delete(session.id);
     })();
     return session.stopPromise;
+  };
+  // Windows keeps a dead parent's pid on its children, so its slower snapshot can run alongside the kill; POSIX reparents them, so ps runs first.
+  const stopLeftovers = (session) => {
+    const root = session.pty.pid;
+    if (!processes || !session.botPane || !Number.isInteger(root)) return null;
+    const slack = platform === "win32" ? 0 : 999;
+    const snapshot = Promise.resolve().then(() => processes.list()).then((table) => paneDescendants(table, root, session.startedAt, slack));
+    void snapshot.then(async (before) => {
+      if (!before.size) return;
+      await new Promise((resolve) => setTimeout(resolve, LEFTOVER_MS));
+      for (const row of await processes.list()) {
+        if (before.get(row.pid) !== row.created) continue;
+        try { processes.stop(row.pid); } catch {}
+      }
+    }).catch(() => {});
+    return snapshot;
   };
   const retireQuietly = (session, forceKill = false, keepNotes = false) => {
     void retire(session, forceKill, keepNotes).catch(() => {});
@@ -1085,6 +1147,15 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
     const workerSession = createWorkerSession(worker, id, cwd, sessionBridge());
     const paneEnv = terminalPaneEnv(source, { pane: id, bot: input.botId, teacher: folder.teacher, mailbox: mail });
     if (workerSession) Object.assign(paneEnv, workerSession.env);
+    const nick = botPane && scratchRoot ? paneNick(input.label) : null;
+    if (nick) {
+      const scratch = path.resolve(scratchRoot, `wink-${nick}`);
+      try {
+        await fs.promises.mkdir(scratch, { recursive: true });
+        for (const key of Object.keys(paneEnv)) if (/^(?:TEMP|TMP|TMPDIR)$/i.test(key)) delete paneEnv[key];
+        Object.assign(paneEnv, { ORBIT_SCRATCH: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
+      } catch {}
+    }
     if (botPane) Object.assign(paneEnv, BOT_PANE_ENV, { ORBIT_COMPACT_SIGNAL: path.join(os.tmpdir(), `orbit-compact-${id}`), ORBIT_REPORT_SIGNAL: path.join(os.tmpdir(), `orbit-report-${id}`) });
     const spawn = () => loadPty().spawn(shell, platform === "win32" ? (botPane ? workerShellArgs(id, managed) : ["-NoLogo"]) : [], {
       name: "xterm-256color", cols: input.cols, rows: input.rows, cwd, env: paneEnv, useConptyDll: platform === "win32",
@@ -1096,7 +1167,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
       throw errorValue(cause);
     }
     const session = {
-      id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: paneEnv.TEMP || paneEnv.TMP || os.tmpdir(), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
+      id, key, botId: input.botId, botPane, workerSession, owner: event.sender, cwd, tempRoot: scratchRoot ?? (paneEnv.TEMP || paneEnv.TMP || os.tmpdir()), shell, pty, spawn, startedAt: now(), respawned: false, respawn: null, command: null, output: "", exitCode: null, seq: 0,
       workerAccount: managed ? Object.freeze({ id: worker.account.id, generation: worker.account.generation }) : null, workerEngine: managed ? worker.executable : null, workerAccountKnown: Boolean(worker) && worker.kind !== "unrouted", workerFinished: false, workerEnvironment: paneEnv,
       launchProject: launchProject(input, folder, cwd), retired: false, exitReported: false, errorReported: false,
       failure: null, attentionReported: false, activityArmed: false, activityCooldownUntil: 0, activityTimer: null,
@@ -1662,7 +1733,7 @@ export function createTerminalHost({ authorize, resolveCwd, owner: paneOwner = (
         if (disposed) throw new Error("Terminal host is shutting down");
         if (deletedBots.has(botId)) throw new Error("Terminal bot was deleted");
         const key = `${sender.id}:${botId}:pane:${randomUUID()}`;
-        session = await start({ key, event: { sender }, input: { botId, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true, worker });
+        session = await start({ key, event: { sender }, input: { botId, label, cols: 120, rows: 30 }, folder, cwd, cancelPromise: new Promise(() => {}), botPane: true, worker });
         if (disposed) {
           await retire(session, true);
           throw new Error("Terminal host is shutting down");
