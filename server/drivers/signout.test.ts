@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSignOut } from "./signout";
+import { isSignOut } from "./signout.js";
 
 describe("isSignOut", () => {
   it.each([
