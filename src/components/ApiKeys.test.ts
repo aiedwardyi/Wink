@@ -2,9 +2,9 @@
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { applyLocale, I18nProvider } from "@/lib/i18n";
+import { applyLocale, I18nProvider, persistPreference } from "@/lib/i18n";
 
 const { mockState, mockApi } = vi.hoisted(() => {
   return {
@@ -27,6 +27,54 @@ applyLocale("en");
 const render = () => renderToStaticMarkup(createElement(I18nProvider, null, createElement(SavedKeys)));
 
 describe("SavedKeys", () => {
+  beforeEach(() => localStorage.setItem("omb-keys-open", "1"));
+
+  it("folds the keys into one counted row and remembers the fold", async () => {
+    mockState.config = { imageGen: { configured: true }, customKeys: [{ host: "api.acme.dev", name: "Acme" }] };
+    localStorage.removeItem("omb-keys-open");
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.body.appendChild(document.createElement("div"));
+    let root = createRoot(host);
+    const mount = async () => {
+      root = createRoot(host);
+      await act(async () => root.render(createElement(I18nProvider, null, createElement(SavedKeys))));
+    };
+    const head = () => host.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    const removes = () => host.querySelectorAll('button[aria-label="Remove the Saved Key"]').length;
+    try {
+      await mount();
+      expect(head().textContent).toBe("Keys2 saved");
+      expect(head().getAttribute("aria-expanded")).toBe("false");
+      expect(removes()).toBe(0);
+
+      await act(async () => head().click());
+      expect(head().getAttribute("aria-expanded")).toBe("true");
+      expect(removes()).toBe(2);
+      expect(host.textContent).toContain("Acme · api.acme.dev");
+      await act(async () => root.unmount());
+      await mount();
+      expect(head().getAttribute("aria-expanded")).toBe("true");
+      expect(removes()).toBe(2);
+
+      await act(async () => head().click());
+      expect(head().getAttribute("aria-expanded")).toBe("false");
+      await act(async () => root.unmount());
+      await mount();
+      expect(head().getAttribute("aria-expanded")).toBe("false");
+      expect(removes()).toBe(0);
+
+      persistPreference("ko");
+      await act(async () => root.unmount());
+      await mount();
+      expect(head().textContent).toBe("키2개 저장됨");
+    } finally {
+      persistPreference("en");
+      await act(async () => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("confirms deletion in-page, cancels without a request, and leaves text input usable", async () => {
     mockState.config = { imageGen: { configured: true } };
     mockApi.mockImplementation(async () => ({ uses: {}, saved: true, config: { imageGen: { configured: false } } }));

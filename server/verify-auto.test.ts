@@ -1,13 +1,14 @@
-import { mkdir, mkdtemp, opendir, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, opendir, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "./contracts.ts";
 import { createVerifyAuto, scanVerifyWrites, type VerifyAutoTurn } from "./verify-auto.ts";
 import { resolveVerifySite } from "./verify-site.ts";
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -18,6 +19,7 @@ vi.mock("./verify-site.ts", async importOriginal => {
   return { ...actual, resolveVerifySite: vi.fn(actual.resolveVerifySite) };
 });
 
+const temps = createTempDirs();
 let root: string;
 let start: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; entry: string; episode: string }) => Promise<void>>>;
 let scan: ReturnType<typeof vi.fn<typeof scanVerifyWrites>>;
@@ -29,8 +31,10 @@ const shell = () => {
   auto.event(event({ type: "item.completed", itemType: "tool", itemId: "shell", ok: true }));
 };
 
+afterEach(() => temps.remove());
+
 beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), "wink-verify-auto-")));
+  root = await realpath(temps.make(join(tmpdir(), "wink-verify-auto-")));
   await writeFile(join(root, "index.html"), "<h1>Hi</h1>");
   start = vi.fn().mockResolvedValue(undefined);
   scan = vi.fn(scanVerifyWrites);

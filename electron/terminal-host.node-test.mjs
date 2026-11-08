@@ -6,6 +6,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { createTerminalHost, createTerminalOutputParser, resolveBotSession, terminalEnvironment, terminalReadyTimeoutMs, trustedTerminalSender, workerShellArgs } from "./terminal-host.mjs";
+import { createPaneCleanup } from "./pane-cleanup.mjs";
 import { installOrbitMsg, mailboxGrant, postPaneNote } from "./terminal-mailbox.mjs";
 import { spawnTerminalPty } from "./terminal-pty.mjs";
 
@@ -1073,6 +1074,56 @@ test("closeForBot retires a bot pane, frees its slot and refuses main or foreign
   assert.deepEqual(f.events.find(([channel, value]) => channel === "terminal:closed" && value.id === panes[0].sessionId), ["terminal:closed", { id: panes[0].sessionId, botId: "bot-1" }]);
   assert.equal(f.children[1].killed, true);
   await f.host.openForBot("bot-1", { label: "w8" });
+});
+
+test("a nicked bot pane gets its own scratch folder as temp", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scratch-home-"));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "scratch-root-")));
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(root, "POKKEY-1"));
+  let owner;
+  const paneCleanup = createPaneCleanup({ home, tempRoot: root, worktreeRoot: path.join(home, "orbit-wt") });
+  const f = fixture({ owner: () => owner, scratchRoot: root, paneCleanup, env: { SHELL: "/bin/sh", TEMP: "/orig", tmp: "/orig" } });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "ANIM-3 | anim" });
+  const scratch = path.join(root, "wink-ANIM-3");
+  const { env } = f.children[0].options;
+  assert.deepEqual([env.ORBIT_SCRATCH, env.TEMP, env.TMP, env.TMPDIR, env.tmp], [scratch, scratch, scratch, scratch, undefined]);
+  assert.equal(fs.statSync(scratch).isDirectory(), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, ".orbit", "pane-ledger.json"), "utf8"))[0].tempRoot, root);
+  await f.host.closeForBot("bot-1", pane.sessionId);
+  await paneCleanup.closed({ id: pane.sessionId, reportAt: 1 });
+  assert.deepEqual([fs.existsSync(scratch), fs.existsSync(path.join(root, "POKKEY-1"))], [false, true]);
+  await f.host.openForBot("bot-1", { label: "builder" });
+  await f.host.open(f.event, f.input);
+  for (const child of f.children.slice(1)) assert.deepEqual([child.options.env.ORBIT_SCRATCH, child.options.env.TEMP], [undefined, "/orig"]);
+});
+
+test("closing a bot pane stops only processes it started", async (t) => {
+  const listed = [];
+  const stopped = [];
+  const table = [
+    { pid: 9001, ppid: 101, created: 999_000 },
+    { pid: 9002, ppid: 101, created: 1_000_500 },
+    { pid: 9003, ppid: 9002, created: 1_000_600 },
+    { pid: 9004, ppid: 9001, created: 1_000_700 },
+    { pid: 9005, ppid: 1, created: 1_000_800 },
+    { pid: 9006, ppid: 101, created: 1_003_000 },
+  ];
+  let owner;
+  let time = 1_000_000;
+  const f = fixture({ owner: () => owner, now: () => time, processes: { list: async () => { listed.push(f.children[0].killed); return table; }, stop: (pid) => stopped.push(pid) } });
+  owner = f.owner;
+  t.after(() => f.host.dispose());
+  const pane = await f.host.openForBot("bot-1", { label: "LEFT-1" });
+  time = 1_002_000;
+  await f.host.closeForBot("bot-1", pane.sessionId);
+  assert.deepEqual(listed, [false]);
+  table[1] = { ...table[1], created: 1_000_900 };
+  await new Promise((resolve) => setTimeout(resolve, 3_300));
+  assert.deepEqual(listed, [false, true]);
+  assert.deepEqual(stopped, [9003]);
 });
 
 test("closeForBot on an already-closed pane succeeds instead of erroring", async () => {

@@ -2,6 +2,28 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.243] - 2026-11-08
+
+### Added
+- Live Verify checks sites built by bots and shows results with Rerun and Watch.
+- Inkwell, Graphite and Moss dark themes, with all existing themes kept.
+- Agentic Mode appears first in Bot Details.
+
+### Changed
+- Bots check past builds and decisions before planning.
+- The bot guide matches the app.
+
+### Fixed
+- Type immediately after picking a model.
+- Swipe right to close Bot Details on phones.
+- Copy and save images from another PC's chat.
+- Reaction chips stay clear of reply text.
+- Servo bot bubbles no longer show a side line.
+- Finished workers no longer show a false stalled notice.
+- Gemini and Grok usage records include cached input.
+- Muse refresh gets a fresh reading and says when to sign in again.
+- Sync picks up files it previously skipped.
+
 ## [1.0.242] - 2026-11-08
 
 ### Added
@@ -718,6 +740,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
 [1.0.242]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.242
 [1.0.241]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.241
 [1.0.240]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.240
