@@ -82,7 +82,7 @@ export function ActivityCard({ waved }: { waved?: { current: boolean } }) {
     if (waved) waved.current = true;
     const squares = grid.current?.querySelectorAll<HTMLElement>("[data-day]") ?? [];
     for (const [day, square] of [...squares].entries()) square.animate?.(
-      [{ opacity: 0, transform: "scale(0.4)" }, { opacity: 1, transform: "none" }],
+      [{ opacity: 0.35, transform: "scale(0.7)" }, { opacity: 1, transform: "none" }],
       { duration: MOTION_LARGE_MS, delay: Math.floor(day / 7) * WAVE_STEP_MS, easing: EASE_ENTRANCE, fill: "backwards" },
     );
   }, []);
