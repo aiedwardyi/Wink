@@ -14,7 +14,7 @@ export function workerHostWindows(operation, { pid = process.pid, target = "" } 
 }
 
 export async function workerHostIdentity(pid = process.pid) {
-  if (process.platform === "win32") return JSON.parse(await workerHostWindows("identity", { pid }));
+  if (process.platform === "win32") return { pid };
   const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -33,6 +33,16 @@ export async function workerHostLiveness(record, inspect = workerHostIdentity) {
     if (actual.boot !== record.boot || actual.created === null || actual.created !== record.created) return "dead";
     return "alive";
   } catch { return "unknown"; }
+}
+
+// Share mode 0 (UV_FS_O_EXLOCK): the kernel frees the lock only when the holder exits.
+const LOCK_FLAGS = fs.constants.O_RDWR | fs.constants.O_CREAT | 0x10000000;
+
+export const holdWorkerHostLock = (file) => fs.openSync(file, LOCK_FLAGS, 0o600);
+
+export function workerHostLock(file) {
+  try { fs.closeSync(holdWorkerHostLock(file)); return "dead"; }
+  catch (error) { return error.code === "EBUSY" ? "alive" : "unknown"; }
 }
 
 export async function privateWorkerHostDirectory(directory) {

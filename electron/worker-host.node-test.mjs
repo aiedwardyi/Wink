@@ -8,11 +8,11 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createTerminalHost } from "./terminal-host.mjs";
 import { createWorkerTerminalHost } from "./worker-host-facade.mjs";
 import { createWorkerHostClient } from "./worker-host-client.mjs";
-import { workerHostIdentity, workerHostLiveness, workerHostWindows } from "./worker-host-identity.mjs";
+import { holdWorkerHostLock, workerHostIdentity, workerHostLiveness, workerHostLock, workerHostWindows } from "./worker-host-identity.mjs";
 import { WORKER_HOST_VERSION, WORKER_HOST_CAPABILITIES, workerHostPeer } from "./worker-host-protocol.mjs";
 import { createTerminalScreen } from "./terminal-screen.mjs";
 import { workerHostScreen } from "./worker-host-screen.mjs";
@@ -50,6 +50,35 @@ test("liveness requires creation and boot identities and preserves unknowns", as
   assert.equal(await workerHostLiveness(record, async () => { throw new Error("Access denied"); }), "unknown");
   assert.equal(await workerHostLiveness({ pid: 10 }), "unknown");
   assert.equal(await workerHostLiveness(record, async () => ({})), "unknown");
+});
+
+test("lock probe is fast, exclusive and not inherited", { skip: process.platform !== "win32", timeout: 20_000 }, async () => {
+  const options = config();
+  const file = path.join(options.root, "host.lock");
+  assert.equal(workerHostLock(file), "dead");
+  const held = holdWorkerHostLock(file);
+  const times = [];
+  for (let index = 0; index < 20; index++) {
+    const began = performance.now();
+    assert.equal(workerHostLock(file), "alive");
+    times.push(performance.now() - began);
+  }
+  assert.ok(times.sort((a, b) => a - b)[10] < 1, `probe ${times[10]} ms`);
+  fs.closeSync(held);
+  assert.equal(workerHostLock(file), "dead");
+  assert.equal(workerHostLock(path.join(options.root, "missing", "host.lock")), "unknown");
+  const source = `const fs = require("fs"); fs.openSync(${JSON.stringify(file)}, fs.constants.O_RDWR | fs.constants.O_CREAT | 0x10000000, 0o600);
+    const pane = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 20000)"], { stdio: "inherit", detached: true }); console.log(pane.pid);`;
+  const holder = spawn(process.execPath, ["-e", source], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+  const [line] = await once(holder.stdout, "data");
+  const pane = Number(String(line).trim());
+  assert.equal(workerHostLock(file), "alive");
+  holder.kill();
+  await once(holder, "exit");
+  try {
+    assert.equal(workerHostLock(file), "dead");
+    process.kill(pane, 0);
+  } finally { process.kill(pane); }
 });
 
 test("screen attachment restores styles, modes, alternate screen and cursor", () => {
@@ -113,8 +142,12 @@ test("failed unpublished host exits empty without admitting a pane", { timeout: 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.root, "pane-runs.json"), "utf8")), []);
 });
 
-test("unreachable live host refuses a replacement and leaves discovery intact", { timeout: 20_000 }, async () => {
+test("unreachable live host refuses a replacement and leaves discovery intact", { timeout: 20_000 }, async (t) => {
   const options = config();
+  if (process.platform === "win32") {
+    const held = holdWorkerHostLock(path.join(options.root, "host.lock"));
+    t.after(() => fs.closeSync(held));
+  }
   const record = { ...await workerHostIdentity(), version: WORKER_HOST_VERSION, nonce: randomUUID(), secret: "test", pipe: process.platform === "win32" ? `\\\\.\\pipe\\wink-missing-${randomUUID()}` : path.join(options.root, "missing.sock") };
   fs.writeFileSync(path.join(options.root, "host.json"), JSON.stringify(record));
   const before = fs.readFileSync(path.join(options.root, "host.json"), "utf8");
@@ -171,7 +204,44 @@ test("real host authenticates, detaches, reattaches the same shell and exits emp
   assert.match(output, /ONCE=1/);
   await first.request("close-pane", ["test", pane.sessionId, true]);
   await first.detach();
-  await until(async () => await workerHostLiveness(identity) === "dead", 15_000);
+  await until(async () => (process.platform === "win32" ? workerHostLock(path.join(options.root, "host.lock")) : await workerHostLiveness(identity)) === "dead", 15_000);
+});
+
+test("live host with a changed boot record is adopted", { skip: process.platform !== "win32", timeout: 90_000 }, async () => {
+  const options = config();
+  const first = client(options);
+  await first.connect();
+  const pane = await first.request("spawn", ["test", {}]);
+  await first.detach();
+  const file = path.join(options.root, "host.json");
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), created: "stepped", boot: "stepped" }));
+  const second = client(options);
+  await second.connect(false);
+  assert.equal(second.identity()?.nonce, first.identity().nonce);
+  assert.equal(second.needsRecovery(), false);
+  await second.request("close-pane", ["test", pane.sessionId, true]);
+  await second.detach();
+  await until(() => workerHostLock(path.join(options.root, "host.lock")) === "dead", 15_000);
+});
+
+test("spawn reply does not wait for a slow pane identity", { skip: process.platform !== "win32", timeout: 90_000 }, async (t) => {
+  const options = config();
+  const hook = path.join(options.root, "slow-identity.mjs");
+  fs.writeFileSync(hook, `import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module";
+const execFile = cp.execFile; cp.execFile = (...args) => { setTimeout(() => execFile(...args), 2000); }; syncBuiltinESMExports();`);
+  const prior = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--import=${pathToFileURL(hook).href}`;
+  t.after(() => { if (prior === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = prior; });
+  let opened = 0;
+  const first = client(options, (channel) => { if (channel === "terminal:opened") opened = performance.now(); });
+  await first.connect();
+  delete process.env.NODE_OPTIONS;
+  const pane = await first.request("spawn", ["test", {}]);
+  const replied = performance.now() - opened;
+  await first.request("close-pane", ["test", pane.sessionId, true]);
+  await first.detach();
+  assert.ok(opened && replied < 200, `spawn replied ${replied} ms after open`);
+  await until(() => workerHostLock(path.join(options.root, "host.lock")) === "dead", 15_000);
 });
 
 test("facade adopts without launch admission and leaves workers alive on dispose", { timeout: 90_000 }, async () => {

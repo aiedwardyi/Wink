@@ -9,7 +9,7 @@ import { createPaneCleanup, readCleanupPins } from "./pane-cleanup.mjs";
 import { createTerminalBridge } from "./terminal-bridge.mjs";
 import { recoverWorkers } from "./worker-resume.mjs";
 import { postPaneNote } from "./terminal-mailbox.mjs";
-import { workerHostIdentity, workerHostRecord, workerHostWindows, writeWorkerHostRecord } from "./worker-host-identity.mjs";
+import { holdWorkerHostLock, workerHostIdentity, workerHostRecord, workerHostWindows, writeWorkerHostRecord } from "./worker-host-identity.mjs";
 import { WORKER_HOST_VERSION, WORKER_HOST_CAPABILITIES, workerHostPeer } from "./worker-host-protocol.mjs";
 import { workerHostScreen } from "./worker-host-screen.mjs";
 
@@ -26,6 +26,7 @@ const config = workerHostRecord(path.join(root, "launch.json"));
 if (!config?.nonce || !config?.secret) throw new Error("Missing worker host configuration");
 let published = false;
 const startupDeadline = setTimeout(() => { if (!published) process.exit(1); }, 30_000).unref();
+if (process.platform === "win32") holdWorkerHostLock(path.join(root, "host.lock"));
 const identity = await workerHostIdentity();
 const record = { ...identity, nonce: config.nonce, secret: config.secret, version: WORKER_HOST_VERSION, pipe: config.pipe, runtime: config.runtime, state: "ready" };
 let controller = null;
@@ -47,7 +48,6 @@ const broadcast = (channel, value) => {
 const owner = { id: 1, mainFrame: {}, isDestroyed: () => false, send: broadcast };
 const event = { sender: owner, senderFrame: owner.mainFrame };
 const runs = createPaneRuns(path.join(root, "pane-runs.json"));
-const identities = new Map();
 const cleanup = createPaneCleanup({ home: config.home, worktreeRoot: config.worktreeRoot, pinned: () => readCleanupPins(config.dataDir) });
 const host = createTerminalHost({
   authorize(caller) { if (caller.sender !== owner) throw new Error("Untrusted worker host caller"); },
@@ -63,11 +63,7 @@ const host = createTerminalHost({
   sessionBridge: () => bridgeAccess?.url,
   paneRuns: runs,
   paneCleanup: cleanup,
-  paneIdentity: (pid, id) => {
-    const identity = workerHostIdentity(pid);
-    identities.set(id, identity);
-    return identity;
-  },
+  paneIdentity: (pid) => ({ pid }),
   snag: (input) => { void services("snag", input).catch(() => {}); },
   loadPty: () => ({ spawn: (shell, args, options) => spawnTerminalPty(config.runtime.ptyModule, shell, args, options) }),
 });
@@ -90,7 +86,6 @@ owner.send = (channel, value) => {
 const commands = {
   list: () => summaries(),
   attach: async (input) => {
-    await identities.get(input?.sessionId);
     const snapshot = await host.open(event, input);
     return { ...snapshot, output: workerHostScreen(snapshot), host: { nonce: record.nonce, ...identity } };
   },
@@ -101,7 +96,6 @@ const commands = {
   spawn: async (...args) => {
     const result = await host.openForBot(...args);
     if (result.sessionId) {
-      await identities.get(result.sessionId);
       const snapshot = await host.open(event, { botId: args[0], sessionId: result.sessionId, cols: 120, rows: 30 });
       Object.assign(panes.get(result.sessionId), { cwd: snapshot.cwd, processIdentity: snapshot.processIdentity });
       writeWorkerHostRecord(path.join(root, "panes.json"), { nonce: record.nonce, ...identity, panes: [...panes.values()] });

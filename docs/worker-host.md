@@ -11,7 +11,8 @@ Explicit pane close keeps its existing meaning. An empty host exits itself.
 ## Ownership
 
 - Discovery lives in `userData/worker-host`, with access restricted to its owner.
-- A random pipe name and secret identify one host nonce, PID, creation time and boot.
+- A random pipe name and secret identify one host nonce. On Windows the host holds
+  an exclusive `host.lock` for life; elsewhere PID, creation time and boot prove liveness.
 - Before publication, the pipe ACL admits the current user and denies network logons.
 - Protocol v1 negotiates capabilities before accepting operations. A snapshot's
   sequence separates its screen replay from subsequent output.

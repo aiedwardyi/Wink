@@ -1,12 +1,6 @@
 param([string]$Operation, [int]$TargetPid, [string]$TargetPath)
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-if ($Operation -eq 'identity') {
-  $created = (Get-Process -Id $TargetPid -ErrorAction SilentlyContinue).StartTime
-  $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks.ToString()
-  @{ pid = $TargetPid; created = $(if ($created) { $created.ToUniversalTime().Ticks.ToString() } else { $null }); boot = $boot } | ConvertTo-Json -Compress
-  exit 0
-}
 if ($Operation -eq 'directory') {
   $acl = New-Object Security.AccessControl.DirectorySecurity
   $acl.SetOwner($identity.User)
