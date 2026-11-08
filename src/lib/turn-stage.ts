@@ -273,7 +273,50 @@ export function revealStream(text: string, ramps: readonly StreamRamp[], now: nu
   };
 }
 
-export function splitReplyBlocks(text: string, complete = false, whole = 0): string[] {
+/** Start of markup a half-typed paragraph has opened but not closed, or -1. */
+function openMarkup(text: string): number {
+  let tilde = -1;
+  let under = -1;
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at];
+    if (c === "\\") at++;
+    else if (c === "`") {
+      let n = 1;
+      while (text[at + n] === "`") n++;
+      const close = text.indexOf("`".repeat(n), at + n);
+      if (close < 0) return -1;
+      at = close + n - 1;
+    } else if (c === "[") {
+      const from = text[at - 1] === "!" ? at - 1 : at;
+      const end = text.indexOf("]", at);
+      if (end < 0) return from;
+      if (text[end + 1] === "(" ? text.indexOf(")", end) < 0 : end === text.length - 1) return from;
+    } else if (c === "<" && /[A-Za-z/!]/.test(text[at + 1] ?? "")) {
+      if (text.indexOf(">", at) < 0) return at;
+    } else if (c === "!" && at === text.length - 1) return at;
+    else if (c === "~" && (at === text.length - 1 || text[at + 1] === "~")) {
+      if (at === text.length - 1) return tilde < 0 ? at : tilde;
+      tilde = tilde < 0 ? at : -1;
+      at++;
+    } else if (c === "_") {
+      const prev = text[at - 1] ?? " ";
+      const next = text[at + 1] ?? "";
+      if (under >= 0 && !/\s/.test(prev) && !/[\p{L}\p{N}]/u.test(next)) under = -1;
+      else if (under < 0 && !/\s/.test(next) && !/[\p{L}\p{N}]/u.test(prev)) under = at;
+    }
+  }
+  return tilde < 0 || under < 0 ? Math.max(tilde, under) : Math.min(tilde, under);
+}
+
+/** The first paragraph while it is still arriving: nothing that could still turn into another block or half-draw markup. */
+function openParagraph(block: string, settle: (text: string) => string): string[] {
+  if (block.includes("|") || /^\s*\d{1,9}\s*$/.test(block)) return [];
+  const cut = openMarkup(block);
+  const shown = settle(cut < 0 ? block : block.slice(0, cut)).trimEnd();
+  return shown ? [shown] : [];
+}
+
+export function splitReplyBlocks(text: string, complete = false, whole = 0, settle = (block: string) => block): string[] {
   if (/^ {0,3}\[[^\]\n]+\]:/m.test(text)) return complete || whole >= text.length ? [text] : [];
   const nodes = fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
   return nodes.flatMap((node, i) => {
@@ -284,7 +327,8 @@ export function splitReplyBlocks(text: string, complete = false, whole = 0): str
     const closed = mark && new RegExp(`\\n {0,3}${mark[0]}{${mark.length},}[ \\t]*\\r?$`).test(block);
     const blank = !["list", "blockquote", "code", "html"].includes(node.type) && /^\r?\n[ \t]*\r?\n/.test(text.slice(end));
     if (complete || i < nodes.length - 1 || closed || blank) return [block.trimEnd()];
-    return whole > start ? [text.slice(start, whole).trimEnd()] : [];
+    if (whole > start) return [text.slice(start, whole).trimEnd()];
+    return i === 0 && node.type === "paragraph" ? openParagraph(block, settle) : [];
   });
 }
 

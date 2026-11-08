@@ -23,9 +23,47 @@ describe("paragraph reply blocks", () => {
     expect(splitReplyBlocks(`${text}${text.endsWith("\n") ? "" : "\n"}Unfinished`)).toEqual([block]);
   });
 
-  it("holds an unfinished paragraph and a fence with a blank line inside", () => {
-    expect(splitReplyBlocks("Still writing")).toEqual([]);
+  it("holds a later unfinished paragraph and a fence with a blank line inside", () => {
+    expect(splitReplyBlocks("Done.\n\nStill writing")).toEqual(["Done."]);
     expect(splitReplyBlocks("Done.\n\n```js\nfirst\n\nsecond")).toEqual(["Done."]);
+  });
+
+  it("shows the first paragraph while it is arriving", () => {
+    expect(splitReplyBlocks("Still writing")).toEqual(["Still writing"]);
+    expect(splitReplyBlocks("Still writing ")).toEqual(["Still writing"]);
+  });
+
+  it.each([
+    ["a table header", "| A | B |"],
+    ["a list number", "1"],
+    ["a list", "- First"],
+    ["a heading", "## Title"],
+    ["an open fence", "```js\nconst a = 1;"],
+    ["an open link", "["],
+  ])("keeps %s out of sight", (_, text) => {
+    expect(splitReplyBlocks(text)).toEqual([]);
+  });
+
+  it.each([
+    ["a half link", "See [the docs](https://exa", "See"],
+    ["a half link text", "See [the do", "See"],
+    ["a link with no target yet", "See [docs]", "See"],
+    ["a half image", "Look ![a cat](cat.p", "Look"],
+    ["an open tag", "Run <span cla", "Run"],
+    ["open strikethrough", "Drop ~~this one", "Drop"],
+    ["open underscores", "This is _very", "This is"],
+  ])("never draws %s", (_, text, shown) => {
+    expect(splitReplyBlocks(text)).toEqual([shown]);
+  });
+
+  it.each([
+    "See [the docs](https://example.com) now",
+    "Use my_file_name and `_private` ok",
+    "A ~~gone~~ word and _slanted_ text",
+    "Take a[0] and [x] and 2 < 3",
+    "Mixed <b>bold</b> done",
+  ])("shows closed markup as written in %j", (text) => {
+    expect(splitReplyBlocks(text)).toEqual([text]);
   });
 
   it("releases an unfinished fence and paragraph at turn end", () => {
