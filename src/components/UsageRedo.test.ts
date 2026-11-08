@@ -497,7 +497,7 @@ const connections = () => mount(createElement(AccountConnections, { accounts: h.
 
 it("lifts a Connections row from its email on a long press but not a tap", async () => {
   await connections();
-  const email = q('[data-connection-account="claude"] [data-connection-identity]')!;
+  const email = q('[data-connection-account="claude"] [data-account-email]')!;
   await act(async () => void touch(email, "touchstart"));
   await held(300);
   await act(async () => void touch(email, "touchend"));
@@ -511,9 +511,9 @@ it("lifts a Connections row from its email on a long press but not a tap", async
 it("passes a slow tap on the grip through to the button under it", async () => {
   await connections();
   const grip = q('[data-connection-account="claude"] [data-usage-grip]')!;
-  const email = q('[data-connection-account="claude"] [data-connection-identity]')!;
-  const opened = vi.spyOn(email, "click");
-  Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [grip, email] });
+  const name = q('[data-connection-account="claude"] [data-edit-name]')!;
+  const opened = vi.spyOn(name, "click");
+  Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [grip, name] });
   await act(async () => void touch(grip, "touchstart"));
   await held(200);
   await act(async () => void touch(grip, "touchend"));

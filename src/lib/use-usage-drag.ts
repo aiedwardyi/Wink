@@ -144,7 +144,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
   };
   const touchRef = useTouchDrag(PRESSABLE, `${SECTION}, ${ROW}`, {
     quick: GRIP,
-    skip: `button:not(${GRIP}, [data-edit-name], [data-connection-identity]), a, input`,
+    skip: `button:not(${GRIP}, [data-edit-name]), a, input`,
     selectPressed: true,
     scroller: () => scrollParent(list.current),
     // the grip's touch area overlaps the start of the name, which keeps its own tap
