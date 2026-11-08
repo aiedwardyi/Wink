@@ -104,6 +104,17 @@ export function createUpdaterCoordinator(updater, setState, { quitForInstall, on
     checkOperation = operation;
     try {
       operation.promise = Promise.resolve(updater.checkForUpdates())
+        .then((result) => {
+          // checkOwnsState muted every event, so an earlier error card would never clear.
+          const latest = result?.isUpdateAvailable ? result.updateInfo?.version : undefined;
+          if (
+            operation.manual && !operation.failed && !operation.supersededByDownload
+            && !downloadOperation && !installOperation && downloadedVersion
+            && !(latest && isNewerVersion(latest, downloadedVersion))
+          ) {
+            setState({ status: "downloaded", version: downloadedVersion });
+          }
+        })
         .catch((error) => {
           if (!operation.supersededByDownload) handleRejectedOperation(operation.manual, error);
         })
