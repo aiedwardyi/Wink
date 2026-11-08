@@ -330,7 +330,7 @@ export function openLiveEvents(
       if (frame.kind === "hello") {
         markColdOpen("hello");
         wakePending = false;
-        wasHidden = false;
+        if (platform.isVisible()) wasHidden = false;
         replayedThrough = frame.resumed ? cursorSeq(frame.cursor) : NaN;
         // `resumed:true` is followed by replay frames. Advancing to hello's
         // newest cursor here would skip any replay frame not yet delivered if
@@ -417,7 +417,7 @@ export function openLiveEvents(
   };
   const onOnline = () => recover(true);
   const onReturn = () => {
-    // A hello landing while hidden clears wasHidden, so a closed link counts too.
+    // a closed link counts as a wake too
     if (wasHidden || !linkOpen) holdReportsForWake();
     recover(wasHidden);
   };

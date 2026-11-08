@@ -417,6 +417,20 @@ describe("live events supervisor", () => {
       stop();
     });
 
+    it("wakes a socket that went silent after a hello landed while hidden", () => {
+      const { test, onError, stop, hide, resume } = resumable();
+      hide();
+      test.sources[0].message({ kind: "hello", resumed: true, cursor: "run00000:5" });
+      resume(1_000);
+
+      expect(test.sources).toHaveLength(2);
+      test.sources[1].open();
+      test.sources[1].message({ kind: "hello", resumed: true, cursor: "run00000:5" });
+      vi.advanceTimersByTime(LIVE_EVENTS_WAKE_QUIET_MS * 2);
+      expect(onError).not.toHaveBeenCalled();
+      stop();
+    });
+
     it("counts a replayed chat as current at its hello", () => {
       const { test, stop, hide, resume } = resumable();
       noteResumeCurrent.mockClear();
