@@ -484,21 +484,24 @@ export function UsageDesk() {
       list.dataset.phoneColumns = "";
       for (const head of heads) head.style.removeProperty("transition-property");
     };
-    // Restyling the whole list here would stall the fold's first frame; measure once it has landed.
-    if (list.querySelector('[data-fold="opening"], [data-fold="closing"]')) {
-      const settled = setTimeout(layout, MOTION_LARGE_MS - 20);
-      return () => clearTimeout(settled);
-    }
-    let width = list.clientWidth;
-    layout();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
-      if (list.clientWidth === width) return;
-      width = list.clientWidth;
+    let observer: ResizeObserver | null = null;
+    const watch = () => {
+      let width = list.clientWidth;
       layout();
-    });
-    observer?.observe(list);
-    document.fonts?.addEventListener("loadingdone", layout);
+      observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+        if (list.clientWidth === width) return;
+        width = list.clientWidth;
+        layout();
+      });
+      observer?.observe(list);
+      document.fonts?.addEventListener("loadingdone", layout);
+    };
+    // Restyling the whole list here would stall the fold's first frame; measure once it has landed.
+    const moving = list.querySelector('[data-fold="opening"], [data-fold="closing"]');
+    const settled = moving ? setTimeout(watch, MOTION_LARGE_MS - 20) : undefined;
+    if (!moving) watch();
     return () => {
+      clearTimeout(settled);
       observer?.disconnect();
       document.fonts?.removeEventListener("loadingdone", layout);
     };

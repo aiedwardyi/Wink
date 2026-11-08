@@ -448,6 +448,21 @@ it("hides the folded meter again on every later close", async () => {
   expect(claudeBody()?.hasAttribute("data-fold-done")).toBe(false);
 });
 
+it("watches the list width again once a fold has landed", async () => {
+  const observers: { observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    observe = vi.fn();
+    disconnect = vi.fn();
+    constructor() { observers.push(this); }
+  });
+  await mount();
+  await click(claudeFold);
+  await held(300);
+  const list = q("[data-usage-sections]");
+  expect(observers.filter((each) => each.observe.mock.calls.some(([node]) => node === list) && !each.disconnect.mock.calls.length)).toHaveLength(1);
+  vi.unstubAllGlobals();
+});
+
 it("keeps a closing body at full width in the phone columns", () => {
   expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
 });
