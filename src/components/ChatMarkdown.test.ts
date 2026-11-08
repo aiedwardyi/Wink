@@ -194,6 +194,31 @@ describe("streaming tail", () => {
   });
 });
 
+describe("ChatMarkdown first paragraph", () => {
+  it("shows only what the finished paragraph shows, one character at a time", async () => {
+    localStorage.setItem("omb-reply-style", "paragraphs");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const reply = "See [the docs](https://example.com/a_b) and ![cat](cat.png) for ~~old~~ _new_ steps, use `my_var` or **bold** <b>tag</b> now.";
+    const rendered = async (text: string, streaming: boolean) => {
+      await act(async () => root.render(createElement(ChatMarkdown, { text, streaming, whole: 0 })));
+      return host.querySelector(".chat-md")?.textContent ?? "";
+    };
+    try {
+      const final = await rendered(reply, false);
+      for (let at = 1; at <= reply.length; at++) {
+        const partial = await rendered(reply.slice(0, at), true);
+        expect.soft(final.startsWith(partial), `${JSON.stringify(reply.slice(0, at))} -> ${JSON.stringify(partial)}`).toBe(true);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      localStorage.setItem("omb-reply-style", "live");
+    }
+  });
+});
+
 describe("relative file links", () => {
   it.each(["precision", "tui", "ledger"] as const)("does not measure file-only lines in %s", async (skin) => {
     applySkin(skin);

@@ -633,7 +633,7 @@ function ChatMarkdownComponent({
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);
   const blocks = useMemo(() => {
-    if (style === "paragraphs") return streaming ? splitReplyBlocks(text, false, whole) : [text];
+    if (style === "paragraphs") return streaming ? splitReplyBlocks(text, false, whole, settleStreamTail) : [text];
     if (!split) return [text];
     const parts = streamBlocks(text);
     if (streaming) parts[parts.length - 1] = settleStreamTail(parts[parts.length - 1]);
@@ -641,7 +641,8 @@ function ChatMarkdownComponent({
   }, [split, text, streaming, style, whole]);
   useLayoutEffect(() => {
     const catchup = whole > previousWhole.current || whole >= text.length;
-    const fade = style === "paragraphs" && previousStyle.current === style && streaming && !catchup
+    const typing = blocks.length === 1 && !/\n[ \t]*\r?\n/.test(text);
+    const fade = style === "paragraphs" && previousStyle.current === style && streaming && !catchup && !typing
       && document.visibilityState === "visible" && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     for (const child of root.current?.children ?? []) {
       if (!seen.current.has(child) && fade) child.animate?.(
