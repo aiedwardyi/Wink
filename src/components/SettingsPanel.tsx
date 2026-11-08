@@ -648,7 +648,7 @@ export function SettingsPanel({
         ))}
       </div>
 
-      <div ref={pagesRef} className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={pagesRef} className={cn("relative min-h-0 flex-1 overflow-hidden", paging && "pointer-events-none")}>
         <div hidden={memoryTab && !paging} inert={memoryTab} className="absolute inset-0 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
           <KeepGoingCard bot={bot} />
           <div className={DETAILS_BOX}>
