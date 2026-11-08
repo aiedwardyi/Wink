@@ -65,6 +65,7 @@ import { switchEffort, type EffortRequest } from "./claude-effort.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
+import { isSignOut } from "./signout.ts";
 import { accountLaunch, claudeAccountAdmission, type AccountContext } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 
@@ -1715,8 +1716,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             if (o.is_error === true) {
               const errors = Array.isArray(o.errors) ? o.errors.filter((error: unknown) => typeof error === "string") : [];
               const text = [typeof o.result === "string" ? o.result : "", ...errors].join("\n");
-              if (classifyError({ text }).reason === "auth") {
-                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true });
+              if (!injected.injected && isSignOut(text)) {
+                emit({ ...base(threadId, currentTurnId()), type: "runtime.error", message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true });
                 if (!hasLiveBackgroundWork(session)) closeSession(threadId, "authentication failed");
               } else if (text.trim() && session.turn && !interrupted && !session.closing
                 && !chatUsageLimit("claude", session.turn.usageFailure, session.turn.usageWindows, !injected.injected)) {
@@ -2112,7 +2113,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       instanceId,
       ...(input.account ? { account: input.account } : {}),
       ...(input.account ? { invalidateAccount: () => { admitted = false; listeners.clear(); } } : {}),
-      ...(input.account ? { accountBusy: () => active.size > 0 || helpers > 0, setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; } } : {}),
+      ...(input.account ? { accountBusy: () => active.size > 0 || helpers > 0 } : {}),
+      setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; },
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,

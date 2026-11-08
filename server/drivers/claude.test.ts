@@ -1972,6 +1972,63 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(done).toMatchObject({ turnId, ok: false });
   });
 
+  it("marks a confirmed auth result as a sign-out of that account", async () => {
+    const recorded = JSON.parse(readFileSync(new URL("../../test/fixtures/recorded/claude/signed-out.json", import.meta.url), "utf8"));
+    const fixture = join(scratch, "signed-out-flag.json");
+    writeFileSync(fixture, JSON.stringify(recorded.reply.messages));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-signed-out-flag", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toEqual([
+      expect.objectContaining({ turnId, message: "Claude is not signed in.", setup: true, signIn: true, signedOut: true }),
+    ]);
+  });
+
+  it.each([
+    ["network", "Network error: connection reset after 401 files", undefined],
+    ["usage", "Invalid API key: usage limit reached", undefined],
+    ["rate", "HTTP 429 Too Many Requests", undefined],
+    ["forbidden", "HTTP 403 Forbidden by organization policy", undefined],
+    ["tool", "tool unauthorized to read this directory", undefined],
+    ["custom", "unexpected status 401 Unauthorized", "unsloth::local-model"],
+  ])("does not mark a Claude account signed out for a %s error", async (_kind, result, model) => {
+    const fixture = join(scratch, "ordinary-auth-error.json");
+    writeFileSync(fixture, JSON.stringify([{ type: "result", subtype: "success", is_error: true, result }]));
+    process.env.FAKE_CLAUDE_REPLY_FIXTURE = fixture;
+    await create(undefined, { UNSLOTH_STUDIO_AUTH_TOKEN: "fixture" });
+    await instance.adapter.sendTurn({ threadId: "ordinary-auth-error", text: "hi", model });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.some((e) => e.type === "runtime.error" && e.signedOut)).toBe(false);
+  });
+
+  it("refuses a turn on a blocked base Claude instance", async () => {
+    process.env.FAKE_CLAUDE_DUMP = join(scratch, "healthy.json");
+    const inputs = () => {
+      const { pid: _pid, ...rest } = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_DUMP!, "utf8"));
+      rmSync(process.env.FAKE_CLAUDE_DUMP!);
+      return JSON.stringify(rest).replace(/omb-mcp-\w+/g, "omb-mcp").replace(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g, "uuid")
+        .replace(/openmausbot-perm-[^"\\]+/g, "openmausbot-perm");
+    };
+    await create();
+    await instance.adapter.sendTurn({ threadId: "t-blocked-base", text: "same input" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const before = inputs();
+    recorder.stop();
+    await instance.dispose();
+
+    await create();
+    expect(instance.accountBusy).toBeUndefined();
+    expect(instance.invalidateAccount).toBeUndefined();
+    instance.setAccountBlocked?.(true);
+    await expect(instance.adapter.sendTurn({ threadId: "t-blocked-base", text: "same input" })).rejects.toThrow("Sign in");
+    expect(recorder.events.some((e) => e.type === "turn.started")).toBe(false);
+    instance.setAccountBlocked?.(false);
+    await instance.adapter.sendTurn({ threadId: "t-blocked-base", text: "same input" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(inputs()).toBe(before);
+  });
+
   describe("API error that ends the turn", () => {
     const overloaded = "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check https://status.claude.com.";
     const serverError = "API Error: Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com.";

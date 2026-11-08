@@ -160,7 +160,8 @@ export type RuntimeEvent = RuntimeEventBase &
     // the snapshot has no authenticated field.
     // `usageLimit` marks the expected one: the account spent its
     // subscription window. `resetsAt` is epoch ms, null when unreported.
-    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; folder?: string; usageLimit?: { resetsAt: number | null } }
+    // `signedOut` marks a confirmed sign-out of this account (Claude and Codex only).
+    | { type: "runtime.error"; message: string; setup?: boolean; signIn?: boolean; signedOut?: boolean; folder?: string; usageLimit?: { resetsAt: number | null } }
   );
 
 /** One subscription usage window (a 5-hour session, a week) as the provider

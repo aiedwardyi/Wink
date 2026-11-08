@@ -45,6 +45,7 @@ import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, codexRateLimitWindows } from "./rate-limits.ts";
 import { cachedSignIn } from "./auth-status.ts";
+import { isSignOut } from "./signout.ts";
 import { accountLaunch } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount } from "./codex-account.ts";
@@ -289,6 +290,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // a retry relaunches the whole app-server; the backoff is scaled down in
       // tests so a fake's transient failures don't stall real seconds
       const retryScale = Number(process.env.FAKE_CODEX_RETRY_SCALE ?? "1");
+      const authRequired = (message: unknown) => [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && isSignOut(message);
 
       const launchAttempt = async (attempt: number): Promise<void> => {
         const env = childEnv();
@@ -365,6 +367,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let contextWindow: number | undefined;
       let usageWindows: ReturnType<typeof codexRateLimitWindows> = [];
       let usageLimitReported = false;
+      let signedOutReported = false;
+      const signedOut = () => {
+        if (signedOutReported) return;
+        signedOutReported = true;
+        emit({ ...base(threadId, turnId), type: "runtime.error", message: "Codex is not signed in.", setup: true, signIn: true, signedOut: true });
+      };
       const apiKeyAccount = input.account ? engineAccount.type === "apiKey" : codexApiKeyAccount(env);
       const usageFailure = (failure: unknown) => chatUsageLimit("codex", failure, usageWindows,
         [null, "openai"].includes(decodeCodexSelection(turn.model).modelProvider) && !apiKeyAccount);
@@ -670,6 +678,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             if (limit && !usageLimitReported) {
               emit({ ...base(threadId, turnId), type: "runtime.error", ...limit });
               usageLimitReported = true;
+            } else if (t.status === "failed" && !stopRequested && !usageLimitReported && isSignOut(t.error?.message)) {
+              if (authRequired(t.error?.message)) signedOut();
+              else emit({ ...base(threadId, turnId), type: "runtime.error", message: String(t.error.message).slice(0, 400) });
             }
             settle(t.status === "completed" && !usageLimitReported, usageLimitReported ? "usage_limit" : t.status === "completed" ? null : (t.error?.message ?? t.status ?? "failed"));
             break;
@@ -695,7 +706,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                 if (limit && !usageLimitReported) {
                   emit({ ...base(threadId, turnId), type: "runtime.error", ...limit });
                   usageLimitReported = true;
-                } else if (message && !usageLimitReported) emit({ ...base(threadId, turnId), type: "runtime.error", message: String(message).slice(0, 400) });
+                } else if (!usageLimitReported && authRequired(message)) signedOut();
+                else if (message && !usageLimitReported) emit({ ...base(threadId, turnId), type: "runtime.error", message: String(message).slice(0, 400) });
               }
             }
             break;
@@ -877,7 +889,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (abandoned) return;
         const failure = e instanceof Error ? e : { text: String(e) };
         const message = e instanceof Error ? e.message : String(e);
-        const needsAuth = /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(message);
+        const needsAuth = authRequired(message);
         const verdict = classifyError(failure);
         if (!state.settled && !needsAuth && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1 && state.sawStreamDelta === false) {
           const delayMs = computeBackoff(attempt);
@@ -910,7 +922,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ...base(threadId, turnId),
             type: "runtime.error",
             message,
-            ...(needsAuth ? { setup: true } : {}),
+            ...(needsAuth ? { setup: true, signIn: true, signedOut: true } : {}),
           });
           settle(false, needsAuth ? "auth_required" : "rpc_error");
         }
@@ -953,7 +965,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     instanceId,
     ...(input.account ? { account: input.account } : {}),
     ...(input.account ? { invalidateAccount: () => { admitted = false; listeners.clear(); } } : {}),
-    ...(input.account ? { accountBusy: () => active.size > 0 || text.busy(), setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; } } : {}),
+    ...(input.account ? { accountBusy: () => active.size > 0 || text.busy() } : {}),
+    setAccountBlocked: (blocked: boolean) => { accountBlocked = blocked; },
     driverKind: DRIVER_KIND,
     displayName: input.displayName,
     enabled: input.enabled,

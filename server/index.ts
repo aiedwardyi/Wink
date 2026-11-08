@@ -3850,6 +3850,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const row = previousId
         ? store.patchMessage(event.threadId, previousId, { role: "bot", kind: "activity", tool })
         : pushMessage({ role: "bot", kind: "activity", tool });
+      if (event.signedOut && event.providerInstanceId) void accountRuntime.signedOut(event.providerInstanceId).catch(() => console.error("Signed-out account could not be saved"));
       if (event.usageLimit && row) limitWaits.failed(event.threadId, event.turnId, event.usageLimit.resetsAt, row.id,
         [...new Set(["five_hour", "seven_day", ...(rateLimitsByInstance.get(event.providerInstanceId ?? "")?.windows.map((window) => window.id) ?? [])])]);
       // a setup error means the engine could not even start: the bot is

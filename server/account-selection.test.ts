@@ -36,7 +36,7 @@ function fixture(useDefault = true) {
   } as unknown as AccountService;
   const registry = { get: (id: string) => instances.find((instance) => instance.instanceId === id),
     accountAvailable: (id: string) => instances.some((instance) => instance.instanceId === id) && availability.get(id) !== false,
-    instances: () => instances,
+    instances: () => instances, accountBlocked: () => false,
   } as unknown as ProviderRegistry;
   const botAccounts = new BotAccounts(accounts, registry, {} as Store, { captured: () => null });
   const globals = { accounts, botAccounts, registry,
