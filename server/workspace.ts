@@ -29,7 +29,7 @@ export const MEMORY_MAX_BYTES = 24_000;
 /** Either budget this full puts a trim notice in the prompt, before anything is cut. */
 const MEMORY_WARN_SHARE = 0.8;
 /** A copy memory sync set aside when one file changed on two PCs (memory-sync.ts park). */
-const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
+export const PARKED_COPY = /\.conflict-[0-9a-f]{8}\.md$/;
 
 export const MEMORY_SEED = `# Memory
 
