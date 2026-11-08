@@ -117,8 +117,10 @@ const { setDevicePermissions } = require("./device-permissions.cjs");
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const verifyProbe = process.env.OMB_VERIFY_PROBE_ROOT ? (await import("./verify-probe-bootstrap.mjs")).prepareVerifyProbe({ app, dialog }) : null;
+const verifyProbePort = verifyProbe ? await verifyProbe.allocatePort() : null;
 // release.yml bakes google-client.json into the package; self-built copies have none.
-const GOOGLE_CLIENT = googleClient(process.env, () => JSON.parse(fs.readFileSync(path.join(__dirname, "google-client.json"), "utf8")));
+const GOOGLE_CLIENT = googleClient(process.env, () => verifyProbe ? null : JSON.parse(fs.readFileSync(path.join(__dirname, "google-client.json"), "utf8")));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
@@ -146,7 +148,7 @@ function deliverNotificationTarget(win, target = pendingNotificationTarget) {
   if (target === pendingNotificationTarget) pendingNotificationTarget = null;
 }
 let mainWindow = null;
-const ERROR_REPORT_DSN = errorReportDsn(() => require("./error-report-config.json"));
+const ERROR_REPORT_DSN = verifyProbe ? null : errorReportDsn(() => require("./error-report-config.json"));
 const errorReports = createErrorReports({ userData: app.getPath("userData"), dsn: ERROR_REPORT_DSN, build: require("../package.json").version, platform: process.platform, arch: process.arch });
 registerErrorReportIpc(ipcMain, errorReports, () => mainWindow?.webContents, () => app.isPackaged ? `http://127.0.0.1:${SERVER_PORT}` : new URL(DEV_URL).origin);
 installErrorReportCapture(app, errorReports, () => mainWindow?.webContents);
@@ -362,7 +364,7 @@ const writeCredential = createCredentialWriter({
   updateCredentials: updateSecureCredentialDocument,
   serverAccess: () => ({ port: app.isPackaged ? SERVER_PORT : Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), token: serverToken }),
 });
-const terminalBridge = createTerminalBridge({ host: terminalHost, updater: app.isPackaged ? updaterBridge : undefined, errorReports, saveCredential: writeCredential });
+const terminalBridge = createTerminalBridge({ host: terminalHost, updater: app.isPackaged ? updaterBridge : undefined, errorReports, saveCredential: writeCredential, verify: (token) => import("./verify-bridge.mjs").then(({ createVerifyBridge }) => createVerifyBridge({ token, log: slog })) });
 let terminalBridgeAccess = null;
 ipcMain.handle("terminal:open", (event, input) => terminalHost.open(event, input));
 ipcMain.handle("terminal:prestart", (event, input) => terminalHost.prestart(event, input));
@@ -561,7 +563,7 @@ export async function secureWorkspaceConfig() {
 }
 
 function composioBrokerUrl() {
-  return resolveComposioBrokerUrl(process.env.OMB_COMPOSIO_BROKER_URL);
+  return verifyProbe ? "" : resolveComposioBrokerUrl(process.env.OMB_COMPOSIO_BROKER_URL);
 }
 
 // The packaged app has no terminal: everything about the server child's life
@@ -1019,7 +1021,7 @@ async function startServerPackaged() {
   // server during teardown — one settle-and-retry covers it
   let everyPortForeignOwned = true;
   for (let attempt = 0; attempt < 2; attempt++) {
-    for (const port of [8799, 18799, 28799]) {
+    for (const port of verifyProbe ? [verifyProbePort] : [8799, 18799, 28799]) {
       const started = await startServerOn(port);
       if (started.proc) {
         serverProc = started.proc;
@@ -1192,6 +1194,7 @@ async function openDeviceWindow(rawHost, rawName) {
         sandbox: true,
         partition: DEVICE_WINDOW_PARTITION,
       },
+      ...verifyProbe?.windowOptions(),
     });
     deviceLinkPages.set(win, deviceLinkPage({
       host: url.host,
@@ -1203,7 +1206,7 @@ async function openDeviceWindow(rawHost, rawName) {
       invalid: nativeText("packaged.deviceLinkInvalid"),
     }));
     const devices = win.webContents.session;
-    const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
+    const linkedFile = (target) => handleDeviceLinkedFile(target, url.origin, { createWindow: (options) => new BrowserWindow(verifyProbe ? verifyProbe.windowOptions(options) : options), webContents: win.webContents, openFile: (href, name) => openDeviceLinkedFile(devices, href, name), log: slog });
     setDevicePermissions(devices);
     // One listener per session: route device-origin 401s and main-frame 403s to their window.
     devices.webRequest.onCompleted({ urls: ["https://*/*"] }, ({ statusCode, webContentsId, resourceType, url: href }) => {
@@ -1223,6 +1226,21 @@ async function openDeviceWindow(rawHost, rawName) {
       const open = safeExternalUrl(target);
       if (open) void shell.openExternal(open);
       return { action: "deny" };
+    });
+    win.webContents.on("context-menu", (_event, params) => {
+      if (params.mediaType !== "image") return;
+      const menuItems = contextMenuTemplate(params, nativeText, {
+        copyLink: (href) => clipboard.writeText(href),
+        copyImage: () => win.webContents.copyImageAt(params.x, params.y),
+        saveImage: () => saveImageCopy(params.srcURL, {
+          dialog,
+          downloads: app.getPath("downloads"),
+          window: win,
+          // The remote PC's login cookie belongs to this session, not node fetch.
+          fetchImpl: (href) => devices.fetch(href),
+        }).catch((error) => dialog.showErrorBox(nativeText("native.saveCopyFailed"), error?.message ?? String(error))),
+      });
+      Menu.buildFromTemplate(menuItems).popup({ window: win, frame: params.frame });
     });
     win.webContents.on("before-input-event", (event, input) => {
       routeWindowZoomKeys(event, input, win.webContents);
@@ -1386,6 +1404,7 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
     },
+    ...verifyProbe?.windowOptions(),
   });
   mainWindow = win;
   retargetUpdater(win);
@@ -1966,11 +1985,11 @@ app.whenReady().then(async () => {
       dialog.showErrorBox("Wink", nativeText("settings.startFresh.recoveryError"));
     }
   }
-  if (app.isPackaged) app.setAsDefaultProtocolClient(PACKAGE_INSTALL_SCHEME);
+  if (app.isPackaged && !verifyProbe) app.setAsDefaultProtocolClient(PACKAGE_INSTALL_SCHEME);
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
-  registerCuaIpc();
-  registerUpdaterIpc();
-  errorReports.start();
+  if (!verifyProbe) registerCuaIpc();
+  if (!verifyProbe) registerUpdaterIpc();
+  if (!verifyProbe) errorReports.start();
   // Display capture remains user-initiated. The renderer first sends a
   // short-lived one-shot intent, then calls getDisplayMedia in the same click.
   // The handler binds that request to the same frame/origin, rejects audio,
@@ -2032,7 +2051,7 @@ app.whenReady().then(async () => {
   startupWindowMs = Math.round(process.uptime() * 1000);
   if (resetFailed) void dialog.showMessageBox(win, { type: "info", message: nativeText("settings.startFresh.error") });
   slog(`window shown packaged=${app.isPackaged} serverReady=${serverReady} uptime=${process.uptime().toFixed(2)}s`);
-  startUpdater(win, nativeText);
+  if (!verifyProbe) startUpdater(win, nativeText);
   // Register before the packaged harness wait: on Darwin, closing the
   // connecting window does not quit, and a dock click in that interval
   // must be able to open a new one.
@@ -2040,11 +2059,11 @@ app.whenReady().then(async () => {
     activateMainWindow();
   });
   void openSecureCredentialDocument(await credentialsReady);
-  const hostedAccount = ensureCompanionAccountService();
+  const hostedAccount = verifyProbe ? null : ensureCompanionAccountService();
   // CUA after the first window so daemon spawn does not contend with first
   // paint. Never blocks reveal on failure — computer use degrades.
   cuaReady =
-    process.platform === "darwin" || process.platform === "linux"
+    !verifyProbe && (process.platform === "darwin" || process.platform === "linux")
       ? startCua().catch((e) => {
           console.error("[cua] start failed:", e);
           return { mode: "unavailable", reason: String(e) };
@@ -2069,22 +2088,22 @@ app.whenReady().then(async () => {
   }
   // Null means there is no saved session. The server stays pending until this push.
   await pushGoogleSession(secureCredentials.googleAccount ?? null);
-  if (!app.isPackaged) {
+  if (!app.isPackaged && !verifyProbe) {
     watchDevServer({ getPort: () => Number(process.env.OMB_PORT || process.env.OGB_PORT || SERVER_PORT), push: () => pushGoogleSession(secureCredentials.googleAccount ?? null) });
   }
-  void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
+  if (!verifyProbe) void recoverWorkers({ runs: paneRuns, host: terminalHost, mailbox: paneMailbox, notePane: postPaneNote, warn: slog }).catch(slog);
   // The companion the user left on comes back without anyone finding the
   // toggle again — one attempt, after the harness port is settled, with the
   // exact options the IPC handler uses. A failure surfaces in companionState
   // (the panel shows the error) rather than retrying; and it never delays
   // the window.
-  if (serverReady && companionEnabledAtRest() && !companionParked()) {
+  if (!verifyProbe && serverReady && companionEnabledAtRest() && !companionParked()) {
     void startDesktopCompanion({ waitForHosted: false, remember: false });
   }
   // Reconcile incomplete setup and resume interrupted sign-out only after the
   // local app is usable. This background network work never gates LAN pairing
   // or the first window.
-  if (!companionParked()) void hostedAccount.restore().catch(() => {});
+  if (!verifyProbe && !companionParked()) void hostedAccount.restore().catch(() => {});
   // Registration is optional network work. Start it only after the local
   // server and first window are usable, then update the server child over its
   // private parent port so Connected Apps becomes available without restart.
@@ -2094,7 +2113,7 @@ app.whenReady().then(async () => {
   if (credentialStoreUnavailable) {
     slog("skipping connected-apps registration: the credential store was unreadable this launch");
   }
-  if (app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
+  if (!verifyProbe && app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
     void updateSecureCredentialDocument(async (credentials) => {
       await ensureManagedComposioCredentials({
         brokerUrl: composioBrokerUrl(),

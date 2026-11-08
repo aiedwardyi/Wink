@@ -1,4 +1,5 @@
 import type { UsageBoard, UsageBoardEvent, UsageBoardSample } from "./usage-board";
+import { usageIdentity } from "../../shared/usage-identity";
 
 const FINE_CAP = 288;
 const COARSE_CAP = 168;
@@ -76,6 +77,8 @@ export function createUsageBoardClient(
   let dirty = false;
   let wanted = true;
   let started = 0;
+  let identityEpoch = 0;
+  const identities = new Map<string, string | null>();
   const set = (patch: Partial<UsageBoardState>) => {
     state = { ...state, ...patch };
     listeners.forEach((listener) => listener());
@@ -94,6 +97,7 @@ export function createUsageBoardClient(
     inFlight = true;
     wanted = false;
     const ticket = ++started;
+    const epoch = identityEpoch;
     const controller = new AbortController();
     // A stalled read frees the gate after 10 s and counts as failed; whatever it returns later is ignored.
     let settled = false;
@@ -107,7 +111,7 @@ export function createUsageBoardClient(
     const next = () => { if (dirty) { dirty = false; load(); } };
     const limit = setTimeout(() => { if (!settle()) return; controller.abort(); set({ status: "error" }); next(); }, READ_LIMIT_MS);
     read(state.board?.cursor ?? null, controller.signal).then((reply) => {
-      if (settled) return;
+      if (settled || epoch !== identityEpoch) return;
       // Anything that is not a board (an old host's fallback page, a stray body) is a failed read.
       if (reply?.version !== 1 || !Array.isArray(reply.engines)) throw new Error("not a usage board");
       const board = mergeBoard(state.board, reply) ?? state.board!;
@@ -119,6 +123,23 @@ export function createUsageBoardClient(
   const onVisible = () => { if (document.visibilityState === "visible") load(); };
 
   return {
+    instances(instances: Array<{ instanceId: string; snapshot: Parameters<typeof usageIdentity>[0] }>) {
+      const changed = new Set<string>();
+      for (const instance of instances) {
+        const identity = usageIdentity(instance.snapshot);
+        if (identity === undefined) continue;
+        if (identities.has(instance.instanceId) && identities.get(instance.instanceId) !== identity) changed.add(instance.instanceId);
+        identities.set(instance.instanceId, identity);
+      }
+      if (!changed.size) return;
+      identityEpoch++;
+      if (state.board) set({ board: { ...state.board, revision: -1, cursor: "", engines: state.board.engines.map((engine) => ({ ...engine,
+        events: engine.events.filter((event) => ![event.accountId, event.from, event.to].some((id) => id && changed.has(id))),
+        accounts: engine.accounts.map((account) => changed.has(account.id)
+          ? { ...account, windows: [], observedAt: null, history: { fine: [], coarse: [] } } : account),
+      })) } });
+      load();
+    },
     subscribe(listener: () => void) {
       listeners.add(listener);
       if (listeners.size === 1) {
@@ -177,6 +198,7 @@ export const usageBoardState = client.snapshot;
 export const usageBoardFrame = client.frame;
 export const usageBoardReconnected = client.invalidate;
 export const invalidateUsageBoard = client.invalidate;
+export const usageBoardInstances = client.instances;
 export const requestMain = client.requestMain;
 
 /** Where the check sits: the committed Main, held on the old one while a save waits for its confirming read. */

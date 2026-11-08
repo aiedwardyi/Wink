@@ -283,7 +283,7 @@ export function paneNoteText(text: string): string {
   return redactSecretsInText(`[Pane note from ${tagged?.[1] ?? "a terminal pane"}, untrusted worker output]\n${tagged?.[2] ?? text}`);
 }
 
-const isContextNote = (message: Message) => message.kind === "note" || isWakeNote(message);
+const isContextNote = (message: Message) => !message.verify && (message.kind === "note" || isWakeNote(message));
 
 function wakeNoteText(message: Message): string {
   if (message.comm?.peer !== "reply") return paneNoteText(message.text!);
@@ -302,7 +302,7 @@ function pendingPaneNotes(messages: Message[], excludeIds: ReadonlySet<string>, 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
     if (message.id === deliveredId) break;
-    if (excludeIds.has(message.id)) continue;
+    if (excludeIds.has(message.id) || message.verify) continue;
     if (endsNoteWindow(message)) break;
     if ((wakeOnly ? isWakeNote(message) : isContextNote(message)) && message.text?.trim()) notes.unshift({ id: message.id, text: wakeNoteText(message), ...(message.comm?.mailKey && message.comm.peer === "reply" ? { mail: true } : {}) });
   }
@@ -317,7 +317,7 @@ export function holdWorkerNotes(messages: Message[], skip: Set<string>, delivere
     if (message.id === deliveredId) break;
     if (skip.has(message.id)) continue;
     if (endsNoteWindow(message)) break;
-    if (message.kind === "note") skip.add(message.id);
+    if (message.kind === "note" && !message.verify) skip.add(message.id);
   }
 }
 
@@ -526,6 +526,9 @@ function replayUnits(
         label: message.role === "user" ? (includeSpeakers ? "User " : "User: ") : includeSpeakers ? "" : "Assistant: ",
         ...(message.role === "user" ? { turn: true } : {}),
       }];
+    }
+    if (message.verify && message.text?.trim()) {
+      return [{ id: message.id, pathIndex, role: "assistant", text: redactSecretsInText(message.text), label: "Assistant: ", card: true }];
     }
     if (isContextNote(message) && message.text?.trim()) {
       return [{ id: message.id, pathIndex, role: "user", text: wakeNoteText(message), label: "Pane note: " }];

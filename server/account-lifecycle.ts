@@ -121,7 +121,7 @@ export class AccountLifecycle {
         if (guarded) {
           this.registry.blockAccount(id, true);
           try {
-            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in");
+            if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
           } catch (error) {
             this.registry.blockAccount(id, blocked);
             throw error;
@@ -143,7 +143,7 @@ export class AccountLifecycle {
       if (this.jobs.has(id)) return this.registry.logins.capture(id);
       this.registry.blockAccount(id, true);
       try {
-        if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in");
+        if (await this.hooks.referenced(id, true) || await this.hooks.panesBusy?.(id)) throw new AccountError("Finish this account's active work before signing in", 409, "account-busy");
         return await this.begin(account, device);
       } catch (error) {
         if (account.state === "pending") await this.discard(id);

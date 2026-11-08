@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verify fixture</title>
+  <style>
+    body { margin: 0; padding: 80px 16px 16px; color: #111; background: #fff; font: 16px Arial; }
+    nav { position: fixed; inset: 0 0 auto; height: 56px; background: #fff; }
+    a, button, input { display: inline-block; box-sizing: border-box; min-width: 88px; min-height: 44px; }
+    button:hover, a:hover { color: #0645ad; background: #ddd; }
+    #section { margin-top: 900px; scroll-margin-top: 64px; }
+    #toast { display: none; position: fixed; inset: 100px 10px auto; background: #eee; }
+  </style>
+</head>
+<body>
+  <nav><a href="#section">Section</a></nav>
+  <h1>Trusted site fixture</h1>
+  <button id="open" type="button">Open</button>
+  <label>Search <input type="search" aria-label="Search"></label>
+  <div id="toast">Opened fixture</div>
+  <section id="section"><h2>Landing</h2><p>Readable fixture text.</p></section>
+  <script>
+    globalThis.lv = { map() { throw new Error("Page globals reached"); } };
+    document.querySelector("#open").addEventListener("click", () => {
+      document.querySelector("#toast").style.display = "block";
+      setTimeout(() => document.querySelector("#toast").style.display = "none", 600);
+    });
+  </script>
+</body>
+</html>

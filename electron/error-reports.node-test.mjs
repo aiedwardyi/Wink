@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { spawnSync } from "node:child_process";
-import { writeChatError } from "../server/chat-error.ts";
+import { runtimeErrorTool, writeChatError } from "../server/chat-error.ts";
 
 const scratch = path.join(os.tmpdir(), "wink-REPORTS-FIX");
 fs.mkdirSync(scratch, { recursive: true });
@@ -58,12 +58,12 @@ test("only the bus's canonical log failure is reported from runtime.error", () =
   const message = bus.match(/INCOMPLETE_LOG_MESSAGE\s*=\s*\n?\s*"([^"]+)"/)[1];
   const branch = source("../server/index.ts").split('case "runtime.error":')[1].split('case "thread.token-usage.updated":')[0].replace(/break;(\s*\})?\s*$/, "$1");
   const calls = [];
-  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
+  const run = new Function("event", "reportServerFailure", "terminalBridgeAccess", "INCOMPLETE_LOG_MESSAGE", "unreadTurns", "store", "pushMessage", "bot", "limitWaits", "rateLimitsByInstance", "writeChatError", "runtimeErrorTool", "accounts", `switch ("runtime.error") { case "runtime.error": ${branch} }`);
   for (const event of [
     { message: "usage limit", usageLimit: { resetsAt: null } }, { message: "sign in", signIn: true },
     { message: "setup", setup: true }, { message: "CLI not found" }, { message: "Permission request timed out" },
     { message: "provider offline" }, { message },
-  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError);
+  ]) run(event, () => calls.push(event), null, message, { start() {} }, { messagesFor: () => [] }, () => {}, null, { messageId() {}, failed() {} }, new Map(), writeChatError, runtimeErrorTool, new Map());
   assert.deepEqual(calls, [{ message }]);
 });
 
@@ -235,7 +235,7 @@ test("missing, malformed and non-object baked config cannot stop startup", async
   const reports = await import("./error-reports.mjs");
   for (const read of [() => { throw new Error("ENOENT"); }, () => JSON.parse("{"), () => null, () => ({}), () => ({ dsn: 4 })]) assert.equal(reports.errorReportDsn(read), "");
   assert.equal(reports.errorReportDsn(() => ({ dsn: "https://public@reports.example/1" })), "https://public@reports.example/1");
-  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
+  assert.match(source("./main.mjs"), /ERROR_REPORT_DSN = verifyProbe \? null : errorReportDsn\(\(\) => require\("\.\/error-report-config.json"\)\)/);
 });
 
 test("the server learns the crash host but never the key", async () => {

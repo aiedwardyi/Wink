@@ -93,13 +93,17 @@ describe("catalogs", () => {
   it("names Agentic Mode in both locales and title cases settings labels", () => {
     expect.soft(en["bot.keepGoing"]).toBe("Agentic Mode");
     expect.soft(ko["bot.keepGoing"]).toBe("에이전트 모드");
-    expect.soft(en["bot.keepGoingHelp"]).toBe("Keeps working on the task until it's done, without stopping to ask.");
-    expect.soft(ko["bot.keepGoingHelp"]).toBe("멈춰서 묻지 않고, 작업이 끝날 때까지 계속 진행해요.");
+    expect.soft(en["bot.keepGoingHelp"]).toBe("On: keeps going alone for nights, days, even weeks.\nOff: answers and waits.");
+    expect.soft(ko["bot.keepGoingHelp"]).toBe("켜면 밤낮으로 며칠, 몇 주도 혼자 계속해요.\n끄면 답하고 기다려요.");
     expect.soft(en["chat.keepGoingPaused"]).toBe("Agentic Mode paused: two tries made no progress");
     expect.soft(en["bot.keepGoingOnMark"]).toBe("Agentic Mode on");
     expect.soft(en["bot.keepGoingPausedMark"]).toBe("Agentic Mode paused");
     expect.soft(ko["bot.keepGoingOnMark"]).toBe("에이전트 모드 켜짐");
     expect.soft(ko["bot.keepGoingPausedMark"]).toBe("에이전트 모드 일시 중지됨");
+    expect.soft(en["bot.keepGoingOnMarkHint"]).toBe("Agentic Mode on. Turn it off in Bot Details.");
+    expect.soft(en["bot.keepGoingPausedMarkHint"]).toBe("Agentic Mode paused. Turn it off in Bot Details.");
+    expect.soft(ko["bot.keepGoingOnMarkHint"]).toBe("에이전트 모드 켜짐. 봇 세부 정보에서 끌 수 있어요.");
+    expect.soft(ko["bot.keepGoingPausedMarkHint"]).toBe("에이전트 모드 일시 중지됨. 봇 세부 정보에서 끌 수 있어요.");
     expect.soft(en["bot.leanStartup"]).toBe("Load Skills & Plugins");
     expect.soft(en["settings.replyStyle.title"]).toBe("Reply Style");
   });
@@ -906,7 +910,7 @@ describe("plan usage", () => {
       expect(source).not.toMatch(/not available at the moment/);
     }
     expect(chatPlanMeters).toContain('t("usage.limits.openAria")');
-    expect(chatPlanMeters).not.toContain('t("usage.chat.openAria", { name })');
+    expect(chatPlanMeters).toContain('t("usage.chat.openAria", { name: engineName(target.engine.engine) })');
     expect(usageDesk).toContain('t("usage.limits.sessionShort")');
     expect(chatPlanMeters).not.toMatch(/Resets in/);
     expect(chatView).toContain("<ChatPlanMeters");
