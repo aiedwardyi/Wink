@@ -969,6 +969,7 @@ describe("summary build wiring", () => {
     expect(index).toContain("const sessionResumes = planSummaryGrace(graceInputs).safe;");
     expect(index).toContain("const summarySkipped = sessionResumes && (summaryBuild.inflight(threadId) || fitsOnNativePrompt(planBeforeSummary));");
     expect(index).toContain("grace: graceInputs, onWait: onSummaryWait");
+    expect(index.split("90_000, () => summarizesOnEstimate(planBeforeSummary), {")).toHaveLength(3);
     expect(index.indexOf("const summaryWaitMs = await summaryBuild.settle(")).toBeLessThan(index.indexOf("  const prepared = await prepareContext("));
     expect(index).toContain("const prepared = await prepareContext(activeMessages, summaryWaitMs, summarySkipped ? summaryGrace : undefined, sessionResumes ? nativeCycle : undefined);");
     expect(index).toContain("requestText: systemUpdate + text, recycle: summaryGrace.recycle || systemRecycle");

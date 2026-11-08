@@ -201,6 +201,24 @@ describe("native send path", () => {
     expect(h.appended).toHaveLength(1);
   });
 
+  it("keeps the running build when the real size clears a send that cannot resume", async () => {
+    const window = { model: MODEL, tokens: 1_000_000 };
+    const h = setup({ messages: fillers(1, 14), nativePrompt: { cursor: "s1", first: 11_254, last: 900_000, growth: 68_400, window } });
+    let finish!: (text: string) => void;
+    h.generateText.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    h.build.onSettled("bot", THREAD);
+    await vi.waitFor(() => expect(h.generateText).toHaveBeenCalledOnce());
+    h.task.nativePrompt = { cursor: "s1", first: 11_254, last: 118_622, growth: -781_378, window };
+    h.task.resumeSeed = undefined;
+    const sending = h.send();
+    await Promise.resolve();
+    finish("SUMMARY\nthe harbor decisions");
+    const { prepared } = await sending;
+    expect(prepared).toMatchObject({ status: "ready", compactionId: "summary-0" });
+    expect(prepared.compaction).toBeUndefined();
+    expect(h.appended).toHaveLength(1);
+  });
+
   it("summarizes first on a near session with no build under way", async () => {
     const h = nearPoint();
     const { prepared, summarySkipped } = await h.send();

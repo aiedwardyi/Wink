@@ -1163,6 +1163,11 @@ export function fitsOnNativePrompt(plan: CompactionPlan): boolean {
   return !plan.needed && plan.status === "fits" && plan.estimatedTokens > plan.budgetTokens;
 }
 
+/** A send that cannot resume replans on the estimate, which the real size may have cleared. */
+export function summarizesOnEstimate(plan: CompactionPlan): boolean {
+  return plan.needed || fitsOnNativePrompt(plan);
+}
+
 // A rejected resume replays this transcript, so it has to fit even when the real prompt does.
 function newestWithin(transcript: ModelContextMessage[], budgetTokens: number, summarized: boolean): ModelContextMessage[] {
   const head = transcript.slice(0, summarized ? 1 : 0);
