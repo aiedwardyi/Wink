@@ -1516,3 +1516,74 @@ test("a dev launch leaves the packaged app's open rows open", (t) => {
   t.after(() => dev.dispose());
   assert.equal(f.ledger()[0].closedAt, null);
 });
+
+test("live-pane rechecks stay within a few filesystem calls per pane", async (t) => {
+  const f = fixture(t);
+  const shared = path.join(f.home, "live", "a", "b", "c", "d", "e");
+  const panes = Array.from({ length: 60 }, (_, index) => ({ id: `live-${index}`, label: `LIVE-${index}`, cwd: path.join(shared, `pane-${index}`) }));
+  for (const pane of panes) fs.mkdirSync(pane.cwd, { recursive: true });
+  f.open(panes);
+  const watched = fs.realpathSync.native(path.join(f.home, "live")).toLowerCase();
+  const promises = await import("node:fs/promises");
+  let calls = 0;
+  for (const method of ["lstat", "realpath"]) {
+    const original = promises.default[method];
+    t.mock.method(promises.default, method, (...args) => {
+      const file = path.resolve(String(args[0])).toLowerCase();
+      if (file === watched || file.startsWith(`${watched}${path.sep}`)) calls++;
+      return original(...args);
+    });
+  }
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  t.diagnostic(`live-pane recheck fs calls: ${calls}`);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.ok(calls <= 12 * 4 * panes.length, `${calls} fs calls`);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a pane cwd re-pointed at scratch between rechecks keeps it", async (t) => {
+  const f = fixture(t);
+  const alias = path.join(f.home, "alias");
+  fs.mkdirSync(alias);
+  f.open([{ id: "other", label: "OTHER", cwd: alias }]);
+  const promises = await import("node:fs/promises");
+  const readdir = promises.default.readdir;
+  let swapped = false;
+  t.mock.method(promises.default, "readdir", async (...args) => {
+    if (path.resolve(String(args[0])) === path.resolve(f.scratch) && !swapped) {
+      swapped = true;
+      fs.rmdirSync(alias);
+      fs.symlinkSync(f.scratch, alias, process.platform === "win32" ? "junction" : "dir");
+    }
+    return readdir(...args);
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(swapped, true);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(alias);
+});
+
+test("overlapping sweeps run one at a time and each logs its CPU", async (t) => {
+  const f = fixture(t);
+  const { target } = repo(f);
+  await eligible(f);
+  let running = 0;
+  let peak = 0;
+  const cleanup = createPaneCleanup({ ...f.options, pinned: async () => {
+    peak = Math.max(peak, ++running);
+    await new Promise((resolve) => setImmediate(resolve));
+    running--;
+    return [];
+  } });
+  cleanup.start(() => []);
+  t.after(() => cleanup.dispose());
+  await Promise.all([cleanup.sweep(), cleanup.sweep()]);
+  assert.equal(peak, 1);
+  assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
+  const logged = events(f).filter((line) => line.kind === "sweep");
+  assert.equal(logged.length, 2);
+  assert.ok(logged.every((line) => Number.isInteger(line.cpuMs) && line.cpuMs >= 0));
+});

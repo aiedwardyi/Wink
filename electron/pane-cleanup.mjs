@@ -264,7 +264,9 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   const scratchBusy = async (entry, target) => {
     const label = nick(entry.label);
-    for (const pane of panes()) if (nick(pane.label) === label || contains(target, await normalizeAsync(pane.cwd)) || contains(target, await normalizeAsync(await resolvePin(pane.cwd)))) return true;
+    // One memo per recheck: sharing it across rechecks would hide a re-pointed junction.
+    const parents = new Map();
+    for (const pane of panes()) if (nick(pane.label) === label || contains(target, await normalizeAsync(pane.cwd, parents)) || contains(target, await normalizeAsync(await resolvePin(pane.cwd), parents))) return true;
     return false;
   };
   const finishScratch = async (target, owner, norm) => {
@@ -497,6 +499,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   };
   const sweep = () => enqueue(async () => {
     const context = scope();
+    const cpu = process.cpuUsage();
     const retained = new Set();
     for (const entry of entries) {
       if (!entry.closedAt || now() - entry.closedAt < DAY_MS || panes().some((pane) => pane.id === entry.id)) continue;
@@ -507,6 +510,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     save();
     const { stats } = context;
     if (stats.calls) await record("links", undefined, { ...stats, ms: Math.round(stats.ms) });
+    const { user, system } = process.cpuUsage(cpu);
+    await record("sweep", undefined, { cpuMs: Math.round((user + system) / 1_000) });
   });
   return {
     opened(session) {
