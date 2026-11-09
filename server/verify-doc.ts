@@ -27,7 +27,6 @@ const WAITING = 4;
 const KEPT = 50;
 const CACHED_FILES = 12;
 const FIX_ROUNDS = 2;
-const NEAR = 16;
 // Files a bot keeps for itself or a codebase, not documents written for a person.
 const DEV = /^(?:readme|changelog|changes|contributing|licen[cs]e|copying|code_of_conduct|security|notice|authors|claude|agents|gemini|memory|skill)(?:\.[a-z]+)?$|^requirements.*\.txt$|^(?:robots|cmakelists)\.txt$/i;
 const PROJECT = ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", ".git"];
@@ -52,12 +51,13 @@ interface Parsed { hits: DocHit[]; names: string[]; dates: string[] }
 interface Run { runId: string; threadId: string; card: VerifyCardData; recording: ReturnType<typeof createReplay>; aborter: AbortController; messageId?: string; saved?: Promise<void> }
 interface Slot { token: object; input?: DocStart; timer?: ReturnType<typeof setTimeout>; run?: Run; orphan?: string }
 // One user turn's fix rounds on one file; `token` marks its fix turn once asked to start, `listed` the latest round's findings.
-interface Fix { botId: string; humanId: string; roots: string[]; file: string; sha: string; rounds: number; handed: Map<string, { row: VerifyDocFinding; near: string[] }>; listed: string[]; fixing: boolean; prompt?: string; messageId?: string; token?: string; timer?: ReturnType<typeof setTimeout> }
+interface Fix { botId: string; humanId: string; roots: string[]; file: string; sha: string; rounds: number; handed: Map<string, { row: VerifyDocFinding; count: number }>; listed: string[]; fixing: boolean; prompt?: string; messageId?: string; token?: string; timer?: ReturnType<typeof setTimeout> }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const findingKey = (row: VerifyDocFinding) => `${row.kind}\n${row.quote}\n${row.fix}`;
 const slipKey = (row: VerifyDocFinding) => `${row.kind}\n${row.quote}`;
 const flat = (text: string) => text.replace(/\s+/g, " ");
+const occurrences = (text: string, quote: string) => text.split(flat(quote)).length - 1;
 const remember = <V>(map: Map<string, V>, key: string, value: V, max: number) => {
   map.delete(key);
   map.set(key, value);
@@ -291,27 +291,25 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     });
     const key = `${threadId}\n${file}`, before = checked.get(key), now = new Set(findings.map(findingKey)), slips = new Set(findings.map(slipKey));
     const whole = status === "completed" && !failed.length && compared;
-    // The checker can miss a slip the bot left; only a handed spot gone from the document counts as fixed.
-    const text = flat(doc.text), unflagged = fx ? [...fx.handed].filter(([slip]) => !slips.has(slip)).map(([, handed]) => handed) : [];
-    const gone = unflagged.filter(handed => !handed.near.some(spot => text.includes(spot))).map(({ row }) => row);
+    // The checker can miss a slip the bot left, and the same words can be right elsewhere: a handed slip counts as fixed only while its quote's count dropped.
+    const text = flat(doc.text), unflagged = fx ? [...fx.handed].filter(([slip]) => !slips.has(slip)).map(([, handed]) => handed).sort((a, b) => a.row.line - b.row.line) : [];
+    const spent = new Map<string, number>(), gone = unflagged.filter(({ row, count }) => {
+      const used = spent.get(row.quote) ?? 0;
+      if (count - occurrences(text, row.quote) <= used) return false;
+      spent.set(row.quote, used + 1);
+      return true;
+    }).map(({ row }) => row);
     const shown = [...findings, ...unflagged.map(({ row }) => row).filter(row => !gone.includes(row))].sort((a, b) => a.line - b.line);
     const fixed = !whole ? 0 : fx ? gone.length : before ? [...before.keys].filter(row => !now.has(row)).length : 0;
     if (whole) remember(checked, key, { sha, keys: now }, KEPT);
     const fresh = status === "completed" && (fx?.rounds ?? 0) < FIX_ROUNDS ? findings.filter(row => !fx?.handed.has(slipKey(row))) : [];
     const { prompt, listed } = fixPrompt(file, fresh);
-    // A spot is the quote with a few words on either side: the same words can be right elsewhere, and a fixed neighbor changes only one side.
-    const context = (row: VerifyDocFinding) => {
-      const start = doc.lineStarts[row.line - 1] ?? 0, at = doc.text.indexOf(row.quote, start), to = at + row.quote.length, end = doc.text.indexOf("\n", to);
-      if (at < 0) return [flat(row.quote)];
-      const sides = [doc.text.slice(Math.max(start, at - NEAR), to), doc.text.slice(at, Math.min(end < 0 ? doc.text.length : end, to + NEAR))].filter(side => side !== row.quote);
-      return (sides.length ? sides : [row.quote]).map(flat);
-    };
     if (listed.length) {
       fx ??= { botId, humanId, roots: input.roots, file, sha, rounds: 0, handed: new Map(), listed: [], fixing: false };
       // In a room the bot that wrote the file last fixes it; the rounds stay with the file.
       Object.assign(fx, { botId, roots: input.roots, sha, prompt, listed: listed.map(slipKey), fixing: true });
       fx.rounds++;
-      for (const row of listed) fx.handed.set(slipKey(row), { row, near: context(row) });
+      for (const row of listed) fx.handed.set(slipKey(row), { row, count: occurrences(text, row.quote) });
       remember(budgets, budget, fx, KEPT);
       remember(fixes, threadId, fx, KEPT);
     }

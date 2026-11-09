@@ -340,6 +340,27 @@ it("counts a fix by its own words, not by a neighbor fixed beside it", async () 
   await vi.waitFor(() => expect(cards()[0]).toMatchObject({ status: "completed", fixed: 1, doc: { findingTotal: 1, findings: [{ quote: "adress" }], fixedFindings: [{ quote: "teh" }] } }));
 });
 
+it("counts a fix by its own words when nothing follows them on the line", async () => {
+  await write({ 49: "We saw teh adress" });
+  generate.mockResolvedValueOnce(slip(["teh", "the"], ["adress", "address"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  await write({ 49: "We saw the adress" });
+  fixEnded();
+  await vi.waitFor(() => expect(cards()[0]).toMatchObject({ status: "completed", fixed: 1, doc: { findingTotal: 1, findings: [{ quote: "adress" }], fixedFindings: [{ quote: "teh" }] } }));
+});
+
+it("counts a fix when the same words stay right elsewhere beside the same neighbors", async () => {
+  await write({ 48: "We saw teh cat.", 49: "We saw teh [sic] in the transcript." });
+  generate.mockResolvedValueOnce(slip(["teh", "the"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  expect(cards()[0]!.doc!.findings).toMatchObject([{ line: 49, quote: "teh" }]);
+  await write({ 48: "We saw the cat.", 49: "We saw teh [sic] in the transcript." });
+  fixEnded();
+  await vi.waitFor(() => expect(cards()[0]).toMatchObject({ status: "completed", fixed: 1, doc: { findingTotal: 0, fixedFindings: [{ quote: "teh" }] } }));
+});
+
 it("stops after two fix rounds for one user turn, even when each fix leaves a new slip", async () => {
   const rounds: [Record<number, string>, string, string][] = [
     [{ 49: "계약서는 다음 주에 보내 드리면 되요." }, "되요", "돼요"],
