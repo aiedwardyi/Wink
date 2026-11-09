@@ -117,6 +117,31 @@ describe("ModelPicker cross navigation", () => {
     }
   });
 
+  it.each([["en", "$9.08/Task", "$26.54/Task"], ["ko", "$9.08/작업", "$26.54/작업"]] as const)("shows the run cost at the picked effort in %s", async (locale, high, max) => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    persistPreference(locale);
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2"], ["low", "medium", "high", "xhigh", "max"])];
+    const runCost = () => document.querySelector('[aria-live="polite"] [data-model-run-cost]')?.textContent;
+    try {
+      await mount({ instanceId: "claude", model: "claude-fable-5-2", mode: "pinned", effort: "high" });
+      expect(runCost()).toBe(high);
+      await key("ArrowRight");
+      await key("ArrowRight");
+      expect(runCost()).toBe(max);
+      expect(document.querySelector("[data-model-price]")).not.toBeNull();
+    } finally {
+      persistPreference("en");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows only the per-1M price when the effort has no run cost", async () => {
+    mock.instances = [engine("grok", "grokAgent", ["grok-4.7"], ["low", "medium", "high", "xhigh"])];
+    await mount({ instanceId: "grok", model: "grok-4.7", mode: "pinned", effort: "medium" });
+    expect(document.querySelector('[aria-live="polite"] [data-model-price]')?.textContent).toBe("$2 / $6 per 1M");
+    expect(document.querySelector("[data-model-run-cost]")).toBeNull();
+  });
+
   it.each([".model-cross-options", ".model-cross-custom"])("preserves native wheel scrolling over %s", async (selector) => {
     const instance = engine("grok", "grokAgent", ["grok-4.7", "grok-4.6"]);
     instance.models.options.push({ id: "provider::custom-model", label: "Custom model", custom: true });
