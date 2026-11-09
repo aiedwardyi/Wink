@@ -138,11 +138,14 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (!deps.enabled()) return drop(threadId);
     if (deps.busy(fx.botId, threadId)) { fx.timer = setTimeout(hand, quietMs, threadId, fx); return; }
     if (!await current(threadId, fx)) return;
+    if (!deps.enabled()) return drop(threadId);
     const token = fx.token = randomUUID();
     const ready = async () => {
       if (fx.token !== token) return false;
       if (!deps.enabled()) { drop(threadId); return false; }
-      return await current(threadId, fx) && fx.token === token;
+      if (!await current(threadId, fx) || fx.token !== token) return false;
+      if (!deps.enabled()) { drop(threadId); return false; }
+      return true;
     };
     deps.fix(fx.botId, threadId, fx.prompt!, () => { if (fixes.get(threadId) === fx && fx.token === token) unfix(threadId); }, ready).then(started => {
       if (started || fixes.get(threadId) !== fx || fx.token !== token) return;

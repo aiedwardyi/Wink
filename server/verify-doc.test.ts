@@ -320,6 +320,34 @@ it("drops a queued room fix when auto verify is turned off before it dispatched"
   expect(cards()[0]!.doc!.fixing).toBeUndefined();
 });
 
+it("drops a queued room fix when auto verify is turned off while it rereads the file", async () => {
+  let ready: (() => Promise<boolean>) | undefined;
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  fix.mockImplementationOnce(async (_botId, _threadId, _prompt, _failed, queued) => { ready = queued; return true; });
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  const pending = ready!();
+  on = false;
+  expect(await pending).toBe(false);
+  expect(cards()[0]!.doc!.fixing).toBeUndefined();
+});
+
+it("hands no fix when auto verify is turned off while it rereads the file", async () => {
+  let off = false;
+  doc.dispose();
+  doc = createVerifyDoc({ store: store as never, instanceFor: () => engine, busy: () => { if (off && !busy) on = false; return busy; }, enabled: () => on, fix, deviceId: () => "device", broadcastPatch: vi.fn(), log, quietMs: 20 });
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockImplementationOnce(async () => { busy = true; return slip(["되요", "돼요"]); });
+  doc.schedule(start(["script.md"]));
+  await done();
+  off = true;
+  busy = false;
+  await vi.waitFor(() => expect(cards()[0]!.doc!.fixing).toBeUndefined());
+  await delay(60);
+  expect(fix).not.toHaveBeenCalled();
+});
+
 it("drops the fix when the file was deleted while the bot was busy", async () => {
   await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
   generate.mockImplementationOnce(async () => { busy = true; return slip(["되요", "돼요"]); });

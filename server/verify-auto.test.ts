@@ -247,6 +247,21 @@ it("marks documents only the scan found, unless the reply names them", async () 
   expect(docs).toHaveBeenCalledWith(expect.objectContaining({ paths: expect.arrayContaining([join(root, "report.docx"), join(root, "draft.docx")]), scanned: [join(root, "draft.docx")] }));
 });
 
+it("matches a named path, not a shared basename, against scanned documents", async () => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await mkdir(join(root, "output"));
+  await mkdir(join(root, "personal"));
+  await writeFile(join(root, "output", "report.docx"), "x");
+  await writeFile(join(root, "personal", "report.docx"), "x");
+  shell();
+  await auto.settled({ ...turn, reply: "Saved output/report.docx." });
+  expect(docs).toHaveBeenLastCalledWith(expect.objectContaining({ scanned: [join(root, "personal", "report.docx")] }));
+  shell();
+  await auto.settled({ ...turn, reply: "Saved report.docx." });
+  expect(docs.mock.lastCall![0].scanned).toEqual(expect.arrayContaining([join(root, "output", "report.docx"), join(root, "personal", "report.docx")]));
+});
+
 it("does not hand documents over for an opted-out or failed turn", async () => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
   await auto.settled({ ...turn, humanText: "Write the script but don't check it" });

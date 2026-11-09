@@ -44,7 +44,12 @@ interface VerifyAutoDeps {
 }
 interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequence: number; checked?: number; names: Map<string, { title: string; readOnly: boolean }> }
 
-const named = (reply: string, path: string) => new RegExp(`(?<![\\w.-])${basename(path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(reply);
+const slashed = (path: string) => `/${path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").toLowerCase()}`;
+// A path in the reply must match this file; a bare name proves nothing when two documents share it.
+const named = (reply: string, path: string, docs: string[]) => {
+  const base = basename(path).toLowerCase(), twins = new Set(docs.filter(doc => basename(doc).toLowerCase() === base).map(slashed)).size > 1;
+  return [...reply.matchAll(new RegExp(`(?<![\\w.-])([^\\s"'\`<>()[\\]|*?]*[\\\\/])?${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "gi"))].some(([ref, dir]) => dir ? slashed(path).endsWith(slashed(ref)) : !twins);
+};
 
 export async function scanVerifyWrites(root: string, since: number): Promise<string[]> {
   const paths: string[] = [];
@@ -145,7 +150,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       if (latest.get(input.threadId) !== token) return;
       const docs = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()));
       // A file only the mtime scan found may be the user's own: checked, never fixed, unless the reply names it.
-      const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path));
+      const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, docs));
       if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs, ...(unnamed.length ? { scanned: unnamed } : {}), humanId: input.humanId }); return; }
       if (!entry) { deps.log(`Live Verify: no entry for ${input.threadId}`); return; }
       if (await deps.startAuto({ botId: input.botId, threadId: input.threadId, entry, episode: JSON.stringify([input.botId, input.threadId, input.humanId, entry]) }) === false) deps.log(`Live Verify: skipped ${input.threadId}`);
