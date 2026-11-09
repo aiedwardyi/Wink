@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Loader2 } from "lucide-react";
 
+import { nextWinkAvatar } from "../../shared/bot-avatar";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { api, useStore, type Bot } from "@/state/store";
 import { defaultModelSelection } from "@/lib/default-engine";
 import { isEmptyEngineLaunch } from "@/lib/engine-rail";
-import { OrbitMark } from "./OrbitMark";
+import { BotAvatar } from "./Avatar";
 import { useI18n } from "@/lib/i18n";
 
 export function CreateBotSheet({
@@ -127,7 +128,7 @@ export function CreateBotSheet({
         <div className="flex items-center gap-4 max-sm:flex-col max-sm:items-start max-sm:gap-3">
           <div className="relative shrink-0">
             <div className="absolute inset-1 rounded-full bg-accent/20 blur-xl" />
-            <OrbitMark size={54} />
+            <BotAvatar bot={{ color: "white", mascotStyle: nextWinkAvatar(state.bots) }} size={54} />
           </div>
           <h1 id="create-bot-title" className="text-[20px] font-semibold tracking-[-0.02em] text-ink">
             {t("createBot.title")}

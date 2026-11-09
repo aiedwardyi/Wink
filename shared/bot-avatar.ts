@@ -185,6 +185,20 @@ export const BOT_AVATAR_LABELS = {
 
 export const WINK_ICON_IDS = ["icon-31", "icon-32", "icon-33", "icon-34", "icon-35", "icon-36"] as const satisfies readonly BotAvatarId[];
 
+/** The Wink color after the newest Wink bot's, wrapping; icon-31 when there is none. */
+export function nextWinkAvatar(bots: readonly { mascotStyle?: string | null; createdAt?: number }[]): (typeof WINK_ICON_IDS)[number] {
+  let last = -1;
+  let newest = -1;
+  for (const bot of bots) {
+    const index = WINK_ICON_IDS.findIndex((id) => id === bot.mascotStyle);
+    if (index >= 0 && (bot.createdAt ?? 0) > newest) {
+      last = index;
+      newest = bot.createdAt ?? 0;
+    }
+  }
+  return WINK_ICON_IDS[(last + 1) % WINK_ICON_IDS.length]!;
+}
+
 /** Older ids stay valid and still render; the picker just stops offering them. */
 export const BOT_AVATAR_PICKER_ORDER = [
   ...WINK_ICON_IDS,

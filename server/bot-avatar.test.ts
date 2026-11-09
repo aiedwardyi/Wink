@@ -19,6 +19,8 @@ import {
   MASCOT_STYLES,
   mascotStyleFromColor,
   mascotStyleSchema,
+  nextWinkAvatar,
+  WINK_ICON_IDS,
   resolveBotAvatarChoice,
   resolveMascotStyle,
 } from "../shared/bot-avatar.ts";
@@ -171,5 +173,23 @@ describe("botNotifyIconPath", () => {
     expect(botNotifyIconPath({ avatarCrop: "rounded", mascotStyle: "icon-05", color: "green" })).toBe("/notify-icons/teal-green.png");
     expect(botNotifyIconPath(undefined)).toBe(APP_NOTIFY_ICON);
     expect(botNotifyIconPath(null)).toBe("/app-icon-192.png?v=2");
+  });
+});
+
+describe("nextWinkAvatar", () => {
+  it("starts on icon-31 and steps through the picker order", () => {
+    expect(nextWinkAvatar([])).toBe("icon-31");
+    WINK_ICON_IDS.forEach((id, index) => {
+      expect(nextWinkAvatar([{ mascotStyle: id, createdAt: 1 }])).toBe(WINK_ICON_IDS[(index + 1) % WINK_ICON_IDS.length]);
+    });
+  });
+
+  it("follows the newest Wink bot and ignores other avatars", () => {
+    expect(nextWinkAvatar([
+      { mascotStyle: "icon-11", createdAt: 9 },
+      { mascotStyle: "icon-33", createdAt: 5 },
+      { mascotStyle: "icon-32", createdAt: 2 },
+      { mascotStyle: null, createdAt: 8 },
+    ])).toBe("icon-34");
   });
 });
