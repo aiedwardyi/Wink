@@ -6110,7 +6110,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean> },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (!roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6130,6 +6130,7 @@ function enqueueDrainedRoomTurn(
       fail("the room is no longer available");
       return;
     }
+    if (room.ready && !(await room.ready())) return;
     // New participation, not a replay of the original user-message round.
     // Hop-1 @mentions from this reply are the same as any hop-0 room turn.
     // Self-summon is already excluded in the chain loop (`id !== bot.id`).
@@ -7215,9 +7216,9 @@ const verifyDoc = createVerifyDoc({
   store,
   instanceFor: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
-  fix: (botId, threadId, prompt, failed) => {
+  fix: (botId, threadId, prompt, failed, ready) => {
     const group = store.conversationForBot(botId, threadId)?.group;
-    if (group) return enqueueDrainedRoomTurn(botId, threadId, { groupId: group.id, hop: 0, cardContinuation: prompt, rootId: rootForStart(threadId, { kind: "automatic" }) ?? undefined, onDispatchError: failed }).then(() => true);
+    if (group) return enqueueDrainedRoomTurn(botId, threadId, { groupId: group.id, hop: 0, cardContinuation: prompt, rootId: rootForStart(threadId, { kind: "automatic" }) ?? undefined, onDispatchError: failed, ready }).then(() => true);
     return startTurn(botId, prompt, { threadId, cardContinuation: true, onDispatchError: failed }).then(() => true, error => { if (isBusyRejection(error)) return false; throw error; });
   },
   deviceId: () => profileSyncSettings.deviceId,

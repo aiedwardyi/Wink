@@ -38,8 +38,8 @@ export interface VerifyDocDeps {
   instanceFor: (botId: string, threadId: string) => Pick<ProviderInstance, "generateText"> | null | undefined;
   /** the bot has a turn going */
   busy: (botId: string, threadId: string) => boolean;
-  /** starts the bot's fix turn; false when the bot is busy, `failed` when it never dispatched */
-  fix: (botId: string, threadId: string, prompt: string, failed: () => void) => Promise<boolean>;
+  /** starts the bot's fix turn; false when the bot is busy, `failed` when it never dispatched, a queued turn dispatches only when `ready` */
+  fix: (botId: string, threadId: string, prompt: string, failed: () => void, ready: () => Promise<boolean>) => Promise<boolean>;
   deviceId: () => string;
   /** an SSE-only message.patch */
   broadcastPatch: (threadId: string, message: Message) => void;
@@ -51,8 +51,8 @@ interface Picked { file: string; site: string; doc: DocText; sha: string; cut: n
 interface Parsed { hits: DocHit[]; names: string[]; dates: string[] }
 interface Run { runId: string; threadId: string; card: VerifyCardData; recording: ReturnType<typeof createReplay>; aborter: AbortController; messageId?: string; saved?: Promise<void> }
 interface Slot { token: object; input?: DocStart; timer?: ReturnType<typeof setTimeout>; run?: Run; orphan?: string }
-// One user turn's fix rounds on one file; `token` marks its fix turn once asked to start.
-interface Fix { botId: string; humanId: string; roots: string[]; file: string; sha: string; rounds: number; handed: Map<string, { row: VerifyDocFinding; near: string }>; fixing: boolean; prompt?: string; messageId?: string; token?: string; timer?: ReturnType<typeof setTimeout> }
+// One user turn's fix rounds on one file; `token` marks its fix turn once asked to start, `listed` the latest round's findings.
+interface Fix { botId: string; humanId: string; roots: string[]; file: string; sha: string; rounds: number; handed: Map<string, { row: VerifyDocFinding; near: string[] }>; listed: string[]; fixing: boolean; prompt?: string; messageId?: string; token?: string; timer?: ReturnType<typeof setTimeout> }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const findingKey = (row: VerifyDocFinding) => `${row.kind}\n${row.quote}\n${row.fix}`;
@@ -108,21 +108,29 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       store.patchMessage(threadId, fx.messageId!, { text: verifyCardText(card), verify: card });
     }
   };
+  // The user can change or remove the file while the fix waits; a fix only lands on what was checked.
+  const current = async (threadId: string, fx: Fix) => {
+    const now = await pick({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file] });
+    if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return false;
+    if (now?.file === fx.file && now.sha === fx.sha) return true;
+    unfix(threadId);
+    fixes.delete(threadId);
+    // The round never reached the bot, so its findings and the round itself stay unspent.
+    fx.rounds--;
+    for (const key of fx.listed) fx.handed.delete(key);
+    fx.listed = [];
+    schedule({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
+    return false;
+  };
   // Like a pane wake, the fix turn waits for the bot; a user message sent meanwhile goes first.
   const hand = async (threadId: string, fx: Fix) => {
     fx.timer = undefined;
     if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return;
     if (deps.busy(fx.botId, threadId)) { fx.timer = setTimeout(hand, quietMs, threadId, fx); return; }
-    // The user can change or remove the file while the bot is busy; a fix only lands on what was checked.
-    const now = await pick({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file] });
-    if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return;
-    if (now?.file !== fx.file || now.sha !== fx.sha) {
-      unfix(threadId);
-      fixes.delete(threadId);
-      return schedule({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
-    }
+    if (!await current(threadId, fx)) return;
     const token = fx.token = randomUUID();
-    deps.fix(fx.botId, threadId, fx.prompt!, () => { if (fixes.get(threadId) === fx && fx.token === token) unfix(threadId); }).then(started => {
+    const ready = async () => fx.token === token && await current(threadId, fx) && fx.token === token;
+    deps.fix(fx.botId, threadId, fx.prompt!, () => { if (fixes.get(threadId) === fx && fx.token === token) unfix(threadId); }, ready).then(started => {
       if (started || fixes.get(threadId) !== fx || fx.token !== token) return;
       fx.token = undefined;
       fx.timer = setTimeout(hand, quietMs, threadId, fx);
@@ -279,21 +287,23 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     const whole = status === "completed" && !failed.length && compared;
     // The checker can miss a slip the bot left; only a handed spot gone from the document counts as fixed.
     const text = flat(doc.text), unflagged = fx ? [...fx.handed].filter(([slip]) => !slips.has(slip)).map(([, handed]) => handed) : [];
-    const gone = unflagged.filter(handed => !text.includes(handed.near)).map(({ row }) => row);
+    const gone = unflagged.filter(handed => !handed.near.some(spot => text.includes(spot))).map(({ row }) => row);
     const shown = [...findings, ...unflagged.map(({ row }) => row).filter(row => !gone.includes(row))].sort((a, b) => a.line - b.line);
     const fixed = !whole ? 0 : fx ? gone.length : before ? [...before.keys].filter(row => !now.has(row)).length : 0;
     if (whole) remember(checked, key, { sha, keys: now }, KEPT);
     const fresh = status === "completed" && (fx?.rounds ?? 0) < FIX_ROUNDS ? findings.filter(row => !fx?.handed.has(slipKey(row))) : [];
     const { prompt, listed } = fixPrompt(file, fresh);
-    // A spot is the quote with a few words around it: the same words can be right elsewhere.
+    // A spot is the quote with a few words on either side: the same words can be right elsewhere, and a fixed neighbor changes only one side.
     const context = (row: VerifyDocFinding) => {
-      const start = doc.lineStarts[row.line - 1] ?? 0, at = doc.text.indexOf(row.quote, start), end = doc.text.indexOf("\n", at + row.quote.length);
-      return flat(at < 0 ? row.quote : doc.text.slice(Math.max(start, at - NEAR), Math.min(end < 0 ? doc.text.length : end, at + row.quote.length + NEAR)));
+      const start = doc.lineStarts[row.line - 1] ?? 0, at = doc.text.indexOf(row.quote, start), to = at + row.quote.length, end = doc.text.indexOf("\n", to);
+      if (at < 0) return [flat(row.quote)];
+      const sides = [doc.text.slice(Math.max(start, at - NEAR), to), doc.text.slice(at, Math.min(end < 0 ? doc.text.length : end, to + NEAR))].filter(side => side !== row.quote);
+      return (sides.length ? sides : [row.quote]).map(flat);
     };
     if (listed.length) {
-      fx ??= { botId, humanId, roots: input.roots, file, sha, rounds: 0, handed: new Map(), fixing: false };
+      fx ??= { botId, humanId, roots: input.roots, file, sha, rounds: 0, handed: new Map(), listed: [], fixing: false };
       // In a room the bot that wrote the file last fixes it; the rounds stay with the file.
-      Object.assign(fx, { botId, roots: input.roots, sha, prompt, fixing: true });
+      Object.assign(fx, { botId, roots: input.roots, sha, prompt, listed: listed.map(slipKey), fixing: true });
       fx.rounds++;
       for (const row of listed) fx.handed.set(slipKey(row), { row, near: context(row) });
       remember(budgets, budget, fx, KEPT);
