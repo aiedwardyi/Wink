@@ -70,7 +70,7 @@ describe("whats new card", () => {
   it("records the shown release as seen once, only after it scrolls into view", () => {
     render(RELEASE);
     render(RELEASE);
-    expect(host.querySelectorAll(".whats-new-tile")).toHaveLength(3);
+    expect(host.querySelectorAll(".whats-new-tile")).toHaveLength(2);
     expect(api).not.toHaveBeenCalled();
     scrollIntoView();
     scrollIntoView();
@@ -88,13 +88,10 @@ describe("whats new card", () => {
 
   it("opens Memory from its Show me and explains the one that starts on its own", () => {
     render(RELEASE);
-    const tiles = WHATS_NEW[RELEASE].tiles;
-    const shows = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
-    const memory = shows[tiles.findIndex((tile) => tile.show === "memory")];
-    const verify = shows[tiles.length - 1];
+    const [memory, verify] = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
     act(() => verify.click());
     expect(verify.getAttribute("aria-expanded")).toBe("true");
-    expect(host.textContent).toContain((tiles[tiles.length - 1].show as { en: string }).en);
+    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1].show as { en: string }).en);
     expect(onClose).not.toHaveBeenCalled();
     act(() => memory.click());
     expect(dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "" } });

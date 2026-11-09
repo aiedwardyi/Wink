@@ -1,6 +1,5 @@
 import memoryClip from "@/assets/whats-new/1.0.246-memory.webp";
 import memoryLightClip from "@/assets/whats-new/1.0.246-memory-light.webp";
-import quickClip from "@/assets/whats-new/1.0.246-quick.webp";
 import verifyClip from "@/assets/whats-new/1.0.246-verify.webp";
 import type { LocaleId } from "./i18n";
 
@@ -15,19 +14,13 @@ export type WhatsNewTile = {
   show: "memory" | Copy;
 };
 
-export type WhatsNewEntry = { title: Copy; tiles: WhatsNewTile[]; more: Copy };
+export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile, WhatsNewTile]; more: Copy };
 
 // One entry per release that has notes; a release with no entry shows nothing.
 export const WHATS_NEW: Record<string, WhatsNewEntry> = {
   "1.0.246": {
     title: { en: "New in Wink 1.0.246", ko: "Wink 1.0.246 새 기능" },
     tiles: [
-      {
-        clip: quickClip,
-        title: { en: "Ask while it works", ko: "일하는 중에도 물어보기" },
-        line: { en: "Short questions get an answer in seconds.", ko: "짧은 질문은 몇 초 만에 답해요." },
-        show: { en: "Just type while your bot is busy.", ko: "봇이 일하는 중에 그냥 입력하세요." },
-      },
       {
         clip: memoryClip,
         lightClip: memoryLightClip,
