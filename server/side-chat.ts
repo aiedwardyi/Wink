@@ -119,6 +119,8 @@ export async function sideIdle(): Promise<void> {
 }
 
 const handoff = (started: number, usage?: Usage): QuickResult => ({ route: "handoff", ...(usage ? { usage } : {}), ms: Date.now() - started });
+const usable = (threadId: string, answer: string, reads: string[]) =>
+  Boolean(answer) && !answer.startsWith("HANDOFF") && answer.length <= MAX_CHARS && !quotesUnread(threadId, answer, reads);
 
 function viaFork(handle: SideHandle, threadId: string, started: number, attached: string[]): Promise<QuickResult> {
   const live: Live = { ...handle.live };
@@ -158,14 +160,14 @@ function viaFork(handle: SideHandle, threadId: string, started: number, attached
       else {
         const answer = event.text.trim();
         const usage = event.usage ? { usage: event.usage } : {};
-        if (!event.ok || !answer || answer.startsWith("HANDOFF") || answer.length > MAX_CHARS || quotesUnread(threadId, answer, reads)) end({ route: "handoff", ...usage }, CLOSE_GRACE_MS);
+        if (!event.ok || !usable(threadId, answer, reads)) end({ route: "handoff", ...usage }, CLOSE_GRACE_MS);
         else end({ route: "answer", text: answer, ...usage }, CLOSE_GRACE_MS);
       }
     });
   });
 }
 
-async function viaText(bot: QuickBot, ask: string, started: number): Promise<QuickResult> {
+async function viaText(bot: QuickBot, threadId: string, ask: string, started: number, attached: string[]): Promise<QuickResult> {
   if (!bot.instance.generateText) return handoff(started);
   let usage: Usage;
   try {
@@ -183,7 +185,7 @@ async function viaText(bot: QuickBot, ask: string, started: number): Promise<Qui
         },
       })
     ).trim();
-    if (!answer || answer.startsWith("HANDOFF")) return handoff(started, usage);
+    if (!usable(threadId, answer, attached)) return handoff(started, usage);
     return { route: "answer", text: answer, ...(usage ? { usage } : {}), ms: Date.now() - started };
   } catch {
     return handoff(started, usage);
@@ -201,5 +203,5 @@ export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; n
   } catch {
     return Promise.resolve(handoff(started));
   }
-  return handle ? viaFork(handle, threadId, started, live.attached) : viaText(bot, [live.text, text].filter(Boolean).join("\n\n"), started);
+  return handle ? viaFork(handle, threadId, started, live.attached) : viaText(bot, threadId, [live.text, text].filter(Boolean).join("\n\n"), started, live.attached);
 }

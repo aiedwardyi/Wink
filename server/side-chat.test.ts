@@ -262,6 +262,17 @@ describe("quickAsk without a fork", () => {
     expect(await quickAsk({ instance: instanceWith({}), messages: [] }, "t1", { text: "q?" })).toMatchObject({ route: "handoff" });
   });
 
+  it("hands off an over-long answer or one quoting a changed file it was not given", async () => {
+    const at = new Date().toISOString();
+    observeLive({ eventId: "x1", provider: "claude", threadId: "t-text-guard", createdAt: at, type: "turn.started" });
+    observeLive({ eventId: "x2", provider: "claude", threadId: "t-text-guard", createdAt: at, type: "item.started", itemType: "tool", itemId: "e1", title: "Edit", summary: "config.json +1 -1" });
+    observeLive({ eventId: "x3", provider: "claude", threadId: "t-text-guard", createdAt: at, type: "item.completed", itemType: "tool", itemId: "e1", ok: true, writes: ["work/config.json"] });
+    const say = (text: string) => quickAsk({ instance: instanceWith({ generateText: async () => text }), messages: [] }, "t-text-guard", { text: "q?" });
+    expect(await say("x".repeat(451))).toMatchObject({ route: "handoff" });
+    expect(await say("config.json says 4100.")).toMatchObject({ route: "handoff" });
+    expect(await say("It runs on Node 20.")).toMatchObject({ route: "answer" });
+  });
+
   it("puts the main's live state in the prompt", async () => {
     const generateText = vi.fn(async (_prompt: string) => "HANDOFF");
     observeLive({ eventId: "f1", provider: "claude", threadId: "t-text", createdAt: new Date().toISOString(), type: "item.started", itemType: "tool", itemId: "b1", title: "Bash", summary: "npm test" });
