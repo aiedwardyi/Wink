@@ -286,7 +286,7 @@ it("keeps a scanned document check-only when the named path fits two documents",
   expect(docs).toHaveBeenLastCalledWith(expect.objectContaining({ scanned: [join(root, "b", "output", "report.docx")] }));
 });
 
-it.each(["Saved `Final report.docx`.", "Saved report.docx.pdf."])("does not let a longer name claim a scanned document: %s", async reply => {
+it.each(["Saved `Final report.docx`.", "Saved Final report.docx.", "Saved \"James' report.docx\".", "Saved report.docx.pdf."])("does not let a longer name claim a scanned document: %s", async reply => {
   const old = new Date(Date.now() - 3_600_000);
   await utimes(join(root, "index.html"), old, old);
   await writeFile(join(root, "Final report.docx"), "x");

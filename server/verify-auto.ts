@@ -45,14 +45,14 @@ interface VerifyAutoDeps {
 interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequence: number; checked?: number; names: Map<string, { title: string; readOnly: boolean }> }
 
 const slashed = (path: string) => `/${path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").toLowerCase()}`;
-const REF = /`([^`\n]+)`|(?<!\w)["'“‘]([^\n]+?)["'”’](?!\w)|([^\s"'`“”‘’<>()[\]|*?]+)/g;
-// A whole reference in the reply must fit this file and no other document; quoted spans keep their spaces.
+const REF = /`([^`\n]+)`|(?<!\w)(?:"([^"\n]+)"|'([^\n]+?)'|“([^”\n]+)”|‘([^\n]+?)’)(?!\w)|([^\s"'`“”‘’<>()[\]|*?]+)/g;
+// A whole reference in the reply must fit this file and no other document; any document ending in its text (Final report.docx) makes it ambiguous.
 const named = (reply: string, path: string, docs: string[]) => {
   const keys = [...new Set(docs.map(slashed))];
-  return [...reply.matchAll(REF)].some(([, code, quoted, bare]) => {
-    const ref = slashed((code ?? quoted ?? bare!).trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1"));
-    const hits = keys.filter(key => key.endsWith(ref));
-    return hits.length === 1 && hits[0] === slashed(path);
+  return [...reply.matchAll(REF)].some(([, ...refs]) => {
+    const ref = slashed(refs.find(ref => ref !== undefined)!.trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1"));
+    const hits = keys.filter(key => key.endsWith(ref.slice(1)));
+    return hits.length === 1 && hits[0] === slashed(path) && hits[0].endsWith(ref);
   });
 };
 
