@@ -233,7 +233,7 @@ describe("message menu helpers", () => {
     window.ogb = {} as NonNullable<typeof window.ogb>;
     window.addEventListener("orbit:back-layer", onLayer);
     try {
-      startSelectMode(row, { x: 0, y: 0 });
+      startSelectMode(row, { x: 0, y: 0 }, "Copy");
       expect(row.hasAttribute("data-select-mode")).toBe(true);
       expect(window.getSelection()?.toString()).toBe("hello there");
       endSelectMode();
@@ -624,6 +624,8 @@ describe("message menu on touch", () => {
   const content = (host: Element, id: string) => host.querySelector(`[data-mid="${id}"] [data-orbit-message-content]`)!;
   const row = (host: Element, id: string) => host.querySelector<HTMLElement>(`[data-mid="${id}"] [data-orbit-message]`)!;
   const labels = (selector: string) => Array.from(messageMenu()!.querySelectorAll(selector)).map((b) => b.textContent);
+  const handle = (end: "start" | "end") => document.querySelector(`[data-select-handle="${end}"]`);
+  const copyButton = () => document.querySelector("[data-select-copy]");
 
   function stubTouchScreen() {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(pointer: coarse)" }));
@@ -823,6 +825,7 @@ describe("message menu on touch", () => {
 
     expect((await touch("touchstart", el, [[100, 120]])).defaultPrevented).toBe(false);
     expect(sel.rangeCount).toBe(0);
+    expect(handle("start")).toBeNull();
     expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(true);
     const node = textNode(el, "first");
     sel.setBaseAndExtent(node, 0, node, 5);
@@ -846,12 +849,67 @@ describe("message menu on touch", () => {
     expect(window.getSelection()?.rangeCount).toBe(0);
   });
 
+  it("draws both drag handles and a Copy button with Select text", async () => {
+    const host = await mountChat(bot([botMsg("b1", "first reply")]));
+    stubTouchScreen();
+    await selectAt(host, "b1", (el) => [textNode(el, "first"), 2]);
+    expect(handle("start")).not.toBeNull();
+    expect(handle("end")).not.toBeNull();
+    expect(copyButton()?.textContent).toBe("Copy");
+    await tapOutside();
+    expect(handle("start")).toBeNull();
+    expect(copyButton()).toBeNull();
+  });
+
+  it("drags either handle to widen or shrink the selection right away", async () => {
+    const host = await mountChat(bot([botMsg("b1", "hello there friend")]));
+    stubTouchScreen();
+    await selectAt(host, "b1", (el) => [textNode(el, "there"), 7]);
+    const node = textNode(content(host, "b1"), "there");
+    let at = 18;
+    stubCaret(() => [node, at]);
+    const drag = async (end: "start" | "end") => {
+      const grab = await touch("touchstart", handle(end)!, [[150, 140]]);
+      await touch("touchmove", handle(end)!, [[160, 140]]);
+      await touch("touchend", handle(end)!);
+      return grab;
+    };
+
+    expect((await drag("end")).defaultPrevented).toBe(true);
+    expect(window.getSelection()?.toString()).toBe("there friend");
+    at = 0;
+    await drag("start");
+    expect(window.getSelection()?.toString()).toBe("hello there friend");
+    at = 12;
+    await drag("start");
+    expect(window.getSelection()?.toString()).toBe("friend");
+    at = 18;
+    await drag("start");
+    expect(window.getSelection()?.toString()).toBe("friend");
+    expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(true);
+    expect(handle("end")).not.toBeNull();
+  });
+
+  it("copies the selection from its Copy button and ends select mode", async () => {
+    const writeText = stubClipboard();
+    const host = await mountChat(bot([botMsg("b1", "first reply")]));
+    stubTouchScreen();
+    await selectAt(host, "b1", (el) => [textNode(el, "reply"), 8]);
+    await touch("touchstart", copyButton()!, [[10, 10]]);
+    expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(true);
+    await act(async () => { copyButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    expect(writeText).toHaveBeenCalledWith("reply");
+    expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(false);
+    expect(handle("start")).toBeNull();
+  });
+
   it("selects the held Korean word", async () => {
     localStorage.setItem("omb-locale", "ko");
     const host = await mountChat(bot([botMsg("b1", "안녕하세요 메시지를 확인했어요")]));
     stubTouchScreen();
     await selectAt(host, "b1", (el) => [textNode(el, "메시지를"), 8]);
     expect(window.getSelection()?.toString()).toBe("메시지를");
+    expect(copyButton()?.textContent).toBe("복사");
   });
 
   it("selects the nearest word at a word end, on a space, on punctuation or in the padding", async () => {
