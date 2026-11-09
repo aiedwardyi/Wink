@@ -52,7 +52,7 @@ describe("side hook", () => {
   });
 
   // Logs each fs call the hook makes; one outside the temp dir fails as missing instead of being probed.
-  const probed = (tool_name: string, tool_input: Record<string, unknown>) => {
+  const probed = (tool_name: string, tool_input: Record<string, unknown>, denied?: string) => {
     const log = join(dir, "probes.log");
     const spy = join(dir, "spy.cjs");
     const homes = [dir, realpathSync.native(dir)];
@@ -65,6 +65,7 @@ describe("side hook", () => {
       `  if (typeof path !== "string") return fn.call(this, path, ...rest);`,
       `  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify([name, path]) + "\\n");`,
       `  if (homes.every((home) => relative(home, path).startsWith("..") || isAbsolute(relative(home, path)))) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });`,
+      `  if (name === "lstatSync" && path === ${JSON.stringify(denied)}) throw Object.assign(new Error("EACCES"), { code: "EACCES" });`,
       `  return fn.call(this, path, ...rest);`,
       `};`,
       `const native = fs.realpathSync.native;`,
@@ -97,6 +98,15 @@ describe("side hook", () => {
     expect(out.decision).toBe("deny");
     expect(out.calls.filter(([name, path]) => name === "realpath" && path.startsWith(join(root, "out")))).toEqual([]);
     expect(decide("Read", { file_path: join(root, "in", "plan.txt") }).permissionDecision).toBe("allow");
+  });
+
+  it("refuses a path whose parent cannot be inspected without following links below it", () => {
+    mkdirSync(join(dir, "outside"));
+    mkdirSync(join(root, "restricted"));
+    symlinkSync(join(dir, "outside"), join(root, "restricted", "net"), "junction");
+    const out = probed("Read", { file_path: join(root, "restricted", "net", "notes.txt") }, join(root, "restricted"));
+    expect(out.decision).toBe("deny");
+    expect(out.calls.filter(([name, path]) => name === "realpath" && path.startsWith(join(root, "restricted", "net")))).toEqual([]);
   });
 
   it("denies edits, commands, agents and every MCP tool", () => {

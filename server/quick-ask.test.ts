@@ -341,9 +341,9 @@ describe("quick route", () => {
     expect(h.steer).not.toHaveBeenCalled();
   });
 
-  it("never requeues a steer dropped after Stop", async () => {
+  it.each([["send-quick-0000000004"], [undefined]])("never requeues a steer dropped after Stop: %s", async (sendId) => {
     const h = harness({ consumed: true, result: { route: "handoff", ms: 3 } });
-    await h.send({ text: QUESTION, sendId: "send-quick-0000000004" });
+    await h.send({ text: QUESTION, sendId });
     let drop: (taken: boolean) => void = () => {};
     h.steer.mockImplementationOnce(async (_threadId, _text, consumed) => {
       drop = consumed!;
@@ -355,9 +355,9 @@ describe("quick route", () => {
     expect(_queuedCount(h.bot.threadId)).toBe(0);
   });
 
-  it("drops a handoff whose steer was taken during Stop", async () => {
+  it.each([["send-quick-0000000003"], [undefined]])("drops a handoff whose steer was taken during Stop: %s", async (sendId) => {
     const h = harness({ consumed: true, result: { route: "handoff", ms: 3 } });
-    await h.send({ text: QUESTION, sendId: "send-quick-0000000003" });
+    await h.send({ text: QUESTION, sendId });
     let drop: (taken: boolean) => void = () => {};
     h.steer.mockImplementationOnce(async (_threadId, _text, consumed) => {
       drop = consumed!;
@@ -369,6 +369,14 @@ describe("quick route", () => {
     expect(h.rows().at(-1)?.steered).toBeUndefined();
     expect(_queuedCount(h.bot.threadId)).toBe(0);
     expect(h.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("posts no answer for an ask handed to the bot while its helper ran", async () => {
+    const h = harness();
+    const { message } = (await h.send({ text: QUESTION })).data as { message: Message };
+    h.store.patchMessage(h.bot.threadId, message.id, { steered: true, quick: { state: "handoff" } });
+    await h.settled();
+    expect(h.rows().some((row) => row.quick?.state === "answer")).toBe(false);
   });
 
   it.each([true, false])("steers the live note and marks it noted only when taken: %s", async (taken) => {

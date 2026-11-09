@@ -36,13 +36,18 @@ function linksStay(root, full, hops = 0) {
   let at = root;
   for (let i = 0; i < parts.length; i += 1) {
     at = join(at, parts[i]);
+    try {
+      if (!lstatSync(at).isSymbolicLink()) continue;
+    } catch (error) {
+      // only a missing part is safe: one that cannot be inspected may hide a link below it
+      return error.code === "ENOENT";
+    }
     let link;
     try {
-      link = lstatSync(at).isSymbolicLink() && readlinkSync(at);
+      link = readlinkSync(at);
     } catch {
-      return true;
+      return false;
     }
-    if (!link) continue;
     const target = resolve(dirname(at), link);
     const next = roots.find((other) => within(other, target));
     return next !== undefined && hops < 40 && linksStay(next, join(target, ...parts.slice(i + 1)), hops + 1);
