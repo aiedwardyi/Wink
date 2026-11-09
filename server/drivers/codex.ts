@@ -40,6 +40,7 @@ import {
   STATIC_CODEX_MODELS,
 } from "./codex-catalog.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
+import { forkCodex } from "./codex-fork.ts";
 import { augmentedPath } from "../env-path.ts";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative, finishNative } from "./native.ts";
@@ -184,6 +185,13 @@ function mountMcpServer(
   if (toolTimeoutSec) appServerArgs.push("-c", `${prefix}.tool_timeout_sec=${toolTimeoutSec}`);
 }
 
+const baseAppServerArgs = (env: Record<string, string | undefined>, model: string | undefined) => [
+  "app-server",
+  ...codexLocalProviderArgs(env, model),
+  "-c",
+  `web_search=${JSON.stringify("live")}`,
+];
+
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Codex", supportsMultipleInstances: true },
@@ -251,6 +259,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       asks: Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>;
     }
     const active = new Map<string, Turn>();
+    const lastThread = new Map<string, { cwd: string; model: string | undefined; cursor: string }>();
 
     const emit = (event: RuntimeEvent) => traceRuntimeEvent(event, () => {
       finishNative(event);
@@ -294,12 +303,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const launchAttempt = async (attempt: number): Promise<void> => {
         const env = childEnv();
-        const appServerArgs = [
-          "app-server",
-          ...codexLocalProviderArgs(env, turn.model),
-          "-c",
-          `web_search=${JSON.stringify("live")}`,
-        ];
+        const appServerArgs = baseAppServerArgs(env, turn.model);
         if (turn.integrations?.composio) {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
         }
@@ -849,6 +853,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           codexThreadId = started?.thread?.id ?? null;
           startedModel = started?.model ?? null;
         }
+        if (codexThreadId) lastThread.set(threadId, { cwd: turn.cwd ?? homedir(), model: turn.model, cursor: codexThreadId });
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
         let prompt = resumeFailed ? (turn.resumeFallback?.text ?? turn.text) : turn.text;
         if (cursor && !resumeFailed && turn.systemUpdate) {
@@ -982,6 +987,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     },
     get textModel() { return models.default; },
     textTimeoutMs: CODEX_TEXT_TIMEOUT_MS,
+    fork: (side) => {
+      const last = lastThread.get(side.threadId);
+      if (!last || !admitted || accountBlocked) return null;
+      const env = childEnv();
+      return forkCodex({ cli: config.cli, args: baseAppServerArgs(env, last.model), env, cwd: last.cwd, policy: turnPolicy, home: retirementHome, cursor: last.cursor }, side);
+    },
     adapter: {
       provider: DRIVER_KIND,
       capabilities: {
