@@ -323,6 +323,12 @@ describe("Store", () => {
     expect(stamps).toEqual([1_000, 1_001, 1_002]);
   });
 
+  it("stamps a new bot even when an older bot has no createdAt", () => {
+    const store = new Store(selection);
+    delete (store.createBot() as Partial<BotRecord>).createdAt;
+    expect(Number.isFinite(store.createBot().createdAt)).toBe(true);
+  });
+
   it("never repeats the newest Wink icon when older bots hold one of each", () => {
     const store = new Store(selection);
     for (const style of ["icon-36", "icon-31", "icon-32", "icon-33", "icon-34", "icon-35"] as const) store.createBot({ mascotStyle: style });

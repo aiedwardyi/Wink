@@ -1443,7 +1443,7 @@ export class Store {
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       resumeCursors: {},
-      createdAt: Math.max(Date.now(), ...this.bots.map((b) => b.createdAt + 1)),
+      createdAt: Math.max(Date.now(), ...this.bots.map((b) => (b.createdAt ?? 0) + 1)),
       ...(computer ? { computer } : {}),
     };
     if (profile.cwd) bot.cwd = profile.cwd;
