@@ -83,7 +83,7 @@ describe("orbit ring presence", () => {
     reducedMotion(false);
     const markup = renderToStaticMarkup(createElement(BotAvatar, { bot: { name: "A", color: "pink" }, size: 36 }));
     expect(markup).not.toContain("data-orbit-ring");
-    expect(markup).toContain("mascot-avatar");
+    expect(markup).toContain("icon-34-wink-peach.png");
     vi.unstubAllGlobals();
   });
 });

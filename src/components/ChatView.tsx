@@ -311,11 +311,17 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
   );
 }, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
 
+/** A row synced from another PC names the peer by that PC's bot id; the name still finds it here. */
+export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]>): Bot | undefined {
+  const named = bots.filter((bot) => bot.name === comm.withName);
+  return bots.find((bot) => bot.id === comm.withBotId) ?? (named.length === 1 ? named[0] : undefined);
+}
+
 /** bot⇄bot comm chip: opens the channel where the exchange lives. */
 function CommChip({ message, comm }: { message: Message; comm: NonNullable<Message["comm"]> }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
-  const peer = state.bots.find((bot) => bot.id === comm.withBotId);
+  const peer = commPeer(state.bots, comm);
   const chip = (
     <div className="flex justify-start">
       <button

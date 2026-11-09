@@ -2,7 +2,7 @@
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
-import { ErrorRow } from "./ChatView";
+import { ErrorRow, commPeer } from "./ChatView";
 import { VerifyCard } from "./VerifyCard";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Gauge, Loader2, MessageSquareReply, Pin, Plus, RefreshCw, Search, X } from "lucide-react";
@@ -181,7 +181,7 @@ export function RoomToolChip({
   }
   const comm = message.comm;
   if (comm) {
-    const peer = state.bots.find((bot) => bot.id === comm.withBotId);
+    const peer = commPeer(state.bots, comm);
     const chip = (
       <div className="flex justify-start">
         <button

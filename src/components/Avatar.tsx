@@ -19,8 +19,10 @@ import {
   botAvatarAssetPath,
   botAvatarProfile,
   isBotAvatarId,
+  mascotStyleSchema,
   resolveMascotStyle,
   type BotAvatarChoice,
+  type BotAvatarId,
   type BotAvatarCrop,
   type MascotStyle,
 } from "../../shared/bot-avatar";
@@ -143,33 +145,52 @@ export type BotAvatarProps = Omit<MausAvatarProps, "color" | "mascotStyle"> & {
   orbitRing?: boolean;
 };
 
+/** Wink logo by color family, for a bot with no stored pick or a lost image. */
+function winkFallback(color: string | null | undefined): BotAvatarId {
+  switch (color) {
+    case "red":
+    case "orange":
+    case "yellow":
+    case "pink":
+    case "coral":
+      return "icon-34";
+    case "green":
+    case "teal":
+    case "cyan":
+      return "icon-33";
+    case "blue":
+    case "purple":
+      return "icon-35";
+    case "white":
+    case "gray":
+      return "icon-32";
+    default:
+      return "icon-31";
+  }
+}
+
 /**
  * The one renderer for a bot's chosen profile image. Malformed persisted
- * values and images that fail to load both fall back to the cute mascot,
+ * values and images that fail to load both fall back to the Wink logo,
  * so an old/corrupt profile can never leave a broken-image icon in the app.
  */
 export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotProps }: BotAvatarProps) {
   const profile = botAvatarProfile(bot);
   const [imageFailed, setImageFailed] = useState(false);
+  const [presetFailed, setPresetFailed] = useState(false);
 
-  useEffect(() => setImageFailed(false), [profile.avatarUrl, profile.mascotStyle]);
+  useEffect(() => {
+    setImageFailed(false);
+    setPresetFailed(false);
+  }, [profile.avatarUrl, profile.mascotStyle]);
 
   const image = profile.avatarCrop !== "mascot" && Boolean(profile.avatarUrl) && !imageFailed;
+  // only a stored legacy pick still draws the old mascot
+  const legacy = !image && !imageFailed && mascotStyleSchema.safeParse(bot.mascotStyle).success;
+  const fallback = winkFallback(bot.color);
+  const icon = isBotAvatarId(profile.mascotStyle) && !presetFailed ? profile.mascotStyle : fallback;
   let face: ReactNode;
-  if (profile.avatarCrop === "mascot" && isBotAvatarId(profile.mascotStyle) && !imageFailed) {
-    face = (
-      <img
-        src={botAvatarAssetPath(profile.mascotStyle)}
-        alt={label ?? (bot.name ? `${bot.name} avatar` : "Bot avatar")}
-        width={size}
-        height={size}
-        draggable={false}
-        onError={() => setImageFailed(true)}
-        className="block shrink-0"
-        style={{ width: size, height: size }}
-      />
-    );
-  } else if (profile.avatarCrop === "mascot" || !profile.avatarUrl || imageFailed) {
+  if (legacy) {
     face = (
       <MausAvatar
         {...mascotProps}
@@ -177,6 +198,19 @@ export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotP
         mascotStyle={resolveMascotStyle(profile.mascotStyle, bot.color)}
         size={size}
         label={label ?? bot.name}
+      />
+    );
+  } else if (!image) {
+    face = (
+      <img
+        src={botAvatarAssetPath(icon)}
+        alt={label ?? (bot.name ? `${bot.name} avatar` : "Bot avatar")}
+        width={size}
+        height={size}
+        draggable={false}
+        onError={icon === fallback ? undefined : () => setPresetFailed(true)}
+        className="block shrink-0"
+        style={{ width: size, height: size }}
       />
     );
   } else {
@@ -206,7 +240,7 @@ export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotP
       style={workingRingStyle({
         size,
         crop: profile.avatarCrop,
-        mascotStyle: profile.mascotStyle,
+        mascotStyle: legacy ? profile.mascotStyle : icon,
         image,
       })}
     >
