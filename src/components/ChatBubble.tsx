@@ -194,6 +194,32 @@ function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }
   );
 }
 
+function QuickLabel({ botName }: { botName: string }) {
+  const { t } = useI18n();
+  return (
+    <div className="mb-1 text-[11px] text-ink-secondary/70" title={t("chat.quickAnswerHint", { name: botName })}>
+      {t("chat.quickAnswer")}
+    </div>
+  );
+}
+
+/** The wait for a quick answer: same label, three pulsing dots. */
+export function QuickTyping({ botName }: { botName: string }) {
+  const { t } = useI18n();
+  return (
+    <div data-quick-typing className="flex w-full flex-col items-start pb-4">
+      <div className="w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5">
+        <QuickLabel botName={botName} />
+        <div className="flex h-[22px] items-center gap-1" role="status" aria-label={t("chat.quickAnswer")}>
+          {[0, 1, 2].map((i) => (
+            <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-secondary/60" style={{ animationDelay: `${i * 200}ms` }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Bubble's bot fields, as primitives so a settled row's memo holds across appends. */
 function bubbleBot(bot: Bot) {
   // the folder this task's turns run in: pinned once a turn ran, else the bot's own
@@ -286,6 +312,7 @@ const Bubble = memo(function Bubble({
   const quoted = useThreadMessage(threadId, hasMore ? message.replyToId : undefined, replyTarget);
   const members = useMemo(() => [{ id: botId, name: botName }], [botId, botName]);
   const user = message.role === "user";
+  const quick = !user && message.quick?.state === "answer";
   const [expanded, setExpanded] = useState(false);
   const dockShown = useDockFade(dock?.live ?? false) && Boolean(dock);
   const text = message.text ?? "";
@@ -487,9 +514,12 @@ const Bubble = memo(function Bubble({
               )}
             </>
           ) : markdownText.trim() ? (
-            <MessageBoundary fallbackText={markdownText}>
-              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
-            </MessageBoundary>
+            <>
+              {quick && <QuickLabel botName={botName} />}
+              <MessageBoundary fallbackText={markdownText}>
+                <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
+              </MessageBoundary>
+            </>
           ) : null}
         </div>
         )}
@@ -513,15 +543,17 @@ const Bubble = memo(function Bubble({
                 <RefreshCw size={14} />
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => onReply(message)}
-              aria-label={t("chat.replyToMessage")}
-              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-              title={t("chat.replyToMessage")}
-            >
-              <MessageSquareReply size={14} />
-            </button>
+            {!quick && (
+              <button
+                type="button"
+                onClick={() => onReply(message)}
+                aria-label={t("chat.replyToMessage")}
+                className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+                title={t("chat.replyToMessage")}
+              >
+                <MessageSquareReply size={14} />
+              </button>
+            )}
 
           </div>
         )}
