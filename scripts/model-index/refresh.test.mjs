@@ -204,6 +204,19 @@ describe("list price parsers", () => {
     });
   });
 
+  it("reads the Standard tab of Google's Markdoc table, with prices wrapped over two lines", () => {
+    const row = (label, free, paid) => ` * ${label}\n * ${free}\n * ${paid}\n\n ---\n`;
+    const tab = (title, input) => [` {% tab title="${title}" %}`, row("Input price", "Free of charge", input), row("Output price (including thinking tokens)", "Free of charge", "$3.75 through December 31, 2026. \n $7.50 starting January 1, 2027."), row("Context caching price", "Free of charge", "$0.075 through December 31, 2026. \n $0.15 starting January 1, 2027. \n $0.50 / 1,000,000 tokens per hour (storage price) through December 31, 2026."), " {% /tab %}"].join("\n");
+    const page = ["Gemini Developer API pricing", "## Gemini 3.8 Flash {% id=\"gemini-3.8-flash\" %}", " *[`gemini-3.8-flash`](/docs/models/gemini-3.8-flash)*", tab("Standard", "$0.75 through December 31, 2026. \n $1.50 starting January 1, 2027."), tab("Batch", "$0.38 through December 31, 2026. \n $0.75 starting January 1, 2027.")].join("\n");
+    expect(listPrices.parseGoogle(page, ["gemini-3.8-flash"])["gemini-3.8-flash"]).toEqual({
+      input: 0.75,
+      cachedInput: 0.075,
+      output: 3.75,
+      until: "2026-12-31",
+      next: { from: "2027-01-01", input: 1.5, cachedInput: 0.15, output: 7.5 },
+    });
+  });
+
   it("fails on a Google price line or heading change", () => {
     const html = fixture("google-pricing.html");
     expect(() => listPrices.parseGoogle(html.replace(/Free of charge/g, "Free"), ["gemini-3.8-flash"])).toThrow(Unverifiable);
