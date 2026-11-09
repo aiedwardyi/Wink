@@ -51,6 +51,14 @@ describe("stray user tags", () => {
     expect(stripStrayUserTags(done("```\n<user1>x</user1>\n```"))).toMatchObject({ text: "```\n<user1>x</user1>\n```" });
   });
 
+  it("keeps the current turn's held fragment through an old turn's late boundary", () => {
+    const at = (turnId: string, patch: Record<string, unknown>) => event({ turnId, ...patch });
+    stripStrayUserTags(at("t2", { type: "turn.started" }));
+    expect(shown(stripStrayUserTags(at("t2", { type: "content.delta", streamKind: "assistant_text", delta: "<us" })))).toBe("");
+    stripStrayUserTags(at("t1", { type: "turn.completed", ok: true }));
+    expect(shown(stripStrayUserTags(at("t2", { type: "content.delta", streamKind: "assistant_text", delta: "er1>new</user1>" })))).toBe("new");
+  });
+
   it("starts each item's stream fresh", () => {
     stripStrayUserTags(delta("<user1>one"));
     stripStrayUserTags(done("one"));

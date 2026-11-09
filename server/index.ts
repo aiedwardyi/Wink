@@ -3326,7 +3326,6 @@ const busyResumeThreads = new Set<string>();
 
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
-  event = stripStrayUserTags(event);
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
@@ -3345,6 +3344,7 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
+  event = stripStrayUserTags(event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {

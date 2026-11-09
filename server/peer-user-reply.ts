@@ -22,7 +22,7 @@ interface SplitTurn {
 
 const turns = new Map<string, SplitTurn>();
 const liveTurns = new Map<string, string | undefined>();
-const streams = new Map<string, { raw: string; sent: string }>();
+const streams = new Map<string, { turnId?: string; raw: string; sent: string }>();
 const PARTIAL_TAG = /<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?$/;
 let nextInput = 0;
 
@@ -71,13 +71,15 @@ function splitTurn(event: RuntimeEvent): SplitTurn | undefined {
 }
 
 export function stripStrayUserTags(event: RuntimeEvent): RuntimeEvent {
-  if (event.type === "turn.started" || event.type === "turn.completed") streams.delete(event.threadId);
+  const held = streams.get(event.threadId);
+  const own = held && held.turnId === event.turnId;
+  if (event.type === "turn.started" || (own && event.type === "turn.completed")) streams.delete(event.threadId);
   if (event.type === "item.completed" && event.itemType === "assistant_text") {
-    streams.delete(event.threadId);
+    if (own) streams.delete(event.threadId);
     return splitTurn(event) ? event : { ...event, text: unwrapUserTags(event.text) };
   }
   if (event.type !== "content.delta" || event.streamKind !== "assistant_text" || splitTurn(event)) return event;
-  const stream = streams.get(event.threadId) ?? { raw: "", sent: "" };
+  const stream = own ? held! : { turnId: event.turnId, raw: "", sent: "" };
   streams.set(event.threadId, stream);
   stream.raw += event.delta;
   const shown = unwrapUserTags(stream.raw.replace(PARTIAL_TAG, ""));

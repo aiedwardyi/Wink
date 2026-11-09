@@ -20,4 +20,13 @@ describe("unwrapUserTags", () => {
     expect(unwrapUserTags("```\n<user1>open")).toBe("```\n<user1>open");
     expect(unwrapUserTags("`<user1>open")).toBe("`<user1>open");
   });
+
+  it("keeps indented, quoted and multiline code literal", () => {
+    const same = (text: string) => expect(unwrapUserTags(text)).toBe(text);
+    same("Steps:\n\n    <user1>x</user1>\n    <user2>y</user2>");
+    same("> ```xml\n> <user1>x</user1>\n> ```");
+    same("see `a\n<user1>b</user1>\nc` then");
+    expect(unwrapUserTags("see `a\nb` <user1>d</user1>\n\n<user2>e</user2>")).toBe("see `a\nb` d\n\ne");
+    expect(unwrapUserTags("a\n    <user1>b</user1>")).toBe("a\n    b");
+  });
 });
