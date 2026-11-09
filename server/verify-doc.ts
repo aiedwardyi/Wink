@@ -108,17 +108,22 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       store.patchMessage(threadId, fx.messageId!, { text: verifyCardText(card), verify: card });
     }
   };
+  // A round dropped before its turn started never reached the bot: its findings and the round stay unspent.
+  const giveBack = (threadId: string) => {
+    const fx = fixes.get(threadId);
+    if (!fx?.fixing || !fx.listed.length) return;
+    fx.rounds--;
+    for (const key of fx.listed) fx.handed.delete(key);
+    fx.listed = [];
+  };
   // The user can change or remove the file while the fix waits; a fix only lands on what was checked.
   const current = async (threadId: string, fx: Fix) => {
     const now = await pick({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file] });
     if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return false;
     if (now?.file === fx.file && now.sha === fx.sha) return true;
+    giveBack(threadId);
     unfix(threadId);
     fixes.delete(threadId);
-    // The round never reached the bot, so its findings and the round itself stay unspent.
-    fx.rounds--;
-    for (const key of fx.listed) fx.handed.delete(key);
-    fx.listed = [];
     schedule({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
     return false;
   };
@@ -172,6 +177,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (slot.token !== token || disposed) return;
     const engine = picked ? deps.instanceFor(botId, threadId) : null;
     if (picked && !engine?.generateText) deps.log(`Live Verify: no text engine for ${threadId}`);
+    giveBack(threadId);
     unfix(threadId);
     if (!picked || !engine?.generateText || checked.get(`${threadId}\n${picked.file}`)?.sha === picked.sha) return dropOrphan(slot, threadId);
     const { file, site, doc, sha, cut } = picked, generate = engine.generateText.bind(engine);
@@ -346,7 +352,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
   /** One check per thread, `quietMs` after the last call; a newer call replaces a running check on its card. */
   function schedule(input: DocStart) {
     if (disposed || !input.roots[0]) return;
-    if (fixes.get(input.threadId)?.timer) { unfix(input.threadId); fixes.delete(input.threadId); }
+    if (fixes.get(input.threadId)?.timer) { giveBack(input.threadId); unfix(input.threadId); fixes.delete(input.threadId); }
     const slot = slots.get(input.threadId) ?? { token: {} };
     slots.set(input.threadId, slot);
     slot.input = slot.input?.botId === input.botId ? { ...input, paths: [...new Set([...slot.input.paths, ...input.paths])] } : input;
@@ -363,10 +369,12 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
   return {
     schedule,
     run: (runId: string) => runs.get(runId),
-    /** The token a starting turn carries when its prompt is the bot's pending fix. */
+    /** The token a starting turn carries when its prompt is the bot's pending fix; from here its round is spent. */
     fixTurn(botId: string, threadId: string, text: string) {
       const fx = fixes.get(threadId);
-      return fx?.token && fx.botId === botId && text.includes(fx.prompt!) ? fx.token : undefined;
+      if (!fx?.token || fx.botId !== botId || !text.includes(fx.prompt!)) return undefined;
+      fx.listed = [];
+      return fx.token;
     },
     /** Any turn that ended; the fix turn ending rechecks its file. */
     ended(turn: { threadId: string; docFix?: string }) {

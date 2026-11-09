@@ -242,6 +242,19 @@ it("spends neither findings nor rounds on a fix dropped before it dispatched", a
   expect(fix.mock.calls[0]![2]).toContain(`"quote":"되요"`);
 });
 
+it("spends neither findings nor rounds on a fix a newer check replaced before it started", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValue(slip(["되요", "돼요"]));
+  doc.schedule(start(["script.md"]));
+  for (const [i, line] of ["덧붙인 문단입니다.", "덧붙인 문단을 고쳤습니다."].entries()) {
+    await vi.waitFor(() => expect(fix).toHaveBeenCalledTimes(i + 1));
+    await write({ 10: line, 49: "계약서는 다음 주에 보내 드리면 되요." });
+    doc.schedule(start(["script.md"]));
+  }
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledTimes(3));
+  expect(fix.mock.calls[2]![2]).toContain(`"quote":"되요"`);
+});
+
 it("drops the fix when the file was deleted while the bot was busy", async () => {
   await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
   generate.mockImplementationOnce(async () => { busy = true; return slip(["되요", "돼요"]); });
@@ -293,6 +306,7 @@ it("keeps a file's handed findings when another file is checked in between", asy
   generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
   doc.schedule(start(["script.md"]));
   await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  doc.fixTurn("bot", "thread", fix.mock.calls[0]![2]);
   await writeFile(join(root, "notes.md"), LINES.map((line, i) => i === 20 ? "자료를 검토 했다." : line).join("\n"));
   generate.mockResolvedValueOnce(slip(["검토 했다", "검토했다"]));
   doc.schedule(start(["notes.md"]));
