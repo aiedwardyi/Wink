@@ -145,6 +145,30 @@ describe("mascot idle motion mount", () => {
     }
   });
 
+  it.each([
+    ["yellow", "icon-34-wink-peach.png"],
+    ["teal", "icon-33-wink-mint.png"],
+    ["blue", "icon-35-wink-lavender.png"],
+    ["white", "icon-32-wink-light.png"],
+    ["", "icon-31-wink.png"],
+  ])("draws an unknown %s bot as the Wink logo, not the old mascot", async (color, asset) => {
+    const { host } = await renderInto(createElement(BotAvatar, { bot: { name: "Gone", color: color as Bot["color"] }, size: 16 }));
+    expect(host.querySelector("img")?.getAttribute("src")).toBe(`/avatars/${asset}`);
+    expect(host.querySelector(".mascot-avatar")).toBeNull();
+  });
+
+  it("falls back to the Wink logo when a custom image fails", async () => {
+    const { host } = await renderInto(createElement(BotAvatar, {
+      bot: { name: "Commander", color: "yellow", avatarUrl: "/api/attachments/shield.png", avatarCrop: "rounded" },
+      size: 16,
+    }));
+    await act(async () => {
+      host.querySelector("img")!.dispatchEvent(new Event("error"));
+    });
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("/avatars/icon-34-wink-peach.png");
+    expect(host.querySelector(".mascot-avatar")).toBeNull();
+  });
+
   it("clears a forced blink class if animationend never fires", async () => {
     const handle = createRef<MausAvatarHandle>();
     const { host } = await renderInto(

@@ -55,10 +55,10 @@ afterEach(async () => {
   applySkin("precision");
 });
 
-async function mount(current: Bot) {
+async function mount(current: Bot, others: Bot[] = []) {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "/api/bots?messages=200"
-    ? Response.json({ bots: [current], groups: [], computerControl: {} })
+    ? Response.json({ bots: [current, ...others], groups: [], computerControl: {} })
     : new Response("{}", { status: 404 })));
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
@@ -156,6 +156,24 @@ describe("ChatView peer reply labels", () => {
     expect(chips(host)).toHaveLength(1);
     expect(chips(host)[0].querySelector("svg")).not.toBeNull();
     expect(chips(host)[0].className).toBe(host.querySelector('[data-mid="received"] button')?.className);
+  });
+
+  it.each(["en", "ko"])("shows the creator's own avatar on a reply synced from its other PC (%s)", async (locale) => {
+    localStorage.setItem("omb-locale", locale);
+    const shield = "/api/attachments/commander-shield.png";
+    const commander = { ...bot([]), id: "commander-here", threadId: "thread-commander", name: "커맨더", color: "yellow" as const, avatarUrl: shield, avatarCrop: "rounded" as const, chiefOfStaff: true };
+    const elsewhere = { ...comm, withBotId: "commander-on-home-pc", withName: "커맨더", withColor: "yellow" as const };
+    const synced = exchange().map((message) => message.comm ? { ...message, comm: elsewhere } : message);
+    const { host } = await mount(bot(synced), [commander]);
+    const avatar = host.querySelector('[data-mid="first reply"] button img');
+    expect(avatar?.getAttribute("src")).toBe(shield);
+    expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
+  });
+
+  it("draws a gone peer as the Wink logo, not the old mascot", async () => {
+    const { host } = await mount(bot(exchange().map((message) => message.comm ? { ...message, comm: { ...comm, withBotId: "gone", withName: "Gone" } } : message)));
+    expect(host.querySelector('[data-mid="first reply"] button img')?.getAttribute("src")).toBe("/avatars/icon-34-wink-peach.png");
+    expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
   });
 
   it("translates the reply label into Korean", async () => {
