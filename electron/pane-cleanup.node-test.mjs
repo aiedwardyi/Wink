@@ -697,6 +697,65 @@ test("a link made outside scratch after the sweep's link scan still blocks its d
   fs.unlinkSync(link);
 });
 
+test("an outside junction re-pointed after the sweep's link scan still blocks its delete", async (t) => {
+  const f = fixture(t);
+  const [first, late] = await scratchRows(f, ["TEST", "LATE"]);
+  fs.writeFileSync(path.join(late, "file"), "late");
+  const kind = process.platform === "win32" ? "junction" : "dir";
+  const away = path.join(f.home, "away");
+  const hop = path.join(f.home, "hop");
+  fs.mkdirSync(away);
+  fs.symlinkSync(away, hop, kind);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const link = path.join(host, "incoming");
+  fs.symlinkSync(hop, link, kind);
+  const promises = await import("node:fs/promises");
+  const rm = promises.default.rm;
+  t.mock.method(promises.default, "rm", async (...args) => {
+    const result = await rm(...args);
+    if (args[0] === first) {
+      fs.unlinkSync(hop);
+      fs.symlinkSync(late, hop, kind);
+    }
+    return result;
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(first), false);
+  assert.equal(fs.readFileSync(path.join(late, "file"), "utf8"), "late");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+  fs.unlinkSync(hop);
+});
+
+test("a link made while the sweep re-checks a change still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const [first, late] = await scratchRows(f, ["TEST", "LATE"]);
+  fs.writeFileSync(path.join(late, "file"), "late");
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const [one, two] = ["one", "two"].map((name) => path.join(host, name));
+  const link = path.join(host, "incoming");
+  const promises = await import("node:fs/promises");
+  const rm = promises.default.rm;
+  t.mock.method(promises.default, "rm", async (...args) => {
+    const result = await rm(...args);
+    if (args[0] === first) fs.mkdirSync(one);
+    return result;
+  });
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === one && !fs.existsSync(two)) fs.mkdirSync(two);
+    else if (args[0] === two && !fs.existsSync(link)) fs.symlinkSync(late, link, "junction");
+    return lstat(...args);
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(first), false);
+  assert.equal(fs.readFileSync(path.join(late, "file"), "utf8"), "late");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
 test("no link watcher outlives its close or sweep", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
   const f = fixture(t);
   const open = new Set();
@@ -1556,7 +1615,7 @@ test("the incoming link scan stays within a few calls per link", async (t) => {
   const stats = events(f).findLast((line) => line.kind === "links") ?? { dirs: 0, links: 0 };
   t.diagnostic(`link scan fs calls: ${calls}; dirs ${stats.dirs}; links ${stats.links}; ${stats.ms} ms`);
   assert.equal(fs.existsSync(target), false, f.warnings.map(String).join("\n"));
-  assert.equal(stats.links, 500);
+  assert.equal(stats.links, 1_000);
   assert.ok(calls <= stats.dirs + 6 * stats.links, `${calls} fs calls`);
   assert.deepEqual(f.warnings, []);
 });

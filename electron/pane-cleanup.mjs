@@ -332,7 +332,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (await linkedInto(target, context)) return kept(entry, target, "linked");
       if (!await unlinkLinks(target, new Set(), current)) return;
       if (!await directory(target) || !await current()) return;
-      if (await linkedInto(target, context)) return kept(entry, target, "linked");
+      if (await linkedInto(target, context, true)) return kept(entry, target, "linked");
       if (!await current()) return;
       await fsp.rm(target, { recursive: true });
       await finishScratch(target, entry, context.norm);
@@ -447,40 +447,54 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   const refresh = async (context, normalized, links) => {
     const { index } = context;
     index.parents = new Map();
-    for (let round = 0; !index.stale; round++) {
-      const seen = index.events;
-      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-      if (index.events === seen) break;
-      if (round === 20) index.stale = true;
-    }
-    if (index.stale) return;
-    index.relinked = false;
-    if (index.skip && index.skip.name !== normalized) {
-      const { file, name, seen } = index.skip;
-      index.skip = null;
-      if (seen) {
-        drop(index, name);
-        await inspect(context, file, name, null, true, index.roots.find((root) => root.temp && path.dirname(name) === root.normalized));
+    // Changes that land while a pass inspects get another pass.
+    for (let pass = 0; ; pass++) {
+      for (let round = 0; !index.stale; round++) {
+        const seen = index.events;
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+        if (index.events === seen) break;
+        if (round === 20) index.stale = true;
       }
+      if (index.stale || (pass && !index.changes.size)) return;
+      if (pass === 20) { index.stale = true; return; }
+      index.relinked = false;
+      if (index.skip && index.skip.name !== normalized) {
+        const { file, name, seen } = index.skip;
+        index.skip = null;
+        if (seen) {
+          drop(index, name);
+          await inspect(context, file, name, null, true, index.roots.find((root) => root.temp && path.dirname(name) === root.normalized));
+        }
+      }
+      const changes = [...index.changes.values()].sort((a, b) => a.rel.length - b.rel.length);
+      index.changes.clear();
+      const walked = new Set();
+      for (const { root, rel, deep } of changes) {
+        const file = path.join(root.file, rel);
+        // Windows may name a change by its 8.3 alias.
+        const name = rel.includes("~") ? await normalizeAsync(file, index.parents) : canonical(path.join(root.normalized, rel));
+        if (!contains(root.normalized, name) || (root.temp && !path.relative(root.normalized, name).startsWith("wink-"))) continue;
+        let parent = name;
+        while (parent.length > root.normalized.length && !walked.has(parent)) parent = path.dirname(parent);
+        if (walked.has(parent)) continue;
+        if (deep) { drop(index, name); walked.add(name); }
+        await inspect(context, file, name, null, deep, root.temp && !rel.includes(path.sep) ? root : null);
+      }
+      // A re-pointed link can redirect any target resolved through it.
+      if (links && index.relinked) for (const [name, link] of index.links) await inspect(context, link.file, name, null, false);
     }
-    const changes = [...index.changes.values()].sort((a, b) => a.rel.length - b.rel.length);
-    index.changes.clear();
-    const walked = new Set();
-    for (const { root, rel, deep } of changes) {
-      const file = path.join(root.file, rel);
-      // Windows may name a change by its 8.3 alias.
-      const name = rel.includes("~") ? await normalizeAsync(file, index.parents) : canonical(path.join(root.normalized, rel));
-      if (!contains(root.normalized, name) || (root.temp && !path.relative(root.normalized, name).startsWith("wink-"))) continue;
-      let parent = name;
-      while (parent.length > root.normalized.length && !walked.has(parent)) parent = path.dirname(parent);
-      if (walked.has(parent)) continue;
-      if (deep) { drop(index, name); walked.add(name); }
-      await inspect(context, file, name, null, deep, root.temp && !rel.includes(path.sep) ? root : null);
-    }
-    // A re-pointed link can redirect any target resolved through it.
-    if (links && index.relinked) for (const [name, link] of index.links) await inspect(context, link.file, name, null, false);
   };
-  const linkedInto = async (target, context) => {
+  const resolveLinks = async ({ index, stats }) => {
+    const links = [...index.links.values()];
+    for (let start = 0; start < links.length; start += 64) await Promise.all(links.slice(start, start + 64).map(async (link) => {
+      stats.links++;
+      try { link.real = canonical(await fsp.realpath(link.file)); } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        link.real = null;
+      }
+    }));
+  };
+  const linkedInto = async (target, context, final = false) => {
     const started = performance.now();
     try {
       const normalized = await normalizeAsync(target);
@@ -488,6 +502,8 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (!roots) return true;
       const key = roots.map(({ file, temp }) => `${temp}:${file}`).join("\0");
       if (context.index?.key !== key) context.close();
+      // A link can resolve through a junction no watcher sees.
+      if (final && context.index?.stale === false) await resolveLinks(context);
       if (context.index) await refresh(context, normalized, true);
       if (context.index?.stale) context.close();
       if (!context.index) {
@@ -602,7 +618,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (!save()) { release(); return; }
     let held = null;
     const final = async () => {
-      if (await linkedInto(target, context)) return "linked";
+      if (await linkedInto(target, context, true)) return "linked";
       if (!await directory(target) || !await directory(worktreeRoot)) return "";
       if (await dirty()) return "dirty";
       if (await unpushed()) return "unpushed";
