@@ -363,7 +363,7 @@ it.each(["en", "ko"] as const)("toggles the chat card on click and preserves bot
   expect(open).not.toHaveBeenCalled();
   expect(document.querySelector("[data-usage-quick]")).not.toBeNull();
   expect(q("[data-usage-meter]")!.getAttribute("aria-expanded")).toBe("true");
-  expect(document.querySelector("[data-usage-quick] [data-usage-refresh]")).toBeNull();
+  expect(document.querySelector("[data-usage-quick] [data-usage-refresh]")).not.toBeNull();
   await click("[data-usage-meter]");
   expect(document.querySelector("[data-usage-quick]:not([data-closing])")).toBeNull();
   const first = new Event("orbit:usage-key", { cancelable: true });
