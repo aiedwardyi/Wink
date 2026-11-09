@@ -12,7 +12,7 @@ import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
-import { answerQuick, routesQuick, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
+import { answerQuick, pending, requeueDroppedAsk, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -140,6 +140,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
   ) => {
     let steered = false;
     let dropped = false;
+    let recorded = false;
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     if (steersSend(adapter, bot.busy, after)) {
       const turnOpts = {
@@ -157,6 +158,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       steered = await adapter
         .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
           if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
+          // a drop after the ask was recorded as delivered goes once down the queue
+          else if (ask && recorded) requeueDroppedAsk(store, bot.id, threadId, ask, drainQueuedSends);
           else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
@@ -194,6 +197,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       resumePaneWakes(current.id);
       // the user joined this turn, so its finish alerts
       paneNoteTurnThreads.delete(threadId);
+      recorded = true;
       const message = ask
         ? store.patchMessage(threadId, ask.id, { steered: true, quick: { state: "handoff" } }) ?? ask
         : store.appendMessage(threadId, {
@@ -209,6 +213,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
       return { ok: true as const, steered: true as const, threadId, message };
     }
+    // an edit or rewind during the steer await drops the ask
+    if (ask && !pending(store, threadId, ask)) return { ok: true as const, cancelled: true as const, threadId };
     cancelUsageWait?.(bot.id);
     if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
       // an idle bot takes the ask as an ordinary turn
@@ -232,6 +238,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
   };
   const startQuick = (quick: QuickRouting, botId: string, threadId: string, ask: Message) => {
+    const settle = trackQuickAsk(botId, threadId, ask.id);
     void answerQuick({
       store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage,
       handoff: async (row) => {
@@ -240,7 +247,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         await deliverBusy(current, threadId, row.text ?? "", { adapter: instanceForBot(current, threadId)?.adapter, after: false, ask: row });
       },
       drain: drainQueuedSends,
-    }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`));
+    }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
   return {
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {

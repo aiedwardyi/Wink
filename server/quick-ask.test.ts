@@ -206,6 +206,43 @@ describe("quick route", () => {
     expect(h.startTurn).toHaveBeenCalledExactlyOnceWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
   });
 
+  it.each([false, true])("queues an ask once when its recorded steer is dropped late, rewound: %s", async (rewound) => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    let drop: (taken: boolean) => void = () => {};
+    h.steer.mockImplementationOnce(async (_threadId, _text, consumed) => {
+      drop = consumed!;
+      return true;
+    });
+    await h.settled();
+    const ask = h.rows().at(-1)!;
+    expect(ask).toMatchObject({ steered: true, quick: { state: "handoff" } });
+    if (rewound) h.store.branchMessage(h.bot.threadId, h.rows().at(-2)!.id, "build the login page");
+    h.store.setActivity(h.bot.id, "idle");
+    drop(false);
+    drop(false);
+    expect(_queuedCount(h.bot.threadId)).toBe(rewound ? 0 : 1);
+    if (rewound) return;
+    expect(h.rows().at(-1)).toMatchObject({ id: ask.id, quick: { state: "handoff" }, queueId: expect.any(String) });
+    expect(h.rows().at(-1)?.steered).toBeUndefined();
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]);
+  });
+
+  it("drops a handoff rewound while its steer was out", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    h.steer.mockImplementation(async () => {
+      if (h.rows().at(-1)?.text === QUESTION) h.store.branchMessage(h.bot.threadId, h.rows().at(-2)!.id, "build the login page");
+      return false;
+    });
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(h.startTurn).not.toHaveBeenCalled();
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
   it("queues a twice-failed handoff as the bot's next turn", async () => {
     const h = harness({ result: { route: "handoff", ms: 3 } });
     await h.send({ text: QUESTION });
@@ -252,6 +289,10 @@ describe("quick route", () => {
     expect(_queuedCount(own)).toBe(1);
     expect(_queuedCount(other.threadId)).toBe(0);
     expect(h.store.messagesFor(own).at(-1)).toMatchObject({ text: QUESTION, quick: { state: "handoff" } });
+    h.store.setActivity(h.bot.id, "idle");
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, own, QUESTION, expect.objectContaining({ text: QUESTION }), [expect.any(String)]);
   });
 
   it.each(["an edit", "a rewind"])("drops a late answer after %s", async (how) => {
@@ -333,6 +374,20 @@ describe("boot recovery", () => {
     drainSteeredMessages(store, run);
     expect(run.mock.calls.filter(([botId]) => botId === bot.id)).toEqual([[bot.id, bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]]]);
     expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
+  });
+
+  it("recovers an ask left in another task once", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    const own = h.bot.threadId;
+    const other = h.store.createTask(h.bot.id)!;
+    await new Promise((resolve) => setImmediate(resolve));
+    recoverQuickAsks(h.store);
+    recoverQuickAsks(h.store);
+    expect(_queuedCount(own)).toBe(1);
+    expect(_queuedCount(other.threadId)).toBe(0);
+    await h.settled();
+    expect(_queuedCount(own)).toBe(1);
   });
 });
 
