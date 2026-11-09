@@ -315,6 +315,14 @@ describe("Store", () => {
     expect(styles).toEqual(["icon-31", "icon-32", "icon-33", "icon-34", "icon-35", "icon-36", "icon-31"]);
   });
 
+  it("stamps each new bot after the newest, even within one millisecond", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const store = new Store(selection);
+    const stamps = Array.from({ length: 3 }, () => store.createBot().createdAt);
+    now.mockRestore();
+    expect(stamps).toEqual([1_000, 1_001, 1_002]);
+  });
+
   it("never repeats the newest Wink icon when older bots hold one of each", () => {
     const store = new Store(selection);
     for (const style of ["icon-36", "icon-31", "icon-32", "icon-33", "icon-34", "icon-35"] as const) store.createBot({ mascotStyle: style });

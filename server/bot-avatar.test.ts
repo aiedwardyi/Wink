@@ -184,6 +184,12 @@ describe("nextWinkAvatar", () => {
     });
   });
 
+  it("breaks createdAt ties the same way for any array order", () => {
+    const pair = [{ mascotStyle: "icon-31", createdAt: 7 }, { mascotStyle: "icon-32", createdAt: 7 }];
+    expect(nextWinkAvatar(pair)).toBe("icon-33");
+    expect(nextWinkAvatar([...pair].reverse())).toBe("icon-33");
+  });
+
   it("follows the newest Wink bot and ignores other avatars", () => {
     expect(nextWinkAvatar([
       { mascotStyle: "icon-11", createdAt: 9 },

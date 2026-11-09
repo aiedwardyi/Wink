@@ -191,9 +191,10 @@ export function nextWinkAvatar(bots: readonly { mascotStyle?: string | null; cre
   let newest = -1;
   for (const bot of bots) {
     const index = WINK_ICON_IDS.findIndex((id) => id === bot.mascotStyle);
-    if (index >= 0 && (bot.createdAt ?? 0) > newest) {
+    const at = bot.createdAt ?? 0;
+    if (index >= 0 && (at > newest || (at === newest && index > last))) {
       last = index;
-      newest = bot.createdAt ?? 0;
+      newest = at;
     }
   }
   return WINK_ICON_IDS[(last + 1) % WINK_ICON_IDS.length]!;
