@@ -4,6 +4,7 @@ import { credentialIsConfigured, credentialResumeOutcome } from "../shared/crede
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { closedAskNotes } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -152,7 +153,10 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       // Reactions count only once the model took them in; an engine
       // that cannot tell leaves them to the next turn's prompt.
       const consumable = adapter.capabilities.steerConsumed === true;
-      const prompt = consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName);
+      const prompt = [
+        ...closedAskNotes(turnOpts.messages, text, ask?.id),
+        consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
+      ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
       const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];
       steered = await adapter
