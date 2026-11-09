@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -23,8 +23,8 @@ describe("side hook", () => {
 
   afterEach(() => removeTempDir(dir));
 
-  const decide = (tool_name: string, tool_input: Record<string, unknown> = {}) => {
-    const run = spawnSync(process.execPath, [HOOK, dir], {
+  const decide = (tool_name: string, tool_input: Record<string, unknown> = {}, preload: string[] = []) => {
+    const run = spawnSync(process.execPath, [...preload, HOOK, dir], {
       input: JSON.stringify({ session_id: "fork-1", hook_event_name: "PreToolUse", cwd: root, tool_name, tool_input }),
       encoding: "utf8",
     });
@@ -49,6 +49,54 @@ describe("side hook", () => {
     ] as const) {
       expect(decide(tool, input)).toEqual({ hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: REASON });
     }
+  });
+
+  // Logs each fs call the hook makes; one outside the temp dir fails as missing instead of being probed.
+  const probed = (tool_name: string, tool_input: Record<string, unknown>) => {
+    const log = join(dir, "probes.log");
+    const spy = join(dir, "spy.cjs");
+    const homes = [dir, realpathSync.native(dir)];
+    const outside = (path: string) => homes.every((home) => relative(home, path).startsWith("..") || isAbsolute(relative(home, path)));
+    writeFileSync(spy, [
+      `const fs = require("node:fs");`,
+      `const { isAbsolute, relative } = require("node:path");`,
+      `const homes = ${JSON.stringify(homes)};`,
+      `const wrap = (name, fn) => function (path, ...rest) {`,
+      `  if (typeof path !== "string") return fn.call(this, path, ...rest);`,
+      `  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify([name, path]) + "\\n");`,
+      `  if (homes.every((home) => relative(home, path).startsWith("..") || isAbsolute(relative(home, path)))) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });`,
+      `  return fn.call(this, path, ...rest);`,
+      `};`,
+      `const native = fs.realpathSync.native;`,
+      `for (const name of ["existsSync", "lstatSync", "readlinkSync"]) fs[name] = wrap(name, fs[name]);`,
+      `fs.realpathSync.native = wrap("realpath", native);`,
+    ].join("\n"));
+    writeFileSync(log, "");
+    const decision = decide(tool_name, tool_input, ["-r", spy]).permissionDecision;
+    const calls = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as [string, string]);
+    return { decision, outside: calls.filter(([, path]) => outside(path)), calls };
+  };
+
+  // Backslash paths are plain file names off Windows.
+  it.each([
+    ["an out-of-root path", "../../elsewhere/notes.txt"],
+    ...(process.platform === "win32"
+      ? [["a UNC path", String.raw`\\wink-test.invalid\share\notes.txt`], ["a device path", String.raw`\\?\C:\notes.txt`], ["a local device", String.raw`\\.\pipe\notes`]]
+      : []),
+  ])("refuses %s before any filesystem call", (_, file_path) => {
+    expect(probed("Read", { file_path })).toMatchObject({ decision: "deny", outside: [] });
+    expect(probed("Grep", { pattern: "x", path: file_path })).toMatchObject({ decision: "deny", outside: [] });
+  });
+
+  it("refuses a link out of the roots without following it", () => {
+    mkdirSync(join(dir, "outside"));
+    symlinkSync(join(dir, "outside"), join(root, "out"), "junction");
+    mkdirSync(join(root, "docs"));
+    symlinkSync(join(root, "docs"), join(root, "in"), "junction");
+    const out = probed("Read", { file_path: join(root, "out", "notes.txt") });
+    expect(out.decision).toBe("deny");
+    expect(out.calls.filter(([name, path]) => name === "realpath" && path.startsWith(join(root, "out")))).toEqual([]);
+    expect(decide("Read", { file_path: join(root, "in", "plan.txt") }).permissionDecision).toBe("allow");
   });
 
   it("denies edits, commands, agents and every MCP tool", () => {
