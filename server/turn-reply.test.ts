@@ -109,6 +109,14 @@ describe("turnSummaries", () => {
     expect(summaries.settle("t1", "turn-1")).toEqual([]);
   });
 
+  it("keeps a quiet turn's summaries hidden", () => {
+    const summaries = turnSummaries();
+    summaries.note("t1", "turn-1", "s1", true);
+    expect(summaries.settle("t1", "turn-1", true)).toEqual([]);
+    summaries.note("t1", "turn-2", "s2", true);
+    expect(summaries.settle("t1", "turn-2")).toEqual(["s2"]);
+  });
+
   it("never lets an older turn's completion settle the next turn", () => {
     const summaries = turnSummaries();
     summaries.note("t1", "old", "r0", false);

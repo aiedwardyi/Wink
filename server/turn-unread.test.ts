@@ -64,7 +64,7 @@ function rig(target: "bot" | "group") {
     reportServerFailure: () => {}, terminalBridgeAccess: null, INCOMPLETE_LOG_MESSAGE: "internal log failure",
     ...turnReply, store, bot: { id: "bot-1" }, group: { id: "group-1" },
     routineReportGroup: undefined, turnSummary: turnReply.turnSummaries(), limitWaits: { bind: () => {} },
-    turnRegistry: { started() {} }, bindPeerTurn: () => {},
+    turnRegistry: { started() {} }, bindPeerTurn: () => {}, paneNoteTurnThreads: new Set<string>(),
     threadId: "thread-1", stopScreenPoller: () => {}, activeVpsThreads: new Map(), groupSpeakers: new Map(),
     pushMessage: (message: Omit<Message, "id" | "at">) => messages.push({ id: `message-${messages.length}`, at: 1, ...message }),
   };
@@ -72,6 +72,9 @@ function rig(target: "bot" | "group") {
   let turn = 0;
   return {
     state,
+    paneNote() {
+      (deps.paneNoteTurnThreads as Set<string>).add("thread-1");
+    },
     start(runtime = true) {
       deps.event = { threadId: "thread-1", turnId: `turn-${++turn}` };
       state.busyBotId = "bot-1";
@@ -155,6 +158,15 @@ describe.each(["bot", "group"] as const)("%s turn unread", (target) => {
     expect(r.state.unread).toBe(true);
     r.state.unread = false;
     r.start();
+    r.settle();
+    expect(r.state.unread).toBe(false);
+  });
+
+  it("keeps a pane-note turn with only an engine summary hidden and read", () => {
+    const r = rig(target);
+    r.paneNote();
+    r.start();
+    r.append({ role: "bot", kind: "text", text: "Checked the report.", summarized: true });
     r.settle();
     expect(r.state.unread).toBe(false);
   });
