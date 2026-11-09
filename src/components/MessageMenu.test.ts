@@ -266,6 +266,14 @@ describe("message menu in 1:1 chats", () => {
     expect(menu?.textContent).not.toContain("Copy ID");
   });
 
+  it("hides Reply on a quick answer and keeps Copy", async () => {
+    const quick = botMsg("b1", "yes", { quick: { state: "answer", askId: "u1" } });
+    const host = await mountChat(bot([userMsg("u1", "hi"), quick]));
+    await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);
+    expect(messageMenu()?.querySelector("[data-menu-reply]")).toBeNull();
+    expect(messageMenu()?.querySelector("[data-menu-copy]")).not.toBeNull();
+  });
+
   it("expands to the full grid and collapses back", async () => {
     const host = await mountChat(bot([botMsg("b1", "hello")]));
     await rightClick(host.querySelector('[data-mid="b1"] [data-orbit-message-content]')!);

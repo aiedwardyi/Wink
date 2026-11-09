@@ -122,6 +122,8 @@ export type RuntimeEvent = RuntimeEventBase &
         inputDigest?: string;
         /** Claude Code tool name, when the engine says the kind. */
         verb?: string;
+        /** files the call is changing, when the engine names them before it finishes */
+        writes?: string[];
       }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
     | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail; writes?: string[] }
@@ -441,6 +443,30 @@ export interface DriverCreateInput<Config> {
   config: Config;
 }
 
+// ── read-only side fork (quick helper) ─────────────────────────────────
+export interface SideInput {
+  threadId: ThreadId;
+  text: string;
+  /** the main turn's open tools and written files (side-live-state.ts); a fork sends it ahead of `text` */
+  live?: string;
+}
+
+export type SideEvent =
+  | { type: "session"; id: string }
+  | { type: "text"; delta: string }
+  | { type: "tool"; name: string; path?: string }
+  /** files a Grep or Glob result listed */
+  | { type: "found"; paths: string[] }
+  | { type: "done"; ok: boolean; text: string; usage?: { input: number; output: number; cachedInput?: number } };
+
+/** One live fork process. What `live` names is swept at boot if Wink dies first. */
+export interface SideHandle {
+  readonly live: { pid: number; procStart: number; cwd: string; tempDir: string; forkSessionId?: string; configDir?: string; mcpLogDir?: string };
+  onEvent(listener: (event: SideEvent) => void): () => void;
+  /** Ends stdin, kills the tree after `graceMs` (0 = now); resolves once it exited and its temp dir is gone. */
+  close(graceMs?: number): Promise<void>;
+}
+
 export interface ProviderInstance {
   readonly account?: import("./account-policy.ts").AccountContext;
   accountBusy?(): boolean;
@@ -467,6 +493,8 @@ export interface ProviderInstance {
   /** the model and default deadline generateText runs on, for telemetry */
   readonly textModel?: string;
   readonly textTimeoutMs?: number;
+  /** A read-only copy of the thread's live session answering one ask; null before the thread ever spawned. */
+  fork?(input: SideInput): SideHandle | null;
   /** Isolated, tool-free permission review on this same provider. Kept
    * separate from generateText so the UI never infers a security capability
    * from a generic helper that may expose prompts in argv or lack approvals. */

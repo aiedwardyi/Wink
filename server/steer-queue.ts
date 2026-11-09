@@ -16,6 +16,7 @@ import { syncHold } from "./sync-hold.ts";
 /** The slice of Store this module needs — narrow so tests can fake it. */
 export interface SteerStore {
   bot(id: string): BotRecord | null;
+  messagesFor(threadId: string): Message[];
   appendMessage(threadId: string, message: Omit<Message, "id" | "at">): Message;
   patchMessage(threadId: string, messageId: string, patch: Partial<Message>): Message | null;
 }
@@ -122,7 +123,7 @@ export function initializeSteerQueue(store: Pick<Store, "bot" | "taskByThread" |
     if (!store.bot(entry.botId) || !store.taskByThread(entry.botId, entry.threadId)) continue;
     const messages = store.messagesFor(entry.threadId);
     const items = entry.items.filter((item) => !messages.some((message) =>
-      (item.sendId && message.sendId === item.sendId) || message.queueId === item.messageId));
+      (item.sendId && message.sendId === item.sendId) || (message.queueId === item.messageId && message.quick?.state !== "handoff")));
     if (items.length) queues.set(entryKey(entry.botId, entry.threadId), { ...entry, items });
   }
   if (pending.length) saveQueuedSends();
@@ -342,9 +343,11 @@ export function drainSteeredMessages(
       }
       // queueId is the pending-chip identity from the 202; append still
       // assigns a fresh transcript id so replay/exclude keep using message.id.
+      // a queued quick handoff's ask row already shows this line
+      const ask = store.messagesFor(entry.threadId).find((message) => message.queueId === item.messageId && message.quick?.state === "handoff");
       let appended: Message;
       try {
-        appended = store.appendMessage(entry.threadId, {
+        appended = (ask && store.patchMessage(entry.threadId, ask.id, { quick: undefined })) || store.appendMessage(entry.threadId, {
           role: "user",
           kind: "text",
           text: item.text,
@@ -417,17 +420,20 @@ export function takeQueuedSteers(
 /** Persist this thread's waiting sends as steered user lines and return
  * their prompts in send order, for the turn about to dispatch. */
 export function foldQueuedSends(
-  store: Pick<SteerStore, "appendMessage">,
+  store: Pick<SteerStore, "messagesFor" | "appendMessage" | "patchMessage">,
   botId: string,
   threadId: string,
   since: number,
+  rows?: Message[],
 ): string[] {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   const appended = new Set<string>();
   try {
     const prompts = takeQueuedSteers(botId, threadId, since).map((item) => {
-      store.appendMessage(threadId, {
+      // a queued quick handoff's ask row already shows this line
+      const ask = store.messagesFor(threadId).find((message) => message.queueId === item.id && message.quick?.state === "handoff");
+      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
         kind: "text",
         text: item.text,
@@ -436,6 +442,7 @@ export function foldQueuedSends(
         queueId: item.id,
         steered: true,
       });
+      rows?.push(row);
       appended.add(item.id);
       return item.prompt;
     });

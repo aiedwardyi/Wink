@@ -498,7 +498,7 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       return created?.value === id && based(created.baseStamp) === parent;
     };
     const edited = rows.some((row, i) => (kids.get(row.id)?.length ?? 0) !== (i < rows.length - 1 ? 1 : 0));
-    const turns = rows.filter((row) => row.role === "user" && row.kind === "text").length;
+    const turns = rows.filter((row) => row.role === "user" && row.kind === "text" && !row.quick).length;
     const prompts = new Set(trunk.slice(at).map((id) => byId.get(id)!).filter((row) => row.role === "user" && row.kind === "text").map((row) => row.text?.trim()).filter(Boolean));
     const duplicate = rows.some((row) => row.role === "user" && row.kind === "text" && row.text?.trim() && prompts.has(row.text.trim()));
     const pending = rows.slice(rows.findLastIndex((row) => row.role === "user" && row.kind === "text") + 1);

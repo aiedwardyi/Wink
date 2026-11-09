@@ -526,19 +526,21 @@ export function MessageMenu({
           {t(pinned ? "chat.unpinMessage" : "chat.pinMessage")}
         </button>
       )}
-      <button
-        type="button"
-        role="menuitem"
-        data-menu-reply
-        onClick={() => {
-          onReply(message);
-          closeMenu(opener, ref.current, onClose);
-        }}
-        className={cn(ROW_CLASS, touch && "min-h-10")}
-      >
-        <MessageSquareReply size={16} className="text-ink-secondary" />
-        {t("chat.reply")}
-      </button>
+      {message.quick?.state !== "answer" && (
+        <button
+          type="button"
+          role="menuitem"
+          data-menu-reply
+          onClick={() => {
+            onReply(message);
+            closeMenu(opener, ref.current, onClose);
+          }}
+          className={cn(ROW_CLASS, touch && "min-h-10")}
+        >
+          <MessageSquareReply size={16} className="text-ink-secondary" />
+          {t("chat.reply")}
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"
