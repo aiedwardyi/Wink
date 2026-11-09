@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { Brain, ChevronDown } from "lucide-react";
+import { Brain, Check, ChevronDown } from "lucide-react";
 import type { AppState, Bot, Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
@@ -29,10 +29,26 @@ export function MemoryGroup({ children }: { children?: ReactNode }) {
 }
 
 /** A group that opens in place; its header sticks while open so the wheel can run through a long file. */
-export function MemoryFold({ title, hint, meta, open, onToggle, ref, children }: {
+export type MemorySaveStatus = "idle" | "saving" | "saved" | "failed";
+
+export function SaveState({ status }: { status: MemorySaveStatus }) {
+  const { t } = useI18n();
+  return (
+    <span role="status" data-save-state={status} className={cn("inline-flex shrink-0 items-center gap-1 text-[12px] leading-4",
+      status === "saving" && "animate-pulse text-ink-secondary motion-reduce:animate-none",
+      status === "saved" && "animate-[fade-in_var(--motion-moderate)_var(--ease-entrance),fade-out_var(--motion-large)_var(--ease-exit)_1760ms_forwards] text-success motion-reduce:animate-none",
+      status === "failed" && "text-danger")}>
+      {status === "saved" && <Check size={12} aria-hidden="true" />}
+      {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : status === "failed" ? t("bot.memoryNotSaved") : null}
+    </span>
+  );
+}
+
+export function MemoryFold({ title, hint, meta, status, open, onToggle, ref, children }: {
   title: string;
   hint: string;
   meta?: ReactNode;
+  status?: ReactNode;
   open: boolean;
   onToggle: () => void;
   ref?: Ref<HTMLButtonElement>;
@@ -53,6 +69,7 @@ export function MemoryFold({ title, hint, meta, open, onToggle, ref, children }:
           <div className="min-w-0 flex-1">
             <DetailsLabel label={title} hint={hint} />
           </div>
+          {status}
           {meta && <span className="shrink-0 text-[12px] text-ink-secondary">{meta}</span>}
           <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
         </button>
@@ -62,8 +79,9 @@ export function MemoryFold({ title, hint, meta, open, onToggle, ref, children }:
   );
 }
 
-export function MemoryFile({ text, loading, open, onToggle, ref, children }: {
+export function MemoryFile({ text, loading, status, open, onToggle, ref, children }: {
   text: string;
+  status?: ReactNode;
   loading: boolean;
   open: boolean;
   onToggle: () => void;
@@ -78,6 +96,7 @@ export function MemoryFile({ text, loading, open, onToggle, ref, children }: {
       title={t("bot.memoryFile")}
       hint={t("bot.memoryThisBotHelp")}
       meta={!loading && lines > 0 ? t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines }) : undefined}
+      status={status}
       open={open}
       onToggle={onToggle}
     >

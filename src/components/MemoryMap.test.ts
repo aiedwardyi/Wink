@@ -45,6 +45,18 @@ describe("MemoryMap", () => {
     expect(muscle.parentElement!.querySelector(".mm-list")!.textContent).toContain("Feedback style");
   });
 
+  it.each([
+    ["lights done steps from the left whatever their order", ["pending", "done", "active", "done"], "++*-"],
+    ["scales 19 steps to 12 segments", [...Array(9).fill("done"), "active", ...Array(9).fill("pending")], "++++++*-----"],
+    ["lights every segment with no glow once all are done", ["done", "done", "done"], "+++"],
+    ["glows the first segment before any step is done", ["active", "pending", "pending"], "*--"],
+  ] as const)("%s", async (_, statuses, bar) => {
+    const plan = statuses.map((status, index) => ({ step: String(index), status }));
+    await mount({ bot: { ...bot, tasks: [{ threadId: "t", taskState: { goal: "Ship", plan, nextAction: "", blockers: [], completed: [], evidence: [], artifacts: [] } }] } as unknown as Bot });
+    expect([...host.querySelectorAll(".mm-steps i")].map((each) => each.hasAttribute("data-now") ? "*" : each.hasAttribute("data-done") ? "+" : "-").join("")).toBe(bar);
+    expect(host.querySelector(".mm-task-meta")!.textContent).toBe(`${statuses.filter((each) => each === "done").length} of ${statuses.length} steps done`);
+  });
+
   it("hides the Sleep line until Sleep has run", async () => {
     await mount();
     expect(host.querySelector(".mm-sleep")).toBeNull();

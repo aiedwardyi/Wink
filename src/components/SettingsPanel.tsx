@@ -29,7 +29,7 @@ import { useDetailsTabs } from "@/lib/use-details-tabs";
 import { BotAvatar } from "./Avatar";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
-import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, type MemoryTopic } from "./MemoryGroups";
+import { currentTask, MemoryEmpty, MemoryFile, MemoryGroup, SaveState, type MemorySaveStatus, type MemoryTopic } from "./MemoryGroups";
 import { DETAILS_BOX, DETAILS_INPUT, DETAILS_ROW, DetailsSwitch, FitTextarea, SwitchRow } from "./BotDetailsRows";
 import { KeepGoingMark, keepGoingMarkState } from "./KeepGoingMark";
 import { SegmentedRow } from "./Segmented";
@@ -257,7 +257,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
   const [text, setText] = useState("");
   const [truncated, setTruncated] = useState(false);
   const [topics, setTopics] = useState<MemoryTopic[]>([]);
-  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [status, setStatus] = useState<MemorySaveStatus>("idle");
   const [conflict, setConflict] = useState<MemoryLatest | null>(null);
   const savedFade = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);
@@ -385,7 +385,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
       },
       failed: (message, pending) => {
         setError(message);
-        if (!pending) setStatus("idle");
+        if (!pending) setStatus("failed");
       },
       conflict: (latest) => {
         setConflict(latest);
@@ -448,12 +448,9 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
 
   return (
     <div className="relative flex flex-col gap-3">
-      <span role="status" className="absolute bottom-full right-0 text-[12px] leading-4 text-ink-secondary">
-        {status === "saving" ? t("bot.memorySaving") : status === "saved" ? t("bot.memorySaved") : null}
-      </span>
       {empty && !(expanded && inMap) ? <MemoryEmpty /> : up && (!loading || loadFailed) && (
         <LazyView>
-          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={editor} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
+          <MapView bot={bot} text={text} topics={topics} target={target} active={up} failed={loadFailed} onRetry={() => void load()} editor={editor} saveState={<SaveState status={status} />} editing={expanded && inMap} onEditing={editFile} onStack={(stacked) => setWide(!stacked)} />
         </LazyView>
       )}
       <MemoryGroup>
@@ -464,7 +461,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} open={expanded} onToggle={() => openFile(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={loading} status={expanded && (!inMap || !wide) && <SaveState status={status} />} open={expanded} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={expanded && (!inMap || !wide)}>
           <div className="px-4 pb-4 pt-3">

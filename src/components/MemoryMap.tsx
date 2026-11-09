@@ -80,7 +80,7 @@ function FactList({ facts, day, fresh }: { facts: MemoryFact[]; day: Intl.DateTi
   );
 }
 
-export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, editing = false, onEditing, onStack }: {
+export function MemoryMap({ bot, text, topics, target, active, sleep = null, failed = false, onRetry, editor, saveState, editing = false, onEditing, onStack }: {
   bot: Bot;
   text: string;
   topics: MemoryTopic[];
@@ -91,6 +91,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   onRetry?: () => void;
   /** the memory file editor; on the wide map it opens over the three kinds */
   editor?: ReactNode;
+  saveState?: ReactNode;
   editing?: boolean;
   onEditing?: (editing: boolean) => void;
   onStack?: (stacked: boolean) => void;
@@ -119,7 +120,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const day = new Intl.DateTimeFormat(localeTag(locale), { month: "short", day: "numeric" });
   const task = currentTask(bot);
   const done = task?.plan.filter((step) => step.status === "done").length ?? 0;
-  const now = task?.plan.findIndex((step) => step.status !== "done") ?? -1;
+  const total = task?.plan.length ?? 0, bars = Math.min(total, 12);
+  const lit = done === total ? bars : done && Math.min(bars - 1, Math.max(1, Math.round((done / total) * bars)));
+  const now = done < total && task?.plan.some((step) => step.status === "active") ? lit : -1;
   const biggest = Math.max(1, ...topics.map((each) => each.bytes));
 
   // the GPU probe makes a WebGL context, so it waits until the wide open has played
@@ -336,7 +339,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
                     <div className="mm-task-goal" title={task.goal}>{task.goal}</div>
                     {task.plan.length > 0 && (
                       <>
-                        <div className="mm-steps" aria-hidden="true">{task.plan.slice(0, 12).map((step, index) => <i key={index} data-done={step.status === "done" || undefined} data-now={index === now || undefined} />)}</div>
+                        <div className="mm-steps" aria-hidden="true">{Array.from({ length: bars }, (_, index) => <i key={index} data-done={index < lit || undefined} data-now={index === now || undefined} />)}</div>
                         <div className="mm-task-meta">{t("bot.memoryTaskSteps", { done, total: task.plan.length })}</div>
                       </>
                     )}
@@ -366,6 +369,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
                 <span className="mm-name">{t("bot.memoryFile")}</span>
                 <span className="mm-hint">{t("bot.memoryThisBotHelp")}</span>
               </span>
+              {saveState}
               <button type="button" className="mm-action" onClick={() => onEditing?.(false)}>{t("bot.memoryEditDone")}</button>
             </div>
             <div className="mm-sheet-body mm-edit" data-mm-content="">{editor}</div>

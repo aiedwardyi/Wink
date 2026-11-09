@@ -55,6 +55,10 @@ const pages = () => [...panel().querySelectorAll<HTMLElement>(".absolute.inset-0
 const tab = (index: number) => panel().querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]!;
 const onMemory = () => tab(1).getAttribute("aria-selected") === "true";
 const box = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]');
+const write = (value: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), value);
+  box()!.dispatchEvent(new Event("input", { bubbles: true }));
+});
 const fileRow = () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((each) => each.textContent?.includes("Memory File"))!;
 const closes = () => dispatch.mock.calls.filter(([action]) => action.type === "toggleSettings");
 
@@ -332,6 +336,16 @@ describe("Memory tab on return", () => {
     expect(puts).toEqual(["- Uses Linux"]);
   });
 
+  it("shows the Memory File save state in its own header, not the page corner", async () => {
+    await open();
+    await toMemory();
+    await act(async () => fileRow().click());
+    await write("- Uses Linux");
+    expect(fileRow().querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
+    expect(host.querySelectorAll("[data-save-state]")).toHaveLength(1);
+    expect(host.querySelectorAll('.relative.flex.flex-col.gap-3 > [role="status"]')).toHaveLength(0);
+  });
+
   it("keeps the file open through a save conflict", async () => {
     localStorage.setItem("omb-memory-draft:bot-held", JSON.stringify({ text: "mine", base: "r:older" }));
     await open({ ...bot, id: "bot-held" });
@@ -441,6 +455,17 @@ describe("Long-Term and Knowledge sheets", () => {
     expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
     expect(sheet("muscle")!.textContent).toContain("Nothing yet.");
     expect(fold("muscle").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows the same save state beside Done when you edit Long-Term", async () => {
+    await wide();
+    await act(async () => [...sheet("long")!.querySelectorAll<HTMLButtonElement>(".mm-action")].find((each) => each.textContent === "Edit")!.click());
+    await settle();
+    await write("- Uses Linux");
+    const state = sheet("file")!.querySelector('.mm-sheet-head [data-save-state="saving"]')!;
+    expect(state.textContent).toBe("Saving…");
+    expect(state.nextElementSibling!.textContent).toBe("Done");
+    expect(host.querySelectorAll("[data-save-state]")).toHaveLength(1);
   });
 
   it("points a hand at every enabled button in Bot details", async () => {
