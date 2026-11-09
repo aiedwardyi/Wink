@@ -40,11 +40,12 @@
 .mm-brain::before { content: ""; position: absolute; inset: -1px; border-radius: 50%; padding: 1.5px;
   background: conic-gradient(from 200deg, rgb(var(--mm-cyan)), rgb(var(--mm-blue)), rgb(var(--mm-violet)), rgb(var(--mm-cyan)));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
-.mm-orbit { position: absolute; left: 50%; top: 50%; border-radius: 50%; translate: -50% -50%; pointer-events: none;
-  background: radial-gradient(closest-side, transparent 86%, rgb(var(--mm-indigo) / calc(0.3 * var(--mem-glow))) 95%, transparent);
+/* a ring's own box stays under the badge at full swell, so only its blur ever shows */
+.mm-orbit { position: absolute; z-index: -1; left: 50%; top: 50%; border-radius: 50%; translate: -50% -50%; pointer-events: none;
+  box-shadow: 0 0 22px 8px var(--mm-swell, rgb(var(--mm-pale) / calc(0.16 * var(--mem-glow))));
   animation: mm-ring 7s cubic-bezier(.2, .6, .3, 1) var(--motion-large) infinite backwards; }
-.mm-orbit-near { width: 92px; height: 92px; }
-.mm-orbit-far { width: 116px; height: 116px; animation-delay: calc(var(--motion-large) - 3.5s); }
+.mm-orbit-near { width: 44px; height: 44px; }
+.mm-orbit-far { width: 48px; height: 48px; animation-delay: calc(var(--motion-large) - 3.5s); }
 
 .mm-sleep { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 4px 14px; font-size: 13.5px; line-height: 18px; color: var(--color-ink-secondary); }
 .mm-sleep-when { display: inline-flex; align-items: center; gap: 6px; color: var(--color-ink); font-weight: 500; }
@@ -207,6 +208,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
   --mm-aura: radial-gradient(closest-side at 50% 22%, rgb(255 255 255 / 0.9), rgb(199 230 255 / 0.4) 32%, rgb(var(--mm-pale) / 0.32) 62%, transparent 100%);
   --mm-ray: radial-gradient(closest-side, rgb(255 255 255 / 0.75), rgb(var(--mm-pale) / 0.22) 65%, transparent);
   --mm-halo: rgb(var(--mm-pale) / 0.7);
+  --mm-swell: rgb(var(--mm-indigo) / 0.14);
   --mm-live-glow: 0 0 36px rgb(var(--mm-indigo) / 0.1), 0 0 90px rgb(var(--mm-pale) / 0.35);
 }
 
