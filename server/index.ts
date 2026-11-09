@@ -404,6 +404,7 @@ import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
+import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
@@ -7210,6 +7211,14 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifyDoc = createVerifyDoc({
+  store,
+  instanceFor: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
+  busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  deviceId: () => profileSyncSettings.deviceId,
+  broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
+  log: line => console.log(line),
+});
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
@@ -7223,11 +7232,13 @@ const verifySite = createVerifySite({
   appToken: authorizedComms,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
   toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+  docRun: runId => verifyDoc.run(runId),
 });
 const verifyAuto = createVerifyAuto({
   enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  startDocs: input => verifyDoc.schedule(input),
   log: line => console.log(line),
   app: { skipPorts: [PORT] },
 });

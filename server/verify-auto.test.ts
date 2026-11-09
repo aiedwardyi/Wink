@@ -18,6 +18,7 @@ const temps = createTempDirs();
 let root: string;
 let start: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; entry: string; episode: string }) => Promise<void>>>;
 let scan: ReturnType<typeof vi.fn<typeof scanVerifyWrites>>;
+let docs: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; roots: string[]; paths: string[] }) => void>>;
 let auto: ReturnType<typeof createVerifyAuto>;
 let turn: VerifyAutoTurn;
 const event = (fields: Partial<RuntimeEvent>) => ({ eventId: "e", provider: "claudeAgent", threadId: "thread", turnId: "turn", createdAt: new Date().toISOString(), ...fields }) as RuntimeEvent;
@@ -34,7 +35,8 @@ beforeEach(async () => {
   await writeFile(join(root, "index.html"), "<h1>Hi</h1>");
   start = vi.fn().mockResolvedValue(undefined);
   scan = vi.fn(scanVerifyWrites);
-  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, scan, log: vi.fn(), app: { waitMs: 300 } });
+  docs = vi.fn();
+  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, startDocs: docs, scan, log: vi.fn(), app: { waitMs: 300 } });
   turn = { botId: "bot", threadId: "thread", turnId: "turn", startedAt: Date.now(), roots: [root], depth: 0, ok: true, humanId: "human", humanText: "Build a page", reply: "" };
   vi.mocked(stat).mockClear();
   vi.mocked(opendir).mockClear();
@@ -199,6 +201,40 @@ it("ignores a dead named URL and non-web writes", async () => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["notes.md"] }));
   await auto.settled({ ...turn, reply: "http://127.0.0.1:12345" });
   expect(start).not.toHaveBeenCalled();
+});
+
+it("hands one turn's document writes to the document check once", async () => {
+  for (let i = 0; i < 20; i++) auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["brief.docx", "notes.txt", "app.py"] }));
+  await auto.settled(turn);
+  expect(start).not.toHaveBeenCalled();
+  expect(docs).toHaveBeenCalledOnce();
+  expect(docs).toHaveBeenCalledWith({ botId: "bot", threadId: "thread", roots: [root], paths: ["script.md", "brief.docx", "notes.txt"] });
+});
+
+it("leaves a turn that wrote a page to the page check", async () => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html", "notes.md"] }));
+  await auto.settled(turn);
+  expect(start).toHaveBeenCalledOnce();
+  expect(docs).not.toHaveBeenCalled();
+});
+
+it("finds a document an opaque shell saved", async () => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await writeFile(join(root, "report.docx"), "x");
+  shell();
+  await auto.settled(turn);
+  expect(start).not.toHaveBeenCalled();
+  expect(docs).toHaveBeenCalledWith(expect.objectContaining({ paths: [join(root, "report.docx")] }));
+});
+
+it("does not hand documents over for an opted-out or failed turn", async () => {
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
+  await auto.settled({ ...turn, humanText: "Write the script but don't check it" });
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
+  await auto.settled({ ...turn, ok: false });
+  expect(docs).not.toHaveBeenCalled();
 });
 
 it("replaces an older pending decision in the same thread", async () => {
@@ -376,7 +412,7 @@ it("caps directory entries even when they are not web files", async () => {
   vi.mocked(opendir).mockResolvedValueOnce({ async *[Symbol.asyncIterator]() {
     for (let i = 0; i < VERIFY_LIMITS.scanEntries + 20; i++) {
       seen++;
-      yield { name: `${i}.txt`, isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true };
+      yield { name: `${i}.log`, isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true };
     }
   } } as Awaited<ReturnType<typeof opendir>>);
   await scanVerifyWrites(root, turn.startedAt);
