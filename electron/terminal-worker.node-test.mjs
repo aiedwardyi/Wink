@@ -228,7 +228,7 @@ test("a POSIX credit launch clears the key after Ctrl+C and a failing exit", asy
   for (const body of ["kill -INT 0", "exit 3", `test -n "$${name}" && echo seen`]) {
     const line = workers.managedWorkerCommand({ executable: "sh", args: ["-c", body], clearEnv: [name] }, {}, "linux");
     // A detached shell leads its own process group, so kill 0 stands in for Ctrl+C without reaching the test runner.
-    const child = spawn(shell, ["-i"], { detached: process.platform !== "win32", windowsHide: true, env: { ...process.env, [name]: key } });
+    const child = spawn(shell, ["-i"], { detached: process.platform !== "win32", windowsHide: true, timeout: 20_000, killSignal: "SIGKILL", env: { ...process.env, [name]: key } });
     let output = "";
     child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { output += chunk; });

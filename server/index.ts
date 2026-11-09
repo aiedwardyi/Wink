@@ -7148,7 +7148,7 @@ function reloadProviders() {
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
-if (accounts.snapshot.length || Object.keys(accounts.drains).length) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length ? terminalBridgeAccess : null, () => accountRuntime.restore()));
+if (accounts.snapshot.length || Object.keys(accounts.drains).length || codexCreditFor()) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length || codexCreditFor() ? terminalBridgeAccess : null, () => accountRuntime.restore()));
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });
