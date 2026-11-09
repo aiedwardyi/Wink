@@ -95,6 +95,16 @@ describe("waiting sends across restart", () => {
     });
   });
 
+  it("keeps a queued quick handoff whose ask row holds the queue id", async () => {
+    const { queue, store } = await boot();
+    const bot = store.createBot();
+    const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "port?", quick: { state: "asked" } });
+    const receipt = queue.queueSteeredMessage(bot.id, bot.threadId, "port?");
+    store.patchMessage(bot.threadId, ask.id, { quick: { state: "handoff" }, queueId: receipt.id });
+    const restarted = await boot();
+    expect(restarted.queue._queuedCount(bot.threadId)).toBe(1);
+  });
+
   it("drains a restored after-turn send once when idle", async () => {
     const { queue, store } = await boot();
     const bot = store.createBot();

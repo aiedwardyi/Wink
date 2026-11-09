@@ -9,7 +9,7 @@ import { endsNoteWindow } from "./pane-wake.ts";
 import { quickAnswersSinceLastUserTurn, routesQuick, type QuickGate } from "./quick-ask.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
-import { _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
+import { drainSteeredMessages, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type Message } from "./store.ts";
 import { turnAddedMessage } from "./turn-reply.ts";
 
@@ -131,6 +131,21 @@ describe("quick route", () => {
     expect(_queuedCount(h.bot.threadId)).toBe(1);
     expect(h.rows().at(-1)).toMatchObject({ quick: { state: "handoff" } });
     expect(h.rows().at(-1)?.queueId).toBeTruthy();
+  });
+
+  it("drains a queued handoff on its ask row, so the ask shows once", async () => {
+    const h = harness({ queueing: false, result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    await h.settled();
+    const ask = h.rows().at(-1)!;
+    h.store.appendMessage(h.bot.threadId, { role: "bot", kind: "text", text: "Settings page is done." });
+    h.store.setActivity(h.bot.id, "idle");
+    const run = vi.fn();
+    drainSteeredMessages(h.store, run);
+    expect(h.rows().filter((row) => row.text === QUESTION)).toHaveLength(1);
+    expect(h.rows().find((row) => row.id === ask.id)?.quick).toBeUndefined();
+    expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
   });
 
   it("starts an ordinary turn on the ask when the bot finished first", async () => {

@@ -129,6 +129,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     group: () => group,
     groups: [],
     patchBot: (_id: string, patch: Partial<BotRecord>) => Object.assign(bot, patch),
+    messagesFor: () => messages,
     appendMessage: (_threadId: string, message: Omit<Message, "id" | "at">) => {
       const appended = { ...message, id: `m${messages.length}`, at: 0 };
       messages.push(appended);
