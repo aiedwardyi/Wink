@@ -6,7 +6,7 @@ export interface AppOptions { waitMs?: number; skipPorts?: readonly number[] }
 const WAIT_MS = 20_000;
 const RETRY_MS = 400;
 const MAX_URLS = 3;
-const NAMED = /(?<![\w.@/-])(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::(\d{1,5}))?([/?#][^\s<>"'`]*)?/gi;
+const NAMED = /(?<![\w.@/-])(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::(\d{1,5}))?(?![\w-]|[.:][\w-])([/?#][^\s<>"'`]*)?/gi;
 
 export function appUrls(text: string, skipPorts: readonly number[] = []): string[] {
   const urls = new Set<string>();
@@ -23,13 +23,12 @@ export function appUrls(text: string, skipPorts: readonly number[] = []): string
 /** "page" for HTML or a redirect, "other" for any other answer, undefined when nothing answered. */
 function ask(url: string, ms: number) {
   return new Promise<"page" | "other" | undefined>(done => {
-    const req = request(url, { timeout: ms, headers: { accept: "text/html" } }, res => {
+    const req = request(url, { signal: AbortSignal.timeout(ms), headers: { accept: "text/html" } }, res => {
       const status = res.statusCode ?? 0;
       done(status >= 300 && status < 400 || /html/i.test(String(res.headers["content-type"])) ? "page" : "other");
       res.on("error", () => {});
       res.destroy();
     });
-    req.on("timeout", () => req.destroy());
     req.on("error", () => done(undefined));
     req.on("close", () => done(undefined));
     req.end();

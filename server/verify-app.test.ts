@@ -28,6 +28,17 @@ const listen = async (server: Server, port = 0) => {
   return (server.address() as AddressInfo).port;
 };
 const page = (type = "text/html") => createHttp((_, res) => { res.writeHead(200, { "content-type": type }); res.end(type.includes("html") ? "<a href='/gone'>Gone</a>" : "{}"); });
+const slow = () => createTcp(socket => {
+  let drips = 0;
+  socket.on("error", () => {});
+  socket.write("HTTP/1.1 200 OK\r\n");
+  const drip = setInterval(() => {
+    if (++drips < 25) return void socket.write("x-wait: 1\r\n");
+    clearInterval(drip);
+    socket.end("content-type: text/html\r\n\r\n<h1>Hi</h1>");
+  }, 40);
+  socket.on("close", () => clearInterval(drip));
+});
 const freePort = async () => {
   const server = createTcp();
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
@@ -109,11 +120,11 @@ it("waits for a server that starts after the turn", async () => {
   expect(start.mock.calls[0]?.[0].entry).toBe(`http://127.0.0.1:${port}/`);
 });
 
-it.each(["refused", "silent", "json", "own port"])("does not check a named URL that is %s", async kind => {
+it.each(["refused", "silent", "slow", "json", "own port"])("does not check a named URL that is %s", async kind => {
   await writeFile(join(root, "package.json"), "{}");
   await mkdir(join(root, "src"));
   await writeFile(join(root, "src", "App.tsx"), "export default () => null");
-  const port = kind === "refused" ? await freePort() : await listen(kind === "silent" ? createTcp() : page(kind === "json" ? "application/json" : "text/html"));
+  const port = kind === "refused" ? await freePort() : await listen(kind === "silent" ? createTcp() : kind === "slow" ? slow() : page(kind === "json" ? "application/json" : "text/html"));
   const auto = verifier(kind === "own port" ? { skipPorts: [port] } : {});
   wrote(auto, ["src/App.tsx"]);
   await auto.settled({ ...turn, reply: `Open http://127.0.0.1:${port}/` });
@@ -131,4 +142,9 @@ it("stays quiet for a chat-only reply naming a running app", async () => {
 it("reads only named http loopback URLs, at most three", () => {
   expect(appUrls("https://localhost:3000, localhost alone, me@localhost:25, http://localhost:3000/a/b), [::1]:4000 and http://127.0.0.1 or 127.0.0.1:5000"))
     .toEqual(["http://localhost:3000/a/b", "http://[::1]:4000/", "http://127.0.0.1/"]);
+});
+
+it("skips hosts and ports that only start like loopback", () => {
+  expect(appUrls("http://localhost.example.com:3000/ http://localhost-api:8080 localhost:300000 http://127.0.0.10:3000/ 127.0.0.1:5000abc, but localhost:3000."))
+    .toEqual(["http://localhost:3000/"]);
 });
