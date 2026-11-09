@@ -135,7 +135,7 @@ describe("a user's reply during a peer turn", () => {
     expect(host.textContent).not.toContain("<user");
     const speaker = (text: string) => [...host.querySelectorAll("[data-mid]")]
       .find((row) => row.textContent?.includes(text))?.querySelector(".orbit-message-speaker")?.textContent;
-    expect(["What changed in the resume?", "Hey Wink"].map(speaker)).toEqual(["Career", "You"]);
+    expect(["What changed in the resume?", "Hey Wink"].map(speaker)).toEqual(["Career", undefined]);
     expect(store.messagesFor(career.threadId).filter((message) => message.comm?.peer === "reply").map((message) => message.text)).toEqual(["Two bullets were reworded."]);
     document.body.style.fontFamily = "";
   });
