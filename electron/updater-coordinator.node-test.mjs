@@ -716,3 +716,61 @@ test("compares release versions numerically", () => {
   assert.equal(isNewerVersion("1.1.0-beta.10", "1.1.0-beta.2"), true);
   assert.equal(isNewerVersion("1.0.98", null), true);
 });
+
+const MINUTE = 60_000;
+
+function timedHarness() {
+  const timers = [];
+  let now = 0;
+  const h = harness({
+    now: () => now,
+    schedule: (fn, ms) => timers.push({ fn, ms }),
+  });
+  return { ...h, timers, advance: (ms) => void (now += ms) };
+}
+
+test("background transient failure stays silent and retries after 1, 5, 15 minutes", async () => {
+  const { updater, coordinator, states, timers } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error('504 "method: GET" Data: <html>'));
+
+  for (let i = 0; i < 4; i += 1) await coordinator.check();
+
+  assert.deepEqual(errorStates(states), []);
+  assert.deepEqual(timers.map((timer) => timer.ms), [1 * MINUTE, 5 * MINUTE, 15 * MINUTE]);
+});
+
+test("a successful check resets the retry ladder", async () => {
+  const { updater, coordinator, timers } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error("read ECONNRESET"));
+  await coordinator.check();
+  updater.checkForUpdates = () => Promise.resolve({ isUpdateAvailable: false });
+  await coordinator.check();
+  updater.checkForUpdates = () => Promise.reject(new Error("read ECONNRESET"));
+  await coordinator.check();
+
+  assert.deepEqual(timers.map((timer) => timer.ms), [1 * MINUTE, 1 * MINUTE]);
+});
+
+test("background non-transient failure neither retries nor surfaces", async () => {
+  const { updater, coordinator, states, timers } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error("sha512 checksum mismatch"));
+
+  await coordinator.check();
+
+  assert.deepEqual(errorStates(states), []);
+  assert.deepEqual(timers, []);
+});
+
+test("a transient failure persisting 24 hours surfaces", async () => {
+  const { updater, coordinator, getState, advance } = timedHarness();
+  updater.checkForUpdates = () => Promise.reject(new Error("getaddrinfo ENOTFOUND github.com"));
+
+  await coordinator.check();
+  advance(23 * 60 * MINUTE);
+  await coordinator.check();
+  assert.equal(getState().status, "idle");
+
+  advance(60 * MINUTE);
+  await coordinator.check();
+  assert.equal(getState().status, "error");
+});

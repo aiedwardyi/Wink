@@ -29,7 +29,7 @@ const isReportNote = (message: Message) => message.kind === "note" && Boolean(me
 
 /** The user's own message carried the notes before it; a teammate's peer turn held them. */
 export const endsNoteWindow = (message: Message) =>
-  message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !message.steered && !message.from?.botId;
+  message.role === "user" && message.kind === "text" && Boolean(message.text?.trim()) && !message.steered && !message.quick && !message.from?.botId;
 
 export function isWakeNote(message: Message): boolean {
   return (!message.quiet || isReportNote(message)) && !message.comm?.read && (message.kind === "note" || (message.kind === "activity" && message.comm?.peer === "reply" && message.comm.wake === true));

@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, GripVertical, Pencil } from "lucide-react";
+import { ChevronDown, Pencil } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useI18n } from "@/lib/i18n";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
@@ -12,12 +12,6 @@ import { Tile } from "./UsageDesk";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 
 const PRESS = "transition-[background-color,transform] duration-100 motion-reduce:transition-none";
-
-export function UsageGrip({ label }: { label: string }) {
-  const { t } = useI18n();
-  return <button type="button" data-usage-grip="" aria-label={t("usage.desk.reorder", { name: label })}
-    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" className="usage-grip"><GripVertical size={12} aria-hidden="true" /></button>;
-}
 
 export function EditableAccountName({ account, revision, editable }: { account: UsageBoardAccount; revision: number; editable: boolean }) {
   const { t } = useI18n();

@@ -90,6 +90,7 @@ import {
 } from "./config.ts";
 import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
 import { AccountService, isInstanceId } from "./accounts.ts";
+import { codexCredit, codexCreditRows } from "./codex-credit.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -160,7 +161,7 @@ import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneM
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
 import { hasPeerWatch, watchPeerTurn, peerInputJoined, takePeerReplyStamp } from "./peer-takeover.ts";
-import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
+import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies, stripStrayUserTags } from "./peer-user-reply.ts";
 import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
@@ -307,6 +308,8 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
+import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
+import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
@@ -413,6 +416,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
 import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { observeLive } from "./side-live-state.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
 
@@ -441,6 +445,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
 }
 const cfg = startupTiming.measure("config", loadConfig);
 const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
+const codexCreditFor = () => codexCredit(DATA_DIR, instanceConfigs(cfg), cfg.imageGen?.key);
 const accountNames = createAccountNames(DATA_DIR);
 accountNames.sync(accounts.list());
 // Before registry.load: a prewarmed engine child would inherit the token.
@@ -1884,6 +1889,8 @@ store.onChange((change) => {
       const bot = store.botByThread(change.threadId);
       if (bot) limitWaits.cancel(bot.id, undefined, change.message.steered === true);
     }
+    // a handed-off quick ask joins the turn as a patch, not an append
+    if (change.type === "message.patch" && change.message.quick?.state === "handoff" && change.message.steered) adoptHumanRoot(change.threadId, change.message.sendId ?? change.message.id);
     if (change.type === "bot" || change.type === "thread" || change.type === "thread.deleted" || change.type === "bot.deleted") limitWaits.reconcile();
   } catch (error) { console.error("limit-waits: reconciliation failed", error); }
   switch (change.type) {
@@ -2932,6 +2939,7 @@ const usageBoard = createUsageBoard({
         const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
         return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountBlocked(id), status: providerSnapshots.get(id) }] : [];
       }),
+      ...codexCreditRows(codexCreditFor()),
     ],
     defaultFor: (base) => accounts.defaultFor(base),
     get drains() { return accounts.drains; },
@@ -2974,7 +2982,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
-  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"), credit: codexCreditFor,
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
@@ -3347,6 +3355,7 @@ bus.subscribe((event: RuntimeEvent) => {
   ) {
     return;
   }
+  event = stripStrayUserTags(event);
   const visibleEvent = peerUserRuntime(event);
   if (visibleEvent) broadcast({ kind: "runtime", event: visibleEvent });
   if (event.type === "turn.started") {
@@ -3876,8 +3885,8 @@ bus.subscribe((event: RuntimeEvent) => {
       const settledReply = lastReply.get(event.threadId);
       const reply = settledReply?.text ?? "";
       lastReply.delete(event.threadId);
-      // summaries are hidden, so a turn that wrote nothing else shows them instead
-      for (const id of turnSummary.settle(event.threadId, event.turnId)) store.patchMessage(event.threadId, id, { summarized: undefined });
+      // summaries are hidden, so a turn that wrote nothing else shows them instead; a pane-note turn may end silent
+      for (const id of turnSummary.settle(event.threadId, event.turnId, paneNoteTurnThreads.has(event.threadId))) store.patchMessage(event.threadId, id, { summarized: undefined });
       const addedMessage = unreadTurns.settle(event.threadId, event.turnId, store.messagesFor(event.threadId));
       const lastReported = turnUsage.get(event.threadId);
       turnUsage.delete(event.threadId);
@@ -4032,7 +4041,7 @@ bus.subscribe((event: RuntimeEvent) => {
         }
       }
       // Before the queue drain subscribers append the next send.
-      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
       setImmediate(() => {
         const owner = verifyOwner && store.bot(verifyOwner.botId);
         void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
@@ -4050,6 +4059,7 @@ bus.subscribe((event: RuntimeEvent) => {
 });
 
 bus.subscribe(observeTraceEvent);
+bus.subscribe(observeLive);
 
 // Delegated turns are fire-and-forget, so the drain cannot hand the
 // peer's reply back to the caller the way ask_bot does. This watch map
@@ -4494,7 +4504,7 @@ const SHOW_IMAGE_GUIDANCE =
   "When you produce or find an image the user should see (a mockup, chart, or screenshot file), call show_image with its absolute path so it appears in this chat. For a video, audio or other file, link its absolute path in markdown, like [clip.mp4](C:\\path\\clip.mp4) or, when the path contains spaces, in angle brackets like [clip.mp4](<C:\\My Files\\clip.mp4>), so the user can open it with one click. Never end with only a file path. To create a new image, call generate_image.";
 
 const ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS =
-  " Never end a turn without a user-visible reply. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
+  " Always give a visible reply to a message the user types. A turn woken by a pane note, worker report, peer note or other automated message ends with no text at all (no '.', '⏳' or status line; call no_reply_needed first if you have it) unless what the user asked for is ready and checked, they must decide or act, or something live changed for them. If the user writes to you while you're working, reply to that message right away in one short visible line (for a question, the short answer; for a correction or instruction, a one-line acknowledgment), then keep working unless they asked you to stop or pause; never answer it only in your thinking. If that line answered it, your final message does not return to it: no recap, no 'On your question' part, no expanded take, unless your later work changed the answer or a Wink note says the user never saw that line, in which case the answer goes out again, exactly once. This covers messages the user types, not pane notes or other automated messages. Everything you write outside tool calls appears in the user's chat, so never write notes to yourself there (like 'Need X.' or a bare file name); just make the next tool call. Some engines replace longer text written between tool calls with a short summary that the user never sees, so keep each mid-turn message to one short line, and put details, links, lists and anything the user must read exactly in your final message. Write every line, mid-turn ones included, in the language the user writes in. Say each thing once: do not restate what you already told the user, in this turn or earlier ones, unless it changed, and do not repeat a status the user already has; if a turn the user started brings nothing new, reply in one short line. When you need the user's decision or input to continue, ask with the ask_user tool instead of only writing the question in a reply, so it gets noticed; it does not pause you. Clean up after yourself: once a task's result is verified, remove the temporary files, folders and worktrees you created for it, by exact path only; never delete by wildcard or age, or anything you did not create, and ask when unsure. Say what you verified yourself and what you assume or were told. Before you propose, plan or start building something, check what was already built or decided about it (feature list, status board, decision notes, your memory) and follow it; if your plan would redo or go against it, say so first. At a usage limit, say it plainly with the reset time if you know it. Never promise to resume on your own; the chat shows whether Wink will continue it.";
 const REPLY_STYLE_INSTRUCTIONS =
   " Default voice (your role description and the user's requests always win, including any length or teaching style they set): lead with the answer, default to 2-5 short lines, give the few points that matter most rather than every option unless the user asks for all of them, use plain words, prefer a few bullets over paragraphs, and be warm. If a question needs working out, work it out before answering. Skip preamble, recaps and generic closing offers; a question you need answered, or asking before you act, is not padding. Code, plans, drafts, commands and anything the user will paste or follow step by step are deliverables: give them in full. Otherwise go longer only when the user asks or the task truly needs it, and even then lead with the verdict.";
 const ALWAYS_REPLY_INSTRUCTIONS = ALWAYS_REPLY_FUNCTIONAL_INSTRUCTIONS + REPLY_STYLE_INSTRUCTIONS;
@@ -5083,6 +5093,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const routineCards = replaysTranscript
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
+  const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
@@ -5090,7 +5101,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5618,7 +5629,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId)), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -7148,7 +7159,7 @@ function reloadProviders() {
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
-if (accounts.snapshot.length || Object.keys(accounts.drains).length) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length ? terminalBridgeAccess : null, () => accountRuntime.restore()));
+if (accounts.snapshot.length || Object.keys(accounts.drains).length || codexCreditFor()) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length || codexCreditFor() ? terminalBridgeAccess : null, () => accountRuntime.restore()));
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });
@@ -7228,6 +7239,7 @@ const verifyAuto = createVerifyAuto({
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
   log: line => console.log(line),
+  app: { skipPorts: [PORT] },
 });
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,
@@ -7303,6 +7315,16 @@ const botChatRoutes = createBotChatRoutes({
   maybeResumeConnectors,
   secretMessage,
   resumeSecretCard,
+  quick: {
+    ask: quickAsk,
+    accountReady: (bot, threadId) => {
+      const instance = botAccounts.instance(bot, threadId);
+      if (!instance || !registry.accountAvailable(instance.instanceId) || limitWaits.held(bot.id)) return false;
+      const now = Date.now();
+      return !rateLimitsByInstance.get(instance.instanceId)?.windows.some((window) => window.usedPercent >= 100 && !(window.resetsAt !== null && window.resetsAt <= now));
+    },
+    usage: { start: boardTurnStarted, settle: (id) => usageBoard.turnSettled(id) },
+  },
 });
 const threadRoutes = createThreadRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
@@ -7418,7 +7440,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "terminal bridge must be a loopback HTTP endpoint" });
         }
         terminalBridgeAccess = { url, token };
-        if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess);
+        if (accounts.snapshot.length || codexCreditFor()) await enableWorkerAccounts(terminalBridgeAccess);
         return json(res, 200, { ok: true });
       }
       if ((method === "PUT" || method === "DELETE") && path === "/api/internal/google-account") {
@@ -8458,6 +8480,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if ((cfg.profile?.name ?? "").trim() !== previousPerson) phoneAccess.nameChanged();
       memoryPass.onConfigChanged();
+      if (patch.imageGen?.key !== undefined) {
+        usageBoard.touch();
+        if (codexCreditFor()) void enableWorkerAccounts(terminalBridgeAccess).catch(() => console.error("Worker account routing is unavailable"));
+      }
       // Provider keys update their instances. Other settings need no reload.
       const reloadKeys = Object.keys(patch).filter(
         (key) =>
@@ -8647,6 +8673,7 @@ setImmediate(() => void limitWaits.tick().catch((error) => console.error("limit-
 setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
+startupTiming.measure("side chats", () => sweepSide());
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 startTeamSnagOwner({

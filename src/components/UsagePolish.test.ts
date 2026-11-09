@@ -85,7 +85,7 @@ it("shares phone label and bar columns with room between collapsed rows", () => 
   expect(rule(".usage-meter-summary .usage-figures")).toContain("gap: 6px");
   expect(rule(".usage-cells-mini")).toContain("--cells-w: 70px");
   expect(rule(".usage-cells-mini")).toContain("--cell-h: 4px");
-  expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content 70px minmax(0, 1fr)");
+  expect(rule(".usage-sections[data-phone-columns]")).toContain("grid-template-columns: max-content max-content var(--usage-bar-col, 70px) minmax(0, 1fr)");
   expect(rule("[data-phone-columns] .usage-summary")).toContain("grid-template-columns: subgrid");
   expect(rule("[data-phone-columns] .usage-meter-summary")).toContain("grid-template-columns: subgrid");
   expect(rule('.usage-desk:not(:has([data-engine-fold][aria-expanded="true"])) .usage-sections')).toContain("row-gap: 30px");
@@ -198,12 +198,37 @@ it("steps every collapsed bar down with its container width and leaves phones un
     expect(q("[data-usage-sections]")!.dataset.summarySize).toBe(size);
     expect(q("[data-desktop-columns]")!.style.getPropertyValue("--usage-summary-columns")).toBe(columns);
   }
-  vi.stubGlobal("innerWidth", 392);
-  await mount();
-  expect(q("[data-summary-size]")).toBeNull();
   expect(rule(".usage-sections .usage-cells-mini")).toContain("transition-property: none");
   expect(rule('.usage-sections[data-summary-size="large"] .usage-cells-mini')).toContain("--cells-w: 120px; --cell-h: 7px");
   expect(rule('.usage-sections[data-summary-size="medium"] .usage-cells-mini')).toContain("--cells-w: 95px; --cell-h: 5.5px");
+  vi.restoreAllMocks();
+});
+
+it("sizes phone folded bars like the limits card and steps down when the figures would squeeze", async () => {
+  vi.stubGlobal("innerWidth", 392);
+  h.board!.engines = [h.board!.engines[0]!];
+  localStorage.setItem("openmausbot.usageFolds.v1", JSON.stringify({ claude: true }));
+  let overflows: string[] = [];
+  let wraps: string[] = [];
+  const size = (element: HTMLElement) => element.closest<HTMLElement>("[data-summary-size]")?.dataset.summarySize ?? "";
+  vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) { return this.matches(".usage-figures") && overflows.includes(size(this)) ? 90 : 40; });
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(60);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return this.matches(".usage-figures") && wraps.includes(size(this)) ? 46 : 20; });
+  for (const [overflow, wrap, expected] of [[[], [], "large"], [["large"], [], "medium"], [[], ["large"], "medium"], [[], ["large", "medium"], "small"], [["large", "medium"], ["small"], "small"]] as const) {
+    overflows = [...overflow];
+    wraps = [...wrap];
+    await mount();
+    expect(q("[data-usage-sections]")!.dataset.summarySize).toBe(expected);
+    expect(q("[data-phone-columns]")).not.toBeNull();
+  }
+  expect(rule(".usage-sections[data-phone-columns]")).toContain("var(--usage-bar-col, 70px)");
+  expect(rule(".usage-sections[data-phone-columns] .usage-cells-mini")).toContain("--cells-w: var(--usage-bar-col, 70px); --cell-h: var(--usage-bar-h, 4px)");
+  expect(rule('.usage-sections[data-phone-columns][data-summary-size="large"]')).toContain("--usage-bar-col: 80px; --usage-bar-h: 7px");
+  expect(rule('.usage-sections[data-phone-columns][data-summary-size="medium"]')).toContain("--usage-bar-col: 75px; --usage-bar-h: 5.5px");
+  expect(css).toMatch(/@media \(width < 768px\) \{\s*\.usage-meter \{ --cells-w: 80px;/);
+  expect(rule(".usage-desk, [data-usage-quick]")).toContain("--cell-h: 7px");
+  await foldAll();
+  expect(q("[data-summary-size]")).toBeNull();
   vi.restoreAllMocks();
 });
 

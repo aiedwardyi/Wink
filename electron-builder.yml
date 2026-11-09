@@ -29,6 +29,7 @@ afterPack: ./scripts/after-pack.mjs
 files:
   - electron/**
   - shared/error-report.mjs
+  - shared/update-error.mjs
   - "!electron/**/*.test.*"
   - "!electron/terminal-*.node-test.mjs"
   - "!electron/resources/speech-helper"

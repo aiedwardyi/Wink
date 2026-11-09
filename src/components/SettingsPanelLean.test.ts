@@ -931,8 +931,8 @@ describe("SettingsPanel memory autosave", () => {
     await wait(800);
     await land(puts[0], new Response(JSON.stringify({ error: "memory is capped at 256KB" }), { status: 400 }));
     expect(box().value).toBe("x".repeat(40));
-    expect(host.querySelector(".text-danger")?.textContent).toBe("Memory is full. Move some notes into separate memory files.");
-    expect(status()).toBe("");
+    expect(host.querySelector("div.text-danger")?.textContent).toBe("Memory is full. Move some notes into separate memory files.");
+    expect(status()).toBe("Not saved");
     await type("x".repeat(20));
     await wait(800);
     expect(puts.map((put) => put.text)).toEqual(["x".repeat(40), "x".repeat(20)]);
@@ -1270,7 +1270,7 @@ describe("SettingsPanel memory autosave", () => {
     await wait(800);
     await land(puts[0], new Response(JSON.stringify({ error: "conflict" }), { status: 409 }));
     expect(box().value).toBe("likes tea");
-    expect(host.querySelector(".text-danger")?.textContent).toBe("conflict");
+    expect(host.querySelector("div.text-danger")?.textContent).toBe("conflict");
     expect(notice()).toBe("");
     expect(stored("bot-bad-409")).toEqual({ text: "likes tea", base: "r:notes for bot-bad-409" });
     await type("likes tea and jazz");

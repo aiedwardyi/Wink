@@ -1,22 +1,30 @@
 /* every hue's alpha scales with --mem-glow, so a quieter map is this one value */
 .mm {
   --mem-glow: 1;
-  --mm-cyan: 103 232 249; --mm-blue: 96 165 250; --mm-indigo: 129 140 248; --mm-violet: 167 139 250; --mm-purple: 139 92 246;
+  --mm-cyan: 103 232 249; --mm-blue: 96 165 250; --mm-indigo: 129 140 248; --mm-violet: 167 139 250; --mm-purple: 139 92 246; --mm-pale: 221 214 254;
   --mm-line: color-mix(in srgb, var(--color-hairline) 70%, rgb(var(--mm-indigo) / calc(0.25 * var(--mem-glow))));
   --mm-card: color-mix(in srgb, var(--color-card) 78%, transparent);
   position: relative; isolation: isolate; display: flex; flex-direction: column; color: var(--color-ink); font-variant-numeric: tabular-nums;
 }
 .mm:not([data-stacked]) { height: clamp(540px, calc(100dvh - 200px), 800px); }
 .mm-glow { position: absolute; z-index: -1; pointer-events: none; left: 50%; top: 0; width: min(980px, 100%); height: 760px; max-height: 100%; transform: translateX(-50%);
-  background: radial-gradient(closest-side at 50% 22%, rgb(var(--mm-cyan) / calc(0.2 * var(--mem-glow))), rgb(var(--mm-blue) / calc(0.17 * var(--mem-glow))) 30%, rgb(var(--mm-purple) / calc(0.12 * var(--mem-glow))) 58%, transparent 100%);
+  background: var(--mm-aura, radial-gradient(closest-side at 50% 22%, rgb(var(--mm-pale) / calc(0.11 * var(--mem-glow))), rgb(var(--mm-blue) / calc(0.05 * var(--mem-glow))) 34%, rgb(var(--mm-pale) / calc(0.03 * var(--mem-glow))) 60%, transparent 85%));
   animation: mm-aura-in var(--motion-large) var(--ease-entrance) backwards, mm-aura 7s ease-in-out var(--motion-large) infinite; }
 .mm-glow::after { content: ""; position: absolute; inset: 0; background: inherit; opacity: 0; transition: opacity var(--motion-large) var(--ease-standard); }
+/* a faint grain over the aura, outside its breathe: the low-alpha fade alone shows 8-bit steps */
+.mm::after { content: ""; position: absolute; z-index: -1; pointer-events: none; left: 50%; top: 0; width: min(980px, 100%); height: 760px; max-height: 100%; transform: translateX(-50%);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 .05'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); -webkit-mask-image: radial-gradient(closest-side at 50% 22%, #000 85%, transparent); mask-image: radial-gradient(closest-side at 50% 22%, #000 85%, transparent); opacity: var(--mm-grain, 1); }
+.mm[data-aura="b"] .mm-glow::before { content: ""; position: absolute; inset: 6% 12% 20%;
+  background: radial-gradient(closest-side at 34% 42%, rgb(var(--mm-pale) / calc(0.09 * var(--mem-glow))), transparent), radial-gradient(closest-side at 66% 58%, rgb(var(--mm-cyan) / calc(0.07 * var(--mem-glow))), transparent);
+  animation: mm-drift 48s linear infinite; }
 .mm-ray { position: absolute; z-index: -1; pointer-events: none; left: 50%; top: 70px; bottom: 120px; width: 420px; transform: translateX(-50%); filter: blur(10px);
-  background: radial-gradient(closest-side, rgb(var(--mm-indigo) / calc(0.22 * var(--mem-glow))), rgb(var(--mm-purple) / calc(0.08 * var(--mem-glow))) 60%, transparent); }
+  background: var(--mm-ray, radial-gradient(closest-side, rgb(var(--mm-pale) / calc(0.09 * var(--mem-glow))), rgb(var(--mm-pale) / calc(0.03 * var(--mem-glow))) 60%, transparent)); }
 .mm[data-open] .mm-glow::after { opacity: 0.7; }
 @keyframes mm-breathe { 0%, 100% { opacity: 0.8; } 50% { opacity: 1; } }
-@keyframes mm-aura { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-@keyframes mm-aura-in { from { opacity: 0; } to { opacity: 0.6; } }
+@keyframes mm-aura { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes mm-aura-in { from { opacity: 0; } to { opacity: 0.4; } }
+@keyframes mm-drift { to { transform: rotate(1turn); } }
+@keyframes mm-ring { 0% { scale: 0.8; opacity: 0; } 30% { opacity: 1; } 100% { scale: 1.2; opacity: 0; } }
 @keyframes mm-step { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.85; } }
 @keyframes mm-arrive { from { opacity: 0; } }
 /* what the staged paint adds lands as one soft arrival */
@@ -24,14 +32,19 @@
 
 .mm-core { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 14px; }
 .mm-brain { position: relative; width: 60px; height: 60px; flex: none; border-radius: 50%; display: grid; place-items: center;
-  background: radial-gradient(circle at 50% 35%, #232a52, #10121f 70%);
-  box-shadow: 0 0 0 1px rgb(160 170 255 / calc(0.35 * var(--mem-glow))), 0 0 26px rgb(99 102 241 / calc(0.55 * var(--mem-glow))), 0 0 70px rgb(var(--mm-purple) / calc(0.35 * var(--mem-glow))); }
+  background: var(--mm-badge, radial-gradient(circle at 50% 35%, #232a52, #10121f 70%));
+  box-shadow: 0 0 0 1px rgb(160 170 255 / calc(0.35 * var(--mem-glow))), var(--mm-badge-glow, 0 0 22px rgb(var(--mm-indigo) / calc(0.28 * var(--mem-glow))), 0 0 56px rgb(var(--mm-pale) / calc(0.1 * var(--mem-glow)))); }
+.mm-brain::after { content: ""; position: absolute; z-index: -1; inset: -18px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, var(--mm-halo, rgb(var(--mm-pale) / calc(0.22 * var(--mem-glow)))), transparent);
+  animation: mm-aura 7s ease-in-out var(--motion-large) infinite backwards; }
 .mm-brain::before { content: ""; position: absolute; inset: -1px; border-radius: 50%; padding: 1.5px;
   background: conic-gradient(from 200deg, rgb(var(--mm-cyan)), rgb(var(--mm-blue)), rgb(var(--mm-violet)), rgb(var(--mm-cyan)));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
-.mm-orbit { position: absolute; left: 50%; top: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; border: 1px solid rgb(150 160 255 / calc(0.07 * var(--mem-glow))); }
-.mm-orbit-near { width: 92px; height: 92px; border-style: dashed; border-color: rgb(150 160 255 / calc(0.16 * var(--mem-glow))); }
-.mm-orbit-far { width: 116px; height: 116px; }
+.mm-orbit { position: absolute; left: 50%; top: 50%; border-radius: 50%; translate: -50% -50%; pointer-events: none;
+  background: radial-gradient(closest-side, transparent 86%, rgb(var(--mm-indigo) / calc(0.3 * var(--mem-glow))) 95%, transparent);
+  animation: mm-ring 7s cubic-bezier(.2, .6, .3, 1) var(--motion-large) infinite backwards; }
+.mm-orbit-near { width: 92px; height: 92px; }
+.mm-orbit-far { width: 116px; height: 116px; animation-delay: calc(var(--motion-large) - 3.5s); }
 
 .mm-sleep { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 4px 14px; font-size: 13.5px; line-height: 18px; color: var(--color-ink-secondary); }
 .mm-sleep-when { display: inline-flex; align-items: center; gap: 6px; color: var(--color-ink); font-weight: 500; }
@@ -52,7 +65,7 @@
 
 .mm-panel { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 18px 18px 16px; border-radius: 14px; text-align: left; color: inherit;
   background: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 40%), var(--mm-card); border: 1px solid var(--mm-line);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 10px 30px rgb(0 0 0 / 0.25); transition: border-color var(--motion-fast) var(--ease-standard); }
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 10px 30px rgb(0 0 0 / 0.25); transition: border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard); }
 .mm-panel > span { display: block; }
 button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); }
 .mm-panel-top { display: flex !important; align-items: center; justify-content: space-between; }
@@ -89,11 +102,13 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-bottom .mm-newest { flex: 1; margin: 0; padding: 0 0 0 16px; border-top: 0; border-left: 1px solid var(--mm-line); }
 .mm-bottom .mm-count { margin: 0; }
 .mm-bottom .mm-count b { font-size: 26px; line-height: 28px; background: none; color: var(--color-ink); }
+.mm:not([data-stacked]) .mm-bottom .mm-panel-top { display: contents !important; }
+.mm:not([data-stacked]) .mm-bottom .mm-chev { order: 1; }
 
 .mm-live { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden auto; padding: 16px 18px; border-radius: 16px; border: 1px solid transparent;
   background: linear-gradient(180deg, color-mix(in srgb, var(--color-card) 92%, rgb(var(--mm-indigo))), var(--color-card)) padding-box,
     linear-gradient(180deg, rgb(var(--mm-cyan) / calc(0.6 * var(--mem-glow))), rgb(var(--mm-indigo) / calc(0.4 * var(--mem-glow))) 45%, rgb(var(--mm-violet) / calc(0.12 * var(--mem-glow)))) border-box;
-  box-shadow: 0 0 40px rgb(99 102 241 / calc(0.22 * var(--mem-glow))), 0 0 90px rgb(var(--mm-purple) / calc(0.12 * var(--mem-glow)));
+  box-shadow: var(--mm-live-glow, 0 0 36px rgb(var(--mm-indigo) / calc(0.12 * var(--mem-glow))), 0 0 80px rgb(var(--mm-pale) / calc(0.06 * var(--mem-glow))));
   transition: opacity var(--motion-large) var(--ease-standard); }
 .mm[data-open] .mm-live { opacity: 0.18; }
 .mm-live-tag { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: rgb(var(--mm-cyan)); font-weight: 600; }
@@ -124,9 +139,15 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-sheet[data-kind="long"] { grid-column: 1 / 3; }
 .mm-sheet[data-kind="knowledge"] { grid-column: 2 / 4; }
 .mm-sheet[data-kind="file"] { grid-column: 1 / -1; }
+.mm-sheet[data-kind="muscle"] { grid-column: 2; grid-row: 1 / -1; }
+.mm-sheet[data-kind="muscle"] .mm-list { columns: 1; }
+.mm-sheet[data-kind="muscle"] .mm-sheet-head { gap: 10px; }
+.mm-sheet[data-kind="muscle"] .mm-sheet-head .mm-name { font-size: 16px; line-height: 20px; }
+.mm-sheet-body > .mm-empty { padding: 6px 18px; }
 .mm-edit { display: flex; flex-direction: column; padding: 14px 18px 18px; }
 .mm-edit textarea { flex: 1 0 auto; min-height: 100%; font-size: 13.5px; }
-.mm[data-open="long"] .mm-left .mm-panel, .mm[data-open="knowledge"] .mm-right .mm-panel { visibility: hidden; }
+.mm[data-open="long"] .mm-left .mm-panel, .mm[data-open="knowledge"] .mm-right .mm-panel, .mm[data-open="muscle"] .mm-bottom .mm-panel { visibility: hidden; opacity: 0; transition: opacity var(--motion-fast) var(--ease-standard), visibility 0s var(--motion-fast); }
+.mm-sheet[data-leaving] { z-index: 4; pointer-events: none; }
 .mm-sheet-head { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--mm-line); }
 .mm-sheet-head .mm-label { flex: 1; }
 .mm-sheet-head .mm-name { margin: 0; font-size: 18px; line-height: 22px; }
@@ -154,7 +175,7 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm-specks i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; box-shadow: 0 0 6px rgb(255 255 255 / 0.9); }
 
 .mm[data-stacked] .mm-ray, .mm[data-stacked] .mm-newest { display: none !important; }
-.mm[data-stacked] .mm-glow { height: 620px; }
+.mm[data-stacked] .mm-glow, .mm[data-stacked]::after { height: 620px; }
 .mm[data-stacked] .mm-grid { display: flex; flex-direction: column; gap: 12px; perspective: none; }
 .mm[data-stacked] .mm-live { order: -1; }
 .mm[data-stacked] .mm-slot > .mm-panel, .mm[data-stacked] .mm-bottom .mm-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 0 12px; padding: 14px; }
@@ -178,8 +199,21 @@ button.mm-panel:hover { border-color: rgb(var(--mm-indigo) / calc(0.45 * var(--m
 .mm[data-stacked] .mm-topic { min-height: 44px; }
 .mm-fold { position: relative; overflow: hidden; margin-top: -1px; padding: 4px 14px 10px; border: 1px solid rgb(var(--mm-indigo) / calc(0.45 * var(--mem-glow))); border-top-color: var(--mm-line); border-radius: 0 0 14px 14px; background: var(--mm-card); }
 
-.mm[data-still] .mm-glow, .mm[data-still] .mm-live-dot, .mm[data-still] .mm-steps i[data-now] { animation: none; }
+/* light skins: a pearl badge, and a mist that pales toward the middle instead of deepening */
+:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="ledger"], [data-skin="community-light"], [data-skin="notebook"], [data-skin="messenger"], [data-skin="code-review"], [data-skin="blueprint"], [data-skin="wink-day"], [data-skin="paper-tape"]) .mm {
+  --mm-grain: 0.6;
+  --mm-badge: radial-gradient(circle at 50% 35%, #ffffff, #eef0fc 72%);
+  --mm-badge-glow: 0 0 22px rgb(var(--mm-indigo) / 0.18), 0 0 60px rgb(var(--mm-pale) / 0.5);
+  --mm-aura: radial-gradient(closest-side at 50% 22%, rgb(255 255 255 / 0.9), rgb(199 230 255 / 0.4) 32%, rgb(var(--mm-pale) / 0.32) 62%, transparent 100%);
+  --mm-ray: radial-gradient(closest-side, rgb(255 255 255 / 0.75), rgb(var(--mm-pale) / 0.22) 65%, transparent);
+  --mm-halo: rgb(var(--mm-pale) / 0.7);
+  --mm-live-glow: 0 0 36px rgb(var(--mm-indigo) / 0.1), 0 0 90px rgb(var(--mm-pale) / 0.35);
+}
+
+.mm[data-still] .mm-glow, .mm[data-still] .mm-glow::before, .mm[data-still] .mm-brain::after, .mm[data-still] .mm-live-dot, .mm[data-still] .mm-steps i[data-now] { animation: none; }
+.mm[data-still] .mm-orbit { animation: none; opacity: 0.5; }
 .mm[data-still] .mm-glow::after { transition: none; }
 @media (prefers-reduced-motion: reduce) {
-  .mm-glow, .mm-live-dot, .mm-steps i[data-now] { animation: none; }
+  .mm-glow, .mm-glow::before, .mm-brain::after, .mm-live-dot, .mm-steps i[data-now] { animation: none; }
+  .mm-orbit { animation: none; opacity: 0.5; }
 }

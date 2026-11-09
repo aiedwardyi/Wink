@@ -16,6 +16,8 @@
 //   FAKE_CODEX_MESSAGES  JSON array of {text, phase?}: the turn's agentMessage
 //                     items, in place of the one default reply
 //   FAKE_CODEX_NO_INJECT  thread/inject_items fails, like a CLI without it
+//   FAKE_CODEX_CONFIG  JSON config that config/read answers
+//   thread/fork answers a new thread id and echoes `ephemeral`; the params land in the dump's calls
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { readFileSync, writeFileSync, writeSync } from "node:fs";
@@ -193,6 +195,12 @@ process.stdin.on("data", (chunk) => {
         break;
       case "thread/start":
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
+        break;
+      case "config/read":
+        out({ jsonrpc: "2.0", id: msg.id, result: { config: JSON.parse(process.env.FAKE_CODEX_CONFIG ?? "{}") } });
+        break;
+      case "thread/fork":
+        out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-fork-1", ephemeral: msg.params?.ephemeral === true }, model: "fake-codex-model" } });
         break;
       case "thread/inject_items":
         out(process.env.FAKE_CODEX_NO_INJECT

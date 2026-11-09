@@ -24,6 +24,7 @@ import { TerminalAppearanceRow } from "./TerminalAppearanceRow";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
 import { LanguagePicker } from "./LanguagePicker";
 import { useI18n } from "@/lib/i18n";
+import { isTransientUpdateError } from "../../shared/update-error.mjs";
 import { PhoneLinkSettings } from "./PhoneLinkSettings";
 import { PhoneNotificationSettings } from "./PhoneNotificationSettings";
 import { loadSidebarSide, saveSidebarSide, type SidebarSide } from "@/lib/sidebar-preferences";
@@ -109,7 +110,9 @@ export function UpdatesRow() {
               : s?.status === "error"
                 ? isMissingUpdateConfig(s.message)
                   ? t("settings.updates.unavailable")
-                  : t("settings.updates.error", { message: s.message ?? t("settings.updates.unknownError") })
+                  : isTransientUpdateError(s.message)
+                    ? t("update.unreachable")
+                    : t("settings.updates.error")
                 : acknowledged
                   ? t("update.upToDate")
                   : t("settings.updates.latest");

@@ -27,7 +27,8 @@ function sweep(aside: HTMLElement, from: number, to: number, fade: "in" | "out")
     });
   }
   return layer.finished.then(
-    () => { delete aside.dataset.coverMotion; cancel(); },
+    // a close keeps its end frame: undoing it would paint the whole panel once more before it unmounts
+    () => { if (out) return; delete aside.dataset.coverMotion; cancel(); },
     () => undefined,
   );
 }
@@ -42,6 +43,8 @@ export function useCoverChat(panel: RefObject<HTMLElement | null>, on: boolean, 
     return () => cancelAnimationFrame(frame);
   }, []);
   useLayoutEffect(() => {
+    // a closing panel gives the chat its column back; measuring that would widen the panel as it leaves
+    if (closing) return;
     const before = panel.current?.previousElementSibling;
     if (!on || !(before instanceof HTMLElement) || before.matches("[data-phone-drawer]") || before.querySelector("[data-phone-drawer]")) { setChat(0); return; }
     const wide = window.matchMedia("(min-width: 48rem)");
@@ -51,7 +54,7 @@ export function useCoverChat(panel: RefObject<HTMLElement | null>, on: boolean, 
     const observer = new ResizeObserver(measure);
     observer.observe(before);
     return () => observer.disconnect();
-  }, [on, panel]);
+  }, [on, panel, closing]);
   // painted over is not out of reach: the chat would still take Tab and screen reader focus
   useLayoutEffect(() => {
     const aside = panel.current;

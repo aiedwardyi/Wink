@@ -163,6 +163,19 @@ describe("startup timing", () => {
     }
   });
 
+  it("turns on worker routing at startup for a saved OpenAI key alone", async () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const statement = source.split("\n").find((line) => line.startsWith("if (accounts.snapshot.length") && line.includes("accountRuntime.restore"));
+    const access = { url: "http://127.0.0.1:9", token: "host" };
+    const restoreStartupAccounts = vi.fn(async () => {});
+    const startupTiming = createStartupTiming({ write: () => {} });
+    runInNewContext(statement!, { accounts: { snapshot: [], drains: {} }, accountRuntime: { restore: async () => {} }, startupTiming,
+      terminalBridgeAccess: access, restoreStartupAccounts, codexCreditFor: () => ({ key: "fixture" }) });
+    startupTiming.paint();
+    await startupTiming.waitFor("accounts");
+    expect(restoreStartupAccounts).toHaveBeenCalledWith(access, expect.any(Function));
+  });
+
   it("waits for paint instead of racing it with the boot probe timer", async () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const start = source.search(/(?:startupTiming.afterPaint\("probes"|void serverServing.then\(\(\) => setTimeout)/);

@@ -49,7 +49,7 @@ import { liveActivityLabel } from "@/lib/live-activity";
 import { useNoReply } from "@/lib/no-reply";
 import { useNoReplySwitch } from "@/lib/no-reply-switch";
 import { buffersForTurn, currentTurnId, turnPhase, turnStageLabel } from "@/lib/turn-stage";
-import { Bubble, bubbleBot, versionProps } from "./ChatBubble";
+import { Bubble, QuickTyping, bubbleBot, versionProps } from "./ChatBubble";
 import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { AskUserRecord } from "./AskUserRecord";
 import { FolderFix } from "./FolderFix";
@@ -645,6 +645,23 @@ const MessagesList = memo(function MessagesList({
     () => chatTranscriptRows(items, { showToolCalls, showActivities, transcript }),
     [items, showToolCalls, showActivities, transcript],
   );
+  // answers whose ask is not the text row right above them quote it; asks still waiting have no answer yet
+  const { quickAsks, answeredAsks } = useMemo(() => {
+    const quickAsks = new Map<string, Message>();
+    const answeredAsks = new Set<string>();
+    let prev: Message | undefined;
+    for (const message of transcript) {
+      if (message.kind !== "text") continue;
+      const askId = message.quick?.state === "answer" ? message.quick.askId : undefined;
+      if (askId) {
+        answeredAsks.add(askId);
+        const ask = transcript.find((candidate) => candidate.id === askId);
+        if (ask && prev?.id !== ask.id) quickAsks.set(message.id, ask);
+      }
+      prev = message;
+    }
+    return { quickAsks, answeredAsks };
+  }, [transcript]);
   const peerReplies = useMemo(() => {
     const replies = new Map<string, NonNullable<Message["comm"]>>();
     let comm: Message["comm"];
@@ -817,7 +834,7 @@ const MessagesList = memo(function MessagesList({
                   onCancelEdit={onCancelEdit}
                   onSubmitEdit={onSubmitEdit}
                   onRegenerate={m.id === lastBotTextId ? onRegenerate : undefined}
-                  replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : undefined}
+                  replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : quickAsks.get(m.id)}
                   onReply={onReply}
                   onMessageMenu={onMessageMenu}
                 />
@@ -833,6 +850,7 @@ const MessagesList = memo(function MessagesList({
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
+            {bot.busy && m.role === "user" && m.quick?.state === "asked" && !answeredAsks.has(m.id) && <QuickTyping botName={bot.name} />}
           </div>
         );
       })}
@@ -1076,7 +1094,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const sendsNext = composerIsBusy(Boolean(bot.busy), accepted);
 
   const lastBotTextId = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text" && isShownMessage(m))?.id,
+    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text" && isShownMessage(m) && m.quick?.state !== "answer")?.id,
     [messages],
   );
 

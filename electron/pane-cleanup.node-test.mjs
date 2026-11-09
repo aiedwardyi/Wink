@@ -567,6 +567,22 @@ test("a missing worktree root does not block reported scratch cleanup", async (t
   assert.deepEqual(f.warnings, []);
 });
 
+test("AF_UNIX sockets in TEMP do not block reported scratch cleanup", { skip: process.platform !== "win32" && "AF_UNIX reparse points are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const host = path.join(f.tempRoot, "wink-HOST");
+  fs.mkdirSync(host);
+  const script = "$s = [System.Net.Sockets.Socket]::new('Unix', 'Stream', 'Unspecified'); $s.Bind([System.Net.Sockets.UnixDomainSocketEndPoint]::new($env:PANE_CLEANUP_SOCKET)); Stop-Process -Id $PID -Force";
+  for (const dir of [host, f.scratch]) {
+    try { execFileSync("pwsh", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, stdio: "ignore", env: { ...process.env, PANE_CLEANUP_SOCKET: path.join(dir, "control.sock") } }); } catch {}
+    if (!fs.readdirSync(dir).includes("control.sock")) return t.skip("pwsh cannot create AF_UNIX sockets");
+  }
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.deepEqual(f.jobs.filter((job) => job.ms === 60_000), []);
+  assert.deepEqual(f.warnings, []);
+});
+
 test("a link appearing in the final scratch walk aborts removal", async (t) => {
   const f = fixture(t);
   const link = path.join(f.scratch, "late-link");

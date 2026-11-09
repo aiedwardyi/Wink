@@ -18,6 +18,7 @@ import { useI18n, type MessageKey } from "@/lib/i18n";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { useReplyStyle } from "@/lib/reply-style";
 import { splitReplyBlocks } from "@/lib/turn-stage";
+import { unwrapUserTags } from "../../shared/user-tags";
 import { windowsPathLinks } from "../../shared/windows-path-links";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
@@ -612,7 +613,7 @@ function Spoiler({ children }: { children?: ReactNode }) {
 }
 
 function ChatMarkdownComponent({
-  text,
+  text: source,
   streaming = false,
   whole = 0,
   baseDir,
@@ -624,6 +625,7 @@ function ChatMarkdownComponent({
   baseDir?: string | null;
   threadId?: string;
 }) {
+  const text = useMemo(() => unwrapUserTags(source), [source]);
   const style = useReplyStyle();
   const root = useRef<HTMLDivElement>(null);
   const seen = useRef(new WeakSet<Element>());

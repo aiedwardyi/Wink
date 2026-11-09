@@ -414,6 +414,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.OMB_CLAUDE_EFFORT_REPLY_MS;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CLAUDE_CODE_SILENT_TURN_REMINDER;
+    delete process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
     delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     delete process.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT;
     delete process.env.XAI_API_KEY;
@@ -920,6 +921,29 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_SILENT_TURN_REMINDER).toBe("1");
+  });
+
+  it("lists only no_reply_needed as a terminal tool when agents is mounted", async () => {
+    await create();
+    const dump = join(scratch, "terminal-tools.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "Bash";
+    await instance.adapter.sendTurn({
+      threadId: "t-terminal-tools", text: "hi",
+      integrations: { agents: { command: process.execPath, args: ["/fake/agents-proxy.js"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_TERMINAL_MCP_TOOLS).toBe("mcp__agents__no_reply_needed");
+  });
+
+  it("clears inherited terminal tools when agents is not mounted", async () => {
+    await create();
+    const dump = join(scratch, "terminal-tools.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "Bash";
+    await instance.adapter.sendTurn({ threadId: "t-terminal-tools", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env).not.toHaveProperty("CLAUDE_CODE_TERMINAL_MCP_TOOLS");
   });
 
   it("turns Claude Code auto memory off on every turn", async () => {

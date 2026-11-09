@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -220,6 +220,30 @@ for (const platform of ["win32", "linux"]) {
     assert.deepEqual(JSON.parse(output), args.map((arg) => arg.replace(/\u0000(ORBIT_[A-Z_]+)\u0000/g, (_, name) => environment[name])));
   });
 }
+
+test("a POSIX credit launch clears the key after Ctrl+C and a failing exit", async (t) => {
+  const key = "sk-proj-WINKFAKECTRLC-0001";
+  const name = "WINK_OPENAI_CREDIT_KEY";
+  const shell = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/sh";
+  for (const body of ["kill -INT 0", "exit 3", `test -n "$${name}" && echo seen`]) {
+    const line = workers.managedWorkerCommand({ executable: "sh", args: ["-c", body], clearEnv: [name] }, {}, "linux");
+    // A detached shell leads its own process group, so kill 0 stands in for Ctrl+C without reaching the test runner.
+    const child = spawn(shell, ["-i"], { detached: process.platform !== "win32", windowsHide: true, timeout: 20_000, killSignal: "SIGKILL", env: { ...process.env, [name]: key } });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    const closed = new Promise((resolve) => child.on("close", resolve));
+    const started = await new Promise((resolve) => { child.on("spawn", () => resolve(true)); child.on("error", () => resolve(false)); });
+    if (!started) return t.skip("POSIX shell is unavailable");
+    child.stdin.end(`${line}\nprintenv ${name}; echo done\n`);
+    await closed;
+    assert.match(output, /done/);
+    assert.ok(!output.includes(key), body);
+    if (body.includes("seen")) assert.match(output, /seen/);
+  }
+  assert.equal(workers.managedWorkerCommand({ executable: "sh", args: ["-c", "kill -INT 0"], clearEnv: [name] }, {}, "linux"),
+    `(trap : INT; 'sh' '-c' 'kill -INT 0'; exit); unset ${name}`);
+});
 
 test("managed Windows commands preserve smart quotes as one literal argument", () => {
   for (const prompt of ["don\u2019t", "x\u2019; calc; \u2019y", "a\u2018b", "a\u201ab", "a\u201bb"]) {

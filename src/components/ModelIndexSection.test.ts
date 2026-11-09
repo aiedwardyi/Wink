@@ -125,7 +125,7 @@ describe("coding tabs", () => {
     expect(chosen("Coding Benchmark")).toBe("Terminal-Bench");
     expect(host.textContent).toContain("Terminal-Bench 4.0, % resolved");
     pick("Coding Benchmark", "FrontierCode");
-    expect(host.textContent).toContain("FrontierCode 1.1, mean score %");
+    expect(host.textContent).toContain("FrontierCode 2.0, mean score %");
   });
 
   it("keeps the chosen coding benchmark across view and tab switches", () => {
@@ -138,7 +138,7 @@ describe("coding tabs", () => {
     expect(chosen("Coding Benchmark")).toBe("FrontierCode");
     for (let i = 0; i < 7; i++) press(window);
     expect(chosen("Coding Benchmark")).toBe("FrontierCode");
-    expect(host.textContent).toContain("FrontierCode 1.1, mean score %");
+    expect(host.textContent).toContain("FrontierCode 2.0, mean score %");
   });
 });
 
@@ -316,10 +316,10 @@ describe("score vs cost", () => {
         const sol = host.querySelector<SVGElement>('[aria-label="GPT-6.1 Sol default"]')!;
         act(() => sol.focus());
         const tip = host.querySelector('[role="tooltip"]')?.textContent;
-        expect(tip).toContain("92.0");
-        expect(tip).toContain("90.3-93.8");
+        expect(tip).toContain("87.8");
+        expect(tip).toContain("84.6-89.9");
         expect(tip).toContain("$0.15");
-        expect(tip).not.toContain("92.0%");
+        expect(tip).not.toContain("87.8%");
         pick(chart, locale === "en" ? "Ranked" : "순위");
         expect(host.querySelectorAll('[tabindex="0"]')).toHaveLength(12);
       } finally {
@@ -459,7 +459,7 @@ describe("score hover card", () => {
     expect(terminal).not.toMatch(/95% CI|Harness/);
     pick("Coding Benchmark", "FrontierCode");
     expect(chosen("Chart")).toBe("Ranked");
-    expect(rowTip("Claude Opus 5.5medium")).toContain("57.1%FrontierCode");
+    expect(rowTip("Claude Opus 5.5medium")).toContain("33.1%FrontierCode");
     pick("Benchmark", "Design");
     expect(host.textContent).not.toContain("GPT-5.6 Terra");
   });

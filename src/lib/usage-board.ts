@@ -42,6 +42,8 @@ export type UsageBoardAccount = {
   bots: UsageBoardBot[];
   // null means unknown (host miss or old host), never "no workers".
   workers: UsageBoardRun[] | null;
+  // Runs on the saved OpenAI key: no plan windows, never Main.
+  credit?: true;
 };
 
 export type UsageBoardEngine = {

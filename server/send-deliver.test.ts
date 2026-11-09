@@ -14,6 +14,7 @@ describe("steersSend", () => {
     const messages: Message[] = [];
     const store = {
       bot: () => bot,
+      messagesFor: () => messages,
       appendMessage: (_threadId: string, message: Omit<Message, "id" | "at">) => {
         const saved = { ...message, id: `m${messages.length}`, at: 1 };
         messages.push(saved);

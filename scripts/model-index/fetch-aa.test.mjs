@@ -4,8 +4,8 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFi
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { API_URL, buildSnapshot, loadResponse, MANUAL, parseResponse, rawFileArg } from "./fetch-aa.mjs";
-import { Unverifiable } from "./lib.mjs";
+import { API_URL, buildSnapshot, INDEX_PAGE, loadResponse, MANUAL, parseResponse, publishedIndexVersion, rawFileArg } from "./fetch-aa.mjs";
+import { beginRun, Unverifiable } from "./lib.mjs";
 
 const { describe, it } = process.env.NODE_TEST_CONTEXT ? await import("node:test") : await import("vitest");
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "aa-models.json");
@@ -38,6 +38,18 @@ describe("AA response", () => {
     assert.deepEqual(snapshot.rows.map(({ effort, value }) => [effort, value]), [["xhigh", 50], ["max", 71.7]]);
     assert.throws(() => build({ previous: { ...previous, benchmark: "aa-terminal-bench", version: "5.0" } }), /version/);
     assert.deepEqual(MANUAL.map(({ name }) => name), ["aa-gdpval", "aa-frontiercode"]);
+  });
+
+  it("stops the Intelligence Index when AA publishes another version, leaving Terminal-Bench alone", () => {
+    assert.throws(() => build({ indexVersion: "5.0.1" }), (error) => error instanceof Unverifiable && /is now v5\.0\.1, snapshot is 4\.3\.2/.test(error.message));
+    assert.equal(build({ indexVersion: "4.3.2" }).snapshot.rows.length, 3);
+    assert.equal(build({ indexVersion: "5.0.1", previous: { ...previous, benchmark: "aa-terminal-bench", version: "4.0" } }).snapshot.rows.length, 2);
+  });
+
+  it("reads one Intelligence Index version from the public page, or fails", () => {
+    assert.equal(publishedIndexVersion("Intelligence Index v5.0.1 incorporates 9 evaluations. Intelligence Index v5.0.1"), "5.0.1");
+    assert.throws(() => publishedIndexVersion("no version here"), Unverifiable);
+    assert.throws(() => publishedIndexVersion("Intelligence Index v5.0.1, Intelligence Index v6.0"), Unverifiable);
   });
 
   it("keeps a filled effort absent from the AA response until a new real score arrives", () => {
@@ -137,12 +149,18 @@ describe("AA input", () => {
     const original = globalThis.fetch;
     const keys = [];
     globalThis.fetch = async (url, options) => {
+      if (url === INDEX_PAGE) {
+        assert.equal(options.headers["x-api-key"], undefined);
+        return { status: 200, text: async () => "Intelligence Index v5.0.1 incorporates 9 evaluations" };
+      }
       assert.equal(url, API_URL);
       keys.push(options.headers["x-api-key"]);
       return { status: 200, text: async () => readFileSync(fixture, "utf8") };
     };
     try {
-      await loadResponse({ apiKey: " env-secret ", keyFile });
+      beginRun();
+      assert.equal((await loadResponse({ apiKey: " env-secret ", keyFile })).indexVersion, "5.0.1");
+      beginRun();
       await loadResponse({ apiKey: "", keyFile });
       assert.deepEqual(keys, ["env-secret", "file-secret"]);
       assert.deepEqual((await loadResponse({ apiKey: "env-secret", keyFile, rawFile: fixture })).rows, rows());

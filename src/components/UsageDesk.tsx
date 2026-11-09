@@ -19,13 +19,13 @@ import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { api, useStore } from "@/state/store";
 import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
-import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { useUsageSwitch } from "@/lib/use-usage-switch";
 import { EngineSignIn } from "./EngineSetup";
 import { Fold } from "./Fold";
 import { ProviderMark } from "./ProviderIcons";
 import { EmptyState } from "./SettingsPrimitives";
-import { AccountPicker, EditableAccountName, UsageGrip } from "./UsageAccounts";
+import { AccountPicker, EditableAccountName } from "./UsageAccounts";
 import { AccountBars, barSlots, WindowBar } from "./UsageBars";
 import { PagedAccounts, type RowSlots } from "./UsagePaged";
 import { USAGE_LAYOUT, usageAccounts } from "./usage-layout";
@@ -218,13 +218,14 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   const pending = state.pending[engine.base];
   const switching = pending?.target === account.id;
   const spot = cn(SPOT, terminal ? "rounded-none" : "rounded-md");
+  const reorder = usageAccounts(engine).length > 1;
   let control: ReactNode = null;
   // While it waits, the sign-in's steps take their own line under the name.
   // The small card keeps a Sign In button where the account already reads connected, never a stray "Connected".
   if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
   else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
   else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
-  else if (account.signIn === "ready") control = (
+  else if (account.signIn === "ready" && !account.credit) control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
       onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON)}>
@@ -232,18 +233,18 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
     </button>
   );
   return (
-    <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} className="min-w-0 border-hairline/70 outline-none [&+&]:border-t">
-      {settings && <UsageGrip label={account.name} />}
+    <div data-account-row={account.id} data-usage-switched={highlight || undefined} tabIndex={-1} {...(reorder && reorderable(t("usage.desk.reorder", { name: account.name })))}
+      className={cn("min-w-0 border-hairline/70 [&+&]:border-t", !reorder && "outline-none")}>
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
-          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && ["claude", "codex"].includes(engine.engine)} />}
+          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex"].includes(engine.engine)} />}
           {email && <span data-account-email="" className="usage-email">{email}</span>}
         </div>
         {control}
       </div>
-      {account.signIn === "ready" ? <>
+      {account.signIn === "ready" && !account.credit ? <>
         <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
-      </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
+      </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(account.signIn === "ready" ? "usage.desk.apiCredit" : STATE_KEY[account.signIn])}</div>}
     </div>
   );
 }
@@ -399,8 +400,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
   const capped = useCappedAccounts({ accounts: ordered(engine.accounts, accountOrder, (each) => each.id), checked, t, row,
     loadOpen: () => loadFolds(ACCOUNTS_KEY)[engine.base] ?? false, saveOpen: (open) => saveFold(engine.base, open, ACCOUNTS_KEY) });
   const head = (arrows?: ReactNode) => (
-    <div data-engine-head="" className="usage-engine-head">
-      <UsageGrip label={label} />
+    <div data-engine-head="" {...(board.engines.filter((each) => each.accounts.length).length > 1 && reorderable(t("usage.desk.reorder", { name: label })))} className="usage-engine-head">
       <button type="button" data-engine-fold="" aria-expanded={!folded} aria-controls={id} onClick={() => afterFold(id, onFold)}
         className={cn("group relative flex h-5 min-w-0 shrink items-center gap-2 text-[14px] font-semibold text-ink",
           terminal ? "rounded-none" : "rounded-md", "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-2")}>
@@ -481,6 +481,17 @@ export function UsageDesk() {
       for (const head of heads) head.style.transitionProperty = "none";
       delete list.dataset.phoneColumns;
       if (!heads.length) return;
+      list.dataset.phoneColumns = "";
+      const figures = [...list.querySelectorAll<HTMLElement>(".usage-meter-summary .usage-figures")];
+      // A bigger bar may neither squeeze a row nor wrap one that fits on one line at the small size.
+      list.dataset.summarySize = "small";
+      const lines = figures.map((each) => each.offsetHeight);
+      for (const size of ["large", "medium"]) {
+        list.dataset.summarySize = size;
+        if (figures.every((each, index) => each.offsetHeight <= lines[index]! && each.scrollWidth <= each.clientWidth)) break;
+        list.dataset.summarySize = "small";
+      }
+      delete list.dataset.phoneColumns;
       for (const head of heads) head.style.setProperty("--usage-row-height", `${head.getBoundingClientRect().height}px`);
       list.dataset.phoneColumns = "";
       for (const head of heads) head.style.removeProperty("transition-property");

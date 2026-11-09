@@ -37,6 +37,7 @@ import { lastUserInstruction, packetAfterInterruption } from "./task-recovery-fl
 import {
   botAvatarChoiceSchema,
   botAvatarProfile,
+  nextWinkAvatar,
   type BotAvatarChoice,
   type BotAvatarCrop,
 } from "../shared/bot-avatar.ts";
@@ -166,6 +167,8 @@ export interface Message {
    * model saw it mid-turn, so the transcript marks it — a reader should
    * know the reply above it may already account for this line */
   steered?: boolean;
+  /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
+  quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   /** screen messages: a frame of the bot's computer (base64 image) */
@@ -717,22 +720,6 @@ const onboardingCard = (): OptionCardData => ({
 interface ThreadState {
   messages: Message[];
   activeLeafId: string | null;
-}
-
-const WINK_ICON_ORDER = ["icon-31", "icon-33", "icon-34", "icon-35", "icon-32"] as const satisfies readonly BotAvatarChoice[];
-
-/** Ties break in WINK_ICON_ORDER, so a fresh install starts on icon-31. */
-function leastUsedWinkIcon(bots: readonly { mascotStyle?: string | null }[]): (typeof WINK_ICON_ORDER)[number] {
-  const counts = new Map<string, number>(WINK_ICON_ORDER.map((id) => [id, 0]));
-  for (const bot of bots) {
-    const style = bot.mascotStyle;
-    if (style && counts.has(style)) counts.set(style, (counts.get(style) ?? 0) + 1);
-  }
-  let chosen: (typeof WINK_ICON_ORDER)[number] = WINK_ICON_ORDER[0];
-  for (const id of WINK_ICON_ORDER) {
-    if ((counts.get(id) ?? 0) < (counts.get(chosen) ?? 0)) chosen = id;
-  }
-  return chosen;
 }
 
 export class Store {
@@ -1453,12 +1440,12 @@ export class Store {
       description: profile.description ?? job ?? "",
       notifications: true,
       color: profile.color ?? "white",
-      mascotStyle: profile.mascotStyle ?? leastUsedWinkIcon(this.bots),
+      mascotStyle: profile.mascotStyle ?? nextWinkAvatar(this.bots),
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       resumeCursors: {},
-      createdAt: Date.now(),
+      createdAt: Math.max(Date.now(), ...this.bots.map((b) => (b.createdAt ?? 0) + 1)),
       ...(computer ? { computer } : {}),
     };
     if (profile.cwd) bot.cwd = profile.cwd;
