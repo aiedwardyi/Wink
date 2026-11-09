@@ -147,6 +147,17 @@ public enum Markdown {
             guard let match = item.firstMatch(in: part, range: NSRange(part.startIndex..., in: part)) else { return nil }
             return (match.range(at: 1).length + match.range(at: 2).length, match.range(at: 3).length)
         }
+        func breaks(_ line: String) -> Bool {
+            let text = line.drop(while: { $0 == " " })
+            guard line.count - text.count <= 3, let first = text.first else { return false }
+            if first == "#" {
+                let hashes = text.prefix(while: { $0 == "#" }).count
+                return hashes <= 6 && (text.count == hashes || text.dropFirst(hashes).first == " " || text.dropFirst(hashes).first == "\t")
+            }
+            guard first == "-" || first == "*" || first == "_" else { return false }
+            let marks = text.filter { $0 != " " && $0 != "\t" }
+            return marks.count >= 3 && marks.allSatisfy { $0 == first }
+        }
         func isBlank(_ part: Substring) -> Bool { part.allSatisfy { $0 == " " || $0 == "\t" } }
         func unquoted(_ line: String) -> Substring {
             var rest = Substring(line)
@@ -242,6 +253,7 @@ public enum Markdown {
                 if let open = fenceStart(Substring(last)), depth == fenceDepth, indent <= fenceColumn + 3, open.column == 0, open.mark.first == fence.first,
                    open.mark.count >= fence.count, isBlank(open.after) {
                     fence = ""
+                    blank = true
                     return quote + last
                 }
                 return line
@@ -266,7 +278,8 @@ public enum Markdown {
                 listColumn = 0
             }
             indented = code
-            blank = false
+            // indented code may follow a heading or rule without a blank line
+            blank = !code && breaks(core)
             return code ? line : scan(line)
         }.joined(separator: "\n")
     }

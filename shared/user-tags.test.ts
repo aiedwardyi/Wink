@@ -67,6 +67,13 @@ describe("unwrapUserTags", () => {
     expect(unwrapUserTags(text)).toBe(text);
   });
 
+  it("keeps indented code literal right after a fence, heading or rule", () => {
+    for (const lead of ["~~~text\nx\n~~~", "# Title", "---"]) {
+      const text = lead + "\n    <user1>y</user1>";
+      expect(unwrapUserTags(text)).toBe(text);
+    }
+  });
+
   it("keeps indented code inside a list item literal", () => {
     const text = "-     <user1>x</user1>";
     expect(unwrapUserTags(text)).toBe(text);

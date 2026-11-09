@@ -8,6 +8,7 @@ const QUOTE = /^(?: {0,3}>[ \t]?)+/;
 const FENCE = /^( *(?:(?:[-*+]|\d{1,9}[.)]) +)*)(`{3,}(?=[^`]*$)|~{3,})/;
 const FENCE_END = /^ *(`{3,}|~{3,})\s*$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])( +)(?=\S)/;
+const BREAK = /^ {0,3}(?:#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$)/;
 const RUNS = /`+/g;
 const EOL = /[\r\n]/g;
 
@@ -101,6 +102,7 @@ export class UserTagScanner {
         return { code: true, head: line };
       }
       this.fence = "";
+      this.blank = true;
       return { code: true, head: quote + last };
     }
     // a fence marker inside indented code is code, not a fence
@@ -122,7 +124,8 @@ export class UserTagScanner {
       this.listColumn = item[1].length + item[2].length + (code ? 1 : item[3].length);
     } else if (!code && indent < this.listColumn) this.listColumn = 0;
     this.indented = code;
-    this.blank = false;
+    // indented code may follow a heading or rule without a blank line
+    this.blank = !code && BREAK.test(core);
     return { code, head: line };
   }
 
