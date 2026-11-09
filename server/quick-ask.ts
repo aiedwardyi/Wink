@@ -21,6 +21,8 @@ const NOTE_HEAD =
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
+// engines that passed the real-engine accuracy bar
+const QUICK_ENGINES: ReadonlySet<string> = new Set(["claudeAgent"]);
 
 export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
 
@@ -45,7 +47,8 @@ export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
   if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
-  if (!gate.instance?.fork && !gate.instance?.generateText) return false;
+  if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
+  if (!gate.instance.fork && !gate.instance.generateText) return false;
   if (gate.messages.some(openAsk)) return false;
   return nominate(gate.text) === "quick";
 }

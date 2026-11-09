@@ -45,7 +45,7 @@ function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean;
     return true;
   });
   const adapter = { capabilities: { queueing: opts.queueing !== false, steerConsumed: opts.consumed === true }, steer, interruptTurn: vi.fn(async () => {}) };
-  const instance = { instanceId: "claude", adapter, generateText: vi.fn(async () => "") };
+  const instance = { instanceId: "claude", driverKind: "claudeAgent", adapter, generateText: vi.fn(async () => "") };
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => (release = resolve));
   const ask = vi.fn(async () => {
@@ -467,7 +467,7 @@ describe("Gate 0", () => {
   const bot = store.createBot({}, { seedMessages: false });
   const busy = { ...bot, busy: true, activeThreadId: bot.threadId };
   const base: QuickGate = {
-    bot: busy, threadId: bot.threadId, text: QUESTION, instance: { fork: () => null } as never, messages: [],
+    bot: busy, threadId: bot.threadId, text: QUESTION, instance: { driverKind: "claudeAgent", fork: () => null } as never, messages: [],
     deliverAfter: false, room: false, accountReady: true,
   };
   const card = { id: "c", at: 1, role: "bot", kind: "options", card: { title: "?", subtitle: "", options: [], askUser: true } } as Message;
@@ -484,11 +484,15 @@ describe("Gate 0", () => {
     ["a queued send", { queueId: "q1" }],
     ["a room", { room: true }],
     ["signed out or at a limit", { accountReady: false }],
-    ["no fork and no fallback", { instance: { adapter: {} } as never }],
+    ["no fork and no fallback", { instance: { driverKind: "claudeAgent", adapter: {} } as never }],
     ["an open ask_user card", { messages: [card] }],
     ["not nominated", { text: "ship it" }],
   ])("skips the helper: %s", (_name, patch) => {
     expect(routesQuick({ ...base, ...patch })).toBe(false);
+  });
+
+  it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {
+    expect(routesQuick({ ...base, instance: { driverKind, fork: () => null, generateText: async () => "" } as never })).toBe(false);
   });
 });
 
