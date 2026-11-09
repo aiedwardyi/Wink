@@ -41,7 +41,7 @@ const bot: Bot = {
   modelSelection: { instanceId: "claude", model: "claude-3-5-sonnet", mode: "automatic" }, messages: [],
 };
 
-type Pass = { element: Element; keyframes: Keyframe[]; finish: () => void; cancel: ReturnType<typeof vi.fn> };
+type Pass = { element: Element; keyframes: Keyframe[]; finish: () => void; cancel: ReturnType<typeof vi.fn>; reverse: ReturnType<typeof vi.fn>; playbackRate: number };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -55,6 +55,10 @@ const pages = () => [...panel().querySelectorAll<HTMLElement>(".absolute.inset-0
 const tab = (index: number) => panel().querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]!;
 const onMemory = () => tab(1).getAttribute("aria-selected") === "true";
 const box = () => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory"]');
+const write = (value: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), value);
+  box()!.dispatchEvent(new Event("input", { bubbles: true }));
+});
 const fileRow = () => [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((each) => each.textContent?.includes("Memory File"))!;
 const closes = () => dispatch.mock.calls.filter(([action]) => action.type === "toggleSettings");
 
@@ -106,13 +110,23 @@ beforeEach(() => {
     addEventListener: () => undefined, removeEventListener: () => undefined,
   }));
   width(392);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ({
+    getExtension: (name: string) => (name === "WEBGL_debug_renderer_info" ? { UNMASKED_RENDERER_WEBGL: 1 } : null),
+    getParameter: () => "NVIDIA GeForce",
+  }) as never);
   Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
   Object.defineProperty(HTMLElement.prototype, "animate", {
     configurable: true,
     value(this: Element, keyframes: Keyframe[]) {
       let finish: () => void = () => undefined;
-      const finished = new Promise((done) => { finish = () => done(undefined); });
-      const pass = { element: this, keyframes, finish: () => finish(), cancel: vi.fn(), finished, reverse: vi.fn() };
+      const run = () => new Promise((done) => { finish = () => done(undefined); });
+      let next = 1;
+      const pass = {
+        element: this, keyframes, finish: () => finish(), cancel: vi.fn(), finished: run(), playbackRate: 1,
+        effect: { updateTiming: vi.fn(), getComputedTiming: () => ({ endTime: 2 * MOTION_LARGE_MS }) },
+        updatePlaybackRate: (rate: number) => { next = rate; },
+        reverse: vi.fn(() => { pass.playbackRate = -next; pass.finished = run(); }),
+      };
       passes.push(pass);
       return pass;
     },
@@ -326,6 +340,17 @@ describe("Memory tab on return", () => {
     expect(puts).toEqual(["- Uses Linux"]);
   });
 
+  it("shows the Memory File save state in its own header, not the page corner", async () => {
+    await open();
+    await toMemory();
+    await act(async () => fileRow().click());
+    await write("- Uses Linux");
+    expect(fileRow().parentElement!.querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
+    expect(fileRow().querySelector("[data-save-state]")).toBeNull();
+    expect(host.querySelectorAll("[data-save-state]")).toHaveLength(1);
+    expect(host.querySelectorAll('.relative.flex.flex-col.gap-3 > [role="status"]')).toHaveLength(0);
+  });
+
   it("keeps the file open through a save conflict", async () => {
     localStorage.setItem("omb-memory-draft:bot-held", JSON.stringify({ text: "mine", base: "r:older" }));
     await open({ ...bot, id: "bot-held" });
@@ -378,5 +403,149 @@ describe("Knowledge and Edit", () => {
     await toMemory();
     await settle();
     expect([...host.querySelectorAll(".mm-steps i")].map((each) => each.hasAttribute("data-now"))).toEqual([false, true, false]);
+  });
+});
+
+describe("Long-Term and Knowledge sheets", () => {
+  const sheet = (kind: string) => host.querySelector<HTMLElement>(`.mm-sheet[data-kind="${kind}"]`);
+  const wide = async () => {
+    width(1280);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? 1280 : 0; });
+    await open();
+    await toMemory();
+    await act(async () => fold("long").click());
+  };
+
+  it("closes by playing its own open back, with the map never fading", async () => {
+    await wide();
+    const swing = passes.filter((each) => each.element === sheet("long"));
+    expect(swing).toHaveLength(1);
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    expect(host.querySelector(".mm")!.hasAttribute("data-closing")).toBe(false);
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
+    expect(swing[0]!.reverse).toHaveBeenCalledTimes(1);
+    expect(swing[0]!.playbackRate).toBeLessThan(0);
+    expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    await finishPasses();
+    expect(sheet("long")).toBeNull();
+  });
+
+  it("turns a close around from where it is on a second click", async () => {
+    await wide();
+    const swing = passes.find((each) => each.element === sheet("long"))!;
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    await act(async () => { fold("long").focus(); fold("long").click(); });
+    expect(swing.reverse).toHaveBeenCalledTimes(2);
+    expect(swing.playbackRate).toBe(1);
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(false);
+    expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    expect(document.activeElement).toBe(sheet("long")!.querySelector(".mm-close"));
+    await finishPasses();
+    expect(sheet("long")).not.toBeNull();
+  });
+
+  it("opens Knowledge from Long-Term in one click, and a click outside closes it", async () => {
+    await wide();
+    await act(async () => fold("knowledge").click());
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
+    expect(sheet("knowledge")!.hasAttribute("data-leaving")).toBe(false);
+    await finishPasses();
+    expect(sheet("long")).toBeNull();
+    await act(async () => host.querySelector<HTMLElement>(".mm-core")!.click());
+    expect(sheet("knowledge")!.hasAttribute("data-leaving")).toBe(true);
+  });
+
+  it("keeps focus on the sheet that opened while the other was still closing", async () => {
+    await wide();
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    await act(async () => fold("knowledge").click());
+    await finishPasses();
+    expect(document.activeElement).toBe(sheet("knowledge")!.querySelector(".mm-close"));
+  });
+
+  it("closes at once under reduced motion, leaving the open's animations alone", async () => {
+    await wide();
+    const swing = passes.find((each) => each.element === sheet("long"))!;
+    reduced = true;
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    await settle();
+    expect(swing.reverse).not.toHaveBeenCalled();
+    expect(sheet("long")).toBeNull();
+    expect(document.activeElement).toBe(fold("long"));
+  });
+
+  it("cancels the open's motion, mist and specks included, when the map unmounts", async () => {
+    await wide();
+    const mine = passes.filter((each) => host.querySelector(".mm")!.contains(each.element));
+    expect(mine.some((each) => each.element.classList.contains("mm-mist"))).toBe(true);
+    expect(mine.some((each) => each.element.classList.contains("mm-specks"))).toBe(true);
+    await act(async () => root.unmount());
+    for (const each of mine) expect(each.cancel).toHaveBeenCalled();
+  });
+
+  it("opens Muscle Memory from Long-Term in one click", async () => {
+    await wide();
+    await act(async () => fold("muscle").click());
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
+    expect(sheet("muscle")!.textContent).toContain("Nothing yet.");
+    expect(fold("muscle").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows the same save state beside Done when you edit Long-Term", async () => {
+    await wide();
+    await act(async () => [...sheet("long")!.querySelectorAll<HTMLButtonElement>(".mm-action")].find((each) => each.textContent === "Edit")!.click());
+    await settle();
+    await write("- Uses Linux");
+    const state = sheet("file")!.querySelector('.mm-sheet-head [data-save-state="saving"]')!;
+    expect(state.textContent).toBe("Saving…");
+    expect(state.nextElementSibling!.textContent).toBe("Done");
+    expect(host.querySelectorAll("[data-save-state]")).toHaveLength(1);
+  });
+
+  describe("through a phone-width resize", () => {
+    let mm = 1280;
+    let observers: (() => void)[] = [];
+    const resize = (next: number) => act(async () => { mm = next; for (const each of observers) each(); });
+    beforeEach(() => {
+      mm = 1280;
+      observers = [];
+      vi.stubGlobal("ResizeObserver", class { constructor(fn: () => void) { observers.push(fn); } observe() {} disconnect() {} });
+    });
+    const wideAt = async () => {
+      width(1280);
+      vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? mm : 0; });
+      await open();
+      await toMemory();
+      await act(async () => fold("long").click());
+    };
+
+    it("plays the open on the sheet it shows again", async () => {
+      await wideAt();
+      await resize(600);
+      await resize(1280);
+      expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    });
+
+    it("cancels the open's motion, mist and specks included, when the layout turns to phone", async () => {
+      await wideAt();
+      const mine = passes.filter((each) => host.querySelector(".mm")!.contains(each.element));
+      expect(mine.some((each) => each.element.classList.contains("mm-mist"))).toBe(true);
+      await resize(600);
+      for (const each of mine) expect(each.cancel).toHaveBeenCalled();
+    });
+
+    it("keeps the editor up when a card opened on the phone layout", async () => {
+      await wideAt();
+      await act(async () => [...sheet("long")!.querySelectorAll<HTMLButtonElement>(".mm-action")].find((each) => each.textContent === "Edit")!.click());
+      await resize(600);
+      await act(async () => fold("long").click());
+      await resize(1280);
+      expect(sheet("file")).not.toBeNull();
+    });
+  });
+
+  it("points a hand at every enabled button in Bot details", async () => {
+    await open();
+    expect(panel().className).toContain("[&_:is(button:not(:disabled),summary)]:cursor-pointer");
   });
 });
