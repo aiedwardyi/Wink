@@ -6,7 +6,7 @@ import { filterCustomModels } from "@/lib/custom-models";
 import { chipEffortLabel, chipEffortShortLabel, chipPhoneName,displayedChipEffort, engineBadgeText, modelChipText, modelChipTitle, modelEffortLabel, modelFamilyAccent } from "@/lib/model-chip";
 import { movePicker, pickerColumn, pickerEfforts, pickerModels, pickerRows, selectPickerEffort, selectPickerModel, withPickerEffort } from "@/lib/cross-model-picker";
 import { focusComposerOnActivation } from "@/lib/focus-composer";
-import { pickerPrice } from "@/lib/model-index";
+import { formatCost, pickerPrice } from "@/lib/model-index";
 import { dialRunCost, dialWheel } from "@/lib/model-dial";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
@@ -452,7 +452,7 @@ export function ModelPickerControl({
             <span data-picker-current-model className="break-all text-ink">{t("model.automaticHelp", { name: draft.model || t("model.unresolved") })}</span>
             {effortIndex >= 0 && <span>{t("model.effort")}: {effortLabel(efforts[effortIndex]!.label)}</span>}
             {price && <span data-model-price className="shrink-0 whitespace-nowrap" title={t("model.priceUnits")}>{price} {t("model.pricePerMillion")}</span>}
-            {runCost != null && <span data-model-run-cost className="shrink-0 whitespace-nowrap">${runCost.toFixed(2)}{t("model.dial.perTask")}</span>}
+            {runCost != null && <span data-model-run-cost className="shrink-0 whitespace-nowrap">{formatCost(runCost)}{t("model.dial.perTask")}</span>}
             {!instance && <span>{t("model.offList")}</span>}
             {instance && <span className={cn("rounded-full px-2 py-0.5", blocked ? "bg-warning/10 text-warning" : "bg-success/10 text-success")}>
               {engineBadgeText(instance.snapshot, needsCli(instance) ? "not-installed" : needsSignIn(instance) ? "sign-in" : "ready", t)}
