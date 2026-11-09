@@ -96,6 +96,15 @@ async function absent(file) {
   return false;
 }
 
+// AF_UNIX sockets are reparse points lstat denies; readlink's EINVAL proves they are not links.
+async function statEntry(file) {
+  try { return await fsp.lstat(file); } catch (error) {
+    if (error.code !== "EACCES") throw error;
+    try { await fsp.readlink(file); } catch (link) { if (link.code === "EINVAL") return null; }
+    throw error;
+  }
+}
+
 async function resolvePin(file) {
   try { return await fsp.realpath(file); } catch (error) {
     if (!["ENOENT", "ENOTDIR"].includes(error.code)) throw error;
@@ -111,7 +120,8 @@ async function walk(root, visit, depth = Infinity, normalized = null) {
   normalized ??= await normalizeAsync(root);
   for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
     const file = path.join(root, entry.name);
-    const stat = await fsp.lstat(file);
+    const stat = await statEntry(file);
+    if (!stat) continue;
     const name = canonical(path.join(normalized, entry.name));
     if (await visit(file, stat, depth, name) !== false && stat.isDirectory() && !stat.isSymbolicLink() && depth > 1) await walk(file, visit, depth - 1, name);
   }
@@ -331,10 +341,11 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     const inspect = async (file, name, temp = false) => {
       if (contains(normalized, name)) return;
       let stat;
-      try { stat = await fsp.lstat(file); } catch (error) {
+      try { stat = await statEntry(file); } catch (error) {
         if (error.code === "ENOENT") return;
         throw error;
       }
+      if (!stat) return;
       if (stat.isSymbolicLink()) {
         stats.links++;
         const destination = path.resolve(path.dirname(file), await fsp.readlink(file));
