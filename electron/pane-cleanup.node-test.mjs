@@ -792,6 +792,77 @@ test("a link missed by a rebuilt index that went stale still blocks its delete",
   fs.unlinkSync(link);
 });
 
+async function staleTwice(t, f, fallback) {
+  await scratchRows(f, ["TEST"]);
+  fs.mkdirSync(path.join(f.worktreeRoot, "host"));
+  const other = path.join(f.tempRoot, "wink-OTHER");
+  fs.mkdirSync(other);
+  const roots = [];
+  const watch = fs.watch;
+  t.mock.method(fs, "watch", (...args) => {
+    const watcher = watch(...args);
+    if (args[0] === f.worktreeRoot) roots.push(watcher);
+    return watcher;
+  });
+  const promises = await import("node:fs/promises");
+  let builds = -1;
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.scratch && builds === -1) {
+      builds = 0;
+      roots.at(-1).emit("error", new Error("overflow"));
+    }
+    return readdir(...args);
+  });
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === other && builds >= 0) {
+      builds++;
+      if (builds === 1) roots.at(-1).emit("error", new Error("overflow"));
+      if (builds === 2) fallback(roots.at(-1));
+    }
+    return lstat(...args);
+  });
+}
+
+test("a link made after a fallback walk whose watcher fails still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const link = path.join(f.worktreeRoot, "host", "incoming");
+  await staleTwice(t, f, (watcher) => {
+    fs.symlinkSync(f.scratch, link, "junction");
+    watcher.emit("error", new Error("overflow"));
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a worktree root recreated during a fallback walk still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const aside = path.join(f.home, "aside");
+  const link = path.join(f.worktreeRoot, "incoming");
+  await staleTwice(t, f, () => {
+    fs.renameSync(f.worktreeRoot, aside);
+    fs.mkdirSync(f.worktreeRoot);
+    fs.symlinkSync(f.scratch, link, "junction");
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a link queued during a fallback walk still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const link = path.join(f.worktreeRoot, "host", "incoming");
+  await staleTwice(t, f, () => fs.symlinkSync(f.scratch, link, "junction"));
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
 test("a link in a worktree root renamed aside and recreated still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
   const f = fixture(t);
   await scratchRows(f, ["TEST"]);

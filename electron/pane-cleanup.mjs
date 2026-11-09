@@ -523,10 +523,12 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (!context.index) {
         await build(context, roots, key, { file: target, name: normalized, seen: false });
         await refresh(context, normalized, false);
-        // A doubtful index never clears a delete: walk again and decide on that walk, as before the index.
+        // A doubtful index never clears a delete: walk once more, and keep the folder this sweep if still in doubt.
         if (WATCH && (context.index.stale || await moved(context.index))) {
           context.close();
           await build(context, roots, key, { file: target, name: normalized, seen: false });
+          await refresh(context, normalized, false);
+          if (context.index.stale || await moved(context.index)) return true;
         }
       }
       // A watch handle on the candidate would hold up its own delete.
