@@ -109,6 +109,7 @@ import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
+import { WhatsNewSlot } from "./WhatsNew";
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -1633,6 +1634,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
       {/* Overlay chrome + composer stack in-flow so 600x480 cannot cover chat. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
+      <WhatsNewSlot />
       {/* isolate: the rows' own z-indices (action bars are z-20) stay under the timeline card */}
       <div
         ref={scrollRef}
