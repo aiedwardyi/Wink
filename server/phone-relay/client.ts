@@ -118,6 +118,7 @@ interface Session {
   pingSentAt: number | null;
   snags: boolean;
   snagWait: { id: string; settle(ok: boolean): void } | null;
+  active: boolean;
   reportOwner?: string;
   channels: Set<DataChannel>;
   cancels: Set<Cancel>;
@@ -177,6 +178,12 @@ export class RelayClient {
       session.snagWait = wait;
       this.send(session.socket, { type: "snag", data: snag });
     });
+  }
+
+  /** Only after a ready that offered it: an older relay closes the channel on one. */
+  sendActive(): void {
+    const session = this.session;
+    if (session?.ready && session.active) this.send(session.socket, { type: "active" });
   }
 
   start(): void {
@@ -266,6 +273,7 @@ export class RelayClient {
       pingSentAt: null,
       snags: false,
       snagWait: null,
+      active: false,
       channels: new Set(),
       cancels: new Set(),
     };
@@ -322,6 +330,7 @@ export class RelayClient {
       case "ready":
         if (!session.authSent || session.ready) throw new Error("unexpected ready");
         session.snags = msg.snags === true;
+        session.active = msg.active === true;
         session.reportOwner = msg.reportOwner;
         this.onReady(session, msg.session, msg.poolToken, msg.pool.min, msg.pool.max, msg.ticket);
         if (msg.account) this.opts.onAccount?.(msg.account);

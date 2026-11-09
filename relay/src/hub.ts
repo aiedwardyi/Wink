@@ -80,6 +80,10 @@ export class Hub {
     return this.byLabel.size;
   }
 
+  get recordsTeam(): boolean {
+    return this.opts.team !== undefined;
+  }
+
   get splicedCount(): number {
     return this.pairs.size;
   }
@@ -162,6 +166,10 @@ export class Hub {
   /** A control frame arrived on the label's current session. */
   seen(session: Session): void {
     if (this.byLabel.get(session.label) === session) this.opts.team?.pcSeen(session.label);
+  }
+
+  active(session: Session): void {
+    if (this.byLabel.get(session.label) === session) this.opts.team?.active(session.label);
   }
 
   /** Kills everything for a label: control, pool, waiting phones and live splices. */

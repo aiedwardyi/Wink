@@ -141,7 +141,7 @@ function PersonCard({ person, days, now, locale }: { person: TeamPerson; days: s
           <div className="truncate text-[15px] font-medium text-ink">{person.name}</div>
           <div className="text-[12px] text-ink-secondary">{status}</div>
         </div>
-        <div className="ml-auto text-right" title={t("team.hoursOpen")}>
+        <div className="ml-auto text-right" title={t("team.activeTime")}>
           <div className="text-[22px] font-semibold leading-tight tracking-tight text-ink tabular-nums">{hoursText(today)}</div>
           <div className="text-[12px] text-ink-secondary">{t("team.today")}</div>
         </div>
