@@ -256,7 +256,9 @@ public enum Markdown {
             let quote = String(line.prefix(line.count - body.count))
             let depth = quote.filter { $0 == ">" }.count
             // a wrapper around a fenced reply is not part of the fence line
-            let core = trimTags(String(body))
+            let trimmed = trimTags(String(body))
+            let lead = trimmed.prefix(while: { $0 == " " || $0 == "\t" })
+            let core = lead.reduce(into: "") { $0 += $1 == "\t" ? "    " : " " } + trimmed.dropFirst(lead.count)
             let open = fenceStart(Substring(core))
             let indent = core.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
             if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(Substring(core)) && indent < fenceColumn)) { fence = "" }

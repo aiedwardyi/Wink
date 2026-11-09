@@ -8,7 +8,7 @@ const OPENER = /^ *<user(\d+)>/;
 const CLOSER = /<\/user(\d+)>(\s*)$/;
 const QUOTE = /^(?: {0,3}>[ \t]?)+/;
 const FENCE = /^( *(?:(?:[-*+]|\d{1,9}[.)]) +)*)(`{3,}(?=[^`]*$)|~{3,})/;
-const FENCE_END = /^ *(`{3,}|~{3,})\s*$/;
+const FENCE_END = /^[ \t]*(`{3,}|~{3,})\s*$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])( +)(?=\S)/;
 const BREAK = /^ {0,3}(?:#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$)/;
 const RUNS = /`+/g;
@@ -92,8 +92,8 @@ export class UserTagScanner {
     const quote = line.slice(0, line.length - body.length);
     const depth = quote.split(">").length - 1;
     // a wrapper around a fenced reply is not part of the fence line
-    const core = body.replace(EDGE_HEAD, "$1").replace(EDGE_TAIL, "$1");
-    const indent = /^[ \t]*/.exec(core)![0].replace(/\t/g, "    ").length;
+    const core = body.replace(EDGE_HEAD, "$1").replace(EDGE_TAIL, "$1").replace(/^[ \t]+/, (lead) => lead.replace(/\t/g, "    "));
+    const indent = /^ */.exec(core)![0].length;
     const open = FENCE.exec(core);
     const mark = open?.[2];
     if (this.fence && (depth < this.fenceDepth || (this.fenceColumn && core.trim() && indent < this.fenceColumn))) this.fence = "";

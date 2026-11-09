@@ -83,6 +83,12 @@ describe("unwrapUserTags", () => {
     expect(unwrapUserTags("- item\n\n  ~~~\n    ~~~\n  <user1>x</user1>")).toBe("- item\n\n  ~~~\n    ~~~\n  x");
   });
 
+  it("recognizes a tab-indented fence inside a list item", () => {
+    const text = "- item\n\n\t~~~xml\n\t<user1>x</user1>\n\t~~~";
+    expect(unwrapUserTags(text)).toBe(text);
+    expect(unwrapUserTags(text + "\n<user2>y</user2>")).toBe(text + "\ny");
+  });
+
   it("reads a spaced rule as a rule, not a list item", () => {
     const text = "* * *\n    <user1>x</user1>";
     expect(unwrapUserTags(text)).toBe(text);
