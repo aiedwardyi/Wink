@@ -14,7 +14,8 @@ import type { BotRecord, Message } from "./store.ts";
 const source = readFileSync(new URL("./bot-chat-routes.ts", import.meta.url), "utf8");
 const start = source.indexOf('      const body = await readBody(req);', source.indexOf('    send: async ('));
 const end = source.indexOf('      return json(res, 202, receipt);', start) + '      return json(res, 202, receipt);'.length;
-const route = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+const busy = source.slice(source.indexOf("  const deliverBusy = async ("), source.indexOf("  const startQuick = "));
+const route = ts.transpileModule(busy + source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
 // Run only the POST body; importing the server would boot its listeners.
 const runPost = new Function("scope", `return (async () => { with (scope) { ${route} } })();`) as (scope: object) => Promise<{ status: number; body: any }>;
 
@@ -49,7 +50,7 @@ function harness(steer = vi.fn(async (..._args: unknown[]) => true), queueing = 
     beginPeerUserReply, cfg: {},
     composeUserTurnPrompt: (text: string) => text, promptWithReply: (text: string) => text,
     userTurnReactionKeys: () => [], hasPeerWatch, clearUnattended: noop,
-    resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain,
+    resumePaneWakes: noop, cancelUsageWait: noop, paneNoteTurnThreads: new Set(), busyResumeThreads, drainQueuedSends: drain, quick: undefined,
   };
   const hold = (text: string) => {
     const sendId = `send-now-${text.padEnd(16, "0")}`;
