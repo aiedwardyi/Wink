@@ -252,4 +252,28 @@ describe("forkCodex (fake app-server)", () => {
     expect(alive(handle.live.pid)).toBe(false);
     expect(existsSync(handle.live.tempDir)).toBe(false);
   });
+
+  it("closes on two approvals in one chunk without a pipe error", async () => {
+    const errors: unknown[] = [];
+    const caught = (error: unknown) => errors.push(error);
+    process.on("uncaughtException", caught);
+    try {
+      const handle = forkCodex(
+        { cli: FAKE_CLI, args: ["app-server"], env: { ...process.env, FAKE_CODEX_MODE: "approval-pair" }, cwd: scratch, policy: {}, home: scratch, cursor: "codex-thread-1" },
+        { threadId: "t", text: "delete it" },
+      );
+      const events: SideEvent[] = [];
+      handle.onEvent((event) => {
+        events.push(event);
+        if (event.type === "tool" && event.name === "approval") void handle.close();
+      });
+      await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ type: "done", ok: false }));
+      await handle.close();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(events.filter((event) => event.type === "tool" && event.name === "approval")).toHaveLength(2);
+      expect(errors).toEqual([]);
+    } finally {
+      process.off("uncaughtException", caught);
+    }
+  });
 });

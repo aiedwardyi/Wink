@@ -1,7 +1,7 @@
 // PreToolUse hook for the quick helper fork: up to 3 Read/Glob/Grep calls inside the roots, everything else denied.
 // argv[2] is the fork's temp dir: side-hook.json holds { roots }, read-<n> files claim the read slots.
-const { existsSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
-const { basename, dirname, isAbsolute, join, relative, resolve } = require("node:path");
+const { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, writeFileSync } = require("node:fs");
+const { basename, dirname, isAbsolute, join, relative, resolve, sep } = require("node:path");
 
 const READS = new Set(["Read", "Glob", "Grep"]);
 const MAX_READS = 3;
@@ -12,7 +12,7 @@ let input = {};
 let roots = [];
 try {
   input = JSON.parse(readFileSync(0, "utf8"));
-  roots = JSON.parse(readFileSync(join(dir, "side-hook.json"), "utf8")).roots.map((root) => real(resolve(root)));
+  roots = [...new Set(JSON.parse(readFileSync(join(dir, "side-hook.json"), "utf8")).roots.flatMap((root) => [resolve(root), real(resolve(root))]))];
 } catch {}
 
 // A missing file resolves through its nearest real parent, or a linked or 8.3 root never matches it.
@@ -25,12 +25,43 @@ function real(path) {
   }
 }
 
+function within(root, path) {
+  const rel = relative(root, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+// Below the root, a link is read but not followed until its target is inside a root too.
+function linksStay(root, full, hops = 0) {
+  const parts = relative(root, full).split(sep).filter(Boolean);
+  let at = root;
+  for (let i = 0; i < parts.length; i += 1) {
+    at = join(at, parts[i]);
+    try {
+      if (!lstatSync(at).isSymbolicLink()) continue;
+    } catch (error) {
+      // only a missing part is safe: one that cannot be inspected may hide a link below it
+      return error.code === "ENOENT";
+    }
+    let link;
+    try {
+      link = readlinkSync(at);
+    } catch {
+      return false;
+    }
+    const target = resolve(dirname(at), link);
+    const next = roots.find((other) => within(other, target));
+    return next !== undefined && hops < 40 && linksStay(next, join(target, ...parts.slice(i + 1)), hops + 1);
+  }
+  return true;
+}
+
+// Out-of-root input, UNC and device paths included, is refused before any filesystem call: a probe alone can reach a network host.
 function inside(path) {
-  const full = real(resolve(input.cwd || roots[0] || ".", path));
-  return roots.some((root) => {
-    const rel = relative(root, full);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  });
+  const full = resolve(input.cwd || roots[0] || ".", path);
+  const root = roots.find((other) => within(other, full));
+  if (root === undefined || !linksStay(root, full)) return false;
+  const found = real(full);
+  return roots.some((other) => within(other, found));
 }
 
 // A glob reaches as far as its fixed head.
