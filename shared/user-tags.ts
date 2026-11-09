@@ -1,7 +1,7 @@
 const TAG = /<\/?user\d+>/g;
 const QUOTE = /^(?: {0,3}>[ \t]?)+/;
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
-const FENCE_END = /^ {0,3}(`{3,}|~{3,})\s*$/;
+const FENCE = /^( *(?:(?:[-*+]|\d{1,9}[.)]) +)*)(`{3,}(?=[^`]*$)|~{3,})/;
+const FENCE_END = /^ *(`{3,}|~{3,})\s*$/;
 const INDENT = /^(?: {4}|\t)/;
 const RUNS = /`+/g;
 
@@ -19,6 +19,7 @@ export function unwrapUserTags(text: string): string {
   if (!/<\/?user\d/.test(text)) return text;
   let fence = "";
   let fenceDepth = 0;
+  let fenceColumn = 0;
   let span = 0;
   let indented = false;
   let blank = true;
@@ -45,9 +46,11 @@ export function unwrapUserTags(text: string): string {
   let out = "";
   for (const line of text.split(/(?<=\n)/)) {
     const body = line.replace(QUOTE, "");
-    const mark = FENCE.exec(body)?.[1];
+    const open = FENCE.exec(body);
+    const mark = open?.[2];
     const depth = line.slice(0, line.length - body.length).split(">").length - 1;
-    if (fence && depth < fenceDepth) fence = "";
+    const indent = body.length - body.trimStart().length;
+    if (fence && (depth < fenceDepth || (fenceColumn && body.trim() && indent < fenceColumn))) fence = "";
     if (fence) {
       const end = FENCE_END.exec(body)?.[1];
       if (end && end[0] === fence[0] && end.length >= fence.length) fence = "";
@@ -55,6 +58,7 @@ export function unwrapUserTags(text: string): string {
     } else if (mark || !body.trim()) {
       fence = mark ?? "";
       fenceDepth = depth;
+      fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? open![1].length : 0;
       span = 0;
       indented = false;
       blank = !mark;

@@ -202,6 +202,8 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(Markdown.unwrapUserTags("see `a\n<user1>b</user1>\nc` then <user2>d</user2>"), "see `a\n<user1>b</user1>\nc` then d")
         XCTAssertEqual(Markdown.unwrapUserTags("A literal \\` then `<user1>x</user1>`."), "A literal \\` then `<user1>x</user1>`.")
         XCTAssertEqual(Markdown.unwrapUserTags("> ~~~xml\n> example\n\n<user1>Actual</user1>"), "> ~~~xml\n> example\n\nActual")
+        XCTAssertEqual(Markdown.unwrapUserTags("- ~~~xml\n  <user1>x</user1>\n  ~~~\n\n<user2>y</user2>"), "- ~~~xml\n  <user1>x</user1>\n  ~~~\n\ny")
+        XCTAssertEqual(Markdown.unwrapUserTags("```x``` <user1>y</user1>"), "```x``` y")
         XCTAssertEqual(Markdown.unwrapUserTags("~~~xml\n~~~not-a-close\n<user1>x</user1>\n~~~"), "~~~xml\n~~~not-a-close\n<user1>x</user1>\n~~~")
     }
 }

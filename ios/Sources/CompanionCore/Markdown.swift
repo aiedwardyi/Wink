@@ -122,6 +122,7 @@ public enum Markdown {
         let tag = try! NSRegularExpression(pattern: "</?user[0-9]+>")
         var fence = ""
         var fenceDepth = 0
+        var fenceColumn = 0
         var span = 0
         var indented = false
         var blank = true
@@ -139,6 +140,37 @@ public enum Markdown {
                 rest = rest.dropFirst(spaces + 1)
                 if let next = rest.first, next == " " || next == "\t" { rest = rest.dropFirst() }
             }
+        }
+        // `column` is where a list item's content starts, so the fence ends when a line dedents past it
+        func fenceStart(_ body: Substring) -> (column: Int, mark: String, after: Substring)? {
+            var rest = body
+            var column = 0
+            var listed = false
+            while true {
+                let spaces = rest.prefix(while: { $0 == " " }).count
+                rest = rest.dropFirst(spaces)
+                column += spaces
+                if let first = rest.first, "-*+".contains(first), rest.dropFirst().first == " " {
+                    rest = rest.dropFirst()
+                    column += 1
+                    listed = true
+                    continue
+                }
+                let digits = rest.prefix(while: { $0.isASCII && $0.isNumber }).count
+                if (1...9).contains(digits), let dot = rest.dropFirst(digits).first, dot == "." || dot == ")",
+                   rest.dropFirst(digits + 1).first == " " {
+                    rest = rest.dropFirst(digits + 1)
+                    column += digits + 1
+                    listed = true
+                    continue
+                }
+                break
+            }
+            guard let first = rest.first, first == "`" || first == "~" else { return nil }
+            let run = rest.prefix(while: { $0 == first }).count
+            let after = rest.dropFirst(run)
+            guard run >= 3, first == "~" || !after.contains("`") else { return nil }
+            return (listed ? column : 0, String(repeating: first, count: run), after)
         }
         func openTick(_ part: Substring) -> String.Index? {
             var slashes = 0
@@ -182,24 +214,21 @@ public enum Markdown {
         return text.components(separatedBy: "\n").map { line -> String in
             let body = unquoted(line)
             let depth = line.prefix(line.count - body.count).filter { $0 == ">" }.count
-            if !fence.isEmpty && depth < fenceDepth { fence = "" }
-            let lead = body.prefix(while: { $0 == " " }).count
-            var mark = ""
-            if lead <= 3, let first = body.dropFirst(lead).first, first == "`" || first == "~" {
-                let run = body.dropFirst(lead).prefix(while: { $0 == first }).count
-                if run >= 3 { mark = String(repeating: first, count: run) }
-            }
+            let open = fenceStart(body)
+            let indent = body.prefix(while: { $0 == " " }).count
+            if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(body) && indent < fenceColumn)) { fence = "" }
             if !fence.isEmpty {
-                if let first = mark.first, first == fence.first, mark.count >= fence.count,
-                   isBlank(body.dropFirst(lead + mark.count)) { fence = "" }
+                if let open = open, open.column == 0, open.mark.first == fence.first, open.mark.count >= fence.count,
+                   isBlank(open.after) { fence = "" }
                 return line
             }
-            if !mark.isEmpty || isBlank(body) {
-                fence = mark
+            if open != nil || isBlank(body) {
+                fence = open?.mark ?? ""
+                fenceColumn = open?.column ?? 0
                 fenceDepth = depth
                 span = 0
                 indented = false
-                blank = mark.isEmpty
+                blank = open == nil
                 return line
             }
             indented = (body.hasPrefix("    ") || body.hasPrefix("\t")) && (blank || indented)
