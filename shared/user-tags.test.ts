@@ -44,6 +44,11 @@ describe("unwrapUserTags", () => {
     expect(unwrapUserTags("<user1>~~~xml\n<user2>x</user2>\n~~~</user1>")).toBe("~~~xml\n<user2>x</user2>\n~~~");
   });
 
+  it("keeps a tag-wrapped marker inside a fence as code", () => {
+    const text = "~~~xml\n<user1>~~~</user1>\n<user2>x</user2>\n~~~";
+    expect(unwrapUserTags(text)).toBe(text);
+  });
+
   it("does not let a fence indented four spaces close a block", () => {
     const text = "   ~~~\n    ~~~\n<user1>x</user1>\n~~~";
     expect(unwrapUserTags(text)).toBe(text);

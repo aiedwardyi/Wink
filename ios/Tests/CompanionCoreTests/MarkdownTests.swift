@@ -205,6 +205,7 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(Markdown.unwrapUserTags("- ~~~xml\n  <user1>x</user1>\n  ~~~\n\n<user2>y</user2>"), "- ~~~xml\n  <user1>x</user1>\n  ~~~\n\ny")
         XCTAssertEqual(Markdown.unwrapUserTags("```x``` <user1>y</user1>"), "```x``` y")
         XCTAssertEqual(Markdown.unwrapUserTags("<user1>~~~xml\n<user2>x</user2>\n~~~</user1>"), "~~~xml\n<user2>x</user2>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("~~~xml\n<user1>~~~</user1>\n<user2>x</user2>\n~~~"), "~~~xml\n<user1>~~~</user1>\n<user2>x</user2>\n~~~")
         XCTAssertEqual(Markdown.unwrapUserTags("   ~~~\n    ~~~\n<user1>x</user1>\n~~~"), "   ~~~\n    ~~~\n<user1>x</user1>\n~~~")
         XCTAssertEqual(Markdown.unwrapUserTags("-     <user1>x</user1>"), "-     <user1>x</user1>")
         XCTAssertEqual(Markdown.unwrapUserTags("- item\n\n      <user1>y</user1>"), "- item\n\n      <user1>y</user1>")

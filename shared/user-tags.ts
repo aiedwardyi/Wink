@@ -28,6 +28,7 @@ export class UserTagScanner {
   private span = 0;
   private indented = false;
   private blank = true;
+  private wrapped = false;
   private kind?: "code" | "text";
   private buf = "";
   private held = "";
@@ -82,15 +83,18 @@ export class UserTagScanner {
     const mark = open?.[2];
     if (this.fence && (depth < this.fenceDepth || (this.fenceColumn && core.trim() && indent < this.fenceColumn))) this.fence = "";
     if (this.fence) {
-      const end = FENCE_END.exec(core)?.[1];
+      // only a wrapper that opened with the fence may come off its closing line
+      const last = this.wrapped ? body.replace(EDGE_TAIL, "$1") : body;
+      const end = FENCE_END.exec(last)?.[1];
       if (!end || depth !== this.fenceDepth || indent > this.fenceColumn + 3 || end[0] !== this.fence[0] || end.length < this.fence.length) {
         return { code: true, head: line };
       }
       this.fence = "";
-      return { code: true, head: quote + core };
+      return { code: true, head: quote + last };
     }
     if (mark || !body.trim()) {
       this.fence = mark ?? "";
+      this.wrapped = Boolean(mark) && EDGE_HEAD.test(body);
       this.fenceDepth = depth;
       this.fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? open![1].length : 0;
       this.span = 0;
