@@ -109,14 +109,14 @@ describe("team cards", () => {
     if (!card) throw new Error("no card");
     expect(card.textContent).toContain("Mobile today · 1 visit · 12m");
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n1h online\nMobile 1 visit · 12m");
+    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n1h active\nMobile 1 visit · 12m");
   });
 
   it("shows <1m for a visit under a minute", async () => {
     const card = await cardAt(3);
     expect(card.textContent).toContain("Mobile today · 1 visit · <1m");
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n1h online\nMobile 1 visit · <1m");
+    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n1h active\nMobile 1 visit · <1m");
   });
 
   it("uses a singular day only for one active day", async () => {
@@ -132,19 +132,19 @@ describe("team cards", () => {
     expect(cards[1]?.textContent).toContain("Busiest Tue, Oct 13 · 0.5h");
   });
 
-  it("tips with date, hours online, then mobile visits", async () => {
+  it("tips with date, active hours, then mobile visits", async () => {
     const card = await cardAt(0);
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n6.9h online\nMobile 3 visits · 4m");
+    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n6.9h active\nMobile 3 visits · 4m");
     await tapBar(card, 10);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Sat, Oct 10\n3h online\nMobile 1 visit · 10m");
+    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Sat, Oct 10\n3h active\nMobile 1 visit · 10m");
     await tapBar(card, 8);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Thu, Oct 8\n5h online\nNo mobile");
+    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Thu, Oct 8\n5h active\nNo mobile");
   });
 
   it("follows the tip in the aria label", async () => {
     const card = await cardAt(0);
-    expect(card.querySelectorAll("button")[13]?.getAttribute("aria-label")).toBe("Tue, Oct 13, 6.9h online, Mobile 3 visits · 4m");
+    expect(card.querySelectorAll("button")[13]?.getAttribute("aria-label")).toBe("Tue, Oct 13, 6.9h active, Mobile 3 visits · 4m");
   });
 
   it("keeps the status to last seen", async () => {
@@ -178,7 +178,7 @@ describe("team cards", () => {
     expect(card.querySelector("div.grid > div")?.className).not.toContain("invisible");
     const kids = card.childElementCount;
     await tapBar(card, 13);
-    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n6.9h online\nMobile 3 visits · 4m");
+    expect(card.querySelector("p.whitespace-pre-line")?.textContent).toBe("Tue, Oct 13\n6.9h active\nMobile 3 visits · 4m");
     expect(card.querySelector("div.grid > div")?.className).toContain("invisible");
     expect(card.childElementCount).toBe(kids);
   });

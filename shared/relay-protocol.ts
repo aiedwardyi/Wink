@@ -52,6 +52,8 @@ export const readyMessageSchema = z.object({
   account: z.string().optional(),
   /** The relay takes `snag` frames. Older PCs strip this field. */
   snags: z.literal(true).optional(),
+  /** The relay takes `active` frames. Older PCs strip this field. */
+  active: z.literal(true).optional(),
   reportOwner: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 /** Relay to PC: a phone waits on an empty pool. */
@@ -68,6 +70,8 @@ export const goMessageSchema = z.object({ type: z.literal("go"), peer: z.string(
 export const snagMessageSchema = z.object({ type: z.literal("snag"), data: z.unknown() });
 /** Relay to PC: the snag with this id is stored or dropped for good. */
 export const snaggedMessageSchema = z.object({ type: z.literal("snagged"), id: z.string() });
+/** PC to relay, only after a ready with `active`: its person used Wink just now. */
+export const activeMessageSchema = z.object({ type: z.literal("active") });
 
 export const relayMessageSchema = z.discriminatedUnion("type", [
   helloMessageSchema,
@@ -81,6 +85,7 @@ export const relayMessageSchema = z.discriminatedUnion("type", [
   goMessageSchema,
   snagMessageSchema,
   snaggedMessageSchema,
+  activeMessageSchema,
 ]);
 
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
@@ -95,6 +100,7 @@ export type JoinMessage = z.infer<typeof joinMessageSchema>;
 export type GoMessage = z.infer<typeof goMessageSchema>;
 export type SnagMessage = z.infer<typeof snagMessageSchema>;
 export type SnaggedMessage = z.infer<typeof snaggedMessageSchema>;
+export type ActiveMessage = z.infer<typeof activeMessageSchema>;
 
 export type ControlMessage =
   | HelloMessage
@@ -105,7 +111,8 @@ export type ControlMessage =
   | PongMessage
   | NoticeMessage
   | SnagMessage
-  | SnaggedMessage;
+  | SnaggedMessage
+  | ActiveMessage;
 export type DataMessage = JoinMessage | GoMessage;
 export type RelayMessage = ControlMessage | DataMessage;
 

@@ -60,6 +60,7 @@ export function createPhoneRelay(options: PhoneRelayOptions, deps: PhoneRelayDep
     reauth: () => runtime.reauth(),
     accountReady: () => runtime.accountReady(),
     sendSnag: (snag) => runtime.sendSnag(snag),
+    sendActive: () => runtime.sendActive(),
   };
 }
 
@@ -208,6 +209,10 @@ class RelayRuntime {
 
   sendSnag(snag: TeamSnag): Promise<boolean> {
     return this.client?.sendSnag(snag) ?? Promise.resolve(false);
+  }
+
+  sendActive(): void {
+    this.client?.sendActive();
   }
 
   reauth(): void {

@@ -1,0 +1,190 @@
+{
+  "benchmark": "rams-index",
+  "active": false,
+  "version": "0.6.1",
+  "index": "design",
+  "label": "Rams Index 0.6.1 (points, 0-100), CC BY 4.0",
+  "updated": "2026-10-29",
+  "rows": [
+    {
+      "model": "claude-fable-5",
+      "effort": "default",
+      "value": 62.8,
+      "interval": {
+        "low": 57.6,
+        "high": 64.7
+      },
+      "cost_per_task": 0.532,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "default",
+      "value": 88.3,
+      "interval": {
+        "low": 86.2,
+        "high": 89.9
+      },
+      "cost_per_task": 0.866,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "default",
+      "value": 74.1,
+      "interval": {
+        "low": 70.9,
+        "high": 76.8
+      },
+      "cost_per_task": 0.276,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "default",
+      "value": 72.7,
+      "interval": {
+        "low": 66.6,
+        "high": 73.3
+      },
+      "cost_per_task": 0.145,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "default",
+      "value": 70,
+      "interval": {
+        "low": 64.4,
+        "high": 73.7
+      },
+      "cost_per_task": 0.006,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-4-argon",
+      "effort": "default",
+      "value": 22.9,
+      "interval": {
+        "low": 19.7,
+        "high": 26.5
+      },
+      "cost_per_task": 0.149,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "effort": "default",
+      "value": 11.5,
+      "interval": {
+        "low": 9.8,
+        "high": 13.9
+      },
+      "cost_per_task": 0.056,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6-astra",
+      "effort": "default",
+      "value": 91,
+      "interval": {
+        "low": 88.7,
+        "high": 94.1
+      },
+      "cost_per_task": 0.428,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6-luna",
+      "effort": "default",
+      "value": 71.2,
+      "interval": {
+        "low": 67.4,
+        "high": 80.1
+      },
+      "cost_per_task": 0.005,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "effort": "default",
+      "value": 92,
+      "interval": {
+        "low": 90.3,
+        "high": 93.8
+      },
+      "cost_per_task": 0.15,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "grok-4.7",
+      "effort": "default",
+      "value": 88.4,
+      "interval": {
+        "low": 85.9,
+        "high": 90.1
+      },
+      "cost_per_task": 0.132,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "effort": "default",
+      "value": 86.1,
+      "interval": {
+        "low": 83.5,
+        "high": 90.1
+      },
+      "cost_per_task": 0.039,
+      "cost_benchmark": "rams-index",
+      "cost_source": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "source_url": "https://www.rams.ai/index/data/models-v0.6.1.json",
+      "retrieved_at": "2026-11-03T11:37:58.482Z",
+      "kind": "independent"
+    }
+  ]
+}

@@ -58,6 +58,8 @@ export interface PhoneRelay {
   accountReady?(): boolean;
   /** True once the relay stored or dropped the snag for good. */
   sendSnag?(snag: TeamSnag): Promise<boolean>;
+  /** This PC's person used Wink just now. */
+  sendActive?(): void;
 }
 
 export interface PhoneRelayEnrollOptions {

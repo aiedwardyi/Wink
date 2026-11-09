@@ -9,10 +9,11 @@ import type { Bot, InstanceInfo } from "@/state/store";
 
 interface MockSheetState {
   instances?: InstanceInfo[];
+  bots?: Array<Pick<Bot, "mascotStyle" | "createdAt">>;
 }
 
 const { mockState, mockDispatch } = vi.hoisted(() => {
-  const value: MockSheetState = { instances: [] };
+  const value: MockSheetState = { instances: [], bots: [] };
   return { mockState: { value }, mockDispatch: vi.fn() };
 });
 
@@ -86,7 +87,7 @@ afterEach(() => {
     writable: true,
     value: undefined,
   });
-  mockState.value = { instances: [] };
+  mockState.value = { instances: [], bots: [] };
   mockDispatch.mockReset();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
@@ -132,6 +133,33 @@ async function pressEnter(field: HTMLInputElement) {
   });
   await flush();
 }
+
+describe("CreateBotSheet avatar preview", () => {
+  const previewSrc = (host: HTMLElement) => host.querySelector("h1")?.parentElement?.querySelector("img")?.getAttribute("src");
+
+  it("shows the Wink icon the new bot will get", async () => {
+    mockState.value = { instances: [], bots: [{ mascotStyle: "icon-33", createdAt: 5 }, { mascotStyle: "icon-31", createdAt: 1 }] };
+    const { host, root } = await renderSheet();
+    try {
+      expect(previewSrc(host)).toBe("/avatars/icon-34-wink-peach.png");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("starts on icon-31 with no bots and leaves the style to the server", async () => {
+    const calls = stubPostBot();
+    mockState.value = { instances: [], bots: [] };
+    const { host, root } = await renderSheet();
+    try {
+      expect(previewSrc(host)).toBe("/avatars/icon-31-wink.png");
+      await pressEnter(await fillName(host, "Scout"));
+      expect(calls[0]?.body).not.toHaveProperty("mascotStyle");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+});
 
 describe("CreateBotSheet submit", () => {
   it("submits on Enter without a stored selection when no engine is usable", async () => {
@@ -210,7 +238,7 @@ describe("CreateBotSheet submit", () => {
   });
 
   it("sends the resolved default selection so creation skips discovery", async () => {
-    mockState.value = { instances: [availableEngine()] };
+    mockState.value = { instances: [availableEngine()], bots: [] };
     const calls = stubPostBot();
     const { host, root } = await renderSheet();
     try {
@@ -276,7 +304,7 @@ describe("CreateBotSheet submit", () => {
 
 describe("CreateBotSheet with no engine", () => {
   it("offers Connect an engine instead of a name form", async () => {
-    mockState.value = { instances: [{ ...availableEngine(), snapshot: { state: "unavailable" } } as InstanceInfo] };
+    mockState.value = { instances: [{ ...availableEngine(), snapshot: { state: "unavailable" } } as InstanceInfo], bots: [] };
     const { host, root } = await renderSheet({ required: false });
     try {
       expect(host.querySelector("#create-bot-name")).toBeNull();
