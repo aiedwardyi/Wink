@@ -22,6 +22,7 @@ export const docCopy = {
 
 const SHOWN = 5;
 const FIX_CHARS = 4_000;
+const flat = (text: string) => text.replace(/\s+/g, " ");
 
 /** The findings as the user's own message to the bot; a room needs the bot's @name. */
 export function fixTheseText(card: VerifyCardData, locale: "en" | "ko", mention?: string): string {
@@ -29,7 +30,7 @@ export function fixTheseText(card: VerifyCardData, locale: "en" | "ko", mention?
   const total = Math.max(card.doc?.findingTotal ?? 0, findings.length);
   let text = `${mention ? `@${mention} ` : ""}${c.ask(card.site)}`, listed = 0;
   for (const f of findings) {
-    const row = `\n${listed + 1}. ${c.line(f)} (${c.words[f.kind]}): "${f.quote}"${f.fix ? ` → "${f.fix}"${f.note ? ` (${f.note})` : ""}` : f.note ? ` - ${f.note}` : ""}`;
+    const row = `\n${listed + 1}. ${c.line(f)} (${c.words[f.kind]}): "${flat(f.quote)}"${f.fix ? ` → "${flat(f.fix)}"${f.note ? ` (${flat(f.note)})` : ""}` : f.note ? ` - ${flat(f.note)}` : ""}`;
     if (text.length + row.length + 24 > FIX_CHARS) break;
     text += row; listed++;
   }

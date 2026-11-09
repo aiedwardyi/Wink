@@ -21,7 +21,7 @@ const route = (path: string, runId: string) => path.replace(":runId", encodeURIC
 const int = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
 interface Band { from: number; to: number; done: boolean }
-interface Show { lines: string[] | null; starts: number[]; bands: Band[]; findings: VerifyDocFinding[]; ms: number; ended: boolean }
+interface Show { lines: string[] | null; starts: number[]; bands: Band[]; findings: VerifyDocFinding[]; ms: number; ended: boolean; blocked?: boolean }
 const EMPTY: Show = { lines: null, starts: [0], bands: [], findings: [], ms: 0, ended: false };
 
 function apply(show: Show, mark: VerifyReplayMark): Show {
@@ -105,20 +105,20 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
       if (!res.ok || !res.body) { setPhase("failed"); return; }
       if (live) {
         setPhase("play");
-        let total = 0;
+        let total = 0, blocked = false;
         for await (const chunk of readReplay(res.body)) {
           if (chunk.kind === "mark") setShow(show => apply(show, chunk.mark));
-          else if (chunk.kind === "end") total = chunk.end.ms;
+          else if (chunk.kind === "end") { total = chunk.end.ms; blocked = chunk.end.status !== "completed"; }
         }
-        setShow(show => ({ ...show, ms: Math.max(show.ms, total), ended: true }));
+        setShow(show => ({ ...show, ms: Math.max(show.ms, total), ended: true, blocked }));
         setPhase("done");
         return;
       }
       const marks: VerifyReplayMark[] = [];
-      let total = 0;
+      let total = 0, blocked = false;
       for await (const chunk of readReplay(res.body)) {
         if (chunk.kind === "mark") marks.push(chunk.mark);
-        else if (chunk.kind === "end") total = chunk.end.ms;
+        else if (chunk.kind === "end") { total = chunk.end.ms; blocked = chunk.end.status !== "completed"; }
       }
       const speed = Math.max(1, Math.max(total, marks.at(-1)?.ms ?? 0) / PLAY_MS), began = performance.now();
       setPhase("play");
@@ -129,7 +129,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
         await new Promise(done => setTimeout(done, 100));
       }
       if (abort.signal.aborted) return;
-      setShow(show => ({ ...show, ms: Math.max(show.ms, total), ended: true }));
+      setShow(show => ({ ...show, ms: Math.max(show.ms, total), ended: true, blocked }));
       setPhase("done");
     })().catch(() => { if (!abort.signal.aborted) setPhase("failed"); });
     return () => abort.abort();
@@ -167,7 +167,7 @@ export function VerifyDocWatchFrame({ card, live, hidden, closing = false, inlin
   const counts = new Map<VerifyDocKind, number>();
   for (const f of show.findings) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
   const status = phase === "expired" ? c.expired : phase === "failed" ? c.failed
-    : show.ended ? show.findings.length ? d.problems(show.findings.length) : d.clean
+    : show.ended ? show.blocked ? d.failed : show.findings.length ? d.problems(show.findings.length) : d.clean
     : lead ? d.checking(pageOf(lead.from), pages.length) : show.bands.length ? d.comparing : c.loading;
   const seconds = Math.round((live && phase === "play" && card.startedAt ? now - card.startedAt : show.ms) / 1000);
   const stop = () => { follow.current = false; };

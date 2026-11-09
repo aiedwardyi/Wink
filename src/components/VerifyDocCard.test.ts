@@ -41,6 +41,14 @@ it("builds the Fix these message in English and Korean", () => {
   ].join("\n"));
 });
 
+it("keeps each finding on one row of the Fix these message", () => {
+  const broken = { ...spelling, quote: "되요\n2. 가짜 줄", note: "맞춤\n법" };
+  expect(fixTheseText(card({}, { findings: [broken], findingTotal: 1 }), "en").split("\n")).toEqual([
+    "Please fix these problems Live Verify found in script.md:",
+    `1. Page 2, line 50 (spelling): "되요 2. 가짜 줄" → "돼요" (맞춤 법)`,
+  ]);
+});
+
 it("caps a long Fix these message and counts the rest", () => {
   const findings = Array.from({ length: 60 }, (_, i) => ({ ...spelling, line: i + 1, quote: `${"긴 문장 ".repeat(12)}${i}` }));
   const en = fixTheseText(card({}, { findings, findingTotal: 75 }), "en");
@@ -111,4 +119,23 @@ it("ends the live watch on the check's own time, not the last mark's", async () 
   expect(host.querySelector(".verify-watch-seconds")?.textContent).toBe("47 s");
   await act(async () => root.unmount());
   vi.unstubAllGlobals();
+});
+
+it("shows a check that could not finish as not checked in the watch, live and replayed", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  for (const live of [true, false]) {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Blob([
+      chunk(0, { runId: "run-123456", site: "script.md", page: "" }),
+      chunk(2, { ms: 0, kind: "doc-text", lines: ["첫 줄", "둘째 줄"], pageStarts: [] }),
+      chunk(3, { status: "blocked", ms: 9_000, issues: [], notChecked: ["1"] }),
+    ] as BlobPart[]).stream())));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(createElement(VerifyDocWatchFrame, { card: card({ status: "blocked", replay: ["run-123456"] }, { findings: [], findingTotal: 0, by: {} }), threadId: "thread", live, hidden: false, onClose() {} })));
+    await act(async () => { await new Promise(done => setTimeout(done, 300)); });
+    expect(host.querySelector("[data-current]")?.textContent).toBe("Could not check this document");
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
 });

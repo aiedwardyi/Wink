@@ -73,6 +73,11 @@ it("numbers pages from rendered breaks, else from breaks plus printed-page size"
   expect(docText("\fcover\n\fbody").pages).toEqual([1, 2]);
 });
 
+it("turns the page where text after a break starts, inside a paragraph too", () => {
+  expect(docText("Start page one. \fStart page two.\nNext", true)).toMatchObject({ pages: [1, 2], pageCount: 2 });
+  expect(docText("one\ntwo \fthree\nfour\nfive\f\nsix", true).pages).toEqual([1, 1, 2, 2, 3]);
+});
+
 it("reads paragraphs, tabs, entities and page breaks from a .docx", () => {
   expect(docxText(docxFixture(["Hello\tworld", "A & B < C", "\fPage two"]))).toEqual({ raw: "Hello\tworld\nA & B < C\n\fPage two", rendered: false });
   expect(docxText(docxFixture(["갑: 주식회사 대성물산", "\f제2조"], true)).rendered).toBe(true);
@@ -128,6 +133,12 @@ it("flags one event given two dates, from the dates the model listed", () => {
   expect(dateClashes(doc, dates).map(hit => [hit.quote, hit.fix, hit.note])).toEqual([["2024. 3. 25.", "2024. 3. 15.", "같은 일, 다른 날짜"]]);
   const report = docText("The survey closed on March 14, 2025.\nThe survey, which closed on March 21, 2025, ran early.");
   expect(dateClashes(report, ["March 14, 2025 (survey closed (Introduction))", "March 21, 2025 (survey closed (Discussion))"]).map(hit => [hit.quote, hit.fix])).toEqual([["March 21, 2025", "March 14, 2025"]]);
+});
+
+it("compares whole dates, named months included", () => {
+  const doc = docText(["The deal was signed on March 15, 2024.", "The deal signed May 15, 2024 stands.", "Paid 2024-03-15.", "Paid 2024-03-03 too.", "Filed 2024. 3. 15. and 2024년 3월 15일."].join("\n"));
+  const dates = ["March 15, 2024 (deal signed)", "May 15, 2024 (deal signed)", "2024-03-15 (invoice paid)", "2024-03-03 (invoice paid)", "2024. 3. 15. (claim filed)", "2024년 3월 15일 (claim filed)"];
+  expect(dateClashes(doc, dates).map(hit => [hit.quote, hit.fix])).toEqual([["May 15, 2024", "March 15, 2024"], ["2024-03-03", "2024-03-15"]]);
 });
 
 it("flags a rare listed name one letter off a far more common one", () => {

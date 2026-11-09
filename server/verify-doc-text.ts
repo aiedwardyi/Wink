@@ -32,16 +32,22 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 /** `rendered`: pages come only from Word's own page marks, else breaks plus page size. */
 export function docText(raw: string, rendered = false): DocText {
   const lines: string[] = [], pages: number[] = [], lineStarts: number[] = [];
-  let page = 1, used = 0, seen = false, at = 0;
+  let page = 1, used = 0, seen = false, broke = false, at = 0;
   for (const row of raw.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n")) {
-    const line = row.includes("\f") ? row.replaceAll("\f", "") : row;
-    if (line !== row && seen) { page++; used = 0; }
+    const parts = row.split("\f"), line = parts.join(""), first = parts.findIndex(part => part.trim() !== "");
+    // A page turns where text after a break starts: a break inside a paragraph moves the lines after it, not the paragraph.
+    if (first !== 0 && parts.length > 1 && seen) broke = true;
+    if (broke && first >= 0) { page++; used = 0; broke = false; }
     const height = Math.max(1, Math.ceil((line.length + (line.match(WIDE)?.length ?? 0)) / COLS));
     if (!rendered && used && used + height > ROWS) { page++; used = 0; }
     used += height;
-    seen ||= line.trim() !== "";
+    seen ||= first >= 0;
     lines.push(line); pages.push(page); lineStarts.push(at);
     at += line.length + 1;
+    if (first >= 0) for (const part of parts.slice(first + 1)) {
+      broke = true;
+      if (part.trim() !== "") { page++; used = 0; broke = false; }
+    }
   }
   return { text: lines.join("\n"), lineStarts, pages, pageCount: page };
 }
@@ -279,6 +285,16 @@ export function parseMergeReply(reply: string, doc: DocText): DocHit[] {
   return hits(json(reply)?.findings, doc.text, 0, new Set(["names"]));
 }
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const MONTH = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\b/i;
+
+const dateParts = (date: string): (number | undefined)[] | null => {
+  const named = MONTH.exec(date), numbers = date.match(/\d+/g)?.map(Number) ?? [];
+  if (named) return [numbers.find(n => n > 31), MONTHS.indexOf(named[1]!.slice(0, 3).toLowerCase()) + 1, numbers.find(n => n >= 1 && n <= 31)];
+  const ymd = /(?:(\d{4})\s*년\s*)?(\d{1,2})\s*월(?:\s*(\d{1,2})\s*일)?/.exec(date) ?? /(\d{4})\s*[-./]\s*(\d{1,2})(?:\s*[-./]\s*(\d{1,2}))?/.exec(date);
+  return ymd && [ymd[1] ? Number(ymd[1]) : undefined, Number(ymd[2]), ymd[3] ? Number(ymd[3]) : undefined];
+};
+
 /** One event the model dated two ways, both in the text: the rarer date is the slip. */
 export function dateClashes(doc: DocText, dates: string[]): DocHit[] {
   const ko = /[가-힣]/.test(doc.text.slice(0, 4_000)), events = new Map<string, Set<string>>(), hits: DocHit[] = [];
@@ -290,9 +306,9 @@ export function dateClashes(doc: DocText, dates: string[]): DocHit[] {
   for (const forms of events.values()) {
     const seen = [...forms].map(date => ({ date, n: count(doc.text, date), at: doc.text.indexOf(date) })).filter(row => row.n > 0).sort((a, b) => b.n - a.n || a.at - b.at);
     if (seen.length !== 2) continue;
-    const [common, rare] = seen as [(typeof seen)[0], (typeof seen)[0]], a = numbers(common.date), b = numbers(rare.date);
-    // The same digits in another format ("2024. 3. 15." and "2024년 3월 15일") are one date.
-    if ([...a].every(n => b.has(n)) || [...b].every(n => a.has(n))) continue;
+    const [common, rare] = seen as [(typeof seen)[0], (typeof seen)[0]], a = numbers(common.date), b = numbers(rare.date), x = dateParts(common.date), y = dateParts(rare.date);
+    // The same date in another format ("2024. 3. 15." and "2024년 3월 15일") is one date; an unclear form ("3/15/2024") compares digits.
+    if (x && y ? x.every((n, i) => n === undefined || y[i] === undefined || n === y[i]) : [...a].every(n => b.has(n)) || [...b].every(n => a.has(n))) continue;
     hits.push({ kind: "names", at: rare.at, quote: rare.date, fix: common.date, note: ko ? "같은 일, 다른 날짜" : "same event, another date" });
   }
   return hits;

@@ -114,6 +114,45 @@ it("reports findings by line and page, then counts them fixed on the next check"
   expect(cards()[1]).toMatchObject({ fixed: 1, doc: { findingTotal: 0 } });
 });
 
+it("counts nothing fixed and checks again after the name and date comparison failed", async () => {
+  const long = Array.from({ length: 900 }, (_, i) => `${i + 1}번째 문단입니다. 오늘 회의에서 정한 내용을 차례로 적어 둡니다.`);
+  long[5] = "김민서 씨가 계약서를 보냈다.";
+  await writeFile(join(root, "script.md"), long.join("\n"));
+  let merges = 0;
+  generate.mockImplementation(async prompt => {
+    if (!prompt.startsWith("These names and dates")) return JSON.stringify({ findings: [], names: [], dates: [{ date: "2024. 3. 15.", what: "contract signed" }, { date: "2024. 6. 10.", what: "reminder sent" }] });
+    if (++merges > 1) throw new Error("timed out");
+    return JSON.stringify({ findings: [{ kind: "names", quote: "김민서", fix: "김민수", note: "two spellings" }] });
+  });
+  doc.schedule(start(["script.md"]));
+  await done();
+  expect(cards()[0]!.doc!.findingTotal).toBe(1);
+  long[800] += " 덧붙임.";
+  await writeFile(join(root, "script.md"), long.join("\n"));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(cards()).toHaveLength(2));
+  await done();
+  expect(cards()[1]!.fixed).toBeUndefined();
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(cards()).toHaveLength(3));
+});
+
+it("keeps secrets out of the replay, like the card", async () => {
+  const lines = [...LINES];
+  lines[9] = "export DATABASE_PASSWORD=hunter2hunter2";
+  await writeFile(join(root, "script.md"), lines.join("\n"));
+  let reply!: (text: string) => void;
+  generate.mockImplementationOnce(() => new Promise<string>(resolve => { reply = resolve; }));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(cards()[0]?.status).toBe("running"));
+  const run = doc.run(cards()[0]!.runId)!;
+  reply(JSON.stringify({ findings: [{ kind: "spelling", quote: "DATABASE_PASSWORD=hunter2hunter2", fix: "DATABASE_PASSWORD=hunter2hunter3" }], names: [], dates: [] }));
+  await done();
+  const replay = run.recording.file().toString();
+  expect(replay).toContain("doc-finding");
+  expect(replay).not.toContain("hunter2");
+});
+
 it("stores the replay on the card, so a reloaded chat can watch it", async () => {
   doc.schedule(start(["script.md"]));
   await done();

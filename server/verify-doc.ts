@@ -6,6 +6,7 @@ import { chunk } from "../electron/verify-replay.mjs";
 import type { VerifyCardData, VerifyCardStatus } from "../shared/live-verify.ts";
 import { VERIFY_DOC_FINDINGS, type VerifyDocFinding, type VerifyDocMark } from "../shared/verify-doc.ts";
 import type { ProviderInstance } from "./contracts.ts";
+import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store } from "./store.ts";
 import { chunkDoc, chunkPrompt, dateClashes, DOC_EXTS, docText, findingAt, lineIndex, mergePrompt, nameTwins, numberingHits, parseChunkReply, parseMergeReply, readDoc, type DocChunk, type DocHit, type DocText } from "./verify-doc-text.ts";
 import { verifyCardText } from "./verify-message.ts";
@@ -138,9 +139,9 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     writeCard(botId, run);
     const ms = () => Date.now() - startedAt;
     const mark = (value: VerifyDocMark) => run.recording.add(chunk(2, value));
-    mark({ ms: 0, kind: "doc-text", lines: doc.text.split("\n"), pageStarts: doc.pages.flatMap((page, i) => i && page === doc.pages[i - 1] ? [] : [i]) });
+    mark({ ms: 0, kind: "doc-text", lines: doc.text.split("\n").map(redactSecretsInText), pageStarts: doc.pages.flatMap((page, i) => i && page === doc.pages[i - 1] ? [] : [i]) });
 
-    let dirty = true, savedAt = startedAt, timedOut = false, next = 0, done = 0;
+    let dirty = true, savedAt = startedAt, timedOut = false, compared = true, next = 0, done = 0;
     const pulse = setInterval(() => {
       const now = Date.now();
       if (now - live.beat! >= BEAT_MS) { live.beat = now; dirty = true; }
@@ -159,7 +160,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       if ([...found.values()].some(other => other.line === row.line && other.kind === row.kind && (other.quote.includes(row.quote) || row.quote.includes(other.quote)))) return;
       found.set(key, row);
       live.by![row.kind] = (live.by![row.kind] ?? 0) + 1;
-      mark({ ms: ms(), kind: "doc-finding", finding: row });
+      mark({ ms: ms(), kind: "doc-finding", finding: { ...row, quote: redactSecretsInText(row.quote), fix: redactSecretsInText(row.fix), ...(row.note ? { note: redactSecretsInText(row.note) } : {}) } });
       dirty = true;
     };
     const lost = (part: DocChunk | null, error: unknown) => {
@@ -203,7 +204,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
         live.page = undefined;
         dirty = true;
         try { for (const hit of parseMergeReply(await generate(prompt, { ephemeral: true, lean: true, timeoutMs: CALL_MS, signal }), doc)) add(hit); }
-        catch (error) { lost(null, error); }
+        catch (error) { compared = false; lost(null, error); }
       }
     } finally {
       clearInterval(pulse);
@@ -223,8 +224,8 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       return from === to ? `${from}` : `${from}-${to}`;
     });
     const key = `${threadId}\n${file}`, before = checked.get(key), now = new Set(findings.map(findingKey));
-    const fixed = status === "completed" && !failed.length && before ? [...before.keys].filter(row => !now.has(row)).length : 0;
-    if (status === "completed" && !failed.length) remember(checked, key, { sha, keys: now }, KEPT);
+    const fixed = status === "completed" && !failed.length && compared && before ? [...before.keys].filter(row => !now.has(row)).length : 0;
+    if (status === "completed" && !failed.length && compared) remember(checked, key, { sha, keys: now }, KEPT);
     run.card = {
       ...run.card, status, endedAt: Date.now(), ...(status === "blocked" ? { errorCode: timedOut ? "timeout" : "internal" } : {}), ...(pages.length ? { notChecked: pages } : {}), ...(fixed ? { fixed } : {}),
       doc: { ...live, page: undefined, beat: undefined, findings: findings.slice(0, VERIFY_DOC_FINDINGS), findingTotal: findings.length },
