@@ -50,9 +50,14 @@ export default function WhatsNewCard({ release, closing, onClose }: { release: s
   const { t, locale } = useI18n();
   const { dispatch } = useStore();
   const entry = WHATS_NEW[release];
+  const card = useRef<HTMLElement>(null);
+  const visible = useSeen(card);
+  const marked = useRef(false);
   useEffect(() => {
-    if (entry) void api("/api/whats-new/seen", { method: "POST" }).catch(() => {});
-  }, [entry]);
+    if (!entry || !visible || marked.current) return;
+    marked.current = true;
+    void api("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ release }) }).catch(() => {});
+  }, [entry, visible, release]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing) onClose();
@@ -63,7 +68,7 @@ export default function WhatsNewCard({ release, closing, onClose }: { release: s
   if (!entry) return null;
   return (
     <div className="whats-new-dock">
-      <section className="whats-new" aria-label={entry.title[locale]} data-closing={closing || undefined}>
+      <section ref={card} className="whats-new" aria-label={entry.title[locale]} data-closing={closing || undefined}>
         <div className="whats-new-head">
           <h2>{entry.title[locale]}</h2>
           <button type="button" className="whats-new-x" aria-label={t("whatsNew.close")} title={t("whatsNew.close")} onClick={onClose}>

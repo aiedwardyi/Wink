@@ -30,9 +30,18 @@ describe("whats new", () => {
     writeFileSync(join(root, "bots.json"), "[]");
     const first = openWhatsNew(root, "1.0.246");
     expect(first.pending()).toBe("1.0.246");
-    first.markSeen();
+    first.markSeen("1.0.246");
     expect(first.pending()).toBeNull();
     expect(openWhatsNew(root, "1.0.246").pending()).toBeNull();
+  });
+
+  it("keeps a newer release pending when a stale card marks an older one seen", () => {
+    writeFileSync(join(root, "bots.json"), "[]");
+    const open = openWhatsNew(root, "1.0.247");
+    open.markSeen("1.0.246");
+    open.markSeen(undefined);
+    expect(open.pending()).toBe("1.0.247");
+    expect(openWhatsNew(root, "1.0.247").pending()).toBe("1.0.247");
   });
 
   it("keeps it pending across restarts until seen", () => {
@@ -52,7 +61,7 @@ describe("whats new", () => {
   it("shares one release across its dev builds", () => {
     expect(releaseOf("1.0.246-dev.3")).toBe("1.0.246");
     writeFileSync(join(root, "bots.json"), "[]");
-    openWhatsNew(root, "1.0.246-dev.2").markSeen();
+    openWhatsNew(root, "1.0.246-dev.2").markSeen("1.0.246");
     expect(openWhatsNew(root, "1.0.246-dev.3").pending()).toBeNull();
   });
 

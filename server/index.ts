@@ -8020,7 +8020,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     if (method === "GET" && path === "/api/whats-new") return json(res, 200, { release: whatsNew.pending() });
     if (method === "POST" && path === "/api/whats-new/seen") {
-      whatsNew.markSeen();
+      whatsNew.markSeen((await readBody(req))?.release);
       return json(res, 200, { ok: true });
     }
     if (method === "GET" && path === "/api/update/state") {

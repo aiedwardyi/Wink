@@ -42,8 +42,9 @@ export function openWhatsNew(dataDir: string, version: string) {
   else if (release && (seen === undefined || newer(release, seen))) pending = release;
   return {
     pending: () => pending,
-    markSeen: () => {
-      if (!pending) return;
+    // A stale client still showing an older card must not use up a newer one.
+    markSeen: (shown: unknown) => {
+      if (!pending || shown !== pending) return;
       writeSeen(dataDir, pending);
       pending = null;
     },

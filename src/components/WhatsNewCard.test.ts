@@ -12,6 +12,21 @@ const api = vi.fn((..._args: unknown[]) => Promise.resolve({ ok: true }));
 const dispatch = vi.fn();
 vi.mock("@/state/store", () => ({ api: (...args: unknown[]) => api(...args), useStore: () => ({ dispatch }) }));
 
+let observers: { see: IntersectionObserverCallback; node?: Element }[] = [];
+vi.stubGlobal(
+  "IntersectionObserver",
+  class {
+    node?: Element;
+    constructor(public see: IntersectionObserverCallback) {
+      observers.push(this);
+    }
+    observe(node: Element) {
+      this.node = node;
+    }
+    disconnect() {}
+  },
+);
+
 const { default: WhatsNewCard } = await import("./WhatsNewCard");
 
 const RELEASE = Object.keys(WHATS_NEW)[0];
@@ -29,6 +44,7 @@ describe("whats new card", () => {
     api.mockClear();
     dispatch.mockClear();
     onClose.mockClear();
+    observers = [];
   });
 
   afterEach(() => {
@@ -37,6 +53,12 @@ describe("whats new card", () => {
   });
 
   const render = (release: string) => act(() => root.render(createElement(WhatsNewCard, { release, closing: false, onClose })));
+  const scrollIntoView = () =>
+    act(() => {
+      for (const observer of observers.filter((o) => o.node?.classList.contains("whats-new"))) {
+        observer.see([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
+      }
+    });
   const button = (name: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === name || b.getAttribute("aria-label") === name)!;
 
   it("renders nothing and records nothing for a release with no entry", () => {
@@ -45,12 +67,15 @@ describe("whats new card", () => {
     expect(api).not.toHaveBeenCalled();
   });
 
-  it("records the release as seen once when it shows", () => {
+  it("records the shown release as seen once, only after it scrolls into view", () => {
     render(RELEASE);
     render(RELEASE);
     expect(host.querySelectorAll(".whats-new-tile")).toHaveLength(2);
+    expect(api).not.toHaveBeenCalled();
+    scrollIntoView();
+    scrollIntoView();
     expect(api).toHaveBeenCalledTimes(1);
-    expect(api).toHaveBeenCalledWith("/api/whats-new/seen", { method: "POST" });
+    expect(api).toHaveBeenCalledWith("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ release: RELEASE }) });
   });
 
   it("closes from Got it, the X and Escape", () => {
