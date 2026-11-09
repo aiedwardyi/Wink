@@ -59,7 +59,7 @@ function chat(threadId: string) {
   const patches: Array<Partial<Message>> = [];
   const peerReplyComm = new Map<string, NonNullable<Message["comm"]>>();
   const deps: Record<string, unknown> = {
-    turnSummaries, takePeerReplyStamp, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {},
+    turnSummaries, takePeerReplyStamp, persistPeerUserReply, peerReplyComm, lastReply: new Map(), markChatLatency: () => {}, paneNoteTurnThreads: new Set<string>(),
     store: {
       messagesFor: () => messages,
       patchMessage: (_threadId: string, id: string, patch: Partial<Message>) => {
