@@ -33,8 +33,9 @@ export function managedWorkerCommand(worker, environment, platform, binDir) {
   // The pane shell outlives the worker, so a launch-only secret leaves its environment on any exit.
   const clear = (worker.clearEnv ?? []).filter((name) => /^[A-Z][A-Z0-9_]*$/.test(name));
   if (!clear.length) return command;
+  // The INT trap keeps Ctrl+C from aborting the list; `exit` stops sh from exec-ing the worker in place of the trap.
   return platform === "win32" ? `try { ${command} } finally { ${clear.map((name) => `Remove-Item Env:${name} -ErrorAction SilentlyContinue`).join("; ")} }`
-    : `${command}; unset ${clear.join(" ")}`;
+    : `(trap : INT; ${command}; exit); unset ${clear.join(" ")}`;
 }
 
 export function unroutedWorkerCommand(worker, command, binDir) {

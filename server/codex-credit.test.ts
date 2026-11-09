@@ -132,6 +132,15 @@ describe("OpenAI credit Codex account", () => {
     await expect(f.prepare({ ...f.input, command: "codex", resume })).rejects.toThrow("Worker account is unavailable or signed out");
   });
 
+  it("refuses a launch on the credit once the key is removed with routing off", async () => {
+    const f = setup(false);
+    f.saved.key = undefined;
+    for (const value of ["OpenAI credit", " openai CREDIT "]) {
+      await expect(f.prepare({ ...f.input, command: `$env:CODEX_HOME='${value}'; codex 'task'` })).rejects.toThrow(/^OpenAI credit needs a saved OpenAI key\. .*OpenAI 키/);
+    }
+    expect(await f.prepare({ ...f.input, command: "$env:CODEX_HOME='legacy'; codex 'task'" })).toBeNull();
+  });
+
   it.each(["claude", "codex"] as const)("answers a %s launch off the credit as an unrouted host gets it today", async (engine) => {
     const unused = vi.fn(() => { throw new Error("unexpected routed work"); });
     const usage = Object.assign(unused, { invalidate() {} });
@@ -194,7 +203,7 @@ writeFileSync(${JSON.stringify(dump)}, JSON.stringify({ argv: process.argv.slice
     expect(managedWorkerCommand(worker, {}, platform)).toBe(plain);
     expect(managedWorkerCommand({ ...worker, clearEnv: ["BAD; calc", "lower", "$env:X"] }, {}, platform)).toBe(plain);
     expect(managedWorkerCommand({ ...worker, clearEnv: [ENV] }, {}, platform)).toBe(platform === "win32"
-      ? `try { ${plain} } finally { Remove-Item Env:${ENV} -ErrorAction SilentlyContinue }` : `${plain}; unset ${ENV}`);
+      ? `try { ${plain} } finally { Remove-Item Env:${ENV} -ErrorAction SilentlyContinue }` : `(trap : INT; ${plain}; exit); unset ${ENV}`);
   });
 
   it("clears the key in a real PowerShell after a clean exit, a failing exit and a missing CLI", { skip: process.platform !== "win32", timeout: 60_000 }, () => {

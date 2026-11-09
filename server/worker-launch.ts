@@ -131,14 +131,17 @@ export function createWorkerLaunch(options: {
   const deps = withCodexCredit(options);
   const onCredit = (text: string) => {
     const credit = deps.credit?.();
+    let named = false;
     try {
-      const command = credit && workerCommand(text);
+      const command = deps.credit && workerCommand(text);
       const home = command && command.kind === "managed" && command.driver === "codex" ? command.home?.value : undefined;
-      return home !== undefined && (canonicalAccountHome(home) === canonicalAccountHome(credit!.account.home)
-        || home.trim().normalize("NFC").toLowerCase() === CODEX_CREDIT_NAME.toLowerCase());
+      named = home?.trim().normalize("NFC").toLowerCase() === CODEX_CREDIT_NAME.toLowerCase();
+      if (credit && home !== undefined && (named || canonicalAccountHome(home) === canonicalAccountHome(credit.account.home))) return true;
     } catch {
       return false;
     }
+    if (named) throw new Error("OpenAI credit needs a saved OpenAI key. (OpenAI 크레딧을 쓰려면 저장된 OpenAI 키가 필요합니다.)");
+    return false;
   };
   return async (input: { botId: string; label?: string; command: string; environment: NodeJS.ProcessEnv; mode?: "send"; resume?: WorkerResume; unrouted?: true }) => {
     if (input.unrouted) return deps.enabled() ? null : unroutedLaunch(input.command);
