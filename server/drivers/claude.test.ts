@@ -414,6 +414,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     delete process.env.OMB_CLAUDE_EFFORT_REPLY_MS;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CLAUDE_CODE_SILENT_TURN_REMINDER;
+    delete process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
     delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     delete process.env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT;
     delete process.env.XAI_API_KEY;
@@ -920,6 +921,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await recorder.until((e) => e.type === "turn.completed");
 
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_SILENT_TURN_REMINDER).toBe("1");
+  });
+
+  it("lists built-ins and mounted Wink MCP tools as terminal tools", async () => {
+    await create();
+    const dump = join(scratch, "terminal-tools.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "stale";
+
+    await instance.adapter.sendTurn({
+      threadId: "t-terminal-tools",
+      text: "hi",
+      integrations: {
+        terminal: { command: process.execPath, args: ["/fake/terminal-proxy.js"], env: {} },
+        dweb: { url: "http://127.0.0.1:49737" },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const tools = JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(",");
+    expect(tools).toEqual(expect.arrayContaining(["Bash", "Read", "mcp__terminal__terminal_read", "mcp__terminal__terminal_close", "mcp__dweb__dweb_status"]));
+    expect(tools).not.toContain("stale");
+    expect(tools).not.toContain("mcp__phone__tap");
   });
 
   it("turns Claude Code auto memory off on every turn", async () => {

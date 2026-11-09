@@ -30,6 +30,7 @@ import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli 
 import { inputDigest } from "../repeat-detector.ts";
 import { REPLY_MARKER } from "../turn-context.ts";
 import { startTurnTimer, startTurnTrace, traceHelperCall, traceRuntimeEvent, type TurnTrace, type UsageObserver } from "../turn-timing.ts";
+import { claudeTerminalTools } from "./mcp-tool-names.ts";
 import { experimentalAgents, originalCatalogCall } from "./tool-catalog.ts";
 import { captureToolDetail } from "../tool-detail.ts";
 
@@ -1131,6 +1132,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
 
       const env = claudeEnvironment(turnModel, turnEnvironment, input.account);
+      env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = claudeTerminalTools(Object.keys(mcpServers), config.tools);
       const cwd = turn.cwd ?? homedir();
       // everything that shapes the process, minus session/turn specifics
       // (the --mcp-config file is a fresh temp path each time; its CONTENT

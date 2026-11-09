@@ -36,6 +36,7 @@
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
+import type { McpTool } from "./mcp-tool-names.ts";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
@@ -67,7 +68,7 @@ const VERIFY_SITE_TOOL = {
     required: ["entry"],
     additionalProperties: false,
   },
-};
+} satisfies McpTool<"agents">;
 
 const WEEKDAYS = [
   "monday",
@@ -558,7 +559,7 @@ const TOOLS = [
       required: ["on"],
     },
   },
-];
+] satisfies McpTool<"agents">[];
 
 type Json = Record<string, unknown>;
 

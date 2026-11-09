@@ -9,6 +9,7 @@ import { TERMINAL_KEYS, type TerminalKey } from "../terminal-keys.ts";
 import { grokSupport, STATIC_GROK_MODELS } from "./acp/grok.ts";
 import { STATIC_CLAUDE_MODELS } from "./claude.ts";
 import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
+import type { McpTool } from "./mcp-tool-names.ts";
 import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
 export { terminalReadGrant } from "../terminal-grant.ts";
 
@@ -179,7 +180,7 @@ export const TOOLS = [
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
-] as const;
+] as const satisfies readonly McpTool<"terminal">[];
 
 type TerminalConfig = { host?: string; token?: string; botId?: string; harness?: string; commsToken?: string; nameOf?: (id: string) => string | undefined };
 type SendInput = { sessionId: string; generation: number; text: string };
