@@ -374,7 +374,7 @@ export function routineCardsSinceLastUserTurn(messages: Message[], excludeIds: R
       break;
     }
     if (excludeIds.has(message.id)) continue;
-    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered) {
+    if (message.role === "user" && message.kind === "text" && message.text?.trim() && !message.steered && !message.quick) {
       since = message.at;
       break;
     }
@@ -553,9 +553,11 @@ function replayUnits(
     if (excludeIds.has(message.id)) return [];
     const mail = mailReplayText(message, pending.get(message.id) ?? 0, through.get(message.id));
     if (mail !== undefined) return mail ? [{ id: message.id, pathIndex, role: "user", text: mail, label: "", mailUpto: through.get(message.id) ?? message.comm?.read?.upto ?? message.text?.length ?? 0 }] : [];
+    // a queued handoff's drained line carries the same words
+    if (message.quick?.state === "handoff" && message.queueId) return [];
     if (message.kind === "text" && message.text?.trim()) {
       const body = transcriptText(message, messagesById, userName);
-      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : body;
+      const text = message.summarized ? `${ENGINE_SUMMARY_PREFIX}${body}` : message.role === "bot" && message.quick ? `[Quick answer] ${body}` : body;
       const speaker = message.role === "user" ? userName : (message.from?.name ?? "Bot");
       return [{
         id: message.id,

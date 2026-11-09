@@ -19,7 +19,7 @@
 // that lookup is unaffected.
 import { build } from "esbuild";
 import { execFile } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { copyFileSync, readdirSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -87,10 +87,13 @@ await build({
   logLevel: "info",
 });
 
+const dist = join(root, "dist-server");
+// The quick helper's PreToolUse hook is run by path (drivers/claude-fork.ts), never imported, so no bundle carries it.
+copyFileSync(join(server, "drivers", "side-hook.cjs"), join(dist, "drivers", "side-hook.cjs"));
+
 // A bundle that declares its own top-level `require` collides with the banner,
 // and that only shows when the file is parsed, so parse every file now.
-const dist = join(root, "dist-server");
-const unchecked = readdirSync(dist, { recursive: true }).filter((file) => file.endsWith(".js"));
+const unchecked = readdirSync(dist, { recursive: true }).filter((file) => /\.c?js$/.test(file));
 const check = promisify(execFile);
 await Promise.all(
   Array.from({ length: availableParallelism() }, async () => {

@@ -307,6 +307,8 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
+import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
+import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
@@ -1884,6 +1886,8 @@ store.onChange((change) => {
       const bot = store.botByThread(change.threadId);
       if (bot) limitWaits.cancel(bot.id, undefined, change.message.steered === true);
     }
+    // a handed-off quick ask joins the turn as a patch, not an append
+    if (change.type === "message.patch" && change.message.quick?.state === "handoff" && change.message.steered) adoptHumanRoot(change.threadId, change.message.sendId ?? change.message.id);
     if (change.type === "bot" || change.type === "thread" || change.type === "thread.deleted" || change.type === "bot.deleted") limitWaits.reconcile();
   } catch (error) { console.error("limit-waits: reconciliation failed", error); }
   switch (change.type) {
@@ -4034,7 +4038,7 @@ bus.subscribe((event: RuntimeEvent) => {
         }
       }
       // Before the queue drain subscribers append the next send.
-      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.from?.botId && message.text?.trim());
+      const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
       setImmediate(() => {
         const owner = verifyOwner && store.bot(verifyOwner.botId);
         void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
@@ -5086,6 +5090,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const routineCards = replaysTranscript
     ? []
     : routineCardsSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
+  const quickAnswers = replaysTranscript ? [] : quickAnswersSinceLastUserTurn(activeMessages, skipTranscript, task.providerSessionBoundId);
   const recallNotes = turnStartedByUser(opts) && supportsWorkspaceFiles(instance.driverKind)
     ? memoryLookup.take(bot.id, threadId, !rewound && !fresh && !recycled ? task.resumeCursors[instanceId] : undefined, text)
     : [];
@@ -5093,7 +5098,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   const mailParts = mailForTurn(store, threadId, paneNoteIds, modelContextWindow, paneTokens);
   const accountNote = accountNotices.forTurn(bot.id);
   const accountNotes = accountNote.text ? [accountNote.text] : [];
-  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...syncNotes, ...recallNotes];
+  const turnNotes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCards, ...quickAnswers, ...syncNotes, ...recallNotes];
   let turnPrompt = turnNotes.length ? [...turnNotes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
   let turnTranscript = withoutTurnNotes(transcript, paneNotes);
   const { turnText, resume } = buildTurnContext({
@@ -5621,7 +5626,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
             if (live.adapter.hasBackgroundWork?.(threadId) !== true) {
               paneNotes = refreshedNotes.notes;
               newestPaneNoteId = refreshedNotes.newestId;
-              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...syncNotes, ...recallNotes];
+              const notes = [...accountNotes, ...paneNotes, ...mailParts.map((part) => part.text), ...routineCardsSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId), ...(replaysTranscript ? [] : quickAnswersSinceLastUserTurn(messages, skipTranscript, task.providerSessionBoundId)), ...syncNotes, ...recallNotes];
               turnPrompt = notes.length ? [...notes, "Current message:", currentPrompt].join("\n\n") : currentPrompt;
             }
             turnTranscript = withoutTurnNotes(transcript, paneNotes);
@@ -7307,6 +7312,16 @@ const botChatRoutes = createBotChatRoutes({
   maybeResumeConnectors,
   secretMessage,
   resumeSecretCard,
+  quick: {
+    ask: quickAsk,
+    accountReady: (bot, threadId) => {
+      const instance = botAccounts.instance(bot, threadId);
+      if (!instance || !registry.accountAvailable(instance.instanceId) || limitWaits.held(bot.id)) return false;
+      const now = Date.now();
+      return !rateLimitsByInstance.get(instance.instanceId)?.windows.some((window) => window.usedPercent >= 100 && !(window.resetsAt !== null && window.resetsAt <= now));
+    },
+    usage: { start: boardTurnStarted, settle: (id) => usageBoard.turnSettled(id) },
+  },
 });
 const threadRoutes = createThreadRoutes({
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
@@ -8099,6 +8114,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
 
+    m = path.match(/^\/api\/bots\/([\w-]+)\/quick\/([\w-]+)\/escalate$/);
+    if (m && method === "POST") return await botChatRoutes.escalateQuick(res, m);
+
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
 
@@ -8650,6 +8668,7 @@ setImmediate(() => void limitWaits.tick().catch((error) => console.error("limit-
 setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
+startupTiming.measure("side chats", () => sweepSide());
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 startTeamSnagOwner({
