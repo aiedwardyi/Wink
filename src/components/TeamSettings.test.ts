@@ -129,15 +129,15 @@ describe("Team settings", () => {
     const team = [...host.querySelectorAll("nav button")].find((button) => button.getAttribute("aria-label") === "Team");
     await act(async () => team!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await vi.waitFor(() => expect(host.textContent).toContain("Ada"));
-    expect(host.textContent).toContain("Team · 8.5h in 7 days · 1 online");
+    expect(host.textContent).toContain("Team · 8.5h active in 7 days · 1 online");
     expect(host.textContent).toContain("Online");
     expect(host.textContent).not.toContain("PCs");
     expect(host.textContent).toContain("Bea");
     expect(host.textContent).toContain("3h ago");
-    expect(host.querySelector("[title='Hours Wink was open']")).not.toBeNull();
+    expect(host.querySelector("[title='Active time']")).not.toBeNull();
     const bar = host.querySelector("article button");
     await act(async () => bar!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(host.textContent).toContain("online");
+    expect(host.querySelector("p.whitespace-pre-line")?.textContent).toMatch(/h active\n/);
   });
 
   it("shows today's report counts for the owner", async () => {

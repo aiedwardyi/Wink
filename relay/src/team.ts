@@ -1,7 +1,8 @@
-// Team usage for the owner's /v1/team: when each PC's control channel is up
-// and when phones are spliced to it. Labels, times and PC names only, kept 90
-// days. Closed spans go to an append-only journal; open ones are checkpointed
-// with their last-seen time, so a crash closes them there on the next boot.
+// Team usage for the owner's /v1/team: when each PC's control channel is up,
+// the 5-minute slots its person was active in, and when phones are spliced to
+// it. Labels, times and PC names only, kept 90 days. Closed spans go to an
+// append-only journal; open ones are checkpointed with their last-seen time,
+// so a crash closes them there on the next boot.
 
 import { createHash } from "node:crypto";
 import { mkdir, open, rename } from "node:fs/promises";
@@ -20,11 +21,13 @@ export const CHECKPOINT_MS = 60_000;
 export const PHONE_GAP_MS = 2 * 60_000;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SPANS = 500_000;
+export const ACTIVE_SLOT_MS = 5 * 60_000;
 const SPAN_RE = /^(pc|phone) ([a-z2-7]{16}) (\d{1,15}) (\d{1,15})$/;
 const NAME_RE = /^name ([a-z2-7]{16}) ([A-Za-z0-9_-]{0,400})$/;
 const ACCT_RE = /^acct ([a-z2-7]{16}) ([A-Za-z0-9_-]{43})$/;
 const WHO_RE = /^who ([a-z2-7]{16}) ([A-Za-z0-9_-]{0,400})$/;
 const TEST_RE = /^test ([a-z2-7]{16}) (\d{1,15})$/;
+const ACT_RE = /^act ([a-z2-7]{16}) (\d{1,12})$/;
 
 type Kind = "pc" | "phone";
 
@@ -51,7 +54,7 @@ export interface TeamPc {
   online: boolean;
   lastSeen: number | null;
   firstSeen: number | null;
-  /** Hours online per day, oldest first. */
+  /** Hours active per day, oldest first. */
   hours: number[];
   phone: { count: number; minutes: number }[];
 }
@@ -69,7 +72,7 @@ export interface TeamPerson {
   online: boolean;
   lastSeen: number | null;
   pcs: TeamPersonPc[];
-  /** Hours online per day, union of this person's PCs, oldest first. */
+  /** Hours active per day, union of this person's PCs, oldest first. */
   hours: number[];
   phone: { count: number; minutes: number }[];
 }
@@ -141,6 +144,12 @@ function merge(spans: { start: number; end: number }[], gap: number): { start: n
 const overlap = (span: { start: number; end: number }, from: number, to: number) =>
   Math.max(0, Math.min(span.end, to) - Math.max(span.start, from));
 
+function activeHours(slots: Iterable<number>, from: number): number {
+  let count = 0;
+  for (const slot of slots) if (slot * ACTIVE_SLOT_MS >= from && slot * ACTIVE_SLOT_MS < from + DAY_MS) count += 1;
+  return Math.round((count * ACTIVE_SLOT_MS) / 36_000) / 100;
+}
+
 export interface TeamWho {
   name: string;
   person: string;
@@ -148,6 +157,8 @@ export interface TeamWho {
 
 export class TeamLog {
   private spans: Span[] = [];
+  /** Active 5-minute slots (ms / ACTIVE_SLOT_MS) per label. */
+  private readonly slots = new Map<string, Set<number>>();
   private readonly names = new Map<string, string>();
   private readonly accounts = new Map<string, string>();
   private readonly whos = new Map<string, string>();
@@ -196,6 +207,11 @@ export class TeamLog {
         team.accounts.set(acct[1], acct[2]);
         continue;
       }
+      const act = ACT_RE.exec(line);
+      if (act) {
+        team.addSlot(act[1], Number(act[2]));
+        continue;
+      }
       const test = TEST_RE.exec(line);
       if (test) {
         team.tests.set(test[1], Math.max(team.tests.get(test[1]) ?? 0, Number(test[2])));
@@ -230,6 +246,14 @@ export class TeamLog {
     if (!open) return;
     this.openPc.delete(label);
     this.record({ kind: "pc", label, start: open.start, end: this.now() });
+  }
+
+  /** The PC's person typed, clicked or sent in Wink. Only the slot is kept. */
+  active(label: string): void {
+    const slot = Math.floor(this.now() / ACTIVE_SLOT_MS);
+    if (this.slots.get(label)?.has(slot)) return;
+    this.addSlot(label, slot);
+    this.append(`act ${label} ${slot}\n`);
   }
 
   setName(label: string, name: string): void {
@@ -322,7 +346,7 @@ export class TeamLog {
         online,
         lastSeen: online ? now : pc.length > 0 ? Math.max(...pc.map((s) => s.end)) : null,
         firstSeen: all.length > 0 ? Math.min(...all.map((s) => s.start)) : null,
-        hours: starts.map((from) => Math.round(pc.reduce((sum, s) => sum + overlap(s, from, from + DAY_MS), 0) / 36_000) / 100),
+        hours: starts.map((from) => activeHours(this.slots.get(label) ?? [], from)),
         phone: starts.map((from) => ({
           count: phone.filter((s) => s.start >= from && s.start < from + DAY_MS).length,
           minutes: Math.round(phone.reduce((sum, s) => sum + overlap(s, from, from + DAY_MS), 0) / 60_000),
@@ -340,6 +364,12 @@ export class TeamLog {
 `);
   }
 
+  private addSlot(label: string, slot: number): void {
+    const slots = this.slots.get(label);
+    if (slots) slots.add(slot);
+    else this.slots.set(label, new Set([slot]));
+  }
+
   private add(span: Span): void {
     if (span.end < span.start) return;
     this.spans.push(span);
@@ -354,6 +384,15 @@ export class TeamLog {
     this.spans = this.spans.filter((span) => span.end >= cutoff);
     const used = new Set([...this.spans.map((s) => s.label), ...this.openPc.keys()]);
     let dropped = before !== this.spans.length;
+    const oldest = Math.floor(cutoff / ACTIVE_SLOT_MS);
+    for (const [label, slots] of this.slots) {
+      for (const slot of slots) {
+        if (slot >= oldest) continue;
+        slots.delete(slot);
+        dropped = true;
+      }
+      if (slots.size === 0) this.slots.delete(label);
+    }
     for (const label of new Set([...this.names.keys(), ...this.accounts.keys(), ...this.whos.keys()])) {
       if (used.has(label)) continue;
       this.names.delete(label);
@@ -390,6 +429,7 @@ export class TeamLog {
     for (const [label, at] of this.tests) text += `test ${label} ${at}\n`;
     for (const span of this.spans) text += `${span.kind} ${span.label} ${span.start} ${span.end}
 `;
+    for (const [label, slots] of this.slots) for (const slot of slots) text += `act ${label} ${slot}\n`;
     return this.queue(() => writeAtomic(this.journal, text));
   }
 
@@ -430,7 +470,7 @@ export class TeamLog {
         const pc = pcByLabel.get(label);
         return pc ? [pc] : [];
       });
-      const merged = merge(labels.flatMap((label) => byLabel.get(label)?.pc ?? []), 0);
+      const slots = new Set(labels.flatMap((label) => [...(this.slots.get(label) ?? [])]));
       let wink = "";
       let seq = -1;
       for (const label of labels) {
@@ -451,7 +491,7 @@ export class TeamLog {
         pcs: members
           .map((pc) => ({ label: pc.label, name: pc.name, online: pc.online }))
           .sort((a, b) => a.name.localeCompare(b.name) || (a.label < b.label ? -1 : 1)),
-        hours: starts.map((from) => Math.round(merged.reduce((sum, span) => sum + overlap(span, from, from + DAY_MS), 0) / 36_000) / 100),
+        hours: starts.map((from) => activeHours(slots, from)),
         phone: starts.map((_, index) => ({
           count: members.reduce((sum, pc) => sum + (pc.phone[index]?.count ?? 0), 0),
           minutes: members.reduce((sum, pc) => sum + (pc.phone[index]?.minutes ?? 0), 0),

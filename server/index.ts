@@ -8328,6 +8328,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const reply = await teamRoute(phoneAccess.base(), googleEnv.teamRelay, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, googleAccount);
       return json(res, reply.status, reply.body);
     }
+    if (method === "POST" && path === "/api/team/active") {
+      phoneAccess.sendActive();
+      return json(res, 200, { ok: true });
+    }
     if (method === "GET" && path === "/api/team/today") {
       const reply = await teamTodayRoute(DATA_DIR, googleEnv.teamOwner, googleAccount.owner()?.email ?? null, crashOrigin, crashCount, Date.now(), {
         base: phoneAccess.base(), baked: googleEnv.teamRelay, tokens: googleAccount,

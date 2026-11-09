@@ -78,6 +78,8 @@ export class FakeRelay extends EventEmitter {
   answerPings = true;
   /** Offer snags in ready, as a team relay does. An old relay closes the channel on a snag. */
   offerSnags = false;
+  /** Offer active in ready, as a team relay does. An old relay closes the channel on one. */
+  offerActive = false;
   reportOwner?: string;
   readonly snags: unknown[] = [];
   enrollAnswer: ((body: string) => EnrollAnswer) | null = null;
@@ -303,6 +305,7 @@ export class FakeRelay extends EventEmitter {
           if (this.refreshTicket) ready.ticket = this.refreshTicket;
           if (this.refreshAccount && msg.account) ready.account = this.refreshAccount;
           if (this.offerSnags) ready.snags = true;
+          if (this.offerActive) ready.active = true;
           if (this.reportOwner) ready.reportOwner = this.reportOwner;
           socket.write(encodeFrame(ready));
           this.record("control:ready");
@@ -317,6 +320,9 @@ export class FakeRelay extends EventEmitter {
           const id = teamSnagSchema.safeParse(msg.data).data?.id;
           if (this.offerSnags && id) socket.write(encodeFrame({ type: "snagged", id }));
           else socket.destroy();
+        } else if (msg.type === "active") {
+          this.record("active");
+          if (!this.offerActive) socket.destroy();
         }
       }
     });

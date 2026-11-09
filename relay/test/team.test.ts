@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { googleSubHash } from "../../shared/google-id-token.ts";
-import { authMessageSchema, buildSetupCode, mintInvite, parseSetupCode } from "../../shared/relay-protocol.ts";
+import { authMessageSchema, buildSetupCode, encodeFrame, mintInvite, parseSetupCode } from "../../shared/relay-protocol.ts";
 import { loadConfig } from "../src/config.ts";
 import { signEnrollment } from "../src/enroll.ts";
 import { TEAM_KEEP_MS, TeamLog, type TeamStats } from "../src/team.ts";
@@ -133,6 +133,7 @@ describe("team session log", () => {
     const team = await TeamLog.open(dir, c.now);
     team.pcUp("aaaaaaaaaaaaaaaa");
     team.setName("aaaaaaaaaaaaaaaa", "Home");
+    team.active("aaaaaaaaaaaaaaaa");
     c.advance(MIN);
     team.phoneStart("aaaaaaaaaaaaaaaa");
     c.advance(4 * MIN);
@@ -183,7 +184,9 @@ describe("team session log", () => {
     const team = await TeamLog.open(await tempDir(), c.now);
     const label = "aaaaaaaaaaaaaaaa";
     team.pcUp(label);
+    team.active(label);
     c.advance(2 * HOUR);
+    team.active(label);
     // Joins a minute apart are one phone session; one 10 minutes later is another.
     const first = team.phoneStart(label);
     const second = team.phoneStart(label);
@@ -203,11 +206,11 @@ describe("team session log", () => {
     const seoul = team.stats(540);
     expect(seoul.days.at(-1)).toBe("2026-10-12");
     expect(seoul.days).toHaveLength(14);
-    expect(seoul.pcs[0]?.hours.at(-1)).toBe(3.27);
+    expect(seoul.pcs[0]?.hours.at(-1)).toBe(0.17);
     expect(seoul.pcs[0]?.phone.at(-1)).toEqual({ count: 2, minutes: 6 });
     const utc = team.stats(0);
     expect(utc.days.at(-1)).toBe("2026-10-11");
-    expect(utc.pcs[0]?.hours.at(-1)).toBe(3.27);
+    expect(utc.pcs[0]?.hours.at(-1)).toBe(0.17);
     expect(utc.pcs[0]?.hours.at(-2)).toBe(0);
     await team.close();
   });
@@ -227,7 +230,11 @@ describe("team session log", () => {
     team.pcUp(ada);
     team.pcUp(desk);
     team.pcUp(solo);
+    team.active(ada);
+    team.active(desk);
+    team.active(solo);
     c.advance(HOUR);
+    team.active(desk);
     team.pcDown(ada);
     team.pcDown(desk);
     const phone = team.phoneStart(ada);
@@ -239,7 +246,7 @@ describe("team session log", () => {
     team.pcDown(solo);
 
     const stats = team.stats(0);
-    expect(stats.pcs.map((pc) => pc.hours.at(-1))).toEqual([1, 1.17, 1]);
+    expect(stats.pcs.map((pc) => pc.hours.at(-1))).toEqual([0.08, 0.08, 0.17]);
     const adaPerson = stats.people.find((person) => person.pcs.length === 2);
     const spare = stats.people.find((person) => person.pcs.length === 1);
     expect(adaPerson).toMatchObject({
@@ -250,13 +257,72 @@ describe("team session log", () => {
         { label: desk, name: "Studio", online: false },
       ],
     });
-    expect(adaPerson?.hours.at(-1)).toBe(1);
+    expect(adaPerson?.hours.at(-1)).toBe(0.17);
     expect(adaPerson?.phone.at(-1)).toEqual({ count: 2, minutes: 10 });
     expect(adaPerson?.id).not.toBe(hash);
     expect(JSON.stringify(stats)).not.toContain(hash);
     expect(spare).toMatchObject({ name: "Spare", pcs: [{ label: solo, name: "Spare", online: false }] });
     expect(spare?.id).not.toBe(adaPerson?.id);
     await team.close();
+  });
+
+  it("counts a pc connected all day with two active slots as 10 minutes", async () => {
+    const dir = await tempDir();
+    const c = clock(Date.parse("2026-10-12T00:00:00Z"));
+    const team = await TeamLog.open(dir, c.now);
+    const label = "aaaaaaaaaaaaaaaa";
+    team.pcUp(label);
+    team.active(label);
+    c.advance(3 * MIN);
+    team.active(label);
+    c.advance(12 * HOUR);
+    team.active(label);
+    c.advance(12 * HOUR - 4 * MIN);
+    team.pcSeen(label);
+    const stats = team.stats(0);
+    expect(stats.pcs[0]?.online).toBe(true);
+    expect(stats.pcs[0]?.hours.at(-1)).toBe(0.17);
+    expect(stats.people[0]?.hours.at(-1)).toBe(0.17);
+    await team.close();
+    expect((await readFile(join(dir, "team-sessions"), "utf8")).match(/^act /gm)).toHaveLength(2);
+  });
+
+  it("loads a journal from before active slots as zero, then keeps and prunes slots", async () => {
+    const dir = await tempDir();
+    const c = clock();
+    const ada = "aaaaaaaaaaaaaaaa";
+    await writeFile(join(dir, "team-sessions"), `pc ${ada} ${T0 - 2 * HOUR} ${T0}\n`);
+    const old = await TeamLog.open(dir, c.now);
+    expect(old.stats(0).pcs).toMatchObject([{ label: ada, hours: Array(14).fill(0) }]);
+    old.pcUp(ada);
+    old.active(ada);
+    await old.close();
+    const again = await TeamLog.open(dir, c.now);
+    expect(again.stats(0).pcs[0]?.hours.at(-1)).toBe(0.08);
+    c.advance(TEAM_KEEP_MS + HOUR);
+    await again.checkpoint();
+    await again.close();
+    expect(await readFile(join(dir, "team-sessions"), "utf8")).not.toContain("act ");
+  });
+
+  it("takes active frames only on a team relay and shows a pc that never sends one as zero", async () => {
+    const issuer = makeIssuer();
+    h = await startRelay({ google: google(issuer), teamOwnerEmail: OWNER });
+    const busy = makePc();
+    const quiet = makePc();
+    const ctl = await openControl(h, busy);
+    await openControl(h, quiet);
+    expect(ctl.ready.active).toBe(true);
+    ctl.socket.write(encodeFrame({ type: "active" }));
+    ctl.socket.write(encodeFrame({ type: "ping" }));
+    expect(await ctl.reader.next()).toEqual({ type: "pong" });
+    const stats = statsOf(await get(h, "/v1/team", bearer(issuer.sign(claims()))));
+    expect(stats.pcs.find((pc) => pc.label === busy.label)?.hours.at(-1)).toBe(0.08);
+    expect(stats.pcs.find((pc) => pc.label === quiet.label)?.hours).toEqual(Array(14).fill(0));
+    await h.close();
+
+    h = await startRelay();
+    expect((await openControl(h, makePc())).ready).not.toHaveProperty("active");
   });
 
   it("round-trips old journals and appends account lines only on change", async () => {

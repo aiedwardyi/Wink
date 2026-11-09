@@ -306,6 +306,10 @@ export class PhoneAccess {
     return this.relay?.sendSnag?.(snag) ?? Promise.resolve(false);
   }
 
+  sendActive(): void {
+    this.relay?.sendActive?.();
+  }
+
   /** The name phones see changed, so the relay authenticates again. */
   nameChanged(): void {
     this.relay?.reauth?.();

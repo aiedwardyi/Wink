@@ -7,6 +7,7 @@ import { applyLocale, readOsLocaleTag, readPreference, resolveLocale } from "./l
 import { startColdOpenTiming } from "./lib/cold-open-timing";
 import { installRendererErrorReports } from "./lib/error-reports";
 import { startPhoneSeen } from "./lib/phone-seen";
+import { startTeamActive } from "./lib/team-active";
 import "./styles.css";
 
 // Before the first paint, not inside a component: stamping the skin during
@@ -21,6 +22,7 @@ if (window.ogb?.platform === "win32") document.documentElement.dataset.orbitCapt
 startColdOpenTiming();
 installRendererErrorReports();
 startPhoneSeen();
+startTeamActive();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
