@@ -12,8 +12,6 @@
 //   DWEB_URL  base URL of the local dweb daemon (http://127.0.0.1:49737)
 import readline from "node:readline";
 
-import type { McpTool } from "./mcp-tool-names.ts";
-
 const DWEB = (process.env.DWEB_URL ?? "http://127.0.0.1:49737").replace(/\/+$/, "");
 const DWEB_DISPLAY = (() => {
   try {
@@ -58,7 +56,7 @@ const TOOLS = [
       required: ["command"],
     },
   },
-] satisfies McpTool<"dweb">[];
+];
 
 type Json = Record<string, unknown>;
 const send = (msg: Json) => process.stdout.write(JSON.stringify(msg) + "\n");

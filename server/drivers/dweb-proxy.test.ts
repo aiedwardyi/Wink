@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { MCP_TOOL_NAMES } from "./mcp-tool-names.ts";
+
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "dweb-proxy.ts");
 
 let stub: Server;
@@ -96,6 +98,7 @@ describe("dweb-proxy MCP surface", () => {
       "dweb_opencode_models",
       "dweb_opencode_run",
     ]);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual([...MCP_TOOL_NAMES.dweb]);
   });
 
   it("renders daemon status and model data", async () => {

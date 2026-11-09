@@ -1,5 +1,5 @@
 // Tool names of Wink's own MCP servers, keyed by the server name the engines mount them under.
-// Each proxy's TOOLS array `satisfies` its list, so a new tool fails tsc until it is named here.
+// Each proxy's TOOLS array `satisfies` its list (dweb, phone: their tests check), so a new tool fails until it is named here.
 export const MCP_TOOL_NAMES = {
   agents: [
     "report_issue", "verify_site", "find_wink_tool", "call_wink_tool",
