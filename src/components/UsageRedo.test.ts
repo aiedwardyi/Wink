@@ -157,7 +157,7 @@ it("shows email under Settings names and nowhere in chat, quick view or picker",
 it("reorders accounts with Alt+Down and keeps the order after remount", async () => {
   await mount();
   const before = rows();
-  await key('[data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await key('[data-account-row="claude"]', "ArrowDown");
   expect(rows()).toEqual([before[1], before[0], before[2]]);
   await remount();
   expect(rows()).toEqual([before[1], before[0], before[2]]);
@@ -172,12 +172,12 @@ it("rereads Usage order whenever the mounted chat line opens its quick view", as
   await click("[data-usage-meter]");
   expect(quickRows()).toEqual(before);
   await click("[data-usage-meter]");
-  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"]', "ArrowDown");
   await click("[data-usage-meter]");
   expect(quickRows()).toEqual(rows());
   expect(quickRows()).toEqual([before[1], before[0], before[2]]);
   await click("[data-usage-meter]");
-  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowDown");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"]', "ArrowDown");
   await click("[data-usage-meter]");
   expect(quickRows()).toEqual([before[1], before[2], before[0]]);
 });
@@ -211,9 +211,9 @@ it("shares order between mounted Connections and Usage without losing other engi
     accounts: h.instances.filter((account) => account.accountOf === "claude"), reload: async () => {},
   })));
   const connections = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount);
-  await key('[data-connection-account="claude"] [data-usage-grip]', "ArrowDown");
+  await key('[data-connection-account="claude"]', "ArrowDown");
   expect(rows()).toEqual([before[1], before[0], before[2]]);
-  await key('[data-usage-engine="claude"] [data-account-row="claude"] [data-usage-grip]', "ArrowUp");
+  await key('[data-usage-engine="claude"] [data-account-row="claude"]', "ArrowUp");
   expect(connections()).toEqual(before);
   expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).codex).toEqual(codex);
 });
@@ -234,9 +234,10 @@ it("keeps another window's engine order when dropping an in-flight drag", async 
     vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, index * 80, 400, 80));
   }
   Object.defineProperty(q('[data-account-row="claude"]'), "animate", { configurable: true, value: undefined });
-  await act(async () => q('[data-account-row="claude"] [data-usage-grip]')!.dispatchEvent(new PointerEvent("pointerdown", {
-    pointerType: "mouse", button: 0, clientY: 40, bubbles: true,
-  })));
+  await act(async () => {
+    q('[data-account-row="claude"]')!.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", button: 0, clientY: 40, bubbles: true }));
+    document.dispatchEvent(new PointerEvent("pointermove", { clientY: 60, bubbles: true }));
+  });
   localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ codex }));
   await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "openmausbot.usageOrder.v1" })));
   await act(async () => {
@@ -250,19 +251,19 @@ it("keeps another window's engine order when dropping an in-flight drag", async 
 it("reorders sections with Alt+Down and keeps the order after remount", async () => {
   await mount();
   const before = engines();
-  await key('[data-usage-engine="claude"] > [data-engine-head] [data-usage-grip]', "ArrowDown");
+  await key('[data-usage-engine="claude"] > [data-engine-head]', "ArrowDown");
   expect(engines()).toEqual([before[1], before[0], ...before.slice(2)]);
   await remount();
   expect(engines()).toEqual([before[1], before[0], ...before.slice(2)]);
 });
 
-it.each(["keyboard", "pointer", "animated pointer"])("restores the current grip after a capped row remounts through %s", async (how) => {
+it.each(["keyboard", "pointer", "animated pointer"])("restores the current row after a capped row remounts through %s", async (how) => {
   const engine = h.board!.engines[0]!;
   engine.accounts.push({ ...engine.accounts[0]!, id: "claude-four", number: 4, name: "Claude 4", main: false });
   await mount();
   await click('[data-usage-engine="claude"] [data-accounts-cap]');
   const id = engine.accounts[2]!.id;
-  const selector = `[data-account-row="${id}"] [data-usage-grip]`;
+  const selector = `[data-account-row="${id}"]`;
   const pressed = q(selector)!;
   pressed.focus();
   if (how === "keyboard") await key(selector, "ArrowDown");
@@ -291,7 +292,7 @@ it("keeps hidden accounts in place when a reorder key hits the list boundary", a
   engine.accounts.push(fourth);
   engine.mainId = fourth.id;
   await mount();
-  await key('[data-account-row="claude"] [data-usage-grip]', "ArrowUp");
+  await key('[data-account-row="claude"]', "ArrowUp");
   await click('[data-usage-engine="claude"] [data-accounts-cap]');
   expect(rows()).toEqual(engine.accounts.map((account) => account.id));
 });
@@ -305,7 +306,7 @@ it.each([false, true])("preserves hidden account slots after a collapsed reorder
   localStorage.setItem("openmausbot.usageOrder.v1", JSON.stringify({ claude: full, codex: ["codex"] }));
   await mount();
   expect(rows()).toEqual([full[0], full[1], full[5]]);
-  await key(`[data-account-row="${full[0]}"] [data-usage-grip]`, "ArrowDown");
+  await key(`[data-account-row="${full[0]}"]`, "ArrowDown");
   const expected = [full[1], full[0], ...full.slice(2)];
   expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!)).toEqual({ claude: expected, codex: ["codex"] });
   await remount();
@@ -410,7 +411,6 @@ it("removes bot and worker counts and offers inline name editing", async () => {
 });
 
 const usageCss = readFileSync(resolve(process.cwd(), "src/components/UsageDesk.css"), "utf8");
-const coarse = usageCss.slice(usageCss.indexOf("@media (pointer: coarse)"));
 const claudeFold = '[data-usage-engine="claude"] [data-engine-fold]';
 const claudeBody = () => q('[data-usage-engine="claude"] [data-fold]');
 const land = async () => {
@@ -468,19 +468,165 @@ it("keeps a closing body at full width in the phone columns", () => {
   expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
 });
 
-it.each([".usage-engine-head > .usage-grip::after", "[data-account-row] > .usage-grip::after", "[data-connection-account][data-account-row] > .usage-grip::after"])("gives %s a 44 px touch target", (selector) => {
-  const rule = coarse.slice(coarse.indexOf(selector), coarse.indexOf("}", coarse.indexOf(selector)));
-  expect(rule).toContain("width: 44px");
-  expect(rule).toContain("height: 44px");
+it("has no grip anywhere and names each row for keyboard reorder", async () => {
+  persistPreference("ko");
+  await mount(createElement("div", null, createElement(UsageDesk), createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} })));
+  await click("[data-usage-meter]");
+  expect(document.querySelector("[data-usage-grip], .usage-grip")).toBeNull();
+  expect(usageCss).not.toContain("usage-grip");
+  for (const selector of ['.usage-sections [data-account-row="claude"]', '[data-usage-quick] [data-account-row="claude"]', '.usage-sections [data-usage-engine="claude"] > [data-engine-head]']) {
+    const row = document.querySelector(selector)!;
+    expect(row.getAttribute("aria-label"), selector).toMatch(/순서 변경$/);
+    expect(row.getAttribute("aria-keyshortcuts"), selector).toBe("Alt+ArrowUp Alt+ArrowDown");
+    expect(row.getAttribute("tabindex"), selector).toBe("0");
+  }
 });
 
-it("lifts a row from its grip on the first small move", async () => {
+it("lifts a held row from its fold arrow without its text selecting", async () => {
   await mount();
-  const grip = q('[data-account-row="claude"] [data-usage-grip]')!;
-  await act(async () => void touch(grip, "touchstart", 100));
-  await act(async () => void touch(grip, "touchmove", 105));
+  const head = q('[data-usage-engine="claude"] > [data-engine-head]')!;
+  const fold = head.querySelector("[data-engine-fold]")!;
+  await act(async () => void touch(fold, "touchstart"));
+  expect(head.style.getPropertyValue("user-select")).toBe("none");
+  await held(400);
   expect(lifted()).toBe(1);
-  await act(async () => void touch(grip, "touchcancel"));
+  expect(document.documentElement.hasAttribute("data-usage-dragging")).toBe(true);
+  await act(async () => void touch(fold, "touchcancel"));
+  expect(document.documentElement.hasAttribute("data-usage-dragging")).toBe(false);
+});
+
+it("opens nothing when a row held at its name is let go in place", async () => {
+  await mount();
+  const name = q('[data-account-row="claude"] [data-edit-name]')!;
+  const opened = vi.spyOn(name, "click");
+  await act(async () => void touch(name, "touchstart"));
+  await held(400);
+  expect(lifted()).toBe(1);
+  await act(async () => void touch(name, "touchend"));
+  expect(opened).not.toHaveBeenCalled();
+  expect(q("[data-account-name-editor]")).toBeNull();
+  expect(lifted()).toBe(0);
+});
+
+const mouse = (type: string, x: number, y: number) => new PointerEvent(type, { pointerType: "mouse", button: 0, clientX: x, clientY: y, bubbles: true });
+const stack = (rows: Iterable<Element>) => {
+  for (const [index, row] of [...rows].entries()) {
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, index * 80, 400, 80));
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+  }
+};
+const claudeRows = () => host.querySelectorAll('[data-usage-engine="claude"] [data-account-row]');
+const drag = async (node: Element, to: number) => act(async () => {
+  node.dispatchEvent(mouse("pointerdown", 40, 40));
+  document.dispatchEvent(mouse("pointermove", 40, to));
+  document.dispatchEvent(mouse("pointerup", 40, to));
+});
+
+it.each(["[data-left]", "[data-account-email]", "[data-edit-name]", "[data-use]"])("reorders with a mouse drag from a row's %s", async (from) => {
+  await mount();
+  const before = rows();
+  stack(claudeRows());
+  const pressed = q(`[data-usage-engine="claude"] ${from}`)!;
+  const index = before.indexOf(pressed.closest("[data-account-row]")!.getAttribute("data-account-row"));
+  await drag(pressed, 130);
+  const expected = [...before];
+  expected.splice(index + 1, 0, expected.splice(index, 1)[0]!);
+  expect(rows()).toEqual(expected);
+  expect(document.documentElement.hasAttribute("data-usage-dragging")).toBe(false);
+});
+
+it("waits a few px before dragging and stops the press from selecting text", async () => {
+  await mount();
+  const row = q('[data-account-row="claude"]')!;
+  const select = new Event("selectstart", { bubbles: true, cancelable: true });
+  await act(async () => {
+    row.dispatchEvent(mouse("pointerdown", 40, 40));
+    row.dispatchEvent(select);
+    document.dispatchEvent(mouse("pointermove", 42, 41));
+  });
+  expect(select.defaultPrevented).toBe(true);
+  expect(lifted()).toBe(0);
+  await act(async () => document.dispatchEvent(mouse("pointermove", 42, 46)));
+  expect(lifted()).toBe(1);
+  await act(async () => document.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true })));
+  expect(lifted()).toBe(0);
+});
+
+it("leaves a double click's word selection alone", async () => {
+  await mount();
+  const row = q('[data-account-row="claude"]')!;
+  await act(async () => {
+    row.dispatchEvent(mouse("pointerdown", 40, 40));
+    row.dispatchEvent(new MouseEvent("mousedown", { detail: 2, bubbles: true }));
+  });
+  const select = new Event("selectstart", { bubbles: true, cancelable: true });
+  row.dispatchEvent(select);
+  expect(select.defaultPrevented).toBe(false);
+  await act(async () => document.dispatchEvent(mouse("pointerup", 40, 40)));
+});
+
+it("keeps a plain click and drops the click that ends a drag", async () => {
+  await mount();
+  stack(claudeRows());
+  const name = '[data-account-row="claude"] [data-edit-name]';
+  await drag(q(name)!, 40);
+  await click(name);
+  expect(q("[data-account-name-editor]")).not.toBeNull();
+  await act(async () => q("[data-account-name-editor] input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  stack(claudeRows());
+  await drag(q(name)!, 130);
+  await click(name);
+  expect(q("[data-account-name-editor]")).toBeNull();
+});
+
+it("never starts a drag from a text field or a single row", async () => {
+  await mount();
+  await click('[data-account-row="claude"] [data-edit-name]');
+  await act(async () => {
+    q("[data-account-name-editor] input")!.dispatchEvent(mouse("pointerdown", 40, 40));
+    document.dispatchEvent(mouse("pointermove", 40, 90));
+  });
+  expect(lifted()).toBe(0);
+  await act(async () => document.dispatchEvent(mouse("pointerup", 40, 90)));
+  const single = q('[data-usage-engine="gemini"] [data-account-row]')!;
+  expect(single.hasAttribute("data-usage-reorder")).toBe(false);
+  await act(async () => {
+    single.dispatchEvent(mouse("pointerdown", 40, 40));
+    document.dispatchEvent(mouse("pointermove", 40, 90));
+  });
+  expect(lifted()).toBe(0);
+  await act(async () => document.dispatchEvent(mouse("pointerup", 40, 90)));
+});
+
+const quickRows = () => document.querySelectorAll<HTMLElement>("[data-usage-quick] [data-account-row]");
+const quickIds = () => [...quickRows()].map((node) => node.getAttribute("data-account-row"));
+const openQuick = async () => {
+  await mount(createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} }));
+  await click("[data-usage-meter]");
+};
+
+it("reorders the small card by mouse, saves the shared order and stays open", async () => {
+  await openQuick();
+  const before = quickIds();
+  stack(quickRows());
+  await drag(quickRows()[0]!, 130);
+  expect(quickIds()).toEqual([before[1], before[0], before[2]]);
+  expect(JSON.parse(localStorage.getItem("openmausbot.usageOrder.v1")!).claude).toEqual([before[1], before[0], before[2]]);
+  expect(document.querySelector("[data-usage-quick]:not([data-closing])")).not.toBeNull();
+});
+
+it("reorders the small card by a held touch and by keyboard", async () => {
+  await openQuick();
+  const before = quickIds();
+  stack(quickRows());
+  const row = quickRows()[0]!;
+  await act(async () => void touch(row, "touchstart", 40));
+  await held(400);
+  expect(document.querySelectorAll("[data-usage-quick] [data-usage-lifted]")).toHaveLength(1);
+  await act(async () => void touch(row, "touchcancel"));
+  await act(async () => quickRows()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true })));
+  expect(quickIds()).toEqual([before[1], before[0], before[2]]);
+  expect(document.activeElement).toBe(quickRows()[1]);
 });
 
 it("picks a row up on a long press", async () => {
@@ -507,19 +653,6 @@ it("lifts a Connections row from its email on a long press but not a tap", async
   await held(400);
   expect(lifted()).toBe(1);
   await act(async () => void touch(email, "touchcancel"));
-});
-
-it("passes a slow tap on the grip through to the button under it", async () => {
-  await connections();
-  const grip = q('[data-connection-account="claude"] [data-usage-grip]')!;
-  const name = q('[data-connection-account="claude"] [data-edit-name]')!;
-  const opened = vi.spyOn(name, "click");
-  Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [grip, name] });
-  await act(async () => void touch(grip, "touchstart"));
-  await held(200);
-  await act(async () => void touch(grip, "touchend"));
-  expect(opened).toHaveBeenCalledOnce();
-  expect(lifted()).toBe(0);
 });
 
 it("leaves a press on Switch and a scrolling touch alone", async () => {

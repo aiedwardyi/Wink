@@ -104,7 +104,7 @@ it.each([1, 2])("heads the engine above %i account rows, with Add Account only o
   expect(header!.querySelector("svg")).not.toBeNull();
   expect(header!.textContent).toBe("ClaudeAdd Account");
   expect(header!.textContent).not.toContain("@");
-  expect([...group.querySelectorAll("svg")].filter((node) => !node.closest("[data-usage-grip]"))).toHaveLength(count + 1);
+  expect(group.querySelectorAll("svg")).toHaveLength(count + 1);
   expect(group.querySelectorAll("[data-engine-hover]")).toHaveLength(0);
   expect(rows).toHaveLength(count);
   expect(group.lastElementChild!.hasAttribute("data-connection-account")).toBe(true);
