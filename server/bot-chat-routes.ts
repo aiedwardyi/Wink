@@ -139,6 +139,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     { adapter, replyTo, sendId, queueId, after, ask }: { adapter: ProviderInstance["adapter"] | undefined; replyTo?: Message; sendId?: string; queueId?: string; after: boolean; ask?: Message },
   ) => {
     let steered = false;
+    let dropped = false;
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     if (steersSend(adapter, bot.busy, after)) {
       const turnOpts = {
@@ -156,8 +157,11 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       steered = await adapter
         .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
           if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
+          else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
+      // an ask the engine already dropped goes once down the idle or queue path
+      if (ask && dropped) steered = false;
       if (!steered) peerInput?.cancel();
     }
     // steer() is awaited adapter work. The turn can settle, the task can
@@ -179,7 +183,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     // a Stop during the steer await already handed a Send now back
     if (sendId && isSendCancelled(sendId)) return { ok: true as const, cancelled: true as const, threadId };
     if (steered) {
-      if (!current.busy) {
+      // an ask the engine accepted counts as delivered: a replay would answer it twice
+      if (!current.busy && !ask) {
         throw Object.assign(
           new Error("the running turn ended before the steered message could be recorded"),
           { status: 409 },
@@ -231,8 +236,10 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage,
       handoff: async (row) => {
         const current = store.bot(botId);
-        if (current?.threadId === threadId) await deliverBusy(current, threadId, row.text ?? "", { adapter: instanceForBot(current, threadId)?.adapter, after: false, ask: row });
+        if (current?.threadId !== threadId) throw new Error("the bot switched tasks before it could receive the message");
+        await deliverBusy(current, threadId, row.text ?? "", { adapter: instanceForBot(current, threadId)?.adapter, after: false, ask: row });
       },
+      drain: drainQueuedSends,
     }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`));
   };
   return {

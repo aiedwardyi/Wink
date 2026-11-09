@@ -307,7 +307,7 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
-import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, recoverQuickAsks } from "./quick-ask.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
@@ -8666,6 +8666,7 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
+startupTiming.measure("quick asks", () => recoverQuickAsks(store));
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 startTeamSnagOwner({
