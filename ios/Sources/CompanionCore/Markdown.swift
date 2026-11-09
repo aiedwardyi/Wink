@@ -123,6 +123,7 @@ public enum Markdown {
         var fence = ""
         var fenceDepth = 0
         var fenceColumn = 0
+        var fenceAt = 0
         var span = 0
         var indented = false
         var blank = true
@@ -142,7 +143,7 @@ public enum Markdown {
             }
         }
         // `column` is where a list item's content starts, so the fence ends when a line dedents past it
-        func fenceStart(_ body: Substring) -> (column: Int, mark: String, after: Substring)? {
+        func fenceStart(_ body: Substring) -> (column: Int, at: Int, mark: String, after: Substring)? {
             var rest = body
             var column = 0
             var listed = false
@@ -170,7 +171,7 @@ public enum Markdown {
             let run = rest.prefix(while: { $0 == first }).count
             let after = rest.dropFirst(run)
             guard run >= 3, first == "~" || !after.contains("`") else { return nil }
-            return (listed ? column : 0, String(repeating: first, count: run), after)
+            return (listed ? column : 0, column, String(repeating: first, count: run), after)
         }
         func openTick(_ part: Substring) -> String.Index? {
             var slashes = 0
@@ -218,13 +219,14 @@ public enum Markdown {
             let indent = body.prefix(while: { $0 == " " }).count
             if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(body) && indent < fenceColumn)) { fence = "" }
             if !fence.isEmpty {
-                if let open = open, depth == fenceDepth, open.column == 0, open.mark.first == fence.first, open.mark.count >= fence.count,
+                if let open = open, depth == fenceDepth, indent <= fenceAt + 3, open.column == 0, open.mark.first == fence.first, open.mark.count >= fence.count,
                    isBlank(open.after) { fence = "" }
                 return line
             }
             if open != nil || isBlank(body) {
                 fence = open?.mark ?? ""
                 fenceColumn = open?.column ?? 0
+                fenceAt = open?.at ?? 0
                 fenceDepth = depth
                 span = 0
                 indented = false

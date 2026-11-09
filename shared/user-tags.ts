@@ -20,6 +20,7 @@ export function unwrapUserTags(text: string): string {
   let fence = "";
   let fenceDepth = 0;
   let fenceColumn = 0;
+  let fenceAt = 0;
   let span = 0;
   let indented = false;
   let blank = true;
@@ -53,12 +54,13 @@ export function unwrapUserTags(text: string): string {
     if (fence && (depth < fenceDepth || (fenceColumn && body.trim() && indent < fenceColumn))) fence = "";
     if (fence) {
       const end = FENCE_END.exec(body)?.[1];
-      if (end && depth === fenceDepth && end[0] === fence[0] && end.length >= fence.length) fence = "";
+      if (end && depth === fenceDepth && indent <= fenceAt + 3 && end[0] === fence[0] && end.length >= fence.length) fence = "";
       out += line;
     } else if (mark || !body.trim()) {
       fence = mark ?? "";
       fenceDepth = depth;
-      fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? open![1].length : 0;
+      fenceAt = open?.[1].length ?? 0;
+      fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? fenceAt : 0;
       span = 0;
       indented = false;
       blank = !mark;
