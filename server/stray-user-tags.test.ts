@@ -59,6 +59,11 @@ describe("stray user tags", () => {
     expect(shown(stripStrayUserTags(at("t2", { type: "content.delta", streamKind: "assistant_text", delta: "er1>new</user1>" })))).toBe("new");
   });
 
+  it("passes tag-free text through and switches on when a tag appears", () => {
+    const sent = ["Plain ", "text <", "b>", " then <us", "er1>Hi</user1> end"].map((piece) => shown(stripStrayUserTags(delta(piece))));
+    expect(sent).toEqual(["Plain ", "text ", "<b>", " then ", "Hi end"]);
+  });
+
   it("starts each item's stream fresh", () => {
     stripStrayUserTags(delta("<user1>one"));
     stripStrayUserTags(done("one"));

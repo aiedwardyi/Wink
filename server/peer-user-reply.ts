@@ -22,8 +22,11 @@ interface SplitTurn {
 
 const turns = new Map<string, SplitTurn>();
 const liveTurns = new Map<string, string | undefined>();
-const streams = new Map<string, { turnId?: string; raw: string; sent: string }>();
+// Tag-free text passes straight through; the full text is only kept and rescanned once a tag shows up.
+interface Stream { turnId?: string; parts: string[]; hold: string; tagged: boolean; raw: string; sent: string }
+const streams = new Map<string, Stream>();
 const PARTIAL_TAG = /<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?$/;
+const USER_TAG = /<\/?user\d/;
 let nextInput = 0;
 
 function splitText(text: string): { peer: string; users: Array<{ id: number; text: string }> } {
@@ -79,12 +82,27 @@ export function stripStrayUserTags(event: RuntimeEvent): RuntimeEvent {
     return splitTurn(event) ? event : { ...event, text: unwrapUserTags(event.text) };
   }
   if (event.type !== "content.delta" || event.streamKind !== "assistant_text" || splitTurn(event)) return event;
-  const stream = own ? held! : { turnId: event.turnId, raw: "", sent: "" };
+  const stream = own ? held! : { turnId: event.turnId, parts: [], hold: "", tagged: false, raw: "", sent: "" };
   streams.set(event.threadId, stream);
-  stream.raw += event.delta;
-  const shown = unwrapUserTags(stream.raw.replace(PARTIAL_TAG, ""));
-  const next = shown.startsWith(stream.sent) ? shown.slice(stream.sent.length) : "";
-  stream.sent += next;
+  const chunk = stream.hold + event.delta;
+  let next: string;
+  if (!stream.tagged && !USER_TAG.test(chunk)) {
+    const open = PARTIAL_TAG.exec(chunk.slice(-12))?.[0].length ?? 0;
+    next = chunk.slice(0, chunk.length - open);
+    stream.hold = chunk.slice(next.length);
+    stream.parts.push(next);
+  } else {
+    if (!stream.tagged) {
+      stream.tagged = true;
+      stream.sent = stream.parts.join("");
+      stream.raw = stream.sent;
+    }
+    stream.raw += chunk;
+    stream.hold = "";
+    const shown = unwrapUserTags(stream.raw.replace(PARTIAL_TAG, ""));
+    next = shown.startsWith(stream.sent) ? shown.slice(stream.sent.length) : "";
+    stream.sent += next;
+  }
   return { ...event, delta: next };
 }
 
