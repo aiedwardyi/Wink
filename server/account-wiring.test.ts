@@ -54,6 +54,7 @@ async function wired(main = "claude") {
     rateLimitsByInstance: new Map(), liveWorkerRuns: async () => ({ known: false, reason: "no-host" }), terminalBridgeAccess: null,
     store: { bots: [{ id: "atlas", name: "Atlas", modelSelection: { instanceId: "claude" } }] }, broadcast,
     providerReload: { current: (): { instanceId: string; account?: { generation: number } } | null => null },
+    codexCreditRows: () => [], codexCreditFor: () => undefined,
   };
   const board = section("const boardEngines", "\nconst refreshUsage");
   const usageBoard = await compile(`${board}\nreturn usageBoard;`)(scope);

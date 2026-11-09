@@ -1,6 +1,7 @@
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 
+import { CODEX_CREDIT_ARGS, CODEX_CREDIT_ENV, isCodexCredit } from "./codex-credit.ts";
 import { applyCredentialAllowlist } from "./config.ts";
 
 export interface AccountContext {
@@ -32,6 +33,7 @@ export function accountLaunch(
   args: string[],
   source: NodeJS.ProcessEnv,
   userSetup = false,
+  creditKey?: string,
 ): { args: string[]; env: NodeJS.ProcessEnv } {
   if (!account) return { args, env: source };
   if (driver !== "claudeAgent" && driver !== "codex") throw new Error("Unsupported account engine");
@@ -55,6 +57,11 @@ export function accountLaunch(
   }
   env.CODEX_HOME = account.home;
   env.CODEX_SQLITE_HOME = join(account.home, "state");
+  if (isCodexCredit(account)) {
+    if (!creditKey) throw new Error("OpenAI credit needs a saved OpenAI key");
+    env[CODEX_CREDIT_ENV] = creditKey;
+    return { env, args: [...args, "-c", `sqlite_home=${JSON.stringify(env.CODEX_SQLITE_HOME)}`, ...CODEX_CREDIT_ARGS] };
+  }
   return { env, args: [...args,
     "-c", `sqlite_home=${JSON.stringify(env.CODEX_SQLITE_HOME)}`,
     "-c", 'forced_login_method="chatgpt"',

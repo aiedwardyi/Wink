@@ -224,7 +224,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
   else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
   else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
-  else if (account.signIn === "ready") control = (
+  else if (account.signIn === "ready" && !account.credit) control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
       onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON)}>
@@ -236,14 +236,14 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
       {settings && <UsageGrip label={account.name} />}
       <div data-account-head="" className="usage-account-head">
         <div className="usage-account-identity min-w-0">
-          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && ["claude", "codex"].includes(engine.engine)} />}
+          {name ?? <EditableAccountName account={account} revision={board.revision} editable={settings && !account.credit && ["claude", "codex"].includes(engine.engine)} />}
           {email && <span data-account-email="" className="usage-email">{email}</span>}
         </div>
         {control}
       </div>
-      {account.signIn === "ready" ? <>
+      {account.signIn === "ready" && !account.credit ? <>
         <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
-      </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(STATE_KEY[account.signIn])}</div>}
+      </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(account.signIn === "ready" ? "usage.desk.apiCredit" : STATE_KEY[account.signIn])}</div>}
     </div>
   );
 }
