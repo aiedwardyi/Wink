@@ -5,9 +5,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "../config.ts";
-import type { ProviderInstance, SideEvent } from "../contracts.ts";
+import type { ProviderInstance, RuntimeEvent, SideEvent } from "../contracts.ts";
 import * as procs from "../procs.ts";
 import { quickAsk, sideIdle } from "../side-chat.ts";
+import { observeLive } from "../side-live-state.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { CodexDriver } from "./codex.ts";
@@ -15,7 +16,7 @@ import { forkCodex } from "./codex-fork.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-codex-app-server.ts");
 const LEDGER = join(DATA_DIR, "side-chat", "live.json");
-const envKeys = ["FAKE_CODEX_MODE", "FAKE_CODEX_DUMP", "FAKE_CODEX_TOOL_FIXTURE"];
+const envKeys = ["FAKE_CODEX_MODE", "FAKE_CODEX_DUMP", "FAKE_CODEX_TOOL_FIXTURE", "FAKE_CODEX_MESSAGES"];
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -126,6 +127,79 @@ describe("Codex fork through quickAsk (fake app-server)", () => {
   it("gives no fork before the thread ever spawned", async () => {
     const side = await mainThread("bench-quiet", "t-known");
     expect(side.fork!({ threadId: "t-never", text: "hi" })).toBeNull();
+  });
+});
+
+describe("Codex fork gets the same live state and guard as Claude's", () => {
+  const at = () => new Date().toISOString();
+  const ev = (threadId: string, id: string, rest: Record<string, unknown>) => observeLive({ eventId: id, provider: "codex", threadId, createdAt: at(), ...rest } as RuntimeEvent);
+
+  async function forkTurn(threadId: string, frames: object[], answer: string) {
+    const dump = join(scratch, `${threadId}.json`);
+    const fixture = join(scratch, `${threadId}-frames.json`);
+    writeFileSync(fixture, JSON.stringify(frames));
+    process.env.FAKE_CODEX_TOOL_FIXTURE = fixture;
+    process.env.FAKE_CODEX_MESSAGES = JSON.stringify([{ text: answer }]);
+    process.env.FAKE_CODEX_DUMP = dump;
+    const result = await quickAsk({ instance: instance!, messages: [] }, threadId, { text: "what port?" });
+    await sideIdle();
+    return { result, sent: calls(dump).find((call) => call.method === "turn/start")!.params.input[0].text as string };
+  }
+
+  it("sends the live block ahead of the ask", async () => {
+    await mainThread("bench-quiet", "t-live");
+    await recorder!.until((event) => event.type === "turn.completed");
+    ev("t-live", "l1", { type: "turn.started" });
+    ev("t-live", "l2", { type: "item.started", itemType: "tool", itemId: "a1", title: "ask_bot", summary: "mina" });
+    const { sent } = await forkTurn("t-live", [], "HANDOFF");
+    expect(sent).toMatch(/^\[Main task right now, as of [\d:]+, from Wink:\n- Open now, still running, no result yet: ask_bot mina[\s\S]*\]\n\n\[Quick helper\.[\s\S]*what port\?$/);
+  });
+
+  it("attaches a small changed file and counts it as read", async () => {
+    await mainThread("bench-quiet", "t-attach");
+    await recorder!.until((event) => event.type === "turn.completed");
+    const notes = join(scratch, "notes.md");
+    writeFileSync(notes, "Release: Tue Nov 24");
+    ev("t-attach", "a1", { type: "turn.started" });
+    ev("t-attach", "a2", { type: "item.started", itemType: "tool", itemId: "f1", title: "edit", verb: "Edit" });
+    ev("t-attach", "a3", { type: "item.completed", itemType: "tool", itemId: "f1", ok: true, writes: [notes] });
+    const { result, sent } = await forkTurn("t-attach", [], "notes.md says Tue Nov 24.");
+    expect(sent).toContain(`--- ${notes} ---\nRelease: Tue Nov 24`);
+    expect(result).toMatchObject({ route: "answer", text: "notes.md says Tue Nov 24." });
+  });
+
+  it("flags a file a fileChange is still writing and hands off an answer naming it", async () => {
+    const notes = join(scratch, "notes.md");
+    const fixture = join(scratch, "main-frames.json");
+    writeFileSync(fixture, JSON.stringify([{ method: "item/started", params: { item: { id: "f1", type: "fileChange", status: "inProgress", changes: [{ path: notes, kind: { type: "update" }, diff: "" }] } } }]));
+    process.env.FAKE_CODEX_TOOL_FIXTURE = fixture;
+    await mainThread("bench-quiet", "t-open");
+    await recorder!.until((event) => event.type === "turn.completed");
+    for (const event of recorder!.events) if (event.type !== "turn.completed") observeLive(event);
+    const { result, sent } = await forkTurn("t-open", [], "notes.md says Friday.");
+    expect(sent).toContain(`- Being written now, don't state what it says: ${notes}`);
+    expect(result).toMatchObject({ route: "handoff" });
+  });
+
+  it("counts a shell read or search hit as a lookup for the unseen-file guard", async () => {
+    await mainThread("bench-quiet", "t-guard");
+    await recorder!.until((event) => event.type === "turn.completed");
+    const config = join(scratch, "config.json");
+    writeFileSync(config, `{"port": 4180, "pad": "${"x".repeat(2_000)}"}`);
+    ev("t-guard", "g1", { type: "turn.started" });
+    ev("t-guard", "g2", { type: "item.started", itemType: "tool", itemId: "f1", title: "edit", verb: "Edit" });
+    ev("t-guard", "g3", { type: "item.completed", itemType: "tool", itemId: "f1", ok: true, writes: [config] });
+    const shell = (id: string, actions: object[], output: string) => [
+      { method: "item/started", params: { item: { id, type: "commandExecution", command: "x", commandActions: actions } } },
+      { method: "item/completed", params: { item: { id, type: "commandExecution", status: "completed", exitCode: 0, command: "x", commandActions: actions, aggregatedOutput: output } } },
+    ];
+    expect((await forkTurn("t-guard", [], "config.json says 4180.")).result).toMatchObject({ route: "handoff" });
+    const read = shell("c1", [{ type: "read", command: "cat config.json", name: "config.json", path: config }], "{}");
+    expect((await forkTurn("t-guard", read, "config.json says 4180.")).result).toMatchObject({ route: "answer" });
+    const search = shell("c2", [{ type: "search", command: "rg port", query: "port", path: scratch }], 'config.json:1:{"port": 4180');
+    expect((await forkTurn("t-guard", search, "config.json says 4180.")).result).toMatchObject({ route: "answer" });
+    const miss = shell("c3", [{ type: "search", command: "rg port", query: "port", path: "src" }], "src/server.js:3:port");
+    expect((await forkTurn("t-guard", miss, "config.json says 4180.")).result).toMatchObject({ route: "handoff" });
   });
 });
 

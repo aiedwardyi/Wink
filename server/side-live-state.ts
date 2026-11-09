@@ -13,7 +13,7 @@ const FILES_CAP = 3_072;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
 interface Turn {
-  open: Map<string, { tool: string; at: number; writes?: string }>;
+  open: Map<string, { tool: string; at: number; writes?: string[] }>;
   /** newest last */
   wrote: { path: string; shown: string }[];
 }
@@ -34,10 +34,11 @@ export function observeLive(event: RuntimeEvent): void {
   else if (event.type === "item.started" && event.itemType === "tool" && event.itemId) {
     const name = (event.title ?? event.verb ?? "tool").replace(/^mcp__.+?__/, "");
     const target = event.summary?.replace(/ \+\d+( -\d+)?$/, "");
+    const writes = target && WRITE_TOOLS.has(name) ? [target] : event.writes;
     turnOf(event.threadId).open.set(event.itemId, {
       tool: target ? `${name} ${target}` : name,
       at: Date.parse(event.createdAt) || Date.now(),
-      ...(target && WRITE_TOOLS.has(name) ? { writes: target } : {}),
+      ...(writes?.length ? { writes } : {}),
     });
   } else if (event.type === "item.completed" && event.itemType === "tool" && event.itemId) {
     const turn = turns.get(event.threadId);
@@ -46,7 +47,7 @@ export function observeLive(event: RuntimeEvent): void {
     turn.open.delete(event.itemId);
     const writes = event.writes ?? [];
     // the start's summary holds the workspace-relative path; absolute ones blow the cap after 2-3 files
-    for (const path of writes) turn.wrote = [...turn.wrote.filter((seen) => seen.path !== path), { path, shown: writes.length === 1 && shown ? shown : path }];
+    for (const path of writes) turn.wrote = [...turn.wrote.filter((seen) => seen.path !== path), { path, shown: writes.length === 1 && shown?.length === 1 ? shown[0]! : path }];
   }
 }
 
@@ -67,7 +68,7 @@ export function liveBlock(threadId: string, now = Date.now()): { text: string; a
   const turn = turns.get(threadId);
   if (!turn || (!turn.open.size && !turn.wrote.length)) return { text: "", attached: [] };
   const stamp = new Date(now).toTimeString().slice(0, 8);
-  const writingShown = [...new Set([...turn.open.values()].flatMap((item) => (item.writes ? [item.writes] : [])))];
+  const writingShown = [...new Set([...turn.open.values()].flatMap((item) => item.writes ?? []))];
   const writing = new Set(writingShown.map(fileName));
   const attached: string[] = [];
   const files: string[] = [];
@@ -103,6 +104,6 @@ export function quotesUnread(threadId: string, answer: string, reads: string[]):
   if (!turn) return false;
   const read = new Set(reads.map(fileName));
   const text = answer.toLowerCase();
-  const touched = [...turn.wrote.map(({ path }) => path), ...[...turn.open.values()].flatMap((item) => (item.writes ? [item.writes] : []))].map(fileName);
+  const touched = [...turn.wrote.map(({ path }) => path), ...[...turn.open.values()].flatMap((item) => item.writes ?? [])].map(fileName);
   return touched.some((name) => name && !read.has(name) && text.includes(name));
 }

@@ -122,6 +122,8 @@ export type RuntimeEvent = RuntimeEventBase &
         inputDigest?: string;
         /** Claude Code tool name, when the engine says the kind. */
         verb?: string;
+        /** files the call is changing, when the engine names them before it finishes */
+        writes?: string[];
       }
     | { type: "item.updated"; itemType: "tool" | "reasoning"; tokens?: number | null }
     | { type: "item.completed"; itemType: "tool"; ok: boolean; summary?: string; durationMs?: number; detail?: ToolDetail; writes?: string[] }

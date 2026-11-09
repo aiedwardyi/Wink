@@ -25,6 +25,7 @@ const QUIET_ITEMS = new Set(["agentMessage", "userMessage", "reasoning", "plan"]
 
 // The read-only sandbox and untrusted policy let only known-safe shell reads run unasked.
 const toolName = (type: string) => (type === "commandExecution" ? "Read" : type);
+const actions = (item: any): any[] => (Array.isArray(item?.commandActions) ? item.commandActions : []);
 
 // Per the app-server protocol: legacy approvals say approved/denied, the rest accept/decline.
 function decline(method: string): Record<string, unknown> {
@@ -83,7 +84,16 @@ export function forkCodex(spawn: CodexSpawn, input: SideInput): SideHandle {
         streamed += delta;
         emit({ type: "text", delta });
       } else if (msg.method === "item/started" && typeof p.item?.type === "string" && !QUIET_ITEMS.has(p.item.type)) {
-        emit({ type: "tool", name: toolName(p.item.type) });
+        const reads = actions(p.item).filter((action) => action?.type === "read" && typeof action.path === "string");
+        if (!reads.length) emit({ type: "tool", name: toolName(p.item.type) });
+        for (const action of reads) emit({ type: "tool", name: "Read", path: action.path });
+      } else if (msg.method === "item/completed" && p.item?.type === "commandExecution") {
+        const scopes = actions(p.item).filter((action) => action?.type === "search" || action?.type === "listFiles");
+        const text: string = typeof p.item.aggregatedOutput === "string" ? p.item.aggregatedOutput : "";
+        if (!scopes.length || p.item.exitCode || !text.trim()) return;
+        // like claude-fork's Grep/Glob: the scope counts, plus each "path:line:text" or path line
+        const paths = text.split(/\r?\n/).map((line) => line.replace(/^((?:[a-zA-Z]:)?[^:]*).*$/, "$1")).filter(Boolean);
+        emit({ type: "found", paths: [...scopes.map((action) => (typeof action.path === "string" ? action.path : "")), ...paths].filter(Boolean) });
       } else if (msg.method === "item/completed" && p.item?.type === "agentMessage" && typeof p.item.text === "string") {
         if (p.item.phase !== "commentary") answer = p.item.text;
         if (!streamed) emit({ type: "text", delta: p.item.text });
@@ -140,7 +150,7 @@ export function forkCodex(spawn: CodexSpawn, input: SideInput): SideHandle {
         const id = forked?.thread?.id;
         if (typeof id !== "string") throw new Error("thread/fork returned no thread");
         emit({ type: "session", id });
-        await request("turn/start", { threadId: id, input: [{ type: "text", text: input.text }] });
+        await request("turn/start", { threadId: id, input: [{ type: "text", text: [input.live, input.text].filter(Boolean).join("\n\n") }] });
       } catch {
         finish(false);
       }

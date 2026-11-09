@@ -598,6 +598,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                 ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId: item.id, title,
               };
               if (verb) started.verb = verb;
+              if (item.type === "fileChange" && Array.isArray(item.changes)) started.writes = item.changes.map((change: { path: string }) => change.path).slice(0, 32);
               emit(started);
             }
             break;
