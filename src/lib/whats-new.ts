@@ -1,4 +1,6 @@
 import memoryClip from "@/assets/whats-new/1.0.246-memory.webp";
+import memoryLightClip from "@/assets/whats-new/1.0.246-memory-light.webp";
+import quickClip from "@/assets/whats-new/1.0.246-quick.webp";
 import verifyClip from "@/assets/whats-new/1.0.246-verify.webp";
 import type { LocaleId } from "./i18n";
 
@@ -6,13 +8,14 @@ type Copy = Record<LocaleId, string>;
 
 export type WhatsNewTile = {
   clip: string;
+  lightClip?: string;
   title: Copy;
   line: Copy;
   /** "memory" opens the current bot's Memory tab; a how-to line is for features that start on their own. */
   show: "memory" | Copy;
 };
 
-export type WhatsNewEntry = { title: Copy; tiles: [WhatsNewTile, WhatsNewTile]; more: Copy };
+export type WhatsNewEntry = { title: Copy; tiles: WhatsNewTile[]; more: Copy };
 
 // One entry per release that has notes; a release with no entry shows nothing.
 export const WHATS_NEW: Record<string, WhatsNewEntry> = {
@@ -20,7 +23,14 @@ export const WHATS_NEW: Record<string, WhatsNewEntry> = {
     title: { en: "New in Wink 1.0.246", ko: "Wink 1.0.246 새 기능" },
     tiles: [
       {
+        clip: quickClip,
+        title: { en: "Ask while it works", ko: "일하는 중에도 물어보기" },
+        line: { en: "Short questions get an answer in seconds.", ko: "짧은 질문은 몇 초 만에 답해요." },
+        show: { en: "Just type while your bot is busy.", ko: "봇이 일하는 중에 그냥 입력하세요." },
+      },
+      {
         clip: memoryClip,
+        lightClip: memoryLightClip,
         title: { en: "See what your bot remembers", ko: "봇이 기억하는 것 보기" },
         line: { en: "Notes sorted by topic, in Bot Details.", ko: "봇 세부 정보에서 주제별로 봐요." },
         show: "memory",

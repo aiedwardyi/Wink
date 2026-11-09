@@ -70,7 +70,7 @@ describe("whats new card", () => {
   it("records the shown release as seen once, only after it scrolls into view", () => {
     render(RELEASE);
     render(RELEASE);
-    expect(host.querySelectorAll(".whats-new-tile")).toHaveLength(2);
+    expect(host.querySelectorAll(".whats-new-tile")).toHaveLength(3);
     expect(api).not.toHaveBeenCalled();
     scrollIntoView();
     scrollIntoView();
@@ -88,14 +88,29 @@ describe("whats new card", () => {
 
   it("opens Memory from its Show me and explains the one that starts on its own", () => {
     render(RELEASE);
-    const [memory, verify] = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
+    const tiles = WHATS_NEW[RELEASE].tiles;
+    const shows = [...host.querySelectorAll<HTMLButtonElement>(".whats-new-show")];
+    const memory = shows[tiles.findIndex((tile) => tile.show === "memory")];
+    const verify = shows[tiles.length - 1];
     act(() => verify.click());
     expect(verify.getAttribute("aria-expanded")).toBe("true");
-    expect(host.textContent).toContain((WHATS_NEW[RELEASE].tiles[1].show as { en: string }).en);
+    expect(host.textContent).toContain((tiles[tiles.length - 1].show as { en: string }).en);
     expect(onClose).not.toHaveBeenCalled();
     act(() => memory.click());
     expect(dispatch).toHaveBeenCalledWith({ type: "toggleSettings", open: true, memory: { line: "" } });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays the light clip on a light skin", () => {
+    document.documentElement.dataset.skin = "wink-day";
+    render(RELEASE);
+    act(() => {
+      for (const observer of observers) observer.see([{ isIntersecting: true } as IntersectionObserverEntry], observer as unknown as IntersectionObserver);
+    });
+    const clips = [...host.querySelectorAll("img")].map((img) => img.getAttribute("src"));
+    delete document.documentElement.dataset.skin;
+    expect(clips).toEqual(WHATS_NEW[RELEASE].tiles.map((tile) => tile.lightClip ?? tile.clip));
+    expect(WHATS_NEW[RELEASE].tiles.some((tile) => tile.lightClip)).toBe(true);
   });
 
   it("ships every string in Korean", () => {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { useI18n, type LocaleId } from "@/lib/i18n";
+import { LIGHT_SKIN_IDS, useSkin } from "@/lib/skins";
 import { WHATS_NEW, releaseNotesUrl, type WhatsNewTile } from "@/lib/whats-new";
 import { api, useStore } from "@/state/store";
 import "./WhatsNewCard.css";
@@ -31,11 +32,12 @@ function Tile({ tile, locale, onShow }: { tile: WhatsNewTile; locale: LocaleId; 
   const { t } = useI18n();
   const frame = useRef<HTMLDivElement>(null);
   const seen = useSeen(frame);
+  const light = LIGHT_SKIN_IDS.has(useSkin());
   const [how, setHow] = useState(false);
   return (
     <div className="whats-new-tile">
       <div ref={frame} className="whats-new-frame">
-        {seen && <img src={tile.clip} alt="" draggable={false} />}
+        {seen && <img src={(light && tile.lightClip) || tile.clip} alt="" draggable={false} />}
       </div>
       <div className="whats-new-tile-title">{tile.title[locale]}</div>
       <div key={String(how)} className="whats-new-line">{how && tile.show !== "memory" ? tile.show[locale] : tile.line[locale]}</div>
