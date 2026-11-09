@@ -420,17 +420,20 @@ export function takeQueuedSteers(
 /** Persist this thread's waiting sends as steered user lines and return
  * their prompts in send order, for the turn about to dispatch. */
 export function foldQueuedSends(
-  store: Pick<SteerStore, "appendMessage">,
+  store: Pick<SteerStore, "messagesFor" | "appendMessage" | "patchMessage">,
   botId: string,
   threadId: string,
   since: number,
+  rows?: Message[],
 ): string[] {
   const key = entryKey(botId, threadId);
   const entry = queues.get(key);
   const appended = new Set<string>();
   try {
     const prompts = takeQueuedSteers(botId, threadId, since).map((item) => {
-      store.appendMessage(threadId, {
+      // a queued quick handoff's ask row already shows this line
+      const ask = store.messagesFor(threadId).find((message) => message.queueId === item.id && message.quick?.state === "handoff");
+      const row = (ask && store.patchMessage(threadId, ask.id, { quick: undefined, steered: true })) || store.appendMessage(threadId, {
         role: "user",
         kind: "text",
         text: item.text,
@@ -439,6 +442,7 @@ export function foldQueuedSends(
         queueId: item.id,
         steered: true,
       });
+      rows?.push(row);
       appended.add(item.id);
       return item.prompt;
     });

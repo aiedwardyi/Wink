@@ -9,7 +9,7 @@ import { endsNoteWindow } from "./pane-wake.ts";
 import { quickAnswersSinceLastUserTurn, routesQuick, type QuickGate } from "./quick-ask.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
-import { drainSteeredMessages, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
+import { drainSteeredMessages, foldQueuedSends, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type Message } from "./store.ts";
 import { turnAddedMessage } from "./turn-reply.ts";
 
@@ -141,6 +141,18 @@ describe("quick route", () => {
     expect(h.rows().find((row) => row.id === ask.id)?.quick).toBeUndefined();
     expect(run).toHaveBeenCalledExactlyOnceWith(h.bot.id, h.bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]);
     expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
+  it("folds a handoff queued after a claim on its ask row, so the ask shows once", async () => {
+    const h = harness({ queueing: false, result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    const claim = queueMark();
+    await h.settled();
+    const ask = h.rows().at(-1)!;
+    expect(foldQueuedSends(h.store, h.bot.id, h.bot.threadId, claim)).toEqual([QUESTION]);
+    expect(h.rows().filter((row) => row.text === QUESTION)).toHaveLength(1);
+    expect(h.rows().find((row) => row.id === ask.id)).toMatchObject({ steered: true });
+    expect(h.rows().find((row) => row.id === ask.id)?.quick).toBeUndefined();
   });
 
   it("starts an ordinary turn on the ask when the bot finished first", async () => {

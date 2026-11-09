@@ -55,11 +55,11 @@ export function beginPeerUserReply(botId: string, threadId: string, prompt: stri
 
 export function foldPeerQueuedSends(store: Store, botId: string, threadId: string, since: number, steering: boolean): string[] {
   if (hasPeerWatch(threadId) && !steering) return [];
-  const prompts = foldQueuedSends(store, botId, threadId, since);
-  const messages = store.activePath(threadId).slice(-prompts.length);
+  const rows: Message[] = [];
+  const prompts = foldQueuedSends(store, botId, threadId, since, rows);
   return prompts.map((prompt, index) => {
     const input = beginPeerUserReply(botId, threadId, prompt);
-    if (input) input.accept(messages[index]!);
+    if (input) input.accept(rows[index]!);
     return input?.prompt ?? prompt;
   });
 }
