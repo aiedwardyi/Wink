@@ -159,7 +159,7 @@ import { admitPaneWake, hasUnreadReplyWake, mailForTurn, markMailRead, markPaneM
 import { turnRegistry } from "./turn-registry.ts";
 import { bindPeerTurn, findDelegationReceipt, updateReceipt, _loadPending, discardDelegations, discardDelegationsFrom, discardOrphanedDelegations, drainDelegations, drainWaitingOn, failUnwatchedDelegation, finishDelegatedTurn, type DelegatedTurn } from "./delegations.ts";
 import { hasPeerWatch, watchPeerTurn, peerInputJoined, takePeerReplyStamp } from "./peer-takeover.ts";
-import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies } from "./peer-user-reply.ts";
+import { drainPeerUserReplies, foldPeerQueuedSends, peerUserRuntime, persistPeerUserReply, settlePeerUserReplies, stripStrayUserTags } from "./peer-user-reply.ts";
 import { peerTurnReplies, type PeerTurnReply } from "./peer-turn-reply.ts";
 import { waitForPeerReply, type AskReply } from "./ask-bot.ts";
 import {
@@ -3326,6 +3326,7 @@ const busyResumeThreads = new Set<string>();
 
 bus.subscribe((event: RuntimeEvent) => {
   peerReplies.observe(event);
+  event = stripStrayUserTags(event);
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);

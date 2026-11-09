@@ -1,3 +1,4 @@
+import { unwrapUserTags } from "../shared/user-tags.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
@@ -21,6 +22,8 @@ interface SplitTurn {
 
 const turns = new Map<string, SplitTurn>();
 const liveTurns = new Map<string, string | undefined>();
+const streams = new Map<string, { raw: string; sent: string }>();
+const PARTIAL_TAG = /<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?$/;
 let nextInput = 0;
 
 function splitText(text: string): { peer: string; users: Array<{ id: number; text: string }> } {
@@ -42,7 +45,7 @@ export function beginPeerUserReply(botId: string, threadId: string, prompt: stri
   turn.inputs.set(id, input);
   turns.set(threadId, turn);
   return {
-    prompt: `${prompt}\n\nReply in <user${id}>one short line</user${id}>; keep the peer answer outside.`,
+    prompt: `${prompt}\n\nFor this reply only, answer in <user${id}>one short line</user${id}>; keep the peer answer outside. Never use that tag in later turns.`,
     accept: (message: Message) => { input.message = message; },
     cancel: () => {
       turn.inputs.delete(id);
@@ -65,6 +68,22 @@ export function foldPeerQueuedSends(store: Store, botId: string, threadId: strin
 function splitTurn(event: RuntimeEvent): SplitTurn | undefined {
   const turn = turns.get(event.threadId);
   return turn && !turn.ready && (!turn.turnId || !event.turnId || turn.turnId === event.turnId) ? turn : undefined;
+}
+
+export function stripStrayUserTags(event: RuntimeEvent): RuntimeEvent {
+  if (event.type === "turn.started" || event.type === "turn.completed") streams.delete(event.threadId);
+  if (event.type === "item.completed" && event.itemType === "assistant_text") {
+    streams.delete(event.threadId);
+    return splitTurn(event) ? event : { ...event, text: unwrapUserTags(event.text) };
+  }
+  if (event.type !== "content.delta" || event.streamKind !== "assistant_text" || splitTurn(event)) return event;
+  const stream = streams.get(event.threadId) ?? { raw: "", sent: "" };
+  streams.set(event.threadId, stream);
+  stream.raw += event.delta;
+  const shown = unwrapUserTags(stream.raw.replace(PARTIAL_TAG, ""));
+  const next = shown.startsWith(stream.sent) ? shown.slice(stream.sent.length) : "";
+  stream.sent += next;
+  return { ...event, delta: next };
 }
 
 export function peerUserRuntime(event: RuntimeEvent): RuntimeEvent | null {
@@ -153,5 +172,6 @@ export function drainPeerUserReplies(store: Pick<Store, "bot" | "taskByThread" |
 export function _resetPeerUserReplies(): void {
   turns.clear();
   liveTurns.clear();
+  streams.clear();
   nextInput = 0;
 }

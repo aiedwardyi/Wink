@@ -55,8 +55,8 @@ public enum Markdown {
         // a fenced block gains a blank line between every line of code. Tool
         // output and pasted text reach chat bubbles with CRLF intact, so this
         // is a path real messages take.
-        let normalised = source.replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+        let normalised = unwrapUserTags(source.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n"))
         var lines = normalised.components(separatedBy: "\n")[...]
         while let line = lines.first {
             lines = lines.dropFirst()
@@ -114,6 +114,47 @@ public enum Markdown {
         }
         flushParagraph()
         return blocks
+    }
+
+    /// Drops `<userN>` tags a bot left outside a peer reply, keeping the inner text and any code.
+    static func unwrapUserTags(_ text: String) -> String {
+        guard text.contains("<user") || text.contains("</user") else { return text }
+        let tag = try! NSRegularExpression(pattern: "</?user[0-9]+>")
+        func strip(_ part: Substring) -> String {
+            let part = String(part)
+            return tag.stringByReplacingMatches(in: part, range: NSRange(part.startIndex..., in: part), withTemplate: "")
+        }
+        func outsideCode(_ line: String) -> String {
+            var out = ""
+            var rest = Substring(line)
+            while let tick = rest.firstIndex(of: "`") {
+                out += strip(rest[..<tick])
+                let size = rest[tick...].prefix(while: { $0 == "`" }).count
+                var scan = rest.index(tick, offsetBy: size)
+                var end = rest.endIndex
+                while let next = rest[scan...].firstIndex(of: "`") {
+                    let run = rest[next...].prefix(while: { $0 == "`" }).count
+                    scan = rest.index(next, offsetBy: run)
+                    if run == size { end = scan; break }
+                }
+                out += rest[tick..<end]
+                rest = rest[end...]
+            }
+            return out + strip(rest)
+        }
+        var fence: Character?
+        return text.components(separatedBy: "\n").map { line -> String in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let open = fence {
+                if trimmed.hasPrefix(String(repeating: open, count: 3)) { fence = nil }
+                return line
+            }
+            if let first = trimmed.first, first == "`" || first == "~", trimmed.hasPrefix(String(repeating: first, count: 3)) {
+                fence = first
+                return line
+            }
+            return outsideCode(line)
+        }.joined(separator: "\n")
     }
 
     private static func heading(_ trimmed: String) -> MarkdownBlock? {

@@ -194,4 +194,10 @@ final class MarkdownTests: XCTestCase {
         case .rule: return ""
         }
     }
+
+    func testStrayUserTagsAreUnwrappedOutsideCode() {
+        XCTAssertEqual(Markdown.blocks("<user1>Got it</user1>"), [.paragraph("Got it")])
+        XCTAssertEqual(Markdown.blocks("use `<user1>` here"), [.paragraph("use `<user1>` here")])
+        XCTAssertEqual(Markdown.blocks("```\n<user1>x</user1>\n```"), [.code(language: nil, text: "<user1>x</user1>")])
+    }
 }
