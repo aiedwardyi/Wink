@@ -74,6 +74,29 @@ describe("unwrapUserTags", () => {
     }
   });
 
+  it("strips only the closer that matches the opening wrapper", () => {
+    const text = "<user1>~~~\n~~~<user2>\n<user3>x</user3>\n~~~</user1>";
+    expect(unwrapUserTags(text)).toBe("~~~\n~~~<user2>\n<user3>x</user3>\n~~~");
+  });
+
+  it("lets a fence inside a list item close with up to three extra spaces", () => {
+    expect(unwrapUserTags("- item\n\n  ~~~\n    ~~~\n  <user1>x</user1>")).toBe("- item\n\n  ~~~\n    ~~~\n  x");
+  });
+
+  it("reads a spaced rule as a rule, not a list item", () => {
+    const text = "* * *\n    <user1>x</user1>";
+    expect(unwrapUserTags(text)).toBe(text);
+  });
+
+  it("matches the unsplit result when a rule or CRLF is split across chunks", () => {
+    const stream = (chunks: string[]) => {
+      const scanner = new UserTagScanner();
+      return chunks.map((piece) => scanner.push(piece)).join("") + scanner.finish();
+    };
+    expect(stream(["_", "__\n    <user1>x</user1>"])).toBe("___\n    <user1>x</user1>");
+    expect(stream(["a\r", "", "\n    <user1>x</user1>"])).toBe(unwrapUserTags("a\r\n    <user1>x</user1>"));
+  });
+
   it("keeps indented code inside a list item literal", () => {
     const text = "-     <user1>x</user1>";
     expect(unwrapUserTags(text)).toBe(text);

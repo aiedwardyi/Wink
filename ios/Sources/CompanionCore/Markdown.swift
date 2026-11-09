@@ -124,7 +124,7 @@ public enum Markdown {
         var fenceDepth = 0
         var fenceColumn = 0
         var listColumn = 0
-        var wrapped = false
+        var wrapped = ""
         var span = 0
         var indented = false
         var blank = true
@@ -136,12 +136,25 @@ public enum Markdown {
         let headTags = try! NSRegularExpression(pattern: "^( *)(?:</?user[0-9]+>)+")
         let tailTags = try! NSRegularExpression(pattern: "(?:</?user[0-9]+>)+(\\s*)$")
         let item = try! NSRegularExpression(pattern: "^( *)([-*+]|[0-9]{1,9}[.)])( +)(?=\\S)")
+        let openerTag = try! NSRegularExpression(pattern: "^ *<user([0-9]+)>")
+        let closerTag = try! NSRegularExpression(pattern: "</user([0-9]+)>(\\s*)$")
         func leadingTags(_ part: String) -> String {
             headTags.stringByReplacingMatches(in: part, range: NSRange(part.startIndex..., in: part), withTemplate: "$1")
         }
-        func trimTags(_ part: String, head strip: Bool = true) -> String {
-            let head = strip ? leadingTags(part) : part
+        func trimTags(_ part: String) -> String {
+            let head = leadingTags(part)
             return tailTags.stringByReplacingMatches(in: head, range: NSRange(head.startIndex..., in: head), withTemplate: "$1")
+        }
+        func capture(_ regex: NSRegularExpression, _ part: String) -> (id: String, start: String.Index, rest: String)? {
+            guard let match = regex.firstMatch(in: part, range: NSRange(part.startIndex..., in: part)),
+                  let id = Range(match.range(at: 1), in: part), let all = Range(match.range, in: part) else { return nil }
+            let rest = match.numberOfRanges > 2 ? Range(match.range(at: 2), in: part).map { String(part[$0]) } ?? "" : ""
+            return (String(part[id]), all.lowerBound, rest)
+        }
+        // only the opening wrapper's own closer may come off a closing fence line
+        func closing(_ part: String) -> String {
+            guard !wrapped.isEmpty, let end = capture(closerTag, part), end.id == wrapped else { return part }
+            return String(part[..<end.start]) + end.rest
         }
         func listItem(_ part: String) -> (width: Int, spaces: Int)? {
             guard let match = item.firstMatch(in: part, range: NSRange(part.startIndex..., in: part)) else { return nil }
@@ -249,7 +262,7 @@ public enum Markdown {
             if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(Substring(core)) && indent < fenceColumn)) { fence = "" }
             if !fence.isEmpty {
                 // only a wrapper that opened with the fence may come off its closing line
-                let last = wrapped ? trimTags(String(body), head: false) : String(body)
+                let last = closing(String(body))
                 if let open = fenceStart(Substring(last)), depth == fenceDepth, indent <= fenceColumn + 3, open.column == 0, open.mark.first == fence.first,
                    open.mark.count >= fence.count, isBlank(open.after) {
                     fence = ""
@@ -262,8 +275,8 @@ public enum Markdown {
             let buried = !isBlank(body) && indent - listColumn >= 4 && (blank || indented)
             if !buried && (open != nil || isBlank(body)) {
                 fence = open?.mark ?? ""
-                wrapped = open != nil && leadingTags(String(body)) != String(body)
-                fenceColumn = open?.column ?? 0
+                wrapped = open == nil ? "" : capture(openerTag, String(body))?.id ?? ""
+                fenceColumn = open.map { $0.column > 0 ? $0.column : (indent >= listColumn ? listColumn : 0) } ?? 0
                 fenceDepth = depth
                 span = 0
                 indented = false
@@ -271,7 +284,7 @@ public enum Markdown {
                 return open == nil ? line : quote + leadingTags(String(body))
             }
             var code = buried
-            if !code, let item = listItem(core) {
+            if !code, !breaks(core), let item = listItem(core) {
                 code = item.spaces >= 5
                 listColumn = item.width + (code ? 1 : item.spaces)
             } else if !code && indent < listColumn {

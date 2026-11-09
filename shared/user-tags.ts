@@ -3,7 +3,9 @@ const EDGE_HEAD = /^( *)(?:<\/?user\d+>)+/;
 const EDGE_TAIL = /(?:<\/?user\d+>)+(\s*)$/;
 const PARTIAL_TAG = /<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?$/;
 const HOLD = /(?:<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?|[\\`]+)$/;
-const UNSETTLED = /^[\s>*+\-\d.)`~]*$/;
+const UNSETTLED = /^[\s>*+\-\d.)`~_#]*$/;
+const OPENER = /^ *<user(\d+)>/;
+const CLOSER = /<\/user(\d+)>(\s*)$/;
 const QUOTE = /^(?: {0,3}>[ \t]?)+/;
 const FENCE = /^( *(?:(?:[-*+]|\d{1,9}[.)]) +)*)(`{3,}(?=[^`]*$)|~{3,})/;
 const FENCE_END = /^ *(`{3,}|~{3,})\s*$/;
@@ -30,13 +32,14 @@ export class UserTagScanner {
   private span = 0;
   private indented = false;
   private blank = true;
-  private wrapped = false;
+  private wrapped = "";
   private kind?: "code" | "text";
   private buf = "";
   private held = "";
   private afterCR = false;
 
   push(chunk: string): string {
+    if (!chunk) return "";
     let out = "";
     let at = 0;
     // the "\n" of a CRLF split across chunks belongs to the line already ended
@@ -96,7 +99,8 @@ export class UserTagScanner {
     if (this.fence && (depth < this.fenceDepth || (this.fenceColumn && core.trim() && indent < this.fenceColumn))) this.fence = "";
     if (this.fence) {
       // only a wrapper that opened with the fence may come off its closing line
-      const last = this.wrapped ? body.replace(EDGE_TAIL, "$1") : body;
+      const closer = this.wrapped ? CLOSER.exec(body) : null;
+      const last = closer?.[1] === this.wrapped ? body.slice(0, closer.index) + closer[2] : body;
       const end = FENCE_END.exec(last)?.[1];
       if (!end || depth !== this.fenceDepth || indent > this.fenceColumn + 3 || end[0] !== this.fence[0] || end.length < this.fence.length) {
         return { code: true, head: line };
@@ -109,16 +113,16 @@ export class UserTagScanner {
     const buried = Boolean(body.trim()) && indent - this.listColumn >= 4 && (this.blank || this.indented);
     if (!buried && (mark || !body.trim())) {
       this.fence = mark ?? "";
-      this.wrapped = Boolean(mark) && EDGE_HEAD.test(body);
+      this.wrapped = (mark && OPENER.exec(body)?.[1]) || "";
       this.fenceDepth = depth;
-      this.fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? open![1].length : 0;
+      this.fenceColumn = !mark ? 0 : /[^ ]/.test(open![1]) ? open![1].length : indent >= this.listColumn ? this.listColumn : 0;
       this.span = 0;
       this.indented = false;
       this.blank = !mark;
       return { code: true, head: mark ? quote + body.replace(EDGE_HEAD, "$1") : line };
     }
     let code = buried;
-    const item = code ? null : ITEM.exec(core);
+    const item = code || BREAK.test(core) ? null : ITEM.exec(core);
     if (item) {
       code = item[3].length >= 5;
       this.listColumn = item[1].length + item[2].length + (code ? 1 : item[3].length);
