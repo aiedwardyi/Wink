@@ -174,6 +174,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
         const { raw, rendered } = await readDoc(file.full);
         const end = raw.length > CAP_CHARS ? raw.lastIndexOf("\n", CAP_CHARS) : raw.length;
         const kept = raw.slice(0, end > 0 ? end : CAP_CHARS), doc = docText(kept, rendered);
+        // Two spellings of one file can disagree; the bot writing either makes it fixable.
         if (doc.text.trim().length >= MIN_CHARS) return { file: file.full, site: file.site, doc, sha: sha256(doc.text), cut: raw.length - kept.length, fixable: files.some(row => row.full === file.full && row.fixable) };
       } catch { deps.log(`Live Verify: could not read a document in ${input.threadId}`); }
     }
