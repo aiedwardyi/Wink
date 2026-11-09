@@ -6,7 +6,7 @@ import { readSeedProfile } from "../.claude/skills/verify-wink/seed-profile.mjs"
 
 const temporaryDirectories = [];
 const SECRET = "fixture-secret";
-const EXCLUDED = ["messages.db", "config.json", "google-binding.json", "device-name.json", "remote-key.json", "memory-sync-v2.json", "profile-sync.json", "picture-sync.json", "phone-ping.json", "web-push-subscriptions.json", "key-uses.json", "workspaces/bot-01/MEMORY.md", "attachments/chat-photo.png"];
+const EXCLUDED = ["messages.db", "search-cache.db", "search-cache.db-wal", "search-cache.db-shm", "config.json", "google-binding.json", "device-name.json", "remote-key.json", "memory-sync-v2.json", "profile-sync.json", "picture-sync.json", "phone-ping.json", "web-push-subscriptions.json", "key-uses.json", "workspaces/bot-01/MEMORY.md", "attachments/chat-photo.png"];
 const FIELDS = ["name", "instanceId", "model", "mode", "pinned", "hidden", "chiefOfStaff", "section", "color", "mascotStyle", "avatar", "avatarCrop"];
 
 function fixture() {
