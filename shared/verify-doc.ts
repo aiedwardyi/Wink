@@ -28,6 +28,10 @@ export interface VerifyDocData {
   cut?: number;
   /** the names and dates comparison failed */
   uncompared?: boolean;
+  /** the bot's fix turn has these findings */
+  fixing?: boolean;
+  /** findings the bot's fix turns removed */
+  fixedFindings?: VerifyDocFinding[];
 }
 
 /** .lvr marks of a document check */

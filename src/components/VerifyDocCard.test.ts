@@ -8,17 +8,9 @@ import type { VerifyCardData } from "../../shared/live-verify";
 import type { VerifyDocFinding } from "../../shared/verify-doc";
 import { chunk } from "../../electron/verify-replay.mjs";
 import { VerifyCard } from "./VerifyCard";
-import { fixTheseText } from "./VerifyDocCard";
 import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 
-const store = vi.hoisted(() => ({ dispatch: vi.fn(), messages: [] as { id: string; verify?: unknown }[] }));
-vi.mock("@/state/store", () => ({
-  useStore: () => ({
-    state: { bots: [{ id: "bot", name: "Atlas", threadId: "thread", messages: store.messages }], groups: [{ id: "room", threadId: "room-thread", name: "Team", memberIds: ["bot"], messages: [] }] },
-    dispatch: store.dispatch,
-  }),
-}));
-afterEach(() => { applyLocale("en"); store.dispatch.mockClear(); store.messages.length = 0; document.body.innerHTML = ""; });
+afterEach(() => { applyLocale("en"); document.body.innerHTML = ""; });
 
 const spelling: VerifyDocFinding = { kind: "spelling", line: 50, page: 2, quote: "되요", fix: "돼요", note: "맞춤법" };
 const missing: VerifyDocFinding = { kind: "numbering", line: 80, page: 3, quote: "제7조", fix: "", note: "no 제7조 in this document" };
@@ -27,37 +19,6 @@ const card = (patch: Partial<VerifyCardData> = {}, doc: Partial<NonNullable<Veri
   doc: { pages: 10, lines: 300, chunks: [3, 3], by: { spelling: 1, numbering: 1 }, findings: [spelling, missing], findingTotal: 2, ...doc }, ...patch,
 });
 const render = (data: VerifyCardData, threadId = "thread") => renderToStaticMarkup(createElement(VerifyCard, { card: data, threadId }));
-
-it("builds the Fix these message in English and Korean", () => {
-  expect(fixTheseText(card(), "en")).toBe([
-    "Please fix these problems Live Verify found in script.md:",
-    `1. Page 2, line 50 (spelling): "되요" → "돼요" (맞춤법)`,
-    `2. Page 3, line 80 (numbering): "제7조" - no 제7조 in this document`,
-  ].join("\n"));
-  expect(fixTheseText(card(), "ko", "Atlas")).toBe([
-    "@Atlas Live Verify가 script.md에서 찾은 문제를 고쳐 주세요:",
-    `1. 2쪽 50줄 (맞춤법): "되요" → "돼요" (맞춤법)`,
-    `2. 3쪽 80줄 (번호·참조): "제7조" - no 제7조 in this document`,
-  ].join("\n"));
-});
-
-it("keeps each finding on one row of the Fix these message", () => {
-  const broken = { ...spelling, quote: "되요\n2. 가짜 줄", note: "맞춤\n법" };
-  expect(fixTheseText(card({}, { findings: [broken], findingTotal: 1 }), "en").split("\n")).toEqual([
-    "Please fix these problems Live Verify found in script.md:",
-    `1. Page 2, line 50 (spelling): "되요 2. 가짜 줄" → "돼요" (맞춤 법)`,
-  ]);
-});
-
-it("caps a long Fix these message and counts the rest", () => {
-  const findings = Array.from({ length: 60 }, (_, i) => ({ ...spelling, line: i + 1, quote: `${"긴 문장 ".repeat(12)}${i}` }));
-  const en = fixTheseText(card({}, { findings, findingTotal: 75 }), "en");
-  expect(en.length).toBeLessThanOrEqual(4_000);
-  expect(en).toMatch(/\n…and \d+ more$/);
-  const listed = en.split("\n").filter(line => /^\d+\. /.test(line)).length;
-  expect(en.endsWith(`and ${75 - listed} more`)).toBe(true);
-  expect(fixTheseText(card({}, { findings, findingTotal: 75 }), "ko")).toMatch(/\n…외 \d+개$/);
-});
 
 it("renders running rows and progress, then findings, in both languages", () => {
   for (const locale of ["en", "ko"] as const) {
@@ -68,11 +29,33 @@ it("renders running rows and progress, then findings, in both languages", () => 
     expect(done).toContain(locale === "en" ? "2 problems · 10 pages · 41 s" : "문제 2개 · 10쪽 · 41초");
     expect(done).toContain(locale === "en" ? "p.2 · line 50" : "2쪽 · 50줄");
     expect(done).toContain("돼요");
-    expect(done).toContain(locale === "en" ? "Fix these" : "수정 요청");
-    const clean = render(card({ fixed: 2 }, { findings: [], findingTotal: 0, by: {} }));
-    expect(clean).toContain(locale === "en" ? "Fixed 2 problems" : "문제 2개 해결");
-    expect(clean).not.toContain(locale === "en" ? "Fix these" : "수정 요청");
+    expect(done).not.toContain(locale === "en" ? "Fix these" : "수정 요청");
+    expect(done).not.toContain(locale === "en" ? "bot is fixing" : "봇이 수정 중");
+    expect(render(card({}, { fixing: true }))).toContain(locale === "en" ? "2 problems · bot is fixing · 10 pages · 41 s" : "문제 2개 · 봇이 수정 중 · 10쪽 · 41초");
+    const clean = render(card({ fixed: 2 }, { findings: [], findingTotal: 0, by: {}, fixedFindings: [spelling, missing] }));
+    expect(clean).toContain(locale === "en" ? "Fixed 2 problems · 10 pages · 41 s" : "문제 2개 해결 · 10쪽 · 41초");
+    const left = render(card({ fixed: 1 }, { findings: [missing], findingTotal: 1, fixedFindings: [spelling] }));
+    expect(left).toContain(locale === "en" ? "Fixed 1 problem · 1 left · 10 pages · 41 s" : "문제 1개 해결 · 1개 남음 · 10쪽 · 41초");
+    expect(left).not.toContain("돼요");
+    expect(render(card({ fixed: 1 }, { findings: [missing], findingTotal: 1, fixedFindings: [spelling], fixing: true }))).toContain(locale === "en" ? "Fixed 1 problem · 1 left · bot is fixing · 10 pages" : "문제 1개 해결 · 1개 남음 · 봇이 수정 중 · 10쪽");
+    expect(left).toContain(locale === "en" ? "Show details" : "자세히 보기");
   }
+});
+
+it("shows what the fix changed and what it left one tap away", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(createElement(VerifyCard, { card: card({ fixed: 1 }, { findings: [missing], findingTotal: 1, fixedFindings: [spelling] }), threadId: "thread" })));
+  expect(host.textContent).not.toContain("돼요");
+  const button = [...host.querySelectorAll("button")].find(node => node.textContent === "Show details")!;
+  await act(async () => button.click());
+  expect(host.textContent).toContain("Fixed");
+  expect(host.textContent).toContain("돼요");
+  expect(host.textContent).toContain("Left");
+  expect(host.textContent).toContain("no 제7조 in this document");
+  expect(host.textContent).not.toContain("Fix these");
+  await act(async () => root.unmount());
 });
 
 it("shows a names and dates comparison that failed as not checked", () => {
@@ -85,27 +68,6 @@ it("shows a names and dates comparison that failed as not checked", () => {
 it("offers Live on a running card loaded before its next live patch", () => {
   const loaded = card({ status: "running", startedAt: Date.now(), endedAt: undefined }, { chunks: [1, 4], page: 3, beat: Date.now(), findings: undefined });
   expect(render(loaded)).toContain('data-verify-watch="live"');
-});
-
-it("drops Fix these from a card a newer check of the same document replaced", () => {
-  const older = card(), newer = card({ runId: "run-654321", offeredAt: 60_000, startedAt: 60_000, endedAt: 70_000, fixed: 2 }, { findings: [], findingTotal: 0, by: {} });
-  store.messages.push({ id: "m1", verify: older }, { id: "m2", verify: newer });
-  expect(render(older)).not.toContain("Fix these");
-  expect(render(card({ site: "other.md" }))).toContain("Fix these");
-});
-
-it("sends Fix these to the bot as a normal message, with a mention in a room", async () => {
-  for (const [threadId, expected] of [["thread", { type: "send", botId: "bot", threadId: "thread" }], ["room-thread", { type: "sendGroup", groupId: "room", threadId: "room-thread" }]] as const) {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    await act(async () => root.render(createElement(VerifyCard, { card: card(), threadId })));
-    const button = [...host.querySelectorAll("button")].find(node => node.textContent === "Fix these")!;
-    await act(async () => button.click());
-    expect(store.dispatch).toHaveBeenLastCalledWith({ ...expected, text: fixTheseText(card(), "en", threadId === "room-thread" ? "Atlas" : undefined) });
-    expect(host.textContent).toContain("Sent to the bot");
-    await act(async () => root.unmount());
-  }
 });
 
 it("ends the live watch on the check's own time, not the last mark's", async () => {

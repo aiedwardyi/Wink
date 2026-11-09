@@ -34,7 +34,8 @@ interface VerifyAutoDeps {
   enabled(): boolean;
   startAuto(input: AutoStart): Promise<boolean | void>;
   cancelQueued?(threadId: string): void;
-  startDocs?(input: { botId: string; threadId: string; roots: string[]; paths: string[] }): void;
+  startDocs?(input: { botId: string; threadId: string; roots: string[]; paths: string[]; humanId: string }): void;
+  docTurnEnded?(input: VerifyAutoTurn): void;
   log(line: string): void;
   freeMemory?(): number;
   scan?: typeof scanVerifyWrites;
@@ -125,6 +126,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
   const settled = async (input: VerifyAutoTurn) => {
     const id = key(input.threadId, input.turnId), turn = turns.get(id);
     turns.delete(id);
+    deps.docTurnEnded?.(input);
     if (!turn?.tools || !turn.writes.size && !turn.opaque) return;
     latest.delete(input.threadId);
     deps.cancelQueued?.(input.threadId);
@@ -139,7 +141,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
       if (latest.get(input.threadId) !== token) return;
       const docs = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()));
-      if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs }); return; }
+      if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs, humanId: input.humanId }); return; }
       if (!entry) { deps.log(`Live Verify: no entry for ${input.threadId}`); return; }
       if (await deps.startAuto({ botId: input.botId, threadId: input.threadId, entry, episode: JSON.stringify([input.botId, input.threadId, input.humanId, entry]) }) === false) deps.log(`Live Verify: skipped ${input.threadId}`);
     } catch { deps.log(`Live Verify: skipped ${input.threadId}`); }

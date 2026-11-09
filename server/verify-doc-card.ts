@@ -29,6 +29,8 @@ export function redactVerifyDoc(value: unknown): VerifyDocData | undefined {
   if (count(value.findingTotal)) out.findingTotal = value.findingTotal;
   if (count(value.cut) && value.cut > 0) out.cut = value.cut;
   if (value.uncompared === true) out.uncompared = true;
+  if (value.fixing === true) out.fixing = true;
+  if (Array.isArray(value.fixedFindings)) out.fixedFindings = value.fixedFindings.slice(0, VERIFY_DOC_FINDINGS).map(finding).filter(row => row !== null);
   return out;
 }
 
@@ -38,5 +40,5 @@ export function docCardText(card: VerifyCardData): string {
   const total = card.doc?.findingTotal ?? 0;
   if (!total) return card.fixed ? `Live Verify checked ${card.site}: fixed ${plural(card.fixed, "problem")}, none left.` : `Live Verify checked ${card.site}: no problems found.`;
   const by = VERIFY_DOC_KINDS.flatMap(kind => card.doc?.by?.[kind] ? [`${card.doc.by[kind]} ${WORDS[kind]}`] : []).join(", ");
-  return `Live Verify checked ${card.site}: ${plural(total, "problem")}${by ? ` (${by})` : ""}.`;
+  return `Live Verify checked ${card.site}: ${card.fixed ? `fixed ${plural(card.fixed, "problem")}, ${total} left` : plural(total, "problem")}${by ? ` (${by})` : ""}.`;
 }

@@ -7215,6 +7215,11 @@ const verifyDoc = createVerifyDoc({
   store,
   instanceFor: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  fix: (botId, threadId, prompt) => {
+    const group = store.conversationForBot(botId, threadId)?.group;
+    if (group) return enqueueDrainedRoomTurn(botId, threadId, { groupId: group.id, hop: 0, cardContinuation: prompt, rootId: rootForStart(threadId, { kind: "automatic" }) ?? undefined }).then(() => true);
+    return startTurn(botId, prompt, { threadId, cardContinuation: true }).then(() => true, error => { if (isBusyRejection(error)) return false; throw error; });
+  },
   deviceId: () => profileSyncSettings.deviceId,
   broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
   log: line => console.log(line),
@@ -7239,6 +7244,7 @@ const verifyAuto = createVerifyAuto({
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
   startDocs: input => verifyDoc.schedule(input),
+  docTurnEnded: input => verifyDoc.ended(input),
   log: line => console.log(line),
   app: { skipPorts: [PORT] },
 });

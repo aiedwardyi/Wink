@@ -19,9 +19,9 @@
 .verify-doc-text q { quotes: none; text-decoration: underline wavy var(--color-danger); text-decoration-skip-ink: none; text-underline-offset: 3px; }
 .verify-doc-text b { font-weight: 600; }
 .verify-doc-text small { display: block; color: var(--color-ink-secondary); font-size: 12px; }
-.verify-doc-actions { display: flex; align-items: center; justify-content: flex-end; margin-top: 10px; color: var(--color-ink-secondary); font-size: 12.5px; }
-.verify-doc-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 14px; border-radius: 8px; background: var(--color-accent); color: var(--color-accent-ink); font-weight: 500; cursor: pointer; }
-.verify-doc-actions button:hover { background: var(--color-accent-border); }
+.verify-doc-group { margin-top: 12px; color: var(--color-ink-secondary); font-size: 12px; font-weight: 500; }
+.verify-doc-group + .verify-doc-findings { margin-top: 4px; }
+.verify-doc-findings[data-fixed] .verify-doc-text q { text-decoration: line-through var(--color-ink-secondary); }
 
 .verify-doc-stage { position: relative; flex: 1 1 auto; min-height: 220px; max-height: 62vh; overflow: auto; overscroll-behavior: contain; padding: 12px; background: var(--color-inset); }
 .verify-watch-frame[data-maximized] .verify-doc-stage { max-height: none; }
@@ -42,7 +42,6 @@
 @media (max-width: 767px) {
   .verify-doc-findings li, :lang(ko) .verify-doc-findings li { grid-template-columns: auto minmax(0, 1fr); row-gap: 2px; }
   .verify-doc-text { grid-column: 1 / -1; }
-  .verify-doc-actions button { min-height: 44px; }
   .verify-doc .verify-card-strip { margin-top: 10px; }
   .verify-doc .verify-card-more { min-height: 44px; margin-top: 0; }
   .verify-doc-stage { padding: 8px; }

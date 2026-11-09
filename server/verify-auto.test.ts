@@ -18,7 +18,8 @@ const temps = createTempDirs();
 let root: string;
 let start: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; entry: string; episode: string }) => Promise<void>>>;
 let scan: ReturnType<typeof vi.fn<typeof scanVerifyWrites>>;
-let docs: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; roots: string[]; paths: string[] }) => void>>;
+let docs: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; roots: string[]; paths: string[]; humanId?: string }) => void>>;
+let ended: ReturnType<typeof vi.fn<(input: VerifyAutoTurn) => void>>;
 let auto: ReturnType<typeof createVerifyAuto>;
 let turn: VerifyAutoTurn;
 const event = (fields: Partial<RuntimeEvent>) => ({ eventId: "e", provider: "claudeAgent", threadId: "thread", turnId: "turn", createdAt: new Date().toISOString(), ...fields }) as RuntimeEvent;
@@ -36,7 +37,8 @@ beforeEach(async () => {
   start = vi.fn().mockResolvedValue(undefined);
   scan = vi.fn(scanVerifyWrites);
   docs = vi.fn();
-  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, startDocs: docs, scan, log: vi.fn(), app: { waitMs: 300 } });
+  ended = vi.fn();
+  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, startDocs: docs, docTurnEnded: ended, scan, log: vi.fn(), app: { waitMs: 300 } });
   turn = { botId: "bot", threadId: "thread", turnId: "turn", startedAt: Date.now(), roots: [root], depth: 0, ok: true, humanId: "human", humanText: "Build a page", reply: "" };
   vi.mocked(stat).mockClear();
   vi.mocked(opendir).mockClear();
@@ -209,7 +211,13 @@ it("hands one turn's document writes to the document check once", async () => {
   await auto.settled(turn);
   expect(start).not.toHaveBeenCalled();
   expect(docs).toHaveBeenCalledOnce();
-  expect(docs).toHaveBeenCalledWith({ botId: "bot", threadId: "thread", roots: [root], paths: ["script.md", "brief.docx", "notes.txt"] });
+  expect(docs).toHaveBeenCalledWith({ botId: "bot", threadId: "thread", roots: [root], paths: ["script.md", "brief.docx", "notes.txt"], humanId: "human" });
+});
+
+it("tells the document check about every ended turn, chat-only and failed ones too", async () => {
+  await auto.settled(turn);
+  await auto.settled({ ...turn, ok: false, botId: "other", startedAt: 5 });
+  expect(ended.mock.calls).toEqual([[turn], [{ ...turn, ok: false, botId: "other", startedAt: 5 }]]);
 });
 
 it("leaves a turn that wrote a page to the page check", async () => {

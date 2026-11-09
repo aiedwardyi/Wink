@@ -8,7 +8,7 @@ import { VERIFY_DOC_FINDINGS, type VerifyDocFinding, type VerifyDocMark } from "
 import type { ProviderInstance } from "./contracts.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { Message, Store } from "./store.ts";
-import { chunkDoc, chunkPrompt, dateClashes, DOC_EXTS, docText, findingAt, lineIndex, mergePrompt, nameTwins, numberingHits, parseChunkReply, parseMergeReply, readDoc, type DocChunk, type DocHit, type DocText } from "./verify-doc-text.ts";
+import { chunkDoc, chunkPrompt, dateClashes, DOC_EXTS, docText, findingAt, fixPrompt, lineIndex, mergePrompt, nameTwins, numberingHits, parseChunkReply, parseMergeReply, readDoc, type DocChunk, type DocHit, type DocText } from "./verify-doc-text.ts";
 import { verifyCardText } from "./verify-message.ts";
 import { createReplay, VERIFY_REPLAYS_DIR } from "./verify-replay.ts";
 
@@ -26,16 +26,19 @@ const SAVE_MS = 30_000;
 const WAITING = 4;
 const KEPT = 50;
 const CACHED_FILES = 12;
+const FIX_ROUNDS = 2;
 // Files a bot keeps for itself or a codebase, not documents written for a person.
 const DEV = /^(?:readme|changelog|changes|contributing|licen[cs]e|copying|code_of_conduct|security|notice|authors|claude|agents|gemini|memory|skill)(?:\.[a-z]+)?$|^requirements.*\.txt$|^(?:robots|cmakelists)\.txt$/i;
 const PROJECT = ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", ".git"];
 
-export interface DocStart { botId: string; threadId: string; roots: string[]; paths: string[] }
+export interface DocStart { botId: string; threadId: string; roots: string[]; paths: string[]; humanId?: string }
 export interface VerifyDocDeps {
   store: Pick<Store, "bot" | "conversationForBot" | "appendMessage" | "patchMessage" | "messagesFor">;
   instanceFor: (botId: string, threadId: string) => Pick<ProviderInstance, "generateText"> | null | undefined;
   /** the bot has a turn going */
   busy: (botId: string, threadId: string) => boolean;
+  /** starts the bot's fix turn; false when the bot is busy */
+  fix: (botId: string, threadId: string, prompt: string) => Promise<boolean>;
   deviceId: () => string;
   /** an SSE-only message.patch */
   broadcastPatch: (threadId: string, message: Message) => void;
@@ -47,9 +50,13 @@ interface Picked { file: string; site: string; doc: DocText; sha: string; cut: n
 interface Parsed { hits: DocHit[]; names: string[]; dates: string[] }
 interface Run { runId: string; threadId: string; card: VerifyCardData; recording: ReturnType<typeof createReplay>; aborter: AbortController; messageId?: string; saved?: Promise<void> }
 interface Slot { token: object; input?: DocStart; timer?: ReturnType<typeof setTimeout>; run?: Run; orphan?: string }
+// One user turn's fix rounds on one file; `at` is when its fix turn was asked to start.
+interface Fix { botId: string; humanId: string; roots: string[]; file: string; rounds: number; handed: Map<string, VerifyDocFinding>; fixing: boolean; prompt?: string; messageId?: string; at?: number; timer?: ReturnType<typeof setTimeout> }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const findingKey = (row: VerifyDocFinding) => `${row.kind}\n${row.quote}\n${row.fix}`;
+const slipKey = (row: VerifyDocFinding) => `${row.kind}\n${row.quote}`;
+const flat = (text: string) => text.replace(/\s+/g, " ");
 const remember = <V>(map: Map<string, V>, key: string, value: V, max: number) => {
   map.delete(key);
   map.set(key, value);
@@ -66,7 +73,7 @@ async function inProject(folder: string, root: string): Promise<boolean> {
 export function createVerifyDoc(deps: VerifyDocDeps) {
   const { store } = deps, quietMs = deps.quietMs ?? QUIET_MS;
   const slots = new Map<string, Slot>(), runs = new Map<string, Run>();
-  const checked = new Map<string, { sha: string; keys: Set<string> }>(), caches = new Map<string, Map<string, Parsed>>();
+  const checked = new Map<string, { sha: string; keys: Set<string> }>(), caches = new Map<string, Map<string, Parsed>>(), fixes = new Map<string, Fix>();
   let chain = Promise.resolve(), waiting = 0, disposed = false;
 
   const writeCard = (botId: string, run: Run) => {
@@ -87,6 +94,33 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       store.patchMessage(threadId, slot.orphan!, { text: verifyCardText(card), verify: card });
     }
     slot.orphan = undefined;
+  };
+  const unfix = (threadId: string) => {
+    const fx = fixes.get(threadId);
+    if (!fx?.fixing) return;
+    clearTimeout(fx.timer);
+    fx.fixing = false;
+    fx.timer = fx.at = undefined;
+    const stored = fx.messageId ? store.messagesFor(threadId).find(message => message.id === fx.messageId)?.verify : undefined;
+    if (stored?.doc?.fixing) {
+      const card: VerifyCardData = { ...stored, doc: { ...stored.doc, fixing: undefined } };
+      store.patchMessage(threadId, fx.messageId!, { text: verifyCardText(card), verify: card });
+    }
+  };
+  // Like a pane wake, the fix turn waits for the bot; a user message sent meanwhile goes first.
+  const hand = (threadId: string, fx: Fix) => {
+    fx.timer = undefined;
+    if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return;
+    if (deps.busy(fx.botId, threadId)) { fx.timer = setTimeout(hand, quietMs, threadId, fx); return; }
+    fx.at = Date.now();
+    deps.fix(fx.botId, threadId, fx.prompt!).then(started => {
+      if (started || fixes.get(threadId) !== fx || !fx.fixing) return;
+      fx.at = undefined;
+      fx.timer = setTimeout(hand, quietMs, threadId, fx);
+    }, error => {
+      deps.log(`Live Verify: no fix turn in ${threadId}: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`);
+      if (fixes.get(threadId) === fx) unfix(threadId);
+    });
   };
 
   async function pick(input: DocStart): Promise<Picked | null> {
@@ -121,11 +155,14 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (slot.token !== token || disposed) return;
     const engine = picked ? deps.instanceFor(botId, threadId) : null;
     if (picked && !engine?.generateText) deps.log(`Live Verify: no text engine for ${threadId}`);
+    unfix(threadId);
     if (!picked || !engine?.generateText || checked.get(`${threadId}\n${picked.file}`)?.sha === picked.sha) return dropOrphan(slot, threadId);
     const { file, site, doc, sha, cut } = picked, generate = engine.generateText.bind(engine);
+    const humanId = input.humanId ?? "", prior = fixes.get(threadId);
+    let fx = prior?.file === file && prior.humanId === humanId ? prior : undefined;
     const parts = chunkDoc(doc), startedAt = Date.now(), runId = randomUUID();
     const run: Run = {
-      runId, threadId, messageId: slot.orphan, aborter: new AbortController(),
+      runId, threadId, messageId: slot.orphan ?? fx?.messageId, aborter: new AbortController(),
       recording: createReplay({ v: 1, runId, site, page: site, startedAt, tiles: { desktop: [1280, 720], phone: [392, 800] } }),
       card: {
         v: 1, runId, owner: botId, site, entry: file, status: "running", mode: "auto", decisionNonce: randomBytes(16).toString("hex"), offeredAt: startedAt, startedAt,
@@ -229,14 +266,34 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       const from = doc.pages[lineIndex(doc, part.start)]!, to = doc.pages[lineIndex(doc, Math.max(part.start, part.end - 1))]!;
       return from === to ? `${from}` : `${from}-${to}`;
     });
-    const key = `${threadId}\n${file}`, before = checked.get(key), now = new Set(findings.map(findingKey));
-    const fixed = status === "completed" && !failed.length && compared && before ? [...before.keys].filter(row => !now.has(row)).length : 0;
-    if (status === "completed" && !failed.length && compared) remember(checked, key, { sha, keys: now }, KEPT);
+    const key = `${threadId}\n${file}`, before = checked.get(key), now = new Set(findings.map(findingKey)), slips = new Set(findings.map(slipKey));
+    const whole = status === "completed" && !failed.length && compared;
+    // The checker can miss a slip the bot left; only words gone from the document count as fixed.
+    const text = flat(doc.text), unflagged = fx ? [...fx.handed].filter(([slip]) => !slips.has(slip)).map(([, row]) => row) : [];
+    const gone = unflagged.filter(row => !text.includes(flat(row.quote)));
+    const shown = [...findings, ...unflagged.filter(row => !gone.includes(row))].sort((a, b) => a.line - b.line);
+    const fixed = !whole ? 0 : fx ? gone.length : before ? [...before.keys].filter(row => !now.has(row)).length : 0;
+    if (whole) remember(checked, key, { sha, keys: now }, KEPT);
+    const fresh = status === "completed" && (fx?.rounds ?? 0) < FIX_ROUNDS ? findings.filter(row => !fx?.handed.has(slipKey(row))) : [];
+    const { prompt, listed } = fixPrompt(file, fresh);
+    if (listed.length) {
+      fx ??= { botId, humanId, roots: input.roots, file, rounds: 0, handed: new Map(), fixing: false };
+      fx.rounds++;
+      for (const row of listed) fx.handed.set(slipKey(row), row);
+      fx.prompt = prompt;
+      fx.fixing = true;
+      remember(fixes, threadId, fx, KEPT);
+    }
     run.card = {
       ...run.card, status, endedAt: Date.now(), ...(status === "blocked" ? { errorCode: timedOut ? "timeout" : "internal" } : {}), ...(pages.length ? { notChecked: pages } : {}), ...(fixed ? { fixed } : {}),
-      doc: { ...live, page: undefined, beat: undefined, findings: findings.slice(0, VERIFY_DOC_FINDINGS), findingTotal: findings.length, ...(compared ? {} : { uncompared: true }) },
+      doc: {
+        ...live, page: undefined, beat: undefined, findings: shown.slice(0, VERIFY_DOC_FINDINGS), findingTotal: shown.length, ...(compared ? {} : { uncompared: true }),
+        ...(listed.length ? { fixing: true } : {}), ...(fixed && fx ? { fixedFindings: gone.slice(0, VERIFY_DOC_FINDINGS) } : {}),
+      },
     };
     writeCard(botId, run);
+    if (fx) fx.messageId = run.messageId;
+    if (listed.length) hand(threadId, fx!);
     run.recording.finish({ status, ms: ms(), issues: [], notChecked: pages });
     run.saved = run.recording.save(VERIFY_REPLAYS_DIR, threadId, run.messageId!).then(kept => {
       const stored = store.messagesFor(threadId).find(message => message.id === run.messageId);
@@ -265,6 +322,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     /** One check per thread, `quietMs` after the last call; a newer call replaces a running check on its card. */
     schedule(input: DocStart) {
       if (disposed || !input.roots[0]) return;
+      if (fixes.get(input.threadId)?.timer) { unfix(input.threadId); fixes.delete(input.threadId); }
       const slot = slots.get(input.threadId) ?? { token: {} };
       slots.set(input.threadId, slot);
       slot.input = slot.input?.botId === input.botId ? { ...input, paths: [...new Set([...slot.input.paths, ...input.paths])] } : input;
@@ -278,8 +336,16 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       slot.timer = setTimeout(fire, quietMs, input.threadId);
     },
     run: (runId: string) => runs.get(runId),
+    /** Any turn that ended; the bot's fix turn ending rechecks its file. */
+    ended(turn: { botId: string; threadId: string; startedAt: number }) {
+      const fx = fixes.get(turn.threadId);
+      if (!fx?.at || fx.botId !== turn.botId || turn.startedAt < fx.at) return;
+      fx.at = undefined;
+      this.schedule({ botId: fx.botId, threadId: turn.threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
+    },
     dispose() {
       disposed = true;
+      for (const fx of fixes.values()) clearTimeout(fx.timer);
       for (const slot of slots.values()) { clearTimeout(slot.timer); slot.run?.aborter.abort(); }
       slots.clear();
     },
