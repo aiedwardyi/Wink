@@ -11,6 +11,7 @@ import { useStore, type Message } from "@/state/store";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useBackLayer } from "@/lib/use-back-layer";
+import { showSelectHandles } from "./select-handles";
 
 declare global {
   interface WindowEventMap {
@@ -95,8 +96,8 @@ function wordAt(content: Element, x: number, y: number): Word | null {
   return before;
 }
 
-/** Selects the held word, or the whole message, and lets the phone's own selection work there until a touch lands elsewhere. */
-export function startSelectMode(row: HTMLElement, held: { x: number; y: number }): void {
+/** Selects the held word, or the whole message, with drag handles and Copy, and lets the phone's own selection work there until a touch lands elsewhere. */
+export function startSelectMode(row: HTMLElement, held: { x: number; y: number }, copyLabel: string): void {
   endSelectMode();
   // the row is unselectable until now, and caret hit-testing skips unselectable text
   row.setAttribute("data-select-mode", "");
@@ -106,16 +107,20 @@ export function startSelectMode(row: HTMLElement, held: { x: number; y: number }
   const sel = window.getSelection();
   if (word) sel?.setBaseAndExtent(word.node, word.start, word.node, word.end);
   else sel?.selectAllChildren(content);
+  const handles = showSelectHandles(row, content, copyLabel, () => end());
   let firstTouch = true;
   const onDown = (e: Event) => {
+    if (handles.owns(e.target)) return;
     if (!(e.target instanceof Node && row.contains(e.target))) end();
     else if (e.type === "touchstart" && firstTouch) {
-      // script selections have no handles, so the first hold starts fresh
+      // script selections have no native handles, so the first hold starts fresh
+      handles.remove();
       sel?.removeAllRanges();
       firstTouch = false;
     }
   };
   const end = () => {
+    handles.remove();
     row.removeAttribute("data-select-mode");
     const sel = window.getSelection();
     if (sel?.anchorNode && row.contains(sel.anchorNode)) sel.removeAllRanges();
@@ -555,7 +560,7 @@ export function MessageMenu({
           onClick={() => {
             // the menu can cover the held point, so it leaves before the hit test
             flushSync(() => closeMenu(opener, ref.current, onClose));
-            startSelectMode(opener, held);
+            startSelectMode(opener, held, t("chat.copy"));
           }}
           className={cn(ROW_CLASS, "min-h-10")}
         >
