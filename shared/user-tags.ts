@@ -92,7 +92,9 @@ export class UserTagScanner {
       this.fence = "";
       return { code: true, head: quote + last };
     }
-    if (mark || !body.trim()) {
+    // a fence marker inside indented code is code, not a fence
+    const buried = Boolean(body.trim()) && indent - this.listColumn >= 4 && (this.blank || this.indented);
+    if (!buried && (mark || !body.trim())) {
       this.fence = mark ?? "";
       this.wrapped = Boolean(mark) && EDGE_HEAD.test(body);
       this.fenceDepth = depth;
@@ -102,7 +104,7 @@ export class UserTagScanner {
       this.blank = !mark;
       return { code: true, head: mark ? quote + body.replace(EDGE_HEAD, "$1") : line };
     }
-    let code = indent - this.listColumn >= 4 && (this.blank || this.indented);
+    let code = buried;
     const item = code ? null : ITEM.exec(core);
     if (item) {
       code = item[3].length >= 5;

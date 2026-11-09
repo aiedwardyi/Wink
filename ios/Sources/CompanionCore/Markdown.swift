@@ -246,7 +246,9 @@ public enum Markdown {
                 }
                 return line
             }
-            if open != nil || isBlank(body) {
+            // a fence marker inside indented code is code, not a fence
+            let buried = !isBlank(body) && indent - listColumn >= 4 && (blank || indented)
+            if !buried && (open != nil || isBlank(body)) {
                 fence = open?.mark ?? ""
                 wrapped = open != nil && leadingTags(String(body)) != String(body)
                 fenceColumn = open?.column ?? 0
@@ -256,7 +258,7 @@ public enum Markdown {
                 blank = open == nil
                 return open == nil ? line : quote + leadingTags(String(body))
             }
-            var code = indent - listColumn >= 4 && (blank || indented)
+            var code = buried
             if !code, let item = listItem(core) {
                 code = item.spaces >= 5
                 listColumn = item.width + (code ? 1 : item.spaces)

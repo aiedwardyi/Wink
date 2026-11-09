@@ -49,6 +49,11 @@ describe("unwrapUserTags", () => {
     expect(unwrapUserTags(text)).toBe(text);
   });
 
+  it("does not open a fence from indented code", () => {
+    const text = "    ~~~\n\n~~~\n<user1>x</user1>\n~~~";
+    expect(unwrapUserTags(text)).toBe(text);
+  });
+
   it("does not let a fence indented four spaces close a block", () => {
     const text = "   ~~~\n    ~~~\n<user1>x</user1>\n~~~";
     expect(unwrapUserTags(text)).toBe(text);
