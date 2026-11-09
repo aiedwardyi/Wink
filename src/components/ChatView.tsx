@@ -1634,7 +1634,6 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
 
       {/* Overlay chrome + composer stack in-flow so 600x480 cannot cover chat. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-      <WhatsNewSlot />
       {/* isolate: the rows' own z-indices (action bars are z-20) stay under the timeline card */}
       <div
         ref={scrollRef}
@@ -1720,6 +1719,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             workers={rowWorkers}
             livePanes={livePanes}
           />
+          <WhatsNewSlot />
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button

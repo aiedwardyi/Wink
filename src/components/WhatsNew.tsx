@@ -32,7 +32,7 @@ export function WhatsNewSlot() {
   }, []);
   if (!shown.mounted || !shown.value) return null;
   return (
-    <LazyView overlay>
+    <LazyView>
       <WhatsNewCard release={shown.value} closing={shown.closing} onClose={close} />
     </LazyView>
   );
