@@ -14,7 +14,6 @@ const text = [
   "- Gets frustrated by fill-in-the-blank when they don't know the words (noted 2026-11-05)",
   "- Has a Samsung Galaxy S24 Ultra phone (noted 2026-11-06)",
   "- When Eddie learns a new concept/method, drill it immediately with fresh similar reps until locked in (noted 2026-11-06)",
-  "Plain prose stays out of the panels.",
 ].join("\n");
 
 describe("memoryMap", () => {
@@ -46,5 +45,41 @@ describe("memoryMap", () => {
     const map = memoryMap(text, messages);
     expect(map.learned[0]!.fact).toBe("Uses Tailscale with SSH mesh across laptop, home, work, and phone");
     expect(map.longTerm.some((each) => each.fact.startsWith("Uses Tailscale"))).toBe(false);
+  });
+});
+
+const plain = [
+  "# Pokkey memory: rules",
+  "",
+  "## Owner",
+  "Prefers short answers, one breath per sentence (09-27)",
+  "Never reply with recaps or background",
+  "[Topic notes](memory/topic.md) - links stay in Knowledge",
+  "<!-- keep this file trimmed -->",
+  "| name | value |",
+  "| --- | --- |",
+  "```",
+  "inside a fence",
+  "```",
+  "## Habits",
+  "Checks the build before replying (noted 2026-11-08)",
+  "- A bullet still counts",
+].join("\n");
+
+describe("memoryMap plain lines", () => {
+  it("counts plain lines as facts but not headings, fences, tables, comments or the title", () => {
+    const map = memoryMap(plain);
+    expect(map.longTerm.map((each) => each.fact)).toEqual([
+      "Checks the build before replying",
+      "Prefers short answers, one breath per sentence (09-27)",
+      "A bullet still counts",
+    ]);
+    expect(map.muscle.map((each) => each.fact)).toEqual(["Never reply with recaps or background"]);
+    expect(map.longTerm[0]!.at).toEqual(new Date(2026, 10, 8));
+  });
+
+  it("keeps #-prose and ignores comment openers, other fence markers and list items inside fences and comments", () => {
+    const text = ["# Memory", "#1 preference is concise answers", "```html", "<!--", "- sample item", "```", "Lives in London", "~~~~", "```", "code line", "~~~~", "Likes tea", "<!--", "- hidden item", "-->", "Ends here"].join("\n");
+    expect(memoryMap(text).longTerm.map((each) => each.fact).sort()).toEqual(["#1 preference is concise answers", "Ends here", "Likes tea", "Lives in London"]);
   });
 });
