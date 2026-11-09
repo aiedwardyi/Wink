@@ -18,7 +18,7 @@ const temps = createTempDirs();
 let root: string;
 let start: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; entry: string; episode: string }) => Promise<void>>>;
 let scan: ReturnType<typeof vi.fn<typeof scanVerifyWrites>>;
-let docs: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; roots: string[]; paths: string[]; humanId?: string }) => void>>;
+let docs: ReturnType<typeof vi.fn<(input: { botId: string; threadId: string; roots: string[]; paths: string[]; scanned?: string[]; humanId?: string }) => void>>;
 let ended: ReturnType<typeof vi.fn<(input: VerifyAutoTurn) => void>>;
 let auto: ReturnType<typeof createVerifyAuto>;
 let turn: VerifyAutoTurn;
@@ -235,6 +235,16 @@ it("finds a document an opaque shell saved", async () => {
   await auto.settled(turn);
   expect(start).not.toHaveBeenCalled();
   expect(docs).toHaveBeenCalledWith(expect.objectContaining({ paths: [join(root, "report.docx")] }));
+});
+
+it("marks documents only the scan found, unless the reply names them", async () => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await writeFile(join(root, "report.docx"), "x");
+  await writeFile(join(root, "draft.docx"), "x");
+  shell();
+  await auto.settled({ ...turn, reply: "Saved it to report.docx." });
+  expect(docs).toHaveBeenCalledWith(expect.objectContaining({ paths: expect.arrayContaining([join(root, "report.docx"), join(root, "draft.docx")]), scanned: [join(root, "draft.docx")] }));
 });
 
 it("does not hand documents over for an opted-out or failed turn", async () => {

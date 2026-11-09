@@ -7219,10 +7219,12 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifyAutoOn = () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false;
 const verifyDoc = createVerifyDoc({
   store,
   instanceFor: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
   busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  enabled: verifyAutoOn,
   fix: (botId, threadId, prompt, failed, ready) => {
     const group = store.conversationForBot(botId, threadId)?.group;
     if (group) return enqueueDrainedRoomTurn(botId, threadId, { groupId: group.id, hop: 0, cardContinuation: prompt, rootId: rootForStart(threadId, { kind: "automatic" }) ?? undefined, onDispatchError: failed, ready }).then(() => true);
@@ -7248,7 +7250,7 @@ const verifySite = createVerifySite({
   docRun: runId => verifyDoc.run(runId),
 });
 const verifyAuto = createVerifyAuto({
-  enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
+  enabled: verifyAutoOn,
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
   startDocs: input => verifyDoc.schedule(input),

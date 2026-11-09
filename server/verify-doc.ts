@@ -31,12 +31,13 @@ const FIX_ROUNDS = 2;
 const DEV = /^(?:readme|changelog|changes|contributing|licen[cs]e|copying|code_of_conduct|security|notice|authors|claude|agents|gemini|memory|skill)(?:\.[a-z]+)?$|^requirements.*\.txt$|^(?:robots|cmakelists)\.txt$/i;
 const PROJECT = ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", ".git"];
 
-export interface DocStart { botId: string; threadId: string; roots: string[]; paths: string[]; humanId?: string }
+export interface DocStart { botId: string; threadId: string; roots: string[]; paths: string[]; scanned?: string[]; humanId?: string }
 export interface VerifyDocDeps {
   store: Pick<Store, "bot" | "conversationForBot" | "appendMessage" | "patchMessage" | "messagesFor">;
   instanceFor: (botId: string, threadId: string) => Pick<ProviderInstance, "generateText"> | null | undefined;
   /** the bot has a turn going */
   busy: (botId: string, threadId: string) => boolean;
+  enabled: () => boolean;
   /** starts the bot's fix turn; false when the bot is busy, `failed` when it never dispatched, a queued turn dispatches only when `ready` */
   fix: (botId: string, threadId: string, prompt: string, failed: () => void, ready: () => Promise<boolean>) => Promise<boolean>;
   deviceId: () => string;
@@ -46,7 +47,7 @@ export interface VerifyDocDeps {
   quietMs?: number;
 }
 
-interface Picked { file: string; site: string; doc: DocText; sha: string; cut: number }
+interface Picked { file: string; site: string; doc: DocText; sha: string; cut: number; fixable: boolean }
 interface Parsed { hits: DocHit[]; names: string[]; dates: string[] }
 interface Run { runId: string; threadId: string; card: VerifyCardData; recording: ReturnType<typeof createReplay>; aborter: AbortController; messageId?: string; saved?: Promise<void> }
 interface Slot { token: object; input?: DocStart; timer?: ReturnType<typeof setTimeout>; run?: Run; orphan?: string }
@@ -116,14 +117,17 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     for (const key of fx.listed) fx.handed.delete(key);
     fx.listed = [];
   };
+  const drop = (threadId: string) => {
+    giveBack(threadId);
+    unfix(threadId);
+    fixes.delete(threadId);
+  };
   // The user can change or remove the file while the fix waits; a fix only lands on what was checked.
   const current = async (threadId: string, fx: Fix) => {
     const now = await pick({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file] });
     if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return false;
     if (now?.file === fx.file && now.sha === fx.sha) return true;
-    giveBack(threadId);
-    unfix(threadId);
-    fixes.delete(threadId);
+    drop(threadId);
     schedule({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
     return false;
   };
@@ -131,10 +135,15 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
   const hand = async (threadId: string, fx: Fix) => {
     fx.timer = undefined;
     if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return;
+    if (!deps.enabled()) return drop(threadId);
     if (deps.busy(fx.botId, threadId)) { fx.timer = setTimeout(hand, quietMs, threadId, fx); return; }
     if (!await current(threadId, fx)) return;
     const token = fx.token = randomUUID();
-    const ready = async () => fx.token === token && await current(threadId, fx) && fx.token === token;
+    const ready = async () => {
+      if (fx.token !== token) return false;
+      if (!deps.enabled()) { drop(threadId); return false; }
+      return await current(threadId, fx) && fx.token === token;
+    };
     deps.fix(fx.botId, threadId, fx.prompt!, () => { if (fixes.get(threadId) === fx && fx.token === token) unfix(threadId); }, ready).then(started => {
       if (started || fixes.get(threadId) !== fx || fx.token !== token) return;
       fx.token = undefined;
@@ -158,14 +167,14 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
       if (!DOC_EXTS.has(ext) || DEV.test(basename(full)) || rel.split(sep)[0]!.toLowerCase() === "memory") return null;
       const info = await stat(full).catch(() => null);
       if (!info?.isFile() || info.size > MAX_BYTES || ext !== ".docx" && await inProject(dirname(full), root)) return null;
-      return { full, site: rel.split(sep).join("/"), mtime: info.mtimeMs };
+      return { full, site: rel.split(sep).join("/"), mtime: info.mtimeMs, fixable: !input.scanned?.includes(path) };
     }))).filter(row => row !== null).sort((a, b) => b.mtime - a.mtime);
     for (const file of files) {
       try {
         const { raw, rendered } = await readDoc(file.full);
         const end = raw.length > CAP_CHARS ? raw.lastIndexOf("\n", CAP_CHARS) : raw.length;
         const kept = raw.slice(0, end > 0 ? end : CAP_CHARS), doc = docText(kept, rendered);
-        if (doc.text.trim().length >= MIN_CHARS) return { file: file.full, site: file.site, doc, sha: sha256(doc.text), cut: raw.length - kept.length };
+        if (doc.text.trim().length >= MIN_CHARS) return { file: file.full, site: file.site, doc, sha: sha256(doc.text), cut: raw.length - kept.length, fixable: files.some(row => row.full === file.full && row.fixable) };
       } catch { deps.log(`Live Verify: could not read a document in ${input.threadId}`); }
     }
     return null;
@@ -179,7 +188,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (picked && !engine?.generateText) deps.log(`Live Verify: no text engine for ${threadId}`);
     giveBack(threadId);
     unfix(threadId);
-    if (!picked || !engine?.generateText || checked.get(`${threadId}\n${picked.file}`)?.sha === picked.sha) return dropOrphan(slot, threadId);
+    if (!picked || !engine?.generateText || !deps.enabled() || checked.get(`${threadId}\n${picked.file}`)?.sha === picked.sha) return dropOrphan(slot, threadId);
     const { file, site, doc, sha, cut } = picked, generate = engine.generateText.bind(engine);
     const humanId = input.humanId ?? "", budget = `${threadId}\n${humanId}\n${file}`;
     let fx = budgets.get(budget);
@@ -302,7 +311,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     const shown = [...findings, ...unflagged.map(({ row }) => row).filter(row => !gone.includes(row))].sort((a, b) => a.line - b.line);
     const fixed = !whole ? 0 : fx ? gone.length : before ? [...before.keys].filter(row => !now.has(row)).length : 0;
     if (whole) remember(checked, key, { sha, keys: now }, KEPT);
-    const fresh = status === "completed" && (fx?.rounds ?? 0) < FIX_ROUNDS ? findings.filter(row => !fx?.handed.has(slipKey(row))) : [];
+    const fresh = status === "completed" && picked.fixable && deps.enabled() && (fx?.rounds ?? 0) < FIX_ROUNDS ? findings.filter(row => !fx?.handed.has(slipKey(row))) : [];
     const { prompt, listed } = fixPrompt(file, fresh);
     if (listed.length) {
       fx ??= { botId, humanId, roots: input.roots, file, sha, rounds: 0, handed: new Map(), listed: [], fixing: false };
@@ -335,6 +344,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (!slot?.input || disposed) return;
     slot.timer = undefined;
     const input = slot.input, token = slot.token;
+    if (!deps.enabled()) { slot.input = undefined; return dropOrphan(slot, threadId); }
     if (deps.busy(input.botId, threadId)) {
       slot.timer = setTimeout(fire, quietMs, threadId);
       return;
@@ -350,10 +360,13 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
   /** One check per thread, `quietMs` after the last call; a newer call replaces a running check on its card. */
   function schedule(input: DocStart) {
     if (disposed || !input.roots[0]) return;
-    if (fixes.get(input.threadId)?.timer) { giveBack(input.threadId); unfix(input.threadId); fixes.delete(input.threadId); }
+    if (fixes.get(input.threadId)?.timer) drop(input.threadId);
     const slot = slots.get(input.threadId) ?? { token: {} };
     slots.set(input.threadId, slot);
-    slot.input = slot.input?.botId === input.botId ? { ...input, paths: [...new Set([...slot.input.paths, ...input.paths])] } : input;
+    const was = slot.input?.botId === input.botId ? slot.input : undefined, paths = was ? [...new Set([...was.paths, ...input.paths])] : input.paths;
+    // A path stays check-only while no merged start knows the bot wrote it.
+    const known = (start: DocStart, path: string) => start.paths.includes(path) && !start.scanned?.includes(path);
+    slot.input = was ? { ...input, paths, scanned: paths.filter(path => !known(was, path) && !known(input, path)) } : input;
     slot.token = {};
     if (slot.run) {
       slot.orphan = slot.run.messageId;

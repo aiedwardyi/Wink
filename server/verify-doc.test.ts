@@ -15,6 +15,7 @@ const LINES = Array.from({ length: 60 }, (_, i) => `${i + 1}번째 문단입니�
 let root: string;
 let messages: Message[];
 let busy: boolean;
+let on: boolean;
 let generate: ReturnType<typeof vi.fn<(prompt: string, opts?: { signal?: AbortSignal }) => Promise<string>>>;
 let engine: { generateText: typeof generate } | null;
 let log: ReturnType<typeof vi.fn<(line: string) => void>>;
@@ -49,11 +50,12 @@ beforeEach(async () => {
   root = await realpath(temps.make(join(tmpdir(), "wink-verify-doc-")));
   messages = [];
   busy = false;
+  on = true;
   generate = vi.fn().mockResolvedValue(JSON.stringify({ findings: [], names: [], dates: [] }));
   engine = { generateText: generate };
   log = vi.fn();
   fix = vi.fn().mockResolvedValue(true);
-  doc = createVerifyDoc({ store: store as never, instanceFor: () => engine, busy: () => busy, fix, deviceId: () => "device", broadcastPatch: vi.fn(), log, quietMs: 20 });
+  doc = createVerifyDoc({ store: store as never, instanceFor: () => engine, busy: () => busy, enabled: () => on, fix, deviceId: () => "device", broadcastPatch: vi.fn(), log, quietMs: 20 });
   await writeFile(join(root, "script.md"), LINES.join("\n"));
 });
 
@@ -253,6 +255,69 @@ it("spends neither findings nor rounds on a fix a newer check replaced before it
   }
   await vi.waitFor(() => expect(fix).toHaveBeenCalledTimes(3));
   expect(fix.mock.calls[2]![2]).toContain(`"quote":"되요"`);
+});
+
+it("checks a file only the scan found but never fixes it", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  doc.schedule({ ...start(["script.md"]), scanned: ["script.md"] });
+  await done();
+  await delay(60);
+  expect(cards()[0]).toMatchObject({ doc: { findingTotal: 1 } });
+  expect(cards()[0]!.doc!.fixing).toBeUndefined();
+  expect(fix).not.toHaveBeenCalled();
+});
+
+it("fixes a scanned file once a merged start knows the bot wrote it", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  doc.schedule({ ...start(["script.md"]), scanned: ["script.md"] });
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+});
+
+it("drops a pending check when auto verify is turned off", async () => {
+  doc.schedule(start(["script.md"]));
+  on = false;
+  await delay(100);
+  expect(cards()).toHaveLength(0);
+  expect(generate).not.toHaveBeenCalled();
+});
+
+it("starts no fix when auto verify is turned off during the check", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockImplementationOnce(async () => { on = false; return slip(["되요", "돼요"]); });
+  doc.schedule(start(["script.md"]));
+  await done();
+  await delay(60);
+  expect(cards()[0]).toMatchObject({ doc: { findingTotal: 1 } });
+  expect(cards()[0]!.doc!.fixing).toBeUndefined();
+  expect(fix).not.toHaveBeenCalled();
+});
+
+it("drops a waiting fix when auto verify is turned off", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockImplementationOnce(async () => { busy = true; return slip(["되요", "돼요"]); });
+  doc.schedule(start(["script.md"]));
+  await done();
+  expect(cards()[0]!.doc!.fixing).toBe(true);
+  on = false;
+  busy = false;
+  await vi.waitFor(() => expect(cards()[0]!.doc!.fixing).toBeUndefined());
+  await delay(60);
+  expect(fix).not.toHaveBeenCalled();
+});
+
+it("drops a queued room fix when auto verify is turned off before it dispatched", async () => {
+  let ready: (() => Promise<boolean>) | undefined;
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  fix.mockImplementationOnce(async (_botId, _threadId, _prompt, _failed, queued) => { ready = queued; return true; });
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  on = false;
+  expect(await ready!()).toBe(false);
+  expect(cards()[0]!.doc!.fixing).toBeUndefined();
 });
 
 it("drops the fix when the file was deleted while the bot was busy", async () => {
