@@ -144,6 +144,20 @@
   [data-orbit-message="user"] [data-orbit-message-content] {
     background: var(--color-bubble-user);
   }
+
+  [data-orbit-message="bot"] .orbit-message-speaker {
+    display: block;
+    margin: 0 0 5px 16px;
+    color: var(--color-ink-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* Rooms label each sender cluster already. */
+  [data-room-transcript] .orbit-message-speaker {
+    display: none;
+  }
 }
 
 @scope ([data-skin="inkwell"]) to ([data-skin]) {
@@ -178,6 +192,10 @@
     padding-block: 0.25rem;
   }
 
+  [data-orbit-message="bot"] .orbit-message-speaker {
+    margin-left: 22px;
+  }
+
   [data-orbit-message-content] {
     padding: 16px 22px;
     font-size: 16px;
@@ -205,6 +223,10 @@
     [data-orbit-message-content] {
       padding: 11px 14px;
       font-size: 15px;
+    }
+
+    [data-orbit-message="bot"] .orbit-message-speaker {
+      margin-left: 14px;
     }
   }
 }
