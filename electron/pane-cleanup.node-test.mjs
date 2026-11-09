@@ -628,6 +628,289 @@ test("a new incoming link during backup invalidates the sweep scan", async (t) =
   assert.equal(fs.existsSync(target), false);
 });
 
+async function scratchRows(f, labels) {
+  const rows = [];
+  for (const label of labels) {
+    const session = { ...f.session, id: label, label };
+    const scratch = path.join(f.tempRoot, `wink-${label}`);
+    if (!fs.existsSync(scratch)) fs.mkdirSync(scratch);
+    f.cleanup.opened(session);
+    await f.cleanup.closed(session, true);
+    rows.push(scratch);
+  }
+  f.advance(4 * DAY_MS);
+  return rows;
+}
+
+async function walkCounter(t, f) {
+  const folders = Array.from({ length: 20 }, (_, index) => path.join(f.worktreeRoot, "host", `folder-${index}`));
+  for (const folder of folders) fs.mkdirSync(folder, { recursive: true });
+  const promises = await import("node:fs/promises");
+  const lstat = promises.default.lstat;
+  let visits = 0;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (folders.includes(args[0])) visits++;
+    return lstat(...args);
+  });
+  return () => visits / folders.length;
+}
+
+test("a sweep walks the link roots once for every scratch it removes", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const rows = await scratchRows(f, ["TEST", "SECOND", "THIRD"]);
+  const walks = await walkCounter(t, f);
+  await f.cleanup.sweep();
+  assert.deepEqual(rows.filter((row) => fs.existsSync(row)), []);
+  assert.equal(walks(), 1);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a reported scratch close walks the link roots once", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const walks = await walkCounter(t, f);
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.equal(walks(), 1);
+  assert.deepEqual(f.warnings, []);
+});
+
+test("a link made outside scratch after the sweep's link scan still blocks its delete", async (t) => {
+  const f = fixture(t);
+  const [first, late] = await scratchRows(f, ["TEST", "LATE"]);
+  fs.writeFileSync(path.join(late, "file"), "late");
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const link = path.join(host, "incoming");
+  const promises = await import("node:fs/promises");
+  const rm = promises.default.rm;
+  t.mock.method(promises.default, "rm", async (...args) => {
+    const result = await rm(...args);
+    if (args[0] === first && !fs.existsSync(link)) fs.symlinkSync(late, link, process.platform === "win32" ? "junction" : "dir");
+    return result;
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(first), false);
+  assert.equal(fs.readFileSync(path.join(late, "file"), "utf8"), "late");
+  assert.equal(fs.realpathSync(link), fs.realpathSync(late));
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("an outside junction re-pointed after the sweep's link scan still blocks its delete", async (t) => {
+  const f = fixture(t);
+  const [first, late] = await scratchRows(f, ["TEST", "LATE"]);
+  fs.writeFileSync(path.join(late, "file"), "late");
+  const kind = process.platform === "win32" ? "junction" : "dir";
+  const away = path.join(f.home, "away");
+  const hop = path.join(f.home, "hop");
+  fs.mkdirSync(away);
+  fs.symlinkSync(away, hop, kind);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const link = path.join(host, "incoming");
+  fs.symlinkSync(hop, link, kind);
+  const promises = await import("node:fs/promises");
+  const rm = promises.default.rm;
+  t.mock.method(promises.default, "rm", async (...args) => {
+    const result = await rm(...args);
+    if (args[0] === first) {
+      fs.unlinkSync(hop);
+      fs.symlinkSync(late, hop, kind);
+    }
+    return result;
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(first), false);
+  assert.equal(fs.readFileSync(path.join(late, "file"), "utf8"), "late");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+  fs.unlinkSync(hop);
+});
+
+test("a link made while the sweep re-checks a change still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const [first, late] = await scratchRows(f, ["TEST", "LATE"]);
+  fs.writeFileSync(path.join(late, "file"), "late");
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const [one, two] = ["one", "two"].map((name) => path.join(host, name));
+  const link = path.join(host, "incoming");
+  const promises = await import("node:fs/promises");
+  const rm = promises.default.rm;
+  t.mock.method(promises.default, "rm", async (...args) => {
+    const result = await rm(...args);
+    if (args[0] === first) fs.mkdirSync(one);
+    return result;
+  });
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === one && !fs.existsSync(two)) fs.mkdirSync(two);
+    else if (args[0] === two && !fs.existsSync(link)) fs.symlinkSync(late, link, "junction");
+    return lstat(...args);
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(first), false);
+  assert.equal(fs.readFileSync(path.join(late, "file"), "utf8"), "late");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a link missed by a rebuilt index that went stale still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  await scratchRows(f, ["TEST"]);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const other = path.join(f.tempRoot, "wink-OTHER");
+  fs.mkdirSync(other);
+  const link = path.join(host, "incoming");
+  const roots = [];
+  const watch = fs.watch;
+  t.mock.method(fs, "watch", (...args) => {
+    const watcher = watch(...args);
+    if (args[0] === f.worktreeRoot) roots.push(watcher);
+    return watcher;
+  });
+  const promises = await import("node:fs/promises");
+  let lost = false;
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.scratch && !lost) { lost = true; roots.at(-1).emit("error", new Error("overflow")); }
+    return readdir(...args);
+  });
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === other && lost && !fs.existsSync(link)) {
+      fs.symlinkSync(f.scratch, link, "junction");
+      roots.at(-1).emit("error", new Error("overflow"));
+    }
+    return lstat(...args);
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+async function staleTwice(t, f, fallback) {
+  await scratchRows(f, ["TEST"]);
+  fs.mkdirSync(path.join(f.worktreeRoot, "host"));
+  const other = path.join(f.tempRoot, "wink-OTHER");
+  fs.mkdirSync(other);
+  const roots = [];
+  const watch = fs.watch;
+  t.mock.method(fs, "watch", (...args) => {
+    const watcher = watch(...args);
+    if (args[0] === f.worktreeRoot) roots.push(watcher);
+    return watcher;
+  });
+  const promises = await import("node:fs/promises");
+  let builds = -1;
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.scratch && builds === -1) {
+      builds = 0;
+      roots.at(-1).emit("error", new Error("overflow"));
+    }
+    return readdir(...args);
+  });
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === other && builds >= 0) {
+      builds++;
+      if (builds === 1) roots.at(-1).emit("error", new Error("overflow"));
+      if (builds === 2) fallback(roots.at(-1));
+    }
+    return lstat(...args);
+  });
+}
+
+test("a link made after a fallback walk whose watcher fails still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const link = path.join(f.worktreeRoot, "host", "incoming");
+  await staleTwice(t, f, (watcher) => {
+    fs.symlinkSync(f.scratch, link, "junction");
+    watcher.emit("error", new Error("overflow"));
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a worktree root recreated during a fallback walk still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const aside = path.join(f.home, "aside");
+  const link = path.join(f.worktreeRoot, "incoming");
+  await staleTwice(t, f, () => {
+    fs.renameSync(f.worktreeRoot, aside);
+    fs.mkdirSync(f.worktreeRoot);
+    fs.symlinkSync(f.scratch, link, "junction");
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a link queued during a fallback walk still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const link = path.join(f.worktreeRoot, "host", "incoming");
+  await staleTwice(t, f, () => fs.symlinkSync(f.scratch, link, "junction"));
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a link in a worktree root renamed aside and recreated still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  await scratchRows(f, ["TEST"]);
+  const aside = path.join(f.home, "aside");
+  const link = path.join(f.worktreeRoot, "incoming");
+  const promises = await import("node:fs/promises");
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.scratch && !fs.existsSync(aside)) {
+      fs.renameSync(f.worktreeRoot, aside);
+      fs.mkdirSync(f.worktreeRoot);
+      fs.symlinkSync(f.scratch, link, "junction");
+    }
+    return readdir(...args);
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(aside), true);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("no link watcher outlives its close or sweep", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  const open = new Set();
+  let opened = 0;
+  const watch = fs.watch;
+  t.mock.method(fs, "watch", (...args) => {
+    const watcher = watch(...args);
+    opened++;
+    open.add(watcher);
+    const close = watcher.close.bind(watcher);
+    watcher.close = () => { open.delete(watcher); close(); };
+    return watcher;
+  });
+  f.cleanup.opened(f.session);
+  await f.cleanup.closed(f.session);
+  assert.equal(fs.existsSync(f.scratch), false);
+  assert.equal(open.size, 0);
+  await scratchRows(f, ["FAILS"]);
+  const promises = await import("node:fs/promises");
+  t.mock.method(promises.default, "rm", async () => { throw Object.assign(new Error("disk failure"), { code: "EIO" }); });
+  await f.cleanup.sweep();
+  assert.match(f.warnings[0]?.message ?? "", /disk failure/);
+  assert.ok(opened >= 4, `${opened} watchers`);
+  assert.equal(open.size, 0);
+});
+
 test("reported scratch is removed and its junction target survives", async (t) => {
   const f = fixture(t);
   const target = path.join(f.home, "user-files");
