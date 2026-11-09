@@ -981,6 +981,25 @@ describe("WorkerChip", () => {
       }
     });
 
+    it("keeps the list scrolling into itself from its top after scrolling back up", async () => {
+      const { sheet, unmount } = await openSheet(13);
+      const list = sheet.querySelector("ul")!;
+      const scrollTo = async (top: number) => {
+        list.scrollTop = top;
+        await act(async () => { list.dispatchEvent(new Event("scroll")); });
+      };
+      try {
+        expect(list.className).toMatch(/(^|\s)touch-pan-down(\s|$)/);
+        expect(list.className).toMatch(/(^|\s)touch-pinch-zoom(\s|$)/);
+        await scrollTo(40);
+        expect(list.style.touchAction).toBe("pan-y pinch-zoom");
+        await scrollTo(0);
+        expect(list.style.touchAction).toBe("pan-down pinch-zoom");
+      } finally {
+        await unmount();
+      }
+    });
+
     it.each([0, 4, 8])("leaves every event of a %i px jitter tap uncancelled and claims a pull", async (jitter) => {
       const { sheet, row, onOpen, chip, unmount } = await openSheet(1);
       try {
