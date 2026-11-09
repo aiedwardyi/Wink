@@ -139,6 +139,10 @@ export function forkCodex(spawn: CodexSpawn, input: SideInput): SideHandle {
       try {
         await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
         send({ jsonrpc: "2.0", method: "initialized", params: {} });
+        // An auto-approved MCP tool would run before item/started could stop it.
+        const config: Record<string, unknown> = { web_search: "disabled" };
+        const read = await request("config/read", { cwd: spawn.cwd });
+        for (const name of Object.keys(read?.config?.mcp_servers ?? {})) config[`mcp_servers.${name}.enabled`] = false;
         const forked = await request("thread/fork", {
           threadId: spawn.cursor,
           ephemeral: true,
@@ -146,6 +150,7 @@ export function forkCodex(spawn: CodexSpawn, input: SideInput): SideHandle {
           sandbox: "read-only",
           approvalPolicy: "untrusted",
           approvalsReviewer: "user",
+          config,
         });
         const id = forked?.thread?.id;
         if (typeof id !== "string") throw new Error("thread/fork returned no thread");

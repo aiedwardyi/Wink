@@ -16,7 +16,7 @@ import { forkCodex } from "./codex-fork.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-codex-app-server.ts");
 const LEDGER = join(DATA_DIR, "side-chat", "live.json");
-const envKeys = ["FAKE_CODEX_MODE", "FAKE_CODEX_DUMP", "FAKE_CODEX_TOOL_FIXTURE", "FAKE_CODEX_MESSAGES"];
+const envKeys = ["FAKE_CODEX_MODE", "FAKE_CODEX_DUMP", "FAKE_CODEX_CONFIG", "FAKE_CODEX_TOOL_FIXTURE", "FAKE_CODEX_MESSAGES"];
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -75,6 +75,7 @@ describe("Codex fork through quickAsk (fake app-server)", () => {
       sandbox: "read-only",
       approvalPolicy: "untrusted",
       approvalsReviewer: "user",
+      config: { web_search: "disabled" },
     });
     const turn = sent.find((call) => call.method === "turn/start")!.params;
     expect(turn.threadId).toBe("codex-fork-1");
@@ -85,6 +86,28 @@ describe("Codex fork through quickAsk (fake app-server)", () => {
     expect(child.spawnargs.join(" ")).toContain("app-server");
     expect(alive(child.pid)).toBe(false);
     expect(existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, "utf8")) : []).toEqual([]);
+  });
+
+  it("starts the side app-server with web search off and every MCP server disabled", async () => {
+    const dump = join(scratch, "dump.json");
+    const side = await mainThread("bench-quiet", "t-mcp");
+    await recorder!.until((event) => event.type === "turn.completed");
+    process.env.FAKE_CODEX_DUMP = dump;
+    process.env.FAKE_CODEX_CONFIG = JSON.stringify({ mcp_servers: { agents: { command: "never-run" }, github: { command: "never-run" } } });
+    await quickAsk({ instance: side, messages: [] }, "t-mcp", { text: "what port?" });
+    await sideIdle();
+
+    const { argv } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(argv).toContain('web_search="disabled"');
+    expect(argv).not.toContain('web_search="live"');
+    expect(argv.join(" ")).not.toContain("mcp_servers.");
+    const sent = calls(dump);
+    expect(sent.find((call) => call.method === "config/read")?.params).toEqual({ cwd: scratch });
+    expect(sent.find((call) => call.method === "thread/fork")?.params.config).toEqual({
+      web_search: "disabled",
+      "mcp_servers.agents.enabled": false,
+      "mcp_servers.github.enabled": false,
+    });
   });
 
   it("hands off on a non-read tool item", async () => {

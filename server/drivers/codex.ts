@@ -992,7 +992,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const last = lastThread.get(side.threadId);
       if (!last || !admitted || accountBlocked) return null;
       const env = childEnv();
-      return forkCodex({ cli: config.cli, args: baseAppServerArgs(env, last.model), env, cwd: last.cwd, policy: turnPolicy, home: retirementHome, cursor: last.cursor }, side);
+      return forkCodex({ cli: config.cli, args: ["app-server", ...codexLocalProviderArgs(env, last.model), "-c", 'web_search="disabled"'], env, cwd: last.cwd, policy: turnPolicy, home: retirementHome, cursor: last.cursor }, side);
     },
     adapter: {
       provider: DRIVER_KIND,
