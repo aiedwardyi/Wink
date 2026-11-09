@@ -258,7 +258,8 @@ public enum Markdown {
             // a wrapper around a fenced reply is not part of the fence line
             let trimmed = trimTags(String(body))
             let lead = trimmed.prefix(while: { $0 == " " || $0 == "\t" })
-            let core = lead.reduce(into: "") { $0 += $1 == "\t" ? "    " : " " } + trimmed.dropFirst(lead.count)
+            let width = lead.reduce(0) { $1 == "\t" ? $0 + 4 - $0 % 4 : $0 + 1 }
+            let core = String(repeating: " ", count: width) + trimmed.dropFirst(lead.count)
             let open = fenceStart(Substring(core))
             let indent = core.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
             if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(Substring(core)) && indent < fenceColumn)) { fence = "" }

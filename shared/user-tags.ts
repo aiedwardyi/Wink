@@ -92,7 +92,7 @@ export class UserTagScanner {
     const quote = line.slice(0, line.length - body.length);
     const depth = quote.split(">").length - 1;
     // a wrapper around a fenced reply is not part of the fence line
-    const core = body.replace(EDGE_HEAD, "$1").replace(EDGE_TAIL, "$1").replace(/^[ \t]+/, (lead) => lead.replace(/\t/g, "    "));
+    const core = body.replace(EDGE_HEAD, "$1").replace(EDGE_TAIL, "$1").replace(/^[ \t]+/, (lead) => " ".repeat([...lead].reduce((col, ch) => (ch === "\t" ? col + 4 - (col % 4) : col + 1), 0)));
     const indent = /^ */.exec(core)![0].length;
     const open = FENCE.exec(core);
     const mark = open?.[2];

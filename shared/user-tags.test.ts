@@ -87,6 +87,8 @@ describe("unwrapUserTags", () => {
     const text = "- item\n\n\t~~~xml\n\t<user1>x</user1>\n\t~~~";
     expect(unwrapUserTags(text)).toBe(text);
     expect(unwrapUserTags(text + "\n<user2>y</user2>")).toBe(text + "\ny");
+    const mixed = "- item\n\n \t ~~~xml\n  <user1>x</user1>\n  ~~~";
+    expect(unwrapUserTags(mixed)).toBe(mixed);
   });
 
   it("reads a spaced rule as a rule, not a list item", () => {
