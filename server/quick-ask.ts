@@ -6,6 +6,7 @@ import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
 import { nominate } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
+import { queueSteeredMessage } from "./steer-queue.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
 const BLOCK_HEAD =
@@ -71,7 +72,35 @@ export interface QuickDeps {
   userName: string;
   /** Today's busy delivery of the ask's own text. */
   handoff(ask: Message): Promise<void>;
+  drain(): void;
   usage?: { start(botId: string, threadId: string, id: string): void; settle(id: string): void };
+}
+
+type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage">;
+
+/** Still on the active path with its text and not yet handed to the bot; an edit or rewind drops it on purpose. */
+const pending = (store: Pick<Store, "activePath">, threadId: string, ask: Message) =>
+  store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && !row.steered && row.quick?.state !== "handoff");
+
+/** The ask as the bot's ordinary next turn in its own thread, else the failed-send row. */
+function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
+  try {
+    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
+    store.patchMessage(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
+  } catch (error) {
+    store.patchMessage(threadId, ask.id, { quick: undefined });
+    const name = `error: queued message could not start - ${error instanceof Error ? error.message : String(error)}`;
+    store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name, ok: false } });
+  }
+}
+
+/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor">): void {
+  // Asks only start in the open chat; other tasks stay unread so boot loads no extra threads.
+  for (const { id, threadId } of store.bots) {
+    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
+    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
+  }
 }
 
 async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message): Promise<QuickResult> {
@@ -95,21 +124,23 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const instance = bot ? deps.instance(bot, threadId) : null;
   const result: QuickResult = instance ? await askHelper(deps, instance, botId, threadId, ask) : { route: "handoff", ms: 0 };
   const current = store.bot(botId);
-  if (!current || current.threadId !== threadId || !store.messagesFor(threadId).some((message) => message.id === ask.id)) return;
+  if (!current || !pending(store, threadId, ask)) return;
   if (result.route === "handoff" || !result.text) {
-    // The turn can end mid-steer (409); the second try takes the idle or queue path.
-    for (let tries = 0; tries < 2; tries++) {
+    // A turn can end or be claimed under a try; the second takes the idle or queue path.
+    for (let tries = 0; tries < 2 && pending(store, threadId, ask); tries++) {
       try {
         return await deps.handoff(ask);
       } catch (error) {
         console.warn(`[quick] handoff failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    store.patchMessage(threadId, ask.id, { quick: undefined });
+    if (!pending(store, threadId, ask)) return;
+    queueAsk(store, botId, threadId, ask);
+    deps.drain();
     return;
   }
   const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
-  if (!current.busy || (current.activeThreadId ?? threadId) !== threadId) return;
+  if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {
     const row = store.messagesFor(threadId).find((message) => message.id === answer.id);

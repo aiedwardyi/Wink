@@ -6,14 +6,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { prepareModelContext, routineCardsSinceLastUserTurn } from "./context-compaction.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
-import { quickAnswersSinceLastUserTurn, routesQuick, type QuickGate } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, recoverQuickAsks, routesQuick, type QuickGate } from "./quick-ask.ts";
 import type { QuickResult } from "./side-chat.ts";
 import { SendSequencer } from "./send-idempotency.ts";
 import { drainSteeredMessages, foldQueuedSends, queueMark, _queuedCount, _resetSteerQueue } from "./steer-queue.ts";
 import { Store, type Message } from "./store.ts";
 import { turnAddedMessage } from "./turn-reply.ts";
 
+const queueFails = vi.hoisted(() => ({ on: false }));
+vi.mock("./steer-queue.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./steer-queue.ts")>();
+  return {
+    ...real,
+    queueSteeredMessage: (...args: Parameters<typeof real.queueSteeredMessage>) => {
+      if (queueFails.on) throw new Error("disk full");
+      return real.queueSteeredMessage(...args);
+    },
+  };
+});
+
 afterEach(() => {
+  queueFails.on = false;
   _resetSteerQueue();
   vi.restoreAllMocks();
 });
@@ -165,31 +178,101 @@ describe("quick route", () => {
     expect(h.startTurn).toHaveBeenCalledWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
   });
 
-  it("retries a handoff whose turn ended mid-steer as an ordinary turn", async () => {
+  it("never replays a handoff steer the engine took after the turn ended", async () => {
     const h = harness({ result: { route: "handoff", ms: 3 } });
     await h.send({ text: QUESTION });
     h.steer.mockImplementationOnce(async () => {
       h.store.setActivity(h.bot.id, "idle");
+      return true;
+    });
+    await h.settled();
+    expect(h.steer).toHaveBeenCalledTimes(1);
+    expect(h.startTurn).not.toHaveBeenCalled();
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+    expect(h.rows().at(-1)).toMatchObject({ text: QUESTION, steered: true, quick: { state: "handoff" } });
+  });
+
+  it("starts an ordinary turn once on a steer the engine dropped", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    h.steer.mockImplementationOnce(async (_threadId, _text, consumed) => {
+      h.store.setActivity(h.bot.id, "idle");
+      consumed?.(false);
       return true;
     });
     await h.settled();
     const ask = h.rows().at(-1)!;
-    expect(ask.quick).toBeUndefined();
-    expect(h.startTurn).toHaveBeenCalledWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
+    expect(ask.steered).toBeUndefined();
+    expect(h.startTurn).toHaveBeenCalledExactlyOnceWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
   });
 
-  it("leaves a twice-failed handoff as a plain unanswered ask", async () => {
+  it("queues a twice-failed handoff as the bot's next turn", async () => {
     const h = harness({ result: { route: "handoff", ms: 3 } });
     await h.send({ text: QUESTION });
-    h.steer.mockImplementationOnce(async () => {
-      h.store.setActivity(h.bot.id, "idle");
-      return true;
-    });
-    h.startTurn.mockRejectedValueOnce(Object.assign(new Error("busy"), { status: 409 }));
+    h.store.setActivity(h.bot.id, "idle");
+    h.startTurn.mockRejectedValue(Object.assign(new Error("busy"), { status: 409 }));
     await h.settled();
-    expect(h.startTurn).toHaveBeenCalledTimes(1);
-    expect(h.rows().at(-1)).toMatchObject({ role: "user", text: QUESTION });
-    expect(h.rows().at(-1)?.quick).toBeUndefined();
+    expect(h.startTurn).toHaveBeenCalledTimes(2);
+    expect(_queuedCount(h.bot.threadId)).toBe(1);
+    expect(h.rows().at(-1)).toMatchObject({ role: "user", text: QUESTION, quick: { state: "handoff" }, queueId: expect.any(String) });
+  });
+
+  it("shows the failed-send row when even the queue fails", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    h.store.setActivity(h.bot.id, "idle");
+    h.startTurn.mockRejectedValue(Object.assign(new Error("busy"), { status: 409 }));
+    queueFails.on = true;
+    await h.settled();
+    const [ask, failed] = h.rows().slice(-2);
+    expect(ask).toMatchObject({ role: "user", text: QUESTION });
+    expect(ask?.quick).toBeUndefined();
+    expect(failed).toMatchObject({ role: "bot", kind: "activity", tool: { name: "error: queued message could not start - disk full", ok: false } });
+  });
+
+  it("lands a late answer in the ask's own task after a switch, without a steer", async () => {
+    const h = harness({ consumed: true });
+    await h.send({ text: QUESTION });
+    const own = h.bot.threadId;
+    const other = h.store.createTask(h.bot.id)!;
+    h.store.setActivity(h.bot.id, "working", other.threadId);
+    await h.settled();
+    expect(h.store.messagesFor(own).at(-1)).toMatchObject({ role: "bot", text: "Port 8787.", quick: { state: "answer" } });
+    expect(h.store.messagesFor(other.threadId).some((row) => row.quick)).toBe(false);
+    expect(h.steer).not.toHaveBeenCalled();
+  });
+
+  it("queues a handoff in the ask's own task after a switch", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    const own = h.bot.threadId;
+    const other = h.store.createTask(h.bot.id)!;
+    await h.settled();
+    expect(h.steer).not.toHaveBeenCalled();
+    expect(_queuedCount(own)).toBe(1);
+    expect(_queuedCount(other.threadId)).toBe(0);
+    expect(h.store.messagesFor(own).at(-1)).toMatchObject({ text: QUESTION, quick: { state: "handoff" } });
+  });
+
+  it.each(["an edit", "a rewind"])("drops a late answer after %s", async (how) => {
+    const h = harness();
+    await h.send({ text: QUESTION });
+    const ask = h.rows().at(-1)!;
+    const [source, text] = how === "an edit" ? [ask, "what port is in the client config?"] : [h.rows().at(-2)!, "build the login page"];
+    h.store.branchMessage(h.bot.threadId, source.id, text);
+    const count = h.rows().length;
+    await h.settled();
+    expect(h.rows()).toHaveLength(count);
+    expect(h.steer).not.toHaveBeenCalled();
+  });
+
+  it("drops a handoff after a rewind", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    h.store.branchMessage(h.bot.threadId, h.rows().at(-2)!.id, "build the login page");
+    await h.settled();
+    expect(h.steer).not.toHaveBeenCalled();
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
   });
 
   it.each([true, false])("steers the live note and marks it noted only when taken: %s", async (taken) => {
@@ -232,6 +315,24 @@ describe("quick route", () => {
     await h.send({ text: "and which file is that in?" });
     await vi.waitFor(() => expect(h.ask).toHaveBeenCalledTimes(2));
     expect((h.ask.mock.calls[1] as unknown[])[2]).toMatchObject({ text: "and which file is that in?", notes: expect.stringContaining(`Q: ${QUESTION}\nA: Port 8787.`) });
+  });
+});
+
+describe("boot recovery", () => {
+  it("hands an orphaned ask to its bot once, as an ordinary turn", () => {
+    const store = new Store(() => ({ instanceId: "claude", model: "opus" }));
+    const bot = store.createBot({}, { seedMessages: false });
+    store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "build it" });
+    const answered = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "which branch?", quick: { state: "asked" } });
+    store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "main", quick: { state: "answer", askId: answered.id } });
+    const ask = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: QUESTION, quick: { state: "asked" } });
+    recoverQuickAsks(store);
+    recoverQuickAsks(store);
+    expect(_queuedCount(bot.threadId)).toBe(1);
+    const run = vi.fn();
+    drainSteeredMessages(store, run);
+    expect(run.mock.calls.filter(([botId]) => botId === bot.id)).toEqual([[bot.id, bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]]]);
+    expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
   });
 });
 
