@@ -7,6 +7,7 @@ import { ArrowDownToLine, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
 import { useUpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { useI18n, type Translate } from "@/lib/i18n";
+import { isTransientUpdateError } from "../../shared/update-error.mjs";
 
 // The one action button in the card. Disabled drops the accent fill for the
 // flat raised grey — the "I heard you" the click needs while the main process
@@ -14,17 +15,14 @@ import { useI18n, type Translate } from "@/lib/i18n";
 const primaryAction =
   "flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent py-1.5 text-[13px] font-medium text-accent-ink transition-colors disabled:cursor-default disabled:bg-control disabled:text-ink-secondary";
 
-// electron-updater surfaces failures as a whole HTTP dump — status line,
-// every response header, stack trace. That is unreadable in a 300px popup,
-// so name the two cases that actually happen and clip anything else to its
-// first line.
+// electron-updater surfaces failures as a whole HTTP dump, so name the cases
+// that actually happen and never show the raw text.
 function friendlyError(t: Translate, message?: string): string {
   if (!message) return t("update.genericError");
+  if (isTransientUpdateError(message)) return t("update.unreachable");
   if (/cannot find .*\.yml|404/i.test(message))
     return t("update.nonePublished");
-  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|net::/i.test(message))
-    return t("update.unreachable");
-  return message.split("\n")[0].slice(0, 140);
+  return t("settings.updates.error");
 }
 
 export function UpdateBanner() {
@@ -83,7 +81,7 @@ export function UpdateBanner() {
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-semibold text-ink">{title}</div>
-          <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary" title={subtitle}>
+          <div className="mt-0.5 text-[12.5px] text-ink-secondary">
             {subtitle}
           </div>
         </div>
