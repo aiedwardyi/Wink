@@ -53,7 +53,7 @@ function turnScope(accountNotices: ReturnType<typeof createAccountNotices>, disp
     accountNotices, dispatch, summaryRebuild, store, bot: { id: "atlas" }, threadId: "t1", threadSyncV2: null,
     paneNotes: ["Pane note: ATLAS-1 finished."], paneNoteIds: [], paneTokens: 0, modelContextWindow: 200_000, newestPaneNoteId: "n1",
     mailForTurn: () => [], routineCards: [], recallNotes: [], currentPrompt: "hello", messages: [], skipTranscript: new Set(), task: {},
-    routineCardsSinceLastUserTurn: () => [], quickAnswers: [], quickAnswersSinceLastUserTurn: () => [], replaysTranscript: false, recycleDeferred: false, seed: {}, systemSeed: null,
+    routineCardsSinceLastUserTurn: () => [], quickAnswers: [], closedAsk: [], quickAnswersSinceLastUserTurn: () => [], replaysTranscript: false, recycleDeferred: false, seed: {}, systemSeed: null,
     markMailRead: vi.fn(), markPaneMailRead: vi.fn(),
   };
 }
