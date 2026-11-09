@@ -177,13 +177,18 @@ function winkFallback(color: string | null | undefined): BotAvatarId {
 export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotProps }: BotAvatarProps) {
   const profile = botAvatarProfile(bot);
   const [imageFailed, setImageFailed] = useState(false);
+  const [presetFailed, setPresetFailed] = useState(false);
 
-  useEffect(() => setImageFailed(false), [profile.avatarUrl, profile.mascotStyle]);
+  useEffect(() => {
+    setImageFailed(false);
+    setPresetFailed(false);
+  }, [profile.avatarUrl, profile.mascotStyle]);
 
   const image = profile.avatarCrop !== "mascot" && Boolean(profile.avatarUrl) && !imageFailed;
   // only a stored legacy pick still draws the old mascot
-  const legacy = !image && mascotStyleSchema.safeParse(bot.mascotStyle).success;
-  const icon = isBotAvatarId(profile.mascotStyle) ? profile.mascotStyle : winkFallback(bot.color);
+  const legacy = !image && !imageFailed && mascotStyleSchema.safeParse(bot.mascotStyle).success;
+  const fallback = winkFallback(bot.color);
+  const icon = isBotAvatarId(profile.mascotStyle) && !presetFailed ? profile.mascotStyle : fallback;
   let face: ReactNode;
   if (legacy) {
     face = (
@@ -203,6 +208,7 @@ export function BotAvatar({ bot, size = 44, label, orbitRing = false, ...mascotP
         width={size}
         height={size}
         draggable={false}
+        onError={icon === fallback ? undefined : () => setPresetFailed(true)}
         className="block shrink-0"
         style={{ width: size, height: size }}
       />

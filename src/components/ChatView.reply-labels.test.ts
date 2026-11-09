@@ -176,6 +176,15 @@ describe("ChatView peer reply labels", () => {
     expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
   });
 
+  it("draws the Wink logo, not either bot's avatar, when two bots share the synced peer's name", async () => {
+    const twin = (id: string, avatarUrl: string) => ({ ...bot([]), id, threadId: `thread-${id}`, name: "커맨더", color: "yellow" as const, avatarUrl, avatarCrop: "rounded" as const });
+    const elsewhere = { ...comm, withBotId: "commander-on-home-pc", withName: "커맨더", withColor: "yellow" as const };
+    const synced = exchange().map((message) => message.comm ? { ...message, comm: elsewhere } : message);
+    const { host } = await mount(bot(synced), [twin("one", "/api/attachments/one.png"), twin("two", "/api/attachments/two.png")]);
+    expect(host.querySelector('[data-mid="first reply"] button img')?.getAttribute("src")).toBe("/avatars/icon-34-wink-peach.png");
+    expect(host.querySelector('[data-mid="first reply"] .mascot-avatar')).toBeNull();
+  });
+
   it("translates the reply label into Korean", async () => {
     localStorage.setItem("omb-locale", "ko");
     const { host } = await mount(bot(exchange()));
