@@ -102,12 +102,15 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const sheet = useRef<HTMLElement>(null);
   const sheets = { long: useRef<HTMLElement>(null), knowledge: useRef<HTMLElement>(null), muscle: useRef<HTMLElement>(null) };
   const played = useRef<Partial<Record<Kind, Animation[]>>>({});
+  const loose = useRef<Animation[]>([]);
+  const openNow = useRef<Kind | null>(null);
   const mist = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const panels = { long: useRef<HTMLButtonElement>(null), knowledge: useRef<HTMLButtonElement>(null), muscle: useRef<HTMLButtonElement>(null) };
   // a viewport under the threshold is always stacked, so a phone never lays out the wide map first
   const [stacked, setStacked] = useState(() => typeof window !== "undefined" && window.innerWidth < STACK_BELOW);
   const [open, setOpen] = useState<Kind | null>(null);
+  openNow.current = open;
   const [leaving, setLeaving] = useState<Kind[]>([]);
   const [mistOn, setMistOn] = useState(false);
   const [still, setStill] = useState(false);
@@ -146,6 +149,21 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     return () => observer.disconnect();
   }, []);
 
+  const stop = () => {
+    for (const each of [...Object.values(played.current).flatMap((each) => each ?? []), ...loose.current]) {
+      each.finished.catch(() => undefined);
+      each.cancel();
+    }
+    played.current = {};
+    loose.current = [];
+  };
+
+  // the phone layout unmounts the sheets, so motion kept for them would play on detached nodes
+  useLayoutEffect(() => {
+    if (stacked) setLeaving([]);
+    return stop;
+  }, [stacked]);
+
   const parts = (kind: Kind): OpenParts | null => {
     const card = panels[kind].current, to = sheets[kind].current;
     if (!card || !to) return null;
@@ -158,13 +176,11 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const fade = (to = sheet.current) => (to ? fadePanel({ sheet: to, content: [...to.querySelectorAll<HTMLElement>("[data-mm-content]")] }) : []);
 
   useLayoutEffect(() => {
-    // the phone layout unmounts the sheets, so motion kept for them would play on detached nodes
-    if (stacked) played.current = {};
     if (!open || stacked) return;
     const running = played.current[open];
     if (running) void playOpen(running, true);
     else if (quiet.current) played.current[open] = fade(sheets[open].current);
-    else { const from = parts(open); if (from) played.current[open] = openPanel(from); }
+    else { const from = parts(open); if (from) played.current[open] = openPanel(from, loose.current); }
     quiet.current = false;
     closeButton.current?.focus({ preventScroll: true });
     if (running) return;
@@ -182,7 +198,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     const slots = [...root.current.querySelectorAll<HTMLElement>(".mm-slot")];
     const after: HTMLElement[] = [];
     for (let next = root.current.nextElementSibling; next instanceof HTMLElement; next = next.nextElementSibling) after.push(next);
-    openFold(fold, [...slots.slice(slots.indexOf(slot) + 1), ...after], mist.current);
+    openFold(fold, [...slots.slice(slots.indexOf(slot) + 1), ...after], mist.current, loose.current);
   }, [open, stacked]);
 
   const editingHere = editing && !stacked;
@@ -191,9 +207,9 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
       before.current = text;
       setOpen(null);
       setLeaving([]);
-      played.current = {};
+      stop();
       root.current?.closest(".overflow-y-auto")?.scrollTo({ top: 0 });
-      fade();
+      loose.current.push(...fade());
       sheet.current?.querySelector("textarea")?.focus({ preventScroll: true });
       return;
     }
@@ -220,7 +236,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
       if (!done) return;
       delete played.current[kind];
       setLeaving((was) => was.filter((each) => each !== kind));
-      if (!next) panels[kind].current?.focus({ preventScroll: true });
+      if (!next && !openNow.current) panels[kind].current?.focus({ preventScroll: true });
     });
   };
 
@@ -250,7 +266,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     return () => window.removeEventListener("keydown", onKey, true);
   });
 
-  useEffect(() => { if (!active) { setOpen(null); setLeaving([]); played.current = {}; setFresh(new Set()); } }, [active]);
+  useEffect(() => { if (!active) { setOpen(null); setLeaving([]); stop(); setFresh(new Set()); } }, [active]);
 
   const panel = (kind: Kind, icon: ReactNode, name: string, hint: string, count: number | null, foot: ReactNode, viz: ReactNode, list: ReactNode) => (
     <div className={cn("mm-slot", KINDS[kind].slot)}>

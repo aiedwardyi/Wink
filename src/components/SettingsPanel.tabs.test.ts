@@ -110,6 +110,10 @@ beforeEach(() => {
     addEventListener: () => undefined, removeEventListener: () => undefined,
   }));
   width(392);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ({
+    getExtension: (name: string) => (name === "WEBGL_debug_renderer_info" ? { UNMASKED_RENDERER_WEBGL: 1 } : null),
+    getParameter: () => "NVIDIA GeForce",
+  }) as never);
   Object.defineProperty(window.navigator, "vibrate", { configurable: true, value: vibrate });
   Object.defineProperty(HTMLElement.prototype, "animate", {
     configurable: true,
@@ -451,6 +455,34 @@ describe("Long-Term and Knowledge sheets", () => {
     expect(sheet("knowledge")!.hasAttribute("data-leaving")).toBe(true);
   });
 
+  it("keeps focus on the sheet that opened while the other was still closing", async () => {
+    await wide();
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    await act(async () => fold("knowledge").click());
+    await finishPasses();
+    expect(document.activeElement).toBe(sheet("knowledge")!.querySelector(".mm-close"));
+  });
+
+  it("closes at once under reduced motion, leaving the open's animations alone", async () => {
+    await wide();
+    const swing = passes.find((each) => each.element === sheet("long"))!;
+    reduced = true;
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    await settle();
+    expect(swing.reverse).not.toHaveBeenCalled();
+    expect(sheet("long")).toBeNull();
+    expect(document.activeElement).toBe(fold("long"));
+  });
+
+  it("cancels the open's motion, mist and specks included, when the map unmounts", async () => {
+    await wide();
+    const mine = passes.filter((each) => host.querySelector(".mm")!.contains(each.element));
+    expect(mine.some((each) => each.element.classList.contains("mm-mist"))).toBe(true);
+    expect(mine.some((each) => each.element.classList.contains("mm-specks"))).toBe(true);
+    await act(async () => root.unmount());
+    for (const each of mine) expect(each.cancel).toHaveBeenCalled();
+  });
+
   it("opens Muscle Memory from Long-Term in one click", async () => {
     await wide();
     await act(async () => fold("muscle").click());
@@ -492,6 +524,14 @@ describe("Long-Term and Knowledge sheets", () => {
       await resize(600);
       await resize(1280);
       expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    });
+
+    it("cancels the open's motion, mist and specks included, when the layout turns to phone", async () => {
+      await wideAt();
+      const mine = passes.filter((each) => host.querySelector(".mm")!.contains(each.element));
+      expect(mine.some((each) => each.element.classList.contains("mm-mist"))).toBe(true);
+      await resize(600);
+      for (const each of mine) expect(each.cancel).toHaveBeenCalled();
     });
 
     it("keeps the editor up when a card opened on the phone layout", async () => {
