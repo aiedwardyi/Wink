@@ -135,6 +135,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_USAGE_REPLAY;
     delete process.env.FAKE_CODEX_MESSAGES;
     delete process.env.FAKE_CODEX_NO_INJECT;
+    delete process.env.FAKE_CODEX_ELICIT;
     delete process.env.OPENAI_API_KEY;
     delete process.env.BOX_TOKEN;
     delete process.env.OMB_TTS_KEY;
@@ -981,6 +982,49 @@ describe("CodexDriver turns (fake app-server)", () => {
     await instance.adapter.respondToRequest("t-mcp-elicitation", opened.requestId!, { behavior: "allow" });
     await recorder.until((e) => e.type === "turn.completed");
     expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "accept", content: {} });
+  });
+
+  describe("Wink-owned MCP tools in Ask mode", () => {
+    const stdio = { command: "/wink-mcp", args: [], env: {} };
+    const integrations = {
+      agents: stdio,
+      phone: stdio,
+      browser: stdio,
+      terminal: stdio,
+      composio: stdio,
+      computer: { boxId: "box-1", token: "box-token" },
+    };
+    const elicit = async (target: string, extra: object = {}) => {
+      await create({ mode: "mcp-elicitation" });
+      const dump = join(scratch, "elicit.json");
+      process.env.FAKE_CODEX_DUMP = dump;
+      process.env.FAKE_CODEX_ELICIT = target;
+      await instance.adapter.sendTurn({ threadId: "t-owned", text: "go", approval: "ask", integrations: { ...integrations, ...extra } });
+      return dump;
+    };
+
+    it.each(["agents/update_task_state", "openmausbot_phone/phone_tap", "browser/browser_navigate", "computer/click", "terminal/terminal_read"])(
+      "accepts %s with no card",
+      async (target) => {
+        const dump = await elicit(target);
+        await recorder.until((e) => e.type === "turn.completed");
+        expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
+        expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "accept", content: {} });
+      },
+    );
+
+    it.each([
+      ["github/create_issue", {}],
+      ["openmausbot_connectors/GMAIL_SEND_EMAIL", {}],
+      ["terminal/terminal_type", {}],
+      ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32", scope: "local-computer" } }],
+    ])("still asks for %s", async (target, extra) => {
+      await elicit(target, extra);
+      const opened = await recorder.until((e) => e.type === "request.opened");
+      expect(opened).toMatchObject({ requestType: "permission", tool: target.split("/")[1] });
+      await instance.adapter.respondToRequest("t-owned", opened.requestId!, { behavior: "deny" });
+      await recorder.until((e) => e.type === "turn.completed");
+    });
   });
 
   it("stamps approvalScope on cards only when the turn controls this Mac", async () => {

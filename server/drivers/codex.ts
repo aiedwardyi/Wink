@@ -466,6 +466,14 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // Mac (not a VM), every card carries approvalScope so the harness's
       // local-computer-block backstop applies to remembered always-allows.
       const controlsHost = turn.integrations?.localComputer?.scope === "local-computer";
+      // Wink's own tools Claude pre-allows (claude.ts `allowed`) never card.
+      const preAllowed = new Set([
+        turn.integrations?.agents && "agents",
+        turn.integrations?.phone && "openmausbot_phone",
+        turn.integrations?.browser && "browser",
+        (turn.integrations?.computer || (turn.integrations?.localComputer && !controlsHost)) && "computer",
+        turn.integrations?.terminal && "terminal/terminal_read",
+      ]);
       const handleServerRequest = (msg: any) => {
         const method = msg.method as string;
         const params = msg.params ?? {};
@@ -485,7 +493,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             : isQuestion
               ? "ask_user"
               : "shell";
-        if (config.fullAuto && !isQuestion) {
+        const owned = isMcpElicitation && (preAllowed.has(params.serverName) || preAllowed.has(`${params.serverName}/${mcpTool}`));
+        if ((config.fullAuto && !isQuestion) || owned) {
           return send({
             jsonrpc: "2.0",
             id: msg.id,

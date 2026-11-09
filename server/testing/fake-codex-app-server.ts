@@ -8,6 +8,7 @@
 //                     mcp-elicitation | logged-in-stdout | logged-out | unauthorized
 //                     | bench-quiet (no tool items — latency floor)
 //                     | usage-calls (two model calls: `last` per call, `total` the thread)
+//   FAKE_CODEX_ELICIT  "server/tool" the mcp-elicitation asks about (default agents/list_bots)
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //   FAKE_CODEX_USAGE  JSON array of tokenUsage payloads, one
 //                     thread/tokenUsage/updated per model call of the turn
@@ -279,15 +280,16 @@ process.stdin.on("data", (chunk) => {
           notify("item/started", { item: { id: "w1", type: "webSearch", query: "OpenMausBot" } });
         }
         if (mode === "mcp-elicitation") {
+          const [serverName, tool] = (process.env.FAKE_CODEX_ELICIT ?? "agents/list_bots").split("/");
           out({
             jsonrpc: "2.0",
             id: 101,
             method: "mcpServer/elicitation/request",
             params: {
-              serverName: "agents",
+              serverName,
               mode: "form",
               _meta: { codex_approval_kind: "mcp_tool_call", tool_params: {} },
-              message: 'Allow the agents MCP server to run tool "list_bots"?',
+              message: `Allow the ${serverName} MCP server to run tool "${tool}"?`,
               requestedSchema: { type: "object", properties: {} },
             },
           });
