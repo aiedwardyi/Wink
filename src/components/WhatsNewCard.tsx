@@ -61,12 +61,13 @@ export default function WhatsNewCard({ release, closing, onClose }: { release: s
     void api("/api/whats-new/seen", { method: "POST", body: JSON.stringify({ release }) }).catch(() => {});
   }, [entry, visible, release]);
   useEffect(() => {
+    if (!visible) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, visible]);
   if (!entry) return null;
   return (
     <div className="whats-new-dock">
