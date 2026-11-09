@@ -107,7 +107,7 @@ export function startSelectMode(row: HTMLElement, held: { x: number; y: number }
   const sel = window.getSelection();
   if (word) sel?.setBaseAndExtent(word.node, word.start, word.node, word.end);
   else sel?.selectAllChildren(content);
-  const handles = showSelectHandles(content, copyLabel, () => end());
+  const handles = showSelectHandles(row, content, copyLabel, () => end());
   let firstTouch = true;
   const onDown = (e: Event) => {
     if (handles.owns(e.target)) return;

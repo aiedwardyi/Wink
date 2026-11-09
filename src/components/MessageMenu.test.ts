@@ -63,7 +63,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   localStorage.clear();
   applySkin("precision");
-  Object.assign(document, { caretRangeFromPoint: undefined });
+  Object.assign(document, { caretRangeFromPoint: undefined, caretPositionFromPoint: undefined, execCommand: undefined });
 });
 
 async function mountChat(current: Bot) {
@@ -901,6 +901,53 @@ describe("message menu on touch", () => {
     expect(writeText).toHaveBeenCalledWith("reply");
     expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(false);
     expect(handle("start")).toBeNull();
+  });
+
+  it("falls back to the selection's own copy, and keeps the selection when nothing copied", async () => {
+    stubClipboard().mockRejectedValue(new Error("denied"));
+    const execCommand = vi.fn((_command: string) => false);
+    Object.assign(document, { execCommand });
+    const host = await mountChat(bot([botMsg("b1", "first reply")]));
+    stubTouchScreen();
+    await selectAt(host, "b1", (el) => [textNode(el, "reply"), 8]);
+    const press = () => act(async () => { copyButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+
+    await press();
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(true);
+    expect(window.getSelection()?.toString()).toBe("reply");
+    expect(handle("end")).not.toBeNull();
+
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    execCommand.mockReturnValue(true);
+    await press();
+    expect(row(host, "b1").hasAttribute("data-select-mode")).toBe(false);
+  });
+
+  it("drags with caretPositionFromPoint where caretRangeFromPoint is missing", async () => {
+    const host = await mountChat(bot([botMsg("b1", "hello there friend")]));
+    stubTouchScreen();
+    await selectAt(host, "b1", (el) => [textNode(el, "there"), 7]);
+    const node = textNode(content(host, "b1"), "there");
+    Object.assign(document, { caretRangeFromPoint: undefined, caretPositionFromPoint: () => ({ offsetNode: node, offset: 18 }) });
+    await touch("touchstart", handle("end")!, [[150, 140]]);
+    await touch("touchmove", handle("end")!, [[160, 140]]);
+    expect(window.getSelection()?.toString()).toBe("there friend");
+  });
+
+  it("hit-tests from the grabbed end, not from the finger", async () => {
+    const host = await mountChat(bot([botMsg("b1", "hello there friend")]));
+    stubTouchScreen();
+    const rect = DOMRect.fromRect({ x: 100, y: 100, width: 40, height: 20 });
+    vi.spyOn(Range.prototype, "getClientRects").mockReturnValue(Object.assign([rect], { item: () => rect }));
+    await selectAt(host, "b1", (el) => [textNode(el, "there"), 7]);
+    const caret = stubCaret(() => [textNode(content(host, "b1"), "there"), 18]);
+    await touch("touchstart", handle("end")!, [[150, 140]]);
+    await touch("touchmove", handle("end")!, [[200, 160]]);
+    expect(caret).toHaveBeenLastCalledWith(190, 130);
+    await touch("touchstart", handle("start")!, [[90, 140]]);
+    await touch("touchmove", handle("start")!, [[60, 140]]);
+    expect(caret).toHaveBeenLastCalledWith(70, 110);
   });
 
   it("selects the held Korean word", async () => {

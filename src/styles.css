@@ -4254,7 +4254,7 @@ html[data-orbit-caption="win32"] .orbit-inset-aware {
   background: var(--color-accent);
 }
 [data-select-handle="start"]::after {
-  right: 0;
+  right: var(--grip-shift, 0);
   border-radius: 50% 0 50% 50%;
 }
 [data-select-handle="end"]::after {
