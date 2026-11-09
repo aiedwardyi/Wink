@@ -77,4 +77,9 @@ describe("memoryMap plain lines", () => {
     expect(map.muscle.map((each) => each.fact)).toEqual(["Never reply with recaps or background"]);
     expect(map.longTerm[0]!.at).toEqual(new Date(2026, 10, 8));
   });
+
+  it("keeps #-prose and ignores comment openers, other fence markers and list items inside fences and comments", () => {
+    const text = ["# Memory", "#1 preference is concise answers", "```html", "<!--", "- sample item", "```", "Lives in London", "~~~~", "```", "code line", "~~~~", "Likes tea", "<!--", "- hidden item", "-->", "Ends here"].join("\n");
+    expect(memoryMap(text).longTerm.map((each) => each.fact).sort()).toEqual(["#1 preference is concise answers", "Ends here", "Likes tea", "Lives in London"]);
+  });
 });
