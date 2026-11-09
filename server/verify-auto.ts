@@ -1,6 +1,6 @@
 import { opendir, realpath, stat } from "node:fs/promises";
 import { freemem } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -45,10 +45,15 @@ interface VerifyAutoDeps {
 interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequence: number; checked?: number; names: Map<string, { title: string; readOnly: boolean }> }
 
 const slashed = (path: string) => `/${path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").toLowerCase()}`;
-// A path in the reply must match this file; a bare name proves nothing when two documents share it.
+const REF = /`([^`\n]+)`|(?<!\w)["'“‘]([^\n]+?)["'”’](?!\w)|([^\s"'`“”‘’<>()[\]|*?]+)/g;
+// A whole reference in the reply must fit this file and no other document; quoted spans keep their spaces.
 const named = (reply: string, path: string, docs: string[]) => {
-  const base = basename(path).toLowerCase(), twins = new Set(docs.filter(doc => basename(doc).toLowerCase() === base).map(slashed)).size > 1;
-  return [...reply.matchAll(new RegExp(`(?<![\\w.-])([^\\s"'\`<>()[\\]|*?]*[\\\\/])?${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "gi"))].some(([ref, dir]) => dir ? slashed(path).endsWith(slashed(ref)) : !twins);
+  const keys = [...new Set(docs.map(slashed))];
+  return [...reply.matchAll(REF)].some(([, code, quoted, bare]) => {
+    const ref = slashed((code ?? quoted ?? bare!).trim().replace(/[.,;:!?]+$/, "").replace(/(\.\w+)[^\x00-\x7f]+$/, "$1"));
+    const hits = keys.filter(key => key.endsWith(ref));
+    return hits.length === 1 && hits[0] === slashed(path);
+  });
 };
 
 export async function scanVerifyWrites(root: string, since: number): Promise<string[]> {

@@ -262,6 +262,56 @@ it("matches a named path, not a shared basename, against scanned documents", asy
   expect(docs.mock.lastCall![0].scanned).toEqual(expect.arrayContaining([join(root, "output", "report.docx"), join(root, "personal", "report.docx")]));
 });
 
+it.each(["Saved it to report.docx.", "Saved output/report.docx.", "Saved ./output/report.docx.", "Saved output\\report.docx.", "Saved OUTPUT/Report.DOCX.", "Saved `output/report.docx`.", "report.docx를 저장했어요."])("names a scanned document: %s", async reply => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await mkdir(join(root, "output"));
+  await writeFile(join(root, "output", "report.docx"), "x");
+  shell();
+  await auto.settled({ ...turn, reply });
+  expect(docs).toHaveBeenCalledWith(expect.objectContaining({ paths: [join(root, "output", "report.docx")] }));
+  expect(docs.mock.lastCall![0].scanned).toBeUndefined();
+});
+
+it("keeps a scanned document check-only when the named path fits two documents", async () => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await mkdir(join(root, "a", "output"), { recursive: true });
+  await mkdir(join(root, "b", "output"), { recursive: true });
+  await writeFile(join(root, "a", "output", "report.docx"), "x");
+  await writeFile(join(root, "b", "output", "report.docx"), "x");
+  auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: [join(root, "a", "output", "report.docx")] }));
+  shell();
+  await auto.settled({ ...turn, reply: "Saved `output/report.docx`." });
+  expect(docs).toHaveBeenLastCalledWith(expect.objectContaining({ scanned: [join(root, "b", "output", "report.docx")] }));
+});
+
+it.each(["Saved `Final report.docx`.", "Saved report.docx.pdf."])("does not let a longer name claim a scanned document: %s", async reply => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await writeFile(join(root, "Final report.docx"), "x");
+  await writeFile(join(root, "report.docx"), "x");
+  shell();
+  await auto.settled({ ...turn, reply });
+  expect(docs.mock.lastCall![0].scanned).toContain(join(root, "report.docx"));
+});
+
+it.each([
+  ["absolute, backticks", (path: string) => `Saved to \`${path}\`.`],
+  ["absolute, quotes", (path: string) => `Saved to "${path}".`],
+  ["relative, backticks", () => "Saved to `My Reports/report.docx`."],
+  ["relative backslash, quotes", () => "Saved to 'My Reports\\report.docx'."],
+])("names a scanned document by a path with spaces: %s", async (_, reply) => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await mkdir(join(root, "My Reports"));
+  await writeFile(join(root, "My Reports", "report.docx"), "x");
+  shell();
+  await auto.settled({ ...turn, reply: reply(join(root, "My Reports", "report.docx")) });
+  expect(docs).toHaveBeenCalledWith(expect.objectContaining({ paths: [join(root, "My Reports", "report.docx")] }));
+  expect(docs.mock.lastCall![0].scanned).toBeUndefined();
+});
+
 it("does not hand documents over for an opted-out or failed turn", async () => {
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["script.md"] }));
   await auto.settled({ ...turn, humanText: "Write the script but don't check it" });
