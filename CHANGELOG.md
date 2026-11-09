@@ -2,6 +2,18 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.246] - 2026-11-09
+
+### Changed
+- Settings > Team counts hours only while someone is actually using Wink, not while it sits open.
+- Smoother motion on the newest cards and panels.
+- Bot names show above bot replies on wide-bubble themes.
+
+### Fixed
+- A signed-out account is marked once and skipped for new work until you sign in again.
+- Long-Term Memory shows facts written as plain lines.
+- Round 4 audit fixes.
+
 ## [1.0.245] - 2026-11-09
 
 ### Added
@@ -783,6 +795,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
 [1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245
 [1.0.244]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.244
 [1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
