@@ -1,6 +1,7 @@
 const TAG = /<\/?user\d+>/g;
 const QUOTE = /^(?: {0,3}>[ \t]?)+/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE_END = /^ {0,3}(`{3,}|~{3,})\s*$/;
 const INDENT = /^(?: {4}|\t)/;
 const RUNS = /`+/g;
 
@@ -36,7 +37,8 @@ export function unwrapUserTags(text: string): string {
     const body = line.replace(QUOTE, "");
     const mark = FENCE.exec(body)?.[1];
     if (fence) {
-      if (mark && mark[0] === fence[0] && mark.length >= fence.length) fence = "";
+      const end = FENCE_END.exec(body)?.[1];
+      if (end && end[0] === fence[0] && end.length >= fence.length) fence = "";
       out += line;
     } else if (mark || !body.trim()) {
       fence = mark ?? "";

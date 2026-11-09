@@ -120,40 +120,76 @@ public enum Markdown {
     static func unwrapUserTags(_ text: String) -> String {
         guard text.contains("<user") || text.contains("</user") else { return text }
         let tag = try! NSRegularExpression(pattern: "</?user[0-9]+>")
+        var fence = ""
+        var span = 0
+        var indented = false
+        var blank = true
+
         func strip(_ part: Substring) -> String {
             let part = String(part)
             return tag.stringByReplacingMatches(in: part, range: NSRange(part.startIndex..., in: part), withTemplate: "")
         }
-        func outsideCode(_ line: String) -> String {
+        func isBlank(_ part: Substring) -> Bool { part.allSatisfy { $0 == " " || $0 == "\t" } }
+        func unquoted(_ line: String) -> Substring {
+            var rest = Substring(line)
+            while true {
+                let spaces = rest.prefix(while: { $0 == " " }).count
+                guard spaces <= 3, rest.dropFirst(spaces).first == ">" else { return rest }
+                rest = rest.dropFirst(spaces + 1)
+                if let next = rest.first, next == " " || next == "\t" { rest = rest.dropFirst() }
+            }
+        }
+        func scan(_ line: String) -> String {
             var out = ""
             var rest = Substring(line)
-            while let tick = rest.firstIndex(of: "`") {
-                out += strip(rest[..<tick])
-                let size = rest[tick...].prefix(while: { $0 == "`" }).count
-                var scan = rest.index(tick, offsetBy: size)
-                var end = rest.endIndex
-                while let next = rest[scan...].firstIndex(of: "`") {
-                    let run = rest[next...].prefix(while: { $0 == "`" }).count
-                    scan = rest.index(next, offsetBy: run)
-                    if run == size { end = scan; break }
+            while !rest.isEmpty {
+                if span == 0 {
+                    guard let tick = rest.firstIndex(of: "`") else { out += strip(rest); break }
+                    out += strip(rest[..<tick])
+                    span = rest[tick...].prefix(while: { $0 == "`" }).count
+                    let after = rest.index(tick, offsetBy: span)
+                    out += rest[tick..<after]
+                    rest = rest[after...]
+                } else {
+                    var cursor = rest.startIndex
+                    var close: String.Index?
+                    while let next = rest[cursor...].firstIndex(of: "`") {
+                        let run = rest[next...].prefix(while: { $0 == "`" }).count
+                        cursor = rest.index(next, offsetBy: run)
+                        if run == span { close = cursor; break }
+                    }
+                    guard let end = close else { out += rest; break }
+                    out += rest[..<end]
+                    span = 0
+                    rest = rest[end...]
                 }
-                out += rest[tick..<end]
-                rest = rest[end...]
             }
-            return out + strip(rest)
+            return out
         }
-        var fence: Character?
+
         return text.components(separatedBy: "\n").map { line -> String in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let open = fence {
-                if trimmed.hasPrefix(String(repeating: open, count: 3)) { fence = nil }
+            let body = unquoted(line)
+            let lead = body.prefix(while: { $0 == " " }).count
+            var mark = ""
+            if lead <= 3, let first = body.dropFirst(lead).first, first == "`" || first == "~" {
+                let run = body.dropFirst(lead).prefix(while: { $0 == first }).count
+                if run >= 3 { mark = String(repeating: first, count: run) }
+            }
+            if !fence.isEmpty {
+                if let first = mark.first, first == fence.first, mark.count >= fence.count,
+                   isBlank(body.dropFirst(lead + mark.count)) { fence = "" }
                 return line
             }
-            if let first = trimmed.first, first == "`" || first == "~", trimmed.hasPrefix(String(repeating: first, count: 3)) {
-                fence = first
+            if !mark.isEmpty || isBlank(body) {
+                fence = mark
+                span = 0
+                indented = false
+                blank = mark.isEmpty
                 return line
             }
-            return outsideCode(line)
+            indented = (body.hasPrefix("    ") || body.hasPrefix("\t")) && (blank || indented)
+            blank = false
+            return indented ? line : scan(line)
         }.joined(separator: "\n")
     }
 
