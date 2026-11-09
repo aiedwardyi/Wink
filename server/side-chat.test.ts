@@ -512,6 +512,17 @@ describe("Claude fork (fake CLI)", () => {
     expect(Object.keys(settings.hooks)).toEqual(["PreToolUse"]);
   });
 
+  it("returns no fork once the main session closed", async () => {
+    process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+    await mainTurn("t-closed");
+    await vi.waitFor(() => expect(existsSync(process.env.FAKE_CLAUDE_PROMPT_LOG!)).toBe(true));
+    const [main] = prompts();
+    await instance.adapter.stopAll();
+    await vi.waitFor(() => expect(alive(main!.pid)).toBe(false));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(instance.fork!({ threadId: "t-closed", text: "q" })).toBeNull();
+  });
+
   it("returns no fork before the thread ever spawned", () => {
     expect(instance.fork!({ threadId: "never", text: "q" })).toBeNull();
   });

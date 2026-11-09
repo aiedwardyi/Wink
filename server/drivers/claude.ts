@@ -1912,7 +1912,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
           } catch {}
         }
-        if (sessions.get(threadId) === session) sessions.delete(threadId);
+        if (sessions.get(threadId) === session) {
+          sessions.delete(threadId);
+          lastSpawn.delete(threadId);
+        }
       });
 
       const stop = () => {
