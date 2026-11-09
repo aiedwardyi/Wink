@@ -19,15 +19,24 @@ const ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
 const NOTED = /\s+\(noted (\d{4})-(\d{2})-(\d{2})\)\s*$/;
 // a line that points at a topic file belongs to Knowledge, not to the facts
 const LINK = /^\[[^\]]+\]\([^)]+\)/;
+// structure a plain line must not be: heading, table row, rule
+const STRUCTURE = /^(?:#|\||[-*_]{3,}$)/;
 // rules for how the bot should act, the habits a user's corrections leave behind
 const MUSCLE = /^(?:feedback\b|when you\b|wants the bot\b|never\b|always\b|don'?t\b|do not\b|before\b)/i;
 
 const newestFirst = (a: MemoryFact, b: MemoryFact) => (b.at?.getTime() ?? 0) - (a.at?.getTime() ?? 0);
 
 export function memoryMap(text: string, messages: readonly Message[] = []): MemoryMapData {
+  let fenced = false;
+  let commented = false;
   const facts = text.split("\n").flatMap((raw) => {
     const line = raw.trimEnd();
-    if (!ITEM.test(line)) return [];
+    const bare = line.trim();
+    const fence = /^(?:```|~~~)/.test(bare);
+    if (fence) fenced = !fenced;
+    const comment = commented || bare.startsWith("<!--");
+    if (comment) commented = !bare.includes("-->");
+    if (!ITEM.test(line) && (!bare || fence || fenced || comment || STRUCTURE.test(bare))) return [];
     const fact = memoryLineText(line).replace(/`/g, "");
     if (!fact || LINK.test(fact)) return [];
     const stamp = NOTED.exec(line);
