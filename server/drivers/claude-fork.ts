@@ -66,7 +66,7 @@ export function forkClaude(spawn: ClaudeSpawn, input: SideInput): SideHandle {
     const hook = { matcher: "*", hooks: [{ type: "command", command }] };
     const settingsAt = args.indexOf("--settings");
     const settings = settingsAt === -1 ? {} : JSON.parse(args[settingsAt + 1]!);
-    const merged = JSON.stringify({ ...settings, hooks: { ...settings.hooks, PreToolUse: [...(settings.hooks?.PreToolUse ?? []), hook] } });
+    const merged = JSON.stringify({ ...settings, hooks: { PreToolUse: [hook] } });
     if (settingsAt === -1) args.push("--settings", merged);
     else args[settingsAt + 1] = merged;
     args.push("--resume", spawn.cursor, "--fork-session", "--no-session-persistence");

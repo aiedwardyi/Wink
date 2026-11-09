@@ -48,7 +48,7 @@ export function accountLaunch(
       if (settings !== undefined) {
         let value;
         try { value = JSON.parse(settings); } catch { throw new Error("Conflicting account settings"); }
-        if (!value || typeof value !== "object" || Object.keys(value).some((key) => key !== "permissions" && key !== "sandbox")) throw new Error("Conflicting account settings");
+        if (!value || typeof value !== "object" || Object.keys(value).some((key) => key !== "permissions" && key !== "sandbox" && key !== "hooks")) throw new Error("Conflicting account settings");
       }
     }
     env.CLAUDE_CONFIG_DIR = account.home;

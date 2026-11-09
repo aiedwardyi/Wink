@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DATA_DIR, ensureDirs } from "./config.ts";
 import type { ProviderInstance, SideEvent, SideHandle, SideInput } from "./contracts.ts";
 import { ClaudeDriver } from "./drivers/claude.ts";
+import { forkClaude } from "./drivers/claude-fork.ts";
 import { EventBus } from "./harness/bus.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { quickAsk, sideIdle, sweepSide } from "./side-chat.ts";
@@ -473,6 +474,31 @@ describe("Claude fork (fake CLI)", () => {
     await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
     await handle.close(5_000);
     expect(prompts().find((line) => line.argv.includes("--fork-session"))!.text).toBe("[LIVE]\n\nq");
+  });
+
+  const forkOf = (settings: object, policy: Parameters<typeof forkClaude>[0]["policy"] = {}) => {
+    process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+    process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Port 8080.");
+    return forkClaude({ cli: FAKE_CLI, args: ["-p", "--settings", JSON.stringify(settings)], mcpServers: {}, cwd: work, env: { ...process.env }, policy, cursor: "s-main" }, { threadId: "t", text: "q" });
+  };
+  const settled = async (handle: SideHandle) => {
+    await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
+    await handle.close(5_000);
+    const argv = prompts().find((line) => line.argv.includes("--fork-session"))!.argv;
+    return JSON.parse(argv[argv.indexOf("--settings") + 1]!);
+  };
+
+  it("keeps only the side hook in the fork's settings", async () => {
+    const other = [{ hooks: [{ type: "command", command: "notify" }] }];
+    const settings = await settled(forkOf({ permissions: { ask: ["Bash"] }, hooks: { SessionStart: other, PreToolUse: other, Stop: other } }));
+    expect(settings.permissions).toEqual({ ask: ["Bash"] });
+    expect(settings.hooks).toEqual({ PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: expect.stringContaining("side-hook.cjs") }] }] });
+  });
+
+  it("forks an account bot's thread", async () => {
+    const account = { id: "acct_7d6e234b-8046-4a5a-9354-2cf05f27d775", of: "claude", home: join(scratch, "account"), generation: 1 };
+    const settings = await settled(forkOf({ permissions: { ask: ["Bash"] } }, { account, accountDriver: "claudeAgent" }));
+    expect(Object.keys(settings.hooks)).toEqual(["PreToolUse"]);
   });
 
   it("returns no fork before the thread ever spawned", () => {
