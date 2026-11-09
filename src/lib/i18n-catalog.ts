@@ -1255,6 +1255,9 @@ export const en = {
   "update.checking": "Checking for updates…",
   "update.upToDate": "You're up to date",
   "update.dismiss": "Dismiss update notice",
+  "whatsNew.close": "Close what's new",
+  "whatsNew.gotIt": "Got it",
+  "whatsNew.showMe": "Show me",
   "update.later": "Later",
   "update.download": "Download",
 
@@ -2825,6 +2828,9 @@ export const ko = {
   "update.checking": "업데이트를 확인하는 중…",
   "update.upToDate": "최신 버전입니다",
   "update.dismiss": "업데이트 알림 닫기",
+  "whatsNew.close": "새 기능 닫기",
+  "whatsNew.gotIt": "확인",
+  "whatsNew.showMe": "바로 보기",
   "update.later": "나중에",
   "update.download": "다운로드",
 

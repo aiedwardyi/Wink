@@ -1680,7 +1680,7 @@ describe("Sidebar group avatar slot", () => {
         expect(element).not.toBeNull();
         return element!;
       });
-      const faces = [...slot.querySelectorAll<HTMLElement>(".mascot-avatar")].map((face) => parseFloat(face.style.width));
+      const faces = [...slot.querySelectorAll<HTMLElement>("img")].map((face) => parseFloat(face.style.width));
       const badge = slot.querySelector("[data-sidebar-group-overflow]") ? 22 : 0;
       const overlap = 12;
       const stack = [...faces, ...(badge ? [badge] : [])];

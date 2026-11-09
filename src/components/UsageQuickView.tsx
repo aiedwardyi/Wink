@@ -1,7 +1,7 @@
 // The compact desk for one chat's engine, grown out of the line that opened it.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, X } from "lucide-react";
+import { ChevronRight, RefreshCw, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { localeTag, useI18n } from "@/lib/i18n";
 import { EASE_ENTRANCE, MOTION_FAST_MS } from "@/lib/motion";
@@ -14,7 +14,7 @@ import { useIsPhone } from "@/lib/use-phone-swipe";
 import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
-import { useAutoRefresh } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useAutoRefresh, useRefreshPending } from "@/lib/usage-auto-refresh";
 import { ProviderMark } from "./ProviderIcons";
 import { AccountGroup, AccountRow, ENGINE_DRIVER, engineName, Hero, type Clock } from "./UsageDesk";
 import { usageAccounts } from "./usage-layout";
@@ -95,6 +95,18 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const checked = checkedMain(state, engine.base);
   const drag = useUsageDrag([engine]);
   const accountOrder = drag.orders[engine.base];
+  const shown = new Set(usageAccounts(engine).map((each) => each.id));
+  const refreshing = [...useRefreshPending()].some((id) => shown.has(id));
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [museAuthFailed, setMuseAuthFailed] = useState(false);
+
+  const refresh = async () => {
+    setRefreshFailed(false);
+    setMuseAuthFailed(false);
+    const outcome = await refreshUsage(store.instances, board, dispatch, shown);
+    setMuseAuthFailed(outcome.museAuthFailed);
+    setRefreshFailed(outcome.failed);
+  };
 
   const close = (focus = true) => {
     onClose();
@@ -168,6 +180,13 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
       <X size={15} aria-hidden="true" />
     </button>
   );
+  const buttons = <>
+    <button type="button" data-usage-refresh="" disabled={refreshing} aria-busy={refreshing} aria-label={t("usage.desk.refresh")} title={t("usage.desk.refresh")} onClick={() => void refresh()}
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] [corner-shape:bevel] text-ink-secondary hover:bg-raised-hover [@media(pointer:coarse)]:size-11">
+      <RefreshCw size={14} aria-hidden="true" className={cn(refreshing && "motion-safe:animate-spin")} />
+    </button>
+    {closeButton}
+  </>;
   return createPortal(
     <>
       {phone && <div aria-hidden="true" data-closing={closing || undefined} inert={closing || undefined} className="animate-fade-in fixed inset-x-0 top-0 z-50 bg-black/45" style={{ bottom: spot.dimBottom }} />}
@@ -178,7 +197,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
         {!tight && <div className="flex shrink-0 items-center gap-2 py-1 pl-4 pr-1.5">
           <span data-engine-mark="" className={cn("flex shrink-0", terminal && "usage-glyphs w-[3ch] text-[12px]")}><ProviderMark driverKind={ENGINE_DRIVER[engine.engine] ?? engine.engine} size={16} /></span>
           <span data-engine-name="" className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{engineName(engine.engine)}</span>
-          {closeButton}
+          {buttons}
         </div>}
         <div data-quick-scroll="" data-usage-engine={engine.engine} data-usage-base={engine.base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
           {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={ordered(engine.accounts, accountOrder, (each) => each.id)} select={setViewedId} foldChart
@@ -188,6 +207,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
               terminal={terminal} clock={clock} reloadInstances={() => refreshInstances()} signIn={() => settings("connections")} />)}
           </AccountGroup>
           {state.failed.has(engine.base) && <div role="alert" className="text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+          {refreshFailed && <div role="alert" className="text-[12px] text-danger">{t(museAuthFailed ? "usage.desk.museSignIn" : "usage.desk.refreshFailed")}</div>}
         </div>
         <div className="flex shrink-0 items-center border-t border-hairline/50">
           <button type="button" data-all-usage="" onClick={() => settings("usage")}
@@ -197,7 +217,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
             {phone ? <ChevronRight size={16} aria-hidden="true" className="-mr-1 text-ink-secondary" />
               : <kbd className="usage-num rounded-[3px] border border-hairline px-1.5 py-0.5 font-sans text-[10.5px] leading-none text-ink-secondary">Alt U</kbd>}
           </button>
-          {tight && <span className="flex shrink-0 border-l border-hairline/50 px-0.5">{closeButton}</span>}
+          {tight && <span className="flex shrink-0 border-l border-hairline/50 px-0.5">{buttons}</span>}
         </div>
       </div>
     </>,

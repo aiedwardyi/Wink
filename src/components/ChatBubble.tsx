@@ -406,7 +406,7 @@ const Bubble = memo(function Bubble({
         className="relative w-fit max-w-[min(42rem,78%)] pb-8"
         style={dock?.wrap && !hasReactions ? { paddingBottom: "2.5rem" } : undefined}
       >
-        <div className="orbit-message-speaker hidden">{user ? (message.from?.name ?? t("chat.you")) : botName}</div>
+        {!user && <div className="orbit-message-speaker hidden">{botName}</div>}
         {user && !message.placeholder && (
           <div
             data-message-hover-actions

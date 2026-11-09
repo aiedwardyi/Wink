@@ -109,6 +109,7 @@ import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
+import { WhatsNewSlot } from "./WhatsNew";
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -310,11 +311,17 @@ const ActivityChip = memo(function ActivityChip({ message, notices, bot }: { mes
   );
 }, (a, b) => a.message === b.message && a.bot === b.bot && sameNotices(a.notices, b.notices));
 
+/** A row synced from another PC names the peer by that PC's bot id; the name still finds it here. */
+export function commPeer(bots: readonly Bot[], comm: NonNullable<Message["comm"]>): Bot | undefined {
+  const named = bots.filter((bot) => bot.name === comm.withName);
+  return bots.find((bot) => bot.id === comm.withBotId) ?? (named.length === 1 ? named[0] : undefined);
+}
+
 /** bot⇄bot comm chip: opens the channel where the exchange lives. */
 function CommChip({ message, comm }: { message: Message; comm: NonNullable<Message["comm"]> }) {
   const { dispatch, state } = useStore();
   const { t } = useI18n();
-  const peer = state.bots.find((bot) => bot.id === comm.withBotId);
+  const peer = commPeer(state.bots, comm);
   const chip = (
     <div className="flex justify-start">
       <button
@@ -1736,6 +1743,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             workers={rowWorkers}
             livePanes={livePanes}
           />
+          <WhatsNewSlot hidden={hidden} />
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button

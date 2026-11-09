@@ -8,6 +8,7 @@
 //                     mcp-elicitation | logged-in-stdout | logged-out | unauthorized
 //                     | bench-quiet (no tool items — latency floor)
 //                     | usage-calls (two model calls: `last` per call, `total` the thread)
+//                     | approval-pair (two approvals in one stdout chunk, then exits)
 //   FAKE_CODEX_ELICIT  "server/tool" the mcp-elicitation asks about (default agents/list_bots)
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //   FAKE_CODEX_USAGE  JSON array of tokenUsage payloads, one
@@ -293,6 +294,10 @@ process.stdin.on("data", (chunk) => {
               requestedSchema: { type: "object", properties: {} },
             },
           });
+        } else if (mode === "approval-pair") {
+          const ask = (id: number) => JSON.stringify({ jsonrpc: "2.0", id, method: "execCommandApproval", params: { command: "rm -rf scratch" } });
+          writeSync(1, `${ask(100)}\n${ask(101)}\n`);
+          process.exit(0);
         } else if (mode === "approval" || mode === "windows-command") {
           const approvalCommand = mode === "windows-command" ? command : "rm -rf scratch";
           out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: approvalCommand } });

@@ -1,4 +1,7 @@
 import "./ProfileFields.test-dom.ts";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -444,6 +447,15 @@ describe("ModelDial", () => {
       expect(vertical()).toBe(true);
       expect(parseFloat(stage().getPropertyValue("--pw"))).toBeLessThanOrEqual(480);
       expect(floor()).toBeCloseTo(12);
+    });
+
+    it("runs the scene to the window's edges past the capped vertical stage", async () => {
+      mouse(800, 900);
+      await mount();
+      expect(parseFloat(stage().getPropertyValue("--pw")) * Number(stage().zoom)).toBeLessThan(800);
+      const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ModelDial.css"), "utf8");
+      expect(css).toMatch(/\.dial-stage\[data-phone\] \{[^}]*overflow: visible; clip-path: inset\(0 -100vw\)/);
+      expect(css).toMatch(/\.dial-stage\[data-phone\] \.dial-scene \{[^}]*left: -100vw; right: -100vw/);
     });
 
     it("turns models with a mouse drag when narrow", async () => {

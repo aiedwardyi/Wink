@@ -1,5 +1,10 @@
 // Quick answers: while a bot works, a short question goes to its read-only helper first.
 // The helper's answer lands as a row under the ask; a HANDOFF goes down today's busy path.
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { writeFileAtomic } from "./atomic.ts";
+import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
@@ -15,6 +20,9 @@ const NOTE_HEAD =
   "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you.]";
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
+const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
+// engines that passed the real-engine accuracy bar
+const QUICK_ENGINES: ReadonlySet<string> = new Set(["claudeAgent"]);
 
 export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
 
@@ -39,7 +47,8 @@ export function routesQuick(gate: QuickGate): boolean {
   const { bot, threadId } = gate;
   if (!bot.busy || bot.threadId !== threadId || (bot.activeThreadId ?? threadId) !== threadId) return false;
   if (gate.deliverAfter || gate.replyTo || gate.queueId || gate.room || !gate.accountReady) return false;
-  if (!gate.instance?.fork && !gate.instance?.generateText) return false;
+  if (!gate.instance || !QUICK_ENGINES.has(gate.instance.driverKind)) return false;
+  if (!gate.instance.fork && !gate.instance.generateText) return false;
   if (gate.messages.some(openAsk)) return false;
   return nominate(gate.text) === "quick";
 }
@@ -79,7 +88,7 @@ export interface QuickDeps {
 type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage">;
 
 /** Still on the active path with its text and not yet handed to the bot; an edit or rewind drops it on purpose. */
-const pending = (store: Pick<Store, "activePath">, threadId: string, ask: Message) =>
+export const pending = (store: Pick<Store, "activePath">, threadId: string, ask: Message) =>
   store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && !row.steered && row.quick?.state !== "handoff");
 
 /** The ask as the bot's ordinary next turn in its own thread, else the failed-send row. */
@@ -94,13 +103,84 @@ function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message
   }
 }
 
+// Asks a Stop handed back, by id since an ask need not carry a sendId; only a late answer still lands.
+const stopped = new Set<string>();
+export const askStopped = (ask: Message) => stopped.has(ask.id);
+
+/** A recorded steer the engine dropped later goes once to the queue in its own thread. */
+export function requeueDroppedAsk(store: AskStore, botId: string, threadId: string, ask: Message, drain: () => void): void {
+  if (stopped.has(ask.id) || !store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && row.steered && row.quick?.state === "handoff")) return;
+  store.patchMessage(threadId, ask.id, { steered: undefined });
+  queueAsk(store, botId, threadId, ask);
+  drain();
+}
+
+// Asks whose job is running, so a restart finds the ones left in another task without reading every thread.
+const running = new Map<string, { botId: string; threadId: string }>();
+let saving = false;
+
+function saveRunning(): void {
+  if (saving) return;
+  saving = true;
+  // after the send's response, one write per tick
+  setImmediate(() => {
+    saving = false;
+    try {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileAtomic(INDEX_FILE, JSON.stringify([...running.values()]), { mode: 0o600 });
+    } catch (error) {
+      console.warn(`[quick] could not save running asks: ${error}`.replace(/\s+/g, " "));
+    }
+  });
+}
+
+export function trackQuickAsk(botId: string, threadId: string, askId: string): () => void {
+  running.set(askId, { botId, threadId });
+  saveRunning();
+  return () => {
+    if (running.delete(askId)) saveRunning();
+  };
+}
+
+function savedThreads(): Array<{ botId: string; threadId: string }> {
+  try {
+    const rows: unknown = JSON.parse(readFileSync(INDEX_FILE, "utf8"));
+    return Array.isArray(rows) ? rows.filter((row) => typeof row?.botId === "string" && typeof row?.threadId === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Stop: no ask of this bot starts a turn or a queue later, even after a restart. */
+export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, botId: string, threadIds: string[]): void {
+  const threads = new Set(threadIds);
+  for (const ask of running.values()) if (ask.botId === botId) threads.add(ask.threadId);
+  for (const threadId of threads) {
+    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
+    const path = store.activePath(threadId);
+    let turn = true;
+    for (let index = path.length - 1; index >= 0; index--) {
+      const row = path[index]!;
+      if (endsNoteWindow(row)) turn = false;
+      if (row.quick?.state === "asked" && !answered.has(row.id)) {
+        stopped.add(row.id);
+        // a stopped ask reads as handed off, so it is neither pending nor recovered
+        store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
+      } else if (turn && row.steered && row.quick?.state === "handoff") stopped.add(row.id);
+    }
+  }
+}
+
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
-export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor">): void {
-  // Asks only start in the open chat; other tasks stay unread so boot loads no extra threads.
-  for (const { id, threadId } of store.bots) {
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+  // the open chats plus the threads of asks still running at shutdown; no other thread is read
+  const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
+  for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
+  for (const [threadId, id] of threads) {
     const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
     for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
   }
+  saveRunning();
 }
 
 async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message): Promise<QuickResult> {
@@ -124,7 +204,9 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const instance = bot ? deps.instance(bot, threadId) : null;
   const result: QuickResult = instance ? await askHelper(deps, instance, botId, threadId, ask) : { route: "handoff", ms: 0 };
   const current = store.bot(botId);
-  if (!current || !pending(store, threadId, ask)) return;
+  // a stopped ask still takes its late answer; one handed to the bot any other way is the bot's
+  const live = stopped.has(ask.id) ? store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text) : pending(store, threadId, ask);
+  if (!current || !live) return;
   if (result.route === "handoff" || !result.text) {
     // A turn can end or be claimed under a try; the second takes the idle or queue path.
     for (let tries = 0; tries < 2 && pending(store, threadId, ask); tries++) {

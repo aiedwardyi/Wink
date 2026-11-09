@@ -148,10 +148,11 @@ function WorkerEntries({ runs, livePanes, onOpenTerminalPane, onClose, inset, ni
   return (
     // The sheet's list spans its padding, so a phone's overlay scrollbar paints there instead of over the status.
     <ul
-      className={cn("min-h-0 overflow-y-auto", !inset && "-mx-5 px-5 overscroll-y-contain touch-[pan-up_pinch-zoom]")}
+      className={cn("min-h-0 overflow-y-auto", !inset && "-mx-5 px-5 overscroll-y-contain touch-pan-down touch-pinch-zoom")}
       onScroll={!inset ? (event) => {
         // Set this before the next touch starts; changing it during a gesture is too late.
-        event.currentTarget.style.touchAction = event.currentTarget.scrollTop > 0 ? "pan-y pinch-zoom" : "pan-up pinch-zoom";
+        // pan-down names the scroll, not the finger: it lets a finger move up only.
+        event.currentTarget.style.touchAction = event.currentTarget.scrollTop > 0 ? "pan-y pinch-zoom" : "pan-down pinch-zoom";
       } : undefined}
     >
       {runs.map((shown) => {

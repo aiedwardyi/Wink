@@ -199,6 +199,57 @@ describe("Usage auto refresh", () => {
     anchor.remove();
   });
 
+  describe("quick view refresh button", () => {
+    const board = structuredClone(usageBoardFixture);
+    let anchor: HTMLButtonElement;
+    const quick = (failed = new Set<string>()) => createElement(UsageQuickView, { engine: board.engines[0]!, account: board.engines[0]!.accounts[0]!, board,
+      state: { board, status: "ready", pending: {}, failed }, anchor: { current: anchor }, onClose: () => {} });
+    const button = () => document.body.querySelector<HTMLButtonElement>("[data-usage-refresh]");
+    const fresh = () => {
+      mockState.instances = [
+        engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(1)) }),
+        engine("codex", "codex", "Codex", { rateLimits: reading(minutesAgo(1)) }),
+      ];
+    };
+    beforeEach(() => { anchor = document.body.appendChild(document.createElement("button")); fresh(); });
+    afterEach(() => anchor.remove());
+
+    it("sits left of Close and refreshes this engine's accounts even when fresh", async () => {
+      await open(quick());
+      expect(refreshed()).toEqual([]);
+      const close = document.body.querySelector("[data-quick-close]")!;
+      expect(button()).not.toBeNull();
+      expect(button()!.nextElementSibling).toBe(close);
+      expect(button()!.getAttribute("aria-label")).toBe("Refresh");
+      await act(async () => { button()!.click(); });
+      expect(refreshed()).toEqual(["/api/usage/refresh/claude"]);
+    });
+
+    it("spins and disables while a refresh is pending, then stops", async () => {
+      await open(quick());
+      await act(async () => { button()!.click(); });
+      expect(button()!.disabled).toBe(true);
+      expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
+      await act(async () => { settle("/api/usage/refresh/claude", "ok"); });
+      expect(button()!.disabled).toBe(false);
+      expect(button()!.querySelector("svg[class*='animate-spin']")).toBeNull();
+    });
+
+    it("spins for the automatic refresh on open", async () => {
+      mockState.instances = [engine("claude", "claudeAgent", "Claude", { rateLimits: reading(minutesAgo(6)) })];
+      await open(quick());
+      expect(button()!.querySelector("svg[class*='animate-spin']")).not.toBeNull();
+    });
+
+    it("shows the failure line and keeps the old reading", async () => {
+      await open(quick());
+      await act(async () => { button()!.click(); });
+      await act(async () => { settle("/api/usage/refresh/claude", "fail"); });
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toBe("Could not refresh usage. Try again.");
+      expect(mockState.instances[0]!.rateLimits).toBeDefined();
+    });
+  });
+
   it("checks again when accounts hydrate late and when the tab becomes visible, never while hidden", async () => {
     const real = mockState.instances;
     mockState.instances = real.map((instance) => ({ ...instance, snapshot: { state: "unavailable" as const, authenticated: false } }));

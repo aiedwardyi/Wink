@@ -1,5 +1,6 @@
 import { VERIFY_LIMITS, type VerifyCardData, type VerifyCardStatus, type VerifyChecker, type VerifyCounts, type VerifyErrorCode, type VerifyIssue, type VerifyResult, type VerifyTile } from "../shared/live-verify.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { docCardText, redactVerifyDoc } from "./verify-doc-card.ts";
 
 const STATUSES = new Set<VerifyCardStatus>(["offered", "waiting", "preparing", "running", "completed", "skipped", "blocked", "stale"]);
 const CHECKERS = new Set<VerifyChecker>(["TEXT_A", "TEXT_B", "HEADINGS", "LINKS", "FONT", "CONTRAST", "BUTTONS", "NAV", "CLICK", "FORM", "FIT", "PAGE_ERRORS"]);
@@ -76,6 +77,8 @@ export function redactVerifyCard(value: unknown): VerifyCardData | undefined {
   if (time(value.endedAt)) out.endedAt = value.endedAt as number;
   if (value.live === true) out.live = true;
   if (Array.isArray(value.replay)) out.replay = value.replay.filter((id): id is string => typeof id === "string" && /^[a-z0-9-]{8,64}$/.test(id)).slice(-3);
+  const doc = redactVerifyDoc(value.doc);
+  if (doc) out.doc = doc;
   return out;
 }
 
@@ -113,6 +116,7 @@ export function verifyReplyText(status: VerifyCardStatus, _site: string, detail:
 
 /** The card's plain-text summary, for transcripts and model context. */
 export function verifyCardText(card: VerifyCardData): string {
+  if (card.doc) return docCardText(card);
   if (card.status === "waiting") return "Waiting for another check.";
   if (card.status === "offered") return card.errorCode === "needs-approval"
     ? `Live Verify for ${card.site} is waiting for your OK.`

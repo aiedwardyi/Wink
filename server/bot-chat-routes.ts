@@ -4,6 +4,7 @@ import { credentialIsConfigured, credentialResumeOutcome } from "../shared/crede
 import { isCompletedTaskRecord } from "../shared/task-resume.ts";
 import { canSwitchWhileWorking, runThread, workingThreadId } from "../shared/working-thread.ts";
 import { sameModelSelection } from "../shared/model-selection.ts";
+import { closedAskNotes } from "./ask-user.ts";
 import * as composio from "./composio.ts";
 import type { AppConfig } from "./config.ts";
 import type { ProviderInstance, RequestOutcome } from "./contracts.ts";
@@ -12,7 +13,7 @@ import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
-import { answerQuick, routesQuick, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
+import { answerQuick, askStopped, cancelQuickAsks, pending, requeueDroppedAsk, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -140,6 +141,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
   ) => {
     let steered = false;
     let dropped = false;
+    let recorded = false;
     let peerInput: ReturnType<typeof beginPeerUserReply>;
     if (steersSend(adapter, bot.busy, after)) {
       const turnOpts = {
@@ -151,12 +153,17 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       // Reactions count only once the model took them in; an engine
       // that cannot tell leaves them to the next turn's prompt.
       const consumable = adapter.capabilities.steerConsumed === true;
-      const prompt = consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName);
+      const prompt = [
+        ...closedAskNotes(turnOpts.messages, text, ask?.id),
+        consumable ? composeUserTurnPrompt(text, turnOpts) : promptWithReply(text, replyTo, turnOpts.userName),
+      ].join("\n\n");
       peerInput = beginPeerUserReply(bot.id, threadId, prompt);
       const reactions = consumable ? userTurnReactionKeys(turnOpts) : [];
       steered = await adapter
         .steer(threadId, peerInput?.prompt ?? prompt, (taken) => {
           if (taken) store.addReactionsDelivered(bot.id, threadId, reactions);
+          // a drop after the ask was recorded as delivered goes once down the queue
+          else if (ask && recorded) requeueDroppedAsk(store, bot.id, threadId, ask, drainQueuedSends);
           else dropped = true;
         }, { fromUser: true, peerTurn: hasPeerWatch(threadId) })
         .catch(() => false);
@@ -181,7 +188,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       });
     }
     // a Stop during the steer await already handed a Send now back
-    if (sendId && isSendCancelled(sendId)) return { ok: true as const, cancelled: true as const, threadId };
+    if (isSendCancelled(sendId) || (ask && askStopped(ask))) return { ok: true as const, cancelled: true as const, threadId };
     if (steered) {
       // an ask the engine accepted counts as delivered: a replay would answer it twice
       if (!current.busy && !ask) {
@@ -194,6 +201,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       resumePaneWakes(current.id);
       // the user joined this turn, so its finish alerts
       paneNoteTurnThreads.delete(threadId);
+      recorded = true;
       const message = ask
         ? store.patchMessage(threadId, ask.id, { steered: true, quick: { state: "handoff" } }) ?? ask
         : store.appendMessage(threadId, {
@@ -209,6 +217,8 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       markChatLatency({ sendId, threadId, userMessageId: message.id }, "queue.decided");
       return { ok: true as const, steered: true as const, threadId, message };
     }
+    // an edit or rewind during the steer await drops the ask
+    if (ask && !pending(store, threadId, ask)) return { ok: true as const, cancelled: true as const, threadId };
     cancelUsageWait?.(bot.id);
     if (!current.busy && !botHasActiveTurn(bot.id, threadId)) {
       // an idle bot takes the ask as an ordinary turn
@@ -232,6 +242,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
   };
   const startQuick = (quick: QuickRouting, botId: string, threadId: string, ask: Message) => {
+    const settle = trackQuickAsk(botId, threadId, ask.id);
     void answerQuick({
       store, instance: instanceForBot, ask: quick.ask, userName: cfg.profile?.name?.trim() || "User", usage: quick.usage,
       handoff: async (row) => {
@@ -240,7 +251,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         await deliverBusy(current, threadId, row.text ?? "", { adapter: instanceForBot(current, threadId)?.adapter, after: false, ask: row });
       },
       drain: drainQueuedSends,
-    }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`));
+    }, botId, threadId, ask).catch((error) => console.warn(`[quick] ask failed: ${error instanceof Error ? error.message : String(error)}`)).finally(settle);
   };
   return {
     cancelUsageWait: (res: ServerResponse, m: RegExpMatchArray) => {
@@ -502,6 +513,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         taskResumes.forgetBot(bot.id);
         cancelPeerUserReplies(bot.id);
         const returned = cancelQueuedSends(bot.id);
+        cancelQuickAsks(store, bot.id, [bot.threadId, runThread(routineRun) ?? bot.threadId]);
         if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
         store.patchBot(bot.id, { paneWakePaused: true });
         // a turn still preparing has no session to interrupt yet
@@ -530,6 +542,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       taskResumes.forgetBot(bot.id);
       cancelPeerUserReplies(bot.id);
       const returned = cancelQueuedSends(bot.id);
+      cancelQuickAsks(store, bot.id, [bot.threadId, bot.activeThreadId ?? bot.threadId]);
       if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
       store.patchBot(bot.id, { paneWakePaused: true });
       const stoppedThreadId = busyGroup?.threadId ?? bot.activeThreadId ?? bot.threadId;
