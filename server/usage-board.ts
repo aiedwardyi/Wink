@@ -3,12 +3,13 @@ import { usageIdentity } from "../shared/usage-identity.ts";
 
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngineId, UsageBoardEvent, UsageBoardFrame, UsageBoardRun, UsageBoardWindow } from "../src/lib/usage-board.ts";
 import { isInstanceId, type AccountDrain } from "./accounts.ts";
+import { CODEX_CREDIT_NAME } from "./codex-credit.ts";
 import type { RateLimitsReport } from "./rate-limits-store.ts";
 import type { createUsageHistory } from "./usage-history.ts";
 
 type AccountRow = {
   id: string; of: string; driverKind: string; generation: number; existing: boolean; state: "pending" | "ready" | "stopped";
-  blocked?: boolean; identity?: string;
+  blocked?: boolean; identity?: string; credit?: true;
   status?: { state: "available" | "unavailable"; authenticated?: boolean; account?: string; accountIdentity?: string };
 };
 type Bot = { id: string; name: string; base: string };
@@ -209,8 +210,8 @@ export function createUsageBoard(deps: Deps) {
         board.engines.push(group);
       }
       const named = deps.names.get(row.id);
-      const number = named?.number ?? 1;
-      const fallback = engine === "claude" || engine === "codex" ? `${titles[engine]} ${number}` : titles[engine];
+      const number = row.credit ? Math.max(0, ...group.accounts.map((account) => account.number)) + 1 : named?.number ?? 1;
+      const fallback = row.credit ? CODEX_CREDIT_NAME : engine === "claude" || engine === "codex" ? `${titles[engine]} ${number}` : titles[engine];
       // Validated user labels may match the provider's sign-in name.
       const nickname = named?.nickname && named.name === named.nickname && !named.nickname.includes("@") ? named.nickname : null;
       const report = deps.rateLimits.get(row.id);
@@ -236,7 +237,7 @@ export function createUsageBoard(deps: Deps) {
       group.accounts.push({ id: row.id, number, nickname, name: nickname ?? text(named?.name ?? fallback, fallback), main: row.id === group.mainId,
         signIn, coverage: "unknown", windows, observedAt: Number.isFinite(observedAt) ? observedAt : null,
         history: points?.generation === row.generation ? { fine: points.fine, coarse: points.coarse } : { fine: [], coarse: [] },
-        bots: accountBots, workers: null });
+        bots: accountBots, workers: null, ...(row.credit ? { credit: true as const } : {}) });
     }
     return { board, rows: rows.map((row) => ({ id: row.id, generation: row.generation })), bots, text, counter: history.counter, accounts: accountSet, epoch };
   }

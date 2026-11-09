@@ -89,6 +89,7 @@ import {
 } from "./config.ts";
 import { loadRateLimits, saveRateLimits, scheduleSaveRateLimits } from "./rate-limits-store.ts";
 import { AccountService, isInstanceId } from "./accounts.ts";
+import { codexCredit, codexCreditRows } from "./codex-credit.ts";
 import { BotAccounts } from "./bot-accounts.ts";
 import { createAccountRuntime } from "./account-runtime.ts";
 import { createAccountNames } from "./account-names.ts";
@@ -438,6 +439,7 @@ if (sweepLegacyOpencodeKey() === "failed") {
 }
 const cfg = startupTiming.measure("config", loadConfig);
 const accounts = startupTiming.measure("accountLoad", () => new AccountService(DATA_DIR, () => instanceConfigs(cfg)));
+const codexCreditFor = () => codexCredit(DATA_DIR, instanceConfigs(cfg), cfg.imageGen?.key);
 const accountNames = createAccountNames(DATA_DIR);
 accountNames.sync(accounts.list());
 // Before registry.load: a prewarmed engine child would inherit the token.
@@ -2929,6 +2931,7 @@ const usageBoard = createUsageBoard({
         const driverKind = entry.enabled === false ? undefined : boardEngines.get(entry.driver);
         return driverKind ? [{ id, of: id, driverKind, generation: 0, existing: true, state: "ready" as const, blocked: registry.accountBlocked(id), status: providerSnapshots.get(id) }] : [];
       }),
+      ...codexCreditRows(codexCreditFor()),
     ],
     defaultFor: (base) => accounts.defaultFor(base),
     get drains() { return accounts.drains; },
@@ -2971,7 +2974,7 @@ const workerLaunch = createWorkerLaunch({
   resumeAccount: createResumeAccount(registry, accounts, () => instanceConfigs(cfg)), mainAccount: (of) => botAccounts.mainAccount(of),
   enabled: () => accounts.snapshot.length > 0, resolveWorkerTurn: workerTurns.resolveWorkerTurn,
   bases: () => instanceConfigs(cfg), usage: spawnUsage, nameOf: (id, engine) => accountNames.nameOf(id, engine),
-  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"),
+  accounts: () => accounts.snapshot.filter((account) => account.state === "ready"), credit: codexCreditFor,
   available: (id, generation) => !registry.accountBlocked(id) && Boolean(registry.get(id))
     && (generation === 0 ? !registry.get(id)?.account : accounts.get(id)?.state === "ready" && registry.get(id)?.account?.generation === generation),
 });
@@ -7145,7 +7148,7 @@ function reloadProviders() {
 // and reload sequence single-flight so two settings requests cannot drop one
 // another's changes or dispose a fleet while another reload is creating it.
 let providerConfigBusy = false;
-if (accounts.snapshot.length || Object.keys(accounts.drains).length) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length ? terminalBridgeAccess : null, () => accountRuntime.restore()));
+if (accounts.snapshot.length || Object.keys(accounts.drains).length || codexCreditFor()) startupTiming.afterPaint("accounts", () => restoreStartupAccounts(accounts.snapshot.length || codexCreditFor() ? terminalBridgeAccess : null, () => accountRuntime.restore()));
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 const teamRoutes = createTeamRoutes({ cfg, store, routines: routines!, defaultSelection, publicBot, publicGroupState, broadcast });
@@ -7415,7 +7418,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "terminal bridge must be a loopback HTTP endpoint" });
         }
         terminalBridgeAccess = { url, token };
-        if (accounts.snapshot.length) await enableWorkerAccounts(terminalBridgeAccess);
+        if (accounts.snapshot.length || codexCreditFor()) await enableWorkerAccounts(terminalBridgeAccess);
         return json(res, 200, { ok: true });
       }
       if ((method === "PUT" || method === "DELETE") && path === "/api/internal/google-account") {
@@ -8450,6 +8453,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if ((cfg.profile?.name ?? "").trim() !== previousPerson) phoneAccess.nameChanged();
       memoryPass.onConfigChanged();
+      if (patch.imageGen?.key !== undefined) {
+        usageBoard.touch();
+        if (codexCreditFor()) void enableWorkerAccounts(terminalBridgeAccess).catch(() => console.error("Worker account routing is unavailable"));
+      }
       // Provider keys update their instances. Other settings need no reload.
       const reloadKeys = Object.keys(patch).filter(
         (key) =>

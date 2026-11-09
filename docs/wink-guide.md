@@ -6,7 +6,7 @@
 - The user picks each bot's engine, model and effort in the model picker (Alt+M, Open Model Picker). Switching keeps the chat: the new engine gets the conversation so far.
 - Saved keys have separate uses:
   - xAI, Gemini, Claude and Vertex AI keys: `call_api` to that provider's own API.
-  - OpenAI key: `generate_image`, bot avatars and `call_api` to `api.openai.com` (for example `/v1/responses`), subject to the key's access. Codex workers use the Codex sign-in.
+  - OpenAI key: `generate_image`, bot avatars and `call_api` to `api.openai.com` (for example `/v1/responses`), subject to the key's access. Codex workers use the Codex sign-in, or this key's API credit with the `$env:CODEX_HOME='OpenAI credit';` prefix.
   - ElevenLabs key: call voices and text-to-speech through `call_api`.
   - Box key: Cloud VM computer access and cloud routines, never `call_api`.
   - A custom key: `call_api` to the one host it was saved for.
