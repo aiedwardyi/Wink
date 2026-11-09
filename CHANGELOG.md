@@ -2,6 +2,37 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.246] - 2026-11-10
+
+### Added
+- A What's New card after an update, shown once.
+- Quick answers: ask a Claude bot a short question while it works and get an answer without stopping its task.
+- Live Verify checks documents bots write and fixes the problems it finds, with details a tap away.
+- Live Verify checks app pages a bot names.
+- Codex workers can run on a saved OpenAI API key.
+- A refresh button in the usage quick view, and whole rows drag to reorder usage accounts.
+
+### Changed
+- Settings > Team counts hours only while someone is actually using Wink, not while it sits open.
+- Bot names show above bot replies on wide-bubble themes, and your own messages no longer carry a "You" label.
+- Smoother Memory panels and a soft brain glow; smoother motion on the newest cards and panels.
+- New bots rotate through the Wink colors.
+- Phones are listed under This PC in Devices, and folded usage bars are bigger on phones.
+- The Model Index uses today's sources.
+- Update failures show a plain, quiet message.
+
+### Fixed
+- Cleanup no longer keeps a CPU core busy for long after workers finish.
+- A signed-out account is marked once and skipped for new work until you sign in again.
+- Long-Term Memory shows facts written as plain lines.
+- Phone text selection has drag handles and Copy, and the phone worker list scrolls again after reaching the top.
+- The model picker no longer shows dark side bands at some window widths.
+- Bots no longer point at a question card you closed by typing.
+- Replies synced from another PC show the bot's own avatar.
+- Codex bots in Ask mode no longer ask before Wink's own tools.
+- Stray tags no longer show in bot replies, and quiet background wakes no longer post empty replies.
+- Security and reliability fixes from release audits.
+
 ## [1.0.245] - 2026-11-09
 
 ### Added
@@ -783,6 +814,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
 [1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245
 [1.0.244]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.244
 [1.0.243]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.243
