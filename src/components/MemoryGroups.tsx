@@ -64,24 +64,24 @@ export function MemoryFold({ title, hint, meta, status, open, onToggle, ref, chi
   }, [open]);
   return (
     <section className={DETAILS_BOX}>
-      <div ref={header} className={cn("scroll-my-px", open && "sticky top-0 z-10 border-b border-hairline/40 bg-card")}>
-        <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none">
+      <div ref={header} className={cn("flex items-center scroll-my-px", open && "sticky top-0 z-10 border-b border-hairline/40 bg-card")}>
+        <button ref={ref} type="button" aria-expanded={open} onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-control/40 motion-reduce:transition-none">
           <div className="min-w-0 flex-1">
             <DetailsLabel label={title} hint={hint} />
           </div>
-          {status}
           {meta && <span className="shrink-0 text-[12px] text-ink-secondary">{meta}</span>}
           <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
         </button>
+        {status && <div className="shrink-0 pr-4">{status}</div>}
       </div>
       {children}
     </section>
   );
 }
 
-export function MemoryFile({ text, loading, status, open, onToggle, ref, children }: {
+export function MemoryFile({ text, loading, save, open, onToggle, ref, children }: {
   text: string;
-  status?: ReactNode;
+  save?: MemorySaveStatus;
   loading: boolean;
   open: boolean;
   onToggle: () => void;
@@ -95,8 +95,8 @@ export function MemoryFile({ text, loading, status, open, onToggle, ref, childre
       ref={ref}
       title={t("bot.memoryFile")}
       hint={t("bot.memoryThisBotHelp")}
-      meta={!loading && lines > 0 ? t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines }) : undefined}
-      status={status}
+      meta={!loading && lines > 0 && (!save || save === "idle") ? t(lines === 1 ? "bot.memoryFileLinesOne" : "bot.memoryFileLines", { count: lines }) : undefined}
+      status={save && <SaveState status={save} />}
       open={open}
       onToggle={onToggle}
     >

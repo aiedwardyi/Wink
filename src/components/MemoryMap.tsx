@@ -166,8 +166,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     else if (quiet.current) played.current[open] = fade(sheets[open].current);
     else { const from = parts(open); if (from) played.current[open] = openPanel(from); }
     quiet.current = false;
-    if (running) return;
     closeButton.current?.focus({ preventScroll: true });
+    if (running) return;
     // scrolled inside the sheet only: scrollIntoView would move the whole tab too
     const body = sheets[open].current?.querySelector<HTMLElement>(".mm-sheet-body");
     const row = body?.querySelector<HTMLElement>("[data-fresh]");

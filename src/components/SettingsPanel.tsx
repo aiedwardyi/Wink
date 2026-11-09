@@ -461,7 +461,7 @@ function MemoryCard({ bot, active, warm }: { bot: Bot; active: boolean; warm: bo
           onToggle={() => dispatch({ type: "updateBot", botId: bot.id, patch: { memoryNotes: !autoNotes } })}
         />
       </MemoryGroup>
-      <MemoryFile ref={fileRow} text={text} loading={loading} status={expanded && (!inMap || !wide) && <SaveState status={status} />} open={expanded} onToggle={() => openFile(!expanded)}>
+      <MemoryFile ref={fileRow} text={text} loading={loading} save={expanded && (!inMap || !wide) ? status : undefined} open={expanded} onToggle={() => openFile(!expanded)}>
         {run && <MemoryCleanRow run={run} onUndo={undo} nonce={target && "cleanup" in target.target ? target.nonce : undefined} className={expanded ? "mb-0 border-t-0" : undefined} />}
         <Fold open={expanded && (!inMap || !wide)}>
           <div className="px-4 pb-4 pt-3">

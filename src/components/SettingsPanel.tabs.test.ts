@@ -341,7 +341,8 @@ describe("Memory tab on return", () => {
     await toMemory();
     await act(async () => fileRow().click());
     await write("- Uses Linux");
-    expect(fileRow().querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
+    expect(fileRow().parentElement!.querySelector('[data-save-state="saving"]')!.textContent).toBe("Saving…");
+    expect(fileRow().querySelector("[data-save-state]")).toBeNull();
     expect(host.querySelectorAll("[data-save-state]")).toHaveLength(1);
     expect(host.querySelectorAll('.relative.flex.flex-col.gap-3 > [role="status"]')).toHaveLength(0);
   });
@@ -429,11 +430,12 @@ describe("Long-Term and Knowledge sheets", () => {
     await wide();
     const swing = passes.find((each) => each.element === sheet("long"))!;
     await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
-    await act(async () => fold("long").click());
+    await act(async () => { fold("long").focus(); fold("long").click(); });
     expect(swing.reverse).toHaveBeenCalledTimes(2);
     expect(swing.playbackRate).toBe(1);
     expect(sheet("long")!.hasAttribute("data-leaving")).toBe(false);
     expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    expect(document.activeElement).toBe(sheet("long")!.querySelector(".mm-close"));
     await finishPasses();
     expect(sheet("long")).not.toBeNull();
   });
