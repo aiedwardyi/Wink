@@ -1,4 +1,4 @@
-// New bots persist a white Wink icon. Existing colour-mapped profiles
+// New bots persist the next Wink icon. Existing colour-mapped profiles
 // are a different path and stay peach/teal/lavender/coral.
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -131,7 +131,7 @@ describe("new bot mascot default", () => {
     });
     expect(created.status).toBe(201);
     const body = z.object({ id: z.string() }).parse(await created.json());
-    expect(await listedBot(body.id)).toMatchObject({ color: "white", mascotStyle: "icon-34" });
+    expect(await listedBot(body.id)).toMatchObject({ color: "white", mascotStyle: "icon-33" });
   });
 
   it("stores the next Wink icon on package import when the file has no style", async () => {
@@ -146,7 +146,7 @@ describe("new bot mascot default", () => {
     expect(imported.status).toBe(201);
     const bots = z.object({ bots: z.array(createdBot) }).parse(imported.body).bots;
     expect(bots).toHaveLength(1);
-    expect(bots[0]).toMatchObject({ name: "White Squircle Import", color: "white", mascotStyle: "icon-35" });
+    expect(bots[0]).toMatchObject({ name: "White Squircle Import", color: "white", mascotStyle: "icon-34" });
   });
 
   it("keeps a colour and style sent on package import", async () => {

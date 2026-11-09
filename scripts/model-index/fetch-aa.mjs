@@ -3,11 +3,12 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { keepFilledRows, percent, readModels, readSnapshot, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
+import { get, keepFilledRows, percent, readModels, readSnapshot, sortRows, sourceIds, Unverifiable, writeSnapshot } from "./lib.mjs";
 
 export const API_URL = "https://artificialanalysis.ai/api/v2/data/llms/models";
+export const INDEX_PAGE = "https://artificialanalysis.ai/models";
 export const BENCHMARKS = {
-  "aa-intelligence-index": { field: "artificial_analysis_intelligence_index" },
+  "aa-intelligence-index": { field: "artificial_analysis_intelligence_index", checksPublishedVersion: true },
   "aa-terminal-bench": { field: "terminalbench_v4_0", version: "4.0", fraction: true },
 };
 export const MANUAL = [
@@ -42,9 +43,19 @@ function places(value) {
   return Math.max(0, (digits.split(".")[1]?.length ?? 0) - Number(exponent));
 }
 
-export function buildSnapshot({ rows, models, retrievedAt, previous }) {
+/** The API's index field has no version, so the public page names the one it serves. */
+export function publishedIndexVersion(html) {
+  const versions = new Set([...html.matchAll(/Intelligence Index v(\d+(?:\.\d+)+)/g)].map((m) => m[1]));
+  if (versions.size !== 1) throw new Unverifiable("AA Intelligence Index version not found on its public page");
+  return [...versions][0];
+}
+
+export function buildSnapshot({ rows, models, retrievedAt, previous, indexVersion }) {
   const benchmark = BENCHMARKS[previous.benchmark];
   if (!benchmark) throw new Unverifiable("AA benchmark has no API field");
+  if (benchmark.checksPublishedVersion && indexVersion && indexVersion !== previous.version) {
+    throw new Unverifiable(`AA Intelligence Index is now v${indexVersion}, snapshot is ${previous.version}; move the snapshot to the new version before refreshing`);
+  }
   if (benchmark.version && previous.version !== benchmark.version) throw new Unverifiable(`AA API supports Terminal-Bench 2.1, 4.0 and hard; snapshot version does not match ${benchmark.version}`);
   if (!rows.some((row) => Object.hasOwn(row.evaluations, benchmark.field))) throw new Unverifiable(`AA API has no ${benchmark.field} field`);
   // JSON drops a trailing zero (56.0 parses as 56), so precision comes from the whole response; past 10 places is float noise
@@ -106,7 +117,8 @@ export async function loadResponse({ rawFile, apiKey = process.env.AA_API_KEY, k
     try {
       const response = await fetch(API_URL, { headers: { "x-api-key": key }, signal: AbortSignal.timeout(60_000) });
       if (response.status !== 200) throw new Error();
-      return { rows: parseResponse(await response.text()), retrievedAt: new Date().toISOString() };
+      const rows = parseResponse(await response.text());
+      return { rows, retrievedAt: new Date().toISOString(), indexVersion: publishedIndexVersion((await get(INDEX_PAGE)).text) };
     } catch (error) {
       if (error instanceof Unverifiable) throw error;
       throw new Unverifiable("AA API request failed; snapshot untouched");

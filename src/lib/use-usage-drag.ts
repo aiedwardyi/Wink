@@ -8,10 +8,16 @@ const CHANGE = "usage-order";
 type Orders = Record<string, string[]>;
 const ROW = "[data-account-row]";
 const SECTION = "[data-usage-engine]";
-const GRIP = "[data-usage-grip]";
-const PRESSABLE = `${GRIP}, ${ROW}, [data-engine-head]`;
+const PRESSABLE = "[data-usage-reorder]";
+const SKIP = "[data-account-name-editor], input, a, code";
+const DRAGGING = "data-usage-dragging";
 const EDGE = 48;
 const STEP = 10;
+const SLOP = 4;
+
+export const reorderable = (label: string) => ({
+  "data-usage-reorder": "", role: "group", tabIndex: 0, "aria-label": label, "aria-keyshortcuts": "Alt+ArrowUp Alt+ArrowDown",
+});
 
 function load(): Orders {
   try {
@@ -19,10 +25,6 @@ function load(): Orders {
     return value && typeof value === "object" && !Array.isArray(value)
       ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].every((id) => typeof id === "string"))) : {};
   } catch { return {}; }
-}
-
-export function readUsageOrder(base: string) {
-  return load()[base];
 }
 
 export function ordered<T>(items: T[], order: string[] = [], id: (item: T) => string): T[] {
@@ -60,6 +62,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     return [...scope.querySelectorAll<HTMLElement>(account ? ROW : SECTION)].filter((item) => !item.closest("[aria-hidden='true']"));
   };
   const clean = (drag: Drag) => {
+    document.documentElement.removeAttribute(DRAGGING);
     for (const node of drag.items) {
       node.style.removeProperty("translate");
       node.style.removeProperty("transition");
@@ -84,7 +87,7 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
   const focus = (drag: Drag) => {
     const selector = drag.node.matches(ROW) ? ROW : SECTION;
     const node = [...list.current?.querySelectorAll<HTMLElement>(selector) ?? []].find((each) => identify(each) === identify(drag.node));
-    node?.querySelector<HTMLElement>("[data-usage-grip]")?.focus({ preventScroll: true });
+    (node?.matches(PRESSABLE) ? node : node?.querySelector<HTMLElement>(PRESSABLE))?.focus({ preventScroll: true });
   };
   const lift = (pressed: HTMLElement) => {
     const node = pressed.closest<HTMLElement>(`${ROW}, ${SECTION}`);
@@ -94,6 +97,8 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     active.current = { node, items, rects: items.map((item) => item.getBoundingClientRect()), from, to: from,
       key: node.matches(ROW) ? node.closest<HTMLElement>(SECTION)!.dataset.usageBase! : "engines", y: 0, dy: 0, scrollTop: scrollParent(list.current)?.scrollTop ?? 0 };
     node.setAttribute("data-usage-lifted", "");
+    // the whole page: a lifted row ignores hits, so a long press would land on the text around it
+    document.documentElement.setAttribute(DRAGGING, "");
     return node;
   };
   const over = (_target: Element | null, y: number) => {
@@ -143,12 +148,9 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
     active.current = null;
   };
   const touchRef = useTouchDrag(PRESSABLE, `${SECTION}, ${ROW}`, {
-    quick: GRIP,
-    skip: `button:not(${GRIP}, [data-edit-name]), a, input`,
+    skip: `button:not([data-edit-name], [data-engine-fold]), ${SKIP}`,
     selectPressed: true,
     scroller: () => scrollParent(list.current),
-    // the grip's touch area overlaps the start of the name, which keeps its own tap
-    tap: (x, y) => document.elementsFromPoint(x, y).find((each) => !each.closest(GRIP))?.closest<HTMLElement>("button")?.click(),
     lift: (pressed) => {
       const node = lift(pressed);
       if (node && active.current) active.current.y = touchY.current;
@@ -159,16 +161,16 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
   const ref = useCallback((node: HTMLElement | null) => { list.current = node; touchRef(node); }, [touchRef]);
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
     touchY.current = event.clientY;
-    if (!(event.target instanceof Element) || !event.target.closest(GRIP)) return;
-    if (event.pointerType === "touch" || event.button !== 0) return;
-    const node = lift(event.target.closest<HTMLElement>(GRIP)!);
-    if (!node || !active.current) return;
-    event.preventDefault();
-    active.current.y = event.clientY;
-    let pointerY = event.clientY;
+    if (event.pointerType === "touch" || event.button !== 0 || !(event.target instanceof Element) || active.current || event.target.closest(SKIP)) return;
+    const pressed = event.target.closest<HTMLElement>(PRESSABLE);
+    if (!pressed) return;
+    unbind.current();
+    const { clientX: startX, clientY: startY } = event;
+    let node: HTMLElement | null = null;
+    let pointerY = startY;
     let frame = 0;
     const place = () => {
-      if (!active.current) return;
+      if (!active.current || !node) return;
       over(null, pointerY);
       node.style.translate = `0 ${active.current.dy}px`;
     };
@@ -182,24 +184,49 @@ export function useUsageDrag(engines: { base: string; accounts: { id: string }[]
       }
       frame = requestAnimationFrame(edge);
     };
-    const move = (next: globalThis.PointerEvent) => { pointerY = next.clientY; place(); };
-    frame = requestAnimationFrame(edge);
-    const end = () => { unbind.current(); drop(); };
-    const abort = () => { unbind.current(); cancel(); };
+    const move = (next: globalThis.PointerEvent) => {
+      pointerY = next.clientY;
+      if (!node) {
+        if (Math.hypot(next.clientX - startX, next.clientY - startY) < SLOP) return;
+        node = lift(pressed);
+        if (!node || !active.current) { unbind.current(); return; }
+        active.current.y = startY;
+        frame = requestAnimationFrame(edge);
+      }
+      place();
+    };
+    const end = () => {
+      unbind.current();
+      if (!node) return;
+      drop();
+      // the drop lands on the press's own button, whose click would still fire
+      const stop = (click: Event) => { click.stopPropagation(); click.preventDefault(); };
+      const release = () => document.removeEventListener("click", stop, true);
+      document.addEventListener("click", stop, { capture: true, once: true });
+      setTimeout(release);
+      unbind.current = release;
+    };
+    const abort = () => { unbind.current(); if (node) cancel(); };
+    const noSelect = (start: Event) => start.preventDefault();
+    // a double click keeps its word selection
+    const second = (down: MouseEvent) => { if (down.detail > 1) unbind.current(); };
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", end, { once: true });
     document.addEventListener("pointercancel", abort, { once: true });
+    document.addEventListener("selectstart", noSelect);
+    document.addEventListener("mousedown", second, { once: true });
     unbind.current = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", end);
       document.removeEventListener("pointercancel", abort);
+      document.removeEventListener("selectstart", noSelect);
+      document.removeEventListener("mousedown", second);
       cancelAnimationFrame(frame);
     };
   };
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key) || !(event.target instanceof Element)) return;
-    const pressed = event.target.closest<HTMLElement>("[data-usage-grip]");
-    if (!pressed || !lift(pressed) || !active.current) return;
+    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key) || !(event.target instanceof HTMLElement) || !event.target.matches(PRESSABLE)) return;
+    if (!lift(event.target) || !active.current) return;
     event.preventDefault();
     event.stopPropagation();
     const drag = active.current;

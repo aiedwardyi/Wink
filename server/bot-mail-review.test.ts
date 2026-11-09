@@ -242,7 +242,7 @@ it.each([
     await pending;
     expect(output.body().id).toBeTruthy();
     expect(output.body().error).toBeUndefined();
-    if (method === "createBot") expect(store.bot(output.body().id)).toMatchObject({ color: "white", mascotStyle: "icon-34" });
+    if (method === "createBot") expect(store.bot(output.body().id)).toMatchObject({ color: "white", mascotStyle: "icon-33" });
     else expect(output.body().memberIds).toEqual([from.id, target.id]);
   } finally {
     turnRegistry.settle(turnId);
