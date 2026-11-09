@@ -53,7 +53,7 @@ export function unwrapUserTags(text: string): string {
     if (fence && (depth < fenceDepth || (fenceColumn && body.trim() && indent < fenceColumn))) fence = "";
     if (fence) {
       const end = FENCE_END.exec(body)?.[1];
-      if (end && end[0] === fence[0] && end.length >= fence.length) fence = "";
+      if (end && depth === fenceDepth && end[0] === fence[0] && end.length >= fence.length) fence = "";
       out += line;
     } else if (mark || !body.trim()) {
       fence = mark ?? "";

@@ -218,7 +218,7 @@ public enum Markdown {
             let indent = body.prefix(while: { $0 == " " }).count
             if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(body) && indent < fenceColumn)) { fence = "" }
             if !fence.isEmpty {
-                if let open = open, open.column == 0, open.mark.first == fence.first, open.mark.count >= fence.count,
+                if let open = open, depth == fenceDepth, open.column == 0, open.mark.first == fence.first, open.mark.count >= fence.count,
                    isBlank(open.after) { fence = "" }
                 return line
             }
