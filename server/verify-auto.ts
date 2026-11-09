@@ -20,6 +20,7 @@ export interface VerifyAutoTurn {
   startedAt: number;
   roots: string[];
   depth: number;
+  docFix?: string;
   ok: boolean;
   routine?: boolean;
   interrupted?: boolean;

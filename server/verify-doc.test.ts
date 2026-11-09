@@ -1,4 +1,4 @@
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,12 +18,12 @@ let busy: boolean;
 let generate: ReturnType<typeof vi.fn<(prompt: string, opts?: { signal?: AbortSignal }) => Promise<string>>>;
 let engine: { generateText: typeof generate } | null;
 let log: ReturnType<typeof vi.fn<(line: string) => void>>;
-let fix: ReturnType<typeof vi.fn<(botId: string, threadId: string, prompt: string) => Promise<boolean>>>;
+let fix: ReturnType<typeof vi.fn<(botId: string, threadId: string, prompt: string, failed: () => void) => Promise<boolean>>>;
 let doc: ReturnType<typeof createVerifyDoc>;
 const start = (paths: string[], humanId = "human"): DocStart => ({ botId: "bot", threadId: "thread", roots: [root], paths, humanId });
 const slip = (...quotes: [string, string][]) => JSON.stringify({ findings: quotes.map(([quote, fix]) => ({ kind: "spelling", quote, fix, note: "맞춤법" })), names: [], dates: [] });
 const write = (edits: Record<number, string>) => writeFile(join(root, "script.md"), LINES.map((line, i) => edits[i] ?? line).join("\n"));
-const fixEnded = () => doc.ended({ botId: "bot", threadId: "thread", startedAt: Date.now() });
+const fixEnded = () => doc.ended({ threadId: "thread", docFix: doc.fixTurn("bot", "thread", fix.mock.calls.at(-1)![2]) });
 const cards = () => messages.filter(message => message.verify).map(message => message.verify as VerifyCardData);
 const done = () => vi.waitFor(() => expect(cards().at(-1)?.status).toBe("completed"), { timeout: 5_000 });
 const store = {
@@ -124,9 +124,9 @@ it("hands findings to the bot's fix turn, then rechecks the fixed file on the sa
   const [botId, threadId, prompt] = fix.mock.calls[0]!;
   expect([botId, threadId]).toEqual(["bot", "thread"]);
   expect(prompt).toContain(join(root, "script.md"));
-  expect(prompt).toContain(`p.2 line 50 (spelling): "되요" → "돼요" (맞춤법)`);
+  expect(prompt).toContain(`{"page":2,"line":50,"kind":"spelling","quote":"되요","fix":"돼요","note":"맞춤법"}`);
   expect(cards()[0]).toMatchObject({ status: "completed", doc: { fixing: true, findingTotal: 1 } });
-  doc.ended({ botId: "bot", threadId: "thread", startedAt: 0 });
+  doc.ended({ threadId: "thread" });
   await delay(60);
   expect(generate).toHaveBeenCalledOnce();
   await write({ 49: "계약서는 다음 주에 보내 드리면 돼요." });
@@ -185,6 +185,92 @@ it("never counts a finding as fixed while its words are still in the document", 
   await write({ 10: "회의는 오후 세시에 시작 했다." });
   fixEnded();
   await vi.waitFor(() => expect(cards()[0]).toMatchObject({ status: "completed", fixed: 1, doc: { findingTotal: 1, findings: [{ quote: "시작 했다" }], fixedFindings: [{ quote: "되요" }] } }));
+});
+
+it("drops the fix and checks again when the file changed while the bot was busy", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockImplementationOnce(async () => { busy = true; return slip(["되요", "돼요"]); });
+  doc.schedule(start(["script.md"]));
+  await done();
+  await write({ 49: "계약서는 다음 주에 보내 드리면 됩니다." });
+  busy = false;
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+  await delay(80);
+  expect(fix).not.toHaveBeenCalled();
+});
+
+it("drops the fix when the file was deleted while the bot was busy", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockImplementationOnce(async () => { busy = true; return slip(["되요", "돼요"]); });
+  doc.schedule(start(["script.md"]));
+  await done();
+  await rm(join(root, "script.md"));
+  busy = false;
+  await delay(120);
+  expect(fix).not.toHaveBeenCalled();
+  expect(cards()[0]!.doc!.fixing).toBeUndefined();
+});
+
+it("counts only the fix turn's own end, not a user turn that ended first", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  doc.ended({ threadId: "thread", docFix: doc.fixTurn("bot", "thread", "그 문서 다시 보여줘") });
+  await delay(80);
+  expect(generate).toHaveBeenCalledOnce();
+  expect(cards()[0]!.doc!.fixing).toBe(true);
+  fixEnded();
+  await vi.waitFor(() => expect(cards()[0]!.doc!.fixing).toBeUndefined());
+});
+
+it("drops bot is fixing when the fix turn could not start", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  fix.mockImplementationOnce(async (_botId, _threadId, _prompt, failed) => { setTimeout(failed, 10); return true; });
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(cards()[0]!.doc!.fixing).toBeUndefined());
+});
+
+it("hands a room's findings to the bot that last wrote the file", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  await write({ 10: "자료를 검토 했다.", 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["검토 했다", "검토했다"]));
+  doc.schedule({ ...start(["script.md"]), botId: "scout" });
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledTimes(2));
+  expect(fix.mock.calls[1]!.slice(0, 2)).toEqual(["scout", "thread"]);
+});
+
+it("keeps a file's handed findings when another file is checked in between", async () => {
+  await write({ 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  await writeFile(join(root, "notes.md"), LINES.map((line, i) => i === 20 ? "자료를 검토 했다." : line).join("\n"));
+  generate.mockResolvedValueOnce(slip(["검토 했다", "검토했다"]));
+  doc.schedule(start(["notes.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledTimes(2));
+  await write({ 10: "덧붙인 문단입니다.", 49: "계약서는 다음 주에 보내 드리면 되요." });
+  generate.mockResolvedValueOnce(slip(["되요", "돼요"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(3));
+  await delay(80);
+  expect(fix).toHaveBeenCalledTimes(2);
+});
+
+it("counts a fix by the flagged spot, not by the same words used elsewhere", async () => {
+  await write({ 9: "We will call you when their ready.", 49: "They brought their laptops to the meeting." });
+  generate.mockResolvedValueOnce(slip(["their", "they're"]));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(fix).toHaveBeenCalledOnce());
+  expect(cards()[0]!.doc!.findings).toMatchObject([{ line: 10, quote: "their" }]);
+  await write({ 9: "We will call you when they're ready.", 49: "They brought their laptops to the meeting." });
+  fixEnded();
+  await vi.waitFor(() => expect(cards()[0]).toMatchObject({ status: "completed", fixed: 1, doc: { findingTotal: 0 } }));
 });
 
 it("stops after two fix rounds for one user turn, even when each fix leaves a new slip", async () => {

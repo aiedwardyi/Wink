@@ -27,6 +27,7 @@ const WAITING = 4;
 const KEPT = 50;
 const CACHED_FILES = 12;
 const FIX_ROUNDS = 2;
+const NEAR = 16;
 // Files a bot keeps for itself or a codebase, not documents written for a person.
 const DEV = /^(?:readme|changelog|changes|contributing|licen[cs]e|copying|code_of_conduct|security|notice|authors|claude|agents|gemini|memory|skill)(?:\.[a-z]+)?$|^requirements.*\.txt$|^(?:robots|cmakelists)\.txt$/i;
 const PROJECT = ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", ".git"];
@@ -37,8 +38,8 @@ export interface VerifyDocDeps {
   instanceFor: (botId: string, threadId: string) => Pick<ProviderInstance, "generateText"> | null | undefined;
   /** the bot has a turn going */
   busy: (botId: string, threadId: string) => boolean;
-  /** starts the bot's fix turn; false when the bot is busy */
-  fix: (botId: string, threadId: string, prompt: string) => Promise<boolean>;
+  /** starts the bot's fix turn; false when the bot is busy, `failed` when it never dispatched */
+  fix: (botId: string, threadId: string, prompt: string, failed: () => void) => Promise<boolean>;
   deviceId: () => string;
   /** an SSE-only message.patch */
   broadcastPatch: (threadId: string, message: Message) => void;
@@ -50,8 +51,8 @@ interface Picked { file: string; site: string; doc: DocText; sha: string; cut: n
 interface Parsed { hits: DocHit[]; names: string[]; dates: string[] }
 interface Run { runId: string; threadId: string; card: VerifyCardData; recording: ReturnType<typeof createReplay>; aborter: AbortController; messageId?: string; saved?: Promise<void> }
 interface Slot { token: object; input?: DocStart; timer?: ReturnType<typeof setTimeout>; run?: Run; orphan?: string }
-// One user turn's fix rounds on one file; `at` is when its fix turn was asked to start.
-interface Fix { botId: string; humanId: string; roots: string[]; file: string; rounds: number; handed: Map<string, VerifyDocFinding>; fixing: boolean; prompt?: string; messageId?: string; at?: number; timer?: ReturnType<typeof setTimeout> }
+// One user turn's fix rounds on one file; `token` marks its fix turn once asked to start.
+interface Fix { botId: string; humanId: string; roots: string[]; file: string; sha: string; rounds: number; handed: Map<string, { row: VerifyDocFinding; near: string }>; fixing: boolean; prompt?: string; messageId?: string; token?: string; timer?: ReturnType<typeof setTimeout> }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const findingKey = (row: VerifyDocFinding) => `${row.kind}\n${row.quote}\n${row.fix}`;
@@ -73,7 +74,7 @@ async function inProject(folder: string, root: string): Promise<boolean> {
 export function createVerifyDoc(deps: VerifyDocDeps) {
   const { store } = deps, quietMs = deps.quietMs ?? QUIET_MS;
   const slots = new Map<string, Slot>(), runs = new Map<string, Run>();
-  const checked = new Map<string, { sha: string; keys: Set<string> }>(), caches = new Map<string, Map<string, Parsed>>(), fixes = new Map<string, Fix>();
+  const checked = new Map<string, { sha: string; keys: Set<string> }>(), caches = new Map<string, Map<string, Parsed>>(), fixes = new Map<string, Fix>(), budgets = new Map<string, Fix>();
   let chain = Promise.resolve(), waiting = 0, disposed = false;
 
   const writeCard = (botId: string, run: Run) => {
@@ -100,7 +101,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (!fx?.fixing) return;
     clearTimeout(fx.timer);
     fx.fixing = false;
-    fx.timer = fx.at = undefined;
+    fx.timer = fx.token = undefined;
     const stored = fx.messageId ? store.messagesFor(threadId).find(message => message.id === fx.messageId)?.verify : undefined;
     if (stored?.doc?.fixing) {
       const card: VerifyCardData = { ...stored, doc: { ...stored.doc, fixing: undefined } };
@@ -108,14 +109,22 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     }
   };
   // Like a pane wake, the fix turn waits for the bot; a user message sent meanwhile goes first.
-  const hand = (threadId: string, fx: Fix) => {
+  const hand = async (threadId: string, fx: Fix) => {
     fx.timer = undefined;
     if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return;
     if (deps.busy(fx.botId, threadId)) { fx.timer = setTimeout(hand, quietMs, threadId, fx); return; }
-    fx.at = Date.now();
-    deps.fix(fx.botId, threadId, fx.prompt!).then(started => {
-      if (started || fixes.get(threadId) !== fx || !fx.fixing) return;
-      fx.at = undefined;
+    // The user can change or remove the file while the bot is busy; a fix only lands on what was checked.
+    const now = await pick({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file] });
+    if (disposed || fixes.get(threadId) !== fx || !fx.fixing) return;
+    if (now?.file !== fx.file || now.sha !== fx.sha) {
+      unfix(threadId);
+      fixes.delete(threadId);
+      return schedule({ botId: fx.botId, threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
+    }
+    const token = fx.token = randomUUID();
+    deps.fix(fx.botId, threadId, fx.prompt!, () => { if (fixes.get(threadId) === fx && fx.token === token) unfix(threadId); }).then(started => {
+      if (started || fixes.get(threadId) !== fx || fx.token !== token) return;
+      fx.token = undefined;
       fx.timer = setTimeout(hand, quietMs, threadId, fx);
     }, error => {
       deps.log(`Live Verify: no fix turn in ${threadId}: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`);
@@ -158,8 +167,8 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     unfix(threadId);
     if (!picked || !engine?.generateText || checked.get(`${threadId}\n${picked.file}`)?.sha === picked.sha) return dropOrphan(slot, threadId);
     const { file, site, doc, sha, cut } = picked, generate = engine.generateText.bind(engine);
-    const humanId = input.humanId ?? "", prior = fixes.get(threadId);
-    let fx = prior?.file === file && prior.humanId === humanId ? prior : undefined;
+    const humanId = input.humanId ?? "", budget = `${threadId}\n${humanId}\n${file}`;
+    let fx = budgets.get(budget);
     const parts = chunkDoc(doc), startedAt = Date.now(), runId = randomUUID();
     const run: Run = {
       runId, threadId, messageId: slot.orphan ?? fx?.messageId, aborter: new AbortController(),
@@ -268,20 +277,26 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     });
     const key = `${threadId}\n${file}`, before = checked.get(key), now = new Set(findings.map(findingKey)), slips = new Set(findings.map(slipKey));
     const whole = status === "completed" && !failed.length && compared;
-    // The checker can miss a slip the bot left; only words gone from the document count as fixed.
-    const text = flat(doc.text), unflagged = fx ? [...fx.handed].filter(([slip]) => !slips.has(slip)).map(([, row]) => row) : [];
-    const gone = unflagged.filter(row => !text.includes(flat(row.quote)));
-    const shown = [...findings, ...unflagged.filter(row => !gone.includes(row))].sort((a, b) => a.line - b.line);
+    // The checker can miss a slip the bot left; only a handed spot gone from the document counts as fixed.
+    const text = flat(doc.text), unflagged = fx ? [...fx.handed].filter(([slip]) => !slips.has(slip)).map(([, handed]) => handed) : [];
+    const gone = unflagged.filter(handed => !text.includes(handed.near)).map(({ row }) => row);
+    const shown = [...findings, ...unflagged.map(({ row }) => row).filter(row => !gone.includes(row))].sort((a, b) => a.line - b.line);
     const fixed = !whole ? 0 : fx ? gone.length : before ? [...before.keys].filter(row => !now.has(row)).length : 0;
     if (whole) remember(checked, key, { sha, keys: now }, KEPT);
     const fresh = status === "completed" && (fx?.rounds ?? 0) < FIX_ROUNDS ? findings.filter(row => !fx?.handed.has(slipKey(row))) : [];
     const { prompt, listed } = fixPrompt(file, fresh);
+    // A spot is the quote with a few words around it: the same words can be right elsewhere.
+    const context = (row: VerifyDocFinding) => {
+      const start = doc.lineStarts[row.line - 1] ?? 0, at = doc.text.indexOf(row.quote, start), end = doc.text.indexOf("\n", at + row.quote.length);
+      return flat(at < 0 ? row.quote : doc.text.slice(Math.max(start, at - NEAR), Math.min(end < 0 ? doc.text.length : end, at + row.quote.length + NEAR)));
+    };
     if (listed.length) {
-      fx ??= { botId, humanId, roots: input.roots, file, rounds: 0, handed: new Map(), fixing: false };
+      fx ??= { botId, humanId, roots: input.roots, file, sha, rounds: 0, handed: new Map(), fixing: false };
+      // In a room the bot that wrote the file last fixes it; the rounds stay with the file.
+      Object.assign(fx, { botId, roots: input.roots, sha, prompt, fixing: true });
       fx.rounds++;
-      for (const row of listed) fx.handed.set(slipKey(row), row);
-      fx.prompt = prompt;
-      fx.fixing = true;
+      for (const row of listed) fx.handed.set(slipKey(row), { row, near: context(row) });
+      remember(budgets, budget, fx, KEPT);
       remember(fixes, threadId, fx, KEPT);
     }
     run.card = {
@@ -318,30 +333,37 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     });
   };
 
+  /** One check per thread, `quietMs` after the last call; a newer call replaces a running check on its card. */
+  function schedule(input: DocStart) {
+    if (disposed || !input.roots[0]) return;
+    if (fixes.get(input.threadId)?.timer) { unfix(input.threadId); fixes.delete(input.threadId); }
+    const slot = slots.get(input.threadId) ?? { token: {} };
+    slots.set(input.threadId, slot);
+    slot.input = slot.input?.botId === input.botId ? { ...input, paths: [...new Set([...slot.input.paths, ...input.paths])] } : input;
+    slot.token = {};
+    if (slot.run) {
+      slot.orphan = slot.run.messageId;
+      slot.run.aborter.abort();
+      slot.run = undefined;
+    }
+    clearTimeout(slot.timer);
+    slot.timer = setTimeout(fire, quietMs, input.threadId);
+  }
+
   return {
-    /** One check per thread, `quietMs` after the last call; a newer call replaces a running check on its card. */
-    schedule(input: DocStart) {
-      if (disposed || !input.roots[0]) return;
-      if (fixes.get(input.threadId)?.timer) { unfix(input.threadId); fixes.delete(input.threadId); }
-      const slot = slots.get(input.threadId) ?? { token: {} };
-      slots.set(input.threadId, slot);
-      slot.input = slot.input?.botId === input.botId ? { ...input, paths: [...new Set([...slot.input.paths, ...input.paths])] } : input;
-      slot.token = {};
-      if (slot.run) {
-        slot.orphan = slot.run.messageId;
-        slot.run.aborter.abort();
-        slot.run = undefined;
-      }
-      clearTimeout(slot.timer);
-      slot.timer = setTimeout(fire, quietMs, input.threadId);
-    },
+    schedule,
     run: (runId: string) => runs.get(runId),
-    /** Any turn that ended; the bot's fix turn ending rechecks its file. */
-    ended(turn: { botId: string; threadId: string; startedAt: number }) {
+    /** The token a starting turn carries when its prompt is the bot's pending fix. */
+    fixTurn(botId: string, threadId: string, text: string) {
+      const fx = fixes.get(threadId);
+      return fx?.token && fx.botId === botId && text.includes(fx.prompt!) ? fx.token : undefined;
+    },
+    /** Any turn that ended; the fix turn ending rechecks its file. */
+    ended(turn: { threadId: string; docFix?: string }) {
       const fx = fixes.get(turn.threadId);
-      if (!fx?.at || fx.botId !== turn.botId || turn.startedAt < fx.at) return;
-      fx.at = undefined;
-      this.schedule({ botId: fx.botId, threadId: turn.threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
+      if (!fx?.token || turn.docFix !== fx.token) return;
+      fx.token = undefined;
+      schedule({ botId: fx.botId, threadId: turn.threadId, roots: fx.roots, paths: [fx.file], humanId: fx.humanId });
     },
     dispose() {
       disposed = true;
