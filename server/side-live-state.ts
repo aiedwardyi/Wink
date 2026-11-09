@@ -67,13 +67,15 @@ export function liveBlock(threadId: string, now = Date.now()): { text: string; a
   const turn = turns.get(threadId);
   if (!turn || (!turn.open.size && !turn.wrote.length)) return { text: "", attached: [] };
   const stamp = new Date(now).toTimeString().slice(0, 8);
-  const writing = new Set([...turn.open.values()].flatMap((item) => (item.writes ? [fileName(item.writes)] : [])));
+  const writingShown = [...new Set([...turn.open.values()].flatMap((item) => (item.writes ? [item.writes] : [])))];
+  const writing = new Set(writingShown.map(fileName));
   const attached: string[] = [];
   const files: string[] = [];
   const unread: string[] = [];
   let budget = FILES_CAP;
   for (const { path, shown } of [...turn.wrote].reverse()) {
-    const body = writing.has(fileName(shown)) ? null : current(path);
+    if (writing.has(fileName(shown))) continue;
+    const body = current(path);
     const part = body === undefined ? `--- ${shown} (deleted) ---` : `--- ${shown} ---\n${body}`;
     if (body === null || part.length > budget) unread.push(shown);
     else {
@@ -87,6 +89,7 @@ export function liveBlock(threadId: string, now = Date.now()): { text: string; a
     const open = [...turn.open.values()].map(({ tool, at }) => `${tool} (started ${Math.max(0, Math.round((now - at) / 1000))} s ago)`);
     lines.push(`- Open now, still running, no result yet: ${open.join("; ")}.`);
   }
+  if (writingShown.length) lines.push(`- Being written now, don't state what it says: ${writingShown.join(", ")}`);
   if (unread.length) lines.push(`- Files the main task changed this turn: look one up (Read, Grep or Glob) in this ask before quoting or naming it, or your answer is dropped: ${unread.join(", ")}`);
   const head = lines.join("\n");
   const capped = head.length + 1 > CAP ? `${head.slice(0, CAP - 1 - CUT.length)}${CUT}` : head;

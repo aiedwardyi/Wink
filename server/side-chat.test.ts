@@ -90,6 +90,8 @@ describe("quickAsk on a fork", () => {
     expect(stub.inputs[0]!.threadId).toBe("t1");
     const [preamble, notes, text] = stub.inputs[0]!.text.split("\n\n");
     expect(preamble).toMatch(/^\[Quick helper\. .*reply with exactly HANDOFF and nothing else\. .*\]$/);
+    expect(preamble).toContain("naming only the files the question needs");
+    expect(preamble).toContain("A file being written now: don't state what it says, answer the rest.");
     expect(notes).toBe("[Quick answers given beside your work.]\nQ: a\nA: b");
     expect(text).toBe("where's the plan?");
   });

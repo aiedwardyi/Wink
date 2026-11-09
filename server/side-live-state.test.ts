@@ -35,6 +35,21 @@ describe("liveBlock", () => {
     expect(block).not.toMatch(/before quoting.*config\.json/);
   });
 
+  it("says a file being written now must not be stated, and stops asking to look it up", () => {
+    const t = "live-5";
+    observeLive(event(t, 0, { type: "turn.started" }));
+    observeLive(started(t, 100, "w1", "Edit", "notes.md +1 -1"));
+    observeLive(completed(t, 200, "w1", ["work/notes.md"]));
+    observeLive(started(t, 300, "w2", "Edit", "notes.md +1 -1"));
+    observeLive(started(t, 400, "w3", "Write", "src/new.js +9"));
+    const block = liveBlock(t, T0 + 1_000).text;
+    expect(block).toContain("- Being written now, don't state what it says: notes.md, src/new.js");
+    expect(block).not.toContain("look one up");
+    observeLive(completed(t, 500, "w2", ["work/notes.md"]));
+    observeLive(completed(t, 600, "w3", ["work/src/new.js"]));
+    expect(liveBlock(t, T0 + 1_000).text).not.toContain("Being written");
+  });
+
   it("is empty for an empty turn, an unknown thread and after the turn ends", () => {
     observeLive(event("live-2", 0, { type: "turn.started" }));
     expect(liveBlock("live-2", T0).text).toBe("");
@@ -110,7 +125,8 @@ describe("liveBlock attachments", () => {
     const { text, attached } = liveBlock(t, T0 + 5_000);
     expect(attached).toEqual([gone]);
     expect(text).toContain("--- gone.md (deleted) ---");
-    expect(text).toMatch(/answer is dropped: notes\.md, logo\.png\n/);
+    expect(text).toContain("Being written now, don't state what it says: notes.md\n");
+    expect(text).toMatch(/answer is dropped: logo\.png\n/);
     expect(text).not.toContain("Port: 4100");
   });
 });
