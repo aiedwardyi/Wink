@@ -756,6 +756,64 @@ test("a link made while the sweep re-checks a change still blocks its delete", {
   fs.unlinkSync(link);
 });
 
+test("a link missed by a rebuilt index that went stale still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  await scratchRows(f, ["TEST"]);
+  const host = path.join(f.worktreeRoot, "host");
+  fs.mkdirSync(host);
+  const other = path.join(f.tempRoot, "wink-OTHER");
+  fs.mkdirSync(other);
+  const link = path.join(host, "incoming");
+  const roots = [];
+  const watch = fs.watch;
+  t.mock.method(fs, "watch", (...args) => {
+    const watcher = watch(...args);
+    if (args[0] === f.worktreeRoot) roots.push(watcher);
+    return watcher;
+  });
+  const promises = await import("node:fs/promises");
+  let lost = false;
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.scratch && !lost) { lost = true; roots.at(-1).emit("error", new Error("overflow")); }
+    return readdir(...args);
+  });
+  const lstat = promises.default.lstat;
+  t.mock.method(promises.default, "lstat", (...args) => {
+    if (args[0] === other && lost && !fs.existsSync(link)) {
+      fs.symlinkSync(f.scratch, link, "junction");
+      roots.at(-1).emit("error", new Error("overflow"));
+    }
+    return lstat(...args);
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
+test("a link in a worktree root renamed aside and recreated still blocks its delete", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
+  const f = fixture(t);
+  await scratchRows(f, ["TEST"]);
+  const aside = path.join(f.home, "aside");
+  const link = path.join(f.worktreeRoot, "incoming");
+  const promises = await import("node:fs/promises");
+  const readdir = promises.default.readdir;
+  t.mock.method(promises.default, "readdir", (...args) => {
+    if (args[0] === f.scratch && !fs.existsSync(aside)) {
+      fs.renameSync(f.worktreeRoot, aside);
+      fs.mkdirSync(f.worktreeRoot);
+      fs.symlinkSync(f.scratch, link, "junction");
+    }
+    return readdir(...args);
+  });
+  await f.cleanup.sweep();
+  assert.equal(fs.existsSync(aside), true);
+  assert.equal(fs.readFileSync(path.join(f.scratch, "file"), "utf8"), "scratch");
+  assert.deepEqual(f.warnings, []);
+  fs.unlinkSync(link);
+});
+
 test("no link watcher outlives its close or sweep", { skip: process.platform !== "win32" && "link watches are Windows-only" }, async (t) => {
   const f = fixture(t);
   const open = new Set();

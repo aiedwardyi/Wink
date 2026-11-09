@@ -435,10 +435,23 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     watcher.on("error", lost);
     return watcher;
   };
+  const rootId = async (file) => {
+    const { dev, ino } = await fsp.stat(file, { bigint: true });
+    return `${dev}:${ino}`;
+  };
+  const moved = async (index) => {
+    for (const root of index.roots) {
+      try { if (await rootId(root.file) !== root.id) return true; } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        return true;
+      }
+    }
+    return false;
+  };
   const build = async (context, roots, key, skip) => {
     const index = { key, roots: [], links: new Map(), changes: new Map(), parents: new Map(), events: 0, stale: !WATCH, watchers: [], sections: new Map(), skip };
     context.index = index;
-    for (const root of roots) index.roots.push({ ...root, normalized: await normalizeAsync(root.file, index.parents) });
+    for (const root of roots) index.roots.push({ ...root, normalized: await normalizeAsync(root.file, index.parents), id: await rootId(root.file) });
     if (WATCH) {
       try { for (const root of index.roots) index.watchers.push(watch(index, root)); } catch { index.stale = true; }
     }
@@ -505,10 +518,16 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       // A link can resolve through a junction no watcher sees.
       if (final && context.index?.stale === false) await resolveLinks(context);
       if (context.index) await refresh(context, normalized, true);
-      if (context.index?.stale) context.close();
+      // A root renamed aside and recreated leaves its watcher on the old folder.
+      if (context.index?.stale || (context.index && await moved(context.index))) context.close();
       if (!context.index) {
         await build(context, roots, key, { file: target, name: normalized, seen: false });
         await refresh(context, normalized, false);
+        // A doubtful index never clears a delete: walk again and decide on that walk, as before the index.
+        if (WATCH && (context.index.stale || await moved(context.index))) {
+          context.close();
+          await build(context, roots, key, { file: target, name: normalized, seen: false });
+        }
       }
       // A watch handle on the candidate would hold up its own delete.
       const own = context.index.sections.get(normalized);
