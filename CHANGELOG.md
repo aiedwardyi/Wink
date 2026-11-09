@@ -2,6 +2,15 @@
 
 All notable changes to Wink, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Earlier releases are on [GitHub Releases](https://github.com/aiedwardyi/orbit-releases/releases).
 
+## [1.0.247] - 2026-11-10
+
+### Added
+- Claude Fable 5.2 in the model pickers and the Model Index.
+
+### Changed
+- The model list shows the cost per task at the effort you pick.
+- Fable 5 is no longer offered for new bots; bots already on it keep working.
+
 ## [1.0.246] - 2026-11-10
 
 ### Added
@@ -814,6 +823,7 @@ All notable changes to Wink, newest first. The format follows [Keep a Changelog]
 - Over-limit task records rejected, or clipped inside a file path.
 - Timeline, swipe and question card polish.
 
+[1.0.247]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.247
 [1.0.246]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.246
 [1.0.245]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.245
 [1.0.244]: https://github.com/aiedwardyi/orbit-releases/releases/tag/v1.0.244
