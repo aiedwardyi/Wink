@@ -11,6 +11,7 @@ import { ClaudeDriver } from "./drivers/claude.ts";
 import { EventBus } from "./harness/bus.ts";
 import { createMemoryPass } from "./memory-pass.ts";
 import { quickAsk, sideIdle, sweepSide } from "./side-chat.ts";
+import { observeLive } from "./side-live-state.ts";
 import { Store, type Message } from "./store.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
@@ -93,6 +94,52 @@ describe("quickAsk on a fork", () => {
     expect(text).toBe("where's the plan?");
   });
 
+  it("hands the main's live state to the fork", async () => {
+    const stub = stubFork();
+    const at = new Date().toISOString();
+    observeLive({ eventId: "l1", provider: "claude", threadId: "t-open", createdAt: at, type: "turn.started" });
+    observeLive({ eventId: "l2", provider: "claude", threadId: "t-open", createdAt: at, type: "item.started", itemType: "tool", itemId: "a1", title: "mcp__agents__ask_bot", summary: "mina" });
+    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t-open", { text: "are we done?" });
+    stub.emit({ type: "done", ok: true, text: "HANDOFF" });
+    await pending;
+    expect(stub.inputs[0]!.live).toMatch(/ask_bot mina \(started \d+ s ago\)/);
+    const idle = stubFork();
+    const quiet = quickAsk({ instance: instanceWith({ fork: idle.fork }), messages: [] }, "t-quiet", { text: "q?" });
+    idle.emit({ type: "done", ok: true, text: "HANDOFF" });
+    await quiet;
+    expect(idle.inputs[0]!.live).toBeUndefined();
+  });
+
+  it("hands off an answer quoting a changed file it did not read this ask", async () => {
+    const at = new Date().toISOString();
+    observeLive({ eventId: "g1", provider: "claude", threadId: "t-guard", createdAt: at, type: "turn.started" });
+    observeLive({ eventId: "g2", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.started", itemType: "tool", itemId: "e1", title: "Edit", summary: "config.json +1 -1" });
+    observeLive({ eventId: "g3", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.completed", itemType: "tool", itemId: "e1", ok: true, writes: ["D:\\work\\config.json"] });
+    observeLive({ eventId: "g4", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.started", itemType: "tool", itemId: "e2", title: "Write", summary: "notes.md +3" });
+    const ask = (reads: string[], answer: string) => {
+      const stub = stubFork();
+      const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t-guard", { text: "what port?" });
+      for (const path of reads) stub.emit({ type: "tool", name: "Read", path });
+      stub.emit({ type: "done", ok: true, text: answer });
+      return pending;
+    };
+    expect(await ask([], "config.json says 4100.")).toMatchObject({ route: "handoff" });
+    expect(await ask([], "notes.md says Friday.")).toMatchObject({ route: "handoff" });
+    expect(await ask(["D:/work/config.json"], "config.json says 4180.")).toMatchObject({ route: "answer" });
+    expect(await ask([], "It runs on Node 20.")).toMatchObject({ route: "answer" });
+  });
+
+  it("hands off an answer over 4 lines", async () => {
+    const say = async (answer: string) => {
+      const stub = stubFork();
+      const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "progress?" });
+      stub.emit({ type: "done", ok: true, text: answer });
+      return pending;
+    };
+    expect(await say("a\nb\n\nc\nd")).toMatchObject({ route: "answer" });
+    expect(await say("a\nb\nc\nd\ne")).toMatchObject({ route: "handoff" });
+  });
+
   it("hands off when the output starts with HANDOFF, killing the fork at once", async () => {
     const stub = stubFork();
     const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "dark mode?" });
@@ -173,6 +220,13 @@ describe("quickAsk without a fork", () => {
     expect(await say("HANDOFF")).toMatchObject({ route: "handoff" });
     expect(await quickAsk({ instance: instanceWith({ generateText: async () => { throw new Error("signed out"); } }), messages: [] }, "t1", { text: "q?" })).toMatchObject({ route: "handoff" });
     expect(await quickAsk({ instance: instanceWith({}), messages: [] }, "t1", { text: "q?" })).toMatchObject({ route: "handoff" });
+  });
+
+  it("puts the main's live state in the prompt", async () => {
+    const generateText = vi.fn(async (_prompt: string) => "HANDOFF");
+    observeLive({ eventId: "f1", provider: "claude", threadId: "t-text", createdAt: new Date().toISOString(), type: "item.started", itemType: "tool", itemId: "b1", title: "Bash", summary: "npm test" });
+    await quickAsk({ instance: instanceWith({ generateText }), messages: [] }, "t-text", { text: "q?" });
+    expect(generateText.mock.calls[0]![0]).toContain("Bash npm test (started");
   });
 });
 
@@ -342,6 +396,16 @@ describe("Claude fork (fake CLI)", () => {
     expect(existsSync(join(work, "made.txt"))).toBe(false);
     expect(existsSync(join(work, "ran.txt"))).toBe(false);
     expect(alive(handle.live.pid)).toBe(false);
+  });
+
+  it("sends the live block ahead of the ask", async () => {
+    process.env.FAKE_CLAUDE_PROMPT_LOG = join(scratch, "prompts.jsonl");
+    process.env.FAKE_CLAUDE_FORK_FIXTURE = fixture("Still waiting on Mina.");
+    await mainTurn("t-block");
+    const handle = instance.fork!({ threadId: "t-block", text: "q", live: "[LIVE]" })!;
+    await new Promise<void>((resolve) => handle.onEvent((event) => event.type === "done" && resolve()));
+    await handle.close(5_000);
+    expect(prompts().find((line) => line.argv.includes("--fork-session"))!.text).toBe("[LIVE]\n\nq");
   });
 
   it("returns no fork before the thread ever spawned", () => {

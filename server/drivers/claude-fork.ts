@@ -116,7 +116,7 @@ export function forkClaude(spawn: ClaudeSpawn, input: SideInput): SideHandle {
         const blocks: any[] = Array.isArray(m.message?.content) ? m.message.content : [];
         const text = blocks.filter((block) => block?.type === "text").map((block) => String(block.text ?? "")).join("");
         if (text) last = text;
-        for (const block of blocks) if (block?.type === "tool_use") emit({ type: "tool", name: String(block.name) });
+        for (const block of blocks) if (block?.type === "tool_use") emit({ type: "tool", name: String(block.name), ...(typeof block.input?.file_path === "string" ? { path: block.input.file_path } : {}) });
       } else if (m.type === "result") {
         finish(!m.is_error, typeof m.result === "string" ? m.result : last, usage(m.usage));
       }
@@ -134,7 +134,7 @@ export function forkClaude(spawn: ClaudeSpawn, input: SideInput): SideHandle {
     child.stderr.resume();
     child.on("error", () => finish(false, ""));
     child.on("close", () => finish(false, last));
-    child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: input.text } }) + "\n");
+    child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [input.live, input.text].filter(Boolean).join("\n\n") } }) + "\n");
 
     let closing: Promise<void> | null = null;
     return {

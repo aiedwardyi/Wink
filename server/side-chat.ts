@@ -8,12 +8,14 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { prepareModelContext } from "./context-compaction.ts";
 import type { ProviderInstance, SideEvent, SideHandle } from "./contracts.ts";
+import { liveBlock, quotesUnread } from "./side-live-state.ts";
 import type { Message } from "./store.ts";
 
 const PREAMBLE =
-  "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines, stating only what this conversation or your lookups show, with no extra tips or guesses. The main task is still running: a step with no result yet is in progress, not interrupted or failed. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question.]";
+  "[Quick helper. The person sent the message below while you are busy on the main task. You are a read-only copy of yourself answering beside that work: the main task keeps running, and it only learns this exchange later as a short note. If the message is a question you can fully answer from this conversation, or with at most 3 Read, Glob or Grep lookups in this project folder, answer it in 1 to 4 short lines (a longer answer is dropped), stating only what this conversation or your lookups show, with no extra tips, guesses, or commands and code you composed yourself. Otherwise reply with exactly HANDOFF and nothing else. HANDOFF whenever answering needs editing or creating files, running commands, the web, other computers, workers or other bots, or whenever the message asks for, approves, corrects, pauses or changes work, even when it is phrased as a question. Your latest step may show here as interrupted or without a result; the main task is still running it, so call it in progress. For anything a file says now, read it; the chat may be behind.]";
 const READ_TOOLS = new Set(["Read", "Glob", "Grep"]);
 const CAP_MS = 12_000;
+const MAX_LINES = 4;
 // An answered fork exits on its own once stdin ends; this only bounds a stuck one.
 const CLOSE_GRACE_MS = 5_000;
 // Half of it is the budget: 16k tokens of summary plus newest tail.
@@ -118,11 +120,12 @@ export async function sideIdle(): Promise<void> {
 
 const handoff = (started: number, usage?: Usage): QuickResult => ({ route: "handoff", ...(usage ? { usage } : {}), ms: Date.now() - started });
 
-function viaFork(handle: SideHandle, started: number): Promise<QuickResult> {
+function viaFork(handle: SideHandle, threadId: string, started: number): Promise<QuickResult> {
   const live: Live = { ...handle.live };
   record(live);
   return new Promise((resolve) => {
     let text = "";
+    const reads: string[] = [];
     let ended = false;
     const end = (result: Omit<QuickResult, "ms">, graceMs: number) => {
       if (ended) return;
@@ -150,10 +153,12 @@ function viaFork(handle: SideHandle, started: number): Promise<QuickResult> {
         if (/^\s*HANDOFF/.test(text)) end({ route: "handoff" }, 0);
       } else if (event.type === "tool") {
         if (!READ_TOOLS.has(event.name)) end({ route: "handoff" }, 0);
+        else if (event.name === "Read" && event.path) reads.push(event.path);
       } else {
         const answer = event.text.trim();
         const usage = event.usage ? { usage: event.usage } : {};
-        if (!event.ok || !answer || answer.startsWith("HANDOFF")) end({ route: "handoff", ...usage }, CLOSE_GRACE_MS);
+        const long = answer.split("\n").filter((line) => line.trim()).length > MAX_LINES;
+        if (!event.ok || !answer || answer.startsWith("HANDOFF") || long || quotesUnread(threadId, answer, reads)) end({ route: "handoff", ...usage }, CLOSE_GRACE_MS);
         else end({ route: "answer", text: answer, ...usage }, CLOSE_GRACE_MS);
       }
     });
@@ -189,11 +194,12 @@ async function viaText(bot: QuickBot, ask: string, started: number): Promise<Qui
 export function quickAsk(bot: QuickBot, threadId: string, ask: { text: string; notes?: string }): Promise<QuickResult> {
   const started = Date.now();
   const text = [PREAMBLE, ask.notes?.trim(), ask.text].filter(Boolean).join("\n\n");
+  const live = liveBlock(threadId) || undefined;
   let handle: SideHandle | null = null;
   try {
-    handle = bot.instance.fork?.({ threadId, text }) ?? null;
+    handle = bot.instance.fork?.({ threadId, text, ...(live ? { live } : {}) }) ?? null;
   } catch {
     return Promise.resolve(handoff(started));
   }
-  return handle ? viaFork(handle, started) : viaText(bot, text, started);
+  return handle ? viaFork(handle, threadId, started) : viaText(bot, [live, text].filter(Boolean).join("\n\n"), started);
 }

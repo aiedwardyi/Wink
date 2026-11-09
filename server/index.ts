@@ -413,6 +413,7 @@ import { createBotChatRoutes } from "./bot-chat-routes.ts";
 import { createThreadRoutes } from "./thread-routes.ts";
 import { startupTiming } from "./startup-timing.ts";
 import { currentTurnTrace, holdTurnTrace, observeTraceEvent, traceClaimedTurn, tracePart } from "./turn-timing.ts";
+import { observeLive } from "./side-live-state.ts";
 import { slimStaticText } from "./drivers/tool-catalog.ts";
 import { restoreStartupAccounts } from "./startup-accounts.ts";
 
@@ -4050,6 +4051,7 @@ bus.subscribe((event: RuntimeEvent) => {
 });
 
 bus.subscribe(observeTraceEvent);
+bus.subscribe(observeLive);
 
 // Delegated turns are fire-and-forget, so the drain cannot hand the
 // peer's reply back to the caller the way ask_bot does. This watch map
