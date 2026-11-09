@@ -481,6 +481,17 @@ export function UsageDesk() {
       for (const head of heads) head.style.transitionProperty = "none";
       delete list.dataset.phoneColumns;
       if (!heads.length) return;
+      list.dataset.phoneColumns = "";
+      const figures = [...list.querySelectorAll<HTMLElement>(".usage-meter-summary .usage-figures")];
+      // A bigger bar may neither squeeze a row nor wrap one that fits on one line at the small size.
+      list.dataset.summarySize = "small";
+      const lines = figures.map((each) => each.offsetHeight);
+      for (const size of ["large", "medium"]) {
+        list.dataset.summarySize = size;
+        if (figures.every((each, index) => each.offsetHeight <= lines[index]! && each.scrollWidth <= each.clientWidth)) break;
+        list.dataset.summarySize = "small";
+      }
+      delete list.dataset.phoneColumns;
       for (const head of heads) head.style.setProperty("--usage-row-height", `${head.getBoundingClientRect().height}px`);
       list.dataset.phoneColumns = "";
       for (const head of heads) head.style.removeProperty("transition-property");
