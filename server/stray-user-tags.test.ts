@@ -64,6 +64,15 @@ describe("stray user tags", () => {
     expect(sent).toEqual(["Plain ", "text ", "<b>", " then ", "Hi end"]);
   });
 
+  it("streams 25k small deltas in linear time", () => {
+    stripStrayUserTags(delta("<user1>"));
+    const start = performance.now();
+    let sent = "";
+    for (let at = 0; at < 25_000; at++) sent += shown(stripStrayUserTags(delta("abcd")));
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(sent).toBe("abcd".repeat(25_000));
+  });
+
   it("starts each item's stream fresh", () => {
     stripStrayUserTags(delta("<user1>one"));
     stripStrayUserTags(done("one"));

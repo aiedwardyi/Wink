@@ -39,4 +39,20 @@ describe("unwrapUserTags", () => {
     expect(unwrapUserTags("see `a\nb` <user1>d</user1>\n\n<user2>e</user2>")).toBe("see `a\nb` d\n\ne");
     expect(unwrapUserTags("a\n    <user1>b</user1>")).toBe("a\n    b");
   });
+
+  it("unwraps only the outer pair around a fenced reply", () => {
+    expect(unwrapUserTags("<user1>~~~xml\n<user2>x</user2>\n~~~</user1>")).toBe("~~~xml\n<user2>x</user2>\n~~~");
+  });
+
+  it("does not let a fence indented four spaces close a block", () => {
+    const text = "   ~~~\n    ~~~\n<user1>x</user1>\n~~~";
+    expect(unwrapUserTags(text)).toBe(text);
+  });
+
+  it("keeps indented code inside a list item literal", () => {
+    const text = "-     <user1>x</user1>";
+    expect(unwrapUserTags(text)).toBe(text);
+    const nested = "- item\n\n      <user1>y</user1>";
+    expect(unwrapUserTags(nested)).toBe(nested);
+  });
 });

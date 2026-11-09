@@ -1,75 +1,145 @@
 const TAG = /<\/?user\d+>/g;
+const EDGE_HEAD = /^( *)(?:<\/?user\d+>)+/;
+const EDGE_TAIL = /(?:<\/?user\d+>)+(\s*)$/;
+const PARTIAL_TAG = /<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?$/;
+const HOLD = /(?:<\/?(?:u(?:s(?:e(?:r\d*)?)?)?)?|[\\`]+)$/;
+const UNSETTLED = /^[\s>*+\-\d.)`~]*$/;
 const QUOTE = /^(?: {0,3}>[ \t]?)+/;
 const FENCE = /^( *(?:(?:[-*+]|\d{1,9}[.)]) +)*)(`{3,}(?=[^`]*$)|~{3,})/;
 const FENCE_END = /^ *(`{3,}|~{3,})\s*$/;
-const INDENT = /^(?: {4}|\t)/;
+const ITEM = /^( *)([-*+]|\d{1,9}[.)])( +)(?=\S)/;
 const RUNS = /`+/g;
 
-function openTick(line: string, from: number): number {
-  for (let at = line.indexOf("`", from); at >= 0; at = line.indexOf("`", at + 1)) {
+function openTick(text: string, from: number): number {
+  for (let at = text.indexOf("`", from); at >= 0; at = text.indexOf("`", at + 1)) {
     let slashes = 0;
-    while (line[at - 1 - slashes] === "\\") slashes++;
+    while (text[at - 1 - slashes] === "\\") slashes++;
     if (slashes % 2 === 0) return at;
   }
   return -1;
 }
 
-/** Drops `<userN>` tags a bot leaves outside a peer reply, keeping the inner text and any code. An unclosed fence or span counts as code, so a streamed prefix unwraps like its whole. */
-export function unwrapUserTags(text: string): string {
-  if (!/<\/?user\d/.test(text)) return text;
-  let fence = "";
-  let fenceDepth = 0;
-  let fenceColumn = 0;
-  let fenceAt = 0;
-  let span = 0;
-  let indented = false;
-  let blank = true;
-  const scan = (line: string): string => {
+/** Drops `<userN>` tags a bot leaves outside a peer reply, keeping the inner text and any code. Fed text in pieces, it costs only the new piece; a tag, backtick run or line start still undecided at the end of a piece is held for the next. */
+export class UserTagScanner {
+  private fence = "";
+  private fenceDepth = 0;
+  private fenceColumn = 0;
+  private listColumn = 0;
+  private span = 0;
+  private indented = false;
+  private blank = true;
+  private kind?: "code" | "text";
+  private buf = "";
+  private held = "";
+
+  push(chunk: string): string {
     let out = "";
-    let at = 0;
-    while (at < line.length) {
-      const tick = span ? at : openTick(line, at);
-      if (!span) out += line.slice(at, tick < 0 ? line.length : tick).replace(TAG, "");
-      if (tick < 0) break;
-      RUNS.lastIndex = tick;
-      let end = line.length;
-      if (span) {
-        for (let run; (run = RUNS.exec(line)); ) if (run[0].length === span) { end = run.index + span; span = 0; break; }
-      } else {
-        span = RUNS.exec(line)![0].length;
-        end = tick + span;
-      }
-      out += line.slice(tick, end);
+    for (let at = 0; at < chunk.length; ) {
+      const nl = chunk.indexOf("\n", at);
+      const end = nl < 0 ? chunk.length : nl + 1;
+      out += this.feed(chunk.slice(at, end), nl >= 0, false);
       at = end;
     }
     return out;
-  };
-  let out = "";
-  for (const line of text.split(/(?<=\n)/)) {
-    const body = line.replace(QUOTE, "");
-    const open = FENCE.exec(body);
-    const mark = open?.[2];
-    const depth = line.slice(0, line.length - body.length).split(">").length - 1;
-    const indent = body.length - body.trimStart().length;
-    if (fence && (depth < fenceDepth || (fenceColumn && body.trim() && indent < fenceColumn))) fence = "";
-    if (fence) {
-      const end = FENCE_END.exec(body)?.[1];
-      if (end && depth === fenceDepth && indent <= fenceAt + 3 && end[0] === fence[0] && end.length >= fence.length) fence = "";
-      out += line;
-    } else if (mark || !body.trim()) {
-      fence = mark ?? "";
-      fenceDepth = depth;
-      fenceAt = open?.[1].length ?? 0;
-      fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? fenceAt : 0;
-      span = 0;
-      indented = false;
-      blank = !mark;
-      out += line;
-    } else {
-      indented = INDENT.test(body) && (blank || indented);
-      blank = false;
-      out += indented ? line : scan(line);
-    }
   }
-  return out;
+
+  finish(): string {
+    return this.kind || this.buf ? this.feed("", false, true) : "";
+  }
+
+  private feed(piece: string, last: boolean, flush: boolean): string {
+    const final = last || flush;
+    let out: string;
+    if (this.kind) out = this.kind === "code" ? piece : this.inline(piece, final);
+    else {
+      this.buf += piece;
+      if (!final && this.unsettled(this.buf)) return "";
+      const { code, head } = this.classify(this.buf);
+      const buf = this.buf;
+      this.buf = "";
+      this.kind = code ? "code" : "text";
+      out = code ? head : this.inline(buf, final);
+    }
+    if (last) this.kind = undefined;
+    return out;
+  }
+
+  // a line start made only of quote, list and fence characters could still become a fence line
+  private unsettled(buf: string): boolean {
+    if (buf.length > 256) return false;
+    const body = buf.replace(QUOTE, "").replace(EDGE_HEAD, "$1").replace(EDGE_TAIL, "$1").replace(PARTIAL_TAG, "");
+    return UNSETTLED.test(body);
+  }
+
+  private classify(line: string): { code: boolean; head: string } {
+    const body = line.replace(QUOTE, "");
+    const quote = line.slice(0, line.length - body.length);
+    const depth = quote.split(">").length - 1;
+    // a wrapper around a fenced reply is not part of the fence line
+    const core = body.replace(EDGE_HEAD, "$1").replace(EDGE_TAIL, "$1");
+    const indent = /^[ \t]*/.exec(core)![0].replace(/\t/g, "    ").length;
+    const open = FENCE.exec(core);
+    const mark = open?.[2];
+    if (this.fence && (depth < this.fenceDepth || (this.fenceColumn && core.trim() && indent < this.fenceColumn))) this.fence = "";
+    if (this.fence) {
+      const end = FENCE_END.exec(core)?.[1];
+      if (!end || depth !== this.fenceDepth || indent > this.fenceColumn + 3 || end[0] !== this.fence[0] || end.length < this.fence.length) {
+        return { code: true, head: line };
+      }
+      this.fence = "";
+      return { code: true, head: quote + core };
+    }
+    if (mark || !body.trim()) {
+      this.fence = mark ?? "";
+      this.fenceDepth = depth;
+      this.fenceColumn = /[^ ]/.test(open?.[1] ?? "") ? open![1].length : 0;
+      this.span = 0;
+      this.indented = false;
+      this.blank = !mark;
+      return { code: true, head: mark ? quote + body.replace(EDGE_HEAD, "$1") : line };
+    }
+    let code = indent - this.listColumn >= 4 && (this.blank || this.indented);
+    const item = code ? null : ITEM.exec(core);
+    if (item) {
+      code = item[3].length >= 5;
+      this.listColumn = item[1].length + item[2].length + (code ? 1 : item[3].length);
+    } else if (!code && indent < this.listColumn) this.listColumn = 0;
+    this.indented = code;
+    this.blank = false;
+    return { code, head: line };
+  }
+
+  private inline(text: string, final: boolean): string {
+    const all = this.held + text;
+    const keep = final ? 0 : HOLD.exec(all)?.[0].length ?? 0;
+    this.held = all.slice(all.length - keep);
+    return this.scan(all.slice(0, all.length - keep));
+  }
+
+  private scan(text: string): string {
+    let out = "";
+    let at = 0;
+    while (at < text.length) {
+      const tick = this.span ? at : openTick(text, at);
+      if (!this.span) out += text.slice(at, tick < 0 ? text.length : tick).replace(TAG, "");
+      if (tick < 0) break;
+      RUNS.lastIndex = tick;
+      let end = text.length;
+      if (this.span) {
+        for (let run; (run = RUNS.exec(text)); ) if (run[0].length === this.span) { end = run.index + this.span; this.span = 0; break; }
+      } else {
+        this.span = RUNS.exec(text)![0].length;
+        end = tick + this.span;
+      }
+      out += text.slice(tick, end);
+      at = end;
+    }
+    return out;
+  }
+}
+
+export function unwrapUserTags(text: string): string {
+  if (!/<\/?user\d/.test(text)) return text;
+  const scanner = new UserTagScanner();
+  return scanner.push(text) + scanner.finish();
 }

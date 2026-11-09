@@ -123,7 +123,7 @@ public enum Markdown {
         var fence = ""
         var fenceDepth = 0
         var fenceColumn = 0
-        var fenceAt = 0
+        var listColumn = 0
         var span = 0
         var indented = false
         var blank = true
@@ -131,6 +131,20 @@ public enum Markdown {
         func strip(_ part: Substring) -> String {
             let part = String(part)
             return tag.stringByReplacingMatches(in: part, range: NSRange(part.startIndex..., in: part), withTemplate: "")
+        }
+        let headTags = try! NSRegularExpression(pattern: "^( *)(?:</?user[0-9]+>)+")
+        let tailTags = try! NSRegularExpression(pattern: "(?:</?user[0-9]+>)+(\\s*)$")
+        let item = try! NSRegularExpression(pattern: "^( *)([-*+]|[0-9]{1,9}[.)])( +)(?=\\S)")
+        func leadingTags(_ part: String) -> String {
+            headTags.stringByReplacingMatches(in: part, range: NSRange(part.startIndex..., in: part), withTemplate: "$1")
+        }
+        func trimTags(_ part: String) -> String {
+            let head = leadingTags(part)
+            return tailTags.stringByReplacingMatches(in: head, range: NSRange(head.startIndex..., in: head), withTemplate: "$1")
+        }
+        func listItem(_ part: String) -> (width: Int, spaces: Int)? {
+            guard let match = item.firstMatch(in: part, range: NSRange(part.startIndex..., in: part)) else { return nil }
+            return (match.range(at: 1).length + match.range(at: 2).length, match.range(at: 3).length)
         }
         func isBlank(_ part: Substring) -> Bool { part.allSatisfy { $0 == " " || $0 == "\t" } }
         func unquoted(_ line: String) -> Substring {
@@ -143,7 +157,7 @@ public enum Markdown {
             }
         }
         // `column` is where a list item's content starts, so the fence ends when a line dedents past it
-        func fenceStart(_ body: Substring) -> (column: Int, at: Int, mark: String, after: Substring)? {
+        func fenceStart(_ body: Substring) -> (column: Int, mark: String, after: Substring)? {
             var rest = body
             var column = 0
             var listed = false
@@ -171,7 +185,7 @@ public enum Markdown {
             let run = rest.prefix(while: { $0 == first }).count
             let after = rest.dropFirst(run)
             guard run >= 3, first == "~" || !after.contains("`") else { return nil }
-            return (listed ? column : 0, column, String(repeating: first, count: run), after)
+            return (listed ? column : 0, String(repeating: first, count: run), after)
         }
         func openTick(_ part: Substring) -> String.Index? {
             var slashes = 0
@@ -214,28 +228,40 @@ public enum Markdown {
 
         return text.components(separatedBy: "\n").map { line -> String in
             let body = unquoted(line)
-            let depth = line.prefix(line.count - body.count).filter { $0 == ">" }.count
-            let open = fenceStart(body)
-            let indent = body.prefix(while: { $0 == " " }).count
-            if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(body) && indent < fenceColumn)) { fence = "" }
+            let quote = String(line.prefix(line.count - body.count))
+            let depth = quote.filter { $0 == ">" }.count
+            // a wrapper around a fenced reply is not part of the fence line
+            let core = trimTags(String(body))
+            let open = fenceStart(Substring(core))
+            let indent = core.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+            if !fence.isEmpty && (depth < fenceDepth || (fenceColumn > 0 && !isBlank(Substring(core)) && indent < fenceColumn)) { fence = "" }
             if !fence.isEmpty {
-                if let open = open, depth == fenceDepth, indent <= fenceAt + 3, open.column == 0, open.mark.first == fence.first, open.mark.count >= fence.count,
-                   isBlank(open.after) { fence = "" }
+                if let open = open, depth == fenceDepth, indent <= fenceColumn + 3, open.column == 0, open.mark.first == fence.first,
+                   open.mark.count >= fence.count, isBlank(open.after) {
+                    fence = ""
+                    return quote + core
+                }
                 return line
             }
             if open != nil || isBlank(body) {
                 fence = open?.mark ?? ""
                 fenceColumn = open?.column ?? 0
-                fenceAt = open?.at ?? 0
                 fenceDepth = depth
                 span = 0
                 indented = false
                 blank = open == nil
-                return line
+                return open == nil ? line : quote + leadingTags(String(body))
             }
-            indented = (body.hasPrefix("    ") || body.hasPrefix("\t")) && (blank || indented)
+            var code = indent - listColumn >= 4 && (blank || indented)
+            if !code, let item = listItem(core) {
+                code = item.spaces >= 5
+                listColumn = item.width + (code ? 1 : item.spaces)
+            } else if !code && indent < listColumn {
+                listColumn = 0
+            }
+            indented = code
             blank = false
-            return indented ? line : scan(line)
+            return code ? line : scan(line)
         }.joined(separator: "\n")
     }
 
