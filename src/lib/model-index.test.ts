@@ -254,7 +254,7 @@ describe("sourced data", () => {
     const scored = MODEL_INDEX_ENTRIES.filter((e) => e.model === "gemini-4-argon" && e.index !== "cost");
     expect(scored.map((e) => [e.index, e.benchmark, e.effort, e.score, e.cost])).toEqual([
       ["coding", "aa-frontiercode", "high", 25.7076262626263, undefined],
-      ["general", "aa-gdpval", "high", 1630.66, undefined],
+      ["general", "aa-gdpval", "high", 1630.66, 3.64],
       ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 9.946608711550533],
       ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
       ["design", "rams-index", "default", 20.7, 0.149],

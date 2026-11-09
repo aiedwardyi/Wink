@@ -1,10 +1,10 @@
 # Model Index refresh, 2026-11-09
 
-Each chart uses the newest version its source publishes, quoted, and a model the source does not publish stays a gap. 203 values changed and 29 were added. Older versions stay as inactive history, byte-for-byte apart from `active: false`.
+Each chart uses the newest version its source publishes, quoted, and a model the source does not publish stays a gap. 256 values changed and 35 were added. Older versions stay as inactive history, byte-for-byte apart from `active: false`.
 
 - Intelligence Index moved from v4.3.2 to [v5.0.1](https://artificialanalysis.ai/models), with cost per task from the same record. AA no longer publishes v4.3.2.
-- FrontierCode moved from 1.1 to [2.0](https://artificialanalysis.ai/evaluations/frontiercode-2-0). Costs were not backfilled. Cognition publishes 1.1 at most, so its fills stay in the 1.1 history.
-- [GDPval-AA v2.1](https://artificialanalysis.ai/evaluations/gdpval-aa) Elos moved and GPT-6.1 Terra gained four efforts. AA no longer publishes run cost, so all costs were removed and the chart is Ranked only.
+- FrontierCode moved from 1.1 to [2.0](https://artificialanalysis.ai/evaluations/frontiercode-2-0). Costs were not backfilled. [1.1](https://artificialanalysis.ai/evaluations/frontiercode) is still published alongside it, and Cognition publishes 1.1 at most, so those rows and fills stay in the 1.1 history.
+- [GDPval-AA v2.1](https://artificialanalysis.ai/evaluations/gdpval-aa) Elos moved and GPT-6.1 Terra gained four efforts. Costs are the Cost per Task bar totals on the same page, rounded as AA shows them. Claude Haiku 5.5 costs carry AA's refusal estimate footnote.
 - Rams Index 0.6.1 republished its scores under the same edition and date. The previous numbers are in `rams-index-2026-11-03.json`.
 - Vals moved to 2026-11-05: Opus 5.5 and Sonnet 5.5 costs changed on both boards, scores did not.
 - Terminal-Bench 4.0 and list prices were re-read with no change. Google's pricing page is now Markdoc, which the parser reads.
@@ -23,7 +23,7 @@ AA numbers come from its public model pages, one per effort. The keyed weekly ru
 | List prices | 0 | 0 | - | - |
 | Total model/chart gaps | 11 | 13 | | |
 
-Counts use the 15 picker models and active charts only. GPT-6.1 Terra and Sol both show on 6 of 7 score charts.
+Counts use the 15 picker models and active charts only. GPT-6.1 Terra and Sol both show on 6 of 7 score charts. Sol alone shows on 7 of 7; Vals publishes no CyberBench score for Terra.
 
 # Model Index fill, 2026-11-03
 
