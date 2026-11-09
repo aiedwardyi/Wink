@@ -109,6 +109,7 @@ import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
+import { WhatsNewSlot } from "./WhatsNew";
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -1736,6 +1737,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             workers={rowWorkers}
             livePanes={livePanes}
           />
+          <WhatsNewSlot hidden={hidden} />
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button

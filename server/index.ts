@@ -47,6 +47,7 @@ import "./bot-profile.ts";
 import "./generate-image.ts";
 import { loadKeyUses } from "./key-broker.ts";
 import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.ts";
+import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
@@ -428,12 +429,14 @@ const MIME: Record<string, string> = {
   ".css": "text/css",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".webp": "image/webp",
   ".ico": "image/x-icon",
   ".json": "application/json",
   ".woff2": "font/woff2",
 };
 
 ensureDirs();
+const whatsNew = openWhatsNew(DATA_DIR, process.env.OMB_APP_VERSION ?? "");
 // One-shot upgrade cleanup: drop the removed engine's plaintext key from the
 // stored file before anything reads it. Idempotent — a file without the
 // legacy section is left untouched. A failed sweep is loud: the secret would
@@ -8057,6 +8060,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true });
     }
 
+    if (method === "GET" && path === "/api/whats-new") return json(res, 200, { release: whatsNew.pending() });
+    if (method === "POST" && path === "/api/whats-new/seen") {
+      whatsNew.markSeen((await readBody(req))?.release);
+      return json(res, 200, { ok: true });
+    }
     if (method === "GET" && path === "/api/update/state") {
       const update = await updateBridgeResponse(terminalBridgeAccess, "state");
       return json(res, update.status, update.body);
