@@ -7225,6 +7225,7 @@ const verifyAuto = createVerifyAuto({
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
   log: line => console.log(line),
+  app: { skipPorts: [PORT] },
 });
 const botRoutes = createBotRoutes({
   accountBots: botAccounts,

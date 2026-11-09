@@ -4,6 +4,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
 import type { RuntimeEvent } from "./contracts.ts";
+import { appEntry, type AppOptions } from "./verify-app.ts";
 import { resolveVerifySite } from "./verify-site.ts";
 
 const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico"]);
@@ -35,6 +36,7 @@ interface VerifyAutoDeps {
   log(line: string): void;
   freeMemory?(): number;
   scan?: typeof scanVerifyWrites;
+  app?: AppOptions;
 }
 interface ToolTurn { tools: number; opaque: boolean; writes: Set<string>; sequence: number; checked?: number; names: Map<string, { title: string; readOnly: boolean }> }
 
@@ -75,28 +77,6 @@ async function entryFor(paths: string[], turn: VerifyAutoTurn): Promise<string |
     return info?.isFile() ? { path: full, mtime: info.mtimeMs } : null;
   }))).filter(row => row !== null).sort((a, b) => b.mtime - a.mtime);
   if (!candidates.length) return;
-  const urls = [...new Set((`${turn.reply}\n${turn.humanText}`.match(/https?:\/\/[^\s<>"'`]+/gi) ?? []).map(url => url.replace(/[),.;]+$/, "")))];
-  let served: Promise<string | undefined> | undefined;
-  const servedUrl = () => served ??= (async () => {
-    for (const url of urls) {
-      try {
-        const site = await resolveVerifySite(url, turn.roots);
-        if (typeof site !== "string" && /^https?:/.test(site.root)) return site.site;
-      } catch {}
-    }
-  })();
-  for (const candidate of candidates) {
-    for (let folder = dirname(candidate.path); owned(folder);) {
-      if ((await stat(join(folder, "package.json")).catch(() => null))?.isFile()) {
-        const site = await servedUrl();
-        if (site) return site;
-        break;
-      }
-      const parent = dirname(folder);
-      if (parent === folder) break;
-      folder = parent;
-    }
-  }
   const tried = new Set<string>();
   for (const candidate of candidates) {
     if (/\.html?$/i.test(candidate.path) && !/^index\.html?$/i.test(candidate.path.split(/[\\/]/).at(-1)!)) {
@@ -154,7 +134,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
     try {
       const paths = [...turn.writes];
       if (turn.opaque) paths.push(...await (deps.scan ?? scanVerifyWrites)(input.roots[0], input.startedAt));
-      const entry = await entryFor([...new Set(paths)], input);
+      const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
       if (latest.get(input.threadId) !== token) return;
       if (!entry) { deps.log(`Live Verify: no entry for ${input.threadId}`); return; }
       if (await deps.startAuto({ botId: input.botId, threadId: input.threadId, entry, episode: JSON.stringify([input.botId, input.threadId, input.humanId, entry]) }) === false) deps.log(`Live Verify: skipped ${input.threadId}`);

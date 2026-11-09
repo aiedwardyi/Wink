@@ -1,22 +1,17 @@
 import { mkdir, opendir, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "./contracts.ts";
 import { createVerifyAuto, scanVerifyWrites, type VerifyAutoTurn } from "./verify-auto.ts";
-import { resolveVerifySite } from "./verify-site.ts";
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, stat: vi.fn(actual.stat), opendir: vi.fn(actual.opendir) };
-});
-vi.mock("./verify-site.ts", async importOriginal => {
-  const actual = await importOriginal<typeof import("./verify-site.ts")>();
-  return { ...actual, resolveVerifySite: vi.fn(actual.resolveVerifySite) };
 });
 
 const temps = createTempDirs();
@@ -30,6 +25,7 @@ const shell = () => {
   auto.event(event({ type: "item.started", itemType: "tool", itemId: "shell", title: "Bash" }));
   auto.event(event({ type: "item.completed", itemType: "tool", itemId: "shell", ok: true }));
 };
+const page = () => createHttpServer((_, res) => { res.writeHead(200, { "content-type": "text/html" }).end("<h1>Hi</h1>"); });
 
 afterEach(() => temps.remove());
 
@@ -38,7 +34,7 @@ beforeEach(async () => {
   await writeFile(join(root, "index.html"), "<h1>Hi</h1>");
   start = vi.fn().mockResolvedValue(undefined);
   scan = vi.fn(scanVerifyWrites);
-  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, scan, log: vi.fn() });
+  auto = createVerifyAuto({ enabled: () => true, freeMemory: () => 8 * 1024 ** 3, startAuto: start, scan, log: vi.fn(), app: { waitMs: 300 } });
   turn = { botId: "bot", threadId: "thread", turnId: "turn", startedAt: Date.now(), roots: [root], depth: 0, ok: true, humanId: "human", humanText: "Build a page", reply: "" };
   vi.mocked(stat).mockClear();
   vi.mocked(opendir).mockClear();
@@ -149,7 +145,7 @@ it("does not treat a package root as a static site", async () => {
 
 it.each(["reply", "humanText"] as const)("uses a named loopback URL from %s for a package candidate", async source => {
   await writeFile(join(root, "package.json"), "{}");
-  const server = createServer(socket => socket.end());
+  const server = page();
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   try {
     const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
@@ -161,7 +157,7 @@ it.each(["reply", "humanText"] as const)("uses a named loopback URL from %s for 
 
 it("keeps the named localhost authority for a package candidate", async () => {
   await writeFile(join(root, "package.json"), "{}");
-  const server = createServer(socket => socket.end());
+  const server = page();
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   try {
     const url = `http://localhost:${(server.address() as { port: number }).port}/`;
@@ -171,20 +167,19 @@ it("keeps the named localhost authority for a package candidate", async () => {
   } finally { await new Promise<void>(done => server.close(() => done())); }
 });
 
-it("probes a named loopback URL once per turn across package candidates", async () => {
+it("probes a named loopback URL once per turn", async () => {
   await writeFile(join(root, "package.json"), "{}");
   await writeFile(join(root, "a.css"), "h1{color:red}");
-  vi.mocked(resolveVerifySite).mockClear();
-  vi.mocked(resolveVerifySite).mockImplementation(async (entry, roots) => {
-    if (entry.startsWith("http")) throw Object.assign(new Error("down"), { code: "page-failed" });
-    return (await vi.importActual<typeof import("./verify-site.ts")>("./verify-site.ts")).resolveVerifySite(entry, roots);
-  });
+  let hits = 0;
+  const server = createHttpServer((_, res) => { hits++; res.writeHead(200, { "content-type": "application/json" }).end("{}"); });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   try {
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
     auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["index.html", "a.css"] }));
-    await auto.settled({ ...turn, reply: "Open http://localhost:5173/ (http://localhost:5173/)." });
-    expect(vi.mocked(resolveVerifySite).mock.calls.filter(([entry]) => entry.startsWith("http"))).toHaveLength(1);
+    await auto.settled({ ...turn, reply: `Open ${url} (${url}).` });
+    expect(hits).toBe(1);
     expect(start).not.toHaveBeenCalled();
-  } finally { vi.mocked(resolveVerifySite).mockReset(); }
+  } finally { await new Promise<void>(done => server.close(() => done())); }
 });
 
 it("tries older changed files when the newest has no static entry", async () => {
@@ -199,7 +194,7 @@ it("tries older changed files when the newest has no static entry", async () => 
   expect(start.mock.calls[0]![0].entry).toBe(join(owned, "site", "index.html"));
 });
 
-it("ignores URLs without a package candidate and ignores non-web writes", async () => {
+it("ignores a dead named URL and non-web writes", async () => {
   await writeFile(join(root, "notes.md"), "hi");
   auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["notes.md"] }));
   await auto.settled({ ...turn, reply: "http://127.0.0.1:12345" });
@@ -231,33 +226,35 @@ it.each(["ancestor", "absolute", "relative", "sibling-prefix"])("never checks an
   expect(start).not.toHaveBeenCalled();
 });
 
-it("does not use a package ancestor outside the owned root", async () => {
+it("checks a named app URL whose package is outside the owned root", async () => {
   await writeFile(join(root, "package.json"), "{}");
   const owned = join(root, "owned");
   await mkdir(owned);
   await writeFile(join(owned, "a.css"), "h1{color:red}");
-  const local = createServer(socket => socket.end());
+  const local = page();
   await new Promise<void>(done => local.listen(0, "127.0.0.1", done));
   try {
+    const url = `http://127.0.0.1:${(local.address() as { port: number }).port}/`;
     auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["a.css"] }));
-    await auto.settled({ ...turn, roots: [owned], reply: `http://127.0.0.1:${(local.address() as { port: number }).port}/` });
-    expect(start).not.toHaveBeenCalled();
+    await auto.settled({ ...turn, roots: [owned], reply: url });
+    expect(start.mock.calls[0]![0].entry).toBe(url);
   } finally { await new Promise<void>(done => local.close(() => done())); }
 });
 
-it("does not use a linked package outside the owned root", async () => {
+it("checks a named app URL through a linked package outside the owned root", async () => {
   const owned = join(root, "owned"), outside = join(root, "outside");
   await mkdir(owned);
   await mkdir(outside);
   await writeFile(join(outside, "package.json"), "{}");
   await writeFile(join(outside, "a.css"), "h1{color:red}");
   await symlink(outside, join(owned, "linked"), process.platform === "win32" ? "junction" : "dir");
-  const local = createServer(socket => socket.end());
+  const local = page();
   await new Promise<void>(done => local.listen(0, "127.0.0.1", done));
   try {
+    const url = `http://127.0.0.1:${(local.address() as { port: number }).port}/`;
     auto.event(event({ type: "item.completed", itemType: "tool", ok: true, writes: ["linked/a.css"] }));
-    await auto.settled({ ...turn, roots: [owned], reply: `http://127.0.0.1:${(local.address() as { port: number }).port}/` });
-    expect(start).not.toHaveBeenCalled();
+    await auto.settled({ ...turn, roots: [owned], reply: url });
+    expect(start.mock.calls[0]![0].entry).toBe(url);
   } finally { await new Promise<void>(done => local.close(() => done())); }
 });
 
