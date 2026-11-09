@@ -5,6 +5,15 @@ const FENCE_END = /^ {0,3}(`{3,}|~{3,})\s*$/;
 const INDENT = /^(?: {4}|\t)/;
 const RUNS = /`+/g;
 
+function openTick(line: string, from: number): number {
+  for (let at = line.indexOf("`", from); at >= 0; at = line.indexOf("`", at + 1)) {
+    let slashes = 0;
+    while (line[at - 1 - slashes] === "\\") slashes++;
+    if (slashes % 2 === 0) return at;
+  }
+  return -1;
+}
+
 /** Drops `<userN>` tags a bot leaves outside a peer reply, keeping the inner text and any code. An unclosed fence or span counts as code, so a streamed prefix unwraps like its whole. */
 export function unwrapUserTags(text: string): string {
   if (!/<\/?user\d/.test(text)) return text;
@@ -16,7 +25,7 @@ export function unwrapUserTags(text: string): string {
     let out = "";
     let at = 0;
     while (at < line.length) {
-      const tick = span ? at : line.indexOf("`", at);
+      const tick = span ? at : openTick(line, at);
       if (!span) out += line.slice(at, tick < 0 ? line.length : tick).replace(TAG, "");
       if (tick < 0) break;
       RUNS.lastIndex = tick;

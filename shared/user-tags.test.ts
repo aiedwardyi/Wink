@@ -27,6 +27,8 @@ describe("unwrapUserTags", () => {
     same("> ```xml\n> <user1>x</user1>\n> ```");
     same("see `a\n<user1>b</user1>\nc` then");
     same("~~~xml\n~~~not-a-close\n<user1>x</user1>\n~~~");
+    same("A literal \\` then `<user1>x</user1>`.");
+    expect(unwrapUserTags("a \\` <user1>b</user1>")).toBe("a \\` b");
     expect(unwrapUserTags("see `a\nb` <user1>d</user1>\n\n<user2>e</user2>")).toBe("see `a\nb` d\n\ne");
     expect(unwrapUserTags("a\n    <user1>b</user1>")).toBe("a\n    b");
   });

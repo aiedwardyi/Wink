@@ -139,12 +139,23 @@ public enum Markdown {
                 if let next = rest.first, next == " " || next == "\t" { rest = rest.dropFirst() }
             }
         }
+        func openTick(_ part: Substring) -> String.Index? {
+            var slashes = 0
+            var index = part.startIndex
+            while index < part.endIndex {
+                let char = part[index]
+                if char == "`" && slashes % 2 == 0 { return index }
+                slashes = char == "\\" ? slashes + 1 : 0
+                index = part.index(after: index)
+            }
+            return nil
+        }
         func scan(_ line: String) -> String {
             var out = ""
             var rest = Substring(line)
             while !rest.isEmpty {
                 if span == 0 {
-                    guard let tick = rest.firstIndex(of: "`") else { out += strip(rest); break }
+                    guard let tick = openTick(rest) else { out += strip(rest); break }
                     out += strip(rest[..<tick])
                     span = rest[tick...].prefix(while: { $0 == "`" }).count
                     let after = rest.index(tick, offsetBy: span)
