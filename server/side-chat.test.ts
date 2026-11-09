@@ -114,7 +114,7 @@ describe("quickAsk on a fork", () => {
     const at = new Date().toISOString();
     observeLive({ eventId: "g1", provider: "claude", threadId: "t-guard", createdAt: at, type: "turn.started" });
     observeLive({ eventId: "g2", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.started", itemType: "tool", itemId: "e1", title: "Edit", summary: "config.json +1 -1" });
-    observeLive({ eventId: "g3", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.completed", itemType: "tool", itemId: "e1", ok: true, writes: ["D:\\work\\config.json"] });
+    observeLive({ eventId: "g3", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.completed", itemType: "tool", itemId: "e1", ok: true, writes: ["work\\config.json"] });
     observeLive({ eventId: "g4", provider: "claude", threadId: "t-guard", createdAt: at, type: "item.started", itemType: "tool", itemId: "e2", title: "Write", summary: "notes.md +3" });
     const ask = (reads: string[], answer: string) => {
       const stub = stubFork();
@@ -129,15 +129,52 @@ describe("quickAsk on a fork", () => {
     expect(await ask([], "It runs on Node 20.")).toMatchObject({ route: "answer" });
   });
 
-  it("hands off an answer over 4 lines", async () => {
+  it("counts a Grep or Glob hit and an attached file as read", async () => {
+    const at = new Date().toISOString();
+    const small = join(scratch, "notes.md");
+    writeFileSync(small, "Release: Tue Nov 24");
+    observeLive({ eventId: "h1", provider: "claude", threadId: "t-hit", createdAt: at, type: "turn.started" });
+    observeLive({ eventId: "h2", provider: "claude", threadId: "t-hit", createdAt: at, type: "item.started", itemType: "tool", itemId: "e1", title: "Edit", summary: "config.json +1 -1" });
+    observeLive({ eventId: "h3", provider: "claude", threadId: "t-hit", createdAt: at, type: "item.completed", itemType: "tool", itemId: "e1", ok: true, writes: ["work/config.json"] });
+    observeLive({ eventId: "h4", provider: "claude", threadId: "t-hit", createdAt: at, type: "item.started", itemType: "tool", itemId: "e2", title: "Edit", summary: "notes.md +1 -1" });
+    observeLive({ eventId: "h5", provider: "claude", threadId: "t-hit", createdAt: at, type: "item.completed", itemType: "tool", itemId: "e2", ok: true, writes: [small] });
+    const ask = (found: string[], answer: string) => {
+      const stub = stubFork();
+      const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t-hit", { text: "what port?" });
+      stub.emit({ type: "tool", name: "Grep" });
+      if (found.length) stub.emit({ type: "found", paths: found });
+      stub.emit({ type: "done", ok: true, text: answer });
+      return pending;
+    };
+    expect(await ask(["src/server.js"], "config.json says 4180.")).toMatchObject({ route: "handoff" });
+    expect(await ask(["src/server.js", "config.json"], "config.json says 4180.")).toMatchObject({ route: "answer" });
+    expect(await ask([], "notes.md says Tue Nov 24.")).toMatchObject({ route: "answer" });
+  });
+
+  it("hands off an answer over 450 characters", async () => {
     const say = async (answer: string) => {
       const stub = stubFork();
       const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t1", { text: "progress?" });
       stub.emit({ type: "done", ok: true, text: answer });
       return pending;
     };
-    expect(await say("a\nb\n\nc\nd")).toMatchObject({ route: "answer" });
-    expect(await say("a\nb\nc\nd\ne")).toMatchObject({ route: "handoff" });
+    expect(await say("- a\n- b\n- c\n- d\n- e\n- f")).toMatchObject({ route: "answer" });
+    expect(await say(`  ${"x".repeat(450)}\n`)).toMatchObject({ route: "answer" });
+    expect(await say("x".repeat(451))).toMatchObject({ route: "handoff" });
+  });
+
+  it("pins the fork input shape a Codex fork reads", async () => {
+    const stub = stubFork();
+    const at = new Date().toISOString();
+    observeLive({ eventId: "s1", provider: "claude", threadId: "t-shape", createdAt: at, type: "turn.started" });
+    observeLive({ eventId: "s2", provider: "claude", threadId: "t-shape", createdAt: at, type: "item.started", itemType: "tool", itemId: "b1", title: "Bash", summary: "npm test" });
+    const pending = quickAsk({ instance: instanceWith({ fork: stub.fork }), messages: [] }, "t-shape", { text: "q?" });
+    stub.emit({ type: "done", ok: true, text: "HANDOFF" });
+    await pending;
+    const input = stub.inputs[0]!;
+    expect(Object.keys(input).sort()).toEqual(["live", "text", "threadId"]);
+    expect(input.live).toMatch(/^\[Main task right now, as of \d\d:\d\d:\d\d, from Wink:\n[\s\S]*\]$/);
+    expect(input.text).not.toContain("Main task right now");
   });
 
   it("hands off when the output starts with HANDOFF, killing the fork at once", async () => {
@@ -380,6 +417,34 @@ describe("Claude fork (fake CLI)", () => {
     expect(alive(fork.pid)).toBe(false);
     expect(existsSync(join(work, "made.txt"))).toBe(false);
     expect(ledger()).toEqual([]);
+  });
+
+  it("reports the files a Grep or Glob result lists", async () => {
+    const path = join(scratch, "fork-grep.json");
+    const grep = (id: string, input: Record<string, string>, content: string) => [
+      { type: "assistant", message: { content: [{ type: "tool_use", id, name: "Grep", input }] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } },
+    ];
+    writeFileSync(path, JSON.stringify([
+      ...grep("g1", { pattern: "port" }, 'config.json:2:  "port": 4180\nsrc\\server.js:2:const { port } = require("../config.json");'),
+      ...grep("g2", { pattern: "Nov", path: "notes.md" }, "4:- Release target: Tuesday Nov 24."),
+      ...grep("g3", { pattern: "zzz", path: "plan.md" }, "No matches found"),
+      { type: "result", is_error: false, result: "4180", usage: { input_tokens: 3, output_tokens: 1 } },
+    ]));
+    process.env.FAKE_CLAUDE_FORK_FIXTURE = path;
+    await mainTurn("t-grep");
+    const handle = instance.fork!({ threadId: "t-grep", text: "what port?" })!;
+    const found: string[][] = [];
+    await new Promise<void>((resolve) => {
+      handle.onEvent((event) => {
+        if (event.type === "found") found.push(event.paths);
+        if (event.type === "done") resolve();
+      });
+    });
+    await handle.close(5_000);
+    expect(found).toHaveLength(2);
+    expect(found[0]).toEqual(expect.arrayContaining(["config.json", "src\\server.js"]));
+    expect(found[1]).toEqual(expect.arrayContaining(["notes.md"]));
   });
 
   it("the hook denies the fake's scripted Write and Bash", async () => {

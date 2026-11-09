@@ -88,6 +88,7 @@ export function forkClaude(spawn: ClaudeSpawn, input: SideInput): SideHandle {
     let finished = false;
     let last = "";
     let session = "";
+    const lookups = new Map<string, string>();
     const finish = (ok: boolean, text: string, used?: ReturnType<typeof usage>) => {
       if (finished) return;
       finished = true;
@@ -116,7 +117,20 @@ export function forkClaude(spawn: ClaudeSpawn, input: SideInput): SideHandle {
         const blocks: any[] = Array.isArray(m.message?.content) ? m.message.content : [];
         const text = blocks.filter((block) => block?.type === "text").map((block) => String(block.text ?? "")).join("");
         if (text) last = text;
-        for (const block of blocks) if (block?.type === "tool_use") emit({ type: "tool", name: String(block.name), ...(typeof block.input?.file_path === "string" ? { path: block.input.file_path } : {}) });
+        for (const block of blocks) {
+          if (block?.type !== "tool_use") continue;
+          emit({ type: "tool", name: String(block.name), ...(typeof block.input?.file_path === "string" ? { path: block.input.file_path } : {}) });
+          if (block.name === "Grep" || block.name === "Glob") lookups.set(block.id, typeof block.input?.path === "string" ? block.input.path : "");
+        }
+      } else if (m.type === "user") {
+        for (const block of Array.isArray(m.message?.content) ? m.message.content : []) {
+          if (block?.type !== "tool_result" || block.is_error || !lookups.has(block.tool_use_id)) continue;
+          const text: string = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? block.content.map((part: any) => String(part?.text ?? "")).join("\n") : "";
+          if (!text.trim() || /^No (files|matches) found/.test(text)) continue;
+          // a Grep inside one file prints "line:text" with no path, so its scope counts too
+          const paths = text.split(/\r?\n/).map((line) => line.replace(/^((?:[a-zA-Z]:)?[^:]*).*$/, "$1")).filter(Boolean);
+          emit({ type: "found", paths: [lookups.get(block.tool_use_id)!, ...paths].filter(Boolean) });
+        }
       } else if (m.type === "result") {
         finish(!m.is_error, typeof m.result === "string" ? m.result : last, usage(m.usage));
       }

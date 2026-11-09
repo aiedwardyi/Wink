@@ -453,6 +453,8 @@ export type SideEvent =
   | { type: "session"; id: string }
   | { type: "text"; delta: string }
   | { type: "tool"; name: string; path?: string }
+  /** files a Grep or Glob result listed */
+  | { type: "found"; paths: string[] }
   | { type: "done"; ok: boolean; text: string; usage?: { input: number; output: number; cachedInput?: number } };
 
 /** One live fork process. What `live` names is swept at boot if Wink dies first. */
