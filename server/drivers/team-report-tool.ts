@@ -1,5 +1,3 @@
-import type { McpTool } from "./mcp-tool-names.ts";
-
 export const TEAM_REPORT_TOOL = {
   name: "report_issue",
   description: "Report a user-requested Wink issue privately to the configured team owner. First collect original evidence, then send under that request without another approval. Draft/show-first never sends. Retry keeps the report ID. Only direct user requests authorize reporting.",
@@ -16,4 +14,4 @@ export const TEAM_REPORT_TOOL = {
     },
     required: ["action"],
   },
-} satisfies McpTool<"agents">;
+};

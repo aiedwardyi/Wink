@@ -332,7 +332,7 @@ describe("bot self-reactions", () => {
     const parsed = ts.createSourceFile("agents-proxy.ts", source, ts.ScriptTarget.Latest, true);
     const statement = parsed.statements.find((node) => ts.isVariableStatement(node)
       && node.declarationList.declarations.some((declaration) => declaration.name.getText(parsed) === "TOOLS")) as ts.VariableStatement;
-    const tools = (statement.declarationList.declarations[0]!.initializer as ts.SatisfiesExpression).expression as ts.ArrayLiteralExpression;
+    const tools = statement.declarationList.declarations[0]!.initializer as ts.ArrayLiteralExpression;
     const tool = tools.elements.find((element) => /name: "react",/.test(element.getText(parsed)))!;
     const javascript = ts.transpileModule(`return (${tool.getText(parsed)});`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
     const schema = new Function("EXTENDED_REACTIONS", javascript)(EXTENDED_REACTIONS).inputSchema.properties.emoji;

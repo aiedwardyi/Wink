@@ -377,7 +377,19 @@ describe("agents-proxy MCP surface", () => {
       "propose_routine",
       "propose_routine_action",
       "set_keep_going",
+      "no_reply_needed",
     ]);
+  });
+
+  it("ends a quiet turn with no_reply_needed without calling Wink", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((t: { name: string }) => t.name === "no_reply_needed");
+    expect(tool.inputSchema).toEqual({ type: "object", additionalProperties: false, properties: {} });
+    lastKeepGoingBody = null;
+    const result = await callTool("no_reply_needed", {});
+    expect(result.result.isError).toBe(false);
+    expect(result.result.content[0].text).toBe("ok");
+    expect(lastKeepGoingBody).toBeNull();
   });
 
   it("sets keep going through the harness and passes its refusal back", async () => {
@@ -1190,7 +1202,7 @@ describe("agents-proxy identity gate", () => {
 
   it("lists every tool with a complete identity at depth 0", async () => {
     const { list } = await probeWithIdentity({ OMB_BOT_ID: "bot-new", OMB_THREAD_ID: "thread-new", OMB_COMMS_TOKEN: TOKEN, OMB_TURN_DEPTH: "0" });
-    expect(list.result.tools).toHaveLength(18);
+    expect(list.result.tools).toHaveLength(19);
     expect(list.result.tools.map((t: { name: string }) => t.name)).toContain("set_keep_going");
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(["ask_bot", "delegate_bot", "ask_user", "update_task_state", "check_delegation"]));
   });
@@ -1222,9 +1234,9 @@ describe("agents-proxy catalog", () => {
 
   it("replaces only the ten optional definitions with the bounded pair", async () => {
     const { list } = await probeWithIdentity(identity(), "find_wink_tool", { query: "images" });
-    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "ask_user", "set_keep_going", "find_wink_tool", "call_wink_tool"]);
+    expect(names(list)).toEqual(["list_bots", "update_task_state", "ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "ask_user", "set_keep_going", "no_reply_needed", "find_wink_tool", "call_wink_tool"]);
     expect(JSON.stringify(list.result.tools.slice(-2)).length).toBeLessThanOrEqual(1200);
-    expect(17 + names(list).length).toBe(27);
+    expect(17 + names(list).length).toBe(28);
   });
 
   it.each([
@@ -1326,14 +1338,14 @@ describe("agents-proxy verify_site", () => {
   });
 
   it.each<[Record<string, string>, number, boolean]>([
-    [{ OMB_TEAM_REPORTS: "0" }, 18, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 19, true],
-    [{ OMB_TEAM_REPORTS: "1" }, 19, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 20, true],
-    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 10, false],
-    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 11, true],
-    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 11, false],
-    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, true],
+    [{ OMB_TEAM_REPORTS: "0" }, 19, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1" }, 20, true],
+    [{ OMB_TEAM_REPORTS: "1" }, 20, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1" }, 21, true],
+    [{ OMB_TEAM_REPORTS: "0", OMB_WINK_TOOL_CATALOG: "1" }, 11, false],
+    [{ OMB_TEAM_REPORTS: "0", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, true],
+    [{ OMB_TEAM_REPORTS: "1", OMB_WINK_TOOL_CATALOG: "1" }, 12, false],
+    [{ OMB_TEAM_REPORTS: "1", OMB_LIVE_VERIFY: "1", OMB_WINK_TOOL_CATALOG: "1" }, 13, true],
   ])("lists the tool only with its env (%o)", async (flags, total, listed) => {
     const { list } = await probe(identity(0, flags));
     expect(names(list)).toHaveLength(total);

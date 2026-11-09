@@ -36,7 +36,6 @@
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
-import type { McpTool } from "./mcp-tool-names.ts";
 import { TEAM_REPORT_TOOL } from "./team-report-tool.ts";
 
 import { CREDENTIAL_BROKER, CREDENTIAL_TARGETS, isCredentialTargetId, parseCustomService } from "../../shared/credential-request.ts";
@@ -68,7 +67,7 @@ const VERIFY_SITE_TOOL = {
     required: ["entry"],
     additionalProperties: false,
   },
-} satisfies McpTool<"agents">;
+};
 
 const WEEKDAYS = [
   "monday",
@@ -559,7 +558,12 @@ const TOOLS = [
       required: ["on"],
     },
   },
-] satisfies McpTool<"agents">[];
+  {
+    name: "no_reply_needed",
+    description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+];
 
 type Json = Record<string, unknown>;
 
@@ -1016,6 +1020,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         : "Agentic Mode is off. Running work is left alone.",
     };
   }
+  if (name === "no_reply_needed") return { text: "ok" };
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 

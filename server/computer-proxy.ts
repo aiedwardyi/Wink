@@ -36,7 +36,6 @@ import {
   type CropRegion,
 } from "./computer-observation.ts";
 import { CONTROL_REFUSAL, createControlClient } from "./control-client.ts";
-import type { McpTool } from "./drivers/mcp-tool-names.ts";
 import {
   ensureRemoteCuaCommand,
   REMOTE_CUA_EXECUTABLE,
@@ -652,7 +651,7 @@ const TOOLS = [
       required: ["url"],
     },
   },
-] satisfies McpTool<"computer">[];
+];
 
 const shellQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 const settleOf = (args: any) => Math.min(Math.max(Number(args?.settle_ms) || SETTLE_MS, 0), 3000);

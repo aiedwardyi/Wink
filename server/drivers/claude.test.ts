@@ -923,26 +923,27 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_SILENT_TURN_REMINDER).toBe("1");
   });
 
-  it("lists built-ins and mounted Wink MCP tools as terminal tools", async () => {
+  it("lists only no_reply_needed as a terminal tool when agents is mounted", async () => {
     await create();
     const dump = join(scratch, "terminal-tools.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
-    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "stale";
-
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "Bash";
     await instance.adapter.sendTurn({
-      threadId: "t-terminal-tools",
-      text: "hi",
-      integrations: {
-        terminal: { command: process.execPath, args: ["/fake/terminal-proxy.js"], env: {} },
-        dweb: { url: "http://127.0.0.1:49737" },
-      },
+      threadId: "t-terminal-tools", text: "hi",
+      integrations: { agents: { command: process.execPath, args: ["/fake/agents-proxy.js"], env: {} } },
     });
     await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_TERMINAL_MCP_TOOLS).toBe("mcp__agents__no_reply_needed");
+  });
 
-    const tools = JSON.parse(readFileSync(dump, "utf8")).env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(",");
-    expect(tools).toEqual(expect.arrayContaining(["Bash", "Read", "mcp__terminal__terminal_read", "mcp__terminal__terminal_close", "mcp__dweb__dweb_status"]));
-    expect(tools).not.toContain("stale");
-    expect(tools).not.toContain("mcp__phone__tap");
+  it("clears inherited terminal tools when agents is not mounted", async () => {
+    await create();
+    const dump = join(scratch, "terminal-tools.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    process.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "Bash";
+    await instance.adapter.sendTurn({ threadId: "t-terminal-tools", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env).not.toHaveProperty("CLAUDE_CODE_TERMINAL_MCP_TOOLS");
   });
 
   it("turns Claude Code auto memory off on every turn", async () => {
