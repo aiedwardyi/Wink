@@ -75,6 +75,13 @@ it("renders running rows and progress, then findings, in both languages", () => 
   }
 });
 
+it("shows a names and dates comparison that failed as not checked", () => {
+  for (const locale of ["en", "ko"] as const) {
+    applyLocale(locale);
+    expect(render(card({}, { uncompared: true })).replace(/<!-- -->/g, "")).toContain(locale === "en" ? "Not checked: names and dates" : "확인하지 못함: 이름·날짜");
+  }
+});
+
 it("offers Live on a running card loaded before its next live patch", () => {
   const loaded = card({ status: "running", startedAt: Date.now(), endedAt: undefined }, { chunks: [1, 4], page: 3, beat: Date.now(), findings: undefined });
   expect(render(loaded)).toContain('data-verify-watch="live"');

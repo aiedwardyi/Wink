@@ -26,6 +26,8 @@ export interface VerifyDocData {
   findingTotal?: number;
   /** characters past the cap that were not checked */
   cut?: number;
+  /** the names and dates comparison failed */
+  uncompared?: boolean;
 }
 
 /** .lvr marks of a document check */

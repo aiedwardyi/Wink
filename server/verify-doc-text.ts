@@ -14,10 +14,12 @@ const MAX = 18_000;
 const SPREAD = 6_000;
 const HITS = 12;
 const MODEL_KINDS = new Set<VerifyDocKind>(["spelling", "grammar", "translation", "names"]);
-const PARTS = /<w:p\b[^>]*?(\/?)>|<\/w:p>|<w:t\b[^>]*>([^<]*)<\/w:t>|<w:tab\/>|<w:br\b([^>]*)\/>|<w:lastRenderedPageBreak\/>|<w:pageBreakBefore\b([^>]*)\/>/g;
+const PARTS = /<w:p\b[^<>]*?(\/?)>|<\/w:p>|<w:t\b[^<>]*>([^<]*)<\/w:t>|<w:tab\/>|<w:br\b([^<>]*)\/>|<w:lastRenderedPageBreak\/>|<w:pageBreakBefore\b([^<>]*)\/>/g;
 const ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: "\"", apos: "'" };
 const ARTICLE = /제\s*(\d{1,3})\s*조(?!\s*의\s*\d)/g;
 const HEADING = /^[\s#*[(]*/;
+// What may follow a line-leading article that defines it; a particle or more sentence makes it a citation.
+const TITLED = /^(?:\s*[([（【<]|[*_)\]]|\s*$)/;
 const SCENE = /^(?:S\s*#|씬|scene)\s*(\d{1,4})\b/i;
 const ITEM = /^ ?(\d{1,3})([.)])\s+\S/;
 const LABEL = /\b(Exhibit|Appendix|Annex|Attachment|Schedule)\s+([A-Z]|\d{1,2})\b|(별첨|별지|첨부)\s*(\d{1,2})(?!\d)/g;
@@ -71,7 +73,7 @@ function zipEntry(zip: Buffer, name: string): Buffer {
 
 export function docxText(zip: Buffer): { raw: string; rendered: boolean } {
   const xml = zipEntry(zip, "word/document.xml").toString("utf8");
-  // Word marks every page it laid out; explicit breaks would count those pages twice.
+  // Word marks every page it laid out; docText counts an explicit break and the mark right after it as one turn.
   const rendered = xml.includes("<w:lastRenderedPageBreak/>");
   const decode = (text: string) => text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => name[0] === "#" ? String.fromCodePoint(Number.parseInt(name.slice(name[1] === "x" || name[1] === "X" ? 2 : 1), name[1] === "x" || name[1] === "X" ? 16 : 10)) : ENTITIES[name] ?? whole);
   const paragraphs: string[] = [];
@@ -81,9 +83,9 @@ export function docxText(zip: Buffer): { raw: string; rendered: boolean } {
     if (tag === "</w:p>" || empty === "/") { paragraphs.push(text); text = ""; }
     else if (run !== undefined) text += decode(run);
     else if (tag === "<w:tab/>") text += "\t";
-    else if (br !== undefined) text += /w:type="page"/.test(br) ? rendered ? "" : "\f" : "\n";
+    else if (br !== undefined) text += /w:type="page"/.test(br) ? "\f" : "\n";
     else if (tag === "<w:lastRenderedPageBreak/>") text += "\f";
-    else if (before !== undefined && !rendered && !/w:val="(?:0|false|off)"/.test(before)) text += "\f";
+    else if (before !== undefined && !/w:val="(?:0|false|off)"/.test(before)) text += "\f";
   }
   return { raw: paragraphs.join("\n"), rendered };
 }
@@ -91,7 +93,12 @@ export function docxText(zip: Buffer): { raw: string; rendered: boolean } {
 export async function readDoc(path: string): Promise<{ raw: string; rendered: boolean }> {
   const bytes = await readFile(path);
   if (extname(path).toLowerCase() === ".docx") return docxText(bytes);
-  return { raw: bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.subarray(2).toString("utf16le") : bytes.toString("utf8"), rendered: false };
+  const label = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le" : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8";
+  let raw: string;
+  // Korean Windows saves plain text as CP949 unless asked not to.
+  try { raw = new TextDecoder(label, { fatal: true }).decode(bytes); } catch { raw = new TextDecoder("euc-kr", { fatal: true }).decode(bytes); }
+  if (raw.includes("\0")) throw new Error("not text");
+  return { raw, rendered: false };
 }
 
 // Below 1 a line ends a chunk. Cuts follow content, not offsets, so an edit re-sends only the chunks around it.
@@ -164,13 +171,13 @@ export function numberingHits(doc: DocText): DocHit[] {
     const start = doc.lineStarts[i]!, lead = HEADING.exec(line)![0].length, rest = line.slice(lead);
     for (const match of line.matchAll(ARTICLE)) {
       const row = { n: Number(match[1]), at: start + match.index, quote: match[0] };
-      if (match.index === lead) articles.push(row);
+      if (match.index === lead && (line[0] === "#" || TITLED.test(line.slice(lead + match[0].length)))) articles.push(row);
       else if (!LAW.test(line.slice(Math.max(0, match.index - 12), match.index))) refs.push(row);
     }
     const scene = SCENE.exec(rest);
     if (scene) scenes.push({ n: Number(scene[1]), at: start + lead, quote: scene[0] });
     const depth = /^#{1,6}(?=\s)/.exec(line)?.[0], head = depth ? ITEM.exec(rest) : null;
-    if (head) heads.set(depth!, [...heads.get(depth!) ?? [], { n: Number(head[1]), at: start + lead, quote: `${head[1]}${head[2]}` }]);
+    if (head) heads.set(depth!, heads.get(depth!) ?? []).get(depth!)!.push({ n: Number(head[1]), at: start + lead, quote: `${head[1]}${head[2]}` });
     const item = ITEM.exec(line);
     if (item) items.push({ n: Number(item[1]), at: start + line.indexOf(item[1]!), quote: `${item[1]}${item[2]}`, i });
     for (const match of line.matchAll(LABEL)) {
@@ -230,18 +237,32 @@ const count = (text: string, part: string) => {
   return n;
 };
 
-/** null when there is nothing to compare across chunks */
-export function mergePrompt(doc: DocText, names: string[], dates: string[]): string | null {
+const around = (doc: DocText, at: number) => {
+  const i = lineIndex(doc, at), end = doc.text.indexOf("\n", at);
+  return `line ${i + 1}: ${doc.text.slice(Math.max(doc.lineStarts[i]!, at - 80), Math.min(end < 0 ? doc.text.length : end, at + 120)).trim()}`;
+};
+
+/** null when there is nothing to compare; `clashes` and `twins` are slips found without the model, kept only if it confirms them. */
+export function mergePrompt(doc: DocText, names: string[], dates: string[], clashes: DocHit[] = [], twins: DocHit[] = []): string | null {
   const counted = [...new Set(names)].map(name => [name, count(doc.text, name)] as const).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, 80);
   const listed = [...new Set(dates)].slice(0, 60);
-  if (counted.length < 2 && listed.length < 2) return null;
+  if (counted.length < 2 && listed.length < 2 && !clashes.length && !twins.length) return null;
+  const pair = (hit: DocHit, label: string) => [label, around(doc, hit.at), around(doc, doc.text.indexOf(hit.fix))];
   return [
     "These names and dates come from one long document. Counts are how often each exact form appears.",
     "Find a person, company, or term written two different ways that clearly mean the same one (the rare form is the mistake), and one event given two different dates.",
     "Different people, companies, or events are not mistakes. Report only clear cases.",
     'Reply with JSON only: {"findings":[{"kind":"names","quote":"the wrong form, exactly as listed","fix":"the form to use","note":"why, at most 8 words"}]}. With none, findings is [].',
-    "Names:", ...counted.map(([name, n]) => `${name} ×${n}`),
-    "Dates:", ...listed,
+    ...counted.length ? ["Names:", ...counted.map(([name, n]) => `${name} ×${n}`)] : [],
+    ...listed.length ? ["Dates:", ...listed] : [],
+    ...clashes.length ? [
+      "Possible slips, each with the lines that use both forms. Report one only if those lines show both forms mean the same person, term, or event:",
+      ...clashes.slice(0, 12).flatMap(hit => pair(hit, `${hit.quote} or ${hit.fix}?`)),
+    ] : [],
+    ...twins.length ? [
+      "Possible name slips, each with how often both forms appear and the lines that use them. A rare name one letter off a common one is usually a typo for it: report it unless those lines show a different person or thing:",
+      ...twins.slice(0, 12).flatMap(hit => pair(hit, `${hit.quote} ×${count(doc.text, hit.quote)} or ${hit.fix} ×${count(doc.text, hit.fix)}?`)),
+    ] : [],
   ].join("\n");
 }
 
@@ -281,8 +302,10 @@ export function parseChunkReply(reply: string, doc: DocText, chunk: DocChunk): {
   return { ok: Array.isArray(value?.findings), hits: hits(value?.findings, doc.text.slice(chunk.start, chunk.end), chunk.start, MODEL_KINDS), names, dates };
 }
 
-export function parseMergeReply(reply: string, doc: DocText): DocHit[] {
-  return hits(json(reply)?.findings, doc.text, 0, new Set(["names"]));
+export function parseMergeReply(reply: string, doc: DocText): { ok: boolean; hits: DocHit[] } {
+  const value = json(reply), rows = Array.isArray(value?.findings) ? value.findings : null;
+  // Every finding here is a names-and-dates one, whatever kind the model wrote ("dates", "events").
+  return { ok: rows !== null, hits: hits(rows?.map(row => record(row) ? { ...row, kind: "names" } : row), doc.text, 0, new Set(["names"])) };
 }
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];

@@ -105,6 +105,7 @@ export function VerifyDocCard({ card, threadId, messageId }: { card: VerifyCardD
         </>}
         {card.notChecked?.length ? <div className="verify-card-unchecked">{c.unchecked}: {c.pageList(card.notChecked.join(", "))}</div> : null}
         {doc.cut ? <div className="verify-card-unchecked">{c.unchecked}: {c.cut(doc.cut)}</div> : null}
+        {doc.uncompared ? <div className="verify-card-unchecked">{c.unchecked}: {c.words.names}</div> : null}
         {!complete && <div className="verify-card-unchecked">{c.unchecked}: {reason}</div>}
         {complete && findings.length > 0 && !replaced && <div className="verify-doc-actions">
           {sent ? <span role="status">{c.sent}</span> : <button type="button" onClick={fix}><Send size={13} />{c.fix}</button>}

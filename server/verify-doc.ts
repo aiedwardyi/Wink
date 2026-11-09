@@ -153,11 +153,12 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     deadline.unref?.();
     const cache = caches.get(file) ?? new Map<string, Parsed>();
     remember(caches, file, cache, CACHED_FILES);
-    const numbering = numberingHits(doc), found = new Map<string, VerifyDocFinding>(), names: string[] = [], dates: string[] = [], failed: DocChunk[] = [], keys = new Set<string>();
+    const numbering = numberingHits(doc), found = new Map<string, VerifyDocFinding>(), near = new Map<string, VerifyDocFinding[]>(), names: string[] = [], dates: string[] = [], failed: DocChunk[] = [], keys = new Set<string>();
     const add = (hit: DocHit) => {
-      const row = findingAt(doc, hit), key = `${findingKey(row)}\n${row.line}`;
+      const row = findingAt(doc, hit), key = `${findingKey(row)}\n${row.line}`, spot = `${row.line}\n${row.kind}`;
       // One slip quoted short by one check and long by another is one finding.
-      if ([...found.values()].some(other => other.line === row.line && other.kind === row.kind && (other.quote.includes(row.quote) || row.quote.includes(other.quote)))) return;
+      if (near.get(spot)?.some(other => other.quote.includes(row.quote) || row.quote.includes(other.quote))) return;
+      near.set(spot, near.get(spot) ?? []).get(spot)!.push(row);
       found.set(key, row);
       live.by![row.kind] = (live.by![row.kind] ?? 0) + 1;
       mark({ ms: ms(), kind: "doc-finding", finding: { ...row, quote: redactSecretsInText(row.quote), fix: redactSecretsInText(row.fix), ...(row.note ? { note: redactSecretsInText(row.note) } : {}) } });
@@ -198,13 +199,18 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     };
     try {
       await Promise.all(Array.from({ length: Math.min(AT_ONCE, parts.length) }, worker));
-      if (!signal.aborted) for (const hit of [...dateClashes(doc, dates), ...nameTwins(doc, names)]) add(hit);
-      const prompt = parts.length > 1 && !signal.aborted ? mergePrompt(doc, names, dates) : null;
+      // A one-chunk document was compared whole by its chunk call; only the slips found without the model need a look.
+      const many = parts.length > 1, clashes = signal.aborted ? [] : dateClashes(doc, dates), twins = signal.aborted ? [] : nameTwins(doc, names);
+      const prompt = signal.aborted ? null : mergePrompt(doc, many ? names : [], many ? dates : [], clashes, twins);
       if (prompt) {
         live.page = undefined;
         dirty = true;
-        try { for (const hit of parseMergeReply(await generate(prompt, { ephemeral: true, lean: true, timeoutMs: CALL_MS, signal }), doc)) add(hit); }
-        catch (error) { compared = false; lost(null, error); }
+        try {
+          const reply = parseMergeReply(await generate(prompt, { ephemeral: true, lean: true, timeoutMs: CALL_MS, signal }), doc);
+          if (!reply.ok) throw new Error("the reply was not the JSON asked for");
+          // A confirmed slip keeps the direction its counts give, whichever way the model wrote it.
+          for (const hit of reply.hits) add([...clashes, ...twins].find(row => row.quote === hit.quote || row.quote === hit.fix && row.fix === hit.quote) ?? hit);
+        } catch (error) { compared = false; lost(null, error); }
       }
     } finally {
       clearInterval(pulse);
@@ -228,7 +234,7 @@ export function createVerifyDoc(deps: VerifyDocDeps) {
     if (status === "completed" && !failed.length && compared) remember(checked, key, { sha, keys: now }, KEPT);
     run.card = {
       ...run.card, status, endedAt: Date.now(), ...(status === "blocked" ? { errorCode: timedOut ? "timeout" : "internal" } : {}), ...(pages.length ? { notChecked: pages } : {}), ...(fixed ? { fixed } : {}),
-      doc: { ...live, page: undefined, beat: undefined, findings: findings.slice(0, VERIFY_DOC_FINDINGS), findingTotal: findings.length },
+      doc: { ...live, page: undefined, beat: undefined, findings: findings.slice(0, VERIFY_DOC_FINDINGS), findingTotal: findings.length, ...(compared ? {} : { uncompared: true }) },
     };
     writeCard(botId, run);
     run.recording.finish({ status, ms: ms(), issues: [], notChecked: pages });

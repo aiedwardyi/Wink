@@ -28,6 +28,7 @@ export function redactVerifyDoc(value: unknown): VerifyDocData | undefined {
   if (Array.isArray(value.findings)) out.findings = value.findings.slice(0, VERIFY_DOC_FINDINGS).map(finding).filter(row => row !== null);
   if (count(value.findingTotal)) out.findingTotal = value.findingTotal;
   if (count(value.cut) && value.cut > 0) out.cut = value.cut;
+  if (value.uncompared === true) out.uncompared = true;
   return out;
 }
 

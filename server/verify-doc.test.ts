@@ -137,6 +137,61 @@ it("counts nothing fixed and checks again after the name and date comparison fai
   await vi.waitFor(() => expect(cards()).toHaveLength(3));
 });
 
+it("handles tens of thousands of findings in linear time", async () => {
+  await writeFile(join(root, "script.md"), "제2조\n".repeat(40_000));
+  const started = performance.now();
+  doc.schedule(start(["script.md"]));
+  await done();
+  expect(cards()[0]!.doc!.findingTotal).toBeGreaterThan(30_000);
+  expect(performance.now() - started).toBeLessThan(3_000);
+});
+
+it("shows a name slip only after the comparison call confirms it", async () => {
+  const lines = [...LINES];
+  for (const i of [3, 9, 15, 21, 27, 33]) lines[i] = "준호: 가자, 늦겠어.";
+  lines[40] = "준오: 나중에 하자.";
+  await writeFile(join(root, "script.md"), lines.join("\n"));
+  const merges: string[] = [];
+  generate.mockImplementation(async prompt => {
+    if (!prompt.startsWith("These names and dates")) return JSON.stringify({ findings: [], names: ["준호", "준오"], dates: [] });
+    merges.push(prompt);
+    return JSON.stringify({ findings: merges.length > 1 ? [{ kind: "names", quote: "준오", fix: "준호", note: "typo" }] : [] });
+  });
+  doc.schedule(start(["script.md"]));
+  await done();
+  expect(merges[0]).toContain("준오: 나중에 하자.");
+  expect(cards()[0]!.doc!.findingTotal).toBe(0);
+  await writeFile(join(root, "script.md"), [...lines, "덧붙인 줄이에요."].join("\n"));
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(cards()).toHaveLength(2));
+  await done();
+  expect(cards()[1]!.doc!.findings).toEqual([{ kind: "names", line: 41, page: 1, quote: "준오", fix: "준호", note: "다른 곳은 준호 (6번)" }]);
+});
+
+it("keeps a date slip the comparison confirms, whatever kind or order it writes", async () => {
+  const lines = [...LINES];
+  lines[10] = "계약은 2024. 3. 15. 체결되었다.";
+  lines[30] = "2024. 3. 25. 체결된 계약에 따라 지급하라.";
+  await writeFile(join(root, "script.md"), lines.join("\n"));
+  generate.mockImplementation(async prompt => JSON.stringify(prompt.startsWith("These names and dates")
+    ? { findings: [{ kind: "events", quote: "2024. 3. 15.", fix: "2024. 3. 25.", note: "same contract" }] }
+    : { findings: [], names: [], dates: [{ date: "2024. 3. 15.", what: "supply contract signed" }, { date: "2024. 3. 25.", what: "supply contract signed" }] }));
+  doc.schedule(start(["script.md"]));
+  await done();
+  expect(cards()[0]!.doc!.findings).toEqual([{ kind: "names", line: 31, page: 1, quote: "2024. 3. 25.", fix: "2024. 3. 15.", note: "같은 일, 다른 날짜" }]);
+});
+
+it("shows names and dates as not checked when the comparison reply is not JSON, and checks again", async () => {
+  const long = Array.from({ length: 900 }, (_, i) => `${i + 1}번째 문단입니다. 오늘 회의에서 정한 내용을 차례로 적어 둡니다.`);
+  await writeFile(join(root, "script.md"), long.join("\n"));
+  generate.mockImplementation(async prompt => prompt.startsWith("These names and dates") ? "I could not compare these." : JSON.stringify({ findings: [], names: [], dates: [{ date: "2024. 3. 15.", what: "contract signed" }, { date: "2024. 6. 10.", what: "reminder sent" }] }));
+  doc.schedule(start(["script.md"]));
+  await done();
+  expect(cards()[0]!.doc!.uncompared).toBe(true);
+  doc.schedule(start(["script.md"]));
+  await vi.waitFor(() => expect(cards()).toHaveLength(2));
+});
+
 it("keeps secrets out of the replay, like the card", async () => {
   const lines = [...LINES];
   lines[9] = "export DATABASE_PASSWORD=hunter2hunter2";

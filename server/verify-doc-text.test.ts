@@ -1,7 +1,14 @@
-import { expect, it } from "vitest";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
 
-import { chunkDoc, dateClashes, docText, docxText, findingAt, nameTwins, numberingHits, parseChunkReply, parseMergeReply, type DocText } from "./verify-doc-text.ts";
-import { docxFixture } from "./testing/docx-fixture.ts";
+import { chunkDoc, dateClashes, docText, docxText, findingAt, nameTwins, numberingHits, parseChunkReply, parseMergeReply, readDoc, type DocText } from "./verify-doc-text.ts";
+import { createTempDirs } from "./testing/cleanup.ts";
+import { docxFixture, zipFixture } from "./testing/docx-fixture.ts";
+
+const temps = createTempDirs();
+afterEach(() => temps.remove());
 
 const WORDS = ["오늘", "정말", "우리가", "그때", "다시", "약속을", "지켜야", "해요", "알겠어", "괜찮아", "회사에서", "연락이", "왔어요", "어디로", "가는", "거야", "모르겠어요", "생각보다", "늦었네", "빨리"];
 const NAMES = ["민지", "준호", "서연", "도윤"];
@@ -84,6 +91,43 @@ it("reads paragraphs, tabs, entities and page breaks from a .docx", () => {
   expect(() => docxText(Buffer.from("not a zip"))).toThrow();
 });
 
+it("counts an explicit page break that no rendered mark follows", () => {
+  const body = `<w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:lastRenderedPageBreak/><w:t>two</w:t><w:br w:type="page"/></w:r></w:p><w:p><w:r><w:lastRenderedPageBreak/><w:t>three</w:t></w:r></w:p><w:p><w:r><w:t>four</w:t><w:br w:type="page"/></w:r></w:p><w:p><w:r><w:t>five</w:t></w:r></w:p><w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>six</w:t></w:r></w:p>`;
+  const { raw, rendered } = docxText(zipFixture({ "word/document.xml": `<w:document><w:body>${body}</w:body></w:document>` }));
+  expect(docText(raw, rendered).pages).toEqual([1, 2, 3, 3, 4, 5]);
+});
+
+it("reads a hostile .docx in linear time", () => {
+  const started = performance.now();
+  docxText(zipFixture({ "word/document.xml": `<w:document><w:body>${"<w:t <w:br ".repeat(18_000)}</w:body></w:document>` }));
+  expect(performance.now() - started).toBeLessThan(1_000);
+});
+
+it("reads UTF-8, UTF-16 and CP949 text, and refuses what is not text", async () => {
+  const dir = temps.make(join(tmpdir(), "wink-doc-text-")), text = "계약서를 보냈습니다.";
+  const read = async (bytes: Buffer) => { await writeFile(join(dir, "a.txt"), bytes); return readDoc(join(dir, "a.txt")); };
+  const utf16 = Buffer.from(text, "utf16le");
+  for (const bytes of [Buffer.from(`﻿${text}`), Buffer.concat([Buffer.from([0xff, 0xfe]), utf16]), Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(utf16).swap16()]), Buffer.from("b0e8bee0bcadb8a620bab8b3c2bdc0b4cfb4d92e", "hex")]) {
+    expect(docText((await read(bytes)).raw).text).toBe(text);
+  }
+  await expect(read(Buffer.from("PK\u0003\u0004\u0000\u0000 binary"))).rejects.toThrow();
+  await expect(read(Buffer.from([0xff, 0xff, 0xff, 0xfe, 0x41]))).rejects.toThrow();
+});
+
+it("numbers 30,000 Markdown headings in linear time", () => {
+  const doc = docText(Array.from({ length: 30_000 }, (_, i) => `# ${i % 9 + 1}. x`).join("\n"));
+  const started = performance.now();
+  numberingHits(doc);
+  expect(performance.now() - started).toBeLessThan(1_000);
+});
+
+it("reads a line that opens with a cited article as a citation, not a heading", () => {
+  expect(hits(["제750조에 따른 손해배상 책임이 있다.", "제763조에 의하여 준용되는 제393조에 따라 배상한다."])).toEqual([]);
+  expect(hits(["## 제1조 목적", "## 제2조 정의", "## 제4조 기간"])).toEqual([["제4조", "제3조"]]);
+  expect(hits(["**제1조** 목적", "**제2조** 정의", "**제4조** 기간"])).toEqual([["제4조", "제3조"]]);
+  expect(hits(["제1조", "제2조 (정의)", "제4조【기간】"])).toEqual([["제4조", "제3조"]]);
+});
+
 it("flags gaps, repeats and missing references in articles, scenes, lists and appendices", () => {
   expect(hits(["제1조(목적)", "본문", "제2조(정의)", "제4조(기간)", "제4조(해지)"])).toEqual([["제4조", "제3조"], ["제4조", "제5조"]]);
   expect(hits(["제1조(목적)", "제2조(기간)", "제3조(해지) 제5조에 따라 해지한다."])).toEqual([["제5조", ""]]);
@@ -151,5 +195,7 @@ it("flags a rare listed name one letter off a far more common one", () => {
 it("places merge findings at the first use of the variant", () => {
   const doc = docText(["원고 김민수는", "피고에게", "김민서는 계약을 해지했다.", "김민수"].join("\n"));
   const merged = parseMergeReply(JSON.stringify({ findings: [{ kind: "names", quote: "김민서", fix: "김민수", note: "elsewhere 2 times" }, { kind: "names", quote: "박영희", fix: "김민수" }] }), doc);
-  expect(merged.map(hit => findingAt(doc, hit))).toEqual([{ kind: "names", line: 3, page: 1, quote: "김민서", fix: "김민수", note: "elsewhere 2 times" }]);
+  expect(merged.ok).toBe(true);
+  expect(merged.hits.map(hit => findingAt(doc, hit))).toEqual([{ kind: "names", line: 3, page: 1, quote: "김민서", fix: "김민수", note: "elsewhere 2 times" }]);
+  expect(parseMergeReply("I could not compare these.", doc)).toEqual({ ok: false, hits: [] });
 });
