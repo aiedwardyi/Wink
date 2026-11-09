@@ -1,7 +1,7 @@
 // PreToolUse hook for the quick helper fork: up to 3 Read/Glob/Grep calls inside the roots, everything else denied.
 // argv[2] is the fork's temp dir: side-hook.json holds { roots }, read-<n> files claim the read slots.
 const { existsSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
-const { isAbsolute, join, relative, resolve } = require("node:path");
+const { basename, dirname, isAbsolute, join, relative, resolve } = require("node:path");
 
 const READS = new Set(["Read", "Glob", "Grep"]);
 const MAX_READS = 3;
@@ -15,11 +15,13 @@ try {
   roots = JSON.parse(readFileSync(join(dir, "side-hook.json"), "utf8")).roots.map((root) => real(resolve(root)));
 } catch {}
 
+// A missing file resolves through its nearest real parent, or a linked or 8.3 root never matches it.
 function real(path) {
   try {
     return realpathSync.native(path);
   } catch {
-    return path;
+    const parent = dirname(path);
+    return parent === path ? path : join(real(parent), basename(path));
   }
 }
 
