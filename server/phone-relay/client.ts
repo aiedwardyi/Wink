@@ -40,6 +40,8 @@ export const MAX_PARALLEL_OPENS = 4;
 export const REFILL_RETRY_BASE_MS = 1_000;
 export const REFILL_RETRY_CAP_MS = 30_000;
 export const SNAG_TIMEOUT_MS = 30_000;
+/** Activity from while the relay was down is sent on the next ready if it is this fresh. */
+export const ACTIVE_HOLD_MS = 5 * 60_000;
 /** A data channel that closes sooner than this counts as a failed open. */
 const SHORT_LIVED_MS = 5_000;
 
@@ -143,6 +145,7 @@ export class RelayClient {
   private rttMs: number | null = null;
   private lastError: string | null = null;
   private nextRetryAt: number | null = null;
+  private activeAt: number | null = null;
 
   constructor(options: RelayClientOptions) {
     this.opts = options;
@@ -183,7 +186,8 @@ export class RelayClient {
   /** Only after a ready that offered it: an older relay closes the channel on one. */
   sendActive(): void {
     const session = this.session;
-    if (session?.ready && session.active) this.send(session.socket, { type: "active" });
+    if (!session?.ready) this.activeAt = this.clock.now();
+    else if (session.active) this.send(session.socket, { type: "active" });
   }
 
   start(): void {
@@ -333,6 +337,8 @@ export class RelayClient {
         session.active = msg.active === true;
         session.reportOwner = msg.reportOwner;
         this.onReady(session, msg.session, msg.poolToken, msg.pool.min, msg.pool.max, msg.ticket);
+        if (session.active && this.activeAt !== null && this.clock.now() - this.activeAt < ACTIVE_HOLD_MS) this.send(session.socket, { type: "active" });
+        this.activeAt = null;
         if (msg.account) this.opts.onAccount?.(msg.account);
         return;
       case "want":
