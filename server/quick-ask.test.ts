@@ -75,13 +75,19 @@ function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean;
     await routes.send(Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", bot.id] as RegExpMatchArray);
     return out;
   }
+  async function stop() {
+    const { out, res } = respond();
+    await routes.interrupt(Readable.from(["{}"]) as IncomingMessage, res, ["", bot.id] as RegExpMatchArray);
+    store.setActivity(bot.id, "idle");
+    return out;
+  }
   const rows = () => store.messagesFor(bot.threadId);
   const settled = async () => {
     release();
     await vi.waitFor(() => expect(ask).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
   };
-  return { bot, store, steer, ask, usage, startTurn, send, rows, settled, release };
+  return { bot, store, steer, ask, usage, startTurn, send, stop, rows, settled, release };
 }
 
 describe("quick route", () => {
@@ -316,6 +322,55 @@ describe("quick route", () => {
     expect(_queuedCount(h.bot.threadId)).toBe(0);
   });
 
+  it("starts nothing from a handoff after Stop", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION, sendId: "send-quick-0000000002" });
+    await h.stop();
+    await h.settled();
+    expect(h.startTurn).not.toHaveBeenCalled();
+    expect(h.steer).not.toHaveBeenCalled();
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
+  it("still lands an answer after Stop", async () => {
+    const h = harness();
+    await h.send({ text: QUESTION });
+    await h.stop();
+    await h.settled();
+    expect(h.rows().at(-1)).toMatchObject({ text: "Port 8787.", quick: { state: "answer" } });
+    expect(h.steer).not.toHaveBeenCalled();
+  });
+
+  it("never requeues a steer dropped after Stop", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION, sendId: "send-quick-0000000004" });
+    let drop: (taken: boolean) => void = () => {};
+    h.steer.mockImplementationOnce(async (_threadId, _text, consumed) => {
+      drop = consumed!;
+      return true;
+    });
+    await h.settled();
+    await h.stop();
+    drop(false);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+  });
+
+  it("drops a handoff whose steer was taken during Stop", async () => {
+    const h = harness({ consumed: true, result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION, sendId: "send-quick-0000000003" });
+    let drop: (taken: boolean) => void = () => {};
+    h.steer.mockImplementationOnce(async (_threadId, _text, consumed) => {
+      drop = consumed!;
+      await h.stop();
+      return true;
+    });
+    await h.settled();
+    drop(false);
+    expect(h.rows().at(-1)?.steered).toBeUndefined();
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
+    expect(h.startTurn).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])("steers the live note and marks it noted only when taken: %s", async (taken) => {
     const h = harness({ consumed: true, taken });
     await h.send({ text: QUESTION });
@@ -374,6 +429,14 @@ describe("boot recovery", () => {
     drainSteeredMessages(store, run);
     expect(run.mock.calls.filter(([botId]) => botId === bot.id)).toEqual([[bot.id, bot.threadId, QUESTION, expect.objectContaining({ id: ask.id }), [ask.id]]]);
     expect(store.messagesFor(bot.threadId).filter((row) => row.text === QUESTION)).toHaveLength(1);
+  });
+
+  it("leaves an ask stopped before a restart", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    await h.stop();
+    recoverQuickAsks(h.store);
+    expect(_queuedCount(h.bot.threadId)).toBe(0);
   });
 
   it("recovers an ask left in another task once", async () => {

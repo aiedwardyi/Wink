@@ -12,7 +12,7 @@ import { json, readBody } from "./http-helpers.ts";
 import { resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { hasPeerWatch } from "./peer-takeover.ts";
 import { beginPeerUserReply, cancelPeerUserReplies } from "./peer-user-reply.ts";
-import { answerQuick, pending, requeueDroppedAsk, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
+import { answerQuick, cancelQuickAsks, pending, requeueDroppedAsk, routesQuick, trackQuickAsk, type QuickAsk, type QuickDeps } from "./quick-ask.ts";
 import { composeUserTurnPrompt, promptWithReply, userTurnReactionKeys } from "./replies.ts";
 import type { RoutineManager } from "./routines.ts";
 import { steersSend } from "./send-deliver.ts";
@@ -184,7 +184,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       });
     }
     // a Stop during the steer await already handed a Send now back
-    if (sendId && isSendCancelled(sendId)) return { ok: true as const, cancelled: true as const, threadId };
+    if (isSendCancelled(sendId ?? ask?.sendId)) return { ok: true as const, cancelled: true as const, threadId };
     if (steered) {
       // an ask the engine accepted counts as delivered: a replay would answer it twice
       if (!current.busy && !ask) {
@@ -509,6 +509,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
         taskResumes.forgetBot(bot.id);
         cancelPeerUserReplies(bot.id);
         const returned = cancelQueuedSends(bot.id);
+        cancelQuickAsks(store, bot.id, [bot.threadId, runThread(routineRun) ?? bot.threadId]);
         if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
         store.patchBot(bot.id, { paneWakePaused: true });
         // a turn still preparing has no session to interrupt yet
@@ -537,6 +538,7 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       taskResumes.forgetBot(bot.id);
       cancelPeerUserReplies(bot.id);
       const returned = cancelQueuedSends(bot.id);
+      cancelQuickAsks(store, bot.id, [bot.threadId, bot.activeThreadId ?? bot.threadId]);
       if (returned.length) broadcast({ kind: "queue.cancelled", botId: bot.id, sends: returned });
       store.patchBot(bot.id, { paneWakePaused: true });
       const stoppedThreadId = busyGroup?.threadId ?? bot.activeThreadId ?? bot.threadId;

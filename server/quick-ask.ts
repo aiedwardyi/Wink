@@ -11,7 +11,7 @@ import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
 import { nominate } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
-import { queueSteeredMessage } from "./steer-queue.ts";
+import { isSendCancelled, markSendCancelled, queueSteeredMessage } from "./steer-queue.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
 const BLOCK_HEAD =
@@ -102,7 +102,7 @@ function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message
 
 /** A recorded steer the engine dropped later goes once to the queue in its own thread. */
 export function requeueDroppedAsk(store: AskStore, botId: string, threadId: string, ask: Message, drain: () => void): void {
-  if (!store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && row.steered && row.quick?.state === "handoff")) return;
+  if (isSendCancelled(ask.sendId) || !store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && row.steered && row.quick?.state === "handoff")) return;
   store.patchMessage(threadId, ask.id, { steered: undefined });
   queueAsk(store, botId, threadId, ask);
   drain();
@@ -144,6 +144,26 @@ function savedThreads(): Array<{ botId: string; threadId: string }> {
   }
 }
 
+/** Stop: no ask of this bot starts a turn or a queue later, even after a restart. */
+export function cancelQuickAsks(store: AskStore & Pick<Store, "messagesFor">, botId: string, threadIds: string[]): void {
+  const threads = new Set(threadIds);
+  for (const ask of running.values()) if (ask.botId === botId) threads.add(ask.threadId);
+  for (const threadId of threads) {
+    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
+    const path = store.activePath(threadId);
+    let turn = true;
+    for (let index = path.length - 1; index >= 0; index--) {
+      const row = path[index]!;
+      if (endsNoteWindow(row)) turn = false;
+      if (row.quick?.state === "asked" && !answered.has(row.id)) {
+        if (row.sendId) markSendCancelled(row.sendId);
+        // a stopped ask reads as handed off, so it is neither pending nor recovered
+        store.patchMessage(threadId, row.id, { quick: { state: "handoff" } });
+      } else if (turn && row.steered && row.quick?.state === "handoff" && row.sendId) markSendCancelled(row.sendId);
+    }
+  }
+}
+
 /** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
 export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
   // the open chats plus the threads of asks still running at shutdown; no other thread is read
@@ -177,7 +197,7 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const instance = bot ? deps.instance(bot, threadId) : null;
   const result: QuickResult = instance ? await askHelper(deps, instance, botId, threadId, ask) : { route: "handoff", ms: 0 };
   const current = store.bot(botId);
-  if (!current || !pending(store, threadId, ask)) return;
+  if (!current || !store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text)) return;
   if (result.route === "handoff" || !result.text) {
     // A turn can end or be claimed under a try; the second takes the idle or queue path.
     for (let tries = 0; tries < 2 && pending(store, threadId, ask); tries++) {

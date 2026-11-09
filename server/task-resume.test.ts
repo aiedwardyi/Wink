@@ -9,6 +9,7 @@ import { startQueuedTurn, writeChatError } from "./chat-error.ts";
 import { rootForStart } from "./comms-root.ts";
 import { watchPeerTurn } from "./peer-takeover.ts";
 import { _resetPeerUserReplies, beginPeerUserReply, cancelPeerUserReplies, drainPeerUserReplies, settlePeerUserReplies } from "./peer-user-reply.ts";
+import { cancelQuickAsks } from "./quick-ask.ts";
 import {
   _resetSteerQueue,
   cancelQueuedSends,
@@ -130,6 +131,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
     groups: [],
     patchBot: (_id: string, patch: Partial<BotRecord>) => Object.assign(bot, patch),
     messagesFor: () => messages,
+    activePath: () => messages,
     appendMessage: (_threadId: string, message: Omit<Message, "id" | "at">) => {
       const appended = { ...message, id: `m${messages.length}`, at: 0 };
       messages.push(appended);
@@ -221,7 +223,7 @@ function rig(options: { preparing?: boolean; live?: boolean; error?: Error; reje
   };
   const invoke = route('/^\\/api\\/bots\\/([\\w-]+)\\/tasks\\/([\\w-]+)\\/resume$/', { ...resumeDeps, botChatRoutes: { resumeTask: botChatRoute("resumeTask", resumeDeps) } });
   const stopDeps = {
-    store, taskResumes, botHasActiveTurn, cancelPeerUserReplies, cancelQueuedSends,
+    store, taskResumes, botHasActiveTurn, cancelPeerUserReplies, cancelQueuedSends, cancelQuickAsks,
     broadcast: (frame: Record<string, unknown>) => frames.push(frame),
     readBody: async () => ({}),
     routines: {
