@@ -80,10 +80,20 @@ describe("whats new card", () => {
 
   it("closes from Got it, the X and Escape", () => {
     render(RELEASE);
+    scrollIntoView();
     act(() => button("Got it").click());
     act(() => button("Close what's new").click());
     act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(onClose).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores Escape while offscreen", () => {
+    render(RELEASE);
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(onClose).not.toHaveBeenCalled();
+    scrollIntoView();
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("opens Memory from its Show me and explains the one that starts on its own", () => {
