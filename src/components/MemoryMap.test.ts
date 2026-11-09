@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +11,8 @@ import type { Bot } from "@/state/store";
 import { MemoryMap } from "./MemoryMap";
 
 vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "MemoryMap.css"), "utf8");
+const rule = (selector: string) => css.match(new RegExp(`^${selector.replace(".", "\\.")} \\{([^}]*)\\}`, "m"))?.[1] ?? "";
 const bot = { id: "b", threadId: "t", messages: [], tasks: [] } as unknown as Bot;
 const text = "- Uses VS Code (noted 2026-10-29)\n- Freshman in CS (noted 2026-10-25)\n- Has ADHD (noted 2026-10-17)\n- Has Linux available (noted 2026-10-17)\n- Feedback style: lead with \"not quite\" (noted 2026-10-30)";
 const topics = [{ name: "reps-content-preferences.md", bytes: 1135 }, { name: "interview-direction.md", bytes: 842 }];
@@ -55,6 +60,16 @@ describe("MemoryMap", () => {
     await mount({ bot: { ...bot, tasks: [{ threadId: "t", taskState: { goal: "Ship", plan, nextAction: "", blockers: [], completed: [], evidence: [], artifacts: [] } }] } as unknown as Bot });
     expect([...host.querySelectorAll(".mm-steps i")].map((each) => each.hasAttribute("data-now") ? "*" : each.hasAttribute("data-done") ? "+" : "-").join("")).toBe(bar);
     expect(host.querySelector(".mm-task-meta")!.textContent).toBe(`${statuses.filter((each) => each === "done").length} of ${statuses.length} steps done`);
+  });
+
+  it("draws the rings as soft glows behind the badge, never a line", () => {
+    const ring = rule(".mm-orbit");
+    expect(ring).toContain("z-index: -1");
+    expect(ring).not.toMatch(/gradient|border:/);
+    expect(ring).toMatch(/box-shadow: 0 0 \d+px/);
+    const grown = Math.max(...[...css.split("\n").find((line) => line.startsWith("@keyframes mm-ring"))!.matchAll(/scale: ([\d.]+)/g)].map((each) => Number(each[1])));
+    const badge = Number(rule(".mm-brain").match(/width: (\d+)px/)![1]);
+    for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
   });
 
   it("hides the Sleep line until Sleep has run", async () => {

@@ -167,3 +167,31 @@ describe("Devices first paint", () => {
     expect(host.querySelectorAll("[data-device-step]")).toHaveLength(5);
   });
 });
+
+describe("Devices list", () => {
+  const follows = (a: Element | null, b: Element | null) => Boolean(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("lists phones under This PC as device rows", async () => {
+    const now = Date.now();
+    store.api.mockResolvedValue({ ...body, phones: [
+      { id: "a", kind: "android", lastSeen: now - 2 * 3_600_000 },
+      { id: "b", kind: "android", lastSeen: now - 4 * 3_600_000 },
+    ] });
+    await open();
+    const intro = host.querySelector("[data-devices-settings] > p");
+    const pc = host.querySelector("[data-pc-ready]");
+    const list = host.querySelector("[data-phone-list]");
+    expect(intro?.textContent).toBe("Use Wink on your phone and your other PCs.");
+    expect(follows(intro, pc)).toBe(true);
+    expect(follows(pc, list)).toBe(true);
+    expect([...list!.querySelectorAll("li")].map((row) => row.textContent)).toEqual(["Android phone · Active 2h ago", "Android phone · Active 4h ago"]);
+    expect(list!.querySelectorAll("li > .size-7 svg")).toHaveLength(2);
+  });
+
+  it("shows no phone list without phones", async () => {
+    store.api.mockResolvedValue({ ...body, phones: [] });
+    await open();
+    expect(host.querySelector("[data-phone-list]")).toBeNull();
+    expect(host.querySelector("[data-pc-ready]")).not.toBeNull();
+  });
+});

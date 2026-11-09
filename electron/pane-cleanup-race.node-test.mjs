@@ -46,7 +46,7 @@ function fixture(t) {
     else if (kind === "pin") pins.push(target);
     else cleanup.opened(next);
   };
-  return { home, target, host, warnings, hooks, cleanup, claim };
+  return { home, target, host, worktreeRoot, warnings, hooks, cleanup, claim };
 }
 
 function armAfterBackup(t) {
@@ -56,11 +56,11 @@ function armAfterBackup(t) {
   return state;
 }
 
-function onHostLstat(t, f, state, run) {
+function onRootLstat(t, f, state, run) {
   const lstat = fsp.lstat;
   t.mock.method(fsp, "lstat", async (...args) => {
     const result = await lstat(...args);
-    if (args[0] === f.host && state.armed && !state.fired) { state.fired = true; run(); }
+    if (args[0] === f.worktreeRoot && state.armed && !state.fired) { state.fired = true; run(); }
     return result;
   });
 }
@@ -87,7 +87,7 @@ for (const kind of ["pane", "pin", "ledger"]) {
   test(`${kind} claiming a worktree during the final link scan keeps it`, async (t) => {
     const f = fixture(t);
     const state = armAfterBackup(t);
-    onHostLstat(t, f, state, () => f.claim(kind));
+    onRootLstat(t, f, state, () => f.claim(kind));
     await f.cleanup.sweep();
     assert.equal(state.fired, true);
     assert.deepEqual(f.warnings, []);
@@ -108,7 +108,7 @@ test("worktree swapped for a junction to itself during the final link scan is no
   const f = fixture(t);
   const state = armAfterBackup(t);
   const parked = path.join(f.home, "parked-worker");
-  onHostLstat(t, f, state, () => {
+  onRootLstat(t, f, state, () => {
     fs.renameSync(f.target, parked);
     fs.symlinkSync(parked, f.target, process.platform === "win32" ? "junction" : "dir");
   });

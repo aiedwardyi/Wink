@@ -8,6 +8,9 @@ const DAY_MS = 24 * 60 * 60_000;
 const SWEEP_MS = 6 * 60 * 60_000;
 const NICK_RE = /^[A-Z0-9][A-Z0-9-]{0,63}$/;
 const KEEP_RE = /^(?:rel-|nm-)|^(?:relay-deploy|release-gate)$/i;
+const SETTLE_MS = 50;
+// Only Windows watches recursively without a startup walk or delivery lag.
+const WATCH = process.platform === "win32";
 const normalize = (file) => {
   const resolved = path.resolve(file);
   if (process.platform !== "win32") return resolved;
@@ -54,7 +57,11 @@ const scope = () => {
     if (!names.has(key)) names.set(key, normalizeAsync(key, parents));
     return names.get(key);
   };
-  return { norm, cache: new Map(), stats: { calls: 0, dirs: 0, links: 0, ms: 0 } };
+  const context = { norm, cache: new Map(), stats: { calls: 0, dirs: 0, links: 0, ms: 0 }, index: null, close: () => {
+    for (const watcher of [...context.index?.watchers ?? [], ...context.index?.sections.values() ?? []]) watcher.close();
+    context.index = null;
+  } };
+  return context;
 };
 const nick = (label) => {
   const first = label?.split("|")[0].trim();
@@ -240,6 +247,15 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
   let timer = null;
   let stopped = false;
   const retries = new Set();
+  const live = new Set();
+  const fresh = async (run) => {
+    const context = scope();
+    live.add(context);
+    try { return await run(context); } finally {
+      live.delete(context);
+      context.close();
+    }
+  };
   const save = () => {
     const temporary = `${file}.${process.pid}.tmp`;
     try {
@@ -284,7 +300,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     for (const entry of entries.slice(0, entries.indexOf(owner) + 1)) if (!entry.scratchDone && entry.scratch && await norm(entry.scratch) === normalized) entry.scratchDone = true;
     save();
   };
-  const removeScratch = async (entry, retry = true, context = scope()) => {
+  const removeScratch = async (entry, retry, context) => {
     if (entry.scratchDone) return;
     const target = await scratchFor(entry, context.norm);
     if (!target) { entry.scratchDone = true; return; }
@@ -316,7 +332,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (await linkedInto(target, context)) return kept(entry, target, "linked");
       if (!await unlinkLinks(target, new Set(), current)) return;
       if (!await directory(target) || !await current()) return;
-      if (await linkedInto(target, context)) return kept(entry, target, "linked");
+      if (await linkedInto(target, context, true)) return kept(entry, target, "linked");
       if (!await current()) return;
       await fsp.rm(target, { recursive: true });
       await finishScratch(target, entry, context.norm);
@@ -326,64 +342,207 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (retry && ["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"].includes(error.code)) {
         const handle = schedule(() => {
           retries.delete(handle);
-          if (!stopped) void enqueue(() => removeScratch(entry, false));
+          if (!stopped) void enqueue(() => fresh((context) => removeScratch(entry, false, context)));
         }, retryMs);
         handle.unref?.();
         retries.add(handle);
       } else warn(error);
     }
   };
-  const linkedInto = async (target, { cache, stats }) => {
-    const started = performance.now();
-    const normalized = await normalizeAsync(target);
-    const parents = new Map();
-    let linked = false;
-    const inspect = async (file, name, temp = false) => {
-      if (contains(normalized, name)) return;
-      let stat;
-      try { stat = await statEntry(file); } catch (error) {
-        if (error.code === "ENOENT") return;
+  const drop = (index, name) => { for (const key of index.links.keys()) if (contains(name, key)) index.links.delete(key); };
+  const inspect = async (context, file, name, temp = null, deep = true, section = null) => {
+    const { index, cache, stats } = context;
+    if (index.skip && contains(index.skip.name, name)) { index.skip.seen = true; return; }
+    let stat;
+    let gone = false;
+    try { stat = await statEntry(file); } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      gone = true;
+    }
+    if (section && !(stat?.isDirectory() && !stat.isSymbolicLink())) {
+      index.sections.get(name)?.close();
+      index.sections.delete(name);
+    }
+    if (gone) return drop(index, name);
+    if (!stat?.isSymbolicLink()) index.links.delete(name);
+    if (!stat) return;
+    if (stat.isSymbolicLink()) {
+      stats.links++;
+      let destination;
+      try { destination = path.resolve(path.dirname(file), await fsp.readlink(file)); } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        return drop(index, name);
+      }
+      let real = null;
+      try { real = canonical(await fsp.realpath(file)); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      index.links.set(name, { file, destination: await normalizeAsync(destination, index.parents), real });
+      index.relinked = true;
+      return;
+    }
+    if (!deep || !stat.isDirectory()) return;
+    stats.dirs++;
+    if (section && WATCH) {
+      index.sections.get(name)?.close();
+      try { index.sections.set(name, watch(index, section, file)); } catch { index.stale = true; }
+    }
+    let saved = cache.get(name);
+    if (!saved || ["dev", "ino", "mtimeMs", "ctimeMs"].some((key) => saved[key] !== stat[key])) {
+      let names;
+      try { names = await fsp.readdir(file, { withFileTypes: true }); } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        return drop(index, name);
+      }
+      names = names.filter((entry) => entry.isDirectory() || entry.isSymbolicLink()).map((entry) => entry.name);
+      saved = { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, names };
+      cache.set(name, saved);
+    }
+    for (const child of saved.names) if (!temp || child.startsWith("wink-")) await inspect(context, path.join(file, child), canonical(path.join(name, child)), null, true, temp);
+  };
+  const linkRoots = async () => {
+    const roots = [];
+    try {
+      if (!await directory(worktreeRoot)) return null;
+      roots.push({ file: worktreeRoot, temp: false });
+    } catch (error) { if (error.code !== "ENOENT") throw error; }
+    for (const root of new Set([tempRoot, ...entries.map((entry) => entry.tempRoot)])) {
+      try {
+        if (!await directory(root)) throw new Error("linked TEMP root");
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
         throw error;
       }
-      if (!stat) return;
-      if (stat.isSymbolicLink()) {
-        stats.links++;
-        const destination = path.resolve(path.dirname(file), await fsp.readlink(file));
-        let real = null;
-        try { real = canonical(await fsp.realpath(file)); } catch (error) { if (error.code !== "ENOENT") throw error; }
-        if (contains(normalized, await normalizeAsync(destination, parents)) || (real && contains(normalized, real))) linked = true;
-        return;
-      }
-      if (!stat.isDirectory()) return;
-      stats.dirs++;
-      let saved = cache.get(name);
-      if (!saved || ["dev", "ino", "mtimeMs", "ctimeMs"].some((key) => saved[key] !== stat[key])) {
-        const names = (await fsp.readdir(file, { withFileTypes: true }))
-          .filter((entry) => entry.isDirectory() || entry.isSymbolicLink()).map((entry) => entry.name);
-        saved = { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, names };
-        cache.set(name, saved);
-      }
-      for (const child of saved.names) if (!temp || child.startsWith("wink-")) await inspect(path.join(file, child), canonical(path.join(name, child)));
+      roots.push({ file: root, temp: true });
+    }
+    return roots;
+  };
+  const watch = (index, root, dir = root.file) => {
+    const base = path.relative(root.file, dir);
+    const note = (rel, deep) => {
+      index.events++;
+      const file = path.join(root.file, rel);
+      index.changes.set(file, { root, rel, deep: deep || !!index.changes.get(file)?.deep });
     };
-    try {
-      try {
-        if (!await directory(worktreeRoot)) return true;
-        await inspect(worktreeRoot, await normalizeAsync(worktreeRoot, parents));
-      } catch (error) { if (error.code !== "ENOENT") throw error; }
-      const roots = new Set([tempRoot, ...entries.map((entry) => entry.tempRoot)]);
-      for (const root of roots) {
-        try {
-          if (!await directory(root)) throw new Error("linked TEMP root");
-        } catch (error) {
-          if (error.code === "ENOENT") continue;
-          throw error;
-        }
-        await inspect(root, await normalizeAsync(root, parents), true);
+    const lost = () => { if (base) note(base, true); else index.stale = true; };
+    // TEMP roots are watched one level deep with a watcher per wink- folder, so deleting one floods no watcher.
+    const watcher = fs.watch(dir, { recursive: !root.temp || !!base }, (type, rel) => {
+      if (!["rename", "change"].includes(type)) index.stale = true;
+      else if (rel == null) lost();
+      else {
+        const head = path.join(base, rel).split(path.sep, 1)[0];
+        if (!root.temp || head.startsWith("wink-") || head.includes("~")) note(path.join(base, rel), type === "rename");
       }
-      return linked;
+    });
+    watcher.on("error", lost);
+    return watcher;
+  };
+  const rootId = async (file) => {
+    const { dev, ino } = await fsp.stat(file, { bigint: true });
+    return `${dev}:${ino}`;
+  };
+  const moved = async (index) => {
+    for (const root of index.roots) {
+      try { if (await rootId(root.file) !== root.id) return true; } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        return true;
+      }
+    }
+    return false;
+  };
+  const build = async (context, roots, key, skip) => {
+    const index = { key, roots: [], links: new Map(), changes: new Map(), parents: new Map(), events: 0, stale: !WATCH, watchers: [], sections: new Map(), skip };
+    context.index = index;
+    for (const root of roots) index.roots.push({ ...root, normalized: await normalizeAsync(root.file, index.parents), id: await rootId(root.file) });
+    if (WATCH) {
+      try { for (const root of index.roots) index.watchers.push(watch(index, root)); } catch { index.stale = true; }
+    }
+    for (const root of index.roots) await inspect(context, root.file, root.normalized, root.temp ? root : null);
+  };
+  const refresh = async (context, normalized, links) => {
+    const { index } = context;
+    index.parents = new Map();
+    // Changes that land while a pass inspects get another pass.
+    for (let pass = 0; ; pass++) {
+      for (let round = 0; !index.stale; round++) {
+        const seen = index.events;
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+        if (index.events === seen) break;
+        if (round === 20) index.stale = true;
+      }
+      if (index.stale || (pass && !index.changes.size)) return;
+      if (pass === 20) { index.stale = true; return; }
+      index.relinked = false;
+      if (index.skip && index.skip.name !== normalized) {
+        const { file, name, seen } = index.skip;
+        index.skip = null;
+        if (seen) {
+          drop(index, name);
+          await inspect(context, file, name, null, true, index.roots.find((root) => root.temp && path.dirname(name) === root.normalized));
+        }
+      }
+      const changes = [...index.changes.values()].sort((a, b) => a.rel.length - b.rel.length);
+      index.changes.clear();
+      const walked = new Set();
+      for (const { root, rel, deep } of changes) {
+        const file = path.join(root.file, rel);
+        // Windows may name a change by its 8.3 alias.
+        const name = rel.includes("~") ? await normalizeAsync(file, index.parents) : canonical(path.join(root.normalized, rel));
+        if (!contains(root.normalized, name) || (root.temp && !path.relative(root.normalized, name).startsWith("wink-"))) continue;
+        let parent = name;
+        while (parent.length > root.normalized.length && !walked.has(parent)) parent = path.dirname(parent);
+        if (walked.has(parent)) continue;
+        if (deep) { drop(index, name); walked.add(name); }
+        await inspect(context, file, name, null, deep, root.temp && !rel.includes(path.sep) ? root : null);
+      }
+      // A re-pointed link can redirect any target resolved through it.
+      if (links && index.relinked) for (const [name, link] of index.links) await inspect(context, link.file, name, null, false);
+    }
+  };
+  const resolveLinks = async ({ index, stats }) => {
+    const links = [...index.links.values()];
+    for (let start = 0; start < links.length; start += 64) await Promise.all(links.slice(start, start + 64).map(async (link) => {
+      stats.links++;
+      try { link.real = canonical(await fsp.realpath(link.file)); } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        link.real = null;
+      }
+    }));
+  };
+  const linkedInto = async (target, context, final = false) => {
+    const started = performance.now();
+    try {
+      const normalized = await normalizeAsync(target);
+      const roots = await linkRoots();
+      if (!roots) return true;
+      const key = roots.map(({ file, temp }) => `${temp}:${file}`).join("\0");
+      if (context.index?.key !== key) context.close();
+      // A link can resolve through a junction no watcher sees.
+      if (final && context.index?.stale === false) await resolveLinks(context);
+      if (context.index) await refresh(context, normalized, true);
+      // A root renamed aside and recreated leaves its watcher on the old folder.
+      if (context.index?.stale || (context.index && await moved(context.index))) context.close();
+      if (!context.index) {
+        await build(context, roots, key, { file: target, name: normalized, seen: false });
+        await refresh(context, normalized, false);
+        // A doubtful index never clears a delete: walk once more, and keep the folder this sweep if still in doubt.
+        if (WATCH && (context.index.stale || await moved(context.index))) {
+          context.close();
+          await build(context, roots, key, { file: target, name: normalized, seen: false });
+          await refresh(context, normalized, false);
+          if (context.index.stale || await moved(context.index)) return true;
+        }
+      }
+      // A watch handle on the candidate would hold up its own delete.
+      const own = context.index.sections.get(normalized);
+      if (own) {
+        own.close();
+        context.index.sections.delete(normalized);
+        context.index.skip = { file: target, name: normalized, seen: true };
+      }
+      for (const [name, link] of context.index.links) if (!contains(normalized, name) && (contains(normalized, link.destination) || (link.real && contains(normalized, link.real)))) return true;
+      return false;
     } finally {
-      stats.calls++;
-      stats.ms += performance.now() - started;
+      context.stats.calls++;
+      context.stats.ms += performance.now() - started;
     }
   };
   const resume = async (entry) => {
@@ -480,7 +639,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (!save()) { release(); return; }
     let held = null;
     const final = async () => {
-      if (await linkedInto(target, context)) return "linked";
+      if (await linkedInto(target, context, true)) return "linked";
       if (!await directory(target) || !await directory(worktreeRoot)) return "";
       if (await dirty()) return "dirty";
       if (await unpushed()) return "unpushed";
@@ -508,8 +667,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     save();
     await record("worktree", target);
   };
-  const sweep = () => enqueue(async () => {
-    const context = scope();
+  const sweep = () => enqueue(() => fresh(async (context) => {
     const cpu = process.cpuUsage();
     const retained = new Set();
     for (const entry of entries) {
@@ -523,7 +681,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
     if (stats.calls) await record("links", undefined, { ...stats, ms: Math.round(stats.ms) });
     const { user, system } = process.cpuUsage(cpu);
     await record("sweep", undefined, { cpuMs: Math.round((user + system) / 1_000) });
-  });
+  }));
   return {
     opened(session) {
       const root = resolveTempRoot(session.tempRoot || tempRoot);
@@ -539,7 +697,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       if (!entry) return Promise.resolve();
       Object.assign(entry, { closedAt: now(), keep: keep === true, reported: !!session.reportAt && session.reportAt >= (session.stallArmedAt || 0) && session.autoReported !== false });
       save();
-      return entry.reported && !entry.keep ? enqueue(() => removeScratch(entry)) : Promise.resolve();
+      return entry.reported && !entry.keep ? enqueue(() => fresh((context) => removeScratch(entry, true, context))) : Promise.resolve();
     },
     start(openPanes) {
       panes = openPanes;
@@ -561,6 +719,7 @@ export function createPaneCleanup({ home, tempRoot = os.tmpdir(), worktreeRoot =
       cancel(timer);
       for (const handle of retries) cancel(handle);
       retries.clear();
+      for (const context of live) context.close();
     },
   };
 }

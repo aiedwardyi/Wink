@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { appEntry, type AppOptions } from "./verify-app.ts";
+import { DOC_EXTS } from "./verify-doc-text.ts";
 import { resolveVerifySite } from "./verify-site.ts";
 
 const WEB = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico"]);
@@ -19,6 +20,7 @@ export interface VerifyAutoTurn {
   startedAt: number;
   roots: string[];
   depth: number;
+  docFix?: string;
   ok: boolean;
   routine?: boolean;
   interrupted?: boolean;
@@ -33,6 +35,8 @@ interface VerifyAutoDeps {
   enabled(): boolean;
   startAuto(input: AutoStart): Promise<boolean | void>;
   cancelQueued?(threadId: string): void;
+  startDocs?(input: { botId: string; threadId: string; roots: string[]; paths: string[]; humanId: string }): void;
+  docTurnEnded?(input: VerifyAutoTurn): void;
   log(line: string): void;
   freeMemory?(): number;
   scan?: typeof scanVerifyWrites;
@@ -53,7 +57,7 @@ export async function scanVerifyWrites(root: string, since: number): Promise<str
         if (entry.name.startsWith(".") || SKIP.has(entry.name) || entry.isSymbolicLink()) continue;
         const path = join(folder, entry.name);
         if (entry.isDirectory()) await walk(path);
-        else if (entry.isFile() && WEB.has(extname(path).toLowerCase()) && (await stat(path)).mtimeMs >= since - 2_000 && !stopped) paths.push(path);
+        else if (entry.isFile() && (WEB.has(extname(path).toLowerCase()) || DOC_EXTS.has(extname(path).toLowerCase())) && (await stat(path)).mtimeMs >= since - 2_000 && !stopped) paths.push(path);
       }
     } catch {}
   };
@@ -123,6 +127,7 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
   const settled = async (input: VerifyAutoTurn) => {
     const id = key(input.threadId, input.turnId), turn = turns.get(id);
     turns.delete(id);
+    deps.docTurnEnded?.(input);
     if (!turn?.tools || !turn.writes.size && !turn.opaque) return;
     latest.delete(input.threadId);
     deps.cancelQueued?.(input.threadId);
@@ -136,6 +141,8 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       if (turn.opaque) paths.push(...await (deps.scan ?? scanVerifyWrites)(input.roots[0], input.startedAt));
       const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
       if (latest.get(input.threadId) !== token) return;
+      const docs = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()));
+      if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs, humanId: input.humanId }); return; }
       if (!entry) { deps.log(`Live Verify: no entry for ${input.threadId}`); return; }
       if (await deps.startAuto({ botId: input.botId, threadId: input.threadId, entry, episode: JSON.stringify([input.botId, input.threadId, input.humanId, entry]) }) === false) deps.log(`Live Verify: skipped ${input.threadId}`);
     } catch { deps.log(`Live Verify: skipped ${input.threadId}`); }

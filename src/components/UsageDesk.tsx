@@ -1,6 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, RefreshCw } from "lucide-react";
-import { usageIdentity } from "../../shared/usage-identity";
 import { z } from "zod";
 import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
@@ -10,14 +9,14 @@ import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
 import { museReading, resetCompact, windowExpired } from "@/lib/usage";
-import { joinRefresh, refreshReady, useRefreshPending } from "@/lib/usage-auto-refresh";
+import { refreshUsage, useRefreshPending } from "@/lib/usage-auto-refresh";
 import type { UsageBoard, UsageBoardAccount, UsageBoardEngine, UsageBoardEvent, UsageBoardWindow } from "@/lib/usage-board";
 import { checkedMain, requestMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { bindingWindow, chartSeries, historyColumn, leftOf, pace, splitWindows, todayVsNormal, type Verdict } from "@/lib/usage-pace";
 import { useIsPhone } from "@/lib/use-phone-swipe";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useVisibleClock } from "@/lib/use-visible-clock";
-import { api, useStore } from "@/state/store";
+import { useStore } from "@/state/store";
 import { setUsageMode, useUsageMode } from "@/lib/usage-preferences";
 import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { useUsageSwitch } from "@/lib/use-usage-switch";
@@ -545,20 +544,9 @@ export function UsageDesk() {
   const refresh = async () => {
     setRefreshFailed(false);
     setMuseAuthFailed(false);
-    const results = await Promise.allSettled(store.instances.filter((each) => each.canRefreshUsage !== false && refreshReady(each)
-      && ["claudeAgent", "codex", "grokAgent", "antigravityAgent", "museAgent"].includes(each.driverKind)
-      && (each.driverKind !== "antigravityAgent" || board.engines.some((engine) => engine.accounts.some((account) => account.id === each.instanceId))))
-      .map((each) => joinRefresh(each.instanceId, async () => {
-        let result = await api(`/api/usage/refresh/${each.instanceId}`, { method: "POST" });
-        if (each.driverKind === "museAgent" && result.status === "no_observation" && !result.error) {
-          result = await api(`/api/usage/check/${each.instanceId}`, { method: "POST" });
-        }
-        if (result.report) dispatch({ type: "rateLimits", instanceId: each.instanceId, report: result.report, identity: usageIdentity(each.snapshot) });
-        if (each.driverKind === "museAgent" && result.status === "auth_error") setMuseAuthFailed(true);
-        if (result.error) throw new Error("refresh");
-        return result;
-      })));
-    setRefreshFailed(results.some((each) => each.status === "rejected"));
+    const outcome = await refreshUsage(store.instances, board, dispatch);
+    setMuseAuthFailed(outcome.museAuthFailed);
+    setRefreshFailed(outcome.failed);
   };
   return (
     <div ref={desk} data-usage-desk="" className={cn("usage-desk min-w-0", waited.current && "animate-fade-in")}>

@@ -9,6 +9,7 @@ import { openVerifyWatch, rerunVerify, toggleVerifyWatch, useVerifyShowing, useV
 import type { Message } from "@/state/store";
 import { Fold } from "./Fold";
 import { LazyView } from "./LazyView";
+import { VerifyDocCard } from "./VerifyDocCard";
 import "./VerifyCard.css";
 
 const VerifyWatchFrame = lazyView(() => import("./VerifyWatch").then(m => ({ default: m.VerifyWatchFrame })));
@@ -59,7 +60,11 @@ const share = (by: By, checker: VerifyChecker) => TILES.reduce((sum, tile) => {
 const rowState = (by: By | undefined, checkers: VerifyChecker[]) => !by ? undefined : active(by, checkers) ? "running" : pairs(by, checkers).length ? "done" : "waiting";
 const dot = (checker: VerifyChecker) => <i key={checker} style={{ background: VERIFY_ROLE[checker] ?? VERIFY_ROLE.FIT }} />;
 
-export function VerifyCard({ card, threadId, messageId, fixerRunning = false }: { card: VerifyCardData; threadId: string; messageId?: string; fixerRunning?: boolean }) {
+export function VerifyCard(props: { card: VerifyCardData; threadId: string; messageId?: string; fixerRunning?: boolean }) {
+  return props.card.doc ? <VerifyDocCard card={props.card} threadId={props.threadId} messageId={props.messageId} /> : <VerifyPageCard {...props} />;
+}
+
+function VerifyPageCard({ card, threadId, messageId, fixerRunning = false }: { card: VerifyCardData; threadId: string; messageId?: string; fixerRunning?: boolean }) {
   const { locale } = useI18n();
   const c = copy[locale];
   const [pending, setPending] = useState(false);

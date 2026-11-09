@@ -1,11 +1,17 @@
 // Quick answers: while a bot works, a short question goes to its read-only helper first.
 // The helper's answer lands as a row under the ask; a HANDOFF goes down today's busy path.
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { writeFileAtomic } from "./atomic.ts";
+import { DATA_DIR } from "./config.ts";
 import { estimateContextTokens } from "./context-compaction.ts";
 import type { ProviderInstance } from "./contracts.ts";
 import { steerUntilTaken } from "./note-steer.ts";
 import { endsNoteWindow } from "./pane-wake.ts";
 import { nominate } from "./quick-route.ts";
 import type { QuickBot, QuickResult } from "./side-chat.ts";
+import { queueSteeredMessage } from "./steer-queue.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
 const BLOCK_HEAD =
@@ -14,6 +20,7 @@ const NOTE_HEAD =
   "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you.]";
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
+const INDEX_FILE = join(DATA_DIR, "quick-asks.json");
 
 export type QuickAsk = (bot: QuickBot, threadId: string, ask: { text: string; notes?: string }) => Promise<QuickResult>;
 
@@ -71,7 +78,82 @@ export interface QuickDeps {
   userName: string;
   /** Today's busy delivery of the ask's own text. */
   handoff(ask: Message): Promise<void>;
+  drain(): void;
   usage?: { start(botId: string, threadId: string, id: string): void; settle(id: string): void };
+}
+
+type AskStore = Pick<Store, "activePath" | "appendMessage" | "patchMessage">;
+
+/** Still on the active path with its text and not yet handed to the bot; an edit or rewind drops it on purpose. */
+export const pending = (store: Pick<Store, "activePath">, threadId: string, ask: Message) =>
+  store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && !row.steered && row.quick?.state !== "handoff");
+
+/** The ask as the bot's ordinary next turn in its own thread, else the failed-send row. */
+function queueAsk(store: AskStore, botId: string, threadId: string, ask: Message): void {
+  try {
+    const queued = queueSteeredMessage(botId, threadId, ask.text ?? "");
+    store.patchMessage(threadId, ask.id, { quick: { state: "handoff" }, queueId: queued.id });
+  } catch (error) {
+    store.patchMessage(threadId, ask.id, { quick: undefined });
+    const name = `error: queued message could not start - ${error instanceof Error ? error.message : String(error)}`;
+    store.appendMessage(threadId, { role: "bot", kind: "activity", tool: { name, ok: false } });
+  }
+}
+
+/** A recorded steer the engine dropped later goes once to the queue in its own thread. */
+export function requeueDroppedAsk(store: AskStore, botId: string, threadId: string, ask: Message, drain: () => void): void {
+  if (!store.activePath(threadId).some((row) => row.id === ask.id && row.text === ask.text && row.steered && row.quick?.state === "handoff")) return;
+  store.patchMessage(threadId, ask.id, { steered: undefined });
+  queueAsk(store, botId, threadId, ask);
+  drain();
+}
+
+// Asks whose job is running, so a restart finds the ones left in another task without reading every thread.
+const running = new Map<string, { botId: string; threadId: string }>();
+let saving = false;
+
+function saveRunning(): void {
+  if (saving) return;
+  saving = true;
+  // after the send's response, one write per tick
+  setImmediate(() => {
+    saving = false;
+    try {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileAtomic(INDEX_FILE, JSON.stringify([...running.values()]), { mode: 0o600 });
+    } catch (error) {
+      console.warn(`[quick] could not save running asks: ${error}`.replace(/\s+/g, " "));
+    }
+  });
+}
+
+export function trackQuickAsk(botId: string, threadId: string, askId: string): () => void {
+  running.set(askId, { botId, threadId });
+  saveRunning();
+  return () => {
+    if (running.delete(askId)) saveRunning();
+  };
+}
+
+function savedThreads(): Array<{ botId: string; threadId: string }> {
+  try {
+    const rows: unknown = JSON.parse(readFileSync(INDEX_FILE, "utf8"));
+    return Array.isArray(rows) ? rows.filter((row) => typeof row?.botId === "string" && typeof row?.threadId === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Boot: an unanswered ask whose job died with the last run goes to its bot once, as an ordinary turn. */
+export function recoverQuickAsks(store: AskStore & Pick<Store, "bots" | "messagesFor" | "taskByThread">): void {
+  // the open chats plus the threads of asks still running at shutdown; no other thread is read
+  const threads = new Map(store.bots.map((bot) => [bot.threadId, bot.id]));
+  for (const { botId, threadId } of savedThreads()) if (store.taskByThread(botId, threadId)) threads.set(threadId, botId);
+  for (const [threadId, id] of threads) {
+    const answered = new Set(store.messagesFor(threadId).map((row) => row.quick?.askId));
+    for (const ask of store.activePath(threadId)) if (ask.quick?.state === "asked" && !answered.has(ask.id)) queueAsk(store, id, threadId, ask);
+  }
+  saveRunning();
 }
 
 async function askHelper(deps: QuickDeps, instance: ProviderInstance, botId: string, threadId: string, ask: Message): Promise<QuickResult> {
@@ -95,21 +177,23 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const instance = bot ? deps.instance(bot, threadId) : null;
   const result: QuickResult = instance ? await askHelper(deps, instance, botId, threadId, ask) : { route: "handoff", ms: 0 };
   const current = store.bot(botId);
-  if (!current || current.threadId !== threadId || !store.messagesFor(threadId).some((message) => message.id === ask.id)) return;
+  if (!current || !pending(store, threadId, ask)) return;
   if (result.route === "handoff" || !result.text) {
-    // The turn can end mid-steer (409); the second try takes the idle or queue path.
-    for (let tries = 0; tries < 2; tries++) {
+    // A turn can end or be claimed under a try; the second takes the idle or queue path.
+    for (let tries = 0; tries < 2 && pending(store, threadId, ask); tries++) {
       try {
         return await deps.handoff(ask);
       } catch (error) {
         console.warn(`[quick] handoff failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    store.patchMessage(threadId, ask.id, { quick: undefined });
+    if (!pending(store, threadId, ask)) return;
+    queueAsk(store, botId, threadId, ask);
+    deps.drain();
     return;
   }
   const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });
-  if (!current.busy || (current.activeThreadId ?? threadId) !== threadId) return;
+  if (!current.busy || current.threadId !== threadId || (current.activeThreadId ?? threadId) !== threadId) return;
   const note = `${NOTE_HEAD} Q: ${ask.text?.trim()} A: ${result.text}`;
   await steerUntilTaken(instance?.adapter, threadId, note, () => {
     const row = store.messagesFor(threadId).find((message) => message.id === answer.id);
