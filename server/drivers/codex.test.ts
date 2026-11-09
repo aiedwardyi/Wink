@@ -1003,10 +1003,17 @@ describe("CodexDriver turns (fake app-server)", () => {
       return dump;
     };
 
-    it.each(["agents/update_task_state", "openmausbot_phone/phone_tap", "browser/browser_navigate", "computer/click", "terminal/terminal_read"])(
+    it.each([
+      ["agents/update_task_state", {}],
+      ["openmausbot_phone/phone_tap", {}],
+      ["browser/browser_navigate", {}],
+      ["computer/click", {}],
+      ["computer/click", { computer: undefined, localComputer: { ...stdio, platform: "win32" } }],
+      ["terminal/terminal_read", {}],
+    ])(
       "accepts %s with no card",
-      async (target) => {
-        const dump = await elicit(target);
+      async (target, extra) => {
+        const dump = await elicit(target, extra);
         await recorder.until((e) => e.type === "turn.completed");
         expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
         expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "accept", content: {} });
