@@ -57,6 +57,7 @@ export interface VerifySiteDeps {
   remoteClient: (req: IncomingMessage) => boolean;
   platform?: NodeJS.Platform;
   toolCheckStarted?: (threadId: string, turnId: string) => () => void;
+  docRun?: (runId: string) => Pick<Run, "threadId" | "recording" | "card" | "saved"> | undefined;
 }
 
 interface Site { root: string; entry: string; revision: string; site: string }
@@ -531,7 +532,7 @@ export function createVerifySite(deps: VerifySiteDeps) {
     if (!enabled()) return json(res, 404, { error: "not found" });
     if (deps.resolveCommsCaller(req.headers.authorization)) return json(res, 403, { error: "forbidden" });
     if (from.relay ? !from.phoneSession : !deps.appToken(req.headers.authorization) && !deps.remoteClient(req)) return json(res, 401, { error: "unauthorized" });
-    const run = runs.get(runId), threadId = run?.threadId ?? await replayThread(runId);
+    const run = runs.get(runId) ?? deps.docRun?.(runId), threadId = run?.threadId ?? await replayThread(runId);
     if (!threadId || !store.botByThread(threadId) && !store.groupByThread(threadId)) return json(res, 404, { error: "not-here" });
     if (!replay && run?.recording && !run.card.endedAt) {
       let blocked = false, opened = false;

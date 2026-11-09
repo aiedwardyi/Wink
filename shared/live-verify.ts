@@ -1,3 +1,5 @@
+import type { VerifyDocData } from "./verify-doc.ts";
+
 export const LIVE_VERIFY_V0: boolean = true;
 
 export const VERIFY_TOOL = "verify_site";
@@ -102,6 +104,7 @@ export interface VerifyCardData {
   replay?: string[];
   /** problems an earlier run of this turn found that this run no longer finds */
   fixed?: number;
+  doc?: VerifyDocData;
 }
 
 export const VERIFY_ACTIVE_STATUSES: readonly VerifyCardStatus[] = ["offered", "waiting", "preparing", "running"];
@@ -170,7 +173,7 @@ export function verifyCardStale(card: VerifyCardData, now: number): boolean {
   if (!VERIFY_ACTIVE_STATUSES.includes(card.status)) return false;
   const held = card.status === "offered" && card.errorCode === "needs-approval";
   const offered = card.status === "offered";
-  const since = offered ? card.offeredAt : card.startedAt ?? card.offeredAt;
+  const since = offered ? card.offeredAt : card.doc?.beat ?? card.startedAt ?? card.offeredAt;
   const limit = held ? VERIFY_LIMITS.heldMs : offered ? VERIFY_LIMITS.askWaitMs : VERIFY_LIMITS.runMs + 10_000;
   return now - since >= limit;
 }

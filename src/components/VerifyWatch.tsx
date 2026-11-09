@@ -9,6 +9,7 @@ import { VERIFY_ROLE as ROLE, VERIFY_TAG as TAG, verifyProblem } from "@/lib/ver
 import { frameBitmap, readReplay } from "@/lib/verify-replay";
 import { chooseVerifyTab, closeVerifyWatch, rerunVerify, setVerifyShowing, verifyChosenTab, verifyLiveGate } from "@/lib/verify-watch";
 import { BANNER_MS, VerifyWatchShow, tagSpot, type Part } from "@/lib/verify-watch-show";
+import { VerifyDocWatchFrame } from "./VerifyDocWatch";
 import "./VerifyWatch.css";
 
 const copy = {
@@ -340,7 +341,9 @@ function handles(ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
 export function VerifyWatchPanel({ card, threadId, live, hidden, closing = false }: { card: VerifyCardData; threadId: string; live: boolean; hidden: boolean; closing?: boolean }) {
   return (
     <aside className="verify-watch animate-panel-in" data-verify-watch data-side-panel="" data-closing={closing || undefined} inert={closing || undefined}>
-      <VerifyWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} closing={closing} onClose={closeVerifyWatch} />
+      {card.doc
+        ? <VerifyDocWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} closing={closing} onClose={closeVerifyWatch} />
+        : <VerifyWatchFrame key={`${card.runId}:${live}`} card={card} threadId={threadId} live={live} hidden={hidden} closing={closing} onClose={closeVerifyWatch} />}
     </aside>
   );
 }

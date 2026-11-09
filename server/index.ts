@@ -406,6 +406,7 @@ import { createGroupRoutes } from "./group-routes.ts";
 import { createInternalRoutes } from "./internal-routes.ts";
 import { createVerifySite, verifyBridgeClient, verifyDecisionRunId } from "./verify-site.ts";
 import { createVerifyAuto } from "./verify-auto.ts";
+import { createVerifyDoc } from "./verify-doc.ts";
 import { LIVE_VERIFY_V0, VERIFY_ROUTES } from "../shared/live-verify.ts";
 import { reportServerFailure } from "./error-reports.ts";
 import { writeChatError, usageError, startQueuedTurn, runtimeErrorTool } from "./chat-error.ts";
@@ -4041,7 +4042,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const human = store.activePath(event.threadId).findLast(message => message.role === "user" && message.kind === "text" && !message.steered && !message.quick && !message.from?.botId && message.text?.trim());
       setImmediate(() => {
         const owner = verifyOwner && store.bot(verifyOwner.botId);
-        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
+        void verifyAuto.settled({ botId: owner?.id ?? "", threadId: event.threadId, turnId: event.turnId, startedAt: verifyStartedAt, roots: owner ? botOutputRoots(owner, event.threadId, group?.id) : [], depth: verifyOwner?.depth ?? 1, docFix: verifyOwner?.docFix, ok: event.ok, routine: verifyRoutine, ...verifyDisposition, humanId: human?.id ?? "", humanText: human?.text ?? "", reply });
       });
       // A delegated turn's terminal state belongs in the A⇄B channel:
       // the request was mirrored there when the delegation drained, and a
@@ -5504,7 +5505,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
       // new cursor with it.
       if (rewound) store.clearResumeCursors(bot.id, threadId);
       watchdog.watch(threadId, bot.id);
-      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId });
+      turnRegistry.prepare({ botId: bot.id, threadId, owner: commsDepth ? "peer" : "user", depth: commsDepth, rootId, docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
       const started = await dispatchAdapterTurn(threadId, async () => {
         if (currentTurnEpoch(bot.id) !== epoch) {
           return Promise.reject(Object.assign(new Error("turn cancelled before dispatch"), { cancelled: true }));
@@ -6116,7 +6117,7 @@ function roomTurnStillAssigned(groupId: string, threadId: string, botId: string)
 function enqueueDrainedRoomTurn(
   botId: string,
   threadId: string,
-  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string },
+  room: { groupId: string; hop: number; rootId?: string; cardContinuation?: string; onDispatchError?: (message: string) => void; instructionId?: string; ready?: () => Promise<boolean> },
 ): Promise<void> {
   const fail = (message: string) => room.onDispatchError?.(message);
   if (!roomTurnStillAssigned(room.groupId, threadId, botId)) {
@@ -6136,6 +6137,7 @@ function enqueueDrainedRoomTurn(
       fail("the room is no longer available");
       return;
     }
+    if (room.ready && !(await room.ready())) return;
     // New participation, not a replay of the original user-message round.
     // Hop-1 @mentions from this reply are the same as any hop-0 room turn.
     // Self-summon is already excluded in the chain loop (`id !== bot.id`).
@@ -6570,7 +6572,7 @@ async function runClaimedGroupMemberTurn(
     // through startClaimedTurn, which recycles the native session after
     // Orbit compaction or a pre-compact fat soak.
     keepRoomTurnInstruction = true;
-    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }) });
+    turnRegistry.prepare({ botId: bot.id, threadId, owner: "room", depth: hop, rootId: rootForStart(threadId, { kind: "inherit", rootId }), docFix: verifyDoc.fixTurn(bot.id, threadId, text) });
     const accountNote = accountNotices.forTurn(bot.id);
     dispatchAdapterTurn(threadId, () => {
       if (currentTurnEpoch(bot.id) !== epoch || isCancelled?.()) {
@@ -7217,6 +7219,19 @@ const internalRoutes = createInternalRoutes({
   routineProposalPersistence,
   maybeResumeConnectors,
 });
+const verifyDoc = createVerifyDoc({
+  store,
+  instanceFor: (botId, threadId) => { const bot = store.bot(botId); return bot ? botAccounts.instance(bot, threadId) : null; },
+  busy: (botId, threadId) => botHasActiveTurn(botId, threadId),
+  fix: (botId, threadId, prompt, failed, ready) => {
+    const group = store.conversationForBot(botId, threadId)?.group;
+    if (group) return enqueueDrainedRoomTurn(botId, threadId, { groupId: group.id, hop: 0, cardContinuation: prompt, rootId: rootForStart(threadId, { kind: "automatic" }) ?? undefined, onDispatchError: failed, ready }).then(() => true);
+    return startTurn(botId, prompt, { threadId, cardContinuation: true, onDispatchError: failed }).then(() => true, error => { if (isBusyRejection(error)) return false; throw error; });
+  },
+  deviceId: () => profileSyncSettings.deviceId,
+  broadcastPatch: (threadId, message) => broadcast({ kind: "message.patch", threadId, message: clientMessage(message) }),
+  log: line => console.log(line),
+});
 const verifySite = createVerifySite({
   store,
   resolveCommsCaller: (header) => commsCallers.resolve(header),
@@ -7230,11 +7245,14 @@ const verifySite = createVerifySite({
   appToken: authorizedComms,
   remoteClient: (req) => hostMatchesRemote(req.headers.host, REMOTE_HOST) || remoteCookieAuthorized(req.headers.cookie, REMOTE_KEY),
   toolCheckStarted: (threadId, turnId) => verifyAuto.checkStarted(threadId, turnId),
+  docRun: runId => verifyDoc.run(runId),
 });
 const verifyAuto = createVerifyAuto({
   enabled: () => LIVE_VERIFY_V0 && process.platform === "win32" && Boolean(terminalBridgeAccess) && cfg.features?.liveVerifyAuto !== false,
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
+  startDocs: input => verifyDoc.schedule(input),
+  docTurnEnded: input => verifyDoc.ended(input),
   log: line => console.log(line),
   app: { skipPorts: [PORT] },
 });
