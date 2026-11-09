@@ -72,14 +72,13 @@ const row = (host: HTMLElement, id: string) => host.querySelector(`[data-mid="${
 const hasQuote = (host: HTMLElement, id: string) => Boolean(row(host, id)?.querySelector("button[title='Jump to original message']"));
 
 describe("ChatView quick answers", () => {
-  it.each([
-    ["en", "Quick answer", "Answered by a read-only copy of Helper while it works. Helper sees it before its next step."],
-    ["ko", "빠른 답변", "Helper이(가) 작업하는 동안 읽기 전용 사본이 대신 답했습니다. Helper은(는) 다음 단계 전에 이 답을 확인합니다."],
-  ])("labels the answer in %s", async (locale, label, title) => {
+  it.each([["en", "Quick answer"], ["ko", "빠른 답변"]])("shows the answer as a plain reply in %s", async (locale, label) => {
     localStorage.setItem("omb-locale", locale);
     const { host } = await mount(bot([ask("q", 1), answer("a", "q", 2)], true));
-    const found = Array.from(row(host, "a")!.querySelectorAll("[title]")).find((el) => el.textContent === label);
-    expect(found?.getAttribute("title")).toBe(title);
+    const el = row(host, "a")!;
+    expect(el.textContent).toContain("answer a");
+    expect(el.textContent).not.toContain(label);
+    expect(el.querySelector("[title*='read-only'], [title*='읽기 전용']")).toBeNull();
   });
 
   it("keeps Copy and drops Reply and Regenerate on a quick answer", async () => {
@@ -99,7 +98,7 @@ describe("ChatView quick answers", () => {
 
   it("shows a typing row under a pending ask, only while the bot works", async () => {
     const { host, render } = await mount(bot([ask("q", 1)], true));
-    expect(row(host, "q")!.querySelector("[data-quick-typing]")?.textContent).toBe("Quick answer");
+    expect(row(host, "q")!.querySelector("[data-quick-typing]")?.textContent).toBe("");
     await render(bot([ask("q", 1)], false));
     expect(host.querySelector("[data-quick-typing]")).toBeNull();
   });

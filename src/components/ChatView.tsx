@@ -849,7 +849,7 @@ const MessagesList = memo(function MessagesList({
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
-            {bot.busy && m.role === "user" && m.quick?.state === "asked" && !answeredAsks.has(m.id) && <QuickTyping botName={bot.name} />}
+            {bot.busy && m.role === "user" && m.quick?.state === "asked" && !answeredAsks.has(m.id) && <QuickTyping />}
           </div>
         );
       })}

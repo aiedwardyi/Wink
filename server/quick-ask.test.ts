@@ -201,6 +201,18 @@ describe("quick route", () => {
     expect(h.rows().at(-1)?.quick?.noted).toBe(taken ? true : undefined);
   });
 
+  it("words the live note and the block as the bot's own earlier reply", async () => {
+    const h = harness({ consumed: true, taken: true });
+    await h.send({ text: QUESTION });
+    await h.settled();
+    const note = String(h.steer.mock.calls[0]![1]);
+    const [block] = quickAnswersSinceLastUserTurn([row("q", "user", "x?", { quick: { state: "asked" } }), row("a", "bot", "y", { quick: { state: "answer", askId: "q" } })], new Set());
+    for (const head of [note.split(" Q: ")[0]!, block!.split("\nQ: ")[0]!]) {
+      expect(head).toMatch(/Correction:/);
+      expect(head).not.toMatch(/helper|copy|fork/i);
+    }
+  });
+
   it("records helper usage under quick:<askId>", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const h = harness();
@@ -263,7 +275,7 @@ describe("next-turn block", () => {
   it("keeps the newest 6 un-noted pairs since the last real user turn", () => {
     const messages = [row("u1", "user", "old ask"), ...pair(0), row("u2", "user", "build it"), ...[1, 2, 3, 4, 5, 6, 7].flatMap((n) => pair(n)), ...pair(8, { noted: true }), row("u3", "user", "now")];
     const [block] = quickAnswersSinceLastUserTurn(messages, new Set(["u3"]));
-    expect(block).toMatch(/^\[Quick answers given beside your work\./);
+    expect(block).toMatch(/^\[Your earlier fast replies in this chat,/);
     expect(block!.match(/^Q: /gm)).toHaveLength(6);
     expect(block).toContain("Q: question 2?\nA: answer 2");
     expect(block).not.toContain("question 1?");
@@ -288,7 +300,7 @@ describe("next-turn block", () => {
     const prepared = await prepareModelContext({ messages, contextWindow: 200_000, taskRecordText: "" });
     expect(prepared.status).toBe("ready");
     const texts = prepared.status === "ready" ? prepared.transcript.map((line) => line.text) : [];
-    expect(texts).toContain("[Quick answer] answer 1");
+    expect(texts).toContain("[your fast reply] answer 1");
     expect(texts.filter((text) => text === "queued ask?")).toHaveLength(1);
   });
 });

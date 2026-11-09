@@ -194,23 +194,12 @@ function TimestampLabel({ at, hidden = false }: { at: number; hidden?: boolean }
   );
 }
 
-function QuickLabel({ botName }: { botName: string }) {
-  const { t } = useI18n();
-  return (
-    <div className="mb-1 text-[11px] text-ink-secondary/70" title={t("chat.quickAnswerHint", { name: botName })}>
-      {t("chat.quickAnswer")}
-    </div>
-  );
-}
-
-/** The wait for a quick answer: same label, three pulsing dots. */
-export function QuickTyping({ botName }: { botName: string }) {
-  const { t } = useI18n();
+/** The wait for a quick answer: three pulsing dots in a plain bot bubble. */
+export function QuickTyping() {
   return (
     <div data-quick-typing className="flex w-full flex-col items-start pb-4">
       <div className="w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5">
-        <QuickLabel botName={botName} />
-        <div className="flex h-[22px] items-center gap-1" role="status" aria-label={t("chat.quickAnswer")}>
+        <div className="flex h-[22px] items-center gap-1">
           {[0, 1, 2].map((i) => (
             <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-secondary/60" style={{ animationDelay: `${i * 200}ms` }} />
           ))}
@@ -514,12 +503,9 @@ const Bubble = memo(function Bubble({
               )}
             </>
           ) : markdownText.trim() ? (
-            <>
-              {quick && <QuickLabel botName={botName} />}
-              <MessageBoundary fallbackText={markdownText}>
-                <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
-              </MessageBoundary>
-            </>
+            <MessageBoundary fallbackText={markdownText}>
+              <ChatMarkdown text={markdownText} streaming={streaming} whole={message.streamWhole} baseDir={botFolder} threadId={threadId} />
+            </MessageBoundary>
           ) : null}
         </div>
         )}
