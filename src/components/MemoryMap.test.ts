@@ -37,6 +37,14 @@ describe("MemoryMap", () => {
     expect(host.querySelector(".mm-live")!.textContent).toContain("Uses VS Code");
   });
 
+  it("opens Muscle Memory to its lessons on a tap", async () => {
+    await mount();
+    const muscle = host.querySelector<HTMLButtonElement>('button.mm-panel[data-kind="muscle"]')!;
+    await act(async () => muscle.click());
+    expect(muscle.getAttribute("aria-expanded")).toBe("true");
+    expect(muscle.parentElement!.querySelector(".mm-list")!.textContent).toContain("Feedback style");
+  });
+
   it("hides the Sleep line until Sleep has run", async () => {
     await mount();
     expect(host.querySelector(".mm-sleep")).toBeNull();

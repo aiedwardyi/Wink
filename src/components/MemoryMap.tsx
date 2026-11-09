@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 import { localeTag, useI18n, type MessageKey } from "@/lib/i18n";
 import { memoryMap, LEARNED_SHOWN, type MemoryFact } from "@/lib/memory-map";
 import { currentTask, NotedLines, type MemoryTopic } from "./MemoryGroups";
-import { closePanel, fadePanel, openFold, openMist, openPanel, softwareRender, type OpenParts } from "./MemoryMapMotion";
+import { AURA, fadePanel, openFold, openMist, openPanel, playOpen, softwareRender, type OpenParts } from "./MemoryMapMotion";
 import { TopicRows } from "./MemoryTopics";
 import { Fold } from "./Fold";
 import { liveHeight, STACK_BELOW, useStage } from "./MemoryMapStage";
@@ -20,7 +20,7 @@ export interface SleepReadout {
   onUndo: () => void;
 }
 
-type Kind = "long" | "knowledge";
+type Kind = "long" | "knowledge" | "muscle";
 
 const DOTS = 40;
 
@@ -29,6 +29,12 @@ const UNITS = {
   knowledge: ["bot.memoryFilesOne", "bot.memoryFiles"],
   muscle: ["bot.memoryLessonsOne", "bot.memoryLessons"],
 } satisfies Record<string, [MessageKey, MessageKey]>;
+
+const KINDS = {
+  long: { icon: Archive, name: "bot.memoryLongTerm", hint: "bot.memoryLongTermHint", slot: "mm-left", side: "left" },
+  knowledge: { icon: BookOpen, name: "bot.memoryKnowledge", hint: "bot.memoryKnowledgeHint", slot: "mm-right", side: "right" },
+  muscle: { icon: Repeat, name: "bot.memoryMuscle", hint: "bot.memoryMuscleHint", slot: "mm-bottom", side: "bottom" },
+} as const satisfies Record<Kind, { icon: typeof Archive; name: MessageKey; hint: MessageKey; slot: string; side: OpenParts["side"] }>;
 
 let seed = 7;
 const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
@@ -93,14 +99,15 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const gradient = `mm${useId().replace(/[^\w-]/g, "")}`;
   const root = useRef<HTMLDivElement>(null);
   const sheet = useRef<HTMLElement>(null);
+  const sheets = { long: useRef<HTMLElement>(null), knowledge: useRef<HTMLElement>(null), muscle: useRef<HTMLElement>(null) };
+  const played = useRef<Partial<Record<Kind, Animation[]>>>({});
   const mist = useRef<HTMLDivElement>(null);
-  const specks = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const panels = { long: useRef<HTMLButtonElement>(null), knowledge: useRef<HTMLButtonElement>(null) };
+  const panels = { long: useRef<HTMLButtonElement>(null), knowledge: useRef<HTMLButtonElement>(null), muscle: useRef<HTMLButtonElement>(null) };
   // a viewport under the threshold is always stacked, so a phone never lays out the wide map first
   const [stacked, setStacked] = useState(() => typeof window !== "undefined" && window.innerWidth < STACK_BELOW);
   const [open, setOpen] = useState<Kind | null>(null);
-  const [closing, setClosing] = useState(false);
+  const [leaving, setLeaving] = useState<Kind[]>([]);
   const [mistOn, setMistOn] = useState(false);
   const [still, setStill] = useState(false);
   // labels and counts, then icons and glow, then Live; an open editor shows at once
@@ -137,26 +144,27 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   }, []);
 
   const parts = (kind: Kind): OpenParts | null => {
-    const from = panels[kind].current, to = sheet.current;
-    if (!from || !to) return null;
+    const card = panels[kind].current, to = sheets[kind].current;
+    if (!card || !to) return null;
     const content = [...to.querySelectorAll<HTMLElement>("[data-mm-content]")];
-    return { sheet: to, content, mist: mist.current, specks: specks.current, from: from.offsetWidth / to.offsetWidth, side: kind === "long" ? "left" : "right" };
+    const { side } = KINDS[kind];
+    const from = side === "bottom" ? card.offsetHeight / to.offsetHeight : card.offsetWidth / to.offsetWidth;
+    return { sheet: to, content, mist: to.querySelector(".mm-mist"), specks: to.querySelector(".mm-specks"), from, side };
   };
 
-  const fade = () => {
-    const to = sheet.current;
-    if (to) fadePanel({ sheet: to, content: [...to.querySelectorAll<HTMLElement>("[data-mm-content]")] });
-  };
+  const fade = (to = sheet.current) => (to ? fadePanel({ sheet: to, content: [...to.querySelectorAll<HTMLElement>("[data-mm-content]")] }) : []);
 
   useLayoutEffect(() => {
-    if (!open || stacked || closing) return;
-    const each = parts(open);
-    if (quiet.current) fade();
-    else if (each) openPanel(each);
+    if (!open || stacked) return;
+    const running = played.current[open];
+    if (running) void playOpen(running, true);
+    else if (quiet.current) played.current[open] = fade(sheets[open].current);
+    else played.current[open] = openPanel(parts(open)!);
     quiet.current = false;
+    if (running) return;
     closeButton.current?.focus({ preventScroll: true });
     // scrolled inside the sheet only: scrollIntoView would move the whole tab too
-    const body = sheet.current?.querySelector<HTMLElement>(".mm-sheet-body");
+    const body = sheets[open].current?.querySelector<HTMLElement>(".mm-sheet-body");
     const row = body?.querySelector<HTMLElement>("[data-fresh]");
     if (body && row) body.scrollTop = row.offsetTop - body.offsetTop - body.clientHeight / 2;
   }, [open, stacked]);
@@ -177,7 +185,8 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     if (editingHere) {
       before.current = text;
       setOpen(null);
-      setClosing(false);
+      setLeaving([]);
+      played.current = {};
       root.current?.closest(".overflow-y-auto")?.scrollTo({ top: 0 });
       fade();
       sheet.current?.querySelector("textarea")?.focus({ preventScroll: true });
@@ -196,24 +205,31 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     setOpen("long");
   }, [editingHere]);
 
-  const close = () => {
-    if (!open || closing) return;
+  const close = (next: Kind | null = null) => {
+    if (!open) return;
     const kind = open;
-    if (stacked) { setOpen(null); return; }
-    const each = parts(kind);
-    setClosing(true);
-    void (each ? closePanel(each) : Promise.resolve()).then(() => {
-      setOpen(null);
-      setClosing(false);
-      panels[kind].current?.focus({ preventScroll: true });
+    setOpen(next);
+    if (stacked) return;
+    setLeaving((was) => [...was.filter((each) => each !== kind), kind]);
+    void playOpen(played.current[kind] ?? [], false).then((done) => {
+      if (!done) return;
+      delete played.current[kind];
+      setLeaving((was) => was.filter((each) => each !== kind));
+      if (!next) panels[kind].current?.focus({ preventScroll: true });
     });
   };
 
+  // another card, or the one now closing, opens from where its motion is
   const toggle = (kind: Kind) => {
     if (open === kind) { close(); return; }
-    if (open && !stacked) return;
-    setMistOn(openMist());
-    setOpen(kind);
+    setLeaving((was) => was.filter((each) => each !== kind));
+    if (!played.current[kind]) setMistOn(openMist());
+    if (open) close(kind);
+    else setOpen(kind);
+  };
+
+  const outside = ({ target }: { target: EventTarget }) => {
+    if (open && !stacked && !(target as Element).closest(".mm-sheet, button.mm-panel")) close();
   };
 
   useEffect(() => {
@@ -229,10 +245,10 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
     return () => window.removeEventListener("keydown", onKey, true);
   });
 
-  useEffect(() => { if (!active) { setOpen(null); setClosing(false); setFresh(new Set()); } }, [active]);
+  useEffect(() => { if (!active) { setOpen(null); setLeaving([]); played.current = {}; setFresh(new Set()); } }, [active]);
 
   const panel = (kind: Kind, icon: ReactNode, name: string, hint: string, count: number | null, foot: ReactNode, viz: ReactNode, list: ReactNode) => (
-    <div className={cn("mm-slot", kind === "long" ? "mm-left" : "mm-right")}>
+    <div className={cn("mm-slot", KINDS[kind].slot)}>
       <button ref={panels[kind]} type="button" aria-expanded={open === kind} disabled={failed} className="mm-panel" data-kind={kind} onClick={() => toggle(kind)}>
         <span className="mm-panel-top">
           <span className="mm-icon">{stage > 0 && icon}</span>
@@ -264,10 +280,13 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const count = (value: number) => (failed ? null : value);
   const longList = <FactList facts={map.longTerm} day={day} fresh={fresh} />;
   const topicList = <TopicRows botId={bot.id} topics={topics} />;
+  const muscleList = map.muscle.length ? <FactList facts={map.muscle} day={day} fresh={fresh} /> : <div className="mm-empty">{t("bot.memoryNone")}</div>;
+  const lists = { long: longList, knowledge: topicList, muscle: muscleList };
+  const counts = { long: map.longTerm.length, knowledge: topics.length, muscle: map.muscle.length };
   const shown = editingHere ? "file" : stacked ? null : open;
 
   return (
-    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-closing={closing || undefined} data-still={still || undefined}>
+    <div ref={root} className="mm" data-stacked={stacked || undefined} data-open={shown ?? undefined} data-aura={AURA} data-still={still || undefined} onClick={outside}>
       {stage > 0 && (
         <>
           <svg width="0" height="0" className="absolute" aria-hidden="true">
@@ -338,17 +357,7 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
           <span className="mm-bars" aria-hidden="true">
             {topics.slice(0, 12).map((each) => <i key={each.name} style={{ height: `${Math.max(14, Math.round((each.bytes / biggest) * 100))}%` }} />)}
           </span>, topicList)}
-        <div className="mm-slot mm-bottom">
-          <div className="mm-panel" data-kind="muscle">
-            <span className="mm-icon">{stage > 0 && <Repeat size={16} aria-hidden="true" />}</span>
-            <span className="mm-label">
-              <span className="mm-name">{t("bot.memoryMuscle")}</span>
-              <span className="mm-hint">{t("bot.memoryMuscleHint")}</span>
-            </span>
-            <span className="mm-newest">{newest(map.muscle[0]?.fact)}</span>
-            <Count kind="muscle" count={count(map.muscle.length)} />
-          </div>
-        </div>
+        {panel("muscle", <Repeat size={16} aria-hidden="true" />, t("bot.memoryMuscle"), t("bot.memoryMuscleHint"), count(map.muscle.length), newest(map.muscle[0]?.fact), null, muscleList)}
         {shown === "file" && (
           <section ref={sheet} className="mm-sheet" data-kind="file" aria-label={t("bot.memoryFile")}>
             <div className="mm-sheet-head" data-mm-content="">
@@ -362,33 +371,33 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
             <div className="mm-sheet-body mm-edit" data-mm-content="">{editor}</div>
           </section>
         )}
-        {open && shown === open && (
-          <section ref={sheet} className="mm-sheet" data-kind={open} aria-label={open === "long" ? t("bot.memoryLongTerm") : t("bot.memoryKnowledge")}>
+        {!stacked && !editingHere && (Object.keys(KINDS) as Kind[]).filter((kind) => kind === open || leaving.includes(kind)).map((kind) => { const { icon: Icon, name, hint } = KINDS[kind]; return (
+          <section key={kind} ref={sheets[kind]} className="mm-sheet" data-kind={kind} data-leaving={kind !== open || undefined} inert={kind !== open} aria-label={t(name)}>
             <div className="mm-sheet-head" data-mm-content="">
-              <span className="mm-icon">{open === "long" ? <Archive size={16} aria-hidden="true" /> : <BookOpen size={16} aria-hidden="true" />}</span>
+              <span className="mm-icon"><Icon size={16} aria-hidden="true" /></span>
               <span className="mm-label">
-                <span className="mm-name">{open === "long" ? t("bot.memoryLongTerm") : t("bot.memoryKnowledge")}</span>
-                <span className="mm-hint">{open === "long" ? t("bot.memoryLongTermHint") : t("bot.memoryKnowledgeHint")}</span>
+                <span className="mm-name">{t(name)}</span>
+                <span className="mm-hint">{t(hint)}</span>
               </span>
-              <Count kind={open} count={open === "long" ? map.longTerm.length : topics.length} />
-              {open === "long" && onEditing && (
+              <Count kind={kind} count={counts[kind]} />
+              {kind === "long" && onEditing && (
                 <button type="button" className="mm-action" onClick={() => onEditing(true)}><Pencil size={13} aria-hidden="true" />{t("bot.memoryEdit")}</button>
               )}
-              <button ref={closeButton} type="button" className="mm-close" onClick={close} aria-label={t("bot.memoryClosePanel", { name: open === "long" ? t("bot.memoryLongTerm") : t("bot.memoryKnowledge") })}>
+              <button ref={kind === open ? closeButton : undefined} type="button" className="mm-close" onClick={() => close()} aria-label={t("bot.memoryClosePanel", { name: t(name) })}>
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
-            <div className="mm-sheet-body" data-mm-content="">{open === "long" ? longList : topicList}</div>
+            <div className="mm-sheet-body" data-mm-content="">{lists[kind]}</div>
             {mistOn && (
               <>
-                <div ref={mist} className="mm-mist" aria-hidden="true" />
-                <div ref={specks} className="mm-specks" aria-hidden="true">
+                <div className="mm-mist" aria-hidden="true" />
+                <div className="mm-specks" aria-hidden="true">
                   {SPECKS.map((each, index) => <i key={index} style={{ left: each.left, top: each.top, opacity: each.opacity, transform: `scale(${each.scale})` }} />)}
                 </div>
               </>
             )}
           </section>
-        )}
+        ); })}
       </div>
     </div>
   );

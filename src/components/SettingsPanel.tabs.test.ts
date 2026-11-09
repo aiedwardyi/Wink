@@ -41,7 +41,7 @@ const bot: Bot = {
   modelSelection: { instanceId: "claude", model: "claude-3-5-sonnet", mode: "automatic" }, messages: [],
 };
 
-type Pass = { element: Element; keyframes: Keyframe[]; finish: () => void; cancel: ReturnType<typeof vi.fn> };
+type Pass = { element: Element; keyframes: Keyframe[]; finish: () => void; cancel: ReturnType<typeof vi.fn>; reverse: ReturnType<typeof vi.fn>; playbackRate: number };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -111,8 +111,14 @@ beforeEach(() => {
     configurable: true,
     value(this: Element, keyframes: Keyframe[]) {
       let finish: () => void = () => undefined;
-      const finished = new Promise((done) => { finish = () => done(undefined); });
-      const pass = { element: this, keyframes, finish: () => finish(), cancel: vi.fn(), finished, reverse: vi.fn() };
+      const run = () => new Promise((done) => { finish = () => done(undefined); });
+      let next = 1;
+      const pass = {
+        element: this, keyframes, finish: () => finish(), cancel: vi.fn(), finished: run(), playbackRate: 1,
+        effect: { updateTiming: vi.fn(), getComputedTiming: () => ({ endTime: 2 * MOTION_LARGE_MS }) },
+        updatePlaybackRate: (rate: number) => { next = rate; },
+        reverse: vi.fn(() => { pass.playbackRate = -next; pass.finished = run(); }),
+      };
       passes.push(pass);
       return pass;
     },
@@ -378,5 +384,67 @@ describe("Knowledge and Edit", () => {
     await toMemory();
     await settle();
     expect([...host.querySelectorAll(".mm-steps i")].map((each) => each.hasAttribute("data-now"))).toEqual([false, true, false]);
+  });
+});
+
+describe("Long-Term and Knowledge sheets", () => {
+  const sheet = (kind: string) => host.querySelector<HTMLElement>(`.mm-sheet[data-kind="${kind}"]`);
+  const wide = async () => {
+    width(1280);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? 1280 : 0; });
+    await open();
+    await toMemory();
+    await act(async () => fold("long").click());
+  };
+
+  it("closes by playing its own open back, with the map never fading", async () => {
+    await wide();
+    const swing = passes.filter((each) => each.element === sheet("long"));
+    expect(swing).toHaveLength(1);
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    expect(host.querySelector(".mm")!.hasAttribute("data-closing")).toBe(false);
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
+    expect(swing[0]!.reverse).toHaveBeenCalledTimes(1);
+    expect(swing[0]!.playbackRate).toBeLessThan(0);
+    expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    await finishPasses();
+    expect(sheet("long")).toBeNull();
+  });
+
+  it("turns a close around from where it is on a second click", async () => {
+    await wide();
+    const swing = passes.find((each) => each.element === sheet("long"))!;
+    await act(async () => sheet("long")!.querySelector<HTMLButtonElement>(".mm-close")!.click());
+    await act(async () => fold("long").click());
+    expect(swing.reverse).toHaveBeenCalledTimes(2);
+    expect(swing.playbackRate).toBe(1);
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(false);
+    expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    await finishPasses();
+    expect(sheet("long")).not.toBeNull();
+  });
+
+  it("opens Knowledge from Long-Term in one click, and a click outside closes it", async () => {
+    await wide();
+    await act(async () => fold("knowledge").click());
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
+    expect(sheet("knowledge")!.hasAttribute("data-leaving")).toBe(false);
+    await finishPasses();
+    expect(sheet("long")).toBeNull();
+    await act(async () => host.querySelector<HTMLElement>(".mm-core")!.click());
+    expect(sheet("knowledge")!.hasAttribute("data-leaving")).toBe(true);
+  });
+
+  it("opens Muscle Memory from Long-Term in one click", async () => {
+    await wide();
+    await act(async () => fold("muscle").click());
+    expect(sheet("long")!.hasAttribute("data-leaving")).toBe(true);
+    expect(sheet("muscle")!.textContent).toContain("Nothing yet.");
+    expect(fold("muscle").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("points a hand at every enabled button in Bot details", async () => {
+    await open();
+    expect(panel().className).toContain("[&_:is(button:not(:disabled),summary)]:cursor-pointer");
   });
 });
