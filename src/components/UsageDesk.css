@@ -133,6 +133,8 @@ html[data-usage-dragging], html[data-usage-dragging] * { cursor: grabbing !impor
 }
 @media (pointer: coarse) {
   .usage-toolbar button::after { content: ""; position: absolute; inset: -10px -2px; }
+  .usage-engine-head[data-usage-reorder] { isolation: isolate; }
+  .usage-engine-head[data-usage-reorder]::before { content: ""; position: absolute; z-index: -1; inset: -12px 0; }
   .usage-toolbar [data-usage-refresh] { width: 44px; height: 44px; }
   .usage-toolbar [data-usage-refresh]::after { inset: 0; }
   .usage-toolbar { flex-wrap: wrap; }

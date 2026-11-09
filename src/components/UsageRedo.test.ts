@@ -468,6 +468,10 @@ it("keeps a closing body at full width in the phone columns", () => {
   expect(usageCss).toMatch(/\[data-phone-columns\] \[data-usage-engine\] > \[data-fold\] \{ grid-column: 1 \/ -1; \}/);
 });
 
+it("keeps a 44 px hold band on the 20 px engine head", () => {
+  expect(usageCss).toMatch(/\.usage-engine-head\[data-usage-reorder\]::before \{[^}]*inset: -12px 0;/);
+});
+
 it("has no grip anywhere and names each row for keyboard reorder", async () => {
   persistPreference("ko");
   await mount(createElement("div", null, createElement(UsageDesk), createElement(ChatPlanMeters, { instanceId: "claude", windows: [], now: usageBoardNow, onOpenUsage: () => {} })));
