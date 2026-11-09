@@ -558,6 +558,11 @@ const TOOLS = [
       required: ["on"],
     },
   },
+  {
+    name: "no_reply_needed",
+    description: "Call once on a turn woken by an automated message (pane note, worker report, peer note) when the user needs nothing from it. After it returns, stop: no text, no more tool calls.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
 ];
 
 type Json = Record<string, unknown>;
@@ -1015,6 +1020,7 @@ async function callTool(name: string, args: Json & TaskStateToolArgs, signal?: A
         : "Agentic Mode is off. Running work is left alone.",
     };
   }
+  if (name === "no_reply_needed") return { text: "ok" };
   return { text: `Unknown tool: ${name}`, isError: true };
 }
 

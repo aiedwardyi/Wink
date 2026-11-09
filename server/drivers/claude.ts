@@ -1133,6 +1133,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
 
       const env = claudeEnvironment(turnModel, turnEnvironment, input.account);
+      // the CLI skips its "no visible output" nudge when a turn ends on a listed tool
+      if (mcpServers.agents) env.CLAUDE_CODE_TERMINAL_MCP_TOOLS = "mcp__agents__no_reply_needed";
+      else delete env.CLAUDE_CODE_TERMINAL_MCP_TOOLS;
       const cwd = turn.cwd ?? homedir();
       // everything that shapes the process, minus session/turn specifics
       // (the --mcp-config file is a fresh temp path each time; its CONTENT
