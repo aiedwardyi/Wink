@@ -11,6 +11,7 @@ import { STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { STATIC_ANTIGRAVITY_MODELS } from "./antigravity.ts";
 import { MSP_MUSE_EFFORT_LEVELS, MSP_MUSE_MODELS } from "./msp/muse.ts";
 import { TOOLS, WORKER_GEMINI_EFFORTS, WORKER_GEMINI_FAMILIES, callTool, claudeState, readTerminalSnapshot, terminalReadGrant, terminalSnapshotText, workerModelsText, workerReportText } from "./terminal-proxy.ts";
+import { RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 
 const CONFIG = { host: "http://127.0.0.1:1", token: "grant", botId: "bot-1" };
 const BUSY = "● Working on it\n✽ Undulating… (3s · ↓ 75 tokens · thought for 2s)\n────────────────────\n❯\n────────────────────";
@@ -123,11 +124,12 @@ describe("terminal proxy", () => {
 
   it("lists every picker model of the four worker engines with its name and --model id", () => {
     const description = TOOLS[2].description;
-    const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
+    const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.filter((option) => !RETIRED_PICKER_MODEL_IDS.includes(option.id)).map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
     for (const [name, id] of [STATIC_CLAUDE_MODELS, STATIC_CODEX_MODELS, MSP_MUSE_MODELS, STATIC_GROK_MODELS].flatMap(names)) {
       expect(description, id).toContain(`${name} = ${id}`);
     }
     expect(description).toContain("Astra = gpt-6-astra");
+    expect(description).not.toContain("Fable 5 = claude-fable-5");
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());

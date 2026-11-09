@@ -35,6 +35,24 @@
       ]
     }
   },
+  "claude-fable-5-2": {
+    "provider": "anthropic",
+    "label": "Claude Fable 5.2",
+    "sources": {
+      "vals": [
+        "anthropic/claude-fable-5-2"
+      ],
+      "lmarena": [
+        "Claude Fable 5.2"
+      ],
+      "list-prices": [
+        "Claude Fable 5.2"
+      ],
+      "aa": [
+        "claude-fable-5-2"
+      ]
+    }
+  },
   "claude-opus-5-5": {
     "provider": "anthropic",
     "label": "Claude Opus 5.5",

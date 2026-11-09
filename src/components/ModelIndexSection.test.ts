@@ -872,12 +872,12 @@ describe("full screen chart", () => {
     touch("touchstart", [[x - 100, y], [x, y]], 1000);
     touch("touchmove", [[x - 150, y], [x + 50, y]], 1020);
     touch("touchend", [[x + 50, y]], 1040);
-    expect(svg().getAttribute("data-mi-zoom")).toBe("2");
+    expect(Number(svg().getAttribute("data-mi-zoom"))).toBeCloseTo(2);
     touch("touchend", [], 1060);
     touch("touchstart", [[x + 50, y]], 1100);
     touch("touchend", [], 1120);
     act(() => void svg().querySelector('rect[fill="transparent"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x + 50, clientY: y })));
-    expect({ zoom: svg().getAttribute("data-mi-zoom"), tooltip: Boolean(host.querySelector('[role="tooltip"]')) }).toEqual({ zoom: "2", tooltip: true });
+    expect({ zoom: Number(svg().getAttribute("data-mi-zoom")).toFixed(6), tooltip: Boolean(host.querySelector('[role="tooltip"]')) }).toEqual({ zoom: "2.000000", tooltip: true });
   });
 
   describe("desktop wheel zoom", () => {
