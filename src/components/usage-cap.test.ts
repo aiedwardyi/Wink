@@ -88,7 +88,7 @@ describe("Usage account cap", () => {
     expect(rows()).toEqual(ids());
     expect(button()?.textContent).toBe(locale === "ko" ? "접기" : "Show less");
     expect(button()?.getAttribute("aria-expanded")).toBe("true");
-    expect(section().querySelector("[role=group]")?.lastElementChild?.contains(button())).toBe(true);
+    expect(section().querySelector("[role=group]:not([data-engine-head])")?.lastElementChild?.contains(button())).toBe(true);
     await click(button());
     expect(rows()).toEqual(ids().slice(0, 3));
   });
