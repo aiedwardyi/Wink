@@ -194,4 +194,32 @@ final class MarkdownTests: XCTestCase {
         case .rule: return ""
         }
     }
+
+    func testStrayUserTagsAreUnwrappedOutsideCode() {
+        XCTAssertEqual(Markdown.blocks("<user1>Got it</user1>"), [.paragraph("Got it")])
+        XCTAssertEqual(Markdown.blocks("use `<user1>` here"), [.paragraph("use `<user1>` here")])
+        XCTAssertEqual(Markdown.blocks("```\n<user1>x</user1>\n```"), [.code(language: nil, text: "<user1>x</user1>")])
+        XCTAssertEqual(Markdown.unwrapUserTags("see `a\n<user1>b</user1>\nc` then <user2>d</user2>"), "see `a\n<user1>b</user1>\nc` then d")
+        XCTAssertEqual(Markdown.unwrapUserTags("A literal \\` then `<user1>x</user1>`."), "A literal \\` then `<user1>x</user1>`.")
+        XCTAssertEqual(Markdown.unwrapUserTags("> ~~~xml\n> example\n\n<user1>Actual</user1>"), "> ~~~xml\n> example\n\nActual")
+        XCTAssertEqual(Markdown.unwrapUserTags("- ~~~xml\n  <user1>x</user1>\n  ~~~\n\n<user2>y</user2>"), "- ~~~xml\n  <user1>x</user1>\n  ~~~\n\ny")
+        XCTAssertEqual(Markdown.unwrapUserTags("```x``` <user1>y</user1>"), "```x``` y")
+        XCTAssertEqual(Markdown.unwrapUserTags("<user1>~~~xml\n<user2>x</user2>\n~~~</user1>"), "~~~xml\n<user2>x</user2>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("~~~xml\n<user1>~~~</user1>\n<user2>x</user2>\n~~~"), "~~~xml\n<user1>~~~</user1>\n<user2>x</user2>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("    ~~~\n\n~~~\n<user1>x</user1>\n~~~"), "    ~~~\n\n~~~\n<user1>x</user1>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("   ~~~\n    ~~~\n<user1>x</user1>\n~~~"), "   ~~~\n    ~~~\n<user1>x</user1>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("-     <user1>x</user1>"), "-     <user1>x</user1>")
+        XCTAssertEqual(Markdown.unwrapUserTags("- item\n\n      <user1>y</user1>"), "- item\n\n      <user1>y</user1>")
+        XCTAssertEqual(Markdown.unwrapUserTags("<user1>~~~\n~~~<user2>\n<user3>x</user3>\n~~~</user1>"), "~~~\n~~~<user2>\n<user3>x</user3>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("- item\n\n  ~~~\n    ~~~\n  <user1>x</user1>"), "- item\n\n  ~~~\n    ~~~\n  x")
+        XCTAssertEqual(Markdown.unwrapUserTags("- item\n\n\t~~~xml\n\t<user1>x</user1>\n\t~~~\n<user2>y</user2>"), "- item\n\n\t~~~xml\n\t<user1>x</user1>\n\t~~~\ny")
+        XCTAssertEqual(Markdown.unwrapUserTags("- item\n\n \t ~~~xml\n  <user1>x</user1>\n  ~~~"), "- item\n\n \t ~~~xml\n  <user1>x</user1>\n  ~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("* * *\n    <user1>x</user1>"), "* * *\n    <user1>x</user1>")
+        for lead in ["~~~text\nx\n~~~", "# Title", "---"] {
+            XCTAssertEqual(Markdown.unwrapUserTags(lead + "\n    <user1>y</user1>"), lead + "\n    <user1>y</user1>")
+        }
+        XCTAssertEqual(Markdown.unwrapUserTags("~~~text\n    ~~~\n<user1>x</user1>\n~~~"), "~~~text\n    ~~~\n<user1>x</user1>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("~~~text\n> ~~~\n<user1>x</user1>\n~~~"), "~~~text\n> ~~~\n<user1>x</user1>\n~~~")
+        XCTAssertEqual(Markdown.unwrapUserTags("~~~xml\n~~~not-a-close\n<user1>x</user1>\n~~~"), "~~~xml\n~~~not-a-close\n<user1>x</user1>\n~~~")
+    }
 }

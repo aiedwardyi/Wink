@@ -219,6 +219,24 @@ describe("ChatMarkdown first paragraph", () => {
   });
 });
 
+describe("ChatMarkdown stray user tags", () => {
+  it("renders a stored row with raw tags clean and keeps code literal", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { streaming: true, text: "<user1>Got it</user1> use `<user2>`\n\n```\n<user3>x</user3>\n```" })));
+      const text = host.querySelector(".chat-md")?.textContent ?? "";
+      expect(text).toContain("Got it use <user2>");
+      expect(text).toContain("<user3>x</user3>");
+      expect(text).not.toContain("<user1>");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
 describe("relative file links", () => {
   it.each(["precision", "tui", "ledger"] as const)("does not measure file-only lines in %s", async (skin) => {
     applySkin(skin);
