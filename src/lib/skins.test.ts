@@ -768,6 +768,51 @@ describe("Inkwell, Graphite and Moss", () => {
   });
 });
 
+describe("Bot name on wide bubbles", () => {
+  const WIDE = ["precision", "inkwell", "graphite", "moss"];
+  const NAMED_ALREADY = [
+    "wink", "wink-cyber", "wink-violet", "wink-black", "wink-day", "community", "community-light", "code-review",
+    "instrument", "carbon", "pewter", "pewter-dusk", "pewter-night", "coal", "folio",
+  ];
+
+  function scopeBodies(id: string): string {
+    const bodies: string[] = [];
+    for (const match of css.matchAll(/@scope \(([^{]*)\) to \(\[data-skin\]\) \{/g)) {
+      if (!match[1].includes(`[data-skin="${id}"]`)) continue;
+      let depth = 0;
+      for (let i = match.index! + match[0].length - 1; i < css.length; i++) {
+        if (css[i] === "{") depth++;
+        else if (css[i] === "}" && --depth === 0) {
+          bodies.push(css.slice(match.index!, i));
+          break;
+        }
+      }
+    }
+    return bodies.join("\n");
+  }
+
+  const showsBotName = (id: string) =>
+    /(?:\[data-orbit-message="bot"\] )?\.orbit-message-speaker \{[^}]*display: block/.test(scopeBodies(id)) ||
+    new RegExp(String.raw`\[data-skin="${id}"\] \.orbit-message-speaker \{[^}]*display: block`).test(css);
+
+  it("shows the name on bot replies in each wide skin and no other skin gains it", () => {
+    for (const id of WIDE) {
+      expect(scopeBodies(id), id).toMatch(/\[data-orbit-message="bot"\] \.orbit-message-speaker \{[^}]*display: block/);
+      expect(scopeBodies(id), id).toMatch(/max-width: (?:min\(54rem, )?9[46]%/);
+    }
+    expect(SKIN_IDS.filter(showsBotName).sort()).toEqual([...NAMED_ALREADY, ...WIDE].sort());
+  });
+
+  it("hides the narrow skins' name and never names the user side", () => {
+    for (const id of SKIN_IDS.filter((skin) => !WIDE.includes(skin) && !NAMED_ALREADY.includes(skin))) expect(showsBotName(id), id).toBe(false);
+    for (const id of WIDE) expect(scopeBodies(id), id).not.toMatch(/\[data-orbit-message="user"\] \.orbit-message-speaker/);
+  });
+
+  it("leaves the name to the room's cluster label", () => {
+    for (const id of WIDE) expect(scopeBodies(id), id).toMatch(/\[data-room-transcript\] \.orbit-message-speaker \{\s*display: none;/);
+  });
+});
+
 const WINK_SKINS = [
   { id: "wink", name: "Wink", face: "Space Grotesk", file: "SpaceGrotesk-Variable.woff2", lead: "#ff4d9d", caret: "#ffd447" },
   { id: "wink-cyber", name: "Wink Cyber", face: "IBM Plex Sans", file: "IBMPlexSans-Variable.woff2", lead: "#38d8ff", caret: "#aaff5a" },

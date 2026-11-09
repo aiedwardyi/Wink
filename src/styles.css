@@ -2352,6 +2352,22 @@ html:lang(ko) {
   }
 }
 
+@scope ([data-skin="precision"]) to ([data-skin]) {
+  [data-orbit-message="bot"] .orbit-message-speaker {
+    display: block;
+    margin: 0 0 4px 14px;
+    color: var(--color-ink-secondary);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* Rooms label each sender cluster already. */
+  [data-room-transcript] .orbit-message-speaker {
+    display: none;
+  }
+}
+
 @scope ([data-skin="mono-hud"]) to ([data-skin]) {
   [data-orbit-message="bot"] [data-orbit-message-content] {
     background: var(--color-card);
