@@ -57,12 +57,12 @@ export function turnSummaries(hide?: (threadId: string, ids: string[]) => void) 
       if (phase === "commentary") turn.commentary.push(messageId);
       else if (phase === "final_answer") turn.final = true;
     },
-    settle(threadId: string, turnId: string | undefined): string[] {
+    settle(threadId: string, turnId: string | undefined, quiet = false): string[] {
       const turn = turns.get(threadId);
       if (!turn || (turn.turnId && turnId && turn.turnId !== turnId)) return [];
       turns.delete(threadId);
       if (turn.final && turn.commentary.length) hide?.(threadId, turn.commentary);
-      return turn.replied ? [] : turn.ids;
+      return turn.replied || quiet ? [] : turn.ids;
     },
   };
 }
