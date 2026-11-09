@@ -121,6 +121,7 @@ public enum Markdown {
         guard text.contains("<user") || text.contains("</user") else { return text }
         let tag = try! NSRegularExpression(pattern: "</?user[0-9]+>")
         var fence = ""
+        var fenceDepth = 0
         var span = 0
         var indented = false
         var blank = true
@@ -180,6 +181,8 @@ public enum Markdown {
 
         return text.components(separatedBy: "\n").map { line -> String in
             let body = unquoted(line)
+            let depth = line.prefix(line.count - body.count).filter { $0 == ">" }.count
+            if !fence.isEmpty && depth < fenceDepth { fence = "" }
             let lead = body.prefix(while: { $0 == " " }).count
             var mark = ""
             if lead <= 3, let first = body.dropFirst(lead).first, first == "`" || first == "~" {
@@ -193,6 +196,7 @@ public enum Markdown {
             }
             if !mark.isEmpty || isBlank(body) {
                 fence = mark
+                fenceDepth = depth
                 span = 0
                 indented = false
                 blank = mark.isEmpty

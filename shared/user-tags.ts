@@ -18,6 +18,7 @@ function openTick(line: string, from: number): number {
 export function unwrapUserTags(text: string): string {
   if (!/<\/?user\d/.test(text)) return text;
   let fence = "";
+  let fenceDepth = 0;
   let span = 0;
   let indented = false;
   let blank = true;
@@ -45,12 +46,15 @@ export function unwrapUserTags(text: string): string {
   for (const line of text.split(/(?<=\n)/)) {
     const body = line.replace(QUOTE, "");
     const mark = FENCE.exec(body)?.[1];
+    const depth = line.slice(0, line.length - body.length).split(">").length - 1;
+    if (fence && depth < fenceDepth) fence = "";
     if (fence) {
       const end = FENCE_END.exec(body)?.[1];
       if (end && end[0] === fence[0] && end.length >= fence.length) fence = "";
       out += line;
     } else if (mark || !body.trim()) {
       fence = mark ?? "";
+      fenceDepth = depth;
       span = 0;
       indented = false;
       blank = !mark;
