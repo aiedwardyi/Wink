@@ -468,6 +468,40 @@ describe("Long-Term and Knowledge sheets", () => {
     expect(host.querySelectorAll("[data-save-state]")).toHaveLength(1);
   });
 
+  describe("through a phone-width resize", () => {
+    let mm = 1280;
+    let observers: (() => void)[] = [];
+    const resize = (next: number) => act(async () => { mm = next; for (const each of observers) each(); });
+    beforeEach(() => {
+      mm = 1280;
+      observers = [];
+      vi.stubGlobal("ResizeObserver", class { constructor(fn: () => void) { observers.push(fn); } observe() {} disconnect() {} });
+    });
+    const wideAt = async () => {
+      width(1280);
+      vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("mm") ? mm : 0; });
+      await open();
+      await toMemory();
+      await act(async () => fold("long").click());
+    };
+
+    it("plays the open on the sheet it shows again", async () => {
+      await wideAt();
+      await resize(600);
+      await resize(1280);
+      expect(passes.filter((each) => each.element === sheet("long"))).toHaveLength(1);
+    });
+
+    it("keeps the editor up when a card opened on the phone layout", async () => {
+      await wideAt();
+      await act(async () => [...sheet("long")!.querySelectorAll<HTMLButtonElement>(".mm-action")].find((each) => each.textContent === "Edit")!.click());
+      await resize(600);
+      await act(async () => fold("long").click());
+      await resize(1280);
+      expect(sheet("file")).not.toBeNull();
+    });
+  });
+
   it("points a hand at every enabled button in Bot details", async () => {
     await open();
     expect(panel().className).toContain("[&_:is(button:not(:disabled),summary)]:cursor-pointer");

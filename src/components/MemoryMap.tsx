@@ -158,11 +158,13 @@ export function MemoryMap({ bot, text, topics, target, active, sleep = null, fai
   const fade = (to = sheet.current) => (to ? fadePanel({ sheet: to, content: [...to.querySelectorAll<HTMLElement>("[data-mm-content]")] }) : []);
 
   useLayoutEffect(() => {
+    // the phone layout unmounts the sheets, so motion kept for them would play on detached nodes
+    if (stacked) played.current = {};
     if (!open || stacked) return;
     const running = played.current[open];
     if (running) void playOpen(running, true);
     else if (quiet.current) played.current[open] = fade(sheets[open].current);
-    else played.current[open] = openPanel(parts(open)!);
+    else { const from = parts(open); if (from) played.current[open] = openPanel(from); }
     quiet.current = false;
     if (running) return;
     closeButton.current?.focus({ preventScroll: true });
