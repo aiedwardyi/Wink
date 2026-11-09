@@ -62,6 +62,7 @@ import {
 import { appendNative, finishNative } from "./native.ts";
 import { chatUsageLimit, claudeRateLimitWindows } from "./rate-limits.ts";
 import { switchEffort, type EffortRequest } from "./claude-effort.ts";
+import { forkClaude, type ClaudeSpawn } from "./claude-fork.ts";
 import { SPAWNED_PROXIES } from "../proxy-paths.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { accountLabel, cachedSignIn } from "./auth-status.ts";
@@ -832,6 +833,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       restartTurn?: () => void;
     }
     const sessions = new Map<string, Session>();
+    const lastSpawn = new Map<string, ClaudeSpawn>();
     const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
     const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
       ? configuredIdleMinimum
@@ -1254,6 +1256,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           },
         });
       }
+      lastSpawn.set(threadId, { cli: config.cli, args: [...args], mcpServers: structuredClone(mcpServers), cwd, env, policy: turn.leanStartup === true ? launchPolicy : turnPolicy, cursor: sessionId ?? newSessionId! });
       if (sessionId) args.push("--resume", sessionId);
       else args.push("--session-id", newSessionId!);
 
@@ -2181,6 +2184,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       },
       generateText: (prompt, opts) =>
         traceHelperCall("claude", opts?.onUsage, (onUsage) => generateReview(prompt, opts?.signal, opts?.timeoutMs ?? SUMMARY_TIMEOUT_MS, "low", opts?.ephemeral, opts?.lean, onUsage)),
+      fork: (side) => {
+        const spawn = lastSpawn.get(side.threadId);
+        return spawn && admitted && !accountBlocked ? forkClaude({ ...spawn, cursor: sessions.get(side.threadId)?.sessionId ?? spawn.cursor }, side) : null;
+      },
       textModel: "claude-haiku-5-5",
       textTimeoutMs: SUMMARY_TIMEOUT_MS,
       reviewPermission: (prompt, signal) => traceHelperCall("claude", undefined, (onUsage) => generateReview(prompt, signal, undefined, undefined, true, true, onUsage)),
