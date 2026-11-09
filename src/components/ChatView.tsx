@@ -1719,7 +1719,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             workers={rowWorkers}
             livePanes={livePanes}
           />
-          <WhatsNewSlot />
+          <WhatsNewSlot hidden={hidden} />
           {jump.forwardFailed && (
             <div className="flex justify-center">
               <button

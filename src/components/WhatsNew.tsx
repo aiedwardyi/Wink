@@ -9,9 +9,10 @@ const WhatsNewCard = lazyView(() => import("./WhatsNewCard"));
 // Off the startup path: asked once per app session, well after the first paint.
 const ASK_AFTER_MS = 1500;
 let asked: Promise<string | null> | undefined;
-// Every mounted chat has a slot; only the first one shows the card, and closing it closes it everywhere.
+// Every mounted chat has a slot (value: hidden); only the first visible one shows the card, and closing it closes it everywhere.
 let release: string | null = null;
-const slots: symbol[] = [];
+const slots = new Map<symbol, boolean>();
+const owner = () => [...slots].find(([, hidden]) => !hidden)?.[0];
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((listener) => listener());
 const subscribe = (listener: () => void) => {
@@ -19,18 +20,18 @@ const subscribe = (listener: () => void) => {
   return () => void listeners.delete(listener);
 };
 
-export function WhatsNewSlot() {
+export function WhatsNewSlot({ hidden = false }: { hidden?: boolean }) {
   const { state } = useStore();
   const [me] = useState(() => Symbol());
-  useEffect(() => {
-    slots.push(me);
+  useEffect(() => () => {
+    slots.delete(me);
     notify();
-    return () => {
-      slots.splice(slots.indexOf(me), 1);
-      notify();
-    };
   }, [me]);
-  const mine = useSyncExternalStore(subscribe, () => (slots[0] === me ? release : null), () => null);
+  useEffect(() => {
+    slots.set(me, hidden);
+    notify();
+  }, [me, hidden]);
+  const mine = useSyncExternalStore(subscribe, () => (owner() === me ? release : null), () => null);
   const shown = usePresence(mine);
   useEffect(() => {
     if (!state.hydrated) return;
@@ -49,7 +50,7 @@ export function WhatsNewSlot() {
     release = null;
     notify();
   }, []);
-  if (!shown.mounted || !shown.value) return null;
+  if (!shown.mounted || !shown.value || (!mine && release)) return null;
   return (
     <LazyView>
       <WhatsNewCard release={shown.value} closing={shown.closing} onClose={close} />
