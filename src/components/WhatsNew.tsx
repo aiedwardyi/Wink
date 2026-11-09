@@ -30,7 +30,7 @@ export function WhatsNewSlot() {
       notify();
     };
   }, [me]);
-  const mine = useSyncExternalStore(subscribe, () => (slots[0] === me ? release : null));
+  const mine = useSyncExternalStore(subscribe, () => (slots[0] === me ? release : null), () => null);
   const shown = usePresence(mine);
   useEffect(() => {
     if (!state.hydrated) return;
