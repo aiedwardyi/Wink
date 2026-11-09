@@ -3,7 +3,7 @@
   "version": "1",
   "index": "legal",
   "label": "Vals.ai Legal Research Bench (all-pass)",
-  "updated": "2026-11-05",
+  "updated": "2026-11-09",
   "rows": [
     {
       "model": "claude-fable-5",
@@ -13,7 +13,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -24,7 +24,18 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "all",
+      "value": 46.154,
+      "cost_per_task": 3.956441,
+      "cost_benchmark": "vals-legal-research",
+      "cost_source": "https://www.vals.ai/benchmarks/legal_research",
+      "source_url": "https://www.vals.ai/benchmarks/legal_research",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -35,7 +46,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -46,7 +57,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -57,7 +68,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -68,7 +79,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -79,7 +90,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -90,7 +101,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -101,7 +112,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -112,7 +123,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -123,7 +134,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -134,7 +145,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -145,7 +156,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -156,7 +167,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -167,7 +178,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     },
     {
@@ -178,7 +189,7 @@
       "cost_benchmark": "vals-legal-research",
       "cost_source": "https://www.vals.ai/benchmarks/legal_research",
       "source_url": "https://www.vals.ai/benchmarks/legal_research",
-      "retrieved_at": "2026-11-09T01:44:04.872Z",
+      "retrieved_at": "2026-11-09T20:38:09.108Z",
       "kind": "independent"
     }
   ]

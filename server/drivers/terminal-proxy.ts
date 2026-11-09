@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ModelCatalog } from "../contracts.ts";
+import { RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 import { TERMINAL_KEYS, type TerminalKey } from "../terminal-keys.ts";
 import { grokSupport, STATIC_GROK_MODELS } from "./acp/grok.ts";
 import { STATIC_CLAUDE_MODELS } from "./claude.ts";
@@ -81,7 +82,7 @@ export const WORKER_GEMINI_EFFORTS = ["high", "medium", "low"];
 // Picker rows only; "Claude " and "Meta " prefixes are dropped to keep the list short.
 export function workerModelsText(): string {
   const line = (engine: string, catalog: ModelCatalog, effort = "") =>
-    `${engine}: ${catalog.options.map((option) => `${option.label.replace(/^(Claude|Meta) /, "")} = ${option.id}`).join(", ")}${effort}.`;
+    `${engine}: ${catalog.options.filter((option) => !RETIRED_PICKER_MODEL_IDS.includes(option.id)).map((option) => `${option.label.replace(/^(Claude|Meta) /, "")} = ${option.id}`).join(", ")}${effort}.`;
   return [
     "Worker models to launch in panes (not bots):",
     line("Claude", STATIC_CLAUDE_MODELS),

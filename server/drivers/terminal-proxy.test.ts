@@ -123,11 +123,12 @@ describe("terminal proxy", () => {
 
   it("lists every picker model of the four worker engines with its name and --model id", () => {
     const description = TOOLS[2].description;
-    const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
+    const names = (catalog: { options: { id: string; label: string }[] }) => catalog.options.filter((option) => option.id !== "claude-fable-5").map((option) => [option.label.replace(/^(Claude|Meta) /, ""), option.id]);
     for (const [name, id] of [STATIC_CLAUDE_MODELS, STATIC_CODEX_MODELS, MSP_MUSE_MODELS, STATIC_GROK_MODELS].flatMap(names)) {
       expect(description, id).toContain(`${name} = ${id}`);
     }
     expect(description).toContain("Astra = gpt-6-astra");
+    expect(description).not.toContain("Fable 5 = claude-fable-5");
     expect(description).toContain(`effort ${MSP_MUSE_EFFORT_LEVELS.join("/")}`);
     expect(description).toMatch(/models to launch in panes \(not bots\)/i);
     expect(description).toContain(workerModelsText());

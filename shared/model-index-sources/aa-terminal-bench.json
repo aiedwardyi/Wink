@@ -72,6 +72,61 @@
       "kind": "independent"
     },
     {
+      "model": "claude-fable-5-2",
+      "effort": "low",
+      "value": 54.5454545454545,
+      "cost_per_task": 4.339918517524423,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+      "retrieved_at": "2026-11-09T20:39:55.515Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "medium",
+      "value": 55.050505050505,
+      "cost_per_task": 5.251012275091596,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+      "retrieved_at": "2026-11-09T20:39:57.417Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "high",
+      "value": 59.5959595959596,
+      "cost_per_task": 13.468788577499403,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+      "retrieved_at": "2026-11-09T20:39:59.061Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "xhigh",
+      "value": 61.6161616161616,
+      "cost_per_task": 20.8121385936618,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+      "retrieved_at": "2026-11-09T20:40:00.578Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "max",
+      "value": 59.5959595959596,
+      "cost_per_task": 31.589769302212897,
+      "cost_benchmark": "aa-terminal-bench",
+      "cost_source": "https://artificialanalysis.ai/models/claude-fable-5-2",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2",
+      "retrieved_at": "2026-11-09T20:39:54.071Z",
+      "kind": "independent"
+    },
+    {
       "model": "claude-opus-5-5",
       "effort": "low",
       "value": 31.3131313131313,

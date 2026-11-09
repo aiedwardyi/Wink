@@ -72,6 +72,61 @@
       "kind": "independent"
     },
     {
+      "model": "claude-fable-5-2",
+      "effort": "low",
+      "value": 1545.68,
+      "cost_per_task": 1.24,
+      "cost_benchmark": "aa-gdpval",
+      "cost_source": "https://artificialanalysis.ai/evaluations/gdpval-aa",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+      "retrieved_at": "2026-11-09T20:39:55.515Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "medium",
+      "value": 1591.16,
+      "cost_per_task": 1.69,
+      "cost_benchmark": "aa-gdpval",
+      "cost_source": "https://artificialanalysis.ai/evaluations/gdpval-aa",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+      "retrieved_at": "2026-11-09T20:39:57.417Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "high",
+      "value": 1718.13,
+      "cost_per_task": 4.72,
+      "cost_benchmark": "aa-gdpval",
+      "cost_source": "https://artificialanalysis.ai/evaluations/gdpval-aa",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+      "retrieved_at": "2026-11-09T20:39:59.061Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "xhigh",
+      "value": 1750.65,
+      "cost_per_task": 10.18,
+      "cost_benchmark": "aa-gdpval",
+      "cost_source": "https://artificialanalysis.ai/evaluations/gdpval-aa",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+      "retrieved_at": "2026-11-09T20:40:00.578Z",
+      "kind": "independent"
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "max",
+      "value": 1830.73,
+      "cost_per_task": 26.43,
+      "cost_benchmark": "aa-gdpval",
+      "cost_source": "https://artificialanalysis.ai/evaluations/gdpval-aa",
+      "source_url": "https://artificialanalysis.ai/models/claude-fable-5-2",
+      "retrieved_at": "2026-11-09T20:39:54.071Z",
+      "kind": "independent"
+    },
+    {
       "model": "claude-opus-5-5",
       "effort": "low",
       "value": 1240.15,

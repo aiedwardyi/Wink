@@ -8,6 +8,9 @@ const RETIRED_ENGINE_KINDS = new Map([
   ["minimax", "MiniMax (API)"], ["opencodeGo", "OpenCode"],
 ]);
 
+/** Never offered, but bots saved on them still run and the Model Index still charts them. */
+export const RETIRED_PICKER_MODEL_IDS: readonly string[] = ["claude-fable-5"];
+
 export function isRetiredEngineKind(kind?: string): boolean {
   return kind !== undefined && RETIRED_ENGINE_KINDS.has(kind);
 }

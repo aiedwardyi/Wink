@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { PICKER_MODEL_IDS, pickerModels, movePicker, pickerRows, pickerEfforts, selectPickerModel, withPickerEffort } from "./cross-model-picker";
 import type { InstanceInfo } from "@/state/store";
+import { STATIC_CLAUDE_MODELS } from "../../server/drivers/claude.ts";
+import { catalogModelLabel } from "./model-chip";
 
 const RETIRED_KINDS = ["grok", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "qwenAgent", "hermesAgent", "openai-compat", "piAgent", "minimax", "opencodeGo"];
 
@@ -63,12 +65,33 @@ describe("picker catalogs", () => {
   it("orders the model column frontier-first without changing the catalog default", () => {
     const instance: InstanceInfo = {
       instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" },
-      models: { default: "claude-sonnet-5-5", options: ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"].map((id) => ({ id, label: id })) },
+      models: { default: "claude-sonnet-5-5", options: ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1", "claude-fable-5-2"].map((id) => ({ id, label: id })) },
     };
     const before = JSON.stringify(instance.models);
     const rows = pickerRows([instance], { instanceId: "claude", model: "claude-opus-5-5", mode: "pinned" });
-    expect(rows[0]!.cells.map((cell) => cell.options[0]!.id)).toEqual(["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+    expect(rows[0]!.cells.map((cell) => cell.options[0]!.id)).toEqual(["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
     expect(JSON.stringify(instance.models)).toBe(before);
+  });
+
+  it("never offers Fable 5", () => {
+    const instance: InstanceInfo = {
+      instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" }, models: STATIC_CLAUDE_MODELS,
+    };
+    const row = pickerRows([instance], { instanceId: "claude", model: "claude-opus-5-5", mode: "pinned" })[0]!;
+    expect(row.cells.flatMap((cell) => cell.options.map((option) => option.id))).not.toContain("claude-fable-5");
+    expect(PICKER_MODEL_IDS).not.toContain("claude-fable-5");
+  });
+
+  it("keeps a bot saved on Fable 5 running under its own label", () => {
+    const instance: InstanceInfo = {
+      instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude", snapshot: { state: "available" }, models: STATIC_CLAUDE_MODELS,
+      capabilities: { effortLevels: ["low", "medium", "high", "xhigh", "max"] },
+    };
+    const saved = { instanceId: "claude", model: "claude-fable-5", mode: "pinned" as const, effort: "max" as const };
+    const row = pickerRows([instance], saved)[0]!;
+    expect(row.cells.find((cell) => cell.offList)).toEqual({ label: "Claude Fable 5", options: [{ id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 1_000_000 }], offList: true });
+    expect(selectPickerModel(instance, "claude-fable-5", saved)).toBe(saved);
+    expect(catalogModelLabel(instance, "claude-fable-5")).toBe("Claude Fable 5");
   });
 
   it("defaults a Haiku 5.5 pick to high effort and keeps Haiku 4.5 off the grid", () => {

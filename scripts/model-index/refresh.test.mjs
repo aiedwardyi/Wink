@@ -168,8 +168,9 @@ describe("vals legal research page", () => {
 
 describe("list price parsers", () => {
   it("reads Anthropic rates, the Haiku prompt tier, and leaves out a model the page does not list", () => {
-    const prices = listPrices.parseAnthropic(fixture("anthropic-pricing.html"), ["Claude Fable 5", "Claude Fable 5.1", "Claude Haiku 5.5", "Claude Nova 9"]);
+    const prices = listPrices.parseAnthropic(fixture("anthropic-pricing.html"), ["Claude Fable 5", "Claude Fable 5.1", "Claude Fable 5.2", "Claude Haiku 5.5", "Claude Nova 9"]);
     expect(prices["Claude Fable 5"]).toEqual({ input: 10, cachedInput: 1, output: 50 });
+    expect(prices["Claude Fable 5.2"]).toEqual({ input: 8, cachedInput: 0.2, output: 40 });
     expect(prices["Claude Fable 5.1"]).toEqual({ input: 10, cachedInput: 0.25, output: 50 });
     expect(prices["Claude Haiku 5.5"]).toEqual({ input: 0.1, cachedInput: 0.01, output: 0.5, upToTokens: 100000, above: { input: 0.5, cachedInput: 0.05, output: 2.5 } });
     expect(prices["Claude Nova 9"]).toBeUndefined();
@@ -258,6 +259,14 @@ describe("list price parsers", () => {
     expect(listPrices.parseMeta(contribOnly, ["muse-spark-1.3"])["muse-spark-1.3"]).toBeUndefined();
     const dangling = `<p>Models: muse-spark-1.3-contributor in Contributor mode; muse-spark-1.2.</p><p>${table}</p>`;
     expect(() => listPrices.parseMeta(dangling, ["muse-spark-1.2"])).toThrow(Unverifiable);
+  });
+
+  it("reads Meta's mode columns in either order", () => {
+    const swapped = "<p>Models: muse-spark-1.3 in Standard mode; muse-spark-1.3-contributor in Contributor mode.</p><p>Usage Contributor mode (per 1M tokens) Standard mode (per 1M tokens) Cached input $0.002 $0.15 Input $0.10 $1.25 Output $0.20 $4.25</p>";
+    expect(listPrices.parseMeta(swapped, ["muse-spark-1.3", "muse-spark-1.3-contributor"])).toEqual({
+      "muse-spark-1.3": { input: 1.25, cachedInput: 0.15, output: 4.25 },
+      "muse-spark-1.3-contributor": { input: 0.1, cachedInput: 0.002, output: 0.2 },
+    });
   });
 
   it("reads Meta tiers by the models each lists", () => {

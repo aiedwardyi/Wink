@@ -142,40 +142,40 @@ describe("ModelPicker cross navigation", () => {
   });
 
   it.each([120, -120])("moves one model per wheel notch %s and keeps effort", async (deltaY) => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"], ["low", "medium", "high", "xhigh", "max"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"], ["low", "medium", "high", "xhigh", "max"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
     const event = new window.WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
     await act(async () => document.querySelector(".model-cross-stage")!.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(true);
     await key("Enter");
     expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({
-      instanceId: "claude", model: deltaY > 0 ? "claude-opus-5-5" : "claude-fable-5-1", mode: "pinned", effort: "medium",
+      instanceId: "claude", model: deltaY > 0 ? "claude-opus-5-5" : "claude-fable-5-2", mode: "pinned", effort: "medium",
     });
   });
 
-  it.each([[-80, "claude-opus-5-5"], [80, "claude-fable-5-1"]])("moves one model per vertical flick %s", async (dy, model) => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+  it.each([[-80, "claude-opus-5-5"], [80, "claude-fable-5-2"]])("moves one model per vertical flick %s", async (dy, model) => {
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
     await swipe(0, dy);
     await key("Enter");
     expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model, mode: "pinned", effort: "medium" });
   });
 
   it.each([[-80, "high"], [80, "low"]])("moves one effort per horizontal flick %s", async (dx, effort) => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
     await swipe(dx, 20);
     await key("Enter");
-    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort });
+    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort });
   });
 
   it("steps once for a long vertical drag", async () => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-2", mode: "pinned", effort: "medium" });
     await swipe(0, -400);
     await swipe(10, -30);
     await key("Enter");
-    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5", mode: "pinned", effort: "medium" });
+    expect(mock.dispatch.mock.calls[0]?.[0].selection).toEqual({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
   });
 
   it("labels Alt+M Open/Close and cancels the draft", async () => {
@@ -201,8 +201,8 @@ describe("ModelPicker cross navigation", () => {
   });
 
   it("counts wheel notches delivered before the next render", async () => {
-    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"], ["low", "medium", "high"])];
-    await mount({ instanceId: "claude", model: "claude-fable-5-1", mode: "pinned", effort: "medium" });
+    mock.instances = [engine("claude", "claudeAgent", ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5"], ["low", "medium", "high"])];
+    await mount({ instanceId: "claude", model: "claude-fable-5-2", mode: "pinned", effort: "medium" });
     await act(async () => {
       for (let notch = 0; notch < 2; notch++) {
         document.querySelector(".model-cross-stage")!.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
@@ -213,6 +213,7 @@ describe("ModelPicker cross navigation", () => {
   });
 
   it.each([
+    ["claudeAgent", "claude-fable-5-2", "high"],
     ["claudeAgent", "claude-fable-5-1", "high"],
     ["codex", "gpt-6-astra", "low"],
     ["codex", "gpt-6.1-sol", "low"],

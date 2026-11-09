@@ -1,3 +1,27 @@
+# Claude Fable 5.2, 2026-11-10
+
+40 published values added for Fable 5.2, read 2026-11-09 UTC. No other value changed.
+
+- AA: Intelligence Index 5.0.1 (with cost), FrontierCode 2.0, Terminal-Bench 4.0 and GDPval-AA 2.1 at low, medium, high, xhigh and max, from the [public model pages](https://artificialanalysis.ai/models/claude-fable-5-2). Terminal-Bench cost is the `terminalbench-4-0` cost per task in the same record. GDPval cost is the rendered Total Cost bar, rounded as AA shows it.
+- [Vals Legal Research Bench](https://www.vals.ai/benchmarks/legal_research): 46.154 at $3.956441 per test, board dated 2026-11-09.
+- [Anthropic list price](https://platform.claude.com/docs/en/about-claude/pricing): $8 input, $0.20 cache hit, $40 output per 1M tokens.
+- Gaps: Rams Index 0.6.1 and CyberBench 1.1 publish no Fable 5.2 score.
+- Meta's pricing page swapped its Standard and Contributor columns; the parser reads the header order. Prices did not change.
+
+Claude Fable 5 left the picker but stays charted for comparison. Picker model/chart gaps went from 13 to 12.
+
+| Chart | Missing before | Missing after | Filled | Newly missing |
+| --- | ---: | ---: | --- | --- |
+| Intelligence Index 5.0.1 | 2 | 1 | - | - |
+| FrontierCode 2.0 | 2 | 1 | - | - |
+| Terminal-Bench 4.0 | 1 | 1 | - | - |
+| GDPval-AA 2.1 | 1 | 1 | - | - |
+| Rams Index 0.6.1 | 3 | 4 | - | Claude Fable 5.2 |
+| CyberBench 1.1 | 3 | 3 | - | Claude Fable 5.2 (Claude Fable 5 left the picker) |
+| Legal Research Bench 1 | 1 | 1 | - | - |
+| List prices | 0 | 0 | - | - |
+| Total model/chart gaps | 13 | 12 | | |
+
 # Model Index refresh, 2026-11-09
 
 Each chart uses the newest version its source publishes, quoted, and a model the source does not publish stays a gap. 256 values changed and 35 were added. Older versions stay as inactive history, byte-for-byte apart from `active: false`.

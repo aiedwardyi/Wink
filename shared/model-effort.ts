@@ -1,6 +1,7 @@
 import type { EffortLevel } from "../server/contracts.ts";
 
 const DEFAULTS = new Map<string, EffortLevel>([
+  ["claudeAgent:claude-fable-5-2", "high"],
   ["claudeAgent:claude-fable-5-1", "high"],
   ["claudeAgent:claude-fable-5", "high"],
   ["claudeAgent:claude-opus-5-5", "high"],

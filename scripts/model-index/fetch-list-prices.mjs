@@ -101,7 +101,7 @@ export function parseMeta(html, names) {
   const cell = String.raw`(?:\$[\d.]+|Not available)`;
   const tiers = [...text.matchAll(new RegExp(
     `Models?:([^\\n]*)\\n(?:(?!Models?:)[\\s\\S]){0,700}?` +
-    `Usage Standard mode \\(per 1M tokens\\) Contributor mode \\(per 1M tokens\\)\\s+` +
+    `Usage (Standard|Contributor) mode \\(per 1M tokens\\) (?!\\2)(Standard|Contributor) mode \\(per 1M tokens\\)\\s+` +
     `Cached input (${cell}) (${cell})\\s+Input (${cell}) (${cell})\\s+Output (${cell}) (${cell})`, "g"))];
   if (tiers.length === 0) throw new Unverifiable("Meta pricing tiers not found");
   const listed = [...text.matchAll(/Models?:([^\n]*)/g)].map((m) => m[1]);
@@ -124,8 +124,10 @@ export function parseMeta(html, names) {
       const standardLine = markStd < 0 && markContrib < 0 ? tier[1] : listFor(markStd);
       const contribLine = listFor(markContrib);
       const triple = (cells) => cells.includes(null) ? null : { input: cells[1], cachedInput: cells[0], output: cells[2] };
-      const standard = triple([num(tier[2]), num(tier[4]), num(tier[6])]);
-      const contributor = triple([num(tier[3]), num(tier[5]), num(tier[7])]);
+      const column = (mode) => (tier[2] === mode ? 0 : 1);
+      const cells = (col) => triple([num(tier[4 + col]), num(tier[6 + col]), num(tier[8 + col])]);
+      const standard = cells(column("Standard"));
+      const contributor = cells(column("Contributor"));
       if (onLine(standardLine) && onLine(contribLine)) throw new Unverifiable(`Meta ${id}: listed in both modes`);
       if (onLine(contribLine)) {
         if (!contributor) throw new Unverifiable(`Meta ${id}: row shape changed`);

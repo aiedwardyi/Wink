@@ -1,5 +1,6 @@
 import type { InstanceInfo } from "@/state/store";
 import { MODEL_INDEX_ENTRIES, type ModelIndexEntry, type ModelIndexKey, type ModelPrice, type ModelRates } from "../../shared/model-index-data.ts";
+import { RETIRED_PICKER_MODEL_IDS } from "../../shared/model-selection.ts";
 import { PICKER_MODEL_IDS, pickerModels, pickerRows } from "./cross-model-picker";
 
 export const MODEL_INDEXES: readonly ModelIndexKey[] = ["intelligence", "coding", "agentic", "design", "security", "general", "legal", "cost"];
@@ -31,7 +32,7 @@ export interface ModelIndexPoint extends ModelIndexEntry {
   price?: ModelPrice;
 }
 
-const PICKER = new Set(PICKER_MODEL_IDS);
+const PICKER = new Set([...PICKER_MODEL_IDS, ...RETIRED_PICKER_MODEL_IDS]);
 
 export const formatUsd = (value: number) => `$${Number.isInteger(value) ? value : value.toFixed(2)}`;
 
