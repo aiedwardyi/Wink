@@ -62,18 +62,13 @@ function harness(opts: { busy?: boolean; consumed?: boolean; queueing?: boolean;
     await routes.send(Readable.from([JSON.stringify(body)]) as IncomingMessage, res, ["", bot.id] as RegExpMatchArray);
     return out;
   }
-  async function escalate(askId: string) {
-    const { out, res } = respond();
-    await routes.escalateQuick(res, ["", bot.id, askId] as RegExpMatchArray);
-    return out;
-  }
   const rows = () => store.messagesFor(bot.threadId);
   const settled = async () => {
     release();
     await vi.waitFor(() => expect(ask).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
   };
-  return { bot, store, steer, ask, usage, startTurn, send, escalate, rows, settled, release };
+  return { bot, store, steer, ask, usage, startTurn, send, rows, settled, release };
 }
 
 describe("quick route", () => {
@@ -156,28 +151,6 @@ describe("quick route", () => {
     const ask = h.rows().at(-1)!;
     expect(ask.quick).toBeUndefined();
     expect(h.startTurn).toHaveBeenCalledWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
-  });
-
-  it("escalates an answer to the busy bot and marks it passed", async () => {
-    const h = harness();
-    await h.send({ text: QUESTION });
-    await h.settled();
-    const [ask, answer] = h.rows().slice(-2);
-    const response = await h.escalate(ask!.id);
-    expect(response.data.steered).toBe(true);
-    expect(h.steer).toHaveBeenCalledTimes(1);
-    expect(h.rows().find((row) => row.id === answer!.id)?.quick?.state).toBe("passed");
-    expect(h.rows().at(-1)).toMatchObject({ steered: true, text: QUESTION });
-    expect((await h.escalate(ask!.id)).status).toBe(404);
-  });
-
-  it("escalates as a normal send once the bot is idle", async () => {
-    const h = harness();
-    await h.send({ text: QUESTION });
-    await h.settled();
-    h.store.setActivity(h.bot.id, "idle");
-    await h.escalate(h.rows().at(-2)!.id);
-    expect(h.startTurn).toHaveBeenCalledWith(h.bot.id, QUESTION, expect.objectContaining({ threadId: h.bot.threadId }));
   });
 
   it.each([true, false])("steers the live note and marks it noted only when taken: %s", async (taken) => {

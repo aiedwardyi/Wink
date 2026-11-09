@@ -384,22 +384,6 @@ export function createBotChatRoutes(deps: BotChatRouteDeps) {
       markChatLatency({ sendId, threadId }, "post.receipt");
       return json(res, 202, receipt);
     },
-    escalateQuick: async (res: ServerResponse, m: RegExpMatchArray) => {
-      const bot = store.bot(m[1]);
-      if (!bot) return json(res, 404, { error: "no such bot" });
-      const threadId = bot.threadId;
-      const messages = store.messagesFor(threadId);
-      const ask = messages.find((message) => message.id === m[2] && message.quick?.state === "asked");
-      const answer = messages.find((message) => message.quick?.askId === m[2] && message.quick.state === "answer");
-      if (!ask?.text || !answer?.quick) return json(res, 404, { error: "no such quick answer" });
-      store.patchMessage(threadId, answer.id, { quick: { ...answer.quick, state: "passed" } });
-      try {
-        return json(res, 202, await deliverBusy(bot, threadId, ask.text, { adapter: instanceForBot(bot, threadId)?.adapter, after: false }));
-      } catch (error) {
-        store.patchMessage(threadId, answer.id, { quick: answer.quick });
-        throw error;
-      }
-    },
     deleteQueued: async (res: ServerResponse, m: RegExpMatchArray) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });

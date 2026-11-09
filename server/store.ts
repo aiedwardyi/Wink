@@ -168,7 +168,7 @@ export interface Message {
    * know the reply above it may already account for this line */
   steered?: boolean;
   /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
-  quick?: { state: "asked" | "answer" | "handoff" | "passed"; askId?: string; noted?: true };
+  quick?: { state: "asked" | "answer" | "handoff"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   /** screen messages: a frame of the bot's computer (base64 image) */

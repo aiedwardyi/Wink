@@ -8114,9 +8114,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return await botChatRoutes.send(req, res, m);
     }
 
-    m = path.match(/^\/api\/bots\/([\w-]+)\/quick\/([\w-]+)\/escalate$/);
-    if (m && method === "POST") return await botChatRoutes.escalateQuick(res, m);
-
     m = path.match(/^\/api\/bots\/([\w-]+)\/usage-wait\/([\w-]+)\/cancel$/);
     if (m && method === "POST") return botChatRoutes.cancelUsageWait(res, m);
 
