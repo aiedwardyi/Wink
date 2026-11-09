@@ -87,16 +87,20 @@
 //                      what each turn of a retained process was sent
 //   FAKE_CLAUDE_REJECT_FLAG  a flag the text helper rejects the way an older
 //                      CLI's Commander does: unknown option, exit 1
+//   FAKE_CLAUDE_FORK_MODE / FAKE_CLAUDE_FORK_FIXTURE  what a --fork-session
+//                      process plays in place of FAKE_CLAUDE_MODE (default
+//                      happy) / FAKE_CLAUDE_REPLY_FIXTURE
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const mode = process.env.FAKE_CLAUDE_MODE ?? "happy";
+const forked = process.argv.includes("--fork-session");
+const mode = (forked ? process.env.FAKE_CLAUDE_FORK_MODE : process.env.FAKE_CLAUDE_MODE) ?? "happy";
 const authReady = Boolean(process.env.FAKE_CLAUDE_AUTH_GATE && existsSync(process.env.FAKE_CLAUDE_AUTH_GATE));
 
 const argv = process.argv.slice(2);
@@ -233,7 +237,7 @@ if (lateRole === "speaker") {
 // and the reply so a test can steer into it.
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type StdinLine = { type?: string; request_id?: string; request?: { subtype?: string; settings?: { effortLevel?: string } } };
-const sessionId = argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session";
+const sessionId = forked ? (argAfter("--session-id") ?? `${argAfter("--resume")}-fork`) : (argAfter("--resume") ?? argAfter("--session-id") ?? "fake-session");
 const model = argAfter("--model") ?? "claude-fake";
 let effort = argAfter("--effort");
 let dumped = false;
@@ -420,12 +424,28 @@ const askBroker = (socketPath: string, tool: string, input: { [key: string]: Jso
     conn.write(JSON.stringify({ t: "ask", id: randomUUID(), tool, input }) + "\n");
   });
 
+// --settings PreToolUse hooks run before the permission check; a deny wins.
+const hookDecision = (tool: string, input: { [key: string]: JsonValue }): string | null => {
+  const settings = argAfter("--settings");
+  const hooks: Array<{ hooks?: Array<{ command?: string }> }> = (settings ? JSON.parse(settings)?.hooks?.PreToolUse : undefined) ?? [];
+  let decision: string | null = null;
+  for (const command of hooks.flatMap((entry) => entry.hooks ?? []).map((hook) => hook.command).filter(Boolean)) {
+    const payload = JSON.stringify({ session_id: sessionId, hook_event_name: "PreToolUse", cwd: process.cwd(), tool_name: tool, tool_input: input });
+    const said = JSON.parse(execSync(command!, { input: payload, encoding: "utf8", windowsHide: true }) || "{}")?.hookSpecificOutput?.permissionDecision;
+    if (said === "deny") return "deny";
+    if (said === "allow") decision = "allow";
+  }
+  return decision;
+};
+
 const playEdits = async () => {
   const mcpConfig = JSON.parse(readFileSync(argAfter("--mcp-config") ?? "", "utf8"));
   const socketPath = String(mcpConfig.mcpServers.ogb.args[1]);
+  const denials: string[] = [];
   const useTool = async (id: string, name: string, input: { [key: string]: JsonValue }, run: () => void) => {
     out({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
-    const behavior = needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow";
+    const behavior = hookDecision(name, input) ?? (needsPrompt(name) ? await askBroker(socketPath, name, input) : "allow");
+    if (behavior !== "allow") denials.push(name);
     if (behavior === "allow") run();
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: behavior !== "allow" }] } });
   };
@@ -433,7 +453,7 @@ const playEdits = async () => {
   await useTool("tu-bash", "Bash", { command: "node -e \"require('fs').writeFileSync('ran.txt','ok')\"" }, () =>
     writeFileSync("ran.txt", "ok"),
   );
-  out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 } });
+  out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, permission_denials: denials });
   turnRunning = false;
   finishIfDone();
 };
@@ -652,7 +672,7 @@ const playTurn = (prompt: JsonValue) => {
     process.stderr.write("fake-claude: simulated crash before result\n");
     process.exit(3);
   }
-  const replyFixture = process.env.FAKE_CLAUDE_REPLY_FIXTURE;
+  const replyFixture = forked ? process.env.FAKE_CLAUDE_FORK_FIXTURE : process.env.FAKE_CLAUDE_REPLY_FIXTURE;
   if (replyFixture) {
     out({ type: "system", subtype: "init", session_id: sessionId, model });
     for (const message of JSON.parse(readFileSync(replyFixture, "utf8"))) out(message);
