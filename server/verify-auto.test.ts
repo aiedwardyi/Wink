@@ -296,6 +296,16 @@ it.each(["Saved `Final report.docx`.", "Saved Final report.docx.", "Saved \"Jame
   expect(docs.mock.lastCall![0].scanned).toContain(join(root, "report.docx"));
 });
 
+it("does not let a longer name that starts with a document's name claim it", async () => {
+  const old = new Date(Date.now() - 3_600_000);
+  await utimes(join(root, "index.html"), old, old);
+  await writeFile(join(root, "report.docx - final.docx"), "x");
+  await writeFile(join(root, "report.docx"), "x");
+  shell();
+  await auto.settled({ ...turn, reply: "Saved report.docx - final.docx." });
+  expect(docs.mock.lastCall![0].scanned).toContain(join(root, "report.docx"));
+});
+
 it.each([
   ["absolute, backticks", (path: string) => `Saved to \`${path}\`.`],
   ["absolute, quotes", (path: string) => `Saved to "${path}".`],
