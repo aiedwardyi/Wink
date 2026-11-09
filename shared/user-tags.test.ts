@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { unwrapUserTags } from "./user-tags.ts";
+import { UserTagScanner, unwrapUserTags } from "./user-tags.ts";
 
 describe("unwrapUserTags", () => {
   it("keeps the inner text and drops the tags", () => {
@@ -47,6 +47,14 @@ describe("unwrapUserTags", () => {
   it("keeps a tag-wrapped marker inside a fence as code", () => {
     const text = "~~~xml\n<user1>~~~</user1>\n<user2>x</user2>\n~~~";
     expect(unwrapUserTags(text)).toBe(text);
+  });
+
+  it("reads carriage returns as line endings, even a CRLF split across chunks", () => {
+    const text = "Intro\r~~~xml\r<user1>x</user1>\r~~~";
+    expect(unwrapUserTags(text)).toBe(text);
+    const scanner = new UserTagScanner();
+    const split = ["See `a\r", "\n<user1>b</user1>\r\nc` then <user2>d</user2>"];
+    expect(split.map((piece) => scanner.push(piece)).join("") + scanner.finish()).toBe("See `a\r\n<user1>b</user1>\r\nc` then d");
   });
 
   it("does not open a fence from indented code", () => {

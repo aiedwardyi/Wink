@@ -9,6 +9,7 @@ const FENCE = /^( *(?:(?:[-*+]|\d{1,9}[.)]) +)*)(`{3,}(?=[^`]*$)|~{3,})/;
 const FENCE_END = /^ *(`{3,}|~{3,})\s*$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])( +)(?=\S)/;
 const RUNS = /`+/g;
+const EOL = /[\r\n]/g;
 
 function openTick(text: string, from: number): number {
   for (let at = text.indexOf("`", from); at >= 0; at = text.indexOf("`", at + 1)) {
@@ -32,13 +33,23 @@ export class UserTagScanner {
   private kind?: "code" | "text";
   private buf = "";
   private held = "";
+  private afterCR = false;
 
   push(chunk: string): string {
     let out = "";
-    for (let at = 0; at < chunk.length; ) {
-      const nl = chunk.indexOf("\n", at);
-      const end = nl < 0 ? chunk.length : nl + 1;
-      out += this.feed(chunk.slice(at, end), nl >= 0, false);
+    let at = 0;
+    // the "\n" of a CRLF split across chunks belongs to the line already ended
+    if (this.afterCR && chunk[0] === "\n") { out = "\n"; at = 1; }
+    this.afterCR = false;
+    while (at < chunk.length) {
+      EOL.lastIndex = at;
+      const eol = EOL.exec(chunk);
+      let end = eol ? eol.index + 1 : chunk.length;
+      if (eol && chunk[eol.index] === "\r") {
+        if (chunk[end] === "\n") end++;
+        else if (end === chunk.length) this.afterCR = true;
+      }
+      out += this.feed(chunk.slice(at, end), Boolean(eol), false);
       at = end;
     }
     return out;
