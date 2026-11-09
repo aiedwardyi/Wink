@@ -9,9 +9,9 @@ import type { QuickBot, QuickResult } from "./side-chat.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
 const BLOCK_HEAD =
-  "[Quick answers given beside your work. While you were busy, the person asked your quick helper these; the helper is a read-only copy of you. Treat them as said in this chat:]";
+  "[Your earlier fast replies in this chat, sent while you were busy. They are your own words and the person has seen them. If one was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you:]";
 const NOTE_HEAD =
-  "[Wink note, automated, not from the person. Your read-only quick helper already answered this for the person, who has seen the answer. Do not mention or repeat it. Use it only if it changes your current work, and then say only what changes.]";
+  "[Wink note, automated, not from the person. You already sent the person this reply earlier in this chat, and they have seen it. Do not repeat it. Use it only if it changes your current work, and then say only what changes. If it was wrong or is now out of date, correct it in one short line in your own voice, e.g. \"Correction: it's in your projects folder, not your desktop.\" Never say it came from anyone but you.]";
 const BLOCK_PAIRS = 6;
 const BLOCK_TOKENS = 1_500;
 
