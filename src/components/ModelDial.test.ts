@@ -257,7 +257,7 @@ describe("ModelDial", () => {
   });
 
   it.each([
-    ["claude-opus-5-5", ["53.6", "54.0", "1.82"]],
+    ["claude-opus-5-5", ["51.8", "35.9", "3.46"]],
     ["unlisted-model", ["Unavailable", "Unavailable", "Unavailable"]],
   ])("exposes formatted stats without rolling digits for %s", async (model, values) => {
     media();
@@ -274,23 +274,24 @@ describe("ModelDial", () => {
     await mount();
     const cost = () => document.querySelector(".dial-cost");
     const shown = () => [spoken(cost()!.querySelector(".dial-odo")!), cost()!.querySelector(".unit")!.textContent];
-    expect(shown()).toEqual(["1.82", unit]);
+    expect(shown()).toEqual(["3.46", unit]);
     expect(cost()!.parentElement!.querySelector(".dial-src")!.textContent).toContain("$");
     await key("ArrowLeft");
-    expect(shown()).toEqual(["1.34", unit]);
+    expect(shown()).toEqual(["2.45", unit]);
     await key("ArrowLeft");
     await key("ArrowLeft");
-    expect(shown()).toEqual(["0.55", unit]);
+    expect(shown()).toEqual(["0.98", unit]);
     for (let i = 0; i < 4; i++) await key("ArrowRight");
-    expect(shown()).toEqual(["5.98", unit]);
+    expect(shown()).toEqual(["10.04", unit]);
   });
 
   it("keeps the price per 1M where an effort has no run cost", async () => {
     persistPreference("en");
     media();
-    await mount({ model: "gpt-6-luna" });
+    await mount({ model: "grok-4.7" });
     for (let i = 0; i < 4; i++) await key("ArrowLeft");
-    expect(effort()).toBe("low");
+    await key("ArrowRight");
+    expect(effort()).toBe("medium");
     expect(document.querySelector(".dial-cost .unit")!.textContent).toBe("/1M");
     expect(spoken(document.querySelector(".dial-cost .dial-odo")!)).not.toBe("0.00");
   });
@@ -1020,7 +1021,7 @@ describe("ModelDial ring", () => {
     await mount();
     await wait(50);
     expect(reads).toBe(0);
-    expect(turns(cap()).at(-1)?.at(-1)).toBe(53.6 * 3.6);
+    expect(turns(cap()).at(-1)?.at(-1)).toBe(51.8359958227294 * 3.6);
   });
 
   it("jumps the ring under reduced motion without reading the spring curve", async () => {
@@ -1039,7 +1040,7 @@ describe("ModelDial ring", () => {
     media();
     await mount();
     await wait(50);
-    const from = 53.6 * 3.6;
+    const from = 51.8359958227294 * 3.6;
     await key("ArrowDown");
     expect(reads).toBe(1);
     const first = turns(cap()).at(-1)!;

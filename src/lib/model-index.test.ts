@@ -97,7 +97,7 @@ describe("model index data", () => {
   });
 
   it("charts FrontierCode on coding, Rams Index on design and CyberBench on security", () => {
-    const want = { coding: ["aa-frontiercode", "1.1", /FrontierCode 1\.1/], design: ["rams-index", "0.6.1", /Rams Index.*CC BY 4\.0/], security: ["vals-cyberbench", "1.1", /CyberBench 1\.1/] } as const;
+    const want = { coding: ["aa-frontiercode", "2.0", /FrontierCode 2.0/], design: ["rams-index", "0.6.1", /Rams Index.*CC BY 4\.0/], security: ["vals-cyberbench", "1.1", /CyberBench 1\.1/] } as const;
     for (const [index, [benchmark, version, label]] of Object.entries(want)) {
       const rows = MODEL_INDEX_ENTRIES.filter((e) => e.index === index);
       expect(rows.length, index).toBeGreaterThan(0);
@@ -203,7 +203,7 @@ describe("sourced data", () => {
       expect(e.interval?.low).toBeLessThanOrEqual(e.score);
       expect(e.interval?.high).toBeGreaterThanOrEqual(e.score);
     }
-    expect(points.find((e) => e.model === "gpt-6.1-sol")).toMatchObject({ score: 92, cost: 0.15, interval: { low: 90.3, high: 93.8 } });
+    expect(points.find((e) => e.model === "gpt-6.1-sol")).toMatchObject({ score: 87.8, cost: 0.15, interval: { low: 84.6, high: 89.9 } });
   });
 
   it("retains the filled WebDev snapshot as inactive history", () => {
@@ -253,11 +253,11 @@ describe("sourced data", () => {
   it("charts Argon on the four AA indexes, Rams Index and the two Vals benchmarks", () => {
     const scored = MODEL_INDEX_ENTRIES.filter((e) => e.model === "gemini-4-argon" && e.index !== "cost");
     expect(scored.map((e) => [e.index, e.benchmark, e.effort, e.score, e.cost])).toEqual([
-      ["coding", "aa-frontiercode", "high", 43.4532, undefined],
-      ["general", "aa-gdpval", "high", 1623.99, 1.8192251097173668],
-      ["intelligence", "aa-intelligence-index", "high", 52.6, 1.990322379299008],
+      ["coding", "aa-frontiercode", "high", 25.7076262626263, undefined],
+      ["general", "aa-gdpval", "high", 1630.66, 3.64],
+      ["intelligence", "aa-intelligence-index", "high", 50.4121935905389, 9.946608711550533],
       ["agentic", "aa-terminal-bench", "high", 57.0707070707071, 6.780140181187823],
-      ["design", "rams-index", "default", 22.9, 0.149],
+      ["design", "rams-index", "default", 20.7, 0.149],
       ["security", "vals-cyberbench", "all", 77.857, 5.113798],
       ["legal", "vals-legal-research", "all", 54.808, 6.44908],
     ]);

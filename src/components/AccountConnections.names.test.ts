@@ -354,10 +354,9 @@ it("persists Connections order in Usage and brings Usage changes back", async ()
   const ids = accounts.map((account) => account.instanceId);
   const connectionOrder = () => [...host.querySelectorAll<HTMLElement>("[data-connection-account]")].map((node) => node.dataset.connectionAccount);
   const usageOrder = () => [...host.querySelectorAll<HTMLElement>('[data-usage-base="claude"] [data-account-row]')].map((node) => node.dataset.accountRow);
-  const move = async (scope: ParentNode | null, key: string) => {
-    const grip = scope?.querySelector<HTMLElement>("[data-usage-grip]");
-    expect(grip, "shared reorder grip").toBeTruthy();
-    await act(async () => grip!.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true })));
+  const move = async (node: Element | null, key: string) => {
+    expect(node, "shared reorder row").toBeTruthy();
+    await act(async () => node!.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true })));
   };
   await move(row(), "ArrowDown");
   const changed = [ids[1], ids[0], ids[2]];

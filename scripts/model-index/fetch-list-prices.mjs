@@ -55,8 +55,16 @@ function googlePrice(line, what, id) {
   return { now: Number(m[1]), until: m[2] && isoDate(m[2]), next: m[3] && Number(m[3]), from: m[4] && isoDate(m[4]) };
 }
 
+/** Google now serves the table as Markdoc source; this reduces it to the one-cell-per-line page text. */
+const flattenMarkdoc = (text) =>
+  text
+    .replace(/\*\[`([\w.-]+)`\]\([^)]*\)\*/g, "\n$1\n")
+    .replace(/\{%\s*tab title="(\w+)"\s*%\}/g, "\n$1\n")
+    .replace(/^[ \t]*\* /gm, "")
+    .replace(/\.\s*\n\s*(\$[\d.]+ starting)/g, ". $1");
+
 export function parseGoogle(html, names) {
-  const text = pageText(html);
+  const text = flattenMarkdoc(pageText(html));
   if (!text.includes("Gemini Developer API pricing")) throw new Unverifiable("Google pricing page heading not found");
   const prices = {};
   for (const id of names) {

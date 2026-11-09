@@ -108,7 +108,7 @@ const live = (node: Element) => !node.closest("[aria-hidden]");
 const visible = (engine = "claude") => [...section(engine)?.querySelectorAll("[data-account-row]") ?? []].filter(live).map((node) => node.getAttribute("data-account-row") ?? "");
 const viewed = (engine = "claude") => visible(engine).at(-1) ?? null;
 const column = (name: string, engine = "claude") => section(engine)?.querySelector(`[data-account-column="${name}"]`) ?? null;
-const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold]):not([data-usage-grip])") ?? []];
+const arrows = (engine = "claude") => [...section(engine)?.firstElementChild?.querySelectorAll<HTMLButtonElement>("button:not([data-engine-fold])") ?? []];
 const picker = (engine = "claude") => [...section(engine)?.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]') ?? []].find(live) ?? null;
 const fold = (engine = "claude") => section(engine)?.querySelector<HTMLButtonElement>("button[data-engine-fold]") ?? null;
 // The phrases sit apart by a CSS gap, not a space, so join them as they read.
@@ -999,7 +999,7 @@ describe("Usage desk", () => {
       ? [[2, true], [2, true], [0, false], [0, false]]
       : [[2, true], [0, false], [0, false], [0, false]]);
     for (const engine of engines) {
-      const box = section(engine)?.querySelector('[role="group"]');
+      const box = section(engine)?.querySelector('[role="group"]:not([data-engine-head])');
       const grid = box?.querySelector("[data-account-column]")?.parentElement ?? box;
       expect(grid?.classList.contains("grid-cols-2"), engine).toBe(!phone && (engine === "claude" || engine === "codex"));
       expect([...grid?.children ?? []].map((node) => node.getAttribute("data-account-column")), engine)

@@ -11,14 +11,13 @@ import { isTerminalSkin, useSkin } from "@/lib/skins";
 import type { UsageBoardAccount } from "@/lib/usage-board";
 import { useUsageBoard } from "@/lib/use-usage-board";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
+import { ordered, reorderable, useUsageDrag } from "@/lib/use-usage-drag";
 import { AccountNameEditor, type SavedAccountName } from "./AccountNameEditor";
 import { Fold } from "./Fold";
 import { useEngineSignIn } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
 import { ROW_BUTTON } from "./SettingsPrimitives";
 import { Tile } from "./UsageDesk";
-import { UsageGrip } from "./UsageAccounts";
 
 const LINE = "flex min-h-9 items-center [@media(pointer:coarse)]:min-h-11";
 const STRONG_BUTTON = cn(ROW_BUTTON, "text-ink");
@@ -75,7 +74,7 @@ export function SignInRow({ instance, mark, name, after, onUpdated }: { instance
   );
 }
 
-function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, grip }: {
+function ConnectionAccount({ account, label, named, revision, busy, disabled, signOut, reload, reorder }: {
   account: UsageAccount;
   label: string;
   named?: UsageBoardAccount;
@@ -84,7 +83,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   disabled: boolean;
   signOut: () => void;
   reload: () => Promise<void>;
-  grip: boolean;
+  reorder: boolean;
 }) {
   const { t } = useI18n();
   const phone = useIsPhone();
@@ -136,8 +135,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
   // Connected rows only: the sign-in row keeps its menu on its name row, so an overlay there would cover Sign In.
   const stacked = phone && name && !draining && !signInRow;
   return (
-    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} className="relative min-w-0">
-      {grip && <UsageGrip label={name?.name ?? account.displayName} />}
+    <div data-connection-account={account.instanceId} data-account-row={account.instanceId} {...(reorder && reorderable(t("usage.desk.reorder", { name: name?.name ?? account.displayName })))} className="relative min-w-0">
       {signInRow ? <>
         <SignInRow instance={account} mark={mark} onUpdated={() => void reload()} />
         {name && <ConnectionRow label={<>
@@ -218,7 +216,7 @@ export function AccountConnections({ accounts, reload }: { accounts: UsageAccoun
         const main = accounts.length > 1 && (account.accountMain ?? account.instanceId === base);
         const hasDestination = accounts.some((other) => other !== account && accountReady(other));
         return (
-          <ConnectionAccount key={account.instanceId} grip={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
+          <ConnectionAccount key={account.instanceId} reorder={accounts.length > 1} account={account} label={account.snapshot.account || (account.displayName === accounts[0]!.displayName ? t("connections.connected") : account.displayName)} busy={busy} disabled={Boolean(main && !hasDestination && !drain)}
             named={board?.engines.flatMap((engine) => engine.accounts).find((row) => row.id === account.instanceId)} revision={board?.revision ?? -1}
             reload={reload} signOut={() => void mutate(`/api/accounts/${encodeURIComponent(account.instanceId)}/sign-out`, drain ? { destinationId: drain.destinationId } : {}, main && !drain ? account.instanceId : undefined)} />
         );

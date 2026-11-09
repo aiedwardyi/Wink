@@ -11,7 +11,7 @@ import type { UsageBoard, UsageBoardAccount, UsageBoardEngine } from "@/lib/usag
 import { checkedMain, type UsageBoardState } from "@/lib/usage-board-client";
 import { useBackLayer } from "@/lib/use-back-layer";
 import { useIsPhone } from "@/lib/use-phone-swipe";
-import { ordered, readUsageOrder } from "@/lib/use-usage-drag";
+import { ordered, useUsageDrag } from "@/lib/use-usage-drag";
 import { useVisibleClock } from "@/lib/use-visible-clock";
 import { useStore } from "@/state/store";
 import { useAutoRefresh } from "@/lib/usage-auto-refresh";
@@ -93,7 +93,8 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
   const soon = viewed.windows.some((each) => each.resetsAt !== null && each.resetsAt > minute && each.resetsAt - minute < HOUR);
   const clock: Clock = { t, locale: localeTag(locale), now: useVisibleClock(soon) };
   const checked = checkedMain(state, engine.base);
-  const accountOrder = readUsageOrder(engine.base);
+  const drag = useUsageDrag([engine]);
+  const accountOrder = drag.orders[engine.base];
 
   const close = (focus = true) => {
     onClose();
@@ -179,7 +180,7 @@ export function UsageQuickView({ engine, account, board, state, anchor, onClose,
           <span data-engine-name="" className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{engineName(engine.engine)}</span>
           {closeButton}
         </div>}
-        <div data-quick-scroll="" className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
+        <div data-quick-scroll="" data-usage-engine={engine.engine} data-usage-base={engine.base} ref={drag.ref} onPointerDown={drag.onPointerDown} onKeyDown={drag.onKeyDown} className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 pb-3", tight && "pt-3", bare && "hidden")}>
           {SHOW_QUICK_HERO && <Hero key={engine.base} engine={engine} account={viewed} accounts={ordered(engine.accounts, accountOrder, (each) => each.id)} select={setViewedId} foldChart
             terminal={terminal} phone={phone} clock={clock} instances={store.instances} />}
           <AccountGroup label={engineName(engine.engine)} terminal={terminal}>
