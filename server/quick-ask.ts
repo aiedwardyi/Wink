@@ -97,7 +97,15 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   const current = store.bot(botId);
   if (!current || current.threadId !== threadId || !store.messagesFor(threadId).some((message) => message.id === ask.id)) return;
   if (result.route === "handoff" || !result.text) {
-    await deps.handoff(ask).catch((error) => console.warn(`[quick] handoff failed: ${error instanceof Error ? error.message : String(error)}`));
+    // The turn can end mid-steer (409); the second try takes the idle or queue path.
+    for (let tries = 0; tries < 2; tries++) {
+      try {
+        return await deps.handoff(ask);
+      } catch (error) {
+        console.warn(`[quick] handoff failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    store.patchMessage(threadId, ask.id, { quick: undefined });
     return;
   }
   const answer = store.appendMessage(threadId, { role: "bot", kind: "text", text: result.text, quick: { state: "answer", askId: ask.id } });

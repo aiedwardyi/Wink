@@ -165,6 +165,33 @@ describe("quick route", () => {
     expect(h.startTurn).toHaveBeenCalledWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
   });
 
+  it("retries a handoff whose turn ended mid-steer as an ordinary turn", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    h.steer.mockImplementationOnce(async () => {
+      h.store.setActivity(h.bot.id, "idle");
+      return true;
+    });
+    await h.settled();
+    const ask = h.rows().at(-1)!;
+    expect(ask.quick).toBeUndefined();
+    expect(h.startTurn).toHaveBeenCalledWith(h.bot.id, QUESTION, expect.objectContaining({ userMessage: expect.objectContaining({ id: ask.id }) }));
+  });
+
+  it("leaves a twice-failed handoff as a plain unanswered ask", async () => {
+    const h = harness({ result: { route: "handoff", ms: 3 } });
+    await h.send({ text: QUESTION });
+    h.steer.mockImplementationOnce(async () => {
+      h.store.setActivity(h.bot.id, "idle");
+      return true;
+    });
+    h.startTurn.mockRejectedValueOnce(Object.assign(new Error("busy"), { status: 409 }));
+    await h.settled();
+    expect(h.startTurn).toHaveBeenCalledTimes(1);
+    expect(h.rows().at(-1)).toMatchObject({ role: "user", text: QUESTION });
+    expect(h.rows().at(-1)?.quick).toBeUndefined();
+  });
+
   it.each([true, false])("steers the live note and marks it noted only when taken: %s", async (taken) => {
     const h = harness({ consumed: true, taken });
     await h.send({ text: QUESTION });
