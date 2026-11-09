@@ -252,6 +252,7 @@ export interface Bot {
   title: string;
   description: string;
   notifications: boolean;
+  createdAt?: number;
   color: MausColor;
   mascotExpression?: string | null;
   /** A legacy recolorable face or a fixed built-in pack icon. */
