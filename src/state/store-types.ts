@@ -95,6 +95,8 @@ export interface Message {
   };
   /** user messages sent into a running turn - the model saw it mid-turn */
   steered?: boolean;
+  /** Quick helper rows: an ask sent while the bot worked, its answer, or an ask handed to the bot. */
+  quick?: { state: "asked" | "answer" | "handoff" | "passed"; askId?: string; noted?: true };
   /** The engine replaced a longer mid-turn note with this short text. */
   summarized?: boolean;
   /** Client-only accepted send; replaced by the canonical transcript row. */
