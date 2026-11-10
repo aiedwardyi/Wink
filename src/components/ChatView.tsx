@@ -2,7 +2,7 @@ import { chatErrorText } from "@/lib/error-text";
 import { ErrorDetails } from "./ErrorDetails";
 import { Fold } from "./Fold";
 import { VerifyCard, VerifyWatchIcon } from "./VerifyCard";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
+import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -13,6 +13,7 @@ import {
   Crown,
   ListTree,
   Loader2,
+  Phone,
   Pin,
   RefreshCw,
   Search,
@@ -73,6 +74,8 @@ import { DeviceTag } from "./DeviceSwitcher";
 import { RenameTitle } from "./RenameTitle";
 import { MessageMenu, SelectionMenu, contextClickKind, endSelectMode, isTouchPrimary, type MessageMenuRequest } from "./MessageMenu";
 import { CallButton, CallOverlay } from "./CallView";
+import { CallCard } from "./CallCard";
+import { lazyView } from "@/lib/stale-build";
 import { cn } from "@/lib/cn";
 import { useFindCurrentId, useSearchFindSeed } from "@/lib/chat-find";
 import { useFocusMessage } from "@/lib/focus-message";
@@ -105,11 +108,16 @@ import { usageAccount } from "@/lib/accounts";
 import { isAskUserCard, pinnedQuestion } from "@/lib/open-question";
 import { isRinging } from "@/lib/routine-ring";
 import { activeRunForBot, routineThreadReturn, routineWorkingElsewhere } from "../../shared/working-thread";
+import { isVoiceLine } from "../../shared/live-call";
+import { callRows } from "@/lib/live-call/call-card";
 import { parsePaneNote, type PaneNote } from "../../shared/pane-note";
 import { NOTE_STATUS_KEY, noteText } from "@/lib/pane-note";
 import { shownState, waitingOnScreen, workerRuns, type WorkerRun } from "@/lib/worker-runs";
 import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { useWhatsNewAnchor, WhatsNewSlot } from "./WhatsNew";
+
+const LiveCallBar = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallBar })));
+const LiveCallBox = lazyView(() => import("./LiveCallBox").then((m) => ({ default: m.LiveCallBox })));
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -579,7 +587,7 @@ const ChatRun = memo(function ChatRun({ run, forceOpen, terminal, showActivities
 
 /** A stamped peer reply carries its own label; inference covers the rest. */
 export function stampedReplyComm(message: Message): Message["comm"] {
-  return message.role === "bot" && message.kind === "text" && isShownMessage(message) && message.text?.trim()
+  return message.role === "bot" && message.kind === "text" && !isVoiceLine(message) && isShownMessage(message) && message.text?.trim()
     ? message.comm
     : undefined;
 }
@@ -604,6 +612,7 @@ const MessagesList = memo(function MessagesList({
   onOpenTerminalPane,
   workers,
   livePanes,
+  onCall,
   hidden,
 }: {
   bot: Bot;
@@ -627,6 +636,7 @@ const MessagesList = memo(function MessagesList({
   onOpenTerminalPane?: (sessionId: string) => void;
   workers: ShownRun[];
   livePanes: Set<string> | null;
+  onCall: boolean;
   hidden: boolean;
 }) {
   const { t } = useI18n();
@@ -703,6 +713,7 @@ const MessagesList = memo(function MessagesList({
     return answers;
   }, [transcript]);
   const bubble = bubbleBot(bot);
+  const calls = useMemo(() => callRows(transcript, onCall), [transcript, onCall]);
   // A search hit inside a folded run has to open it: the fold keeps the
   // row out of the DOM, and there is nothing for the scroll to land on.
   const focus = state.focusMessage;
@@ -758,7 +769,9 @@ const MessagesList = memo(function MessagesList({
           );
         }
         const m = item.message;
-        const row = (() => {
+        const callId = m.call?.id;
+        const callStart = callId && !items.some((x, j) => j < i && x.kind === "message" && x.message.call?.id === callId);
+        const row = isVoiceLine(m) ? null : (() => {
           switch (m.kind) {
             case "compaction":
               return <ContextCompactionDivider message={m} />;
@@ -856,12 +869,13 @@ const MessagesList = memo(function MessagesList({
               );
           }
         })();
-        if (!row) return null;
+        if (!row && !callStart) return null;
         const replyComm = stampedReplyComm(m) ?? peerReplies.get(m.id);
-        const key = m.role === "bot" && m.kind === "text" ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
+        const key = m.role === "bot" && m.kind === "text" && !isVoiceLine(m) ? replySlot(bot.threadId, m, transcript) : m.sendId ?? m.id;
         return (
-          <div key={key} className="contents" data-mid={m.id} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
+          <div key={key} className="contents" data-mid={row ? m.id : undefined} data-find-for={item.notices?.map((notice) => notice.message.id).join(" ") || undefined} {...logLine(skin === "logfile", m.at, [m])}>
             {newDay && <DaySeparator at={m.at} />}
+            {callStart && <CallCard rows={calls.rows.get(callId) ?? [m]} live={calls.live === callId} botName={bot.name} forceOpen={(calls.rows.get(callId) ?? [m]).some((call) => call.id === focusedId || call.id === findCurrent)} />}
             {/* text: undefined, or the chip would draw this row's own text under its label */}
             {replyComm && <ActivityChip bot={bot} message={{ ...m, kind: "activity", text: undefined, comm: replyComm, tool: { name: t("chat.replyToBot", { name: replyComm.withName }) } }} />}
             {row}
@@ -951,6 +965,10 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const callAvailable =
     capabilitiesReady && capabilities.dictation.available && Boolean(window.ogb?.speechStart);
+  const [liveCall, setLiveCall] = useState<{ botId: string; ctx: AudioContext } | null>(null);
+  const endLiveCall = useCallback(() => setLiveCall(null), []);
+  const onLiveCall = liveCall?.botId === bot.id;
+  const liveCallLabel = onLiveCall ? `Hang up on ${bot.name}` : `Call ${bot.name}`;
   const elsewhere = routineWorkingElsewhere(
     bot.threadId,
     activeRunForBot(state.routineRuns, bot.id),
@@ -1109,7 +1127,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   const sendsNext = composerIsBusy(Boolean(bot.busy), accepted);
 
   const lastBotTextId = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text" && isShownMessage(m) && m.quick?.state !== "answer")?.id,
+    () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text" && !isVoiceLine(m) && isShownMessage(m) && m.quick?.state !== "answer")?.id,
     [messages],
   );
 
@@ -1236,7 +1254,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
   for (let i = listed.length - 1; liveTail && !tail && i >= 0; i--) {
     if (messageVisible(listed[i], { showToolCalls, showActivities, transcript: messages })) tail = listed[i];
   }
-  const tailSlot = tail?.role === "bot" && tail.kind === "text" ? replySlot(bot.threadId, tail, shown) : null;
+  const tailSlot = tail?.role === "bot" && tail.kind === "text" && !isVoiceLine(tail) ? replySlot(bot.threadId, tail, shown) : null;
   const docked = useReplyDock(listedStreaming && waiting ? tailSlot : null, tailSlot, waiting);
   const dockSlot = docked?.slot;
   const dockLive = docked?.live ?? false;
@@ -1468,7 +1486,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
     <MediaViewerProvider threadId={bot.threadId} messages={shown}>
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       {/* Call mode covers the thread while the bot is on the line */}
-      <CallOverlay bot={bot} />
+      {!onLiveCall && <CallOverlay bot={bot} />}
       {/* Header */}
       <div
         className={cn(
@@ -1558,6 +1576,25 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           </button>
           )}
 
+          {/* Before the chip: the phone header fits the chip as its last control. */}
+          {!window.ogb && (
+            <button
+              type="button"
+              aria-pressed={onLiveCall}
+              aria-label={liveCallLabel}
+              title={liveCallLabel}
+              // The audio context is born in the tap: phones only let it play from one.
+              onClick={() => {
+                if (onLiveCall) return setLiveCall(null);
+                const ctx = new AudioContext();
+                void ctx.resume();
+                setLiveCall({ botId: bot.id, ctx });
+              }}
+              className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
+            >
+              <Phone size={18} />
+            </button>
+          )}
           <ModelPicker bot={bot} className="max-md:min-w-0" switchControl={modelSwitch.pickerRef} onSwitching={modelSwitch.onSwitching} onRerunSettled={modelSwitch.onRerunSettled} />
           {callAvailable && <CallButton bot={bot} />}
         </div>
@@ -1752,6 +1789,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
             onOpenTerminalPane={onOpenTerminalPane}
             workers={rowWorkers}
             livePanes={livePanes}
+            onCall={onLiveCall}
             hidden={hidden}
           />
           {!whatsNewAnchor && <WhatsNewSlot hidden={hidden} last={lastMessage?.id} />}
@@ -1859,6 +1897,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           selected one. ArrowUp-to-edit stays gated on busy because editing
           rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className={cn("relative z-[2] w-full shrink-0", CHAT_COLUMN_CLASS)}>
+        {onLiveCall && <Suspense fallback={null}><LiveCallBar bot={bot} ctx={liveCall.ctx} onEnd={endLiveCall} /></Suspense>}
         {engine && needsSignIn(engine) && !(lastMessage?.tool?.setup || lastMessage?.tool?.signIn) && (
           <div className="px-5 pb-2"><SignInCard instance={engine} help={t("chat.signInHelp", { name: bot.name })} /></div>
         )}
@@ -1891,6 +1930,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onConsumeReply={consumeReply}
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
+          call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>

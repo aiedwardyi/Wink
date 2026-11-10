@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
+import { isVoiceLine } from "../shared/live-call.ts";
 import { _resetCommsRoots, adoptHumanRoot, callerSnapshot, rootForStart, type RootStart } from "./comms-root.ts";
 import { Store } from "./store.ts";
 import { _resetSteerQueue, foldQueuedSends, queueMark, queueSteeredMessage } from "./steer-queue.ts";
@@ -33,10 +34,10 @@ it("adopts direct human steers without adopting control or imported messages", (
   turnRegistry.started("direct-turn", threadId);
   const captured = callerSnapshot(botId, threadId);
   const prelude = source.text.split("store.onChange((change) => {")[1]!.split("  switch (change.type) {")[0]!;
-  const onChange = new Function("change", "store", "limitWaits", "console", "adoptHumanRoot", prelude);
+  const onChange = new Function("change", "store", "limitWaits", "console", "adoptHumanRoot", "isVoiceLine", prelude);
   const error = vi.fn();
   const message = { id: "steered", sendId: "direct-send", role: "user", kind: "text", steered: true };
-  const change = (patch = {}, imported = false) => onChange({ type: "message", threadId, message: { ...message, ...patch }, imported }, { botByThread: () => null }, {}, { error }, adoptHumanRoot);
+  const change = (patch = {}, imported = false) => onChange({ type: "message", threadId, message: { ...message, ...patch }, imported }, { botByThread: () => null }, {}, { error }, adoptHumanRoot, isVoiceLine);
   change();
   const adopted = callerSnapshot(botId, threadId)?.rootId;
   expect(adopted).not.toBe(rootId);

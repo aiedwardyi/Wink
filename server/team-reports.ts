@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { isVoiceLine } from "../shared/live-call.ts";
 import type { PhoneRelayStatus } from "../shared/relay-protocol.ts";
 import { REPORT_ID, teamReportSchema, type ReportReceipt, type TeamReport } from "../shared/team-report.ts";
 import { writeFileAtomic } from "./atomic.ts";
@@ -135,8 +136,8 @@ export class TeamReports {
     writeFileAtomic(contextFile, JSON.stringify({ requestId: report.requestMessageId, reportId: report.id }), { mode: 0o600 });
     if (body.action === "collect" || body.action === "draft") {
       return { id: report.id, state: "draft", sent: false, checklist: REPORT_CHECKLIST,
-        earlierReferences: path.slice(0, path.findIndex((message) => message.id === report.selectedMessageId)).filter((message) => message.role === "user" && message.kind === "text" && !message.comm).slice(-8).map((message) => ({ id: message.id, text: reportText(message.text ?? "").slice(0, 360) })),
-        recentAnswers: path.slice(0, path.indexOf(request)).filter((message) => message.role === "bot" && message.kind === "text" && !message.comm).slice(-8).map((message) => ({ id: message.id, text: reportText(message.text ?? "").slice(0, 360) })),
+        earlierReferences: path.slice(0, path.findIndex((message) => message.id === report.selectedMessageId)).filter((message) => message.role === "user" && message.kind === "text" && !message.comm && !isVoiceLine(message)).slice(-8).map((message) => ({ id: message.id, text: reportText(message.text ?? "").slice(0, 360) })),
+        recentAnswers: path.slice(0, path.indexOf(request)).filter((message) => message.role === "bot" && message.kind === "text" && !message.comm && !isVoiceLine(message)).slice(-8).map((message) => ({ id: message.id, text: reportText(message.text ?? "").slice(0, 360) })),
         report: { ...report, images: report.images.map(({ base64, ...image }) => ({ ...image, bytes: Buffer.from(base64, "base64").length })) } };
     }
     if (!teamReportPrompt(o.status(), o.owner)) return previous?.receipt

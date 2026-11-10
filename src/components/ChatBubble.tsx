@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, RefreshCw, Webhook } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, Copy, MessageSquareReply, Pencil, Phone, RefreshCw, Webhook } from "lucide-react";
 import { useStoreDispatch, formatDateTime, formatTime, type Bot, type Message } from "@/state/store";
 import { DockedPresence, MessageBoundary, useDockFade, type ReplyDock } from "./TurnPresence";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -561,7 +561,14 @@ const Bubble = memo(function Bubble({
           onPick={(option) => dispatch({ type: "send", botId, text: option })}
         />
       )}
-      <TimestampLabel at={message.at} hidden={streaming} />
+      {message.call ? (
+        <div className="flex items-center gap-1">
+          <Phone size={11} className="mt-0.5 text-ink-secondary/70" />
+          <TimestampLabel at={message.at} hidden={streaming} />
+        </div>
+      ) : (
+        <TimestampLabel at={message.at} hidden={streaming} />
+      )}
       {(sendsNext || sendsAfterSync) && (
         <div className="mt-1 flex items-center gap-1 pr-1 text-[11px] text-ink-secondary/70">
           <Clock size={11} aria-hidden="true" />

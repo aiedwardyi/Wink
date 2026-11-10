@@ -19,6 +19,7 @@
 // rather than listening to nothing.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Loader2, Phone, PhoneOff, X } from "lucide-react";
+import { isVoiceLine } from "../../shared/live-call";
 
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { currentCall, deferCallCleanup, endCall, startCall, useOnCall } from "@/lib/call";
@@ -32,12 +33,7 @@ import { cn } from "@/lib/cn";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { usePresence } from "@/lib/use-presence";
 import { useBackLayer } from "@/lib/use-back-layer";
-
-/** Spoken answers to a permission card. Anything else is read as a reply
- * to the bot, not as consent — an approval must never be granted by a
- * sentence that merely contained the word "sure". */
-const YES = /^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|allow|approve|approved|fine|please do)\b/i;
-const NO = /^(no|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
+import { consentOf } from "@/lib/live-call/consent";
 
 type Phase = "listening" | "sending" | "working" | "speaking";
 const CALL_ENDPOINT_MS = 850;
@@ -322,8 +318,9 @@ function Call({ bot }: { bot: Bot }) {
           hush();
           return;
         }
-        if (YES.test(said) || NO.test(said)) {
-          const allow = YES.test(said);
+        const consent = consentOf(said);
+        if (consent) {
+          const allow = consent === "yes";
           // Keep this request claimed until the server's durable card patch
           // arrives. Clearing it here lets a render in that network gap read
           // and submit the same approval again.
@@ -454,7 +451,7 @@ function Call({ bot }: { bot: Bot }) {
     if (!fresh.length) return;
     // only the newest of each kind matters: a burst of tool chips should
     // not queue thirty seconds of narration behind the actual answer
-    const reply = [...fresh].reverse().find((m) => m.role === "bot" && m.kind === "text" && m.text?.trim());
+    const reply = [...fresh].reverse().find((m) => m.role === "bot" && m.kind === "text" && !isVoiceLine(m) && m.text?.trim());
     const chip = [...fresh].reverse().find((m) => m.kind === "activity" && m.tool?.spoken);
     for (const m of fresh) spokenIds.current.add(m.id);
 
