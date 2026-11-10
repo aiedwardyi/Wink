@@ -16,6 +16,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 import { ensureDirs, PROVIDER_CREDENTIAL_ENV, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
 import type { PrepareTurn, ProviderDriver, ProviderInstance, SendTurnInput } from "../../contracts.ts";
+import { createQuietEnd } from "../../quiet-end.ts";
+import type { Message } from "../../store.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { createAcpDriver, probeCliVersion, skipSubscriptionAuthForLocalInject, wslSessionPaths, type AcpSupport } from "./core.ts";
 import { toWslPath } from "../../env-path.ts";
@@ -2147,6 +2149,23 @@ describe("ACP turns (fake CLI)", () => {
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
     expect(recorder.events.filter((e) => e.type === "runtime.error")).toHaveLength(0);
+  });
+
+  it.each([
+    ["ends at the first no_reply_needed result as a clean finish", [], 1],
+    ["runs on past no_reply_needed when the user typed into the turn", [{ id: "m1", role: "user", kind: "text", text: "wake", at: Number.MAX_SAFE_INTEGER }], 2],
+  ] as const)("%s", async (_name, typed, calls) => {
+    await create(GrokAgentDriver, "quiet-loop");
+    instance.adapter.onEvent(createQuietEnd(() => typed as unknown as Message[], () => instance.adapter));
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "wake" });
+    const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    expect(done).toMatchObject({ ok: true, stopReason: null });
+    expect(recorder.events.filter((e) => e.type === "item.started" && e.title === "no_reply_needed")).toHaveLength(calls);
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
+    if (calls === 1) {
+      const next = await instance.adapter.sendTurn({ threadId: "t-quiet-end", text: "hello" });
+      await expect(recorder.until((e) => e.type === "turn.completed" && e.turnId === next.turnId)).resolves.toMatchObject({ ok: true, stopReason: null });
+    }
   });
 
   it("an exit before result becomes runtime.error + failed turn", async () => {
