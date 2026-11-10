@@ -5,6 +5,7 @@
 // an http.Server that never listens: no new port is opened.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { isIP } from "node:net";
 import { Duplex } from "node:stream";
 import { TLSSocket, createSecureContext, type SecureContext } from "node:tls";
@@ -14,6 +15,10 @@ import { ALPN_ACME } from "../../shared/relay-protocol.ts";
 import { parseClientHello, type ClientHelloInfo } from "../../shared/tls-client-hello.ts";
 import { realClock, type Cancel, type Clock } from "./clock.ts";
 import { markRelaySocket } from "./via.ts";
+
+const { HTTPParser } = createRequire(import.meta.url)("node:_http_common") as {
+  HTTPParser: { kOnMessageBegin: number };
+};
 
 export const ALPN_HTTP1 = "http/1.1";
 export const PEEK_TIMEOUT_MS = 10_000;
@@ -287,6 +292,7 @@ export class RelayIngress {
     let stopHeaders: Cancel | null = null;
     let stopRequest: Cancel | null = null;
     let stopKeepAlive: Cancel | null = null;
+    let generation = 0;
     const clear = () => {
       stopHeaders?.();
       stopRequest?.();
@@ -300,17 +306,20 @@ export class RelayIngress {
       stopHeaders = deadline(server.headersTimeout);
       stopRequest = deadline(server.requestTimeout);
     }
-    function waiting(): void {
+    function waiting(current: number): void {
+      if (current !== generation) return;
       clear();
       if (socket.destroyed) return;
       stopKeepAlive = deadline(KEEP_ALIVE_TIMEOUT_MS);
     }
-    // Register after HTTP takes ownership so Node exposes data before parsing it.
-    socket.prependListener("data", () => {
-      if (stopKeepAlive) requesting();
-    });
+    // Native message starts include partial headers buffered behind another request.
+    const parser = (socket as TLSSocket & { parser: Record<number, (() => void) | null> }).parser;
+    parser[HTTPParser.kOnMessageBegin] = () => {
+      generation++;
+      if (generation > 1) requesting();
+    };
     this.onRequest.set(socket, (req, res) => {
-      if (stopKeepAlive) requesting();
+      const current = generation;
       release();
       stopHeaders?.();
       stopHeaders = null;
@@ -331,8 +340,8 @@ export class RelayIngress {
         });
       }
       // Handlers run first; one that already ended its response starts the wait now.
-      if (res.writableEnded) waiting();
-      else res.once("finish", waiting);
+      if (res.writableEnded) waiting(current);
+      else res.once("finish", () => waiting(current));
     });
     socket.once("close", clear);
     requesting();

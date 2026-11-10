@@ -280,6 +280,48 @@ describe("relay ingress", () => {
     tls.destroy();
   });
 
+  it("keeps the headers deadline for a buffered pipelined request", async () => {
+    const { ingress, clock } = setup();
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    tls.write(`GET /first HTTP/1.1\r\nhost: ${HOST}\r\n\r\nGET /slow HTTP/1.1\r\nhost: ${HOST}\r\n`);
+    await once(tls, "data");
+    clock.advance(59_999);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    clock.advance(1);
+    expect(await closesSoon(pcEnd)).toBe(true);
+    tls.destroy();
+  });
+
+  it("does not arm an idle wait while a pipelined event stream is active", async () => {
+    const clock = new FakeClock();
+    let first: ServerResponse;
+    const ingress = new RelayIngress({
+      host: HOST,
+      clock,
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        if (req.url === "/first") {
+          first = res;
+          return;
+        }
+        first.end("ok");
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write("data: hello\n\n");
+      },
+    });
+    ingress.setCertificate(certA.keyPem, certA.certPem);
+    open.push(ingress);
+    const { pcEnd, tls } = phonePipe();
+    ingress.accept(pcEnd, Buffer.alloc(0), "203.0.113.9");
+    await once(tls, "secureConnect");
+    tls.write(`GET /first HTTP/1.1\r\nhost: ${HOST}\r\n\r\nGET /api/events HTTP/1.1\r\nhost: ${HOST}\r\n\r\n`);
+    await once(tls, "data");
+    clock.advance(311_000);
+    expect(await closesSoon(pcEnd)).toBe(false);
+    tls.destroy();
+  });
+
   /** Keeps event responses open without reading the request. */
   async function streaming(clock: FakeClock) {
     const ingress = new RelayIngress({
