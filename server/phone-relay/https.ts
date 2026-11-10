@@ -5,6 +5,7 @@
 import type { OutgoingHttpHeaders } from "node:http";
 import { request } from "node:https";
 import type { LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 
 export interface HttpsDeps {
   /** Extra trust roots; production leaves this unset and uses the system store. */
@@ -17,7 +18,8 @@ export interface HttpsDeps {
 export interface HttpsRequest {
   method: "GET" | "POST";
   url: string;
-  body?: string;
+  /** A stream goes out chunked unless `headers` names its length. */
+  body?: string | Buffer | Readable;
   contentType?: string;
   headers?: Record<string, string>;
   timeoutMs: number;
@@ -59,7 +61,7 @@ function once(url: URL, req: HttpsRequest, deps: HttpsDeps): Promise<HttpsRespon
     const headers: OutgoingHttpHeaders = { accept: "application/json", ...req.headers };
     if (req.body !== undefined) {
       headers["content-type"] = req.contentType ?? "application/json";
-      headers["content-length"] = String(Buffer.byteLength(req.body));
+      if (!(req.body instanceof Readable)) headers["content-length"] = String(Buffer.byteLength(req.body));
     }
     const client = request(
       {
@@ -105,6 +107,8 @@ function once(url: URL, req: HttpsRequest, deps: HttpsDeps): Promise<HttpsRespon
       reject(error instanceof HttpsError ? error : new HttpsError(error.message));
     }
     client.on("error", fail);
-    client.end(req.body);
+    if (!(req.body instanceof Readable)) return void client.end(req.body);
+    req.body.on("error", (error) => client.destroy(new HttpsError(error.message)));
+    req.body.pipe(client);
   });
 }

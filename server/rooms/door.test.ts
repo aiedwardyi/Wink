@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { Agent, createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
@@ -77,7 +78,7 @@ let clock = Date.now();
 let relayPort = 0;
 let localPort = 0;
 
-function call(path: string, init: { method?: string; headers?: Record<string, string | undefined>; body?: string; key?: string; local?: boolean; agent?: Agent } = {}): Promise<Reply> {
+function call(path: string, init: { method?: string; headers?: Record<string, string | undefined>; body?: string | Buffer; key?: string; local?: boolean; agent?: Agent } = {}): Promise<Reply> {
   const method = init.method ?? "GET";
   const headers: Record<string, string> = init.local ? { host: "127.0.0.1" } : { host: HOST, ...(method === "POST" ? { origin: ORIGIN } : {}) };
   if (init.key) headers.authorization = `Bearer ${init.key}`;
@@ -736,6 +737,68 @@ describe("send", () => {
     expect(await post(path, { text: "<attached-file>x" }, { key })).toMatchObject({ status: 400, body: { error: "team rooms don't take attachments" } });
     expect((await post(path, { text: "y".repeat(5000) }, { key })).body.entry.text).toHaveLength(4000);
     expect(recentRoomEntries(group.hosted.roomId, 5)).toHaveLength(1);
+  });
+});
+
+describe("files", () => {
+  const upload = (roomId: string, key: string, body: string | Buffer, name = "notes.txt") => call(`/room/v1/rooms/${roomId}/files?uploadId=${randomBytes(12).toString("base64url")}&name=${name}`, { method: "POST", key, body });
+
+  it("open only to current members of that room, before any read", async () => {
+    const a = peopleRoom("A");
+    const b = peopleRoom("B");
+    const mina = await joined(a, "Mina");
+    const pat = await joined(a, "Pat");
+    const joe = await joined(b, "Joe");
+    const up = await upload(a.hosted.roomId, mina.key, "hello team");
+    expect(up).toMatchObject({ status: 200, body: { file: { name: "notes.txt", type: "text/plain", bytes: 10 } } });
+    const path = `/room/v1/rooms/${a.hosted.roomId}/files/${up.body.file.id}`;
+    expect(await call(path, { key: pat.key })).toMatchObject({
+      status: 200,
+      body: "hello team",
+      headers: { "content-type": "application/octet-stream", "content-disposition": expect.stringMatching(/^attachment;/), "x-content-type-options": "nosniff" },
+    });
+    expect((await call(`${path}/preview`, { key: pat.key })).status).toBe(404);
+    expect(await call(path, { key: joe.key })).toMatchObject({ status: 404, body: { error: "not found" } });
+    expect(await call(`/room/v1/rooms/${b.hosted.roomId}/files/${up.body.file.id}`, { key: joe.key })).toMatchObject({ status: 404, body: { error: "not found" } });
+    expect(await call(path)).toMatchObject({ status: 401, body: { error: "unauthorized" } });
+    for (const method of ["HEAD", "PUT", "DELETE", "POST"]) expect((await call(path, { method, key: mina.key, headers: { origin: ORIGIN } })).status, method).toBe(404);
+    expect((await call(`/room/v1/rooms/${a.hosted.roomId}/files`, { key: mina.key })).status).toBe(404);
+    expect((await upload(b.hosted.roomId, mina.key, "wrong room")).status).toBe(404);
+    removeRoomPerson(a.hosted.roomId, mina.personId);
+    expect(await call(path, { key: mina.key })).toMatchObject({ status: 401, body: { error: "unauthorized" } });
+    expect((await upload(a.hosted.roomId, mina.key, "after remove")).status).toBe(401);
+    revokeGuestKeys(a.hosted.roomId, pat.personId);
+    expect((await call(path, { key: pat.key })).status).toBe(401);
+    flag = false;
+    expect((await call(path, { key: joe.key })).status).toBe(404);
+  });
+
+  it("ride on a send to every reader; someone else's file, an empty line and a reused sendId are refused", async () => {
+    const group = peopleRoom();
+    const roomId = group.hosted.roomId;
+    const mina = await joined(group, "Mina");
+    const pat = await joined(group, "Pat");
+    const mine = await upload(roomId, mina.key, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]), "cat.png");
+    const theirs = await upload(roomId, pat.key, "pat's notes");
+    expect([mine.status, theirs.status]).toEqual([200, 200]);
+    expect(mine.body.file).toMatchObject({ type: "image/png", bytes: 16 });
+    const stream = await openStream(roomId, pat.key, 0);
+    const path = `/room/v1/rooms/${roomId}/send`;
+    const sendId = "send-with-a-file-0001";
+    const sent = await post(path, { text: "", fileIds: [mine.body.file.id], sendId }, { key: mina.key });
+    expect(sent).toMatchObject({ status: 200, body: { entry: { text: "", files: [mine.body.file] } } });
+    await stream.until((frames) => frames.some((frame) => frame.kind === "entry" && frame.entry.files?.[0]?.id === mine.body.file.id));
+    expect((await post(path, { text: "", fileIds: [mine.body.file.id], sendId }, { key: mina.key })).body).toEqual(sent.body);
+    expect(await post(path, { text: "", sendId }, { key: mina.key })).toMatchObject({ status: 409, body: { error: "sendId was used for another message" } });
+    expect(await post(path, { text: "look", fileIds: [theirs.body.file.id] }, { key: mina.key })).toMatchObject({ status: 404, body: { error: "no such file in this room" } });
+    expect(await post(path, { text: " ", fileIds: [] }, { key: mina.key })).toMatchObject({ status: 400, body: { error: "message is empty" } });
+    expect(await post(path, { text: "x", fileIds: "nope" }, { key: mina.key })).toMatchObject({ status: 400, body: { error: "bad request" } });
+    expect(await post(path, { text: "x", fileIds: Array.from({ length: 11 }, () => mine.body.file.id) }, { key: mina.key })).toMatchObject({ status: 400 });
+    expect(recentRoomEntries(roomId, 5).map((entry) => entry.files?.map((file) => file.id))).toEqual([[mine.body.file.id]]);
+    expect(store.messagesFor(group.threadId).at(-1)).toMatchObject({ roomFiles: [mine.body.file] });
+    const preview = await call(`/room/v1/rooms/${roomId}/files/${mine.body.file.id}/preview`, { key: pat.key });
+    expect(preview.headers).toMatchObject({ "content-type": "image/png", "content-disposition": expect.stringMatching(/^inline;/), "x-content-type-options": "nosniff" });
+    await shut(stream);
   });
 });
 

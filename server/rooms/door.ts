@@ -21,6 +21,7 @@ import {
   writeFrame,
   type DoorState,
 } from "./door-streams.ts";
+import { FILE_PATH, fileAction, fileIdsOf, fileRoute, sameFiles } from "./file-routes.ts";
 import { guestByKey, inviteRoomId, joinRoom, removeGuest, type JoinResult } from "./invites.ts";
 import { peopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
@@ -32,7 +33,7 @@ const SNAPSHOT_ENTRIES = 200;
 const REPLAY_ENTRIES = 1_000;
 const MAX_STREAMS = 2;
 const ROUTE = /^\/room\/v1\/rooms\/([\w-]{1,64})\/(snapshot|stream|send|leave|asks\/[\w-]{1,64}\/cancel)$/;
-const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", cancel: "POST" };
+const METHODS: Record<string, string> = { snapshot: "GET", stream: "GET", send: "POST", leave: "POST", cancel: "POST", upload: "POST", download: "GET", preview: "GET" };
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const JOIN_STATUS = {
   busy: 429,
@@ -235,7 +236,8 @@ async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: strin
   const fields = record(body.value);
   const text = fields?.text;
   const replyToId = fields?.replyToId;
-  if (typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
+  const fileIds = fileIdsOf(fields?.fileIds);
+  if (typeof text !== "string" || !fileIds || (replyToId !== undefined && typeof replyToId !== "string")) return send(res, 400, { error: "bad request" });
   if (replyToId !== undefined && !/^[\w-]{1,64}$/.test(replyToId)) return send(res, 404, { error: "no such message in this room" });
   let sendId: string | undefined;
   try {
@@ -247,10 +249,12 @@ async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: strin
     const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === person.id) : undefined;
     if (earlier) {
       const entry = earlier.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : null;
-      if (!entry || entry.text !== committedRoomText("person", text) || entry.replyToId !== replyToId) return send(res, 409, { error: "sendId was used for another message" });
+      if (!entry || entry.text !== committedRoomText("person", text) || entry.replyToId !== replyToId || !sameFiles((entry.files ?? []).map((file) => file.id), fileIds)) {
+        return send(res, 409, { error: "sendId was used for another message" });
+      }
       return send(res, 200, { entry: doorEntry(entry) });
     }
-    const { entry } = hostedSend(group, { kind: "person", id: person.id }, text, replyToId, sendId);
+    const { entry } = hostedSend(group, { kind: "person", id: person.id }, text, replyToId, sendId, fileIds);
     send(res, 200, { entry: doorEntry(entry) });
   } catch (error) {
     const status = (error as { status?: number }).status;
@@ -272,8 +276,9 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const url = new URL(req.url ?? "/", "https://relay.invalid");
   const method = req.method ?? "GET";
   if (url.pathname === "/room/v1/join") return method === "POST" ? join(req, res, relay.host) : notFound(res);
-  const route = ROUTE.exec(url.pathname);
-  const action = route?.[2]?.startsWith("asks/") ? "cancel" : route?.[2];
+  const file = url.pathname.startsWith("/room/v1/") ? FILE_PATH.exec(url.pathname.slice("/room/v1".length)) : null;
+  const route = file ?? ROUTE.exec(url.pathname);
+  const action = file ? fileAction(file) : route?.[2]?.startsWith("asks/") ? "cancel" : route?.[2];
   if (!route || !action || method !== (METHODS[action] ?? "POST")) return notFound(res);
   const guest = guestFor(req, res, relay.peer);
   if (!guest) return;
@@ -281,6 +286,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   const group = doorGroup(guest.roomId);
   if (!group) return notFound(res);
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
+  if (file) return fileRoute(file, req, res, url, guest.roomId, guest.person.id, () => guestByKey(bearerOf(req) ?? "")?.person.id === guest.person.id && doorGroup(guest.roomId) !== null);
   if (action === "snapshot") return snapshot(res, group, guest.person);
   if (action === "stream") return stream(res, url, group, guest.person);
   if (action === "send") return sendLine(req, res, guest.roomId, guest.person);

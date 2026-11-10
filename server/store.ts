@@ -197,6 +197,7 @@ export interface Message {
   /** Team room rows: who said it, and the room log entry it mirrors. */
   author?: import("./rooms/db.ts").RoomAuthor;
   roomEntryId?: string;
+  roomFiles?: import("./rooms/db.ts").RoomFile[];
   quiet?: true;
   snagIds?: string[];
   reportIds?: string[];

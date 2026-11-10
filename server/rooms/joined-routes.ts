@@ -38,5 +38,5 @@ export async function joinedRoute(
   if (method !== "POST") return notFound;
   if (action === "leave") return reply(await client.leave(roomId), "room");
   const fields = await body();
-  return reply(await client.send(roomId, field(fields, "text"), field(fields, "replyToId"), field(fields, "sendId")), "entry");
+  return reply(await client.send(roomId, field(fields, "text"), field(fields, "replyToId"), field(fields, "sendId"), field(fields, "fileIds")), "entry");
 }

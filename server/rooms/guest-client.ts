@@ -2,17 +2,20 @@
 // with a pasted code, keeps joined.db in step with the door's stream, sends
 // and leaves. Speaks the frozen door protocol only; no outbox.
 import { randomBytes } from "node:crypto";
-import type { ClientRequest } from "node:http";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import { request } from "node:https";
+import type { Readable } from "node:stream";
 import { z } from "zod";
 
 import { labelFromHost } from "../../shared/relay-protocol.ts";
+import { DOCUMENT_MAX_BYTES } from "../attachments.ts";
 import { HttpsError, httpsRequest, type HttpsDeps } from "../phone-relay/https.ts";
 import {
   addJoinedEntries,
   endJoined,
   joinedCursor,
   joinedEntries,
+  joinedFile,
   joinedKey,
   joinedRoom,
   joinedRooms,
@@ -20,9 +23,11 @@ import {
   saveJoined,
   setJoinedState,
   type JoinedEntry,
+  type JoinedFile,
   type JoinedRoom,
   type JoinedState,
 } from "./joined.ts";
+import { cachedJoinedFile, keepJoinedFile } from "./joined-files.ts";
 
 const CODE = /^wkr1:([a-z0-9.-]{1,253}):([\w-]{1,64})\.(wki_[A-Za-z0-9_-]{43})$/;
 const SEND_ID = /^[A-Za-z0-9_-]{16,80}$/;
@@ -32,10 +37,19 @@ const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
 const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
+const UPLOAD_MS = 10 * 60_000;
+const MAX_FILES = 10;
 
 const id = z.string().regex(/^[\w-]{1,64}$/);
 const name = z.string().max(200);
 const personSchema = z.object({ id, name });
+const fileSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
+  name: z.string().max(200),
+  type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip", "application/x-ole-storage", "text/plain"]),
+  bytes: z.number().int().positive().max(DOCUMENT_MAX_BYTES),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
 const entrySchema = z.object({
   seq: z.number().int().positive(),
   id,
@@ -43,6 +57,7 @@ const entrySchema = z.object({
   author: z.object({ kind: z.enum(["host", "person"]), id, name }),
   text: z.string().max(20_000),
   replyToId: id.optional(),
+  files: z.array(fileSchema).max(MAX_FILES).optional(),
 });
 const stateSchema = z.object({
   version: z.number().int().nonnegative(),
@@ -117,6 +132,7 @@ export class GuestClient {
   private readonly pending = new Map<string, number>();
   /** Keys whose leave is in flight. */
   private readonly leaving = new Set<string>();
+  private readonly fetching = new Map<string, Promise<GuestResult<{ file: JoinedFile; path: string }>>>();
   private started = false;
   private readonly deps: GuestClientDeps;
 
@@ -163,11 +179,11 @@ export class GuestClient {
   }
 
   /** One at a time per room. A caller retrying a failed send passes the same sendId back. */
-  send(roomId: string, text: unknown, replyToId?: unknown, sendId?: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
+  send(roomId: string, text: unknown, replyToId?: unknown, sendId?: unknown, fileIds?: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
     const waiting = this.pending.get(roomId) ?? 0;
     if (waiting >= MAX_PENDING_SENDS) return Promise.resolve(failed(429, "too many messages waiting to send"));
     this.pending.set(roomId, waiting + 1);
-    const next = (this.sending.get(roomId) ?? Promise.resolve()).then(() => this.sendNow(roomId, text, replyToId, sendId));
+    const next = (this.sending.get(roomId) ?? Promise.resolve()).then(() => this.sendNow(roomId, text, replyToId, sendId, fileIds));
     const tail = next.catch(() => {}).then(() => {
       const left = (this.pending.get(roomId) ?? 1) - 1;
       if (left) return void this.pending.set(roomId, left);
@@ -191,14 +207,78 @@ export class GuestClient {
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
-  private async sendNow(roomId: string, text: unknown, replyToId: unknown, sendId: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
+  /** Streams `body` to the door, which sniffs and caps it. The caller owns uploadId and resends it on retry; no retry here, the body is spent. */
+  async upload(roomId: string, body: Buffer | Readable, name: string, uploadId: string, length?: string): Promise<GuestResult<JoinedFile> & { uploadId?: string }> {
+    if (!joinedRoom(roomId)) return failed(404, "not found");
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(409, "this room is read-only");
+    if (!SEND_ID.test(uploadId)) return failed(400, "bad uploadId");
+    const query = new URLSearchParams({ uploadId, name: name.slice(0, 200) });
+    const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/files?${query}`, creds.key, body, length, UPLOAD_MS);
+    if (!reply.ok) {
+      if (reply.status === 401) this.end(roomId, creds.key);
+      return { ...reply, uploadId };
+    }
+    const file = z.object({ file: fileSchema }).safeParse(reply.value);
+    return file.success ? { ok: true, value: file.data.file, uploadId } : { ...unavailable(), uploadId };
+  }
+
+  /** A file a held entry carries: the local copy, else fetched through the door with this room's key. */
+  file(roomId: string, fileId: string): Promise<GuestResult<{ file: JoinedFile; path: string }>> {
+    const file = joinedFile(roomId, fileId);
+    if (!file) return Promise.resolve(failed(404, "not found"));
+    const path = cachedJoinedFile(roomId, file);
+    if (path) return Promise.resolve({ ok: true, value: { file, path } });
+    const key = `${roomId}\n${fileId}`;
+    let fetching = this.fetching.get(key);
+    if (!fetching) {
+      fetching = this.fetchFile(roomId, file).finally(() => this.fetching.delete(key));
+      this.fetching.set(key, fetching);
+    }
+    return fetching;
+  }
+
+  private async fetchFile(roomId: string, file: JoinedFile): Promise<GuestResult<{ file: JoinedFile; path: string }>> {
+    const creds = joinedKey(roomId);
+    if (!creds) return failed(409, "this room is read-only");
+    const https = this.deps.https ?? {};
+    const res = await new Promise<IncomingMessage | null>((resolve) => {
+      const req = request({
+        method: "GET",
+        protocol: "https:",
+        hostname: creds.relayHost,
+        servername: creds.relayHost,
+        port: https.port ?? 443,
+        path: `/room/v1/rooms/${roomId}/files/${file.id}`,
+        headers: { host: creds.relayHost, authorization: `Bearer ${creds.key}` },
+        ca: https.ca,
+        lookup: https.lookup,
+        agent: false,
+        timeout: REQUEST_MS,
+      }, resolve);
+      req.on("timeout", () => req.destroy());
+      req.on("error", () => resolve(null));
+      req.end();
+    });
+    if (!res) return unavailable();
+    if (res.statusCode !== 200) {
+      res.resume();
+      if (res.statusCode === 401) this.end(roomId, creds.key);
+      return res.statusCode === 404 ? failed(404, "not found") : unavailable();
+    }
+    if (!(await keepJoinedFile(roomId, file, res))) return unavailable();
+    return { ok: true, value: { file, path: cachedJoinedFile(roomId, file)! } };
+  }
+
+  private async sendNow(roomId: string, text: unknown, replyToId: unknown, sendId: unknown, fileIds: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
     if (!joinedRoom(roomId)) return failed(404, "not found");
     const creds = joinedKey(roomId);
     if (!creds) return failed(409, "this room is read-only");
     if (typeof text !== "string" || (replyToId !== undefined && typeof replyToId !== "string")) return failed(400, "bad request");
     if (sendId !== undefined && (typeof sendId !== "string" || !SEND_ID.test(sendId))) return failed(400, "bad sendId");
+    if (fileIds !== undefined && !(Array.isArray(fileIds) && fileIds.length <= MAX_FILES && fileIds.every((fileId) => typeof fileId === "string"))) return failed(400, "bad request");
     const chosen = (sendId as string | undefined) ?? randomBytes(18).toString("base64url");
-    const body = JSON.stringify({ text, ...(replyToId === undefined ? {} : { replyToId }), sendId: chosen });
+    const body = JSON.stringify({ text, ...(replyToId === undefined ? {} : { replyToId }), sendId: chosen, ...(fileIds?.length ? { fileIds } : {}) });
     let reply: GuestResult<unknown> = unavailable();
     for (let tries = 0; tries < SEND_TRIES && !reply.ok && reply.status === 503; tries++) {
       reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/send`, creds.key, body);
@@ -214,11 +294,15 @@ export class GuestClient {
   }
 
   /** A transport failure or a non-JSON reply reads as 503 `unavailable`. */
-  private async call(relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string): Promise<GuestResult<unknown>> {
+  private async call(
+    relayHost: string, method: "GET" | "POST", path: string, key: string | null, body?: string | Buffer | Readable, length?: string, timeoutMs = REQUEST_MS,
+  ): Promise<GuestResult<unknown>> {
     const headers: Record<string, string> = { host: relayHost, ...(method === "POST" ? { origin: `https://${relayHost}` } : {}) };
     if (key) headers.authorization = `Bearer ${key}`;
+    if (length) headers["content-length"] = length;
+    const contentType = typeof body === "string" ? undefined : "application/octet-stream";
     try {
-      const res = await httpsRequest({ method, url: `https://${relayHost}${path}`, body, headers, timeoutMs: REQUEST_MS, maxBytes: REPLY_BYTES }, this.deps.https);
+      const res = await httpsRequest({ method, url: `https://${relayHost}${path}`, body, contentType, headers, timeoutMs, maxBytes: REPLY_BYTES }, this.deps.https);
       if (res.status !== 200) return doorError(res.status, res.body);
       return { ok: true, value: JSON.parse(res.body.toString("utf8")) };
     } catch (error) {

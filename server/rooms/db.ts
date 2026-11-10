@@ -32,6 +32,15 @@ export interface RoomPerson {
   joinedAt: number;
 }
 
+/** A picture or file on a room entry; the bytes live in room-files. */
+export interface RoomFile {
+  id: string;
+  name: string;
+  type: string;
+  bytes: number;
+  sha256: string;
+}
+
 export interface RoomEntry {
   seq: number;
   id: string;
@@ -42,6 +51,7 @@ export interface RoomEntry {
   askId?: string;
   grant?: RoomGrant;
   clean?: boolean;
+  files?: RoomFile[];
 }
 
 export type RoomEntryDraft = Omit<RoomEntry, "seq" | "id" | "at">;
@@ -98,6 +108,7 @@ function open(): DatabaseSync {
       ask_id TEXT,
       grant_kind TEXT,
       clean INTEGER,
+      files TEXT,
       PRIMARY KEY (room_id, seq)
     );
     CREATE TRIGGER IF NOT EXISTS log_append_only BEFORE UPDATE ON log
@@ -105,6 +116,9 @@ function open(): DatabaseSync {
     CREATE TRIGGER IF NOT EXISTS log_no_delete BEFORE DELETE ON log
     BEGIN SELECT RAISE(ABORT, 'the room log is append-only'); END;
   `);
+  if (!(db.prepare("PRAGMA table_info(log)").all() as Array<{ name: string }>).some((column) => column.name === "files")) {
+    db.exec("ALTER TABLE log ADD COLUMN files TEXT");
+  }
   return db;
 }
 
@@ -166,10 +180,10 @@ export function addPerson(roomId: string, name: unknown, level: RoomLevel, taken
 
 type LogRow = {
   seq: number; id: string; at: number; author_kind: RoomAuthor["kind"]; author_id: string; author_name: string; text: string;
-  reply_to_id: string | null; ask_id: string | null; grant_kind: RoomGrant | null; clean: number | null;
+  reply_to_id: string | null; ask_id: string | null; grant_kind: RoomGrant | null; clean: number | null; files: string | null;
 };
 
-const LOG_COLUMNS = "seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean";
+const LOG_COLUMNS = "seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files";
 
 const rowToEntry = (row: LogRow): RoomEntry => ({
   seq: row.seq,
@@ -181,6 +195,7 @@ const rowToEntry = (row: LogRow): RoomEntry => ({
   ...(row.ask_id ? { askId: row.ask_id } : {}),
   ...(row.grant_kind ? { grant: row.grant_kind } : {}),
   ...(row.clean === null ? {} : { clean: row.clean === 1 }),
+  ...(row.files ? { files: JSON.parse(row.files) as RoomFile[] } : {}),
 });
 
 export function roomEntry(roomId: string, id: string): RoomEntry | null {
@@ -220,16 +235,17 @@ export function committedRoomText(author: RoomAuthor["kind"], text: string): str
 /** The only insert into the room log. Entries are never updated. */
 export function appendRoomEntry(roomId: string, draft: RoomEntryDraft): RoomEntry {
   const text = committedRoomText(draft.author.kind, draft.text);
-  if (!text) throw new RoomError(400, "message is empty");
+  if (!text && !draft.files?.length) throw new RoomError(400, "message is empty");
   if (!roomById(roomId)) throw new RoomError(404, "no such room");
   if (draft.replyToId !== undefined && !roomEntry(roomId, draft.replyToId)) throw new RoomError(404, "no such message in this room");
   const row = db().prepare(`
-    INSERT INTO log (room_id, seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean)
-    VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO log (room_id, seq, id, at, author_kind, author_id, author_name, text, reply_to_id, ask_id, grant_kind, clean, files)
+    VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE room_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING ${LOG_COLUMNS}
   `).get(
     roomId, roomId, newId(), Date.now(), draft.author.kind, draft.author.id, draft.author.name, text,
     draft.replyToId ?? null, draft.askId ?? null, draft.grant ?? null, draft.clean === undefined ? null : Number(draft.clean),
+    draft.files?.length ? JSON.stringify(draft.files) : null,
   ) as LogRow;
   return rowToEntry(row);
 }
