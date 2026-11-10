@@ -636,7 +636,7 @@ function routineRow(routine: Json): string {
   const schedule = jsonRecord(routine.schedule) ? routine.schedule : {};
   const when = schedule.type === "once"
     ? `once ${String(schedule.at ?? "")}`
-    : `weekly ${String(schedule.time ?? "")} ${Array.isArray(schedule.weekdays) ? schedule.weekdays.join(",") : ""}`.trimEnd();
+    : `${String(schedule.type ?? "weekly")} ${String(schedule.time ?? "")} ${Array.isArray(schedule.weekdays) ? schedule.weekdays.join(",") : ""}`.trimEnd();
   return `- ${String(routine.id)} | ${String(routine.name)} | ${when} | ${routine.enabled ? "enabled" : "paused"} | ${String(routine.nextRunAt ?? "none")}`;
 }
 
