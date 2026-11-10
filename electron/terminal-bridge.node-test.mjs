@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import http from "node:http";
 import test from "node:test";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import os from "node:os";
@@ -760,4 +762,180 @@ test("reports the updater missing when the bridge has none", async () => {
 
 test("update grant matches the server's", () => {
   assert.equal(updateGrant("bridge-secret"), serverUpdateGrant("bridge-secret"));
+});
+
+const inputGrant = (token, botId) => createHmac("sha256", token).update(`orbit-terminal-input-v1:${botId}`).digest("base64url");
+
+function liveFixture(t) {
+  const children = [];
+  const owner = { id: 1, isDestroyed: () => false, send() {} };
+  const host = createTerminalHost({
+    authorize() {}, owner: () => owner, resolveCwd: async () => os.tmpdir(),
+    platform: "linux", env: { SHELL: "/bin/sh" }, freeMemory: () => 64 * 1024 ** 3,
+    loadPty: () => ({ spawn: () => {
+      const child = { writes: [], sizes: [], paused: 0, onData(cb) { this.data = cb; }, onExit(cb) { this.exit = cb; }, write(text) { this.writes.push(text); }, resize(cols, rows) { this.sizes.push([cols, rows]); }, pause() { this.paused++; }, kill() {} };
+      children.push(child);
+      return child;
+    } }),
+  });
+  const watches = [];
+  const watchBot = host.watchBot?.bind(host);
+  host.watchBot = (botId, sessionId, viewer) => {
+    const entry = { sends: 0, dropped: false };
+    let stopped;
+    entry.stopped = new Promise((resolve) => { stopped = resolve; });
+    const watch = watchBot(botId, sessionId, {
+      send: (frame) => { entry.sends++; return viewer.send(frame); },
+      end: viewer.end,
+      drop: () => { entry.dropped = true; viewer.drop(); },
+    });
+    watches.push(entry);
+    return { snapshot: watch.snapshot, stop: () => { watch.stop(); stopped(); } };
+  };
+  const bridge = createTerminalBridge({ host });
+  t.after(async () => { await host.dispose(); await bridge.close(); });
+  return { host, bridge, children, owner, watches };
+}
+
+async function openLive(f) {
+  const access = await f.bridge.start();
+  const pane = await f.host.open({ sender: f.owner }, { botId: "bot-1", cols: 80, rows: 24 });
+  return { access, pane, child: f.children[0] };
+}
+
+function readLines(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  return async () => {
+    while (!buffered.includes("\n")) {
+      const { value, done } = await reader.read();
+      if (done) return null;
+      buffered += decoder.decode(value, { stream: true });
+    }
+    const index = buffered.indexOf("\n");
+    const line = buffered.slice(0, index);
+    buffered = buffered.slice(index + 1);
+    return JSON.parse(line);
+  };
+}
+
+const streamRequest = (access, grant, query = "", init = {}) => fetch(`${access.url}/v1/bots/bot-1/terminal/stream${query}`, { headers: { authorization: `Bearer ${grant}` }, ...init });
+
+test("streams the snapshot first, then chunks in seq order", async (t) => {
+  const f = liveFixture(t);
+  const { access, pane, child } = await openLive(f);
+  child.data("\x1b[?2004hbefore\r\n");
+  const read = terminalReadGrant(access.token, "bot-1");
+  const response = await streamRequest(access, read, `?sessionId=${pane.sessionId}`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /ndjson/);
+  const next = readLines(response.body);
+  assert.deepEqual(await next(), { sessionId: pane.sessionId, generation: pane.generation, output: "\x1b[?2004hbefore\r\n", seq: 1, cols: 80, rows: 24, modes: [2004], resetModes: [], exitCode: null });
+  child.data("one");
+  child.data("two");
+  assert.deepEqual(await next(), { seq: 2, data: "one" });
+  assert.deepEqual(await next(), { seq: 3, data: "two" });
+  await f.host.resize({ sender: f.owner }, pane.sessionId, 100, 30);
+  assert.deepEqual(await next(), { cols: 100, rows: 30 });
+  child.exit({ exitCode: 0 });
+  assert.deepEqual(await next(), { exitCode: 0 });
+  assert.equal(await next(), null);
+  await f.watches[0].stopped;
+  const exited = readLines((await streamRequest(access, read)).body);
+  assert.equal((await exited()).exitCode, 0);
+  assert.equal(await exited(), null);
+  assert.equal((await streamRequest(access, terminalReadGrant(access.token, "bot-2"))).status, 401);
+  assert.equal((await fetch(`${access.url}/v1/bots/bot-2/terminal/stream`, { headers: { authorization: `Bearer ${terminalReadGrant(access.token, "bot-2")}` } })).status, 409);
+});
+
+test("a viewer that throws is dropped without starving the others", async (t) => {
+  const f = liveFixture(t);
+  const { pane, child } = await openLive(f);
+  const frames = [];
+  let dropped = 0;
+  f.host.watchBot("bot-1", pane.sessionId, { send() { throw new Error("gone"); }, end() {}, drop() { dropped++; } });
+  f.host.watchBot("bot-1", pane.sessionId, { send: (frame) => { frames.push(frame); return 0; }, end() {}, drop() {} });
+  assert.doesNotThrow(() => child.data("a"));
+  child.data("b");
+  assert.deepEqual([dropped, frames], [1, [{ seq: 1, data: "a" }, { seq: 2, data: "b" }]]);
+});
+
+test("does no stream work for a pane nobody watches and forgets a closed viewer", async (t) => {
+  const f = liveFixture(t);
+  const { access, child } = await openLive(f);
+  const idle = () => {
+    const stringify = t.mock.method(JSON, "stringify");
+    const timeout = t.mock.method(globalThis, "setTimeout");
+    const interval = t.mock.method(globalThis, "setInterval");
+    child.data("idle output\r\n");
+    const counts = [stringify.mock.callCount(), timeout.mock.callCount(), interval.mock.callCount()];
+    t.mock.restoreAll();
+    return counts;
+  };
+  assert.deepEqual(idle(), [0, 0, 0]);
+  const controller = new AbortController();
+  const response = await streamRequest(access, terminalReadGrant(access.token, "bot-1"), "", { signal: controller.signal });
+  assert.equal(response.status, 200);
+  const next = readLines(response.body);
+  assert.equal((await next()).seq, 1);
+  child.data("watched");
+  assert.deepEqual(await next(), { seq: 2, data: "watched" });
+  controller.abort();
+  await f.watches[0].stopped;
+  const sends = f.watches[0].sends;
+  assert.deepEqual(idle(), [0, 0, 0]);
+  assert.equal(f.watches[0].sends, sends);
+});
+
+test("drops a viewer more than 1 MB behind without pausing the pane", async (t) => {
+  const f = liveFixture(t);
+  const { access, child } = await openLive(f);
+  const response = await new Promise((resolve, reject) => {
+    const req = http.get(`${access.url}/v1/bots/bot-1/terminal/stream`, { headers: { authorization: `Bearer ${terminalReadGrant(access.token, "bot-1")}` } }, resolve);
+    req.on("error", reject);
+  });
+  assert.equal(response.statusCode, 200);
+  response.on("error", () => {});
+  response.pause();
+  const chunk = `${"x".repeat(1023)}\n`.repeat(64);
+  for (let i = 0; i < 512 && !f.watches[0].dropped; i++) child.data(chunk);
+  assert.equal(f.watches[0].dropped, true);
+  const sends = f.watches[0].sends;
+  child.data(chunk);
+  assert.equal(f.watches[0].sends, sends);
+  assert.equal(child.paused, 0);
+  const controller = new AbortController();
+  const again = await streamRequest(access, terminalReadGrant(access.token, "bot-1"), "", { signal: controller.signal });
+  assert.equal(again.status, 200);
+  assert.equal((await readLines(again.body)()).output.length, 256 * 1024);
+  controller.abort();
+});
+
+test("types raw keys and resizes only with the input grant", async (t) => {
+  const f = liveFixture(t);
+  const { access, pane, child } = await openLive(f);
+  const post = (route, grant, body) => fetch(`${access.url}/v1/bots/bot-1/terminal/${route}`, { method: "POST", headers: { authorization: `Bearer ${grant}` }, body: JSON.stringify(body) });
+  const key = { sessionId: pane.sessionId, generation: pane.generation, data: "\x03" };
+  const size = { sessionId: pane.sessionId, generation: pane.generation, cols: 120, rows: 40 };
+  const read = terminalReadGrant(access.token, "bot-1");
+  assert.equal((await post("input", read, key)).status, 403);
+  assert.equal((await post("resize", read, size)).status, 403);
+  assert.equal((await post("input", terminalSendGrant(access.token, "bot-1"), key)).status, 401);
+  const writes = child.writes.length;
+  assert.deepEqual(child.sizes, []);
+  const input = inputGrant(access.token, "bot-1");
+  const typed = await post("input", input, key);
+  assert.equal(typed.status, 200);
+  assert.deepEqual(await typed.json(), { sent: true });
+  assert.deepEqual(child.writes.slice(writes), ["\x03"]);
+  assert.equal((await post("resize", input, size)).status, 200);
+  assert.deepEqual(child.sizes, [[120, 40]]);
+  assert.equal((await post("resize", input, { ...size, cols: 501 })).status, 400);
+  assert.equal((await post("resize", input, { ...size, rows: 0 })).status, 400);
+  assert.equal((await post("input", input, { ...key, data: "x".repeat(64 * 1024 + 1) })).status, 400);
+  assert.equal((await post("input", input, { ...key, generation: pane.generation + 1 })).status, 409);
+  assert.equal((await post("input", inputGrant(access.token, "bot-2"), key)).status, 401);
+  assert.equal((await streamRequest(access, input)).status, 401);
+  assert.deepEqual(child.writes.slice(writes), ["\x03"]);
 });
