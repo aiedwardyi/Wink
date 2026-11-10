@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyLocale } from "@/lib/i18n";
+import { LIGHT_SKIN_IDS, SKINS } from "@/lib/skins";
 import type { Bot } from "@/state/store";
 import { MemoryMap } from "./MemoryMap";
 
@@ -70,6 +71,35 @@ describe("MemoryMap", () => {
     const grown = Math.max(...[...css.split("\n").find((line) => line.startsWith("@keyframes mm-ring"))!.matchAll(/scale: ([\d.]+)/g)].map((each) => Number(each[1])));
     const badge = Number(rule(".mm-brain").match(/width: (\d+)px/)![1]);
     for (const size of [".mm-orbit-near", ".mm-orbit-far"]) expect(Number(rule(size).match(/width: (\d+)px/)![1]) * grown).toBeLessThanOrEqual(badge);
+  });
+
+  it("gives Muscle Memory its own hue on the icon and the count", () => {
+    const muscle = (part: string) => css.match(new RegExp(`^\\[data-kind="muscle"\\] ${part} \\{([^}]*)\\}`, "m"))?.[1] ?? "";
+    expect(rule(".mm")).toContain("--mm-fuchsia: 232 121 249;");
+    expect(muscle(".mm-icon")).toContain("color: rgb(var(--mm-fuchsia));");
+    expect(muscle(".mm-count b")).toContain("rgb(var(--mm-fuchsia))");
+    expect(rule(".mm-bottom .mm-count b")).not.toContain("color:");
+  });
+
+  it("keeps Live now at 4.5:1 on its panel in every skin, in the same cyan hue", () => {
+    const skins = ["../styles.css", "../skins/fresh-dark.css"].map((file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), file), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rootCard = skins.match(/(?:@theme|:root)\s*\{[^}]*--color-card:\s*(#[0-9a-f]{6})/i)![1];
+    const card = (id: string) => [...skins.matchAll(/([^{}]*)\{[^{}]*--color-card:\s*(#[0-9a-f]{6})[^{}]*\}/gi)].filter(([, selector]) => selector.includes(`[data-skin="${id}"]`)).at(-1)?.[2] ?? rootCard;
+    const hex = (value: string) => [1, 3, 5].map((at) => parseInt(value.slice(at, at + 2), 16));
+    const lum = (rgb: number[]) => rgb.map((c) => c / 255).map((c) => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const hue = ([r, g, b]: number[]) => { const max = Math.max(r, g, b), d = max - Math.min(r, g, b); return 60 * (max === r ? (g - b) / d : max === g ? 2 + (b - r) / d : 4 + (r - g) / d); };
+    const triplet = (name: string, body: string) => body.match(new RegExp(`--mm-${name}: (\\d+ \\d+ \\d+);`))![1].split(" ").map(Number);
+    const light = css.slice(css.indexOf(":is([data-skin="));
+    const [cyan, indigo, lightInk] = [triplet("cyan", rule(".mm")), triplet("indigo", rule(".mm")), triplet("live-ink", light)];
+    expect(rule(".mm")).toContain("--mm-live-ink: var(--mm-cyan);");
+    expect(rule(".mm-live-tag")).toContain("color: rgb(var(--mm-live-ink));");
+    expect(Math.abs(hue(lightInk) - hue(cyan))).toBeLessThan(1);
+    for (const { id } of SKINS) {
+      expect(light.slice(0, light.indexOf(" .mm {")).includes(`[data-skin="${id}"]`), id).toBe(LIGHT_SKIN_IDS.has(id));
+      const panel = hex(card(id)).map((c, i) => c * 0.92 + indigo[i] * 0.08);
+      const [hi, lo] = [lum(LIGHT_SKIN_IDS.has(id) ? lightInk : cyan), lum(panel)].sort((a, b) => b - a);
+      expect((hi + 0.05) / (lo + 0.05), id).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it("hides the Sleep line until Sleep has run", async () => {
