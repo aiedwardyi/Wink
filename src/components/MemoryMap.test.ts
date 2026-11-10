@@ -124,6 +124,16 @@ describe("smooth glow", () => {
     expect(render({ dpr: 1, size: [980, 808], back: [0, 0, 0], aura: [aura, 0, 0, 980, 760], lift: 0.7, ray: null, halo: [aura, 18], badge: [460, 60, 60], shadow, veil: [aura, 1], swell: shadow, orbits: [44, 48], live: null })).toEqual({ layers: null });
   });
 
+  it("answers with no layers when the painter throws", async () => {
+    const sent = vi.fn(), page = self, warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("self", { postMessage: sent, close() {} });
+    await import("./MemoryMapGlow.worker");
+    await (self as unknown as { onmessage(message: { data: unknown }): Promise<void> }).onmessage({ data: null });
+    expect(sent).toHaveBeenCalledWith({ layers: null }, []);
+    expect(warned).toHaveBeenCalledTimes(1);
+    warned.mockRestore(); vi.stubGlobal("self", page);
+  });
+
   it("holds the painted glow still for reduced motion", () => {
     const still = css.lastIndexOf("@media (prefers-reduced-motion: reduce)");
     expect(css.slice(still)).toMatch(/\.mm-smooth-breath \{ animation: none; \}/);
