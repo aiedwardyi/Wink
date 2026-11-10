@@ -5,6 +5,7 @@ import { roomResponder } from "../../shared/room-routing.ts";
 import { committedRoomText, roomEntry, roomPeople, RoomError, type RoomAuthor, type RoomEntry, type RoomGrant, type RoomLevel } from "./db.ts";
 import { roomEngineAllowed } from "./guards.ts";
 import { writeRoomEntry } from "./mirror.ts";
+import { peopleOnlyRoom } from "./people-only.ts";
 import { askById, beginEnd, createAsk, engineLine, roomAskDeps, runAsk, sendRefusal, spend, type HostedGroup } from "./asks.ts";
 
 export type RoomSender = { kind: "host" } | { kind: "person"; id: string };
@@ -27,7 +28,7 @@ export function hostedSend(group: HostedGroup, sender: RoomSender, text: string,
     const bot = store.bot(id);
     return bot && !bot.hidden ? [bot] : [];
   });
-  const bot = roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
+  const bot = peopleOnlyRoom(roomId) ? null : roomResponder(committedRoomText(author.kind, text), bots, people.map((candidate) => candidate.name), quote?.author.kind === "bot" ? quote.author.id : undefined);
   const grant = person ? GRANTS[person.level] : "work";
   if (person) {
     const refusal = sendRefusal(roomId, person.id, bot ? grant : null);

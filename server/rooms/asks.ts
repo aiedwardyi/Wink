@@ -9,9 +9,10 @@ import { DATA_DIR } from "../config.ts";
 import { newId, type ProviderInstance } from "../contracts.ts";
 import { cancelQueuedAsk } from "../steer-queue.ts";
 import type { GroupRecord, Store } from "../store.ts";
-import { appendRoomEntry, roomPeople, type RoomGrant, type RoomLevel } from "./db.ts";
+import { appendRoomEntry, roomPeople, RoomError, type RoomGrant, type RoomLevel } from "./db.ts";
 import { roomEngineAllowed } from "./guards.ts";
 import { writeRoomEntry } from "./mirror.ts";
+import { PEOPLE_ONLY_LINE, peopleOnlyRoom } from "./people-only.ts";
 
 export type AskState = "held" | "queued" | "running" | "stopping" | "done" | "failed" | "cancelled";
 export type AskEnd = "failed" | "cancelled";
@@ -196,6 +197,7 @@ function prune(now: number): void {
 }
 
 export function createAsk(draft: Omit<RoomAsk, "id" | "at" | "state" | "reason" | "allowed">): RoomAsk {
+  if (peopleOnlyRoom(draft.roomId)) throw new RoomError(409, PEOPLE_ONLY_LINE);
   const now = Date.now();
   prune(now);
   const ask: RoomAsk = { ...draft, id: newId(), allowed: false, state: draft.grant ? "queued" : "held", at: now };
@@ -221,6 +223,7 @@ const botName = (ask: RoomAsk) => need().store.bot(ask.botId)?.name ?? "The bot"
 
 /** Why a live ask may no longer run: the room, the bot, the asker's level or the engine changed. */
 function askInvalid(ask: RoomAsk): { end: AskEnd; line?: string } | null {
+  if (peopleOnlyRoom(ask.roomId)) return { end: "failed" };
   const { store, driverKind } = need();
   const group = store.groupByThread(ask.threadId);
   if (group?.hosted?.roomId !== ask.roomId || !group.memberIds.includes(ask.botId)) return { end: "cancelled" };
@@ -264,6 +267,7 @@ export function askAllowsRequest(id: string): boolean {
 }
 
 function writeEnd(ask: RoomAsk, text: string): void {
+  if (peopleOnlyRoom(ask.roomId)) return;
   const { store } = need();
   const group = store.groupByThread(ask.threadId);
   const draft = {
@@ -381,6 +385,7 @@ function askRefusal(roomId: string, personId: string, ask: RoomGrant, mine: Room
 /** A queued ask starts: work on the room's queue, words through its hook. */
 export function runAsk(ask: RoomAsk): void {
   const { dispatch, instance } = need();
+  if (peopleOnlyRoom(ask.roomId)) return void endAsk(ask.id, "failed");
   if (ask.asker.kind === "person") spend(ask.roomId, ask.asker.id, "ask");
   if (ask.grant === "work") return dispatch(ask);
   if (roomAskHooks.words) return roomAskHooks.words(ask, instance(ask.botId, ask.threadId));

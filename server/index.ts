@@ -7299,6 +7299,7 @@ const verifySite = createVerifySite({
 });
 const verifyAuto = createVerifyAuto({
   enabled: verifyAutoOn,
+  skip: threadId => isHostedThread(store, threadId),
   startAuto: input => verifySite.startAuto(input),
   cancelQueued: threadId => verifySite.cancelAuto(threadId),
   startDocs: input => verifyDoc.schedule(input),
