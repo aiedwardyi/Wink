@@ -489,7 +489,7 @@ export const en = {
   "settings.advanced.title": "Advanced",
 
   "onboarding.welcomeTitle": "Welcome to Wink",
-  "onboarding.welcomeBody": "A calm home for bots that run on engines like Claude or Codex. Give a bot a job, then message it like anyone else.",
+  "onboarding.welcomeBody": "Give a bot a job. Check in from anywhere.",
   "onboarding.enginesError": "Wink is still getting ready.",
   "onboarding.enginesErrorHint": "Wait a moment, then try again.",
   "onboarding.tryAgain": "Try again",
@@ -2077,7 +2077,7 @@ export const ko = {
   "settings.advanced.title": "고급",
 
   "onboarding.welcomeTitle": "Wink에 오신 것을 환영합니다",
-  "onboarding.welcomeBody": "Claude, Codex 같은 엔진으로 작동하는 봇을 한곳에서 편하게 사용하세요. 봇에게 일을 맡기고, 동료와 대화하듯 메시지를 주고받으세요.",
+  "onboarding.welcomeBody": "봇에게 일을 맡기세요. 어디서든 확인하세요.",
   "onboarding.enginesError": "Wink를 준비하고 있어요.",
   "onboarding.enginesErrorHint": "잠시 기다린 후 다시 시도해 주세요.",
   "onboarding.tryAgain": "다시 시도",
