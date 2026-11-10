@@ -6,6 +6,7 @@ import { closedAskNotes } from "./ask-user.ts";
 import { DATA_DIR } from "./config.ts";
 import * as context from "./context-compaction.ts";
 import * as mail from "./mail.ts";
+import { callLinesSinceLastUserTurn } from "./live-call.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { quickAnswersSinceLastUserTurn } from "./quick-ask.ts";
 import { composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys } from "./replies.ts";
@@ -65,7 +66,7 @@ function summarizedChat() {
     expect(ready.compaction).toBeUndefined();
     const prepared = landed ? { ...ready, compaction: store.activePath(threadId).find((row) => row.id === summary.id)!.compaction } : ready;
     const turn = prepareTurn({
-      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys,
+      ...context, ...turns, ...mail, quickAnswersSinceLastUserTurn, callLinesSinceLastUserTurn, closedAskNotes, turnStartedByUser: () => false, composeUserTurnPrompt, turnReplaysTranscript, userTurnReactionKeys,
       store, bot, threadId, task: store.taskByThread(bot.id, threadId)!, instanceId, model, instance,
       text, userMessage, activeMessages, skipTranscript, prepared,
       latestCompactionId: ready.compactionId ?? null, sessionPrompt: undefined, nativeAt,
@@ -106,4 +107,16 @@ it("sends the task record once after a background summary lands on a live sessio
     compactionId: turns.turnSeedCompactionId({ replayed: false, instanceId, cursor: "session-1", seed, sessionCompactionId: built.id, supersededIds: context.supersededCompactionIds(store.activePath(threadId), built.id) }),
   });
   expect(await send("and the bird?", false, 1)).toEqual({ turnText: "and the bird?", resume: true });
+});
+
+it("carries a call's spoken lines into a resumed session's next turn once", async () => {
+  const { store, threadId, send } = summarizedChat();
+  await send("and the cat?");
+  const call = { id: "c-0123456789ab" };
+  store.appendMessage(threadId, { role: "bot", kind: "text", text: "Good evening. What do you need?", call: { ...call, voice: true } });
+  store.appendMessage(threadId, { role: "user", kind: "text", text: "Is the password reset email fixed?", call });
+  const { turnText } = await send("what did we just say?");
+  expect(turnText).toContain("You: Good evening. What do you need?\nPerson: Is the password reset email fixed?");
+  expect(turnText.endsWith("Current message:\n\nwhat did we just say?")).toBe(true);
+  expect(await send("and the fish?")).toEqual({ turnText: "and the fish?", resume: true });
 });

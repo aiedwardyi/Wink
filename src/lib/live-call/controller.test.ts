@@ -34,7 +34,7 @@ function fakeAudio(): CallAudioPort & { flushed: number } {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup(responses: Record<string, Posted> = {}, audio: CallAudioPort = fakeAudio()) {
+function setup(responses: Record<string, Posted | (() => Promise<Posted>)> = {}, audio: CallAudioPort = fakeAudio()) {
   const engines: FakeEngine[] = [];
   const posts: Array<{ path: string; body: any }> = [];
   const call = new LiveCall({
@@ -47,7 +47,7 @@ function setup(responses: Record<string, Posted> = {}, audio: CallAudioPort = fa
     post: async (path, body) => {
       posts.push({ path, body });
       const hit = Object.entries(responses).find(([suffix]) => path.endsWith(suffix));
-      if (hit) return hit[1];
+      if (hit) return typeof hit[1] === "function" ? hit[1]() : hit[1];
       if (path.endsWith("/call/token")) return { status: 200, data: { callId: "c-0123456789ab", url: "wss://x", token: "t", model: "m" } };
       return { status: 200, data: {} };
     },
@@ -55,7 +55,7 @@ function setup(responses: Record<string, Posted> = {}, audio: CallAudioPort = fa
   return { call, engines, posts, engine: () => engines.at(-1)! };
 }
 
-async function started(responses?: Record<string, Posted>, audio?: CallAudioPort) {
+async function started(responses?: Record<string, Posted | (() => Promise<Posted>)>, audio?: CallAudioPort) {
   const s = setup(responses, audio);
   await s.call.start();
   s.engine().events.ready();
@@ -250,8 +250,21 @@ describe("LiveCall", () => {
     engine().events.usage(120);
     call.end();
     expect(call.state().status).toBe("ended");
+    await flush();
     const end = posts.find((p) => p.path.endsWith("/call/end"))?.body;
     expect(end.callId).toBe("c-0123456789ab");
     expect(end.stats).toMatchObject({ device: "phone", userLines: 1, hangulShare: 1, usage: { total: 120 }, orders: { proposed: 0 } });
+  });
+
+  it("ends the call only after its last lines are saved", async () => {
+    let save!: () => void;
+    const { call, engine, posts } = await started({ "/call/lines": () => new Promise((resolve) => { save = () => resolve({ status: 200, data: {} }); }) });
+    engine().events.heard("Is the password reset email fixed?");
+    call.end();
+    await flush();
+    expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines"]);
+    save();
+    await flush();
+    expect(posts.map((p) => p.path.split("/").at(-1))).toEqual(["token", "lines", "end"]);
   });
 });

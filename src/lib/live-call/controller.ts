@@ -75,6 +75,7 @@ export class LiveCall {
   private listeners = new Set<() => void>();
   private snapshot: CallState = { status: "starting", muted: false };
   private callId?: string;
+  private writes = new Set<Promise<unknown>>();
   private handle?: string;
   private connected = false;
   private reconnecting = 0;
@@ -348,7 +349,9 @@ export class LiveCall {
   /** Every call row goes through here. */
   private postLines(lines: CallLine[]) {
     if (!this.callId) return;
-    void this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/lines`, { callId: this.callId, lines }).catch(() => {});
+    const write = this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/lines`, { callId: this.callId, lines }).catch(() => {});
+    this.writes.add(write);
+    void write.finally(() => this.writes.delete(write));
   }
 
   /** The chat as the store has it: relays the bot's settled reply and anything waiting on the user. */
@@ -431,7 +434,7 @@ export class LiveCall {
     this.deps.audio.close();
     if (!this.callId || this.snapshot.startedAt === undefined) return;
     const { ttfa, usage, ...counts } = this.stats;
-    void this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/end`, {
+    const body = {
       callId: this.callId,
       stats: {
         ...counts,
@@ -441,6 +444,8 @@ export class LiveCall {
         ttfaMs: { p50: percentile(ttfa, 0.5), p90: percentile(ttfa, 0.9) },
         usage: { total: usage },
       },
-    }).catch(() => {});
+    };
+    // The server recaps the call on end, so the last lines must land first.
+    void Promise.all([...this.writes]).then(() => this.deps.post(`/api/bots/${encodeURIComponent(this.deps.botId)}/call/end`, body)).catch(() => {});
   }
 }
