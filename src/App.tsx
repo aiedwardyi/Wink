@@ -483,7 +483,9 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
     dispatch({ type: "setWorkspaceOpen", open: terminalOpen });
   }, [terminalOpen, dispatch]);
 
-  const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || (!noEngines && state.bots.length === 0));
+  const botsUnreadable = state.botsUnreadable && state.bots.length === 0;
+  const createBotRequired = !noEngines && state.bots.length === 0 && !botsUnreadable;
+  const createBotSheetOpen = !onboardingOpen && state.connected && state.hydrated && (state.createBotOpen || createBotRequired);
   const secondaryViewOpen =
     onboardingOpen ||
     terminalOpen ||
@@ -680,6 +682,11 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
         <LazyView fallback={<BootFallback />}>
           <NoEngines />
         </LazyView>
+      ) : botsUnreadable ? (
+        <main role="alert" className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app px-6 text-center text-ink-secondary">
+          <div className="text-[14px] text-ink">{t("chrome.botsUnreadable")}</div>
+          <div className="text-[12px]">{t("chrome.botsUnreadableHint")}</div>
+        </main>
       ) : group ? (
         LIVE_VERIFY_V0 ? (
           <div className={`relative flex min-h-0 min-w-0 flex-1${watchDock}`}>
@@ -756,7 +763,7 @@ function Shell({ onboardingOpen }: { onboardingOpen: boolean }) {
       <Presence open={createBotSheetOpen}>
         {(closing) => (
           <LazyView overlay>
-            <CreateBotSheet required={!noEngines && state.bots.length === 0} closing={closing} />
+            <CreateBotSheet required={createBotRequired} closing={closing} />
           </LazyView>
         )}
       </Presence>

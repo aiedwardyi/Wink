@@ -489,6 +489,8 @@ export interface AppState {
   hasConnected: boolean;
   /** true once the first `hydrate` action has landed and state.bots reflects the real snapshot */
   hydrated: boolean;
+  /** The server's bot list file is there but did not load: an empty `bots` is not a first run. */
+  botsUnreadable: boolean;
   error: string | null;
   mascotMotion: {
     botId: string;
@@ -541,6 +543,7 @@ export type Action =
       type: "hydrate";
       bots: Bot[];
       groups: Group[];
+      botsUnreadable?: boolean;
       computerControl?: Record<string, { held: boolean; helpReason: string | null }>;
       sidebarOrder: SidebarOrder;
     }
