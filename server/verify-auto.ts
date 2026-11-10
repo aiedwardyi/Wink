@@ -3,6 +3,7 @@ import { freemem } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { VERIFY_LIMITS } from "../shared/live-verify.ts";
+import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { appEntry, type AppOptions } from "./verify-app.ts";
 import { DOC_EXTS } from "./verify-doc-text.ts";
@@ -54,6 +55,11 @@ const named = (reply: string, path: string, docs: string[]) => {
     const hits = keys.filter(key => key.includes(ref.slice(1)));
     return hits.length === 1 && hits[0] === slashed(path) && hits[0].endsWith(ref);
   });
+};
+// Memory and the other files a bot keeps under the data folder are never documents for the person.
+const internal = (path: string) => {
+  const rel = relative(DATA_DIR, path);
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 };
 
 export async function scanVerifyWrites(root: string, since: number): Promise<string[]> {
@@ -153,9 +159,11 @@ export function createVerifyAuto(deps: VerifyAutoDeps) {
       paths.push(...scanned);
       const entry = await appEntry(`${input.reply}\n${input.humanText}`, deps.app) ?? await entryFor([...new Set(paths)], input);
       if (latest.get(input.threadId) !== token) return;
-      const docs = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()));
+      const found = entry ? [] : [...new Set(paths)].filter(path => DOC_EXTS.has(extname(path).toLowerCase()) && !internal(resolve(input.roots[0]!, path)));
+      // A document the bot wrote is for the person only when the reply or their message names it; the rest are its own notes.
+      const docs = found.filter(path => scanned.includes(path) || named(input.reply, path, found) || named(input.humanText, path, found));
       // A file only the mtime scan found may be the user's own: checked, never fixed, unless the reply names it.
-      const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, docs));
+      const unnamed = docs.filter(path => scanned.includes(path) && !named(input.reply, path, found));
       if (docs.length && deps.startDocs) { deps.startDocs({ botId: input.botId, threadId: input.threadId, roots: input.roots, paths: docs, ...(unnamed.length ? { scanned: unnamed } : {}), humanId: input.humanId }); return; }
       if (!entry) { deps.log(`Live Verify: no entry for ${input.threadId}`); return; }
       if (await deps.startAuto({ botId: input.botId, threadId: input.threadId, entry, episode: JSON.stringify([input.botId, input.threadId, input.humanId, entry]) }) === false) deps.log(`Live Verify: skipped ${input.threadId}`);
