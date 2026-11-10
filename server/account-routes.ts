@@ -85,7 +85,10 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
         if (!parsed.success) throw new AccountError("An engine base id and optional device flag are required", 400);
         json(res, 200, await lifecycle.add(parsed.data.of, parsed.data.device));
       } else if (id && action === "default" && method === "POST") {
-        json(res, 200, await lifecycle.useForBots(id));
+        json(res, 200, await lifecycle.useForBots(id).catch((error) => {
+          console.warn(`accounts: Main switch to ${id} refused (${(error as { code?: string }).code ?? "error"}): ${error instanceof Error ? error.message : String(error)}`);
+          throw error;
+        }));
       } else if (id && action === "sign-in" && method === "POST") {
         const parsed = signInSchema.safeParse(await body(req));
         if (!parsed.success) throw new AccountError("device must be a boolean", 400);
@@ -99,7 +102,7 @@ export function createAccountRoutes(lifecycle: AccountLifecycle, registry: Provi
     } catch (error) {
       const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500;
       if (nameRoute) json(res, status, error instanceof AccountNameError ? { error: error.message, code: error.code } : status === 400 ? { error: "Invalid nickname", code: "invalid-character" } : { error: "Account operation failed" });
-      else if (status < 500 || error instanceof AccountError) json(res, status, { error: (error as Error).message, code: (error as { code?: unknown }).code });
+      else if (status < 500 || error instanceof AccountError) json(res, status, { error: (error as Error).message, code: (error as { code?: unknown }).code, bot: (error as { bot?: unknown }).bot });
       else json(res, status, { error: "Account operation failed" });
     }
     return true;

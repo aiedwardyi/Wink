@@ -4,7 +4,7 @@ import { z } from "zod";
 import { accountReady } from "@/lib/accounts";
 import { cn } from "@/lib/cn";
 import { afterFold } from "@/lib/fold-press";
-import { localeTag, useI18n, type Translate } from "@/lib/i18n";
+import { localeTag, useI18n, type MessageKey, type Translate } from "@/lib/i18n";
 import { EASE_ENTRANCE, EASE_SOFT, MOTION_FAST_MS, MOTION_LARGE_MS } from "@/lib/motion";
 import { reducedMotion } from "@/lib/phone-swipe";
 import { isTerminalSkin, useSkin } from "@/lib/skins";
@@ -133,6 +133,12 @@ function labelsText(labels: string[], t: Translate) {
   const sorted = [...labels].sort();
   const shown = sorted.slice(0, 3).join(", ");
   return sorted.length > 3 ? t("usage.desk.labelsMore", { labels: shown, count: sorted.length - 3 }) : shown;
+}
+
+const MAIN_REFUSED: Record<string, MessageKey> = { "main-model": "usage.desk.mainModel", "main-effort": "usage.desk.mainEffort", "main-unavailable": "usage.desk.mainUnavailable" };
+export function mainFailedText(state: UsageBoardState, base: string, t: Translate) {
+  const why = state.refused?.[base];
+  return t(MAIN_REFUSED[why?.code ?? ""] ?? "usage.desk.mainFailed", { bot: why?.bot ?? "" });
 }
 
 /** One grey line per kind, newest only, last 24 h; wording only from the event's own names and labels. */
@@ -415,7 +421,7 @@ function EngineSection({ engine, board, state, stacked, terminal, clock, label, 
     <section data-usage-engine={engine.engine} data-usage-base={engine.base} aria-label={label} className="min-w-0">
       {USAGE_LAYOUT === "A" ? <PagedAccounts engine={engine} checked={checked} stacked={stacked} t={t} head={head} row={row} group={group} />
         : <>{head()}{group(capped)}</>}
-      {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{t("usage.desk.mainFailed")}</div>}
+      {state.failed.has(engine.base) && <div role="alert" className="mt-2 text-[12px] text-danger">{mainFailedText(state, engine.base, t)}</div>}
     </section>
   );
 }
