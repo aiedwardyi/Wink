@@ -1,7 +1,7 @@
 // Store persistence contract: bots.json + messages-<threadId>.json are
 // the durable record — everything here must survive a process restart
 // except `busy`, which never does (no turn survives one either).
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -1107,6 +1107,32 @@ describe("Store", () => {
     expect(store.botsFile).toBe("unreadable");
     expect(store.bots).toEqual([]);
     expect(readFileSync(path, "utf8")).toBe('[{"id": "bot-1"');
+  });
+
+  it("sets an unreadable bots.json aside before the first save", () => {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(join(DATA_DIR, "bots.json"), '[{"id": "bot-1"');
+    const store = new Store(selection);
+    store.createBot({ name: "First" }, { seedMessages: false });
+    store.createBot({ name: "Second" }, { seedMessages: false });
+    const kept = readdirSync(DATA_DIR).filter((name) => /^bots\.bad-\d+\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(DATA_DIR, kept[0]!), "utf8")).toBe('[{"id": "bot-1"');
+    expect(new Store(selection).bots.map((bot) => bot.name)).toEqual(["Second", "First"]);
+    expect(store.botsFile).toBe("unreadable");
+  });
+
+  it("sets an unreadable groups.json aside before the first save", () => {
+    const bot = new Store(selection).createBot({ name: "Member" }, { seedMessages: false });
+    writeFileSync(join(DATA_DIR, "groups.json"), '[{"id": "room-1"');
+    const store = new Store(selection);
+    expect(store.groups).toEqual([]);
+    expect(readFileSync(join(DATA_DIR, "groups.json"), "utf8")).toBe('[{"id": "room-1"');
+    store.createGroup("Team", [bot.id]);
+    const kept = readdirSync(DATA_DIR).filter((name) => /^groups\.bad-\d+\.json$/.test(name));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(DATA_DIR, kept[0]!), "utf8")).toBe('[{"id": "room-1"');
+    expect(new Store(selection).groups.map((group) => group.name)).toEqual(["Team"]);
   });
 
   it("createBot recreates a lost bot under its old id", () => {

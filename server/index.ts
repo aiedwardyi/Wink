@@ -7846,6 +7846,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }),
         ),
         cursor: `${STREAM_ID}:${lastSeq}`,
+        ...(store.botsFile === "unreadable" ? { botsUnreadable: true } : {}),
       });
     }
     if (method === "PUT" && path === "/api/bots/order") {

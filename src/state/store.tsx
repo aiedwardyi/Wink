@@ -205,6 +205,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...holdStopping({ ...hydrated, bots: applyOptimisticBusy(hydrated.bots, acceptedSends) }, action.bots),
         hydrated: true,
+        botsUnreadable: Boolean(action.botsUnreadable),
         acceptedSends,
         dismissedTaskRecovery: {
           ...hydrated.dismissedTaskRecovery,
@@ -992,6 +993,7 @@ export const initialState: AppState = {
   connected: false,
   hasConnected: false,
   hydrated: false,
+  botsUnreadable: false,
   error: null,
   mascotMotion: null,
   pendingQueued: {},
@@ -2017,6 +2019,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           type: "hydrate",
           bots,
           groups: groups ?? [],
+          botsUnreadable: snapshot.botsUnreadable,
           sidebarOrder: loadSidebarOrder(),
         });
         // Snapshot has busy, not StreamState.signal. Without SSE replay a

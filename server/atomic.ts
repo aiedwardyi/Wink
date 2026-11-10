@@ -6,6 +6,7 @@
 // that fails to parse on next boot and is silently treated as empty state.
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { extname } from "node:path";
 
 export function writeFileAtomic(path: string, data: string, options: { mode?: number } = {}): void {
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
@@ -43,5 +44,15 @@ export function writeFileAtomic(path: string, data: string, options: { mode?: nu
       /* best-effort cleanup */
     }
     throw e;
+  }
+}
+
+/** Moves a file that did not load to `<name>.bad-<time><ext>`, so the next save cannot write over it. */
+export function setAsideFile(path: string): void {
+  const ext = extname(path);
+  try {
+    renameSync(path, `${path.slice(0, path.length - ext.length)}.bad-${Date.now()}${ext}`);
+  } catch (e) {
+    if (!(e instanceof Error && "code" in e && e.code === "ENOENT")) throw e;
   }
 }

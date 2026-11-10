@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
-import { writeFileAtomic } from "./atomic.ts";
+import { setAsideFile, writeFileAtomic } from "./atomic.ts";
 import type { BotHooks } from "./bot-hooks.ts";
 import { indexMailRow, rebuildMailIndex } from "./mail-index.ts";
 import type { UsageWaitView } from "./limit-wait-store.ts";
@@ -17,7 +17,7 @@ import * as mdb from "./message-db.ts";
 import type { SyncChange, SyncMutation } from "./thread-sync-v2.ts";
 import { syncPathChanged } from "./thread-sync-path.ts";
 import type { ToolDetail } from "../shared/tool-detail.ts";
-import { workspaceDir } from "./workspace.ts";
+import { removeWorkspace } from "./workspace.ts";
 import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { applyPendingModel } from "./pending-model.ts";
@@ -622,6 +622,7 @@ export interface InstalledPackageMetadata {
 
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const GROUPS_FILE = join(DATA_DIR, "groups.json");
+const fileMissing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 // One file per resume cursor, so bots.json never carries a prompt copy.
 const SESSION_SYSTEM_DIR = join(DATA_DIR, "session-system");
@@ -727,6 +728,8 @@ export class Store {
   /** "missing" is a lost file; "unreadable" is there but did not load, so it may still hold good bots. */
   botsFile: "loaded" | "missing" | "unreadable" = "loaded";
   groups: GroupRecord[] = [];
+  /** Lists that were there but did not load; the first save moves each aside instead of writing over it. */
+  private unloaded = new Set<string>();
   private threads = new Map<string, ThreadState>();
   private taskPackets = new Map<string, TaskResumePacket | null>();
   private defaultSelection: () => ModelSelection;
@@ -742,12 +745,14 @@ export class Store {
       this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
     } catch (error) {
       this.bots = [];
-      this.botsFile = error instanceof Error && "code" in error && error.code === "ENOENT" ? "missing" : "unreadable";
+      this.botsFile = fileMissing(error) ? "missing" : "unreadable";
+      if (this.botsFile === "unreadable") this.unloaded.add(BOTS_FILE);
     }
     try {
       this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
-    } catch {
+    } catch (error) {
       this.groups = [];
+      if (!fileMissing(error)) this.unloaded.add(GROUPS_FILE);
     }
     // busy never survives a restart - no turn does either.
     let botsMigrated = false;
@@ -919,8 +924,16 @@ export class Store {
     }
   }
 
+  private saveList(file: string, json: string) {
+    if (this.unloaded.has(file)) {
+      setAsideFile(file);
+      this.unloaded.delete(file);
+    }
+    writeFileAtomic(file, json, { mode: 0o600 });
+  }
+
   private saveBots() {
-    writeFileAtomic(BOTS_FILE, JSON.stringify(this.bots, null, 2), { mode: 0o600 });
+    this.saveList(BOTS_FILE, JSON.stringify(this.bots, null, 2));
     this.pruneSessionSystems();
   }
 
@@ -948,7 +961,7 @@ export class Store {
   }
 
   private saveGroups() {
-    writeFileAtomic(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId: _busyBotId, ...g }) => g), null, 2), { mode: 0o600 });
+    this.saveList(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId: _busyBotId, ...g }) => g), null, 2));
   }
 
   setSyncWriter(writer: Store["syncWrite"]): void {
@@ -1487,7 +1500,7 @@ export class Store {
     // the bot's workspace (files + memory) goes with it — same rule as its
     // transcripts: deleting a bot deletes what it knew
     try {
-      rmSync(workspaceDir(id), { recursive: true, force: true });
+      removeWorkspace(id);
     } catch {}
     this.saveBots();
     this.emit({ type: "bot.deleted", botId: id });
