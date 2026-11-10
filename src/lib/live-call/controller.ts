@@ -11,6 +11,8 @@ export type CallState = {
   muted: boolean;
   pending?: { order: string; expiresAt: number };
   error?: string;
+  /** The line being spoken, kept after its turn until the next one starts. */
+  caption?: { id: number; who: CallLine["who"]; text: string };
 };
 
 export type CallAudioPort = {
@@ -78,6 +80,8 @@ export class LiveCall {
   private reconnecting = 0;
   private heardBuf = "";
   private saidBuf = "";
+  private lines = 0;
+  private lineIds: Record<CallLine["who"], number> = { user: 0, voice: 0 };
   private guarded = false;
   private pending?: { order: string; toolId: string; timer: ReturnType<typeof setTimeout> };
   private awaiting = false;
@@ -189,10 +193,12 @@ export class LiveCall {
       heard: (text) => {
         if (!mine()) return;
         this.heardBuf += text;
+        this.caption("user", this.heardBuf);
       },
       said: (text) => {
         if (!mine()) return;
         this.saidBuf += text;
+        this.caption("voice", this.saidBuf);
         if (this.awaiting && !this.guarded && claimsDone(this.saidBuf)) {
           this.guarded = true;
           this.stats.doneGuard += 1;
@@ -308,9 +314,17 @@ export class LiveCall {
     this.engine?.sendToolResult(pending.toolId, "propose_work", result);
   }
 
+  private caption(who: CallLine["who"], buf: string) {
+    const text = spokenText(buf);
+    if (!text) return;
+    this.lineIds[who] ||= ++this.lines;
+    this.set({ caption: { id: this.lineIds[who], who, text } });
+  }
+
   private flushHeard() {
     const text = spokenText(this.heardBuf);
     this.heardBuf = "";
+    this.lineIds.user = 0;
     if (!text) return;
     this.stats.userLines += 1;
     this.letters.hangul += text.match(HANGUL)?.length ?? 0;
@@ -324,6 +338,7 @@ export class LiveCall {
   private flushSaid(share: number) {
     const full = spokenText(this.saidBuf);
     this.saidBuf = "";
+    this.lineIds.voice = 0;
     if (!full) return;
     const text = share < 1 ? `${full.slice(0, Math.max(1, Math.round(full.length * share))).trimEnd()}…` : full;
     this.stats.voiceLines += 1;

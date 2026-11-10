@@ -103,6 +103,24 @@ describe("LiveCall", () => {
     ]);
   });
 
+  it("captions the line being spoken, keeping the last one after its turn", async () => {
+    const { call, engine } = await started();
+    expect(call.state().caption).toBeUndefined();
+    engine().events.heard("Can you fix ");
+    expect(call.state().caption).toEqual({ id: 1, who: "user", text: "Can you fix" });
+    engine().events.heard("the login bug?");
+    expect(call.state().caption).toEqual({ id: 1, who: "user", text: "Can you fix the login bug?" });
+    engine().events.answering();
+    engine().events.said("<no speech>");
+    expect(call.state().caption?.who).toBe("user");
+    engine().events.said("Sure, {pause} on it.");
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    engine().events.turnDone();
+    expect(call.state().caption).toEqual({ id: 2, who: "voice", text: "Sure, on it." });
+    engine().events.said("Next.");
+    expect(call.state().caption).toEqual({ id: 3, who: "voice", text: "Next." });
+  });
+
   it("sends an order after a tapped yes, tagged as an order", async () => {
     const { call, engine, posts } = await started({ "/messages": { status: 202, data: { ok: true } } });
     engine().events.toolCall([{ id: "t1", name: "propose_work", args: { order: "Fix the login bug." } }]);

@@ -10,11 +10,18 @@ export class CallAudio {
   private nextAt = 0;
   private startedAt = 0;
   private queuedSec = 0;
+  private readonly voice: AnalyserNode;
+  private mic: AnalyserNode | null = null;
+  private readonly samples = new Float32Array(256);
   onIdle: () => void = () => {};
   onStart: () => void = () => {};
 
   // The context comes from the call tap, the only moment a phone lets it play.
-  constructor(readonly ctx: AudioContext) {}
+  constructor(readonly ctx: AudioContext) {
+    this.voice = ctx.createAnalyser();
+    this.voice.fftSize = this.samples.length;
+    this.voice.connect(ctx.destination);
+  }
 
   async capture(onFrame: (pcm: ArrayBuffer) => void) {
     this.stream = await navigator.mediaDevices.getUserMedia({
@@ -28,8 +35,25 @@ export class CallAudio {
     }
     this.node = new AudioWorkletNode(this.ctx, "capture-16k");
     this.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => onFrame(event.data);
-    this.ctx.createMediaStreamSource(this.stream).connect(this.node);
+    const source = this.ctx.createMediaStreamSource(this.stream);
+    source.connect(this.node);
+    this.mic = this.ctx.createAnalyser();
+    this.mic.fftSize = this.samples.length;
+    source.connect(this.mic);
     await this.ctx.resume();
+  }
+
+  /** Loudness 0-1 of the voice, or of whoever is louder when `mic` is on; read per frame. */
+  level(mic: boolean): number {
+    const voice = this.rms(this.voice);
+    return Math.min(1, 4 * (mic && this.mic ? Math.max(voice, this.rms(this.mic)) : voice));
+  }
+
+  private rms(node: AnalyserNode): number {
+    node.getFloatTimeDomainData(this.samples);
+    let sum = 0;
+    for (const sample of this.samples) sum += sample * sample;
+    return Math.sqrt(sum / this.samples.length);
   }
 
   get playing(): boolean {
@@ -49,7 +73,7 @@ export class CallAudio {
     for (let i = 0; i < pcm.length; i++) data[i] = pcm[i]! / 32768;
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.ctx.destination);
+    source.connect(this.voice);
     const first = !this.sources.size;
     if (first) {
       this.nextAt = this.ctx.currentTime + 0.05;

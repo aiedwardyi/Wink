@@ -115,6 +115,7 @@ import { ContextCompactionDivider, TaskRecoveryCard } from "./TaskRecoveryCard";
 import { WhatsNewSlot } from "./WhatsNew";
 
 const LiveCallBar = lazyView(() => import("./LiveCallBar").then((m) => ({ default: m.LiveCallBar })));
+const LiveCallBox = lazyView(() => import("./LiveCallBox").then((m) => ({ default: m.LiveCallBox })));
 
 /** Older pages fetched looking for the prompt behind a bot-only branch. */
 const PROMPT_PAGES = 3;
@@ -1575,7 +1576,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
                 void ctx.resume();
                 setLiveCall({ botId: bot.id, ctx });
               }}
-              className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-danger text-white" : "text-ink-secondary hover:bg-raised hover:text-ink")}
+              className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-danger/15 text-danger" : "text-ink-secondary hover:bg-raised hover:text-ink")}
             >
               <Phone size={18} />
             </button>
@@ -1913,6 +1914,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
           onConsumeReply={consumeReply}
           onRestoreReply={restoreReply}
           onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
+          call={onLiveCall ? (box) => <Suspense fallback={null}><LiveCallBox bot={bot} {...box} /></Suspense> : undefined}
         />
         {terminal && <TermStatusLine bot={bot} engine={engine} hidden={hidden} cwd={activeTask?.cwd === undefined ? bot.cwd : activeTask.cwd} />}
       </div>
