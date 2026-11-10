@@ -2,6 +2,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { Agent, createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +16,7 @@ import { Store } from "../store.ts";
 import { closeAsksDb, configureRoomAsks, roomAsks, roomAskHooks, type HostedGroup, type RoomAskDeps } from "./asks.ts";
 import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries, roomPeople } from "./db.ts";
 import { configureRoomDoor, handleRoomDoor, removeRoomPerson } from "./door.ts";
-import { goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
+import { ENDED_FLUSH_MS, endDoorPerson, goLive, HEARTBEAT_MS, MAX_BACKLOG_BYTES, openDoorStream, writeFrame, type DoorFrame } from "./door-streams.ts";
 import { closeInvitesDb, createInvite, revokeGuestKeys, roomInvites } from "./invites.ts";
 import { writeRoomEntry } from "./mirror.ts";
 import { createPeopleOnlyRoom } from "./people-only.ts";
@@ -72,6 +73,7 @@ async function listen(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
+let clock = Date.now();
 let relayPort = 0;
 let localPort = 0;
 
@@ -218,7 +220,9 @@ afterAll(async () => {
 
 beforeEach(() => {
   close();
-  vi.setSystemTime(Date.now() + 5 * MINUTE);
+  // Monotonic, so a test that swaps fake timers can't move the limiters' clock back.
+  clock = Math.max(clock, Date.now()) + 5 * MINUTE;
+  vi.setSystemTime(clock);
   rmSync(DATA_DIR, { recursive: true, force: true });
   flag = true;
   reached.length = 0;
@@ -591,6 +595,26 @@ describe("stream internals", () => {
     res.destroy();
   });
 
+  it("destroys a removed person's stream socket once the ended flush deadline passes", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const res = new FakeRes();
+      const socket = { destroy: vi.fn(), once: vi.fn() };
+      Object.assign(res, { socket, end: (chunk: string) => res.written.push(chunk) });
+      openDoorStream("r", "p", res as unknown as ServerResponse);
+      endDoorPerson("r", "p");
+      expect(res.written.at(-1)).toBe(`data: {"kind":"ended"}
+
+`);
+      vi.advanceTimersByTime(ENDED_FLUSH_MS - 1);
+      expect(socket.destroy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(socket.destroy).toHaveBeenCalledOnce();
+    } finally {
+      vi.useFakeTimers({ toFake: ["Date"] });
+    }
+  });
+
   it("sends a comment heartbeat every 15 s and cuts a reader past 1 MB behind", () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     try {
@@ -631,27 +655,63 @@ describe("send", () => {
     watch.close();
   });
 
-  it("refuses a send whose room was deleted while its body was uploading", async () => {
-    const group = peopleRoom();
-    const { key } = await joined(group, "Mina");
-    const reply = new Promise<number>((resolve, reject) => {
+  /** A send whose body arrives in two parts, with `between` run while it uploads. */
+  function slowSend(group: HostedGroup, key: string, between: () => void): Promise<Reply> {
+    return new Promise((resolve) => {
       const req = request({
         host: "127.0.0.1", port: relayPort, method: "POST", path: `/room/v1/rooms/${group.hosted.roomId}/send`, agent: false,
         headers: { host: HOST, origin: ORIGIN, authorization: `Bearer ${key}`, "content-type": "application/json" },
       }, (res) => {
-        res.resume();
-        resolve(res.statusCode ?? 0);
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) }));
       });
-      req.on("error", reject);
+      // Remove and revoke cut this socket too; a cut reads as status 0.
+      req.on("error", () => resolve({ status: 0, headers: {}, body: null }));
       req.write('{"text":');
       setTimeout(() => {
-        store.deleteGroup(group.id);
+        between();
         req.end('"too late"}');
       }, 50);
     });
-    expect(await reply).toBe(404);
+  }
+
+  it("refuses a send whose room was deleted while its body was uploading", async () => {
+    const group = peopleRoom();
+    const { key } = await joined(group, "Mina");
+    expect((await slowSend(group, key, () => store.deleteGroup(group.id))).status).toBe(404);
     expect(recentRoomEntries(group.hosted.roomId, 5)).toEqual([]);
   });
+
+  /** Deletes rows straight from rooms.db, so no stream or socket is cut. */
+  function dropRows(sql: string, ...params: string[]): void {
+    const db = new DatabaseSync(join(DATA_DIR, "rooms.db"));
+    db.prepare(sql).run(...params);
+    db.close();
+  }
+
+  for (const [what, cut, drop] of [
+    ["revoked", revokeGuestKeys, "DELETE FROM guest_keys WHERE room_id = ? AND person_id = ?"],
+    ["removed", removeRoomPerson, "DELETE FROM people WHERE room_id = ? AND id = ?"],
+  ] as const) {
+    it(`commits nothing when the key is ${what} while a send body uploads`, async () => {
+      const group = peopleRoom();
+      const mina = await joined(group, "Mina");
+      const joon = await joined(group, "Joon");
+      const watch = await openStream(group.hosted.roomId, joon.key, 0);
+      await watch.until((frames) => frames.length >= 1);
+      const quiet = await slowSend(group, mina.key, () => dropRows(drop, group.hosted.roomId, mina.personId));
+      expect(quiet).toMatchObject({ status: 401, body: { error: "unauthorized" } });
+      const second = await joined(group, "Mina2");
+      const cutOff = await slowSend(group, second.key, () => cut(group.hosted.roomId, second.personId));
+      expect([0, 401]).toContain(cutOff.status);
+      expect(recentRoomEntries(group.hosted.roomId, 5)).toEqual([]);
+      expect(store.messagesFor(group.threadId)).toEqual([]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(watch.frames.filter((frame) => frame.kind === "entry")).toEqual([]);
+      watch.close();
+    });
+  }
 
   it("dedupes a retried sendId and refuses its reuse for other text", async () => {
     const group = peopleRoom();

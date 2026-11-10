@@ -8,6 +8,8 @@ import type { RoomAuthor, RoomEntry } from "./db.ts";
 /** The relay cuts a socket idle for 10 minutes. */
 export const HEARTBEAT_MS = 15_000;
 export const MAX_BACKLOG_BYTES = 1024 * 1024;
+/** A reader that stops reading can hold the `ended` flush open forever. */
+export const ENDED_FLUSH_MS = 5_000;
 
 export interface DoorEntry {
   seq: number;
@@ -132,6 +134,7 @@ export function endDoorPerson(roomId: string, personId: string, keep?: Duplex): 
     const socket = stream.res.socket;
     if (socket) ending.add(socket);
     stream.res.end(`data: ${JSON.stringify({ kind: "ended" } satisfies DoorFrame)}\n\n`, () => socket?.destroy());
+    setTimeout(() => socket?.destroy(), ENDED_FLUSH_MS).unref();
   }
   const key = personKey(roomId, personId);
   for (const socket of sockets.get(key) ?? []) {

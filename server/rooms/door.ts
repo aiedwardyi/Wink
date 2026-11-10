@@ -184,9 +184,11 @@ async function join(req: IncomingMessage, res: ServerResponse, relayHost: string
   send(res, 200, { roomId: result.roomId, person: { id: result.person.id, name: result.person.name }, key: result.key });
 }
 
+const bearerOf = (req: IncomingMessage) => /^Bearer (\S{1,256})$/.exec(req.headers.authorization ?? "")?.[1];
+
 function guestFor(req: IncomingMessage, res: ServerResponse, peer: string | null): Guest | null {
   const { unauthenticated, badKeys } = door!;
-  const bearer = /^Bearer (\S{1,256})$/.exec(req.headers.authorization ?? "")?.[1];
+  const bearer = bearerOf(req);
   const guest = bearer ? guestByKey(bearer) : null;
   if (guest) return guest;
   const limited = !unauthenticated.take("door") || (bearer !== undefined && !badKeys.take(rateKey(peer)));
@@ -224,9 +226,12 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
 async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
   const body = await readJson(req, BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
-  // The room may have gone while the body was uploading.
+  // The room, key or person may have gone while the body was uploading.
   const group = doorGroup(roomId);
   if (!group) return notFound(res);
+  const bearer = bearerOf(req);
+  const still = bearer ? guestByKey(bearer) : null;
+  if (still?.roomId !== roomId || still.person.id !== person.id) return send(res, 401, { error: "unauthorized" });
   const fields = record(body.value);
   const text = fields?.text;
   const replyToId = fields?.replyToId;
