@@ -79,8 +79,10 @@ export function configureRoomDoor(deps: RoomDoorDeps | null): void {
     unsubscribe: deps.store.onChange((change) => {
       const roomId = (change.type === "group" || change.type === "group.deleted") && door?.watched.get(change.groupId);
       if (!roomId || !anyDoorStreams()) return;
-      if (doorGroup(roomId)) pushRoomState(roomId);
-      else endDoorRoom(roomId);
+      if (doorGroup(roomId)) return pushRoomState(roomId);
+      endDoorRoom(roomId);
+      door!.versions.delete(roomId);
+      door!.watched.delete(change.groupId);
     }),
   };
 }
@@ -219,9 +221,12 @@ function stream(res: ServerResponse, url: URL, group: HostedGroup, person: RoomP
   goLive(open, head);
 }
 
-async function sendLine(req: IncomingMessage, res: ServerResponse, group: HostedGroup, person: RoomPerson): Promise<void> {
+async function sendLine(req: IncomingMessage, res: ServerResponse, roomId: string, person: RoomPerson): Promise<void> {
   const body = await readJson(req, BODY_BYTES);
   if (!body.ok) return bodyError(res, body.status);
+  // The room may have gone while the body was uploading.
+  const group = doorGroup(roomId);
+  if (!group) return notFound(res);
   const fields = record(body.value);
   const text = fields?.text;
   const replyToId = fields?.replyToId;
@@ -234,7 +239,6 @@ async function sendLine(req: IncomingMessage, res: ServerResponse, group: Hosted
     return send(res, 400, { error: "bad sendId" });
   }
   try {
-    const roomId = group.hosted.roomId;
     const earlier = sendId ? door!.deps.store.messagesFor(group.threadId).find((message) => message.sendId === sendId && message.author?.id === person.id) : undefined;
     if (earlier) {
       const entry = earlier.roomEntryId ? roomEntry(roomId, earlier.roomEntryId) : null;
@@ -274,7 +278,7 @@ export async function handleRoomDoor(req: IncomingMessage, res: ServerResponse, 
   trackDoorSocket(guest.roomId, guest.person.id, req.socket);
   if (action === "snapshot") return snapshot(res, group, guest.person);
   if (action === "stream") return stream(res, url, group, guest.person);
-  if (action === "send") return sendLine(req, res, group, guest.person);
+  if (action === "send") return sendLine(req, res, guest.roomId, guest.person);
   if (action === "cancel") return send(res, 404, { error: "no such ask" });
   removeRoomPerson(guest.roomId, guest.person.id, req.socket);
   send(res, 200, { ok: true }, { connection: "close" });

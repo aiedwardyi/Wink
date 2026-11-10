@@ -631,6 +631,28 @@ describe("send", () => {
     watch.close();
   });
 
+  it("refuses a send whose room was deleted while its body was uploading", async () => {
+    const group = peopleRoom();
+    const { key } = await joined(group, "Mina");
+    const reply = new Promise<number>((resolve, reject) => {
+      const req = request({
+        host: "127.0.0.1", port: relayPort, method: "POST", path: `/room/v1/rooms/${group.hosted.roomId}/send`, agent: false,
+        headers: { host: HOST, origin: ORIGIN, authorization: `Bearer ${key}`, "content-type": "application/json" },
+      }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("error", reject);
+      req.write('{"text":');
+      setTimeout(() => {
+        store.deleteGroup(group.id);
+        req.end('"too late"}');
+      }, 50);
+    });
+    expect(await reply).toBe(404);
+    expect(recentRoomEntries(group.hosted.roomId, 5)).toEqual([]);
+  });
+
   it("dedupes a retried sendId and refuses its reuse for other text", async () => {
     const group = peopleRoom();
     const { key } = await joined(group, "Mina");
