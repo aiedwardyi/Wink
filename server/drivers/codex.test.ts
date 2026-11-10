@@ -1377,6 +1377,34 @@ describe("CodexDriver turns (fake app-server)", () => {
     ]);
   });
 
+  it.each(["notification", "completion", "both"])("explains API credit promos once: %s", async (source) => {
+    const error = { message: "Request rejected: codex_byok_restricted_by_api_credit_promo" };
+    const fixture = join(scratch, "promo-failure.json");
+    writeFileSync(fixture, JSON.stringify([
+      ...(source !== "completion" ? [{ method: "error", params: { error, willRetry: false } }] : []),
+      { method: "turn/completed", params: { turn: { status: "failed", ...(source !== "notification" ? { error } : {}) } } },
+    ]));
+    await create({ environment: { CODEX_HOME: scratch, FAKE_CODEX_TOOL_FIXTURE: fixture } });
+    await instance.adapter.sendTurn({ threadId: "t-codex-promo", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.error")).toMatchObject([
+      { message: "This OpenAI key's org is on API credit, which Codex can't use. Pick another Codex account." },
+    ]);
+    expect(JSON.stringify(recorder.events)).not.toContain("codex_byok_restricted_by_api_credit_promo");
+  });
+
+  it("marks the account home after an API credit promo failure", async () => {
+    const fixture = join(scratch, "promo-mark.json");
+    writeFileSync(fixture, JSON.stringify([
+      { method: "error", params: { message: "codex_byok_restricted_by_api_credit_promo", willRetry: false } },
+      { method: "turn/completed", params: { turn: { status: "failed" } } },
+    ]));
+    await create({ environment: { CODEX_HOME: scratch, FAKE_CODEX_TOOL_FIXTURE: fixture } });
+    await instance.adapter.sendTurn({ threadId: "t-codex-promo-mark", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(readFileSync(join(scratch, ".wink-codex-promo.json"), "utf8")).toBe('{"generation":0}');
+  });
+
   it.each(["notification", "completion", "both"])("marks typed subscription exhaustion once: %s", async (source) => {
     const reset = Math.floor(Date.now() / 1000) + 3600;
     const error = { message: "Plan spent", codexErrorInfo: "usageLimitExceeded", resets_at: reset };

@@ -230,8 +230,8 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
   // The small card keeps a Sign In button where the account already reads connected, never a stray "Connected".
   if (account.signIn === "signed-out" && instance && (settings || !accountReady(instance))) control = <div className="min-w-0 [grid-area:1/2] has-[span]:[grid-area:2/1/auto/-1] has-[span]:justify-self-end"><EngineSignIn instance={instance} forceSignIn buttonLabel={t("engines.signIn")} buttonClassName={cn(spot, BUTTON)} /></div>;
   else if (account.signIn === "signed-out") control = <button type="button" data-sign-in="" onClick={signIn} className={cn(spot, BUTTON)}>{t("engines.signIn")}</button>;
-  else if (account.signIn === "ready" && checked) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
-  else if (account.signIn === "ready" && !account.credit) control = (
+  else if (account.signIn === "ready" && checked && !account.codexPromo) control = <span data-main-check="" className={cn(spot, "border-transparent text-accent-text")}>{t("accounts.main")}</span>;
+  else if (account.signIn === "ready" && !account.credit && !account.codexPromo) control = (
     <button type="button" data-use="" aria-label={switching ? undefined : t("usage.desk.useAria", { name: account.name })}
       aria-busy={switching || undefined} aria-disabled={Boolean(pending) || undefined}
       onClick={() => requestMain(engine.base, account.id, reloadInstances)} className={cn(spot, BUTTON)}>
@@ -248,7 +248,7 @@ export function AccountRow({ engine, account, board, state, checked, terminal, c
         </div>
         {control}
       </div>
-      {account.signIn === "ready" && !account.credit ? <>
+      {account.codexPromo ? <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</div> : account.signIn === "ready" && !account.credit ? <>
         <AccountBars engine={engine.engine} account={account} now={clock.now} t={t} />
       </> : <div data-row-status="" className="mt-1.5 text-[12px] text-ink-secondary">{t(account.signIn === "ready" ? "usage.desk.apiCredit" : STATE_KEY[account.signIn])}</div>}
     </div>

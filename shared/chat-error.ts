@@ -1,13 +1,14 @@
 export type ChatError =
   | { kind: "quiet"; site: "chatRace" | "chatQueue" }
   | { kind: "keep"; raw: string }
-  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied"; vars?: Record<string, string | number>; raw?: string }
+  | { kind: "known"; key: "errors.stopped" | "errors.model" | "errors.apps" | "errors.engine" | "errors.sendTaskChanged" | "errors.stopTaskChanged" | "chat.busyGaveUp" | "errors.signedOut" | "errors.engineStopped" | "errors.signInChanged" | "errors.hookDenied" | "errors.codexPromo"; vars?: Record<string, string | number>; raw?: string }
   | { kind: "unknown"; raw: string };
 
 export function classifyChatError(line: string): ChatError {
   const raw = line.replace(/^error:\s*/, "");
   const queued = /^queued (?:message|room turn) could not start\s*[-\u2014]\s*/.test(raw);
   const reason = raw.replace(/^queued (?:message|room turn) could not start\s*[-\u2014]\s*/, "");
+  if (reason.includes("codex_byok_restricted_by_api_credit_promo") || reason === "This OpenAI key's org is on API credit, which Codex can't use. Pick another Codex account.") return { kind: "known", key: "errors.codexPromo" };
   if (/^the (?:bot|channel) switched tasks before it could receive the message$/i.test(reason)) return { kind: "known", key: "errors.sendTaskChanged" };
   if (/^the (?:bot|channel) switched tasks before it could be interrupted$/i.test(reason)) return { kind: "known", key: "errors.stopTaskChanged" };
   if (/^(?:Claude is not signed in\.|Grok CLI is not signed in|Grok runs in WSL\.|`[^`]+` isn't installed|Project folder not found:)/.test(reason)) return { kind: "keep", raw };

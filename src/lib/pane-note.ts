@@ -1,10 +1,12 @@
 import type { MessageKey, Translate } from "@/lib/i18n";
 import type { PaneNote, PaneNoteStatus } from "../../shared/pane-note";
+import { en } from "./i18n-catalog";
 
 export const NOTE_STATUS_KEY = { done: "chat.noteDone", failed: "chat.noteFailed", blocked: "chat.noteBlocked" } as const satisfies Record<PaneNoteStatus, MessageKey>;
 
 /** The worker's words, or a plain sentence for Wink's own watcher notes. */
 export function noteText(note: PaneNote, t: Translate): string {
+  if (note.body === en["errors.codexPromo"]) return t("errors.codexPromo");
   if (note.alert?.kind === "stalled") return note.alert.minutes === 1 ? t("chat.noteStalledOne") : t("chat.noteStalled", { count: note.alert.minutes });
   if (note.alert?.kind === "waiting") return t("chat.noteWaiting");
   if (note.alert?.kind === "finished") return t("chat.noteFinished");

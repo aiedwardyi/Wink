@@ -51,6 +51,7 @@ import { accountLaunch } from "../account-policy.ts";
 import { baseAccount } from "../worker-resume.ts";
 import { codexAccount, codexApiKeyAccount, readCodexAccount, type CodexAccount } from "./codex-account.ts";
 import { CODEX_TEXT_TIMEOUT_MS, createCodexText } from "./codex-text.ts";
+import { CODEX_PROMO_MESSAGE, isCodexPromo, markCodexPromo, requireCodexPromoAccount } from "../../electron/codex-promo.mjs";
 
 export { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 
@@ -275,6 +276,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
     const sendTurn = async (turn: SendTurnInput) => {
       if (!admitted || accountBlocked) throw new Error("Sign in to this Codex account before starting a turn");
+      requireCodexPromoAccount(retirementHome, input.account?.generation ?? 0);
       if (input.account && turn.model && decodeCodexSelection(turn.model).modelProvider !== "openai") throw new Error("Unsupported subscription model");
       // One driver instance serves many threads. Interrupt state belongs to
       // this turn so activity elsewhere cannot cancel or revive its retry.
@@ -371,6 +373,17 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let contextWindow: number | undefined;
       let usageWindows: ReturnType<typeof codexRateLimitWindows> = [];
       let usageLimitReported = false;
+      let promoReported = false;
+      const promoFailure = (failure: unknown) => {
+        if (!isCodexPromo(failure)) return false;
+        if (!promoReported) {
+          promoReported = true;
+          try { markCodexPromo(retirementHome, input.account?.generation ?? 0); }
+          catch { console.error("Codex account restriction could not be saved"); }
+          emit({ ...base(threadId, turnId), type: "runtime.error", message: CODEX_PROMO_MESSAGE });
+        }
+        return true;
+      };
       let signedOutReported = false;
       const signedOut = () => {
         if (signedOutReported) return;
@@ -688,6 +701,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           case "turn/completed": {
             trace?.mark("native_completion");
             const t = p.turn ?? {};
+            if ((t.status === "failed" && !stopRequested && promoFailure(t.error)) || promoReported) {
+              settle(false, "api_credit_promo");
+              break;
+            }
             const limit = t.status === "failed" && !stopRequested ? usageFailure(t.error) : null;
             if (limit && !usageLimitReported) {
               emit({ ...base(threadId, turnId), type: "runtime.error", ...limit });
@@ -703,6 +720,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             // shape drift: 0.144 sends {message}, 0.139 nests it under
             // {error:{message}} — surface either (agentcal armor)
             {
+              if (!stopRequested && promoFailure(p)) {
+                settle(false, "api_credit_promo");
+                break;
+              }
               const message = p.message ?? p.error?.message;
               if (p.willRetry === true) {
                 // the CLI reconnects the dropped stream itself ("Reconnecting... 2/5")
@@ -716,6 +737,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                   maxAttempts: tries ? Number(tries[2]) + 1 : undefined,
                 });
               } else if (!stopRequested) {
+                if (promoReported) break;
                 const limit = usageFailure(p);
                 if (limit && !usageLimitReported) {
                   emit({ ...base(threadId, turnId), type: "runtime.error", ...limit });
@@ -806,6 +828,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           return;
         }
         if (!state.settled) {
+          if (promoFailure(stderr) || promoReported) {
+            settle(false, "api_credit_promo");
+            return;
+          }
           emit({
             ...base(threadId, turnId),
             type: "runtime.error",
@@ -904,6 +930,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (abandoned) return;
         const failure = e instanceof Error ? e : { text: String(e) };
         const message = e instanceof Error ? e.message : String(e);
+        if (!state.settled && (promoFailure(e) || promoReported)) {
+          settle(false, "api_credit_promo");
+          return;
+        }
         const needsAuth = authRequired(message);
         const verdict = classifyError(failure);
         if (!state.settled && !needsAuth && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1 && state.sawStreamDelta === false) {

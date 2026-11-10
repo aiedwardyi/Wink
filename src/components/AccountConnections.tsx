@@ -162,6 +162,7 @@ function ConnectionAccount({ account, label, named, revision, busy, disabled, si
         </>}
         actions={draining ? <span role="status">{t("accounts.removing")}</span> : stacked ? undefined : phone ? more : controls} />}
       {stacked && <span className="absolute right-0 top-0 flex h-9 items-center [@media(pointer:coarse)]:h-11">{more}</span>}
+      {named?.codexPromo && <p className="pb-2 pl-6 text-[12px] text-ink-secondary">{t("usage.desk.codexPromo")}</p>}
       <Fold open={menu} id={`${id}-actions`}>
         <div ref={actions} className="flex min-w-0 flex-wrap justify-end gap-2 pb-2 pl-6"
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(false); menuButton.current?.focus(); } }}>

@@ -175,6 +175,14 @@ async function mount({ phone = false, coarse = phone, locale = "en", reduce = fa
   await act(async () => root.render(createElement(i18n.I18nProvider, null, createElement(UsageSection))));
   await settle();
 }
+it.each(["en", "ko"] as const)("marks a promo account in Usage: %s", async (locale) => {
+  Object.assign(accountOf(server.board, "codex"), { codexPromo: true });
+  await mount({ locale });
+  const row = host.querySelector('[data-account-row="codex"]');
+  expect(row?.textContent).toContain(locale === "en" ? "Unavailable for Codex: API credit promo" : "Codex 사용 불가: API 크레딧 프로모션");
+  expect(row?.querySelector("button[data-use], [data-main-check]")).toBeNull();
+});
+
 async function unmount() {
   await act(async () => root.unmount());
   host.remove();

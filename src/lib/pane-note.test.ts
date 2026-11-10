@@ -9,6 +9,11 @@ const stored = (text: string, label: string | null = "QCARD-FIX | Opus 5.5 | hig
   `[pane bc9c674b]${label ? ` [${label}]` : ""} from Wink (${BOT}): ${text}`;
 
 describe("parsePaneNote", () => {
+  it("localizes the worker's API credit promo notice", () => {
+    const note = parsePaneNote(stored("This OpenAI key's org is on API credit, which Codex can't use. Pick another Codex account."));
+    expect(noteText(note, (key, vars) => translate("ko", key, vars))).toBe("이 OpenAI 키의 조직은 API 크레딧 프로모션을 사용 중이라 Codex를 쓸 수 없어요. 다른 Codex 계정을 선택하세요.");
+  });
+
   it("splits a DONE report into status and the worker's words", () => {
     expect(parsePaneNote(stored("DONE QCARD-FIX branch=fix/question-card sha=3623665c dirty=no\nThe card is fixed. Tests pass."))).toEqual({
       pane8: "bc9c674b",
