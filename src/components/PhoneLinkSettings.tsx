@@ -1,64 +1,47 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { api } from "@/state/store";
 import { ConnectDevices } from "./ConnectDevices";
+import { YourPcs } from "./DeviceRows";
 import { PhoneAccessSettings } from "./PhoneAccessSettings";
+import { PhonePairing } from "./PhonePairing";
 import { Fold } from "./Fold";
+
+const link = "text-[12px] text-ink-secondary underline hover:text-ink";
 
 export function PhoneLinkSettings() {
   const { t } = useI18n();
-  const [relayOpen, setRelayOpen] = useState(false);
-  const [relayManaged, setRelayManaged] = useState(false);
-  const relayBox = useRef<HTMLDivElement>(null);
+  const [pairOpen, setPairOpen] = useState(false);
+  const [tailscaleOpen, setTailscaleOpen] = useState(false);
+  const [paired, setPaired] = useState(0);
+  const onPaired = useCallback(() => setPaired((count) => count + 1), []);
+  const closePairing = useCallback(() => setPairOpen(false), []);
 
-  useEffect(() => {
-    if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) return;
-    let live = true;
-    api("/api/phone-relay/status").then(() => live && setRelayManaged(true), () => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  // The form renders once its status loads, so wait for it before focusing it. Scroll only
-  // once its fold has opened too: mid-fold, the scroller cannot reach where the form ends up.
-  useEffect(() => {
-    const box = relayBox.current;
-    if (!relayOpen || !box) return;
-    const fold = box.closest("[data-fold]");
-    let focused = false;
-    const reveal = () => {
-      if (!box.firstElementChild) return false;
-      if (!focused) {
-        focused = true;
-        box.querySelector<HTMLElement>("input, select, textarea")?.focus({ preventScroll: true });
-      }
-      if (fold?.getAttribute("data-fold") === "opening") return false;
-      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-      box.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
-      return true;
-    };
-    if (reveal()) return;
-    const watch = new MutationObserver(() => {
-      if (reveal()) watch.disconnect();
-    });
-    watch.observe(box, { childList: true, subtree: true });
-    if (fold) watch.observe(fold, { attributes: true, attributeFilter: ["data-fold"] });
-    return () => watch.disconnect();
-  }, [relayOpen]);
+  // Relay management answers only on this PC; another device keeps the Tailscale page.
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
+    return <div data-phone-settings className="rounded-xl bg-card p-4"><ConnectDevices /></div>;
+  }
 
   return (
-    <div data-phone-settings className="rounded-xl bg-card p-4">
-      <ConnectDevices />
-      {relayManaged && <>
-        <button type="button" aria-expanded={relayOpen} aria-controls="phone-relay-settings" onClick={() => setRelayOpen((open) => !open)} className="mt-5 text-[12px] text-ink-secondary underline hover:text-ink">
-          {t("settings.phone.relay")}
-        </button>
-        <Fold open={relayOpen} id="phone-relay-settings">
-          <div ref={relayBox} className="mt-4 border-t border-hairline/40 pt-4"><PhoneAccessSettings /></div>
+    <div data-phone-settings className="usage-sections">
+      <PhoneAccessSettings refresh={paired} />
+      <YourPcs />
+      <div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <button type="button" aria-expanded={pairOpen} aria-controls="phone-pairing" onClick={() => setPairOpen((open) => !open)} className={link}>
+            {t("settings.devices.pairWithCode")}
+          </button>
+          <button type="button" aria-expanded={tailscaleOpen} aria-controls="devices-tailscale" onClick={() => setTailscaleOpen((open) => !open)} className={link}>
+            {t("settings.devices.useTailscale")}
+          </button>
+        </div>
+        <Fold open={pairOpen} id="phone-pairing">
+          <div className="pt-3"><PhonePairing onPaired={onPaired} onClose={closePairing} /></div>
         </Fold>
-      </>}
+        <Fold open={tailscaleOpen} id="devices-tailscale">
+          <div className="pt-3"><ConnectDevices /></div>
+        </Fold>
+      </div>
     </div>
   );
 }
