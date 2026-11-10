@@ -217,7 +217,8 @@ export function RemoteTerminalView({
   const inSync = !activePaneId || !snapshot?.sessionId || snapshot.sessionId === activePaneId;
   const shown = onMainTab ? MAIN_CLOSED : inSync ? snapshot : null;
   const noTerminal = shown?.state === "no-terminal";
-  const text = shown && !noTerminal ? snapshotText(shown) : "";
+  const text = shown && !noTerminal ? snapshotText(shown).replace(/(?:\r?\n[^\S\r\n]*)+$/, "") : "";
+  const screenRuns = shown?.screenRuns?.slice(0, Math.max(1, shown.screenRuns.findLastIndex((row) => row.some((run) => run.t.trim())) + 1));
   const canType = !!shown?.sessionId && shown.generation !== undefined && !noTerminal && !shown.exited;
 
   useLayoutEffect(() => {
@@ -401,10 +402,10 @@ export function RemoteTerminalView({
           }}
           className="orbit-remote-terminal min-h-0 flex-1 overflow-auto overscroll-contain whitespace-pre p-4 text-[12px] leading-relaxed select-text"
         >
-          {shown?.screenRuns ? (
+          {screenRuns ? (
             <>
-              {shown.recentText && `${shown.recentText}\n\n`}
-              {shown.screenRuns.map((row, y) => (
+              {shown?.recentText && `${shown.recentText}\n\n`}
+              {screenRuns.map((row, y) => (
                 <Fragment key={y}>
                   {y > 0 && "\n"}
                   {row.map((run, x) => (
