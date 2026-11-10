@@ -54,11 +54,15 @@ describe("HIGH 1 Claude limit wording", () => {
     const room = [{ id: "five_hour", usedPercent: 12, resetsAt: now + 3_600_000 }, { id: "seven_day", usedPercent: 52, resetsAt: now + 86_400_000 }];
     it.each([FABLE, ...["Opus", "Sonnet", "Haiku", "Mythos"].map((model) => FABLE.replace("Fable", model)), FABLE.replace("'", "\u2019")])(
       "is a usage limit while the account windows have room: %s", (text) => {
-        expect(chatUsageLimit("claude", { error: "rate_limit", result: text }, room, true, now)?.usageLimit).toEqual({ resetsAt: null });
+        expect(chatUsageLimit("claude", { error: "rate_limit", result: text }, room, true, now)?.usageLimit).toEqual({ resetsAt: null, model: true });
       });
     it("keeps the reset the event carries", () => {
       const reset = now + 7_200_000;
-      expect(chatUsageLimit("claude", { error: "rate_limit", result: FABLE, resetsAt: reset / 1000 }, room, true, now)?.usageLimit).toEqual({ resetsAt: reset });
+      expect(chatUsageLimit("claude", { error: "rate_limit", result: FABLE, resetsAt: reset / 1000 }, room, true, now)?.usageLimit).toEqual({ resetsAt: reset, model: true });
+    });
+    it("leaves a whole-plan limit unmarked", () => {
+      const spent = [{ id: "five_hour", usedPercent: 100, resetsAt: now + 3_600_000 }];
+      expect(chatUsageLimit("claude", "You've hit your session limit · resets 3am (Asia/Seoul)", spent, true, now)?.usageLimit).toEqual({ resetsAt: now + 3_600_000 });
     });
     it("still rejects a plain limit line while the account windows have room", () => {
       expect(chatUsageLimit("claude", "You've hit your limit · resets 3am (Asia/Seoul)", room, true, now)).toBeNull();

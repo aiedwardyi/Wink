@@ -158,7 +158,7 @@ export interface Message {
     signIn?: boolean;
     accountId?: string;
     folder?: string;
-    usageLimit?: { resetsAt: number | null };
+    usageLimit?: { resetsAt: number | null; model?: boolean };
     usageWait?: UsageWaitView;
     /** an auto-approval chip; the model replay skips it */
     approval?: boolean;

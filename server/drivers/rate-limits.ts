@@ -75,7 +75,7 @@ export function chatUsageLimit(
   windows: readonly RateLimitWindow[] = [],
   subscription = true,
   now = Date.now(),
-): { message: string; usageLimit: { resetsAt: number | null } } | null {
+): { message: string; usageLimit: { resetsAt: number | null; model?: boolean } } | null {
   if (!subscription) return null;
   const body = isRecord(failure) ? failure : {};
   const error = isRecord(body.error) ? body.error : body;
@@ -96,7 +96,7 @@ export function chatUsageLimit(
     ["resetsAt", "resets_at", "resetAt", "reset_at"].map((key) => epochMs(detail[key])));
   resets.push(...spent.map((w) => w.resetsAt));
   const known = resets.filter((at): at is number => at !== null);
-  return { message: message || "Usage limit reached", usageLimit: { resetsAt: known.length ? Math.max(...known) : null } };
+  return { message: message || "Usage limit reached", usageLimit: { resetsAt: known.length ? Math.max(...known) : null, ...(modelCap && { model: true }) } };
 }
 
 /** Grok Build ACP `x.ai/billing` / CLI `/usage`: one weekly included pool.
