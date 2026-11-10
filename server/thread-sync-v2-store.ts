@@ -661,6 +661,12 @@ export function createThreadSyncV2Store(host: SyncStoreHost, enabled = true) {
       republishChats();
     },
     republishing: () => republishing > 0,
+    /** Rebuilds a returning bot's chats from this PC's own sync records. */
+    rebuild(botId: string): void {
+      const tasks = withMessageTransaction((db) => z.array(storedTaskSchema).parse(db.prepare("SELECT * FROM sync_v2_store WHERE botId = ?").all(botId)));
+      for (const task of tasks) if (!task.deleted) restore(task);
+      if (tasks.length) host.store.applySyncImport(() => host.imported(botId));
+    },
     messageWriter(threadId: string, messageId: string): string | null {
       const task = stored(threadId);
       return task ? engine.variants(task, "row", messageId)[0]?.version.origin ?? null : null;
