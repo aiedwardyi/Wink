@@ -30,6 +30,7 @@ const REQUEST_MS = 15_000;
 const REPLY_BYTES = 4 * 1024 * 1024;
 const FRAME_BYTES = 256 * 1024;
 const SEND_TRIES = 2;
+const MAX_PENDING_SENDS = 20;
 const VIEW_ENTRIES = 200;
 
 const id = z.string().regex(/^[\w-]{1,64}$/);
@@ -104,13 +105,18 @@ interface Sync {
   req: ClientRequest | null;
   timer: NodeJS.Timeout | null;
   tries: number;
-  leaving: boolean;
+  /** Set by reset; only a snapshot that lands clears it. */
+  needsSnapshot: boolean;
+  snapshotting: Promise<boolean> | null;
   stopped: boolean;
 }
 
 export class GuestClient {
   private readonly syncs = new Map<string, Sync>();
   private readonly sending = new Map<string, Promise<unknown>>();
+  private readonly pending = new Map<string, number>();
+  /** Keys whose leave is in flight. */
+  private readonly leaving = new Set<string>();
   private started = false;
   private readonly deps: GuestClientDeps;
 
@@ -158,12 +164,17 @@ export class GuestClient {
 
   /** One at a time per room. A caller retrying a failed send passes the same sendId back. */
   send(roomId: string, text: unknown, replyToId?: unknown, sendId?: unknown): Promise<GuestResult<JoinedEntry> & { sendId?: string }> {
+    const waiting = this.pending.get(roomId) ?? 0;
+    if (waiting >= MAX_PENDING_SENDS) return Promise.resolve(failed(429, "too many messages waiting to send"));
+    this.pending.set(roomId, waiting + 1);
     const next = (this.sending.get(roomId) ?? Promise.resolve()).then(() => this.sendNow(roomId, text, replyToId, sendId));
-    const tail = next.catch(() => {});
-    this.sending.set(roomId, tail);
-    void tail.then(() => {
-      if (this.sending.get(roomId) === tail) this.sending.delete(roomId);
+    const tail = next.catch(() => {}).then(() => {
+      const left = (this.pending.get(roomId) ?? 1) - 1;
+      if (left) return void this.pending.set(roomId, left);
+      this.pending.delete(roomId);
+      this.sending.delete(roomId);
     });
+    this.sending.set(roomId, tail);
     return next;
   }
 
@@ -172,14 +183,11 @@ export class GuestClient {
     if (!room) return failed(404, "not found");
     const creds = joinedKey(roomId);
     if (!creds) return { ok: true, value: this.view(room) };
-    const sync = this.syncs.get(roomId);
-    if (sync) sync.leaving = true;
+    this.leaving.add(creds.key);
     const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/leave`, creds.key, "{}");
-    if (!reply.ok && reply.status !== 401) {
-      if (sync) sync.leaving = false;
-      return reply;
-    }
-    this.end(roomId, "left");
+    if (reply.ok || reply.status === 401) this.end(roomId, creds.key, "left");
+    this.leaving.delete(creds.key);
+    if (!reply.ok && reply.status !== 401) return reply;
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
@@ -196,7 +204,7 @@ export class GuestClient {
       reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/send`, creds.key, body);
     }
     if (!reply.ok) {
-      if (reply.status === 401) this.end(roomId, "removed");
+      if (reply.status === 401) this.end(roomId, creds.key);
       return { ...reply, sendId: chosen };
     }
     const entry = z.object({ entry: entrySchema }).safeParse(reply.value);
@@ -229,7 +237,7 @@ export class GuestClient {
   }
 
   private follow(roomId: string): void {
-    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, leaving: false, stopped: false };
+    const sync: Sync = { link: "connecting", req: null, timer: null, tries: 0, needsSnapshot: false, snapshotting: null, stopped: false };
     this.syncs.set(roomId, sync);
     void this.connect(roomId, sync);
   }
@@ -243,9 +251,11 @@ export class GuestClient {
     this.syncs.delete(roomId);
   }
 
-  private end(roomId: string, status: "removed" | "left"): void {
+  /** Only while `key` is still the room's key: a late reply from before a rejoin changes nothing. */
+  private end(roomId: string, key: string, status?: "removed" | "left"): void {
+    if (joinedKey(roomId)?.key !== key) return;
     this.unfollow(roomId);
-    if (endJoined(roomId, status)) this.changed(roomId);
+    if (endJoined(roomId, status ?? (this.leaving.has(key) ? "left" : "removed"))) this.changed(roomId);
   }
 
   private setLink(roomId: string, sync: Sync, link: JoinedLink): void {
@@ -267,17 +277,25 @@ export class GuestClient {
     sync.timer.unref();
   }
 
-  /** False when the room ended or the snapshot could not be had. */
-  private async snapshot(roomId: string, sync: Sync): Promise<boolean> {
+  /** One request at a time per room. False when the room ended or the snapshot could not be had. */
+  private snapshot(roomId: string, sync: Sync): Promise<boolean> {
+    sync.snapshotting ??= this.loadSnapshot(roomId, sync).finally(() => {
+      sync.snapshotting = null;
+    });
+    return sync.snapshotting;
+  }
+
+  private async loadSnapshot(roomId: string, sync: Sync): Promise<boolean> {
     const creds = joinedKey(roomId);
     if (!creds || sync.stopped) return false;
     const reply = await this.call(creds.relayHost, "GET", `/room/v1/rooms/${roomId}/snapshot`, creds.key);
     if (sync.stopped) return false;
-    if (!reply.ok && reply.status === 401) this.end(roomId, "removed");
+    if (!reply.ok && reply.status === 401) this.end(roomId, creds.key);
     const snapshot = reply.ok ? snapshotSchema.safeParse(reply.value) : null;
     if (!snapshot?.success) return false;
     addJoinedEntries(roomId, snapshot.data.entries, snapshot.data.head);
     setJoinedState(roomId, snapshot.data.state);
+    sync.needsSnapshot = false;
     this.changed(roomId);
     return true;
   }
@@ -285,7 +303,7 @@ export class GuestClient {
   /** A snapshot first when nothing is held yet, then the stream from the newest seq held. */
   private async connect(roomId: string, sync: Sync): Promise<void> {
     if (sync.stopped) return;
-    if (!joinedRoom(roomId)?.state && !(await this.snapshot(roomId, sync))) return this.retry(roomId, sync);
+    if ((sync.needsSnapshot || !joinedRoom(roomId)?.state) && !(await this.snapshot(roomId, sync))) return this.retry(roomId, sync);
     const creds = joinedKey(roomId);
     if (!creds || sync.stopped) return;
     const head = joinedCursor(roomId);
@@ -314,7 +332,7 @@ export class GuestClient {
     req.on("response", (res) => {
       if (res.statusCode !== 200) {
         res.resume();
-        if (res.statusCode === 401) this.end(roomId, "removed");
+        if (res.statusCode === 401) this.end(roomId, creds.key);
         else req.destroy();
         return;
       }
@@ -329,7 +347,7 @@ export class GuestClient {
         while ((cut = text.indexOf("\n\n")) >= 0) {
           const block = text.slice(0, cut);
           text = text.slice(cut + 2);
-          if (block.startsWith("data: ")) void this.frame(roomId, sync, block.slice(6));
+          if (block.startsWith("data: ")) void this.frame(roomId, sync, creds.key, block.slice(6));
         }
         if (text.length > FRAME_BYTES) req.destroy();
       });
@@ -343,7 +361,7 @@ export class GuestClient {
     req.end();
   }
 
-  private async frame(roomId: string, sync: Sync, json: string): Promise<void> {
+  private async frame(roomId: string, sync: Sync, key: string, json: string): Promise<void> {
     if (sync.stopped) return;
     let parsed: z.infer<typeof frameSchema>;
     try {
@@ -354,13 +372,15 @@ export class GuestClient {
       return;
     }
     if (parsed.kind === "entry") {
-      if (addJoinedEntries(roomId, [parsed.entry], parsed.entry.seq)) this.changed(roomId);
+      // The cursor holds until a reset's snapshot lands, so a restart meanwhile replays from the start.
+      if (addJoinedEntries(roomId, [parsed.entry], sync.needsSnapshot ? undefined : parsed.entry.seq)) this.changed(roomId);
     } else if (parsed.kind === "state") {
       if (setJoinedState(roomId, parsed.state)) this.changed(roomId);
     } else if (parsed.kind === "ended") {
-      this.end(roomId, sync.leaving ? "left" : "removed");
-    } else {
+      this.end(roomId, key);
+    } else if (!sync.snapshotting) {
       // Live entries keep arriving on this stream while the snapshot loads; both are deduped by seq.
+      sync.needsSnapshot = true;
       resetJoined(roomId);
       if (!(await this.snapshot(roomId, sync))) sync.req?.destroy();
     }

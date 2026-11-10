@@ -211,3 +211,93 @@ describe("sync", () => {
     expect(joinedKey("r1")).not.toBeNull();
   });
 });
+
+describe("races and floods", () => {
+  const KEY2 = `wkg_${"m".repeat(43)}`;
+  const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+  const entry = (seq: number) => ({ seq, id: `e${seq}`, at: seq, author: { kind: "host", id: "host", name: "Edward" }, text: `line ${seq}` });
+  const urls = (part: string) => seen.filter((row) => row.url.includes(part)).map((row) => row.url);
+
+  it("a failed snapshot after reset is retried before the stream resumes, whatever frames came meanwhile", async () => {
+    let snapshots = 0;
+    let streams = 0;
+    route = (req, res) => {
+      if (req.url?.endsWith("/snapshot")) return ++snapshots === 2 ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res);
+      if (req.url?.includes("/stream") && ++streams === 1) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(frame({ kind: "reset" }) + frame({ kind: "entry", entry: entry(5) }) + frame({ kind: "state", state: { ...STATE, version: 2 } }));
+        return;
+      }
+      quietDoor(req, res);
+    };
+    await guest({ timing: { retryMs: 20 } }).join(CODE);
+    await until(() => urls("/stream").length >= 2);
+    expect(snapshots).toBe(3);
+    expect(urls("/stream")[1]).toBe("/room/v1/rooms/r1/stream?after=0");
+  });
+
+  it("a late 401 or leave from before a rejoin leaves the new key alone", async () => {
+    let joins = 0;
+    route = (req, res) => {
+      if (req.url === "/room/v1/join") return reply(res, 200, { roomId: "r1", person: { id: "p1", name: "Mina" }, key: ++joins === 1 ? KEY : KEY2 });
+      if (req.url?.endsWith("/send")) return void setTimeout(() => reply(res, 401, { error: "unauthorized" }), 200);
+      if (req.url?.endsWith("/leave")) return void setTimeout(() => reply(res, 200, { ok: true }), 200);
+      quietDoor(req, res);
+    };
+    const c = guest();
+    await c.join(CODE);
+    await until(() => urls("/stream").length >= 1);
+    const late = [c.send("r1", "old"), c.leave("r1")];
+    await until(() => urls("/send").length >= 1 && urls("/leave").length >= 1);
+    await c.join(CODE);
+    await Promise.all(late);
+    expect(joinedRoom("r1")).toMatchObject({ status: "joined" });
+    expect(joinedKey("r1")?.key).toBe(KEY2);
+  });
+
+  it("a flood of resets costs one snapshot at a time", async () => {
+    let streams = 0;
+    route = (req, res) => {
+      if (req.url?.endsWith("/snapshot")) return void setTimeout(() => quietDoor(req, res), 200);
+      if (req.url?.includes("/stream") && ++streams === 1) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(frame({ kind: "reset" }).repeat(50));
+        return;
+      }
+      quietDoor(req, res);
+    };
+    await guest().join(CODE);
+    await until(() => urls("/stream").length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(urls("/snapshot")).toHaveLength(2);
+  });
+
+  it("refuses sends past a small queue instead of waiting on a silent host", async () => {
+    const held: ServerResponse[] = [];
+    route = (req, res) => (req.url?.endsWith("/send") ? void held.push(res) : quietDoor(req, res));
+    const c = guest();
+    await c.join(CODE);
+    const queued = Array.from({ length: 20 }, (_, i) => c.send("r1", `m${i}`));
+    const extra = await Promise.race([c.send("r1", "one too many"), new Promise((resolve) => setTimeout(() => resolve("waiting"), 300))]);
+    expect(extra).toEqual({ ok: false, status: 429, error: "too many messages waiting to send" });
+    route = (req, res) => (req.url?.endsWith("/send") ? reply(res, 503, { error: "phone access is off" }) : quietDoor(req, res));
+    for (const res of held) reply(res, 503, { error: "phone access is off" });
+    await until(() => held.every((res) => res.writableEnded));
+    expect((await Promise.all(queued)).every((result) => !result.ok && result.status === 503)).toBe(true);
+  });
+
+  it("a 401 that lands during a leave reads as left", async () => {
+    route = (req, res) => {
+      if (req.url?.endsWith("/leave")) return void setTimeout(() => reply(res, 200, { ok: true }), 200);
+      if (req.url?.endsWith("/send")) return reply(res, 401, { error: "unauthorized" });
+      quietDoor(req, res);
+    };
+    const c = guest();
+    await c.join(CODE);
+    const leaving = c.leave("r1");
+    await until(() => urls("/leave").length >= 1);
+    await c.send("r1", "too late");
+    await leaving;
+    expect(joinedRoom("r1")).toMatchObject({ status: "left" });
+  });
+});
