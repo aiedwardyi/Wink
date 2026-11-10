@@ -490,7 +490,7 @@ export function discardDelegations(bus: CommsBus, threadId: string, sourceBotId?
   }
 }
 
-export function discardOrphanedDelegations(bus: CommsBus): number {
+export function discardOrphanedDelegations(bus: CommsBus, recoverMail = true): number {
   const threads = pendingThreads();
   for (const receipt of receiptSnapshot()) {
     if (receipt.state === "finishing") {
@@ -513,7 +513,7 @@ export function discardOrphanedDelegations(bus: CommsBus): number {
   }
   pendingDelegations.clear();
   savePending();
-  recoverHandedMail(bus.store);
+  if (recoverMail) recoverHandedMail(bus.store);
   return threads.length;
 }
 

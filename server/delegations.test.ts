@@ -1072,7 +1072,7 @@ describe("boot does not run a dead process's handoffs", () => {
     const start = index.indexOf("_loadPending();");
     expect(start).toBeGreaterThan(0);
     const bootBlock = index.slice(start, start + 700);
-    expect(bootBlock).toContain("discardOrphanedDelegations(commsBus)");
+    expect(bootBlock).toContain("discardOrphanedDelegations(commsBus, false)");
     expect(bootBlock).not.toContain("drainDelegations(");
   });
 });

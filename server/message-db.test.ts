@@ -11,6 +11,7 @@ import {
   closeMessageDb,
   deleteThread,
   insertMessage,
+  lastMessageAt,
   messageDatabase,
   readThread,
   replaceThread,
@@ -21,6 +22,8 @@ import {
   updateMessage,
   withMessageTransaction,
 } from "./message-db.ts";
+import { recoverHandedMail } from "./mail-index.ts";
+import { dismissStalePeerCards } from "./peer-approval.ts";
 import { Store, type Message } from "./store.ts";
 import type { ModelSelection } from "./contracts.ts";
 
@@ -494,5 +497,21 @@ describe("message-db", () => {
     expect(path.at(-1)?.text).toBe("edited");
     // both branches survive in the tree
     expect(reloaded.messagesFor(bot.threadId).filter((m) => m.parentId === first.parentId)).toHaveLength(2);
+  });
+
+  it("answers the boot recovery statements from an index", () => {
+    const store = new Store(selection);
+    const db = messageDatabase();
+    const prepare = vi.spyOn(db, "prepare");
+    recoverHandedMail(store);
+    lastMessageAt("t1");
+    dismissStalePeerCards({ store, broadcast: () => {} });
+    const statements = prepare.mock.calls.map(([sql]) => sql);
+    prepare.mockRestore();
+    expect(statements).toHaveLength(3);
+    for (const sql of statements) {
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail));
+      expect(plan.join("; ")).toMatch(/^(SEARCH|SCAN) messages USING (COVERING )?INDEX messages_(mail_handed|thread_at|peer_card)\b/);
+    }
   });
 });

@@ -51,6 +51,7 @@ import { loadAnalyticsConsent, saveAnalyticsConsent } from "./analytics-consent.
 import { openWhatsNew } from "./whats-new.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
+import { deferBootRecovery } from "./boot-recovery.ts";
 import * as box from "./box.ts";
 import { vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
@@ -310,7 +311,7 @@ import { postPhoneKeepAwake, type PhoneKeepAwakeMessage } from "./phone-keep-awa
 import { refuseVpsJoin, requestCredentials } from "./phone-auth.ts";
 import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googleProfileFill, googleProfilePhoto, takeGoogleEnv } from "./google-account.ts";
 import { quorumRoute } from "./quorum-route.ts";
-import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
+import { quickAnswersSinceLastUserTurn, quickAnswersTaken } from "./quick-ask.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
 import { teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
@@ -4655,6 +4656,7 @@ async function startClaimedTurn(botId: string, text: string, opts?: StartTurnOpt
   // Sends queued before this claim belong to drain, not to this turn's folds.
   const claimMark = queueMark();
   await startupTiming.waitFor("accounts").catch(() => {});
+  await startupTiming.waitFor("recovery");
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (!opts?.limitWaitId && turnStartedByUser(opts)) limitWaits.cancel(botId);
@@ -5936,11 +5938,6 @@ if (recoveryOwners.length > 0) {
     ),
   );
 }
-// One chat per bot: open each idle bot on its newest user chat, never a routine run.
-const routineThreads = routineThreadIds();
-for (const bot of store.bots) {
-  if (!botHasActiveTurn(bot.id)) store.followNewestTask(bot.id, routineThreads);
-}
 routines.start();
 
 // Chat tools can prepare routine changes, but the harness applies them only
@@ -6202,7 +6199,7 @@ const approvalBus: ApprovalBus = { store, broadcast };
 // with the same visible chip instead of starting turns nobody is here for.
 _loadPending();
 {
-  const dropped = discardOrphanedDelegations(commsBus);
+  const dropped = discardOrphanedDelegations(commsBus, false);
   if (dropped) console.log(`delegations: dropped queued handoffs on ${dropped} thread(s) whose turn died with a previous run`);
 }
 
@@ -8698,7 +8695,13 @@ setImmediate(drainQueuedSends);
 googleSync.resume();
 startupTiming.measure("uploads", () => uploads.sweep());
 startupTiming.measure("side chats", () => sweepSide());
-startupTiming.measure("quick asks", () => recoverQuickAsks(store));
+deferBootRecovery(store, () => {
+  // One chat per bot: open each idle bot on its newest user chat, never a routine run.
+  const routineThreads = routineThreadIds();
+  for (const bot of store.bots) {
+    if (!botHasActiveTurn(bot.id)) store.followNewestTask(bot.id, routineThreads);
+  }
+});
 setInterval(() => uploads.sweep(), 60 * 60 * 1000).unref();
 setInterval(() => void teamSnags?.sync(), 60_000).unref();
 const backups = startBackups({ dataDir: DATA_DIR, syncFolders: () => [...(profileSyncSettings.folder ? [profileSyncSettings.folder] : []), ...uploadCloudRoots], idle: () => !store.bots.some((bot) => bot.busy), log: (line) => console.warn(line) });

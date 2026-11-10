@@ -13,6 +13,7 @@ import {
   serveEarlyRequest,
   startEarlyListen,
 } from "./early-listen.ts";
+import { startupTiming } from "./startup-timing.ts";
 import { createTempDirs } from "./testing/cleanup.ts";
 
 const temps = createTempDirs();
@@ -32,6 +33,15 @@ async function listen(port = 0) {
   const address = early.server.address();
   if (!address || typeof address === "string") throw new Error("early listen has no port");
   return { early, port: address.port, base: `http://127.0.0.1:${address.port}` };
+}
+
+async function hold(base: string, requests: Array<[method: string, path: string]>) {
+  const answers: Array<Promise<string>> = [];
+  for (const [method, path] of requests) {
+    answers.push(fetch(`${base}${path}`, { method }).then((answer) => answer.text()));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return answers;
 }
 
 describe("early public paths", () => {
@@ -132,6 +142,57 @@ describe("startEarlyListen", () => {
       res.end(JSON.stringify({ bots: [{ id: "ready" }] }));
     });
     expect(await pending).toEqual({ bots: [{ id: "ready" }] });
+  });
+
+  it("replays the chat list first and the rest in arrival order", async () => {
+    const { early, base } = await listen();
+    const answers = await hold(base, [["POST", "/api/bots/b1/send"], ["GET", "/api/instances"], ["GET", "/api/bots?messages=200"], ["POST", "/api/bots/b2/send"]]);
+    const seen: string[] = [];
+    early.setHandler((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      res.end("ok");
+    });
+    await Promise.all(answers);
+    expect(seen).toEqual(["GET /api/bots?messages=200", "POST /api/bots/b1/send", "GET /api/instances", "POST /api/bots/b2/send"]);
+  });
+
+  it("turns the event loop between replayed requests and keeps a late arrival behind them", async () => {
+    const { early, base } = await listen();
+    const answers = await hold(base, [["GET", "/api/a"], ["GET", "/api/b"], ["GET", "/api/c"]]);
+    const seen: string[] = [];
+    let late: Promise<string> | undefined;
+    early.setHandler((req, res) => {
+      seen.push(req.url!);
+      setImmediate(() => seen.push("turn"));
+      late ??= fetch(`${base}/api/late`).then((answer) => answer.text());
+      res.end("ok");
+    });
+    await Promise.all(answers);
+    await late;
+    expect(seen.slice(0, 5)).toEqual(["/api/a", "turn", "/api/b", "turn", "/api/c"]);
+    expect(seen.filter((entry) => entry !== "turn")).toEqual(["/api/a", "/api/b", "/api/c", "/api/late"]);
+  });
+
+  it("times each replayed route once, with ids and queries left out", async () => {
+    const { early, base } = await listen();
+    const replayed = vi.spyOn(startupTiming, "replayed").mockImplementation(() => {});
+    try {
+      const answers = await hold(base, [
+        ["GET", "/api/bots/0b9f6c1e-7a52-4d3c-9e21-5f0a8c7d6b4e/messages?before=m1"],
+        ["GET", "/api/bots?messages=200"],
+        ["POST", "/api/search/person@example.com"],
+      ]);
+      early.setHandler((_req, res) => res.end("ok"));
+      await Promise.all(answers);
+      expect(replayed).toHaveBeenCalledOnce();
+      expect(replayed.mock.calls[0][0]).toEqual([
+        ["/api/bots", expect.any(Number)],
+        ["/api/bots/:id/messages", expect.any(Number)],
+        ["/api/search/:id", expect.any(Number)],
+      ]);
+    } finally {
+      replayed.mockRestore();
+    }
   });
 
   it("rejects further API holds once the early queue is full", async () => {

@@ -15,6 +15,7 @@
 // `alwaysAllow`, so the two sides never disagree about what was granted.
 
 import { newId } from "./contracts.ts";
+import { messageDatabase } from "./message-db.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 
@@ -186,21 +187,24 @@ export function cancelPeerApprovalsForThread(threadId: string): void {
  * in-memory approval died with the process. Settle them at boot so a
  * crashed run doesn't leave a thread with a permanently blocked composer. */
 export function dismissStalePeerCards(bus: ApprovalBus): number {
+  const threadIds = new Set(
+    [...bus.store.bots, ...bus.store.groups].flatMap((conversation) => [conversation.threadId, ...(conversation.tasks ?? []).map((task) => task.threadId)]),
+  );
+  // Every peer card, settled or not: only the tool is matched in SQL, so no open card shape can be missed.
+  const rows = messageDatabase().prepare("SELECT thread_id, json FROM messages WHERE json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot')").all();
   let dismissed = 0;
-  for (const conversation of [...bus.store.bots, ...bus.store.groups]) {
-    const threadIds = new Set([conversation.threadId, ...(conversation.tasks ?? []).map((task) => task.threadId)]);
-    for (const threadId of threadIds) {
-      for (const message of bus.store.messagesFor(threadId)) {
-        const card = message.card;
-        if (!card?.requestId || card.answered || card.dismissed) continue;
-        if (card.tool !== "ask_bot" && card.tool !== "delegate_bot") continue;
-        if (pendingComms.has(card.requestId)) continue;
-        const patched = bus.store.patchMessage(threadId, message.id, {
-          card: { ...card, answered: "deny", dismissed: true },
-        });
-        if (patched) dismissed += 1;
-      }
-    }
+  for (const row of rows) {
+    const threadId = String(row.thread_id);
+    if (!threadIds.has(threadId)) continue;
+    // SAFETY: Stored rows use the Message envelope.
+    const message = JSON.parse(String(row.json)) as Message;
+    const card = message.card;
+    if (!card?.requestId || card.answered || card.dismissed) continue;
+    if (pendingComms.has(card.requestId)) continue;
+    const patched = bus.store.patchMessage(threadId, message.id, {
+      card: { ...card, answered: "deny", dismissed: true },
+    });
+    if (patched) dismissed += 1;
   }
   return dismissed;
 }

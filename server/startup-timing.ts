@@ -17,6 +17,7 @@ export function createStartupTiming(options: {
   let logged = false;
   let closed = false;
   let errors = 0;
+  let replay: ReadonlyArray<readonly [string, number | null]> = [];
 
   const finish = (force = false) => {
     if ((!serving && !force) || !released || (!force && pending) || logged) return;
@@ -25,6 +26,7 @@ export function createStartupTiming(options: {
       .filter(([, value]) => Number.isFinite(value))
       .map(([key, value]) => [key, Math.round(value)]));
     write(`startup ${JSON.stringify(values)}`);
+    if (replay.length) write(`startup replay ${JSON.stringify(replay)}`);
   };
   const mark = (name: string) => { spans[name] = now(); };
   const measure = <T>(name: string, work: () => T): T => {
@@ -76,7 +78,12 @@ export function createStartupTiming(options: {
     },
     beforeRequest(method: string, path: string): Promise<unknown> | undefined {
       if (["GET", "HEAD", "OPTIONS"].includes(method) || ["/api/diag/cold-open", "/api/internal/google-account", "/api/internal/terminal-bridge"].includes(path)) return;
-      return tasks.get("accounts")?.then(() => {}, () => {});
+      const waits = ["accounts", "recovery"].flatMap((name) => tasks.get(name) ?? []);
+      if (waits.length) return Promise.allSettled(waits);
+    },
+    /** Requests held during boot, in replay order; null is one still open when the line is written. */
+    replayed(routes: typeof replay): void {
+      replay = routes;
     },
     close(): void {
       closed = true;

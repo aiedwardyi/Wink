@@ -91,6 +91,32 @@ describe("startup timing", () => {
     expect(action).toHaveBeenCalledOnce();
   });
 
+  it("holds actions for crash recovery when no account is saved", async () => {
+    const startup = createStartupTiming({ write: () => {} });
+    startup.afterPaint("recovery", async () => {});
+    expect(startup.beforeRequest("GET", "/api/bots")).toBeUndefined();
+    expect(startup.beforeRequest("POST", "/api/diag/cold-open")).toBeUndefined();
+    const action = vi.fn();
+    const pending = startup.beforeRequest("POST", "/api/bots/b1/send")!.then(action);
+    await new Promise(setImmediate);
+    expect(action).not.toHaveBeenCalled();
+    startup.paint();
+    await pending;
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it("writes the replayed routes on one line beside the startup line", () => {
+    const write = vi.fn();
+    const startup = createStartupTiming({ write });
+    const routes: Array<[string, number | null]> = [["/api/bots", null], ["/api/events", null]];
+    startup.replayed(routes);
+    routes[0][1] = 41;
+    startup.serving();
+    startup.paint();
+    startup.close();
+    expect(write.mock.calls.map(([line]) => line.split(" {")[0])).toEqual(["startup", 'startup replay [["/api/bots",41],["/api/events",null]]']);
+  });
+
   it("does not start deferred probes when the window closes before paint", async () => {
     const work = vi.fn(async () => {});
     const write = vi.fn();

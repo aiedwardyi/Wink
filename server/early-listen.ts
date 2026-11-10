@@ -68,6 +68,11 @@ function pathnameOf(req: IncomingMessage): string {
   }
 }
 
+/** Path for the log: no query, and any segment that is not a plain word reads `:id`. */
+function routeOf(req: IncomingMessage): string {
+  return pathnameOf(req).split("/").map((part) => (/^[a-z-]*$/.test(part) ? part : ":id")).join("/");
+}
+
 export function serveEarlyRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -133,21 +138,38 @@ export function startEarlyListen(options: { port?: number; staticDir?: string | 
     staticDir: options.staticDir ?? process.env.OMB_STATIC_DIR ?? null,
     setHandler(next) {
       handler = next;
-      const pending = queued.splice(0);
-      for (const { req, res } of pending) {
-        if (req.destroyed || res.writableEnded) continue;
-        void next(req, res);
-      }
+      const chatList = queued.findIndex(({ req }) => req.method === "GET" && pathnameOf(req) === "/api/bots");
+      if (chatList > 0) queued.unshift(...queued.splice(chatList, 1));
+      if (queued.length) void replay(next);
     },
   };
 
+  // One request per loop turn, so an answer leaves before the next handler runs.
+  const replay = async (next: HarnessHandler) => {
+    const routes: Array<[string, number | null]> = [];
+    startupTiming.replayed(routes);
+    for (let held = queued[0]; held; held = queued[0]) {
+      const { req, res } = held;
+      if (!req.destroyed && !res.writableEnded) {
+        const start = performance.now();
+        const route: [string, number | null] = [routeOf(req), null];
+        if (routes.length < MAX_QUEUED_EARLY_REQUESTS) routes.push(route);
+        const settled = () => { route[1] = Math.round(performance.now() - start); };
+        void Promise.resolve(next(req, res)).then(settled, settled);
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      // Left queued until now so a request arriving mid-replay waits its turn.
+      if (queued[0] === held) queued.shift();
+    }
+  };
+
   early.server = createServer(SERVER_TIMEOUTS, (req, res) => {
-    if (handler) {
+    if (handler && !queued.length) {
       void handler(req, res);
       return;
     }
-    if (serveEarlyRequest(req, res, { staticDir: early.staticDir })) return;
-    if (queued.length >= MAX_QUEUED_EARLY_REQUESTS) {
+    if (!handler && serveEarlyRequest(req, res, { staticDir: early.staticDir })) return;
+    if (!handler && queued.length >= MAX_QUEUED_EARLY_REQUESTS) {
       res.writeHead(503, { "content-type": "text/plain" });
       res.end("unavailable");
       return;

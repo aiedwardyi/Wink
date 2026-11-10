@@ -3,7 +3,7 @@
 // and the composer stays disabled behind it — so a gate that works
 // perfectly can still make a thread unusable. These tests pin the settle.
 import { rmSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
@@ -153,6 +153,28 @@ describe("peer approval card lifecycle", () => {
     expect(
       store.messagesFor(background.threadId).find((message) => message.id === orphan.id)?.card?.dismissed,
     ).toBe(true);
+  });
+
+  it("finds stale cards without reading a transcript", () => {
+    const background = store.createTask(from.id, "Background", false)!;
+    store.createGroup("Room", [from.id, target.id]);
+    const card = (requestId: string, tool: string, extra: object = {}) =>
+      store.appendMessage(background.threadId, {
+        role: "bot",
+        kind: "options",
+        card: { title: "Contact Helper", subtitle: "ping", options: ["Allow", "Deny"], requestId, tool, ...extra },
+      });
+    const open = [card("dead-ask", "ask_bot"), card("dead-delegate", "delegate_bot", { answered: "", dismissed: false })];
+    const kept = [card("dead-answered", "ask_bot", { answered: "allow" }), card("provider", "Bash")];
+    const messagesFor = vi.spyOn(store, "messagesFor");
+
+    expect(dismissStalePeerCards(bus)).toBe(2);
+    expect(messagesFor).not.toHaveBeenCalled();
+    messagesFor.mockRestore();
+    const cards = new Map(store.messagesFor(background.threadId).map((message) => [message.id, message.card]));
+    for (const message of open) expect(cards.get(message.id)).toMatchObject({ answered: "deny", dismissed: true });
+    expect(cards.get(kept[0].id)).toMatchObject({ answered: "allow" });
+    expect(cards.get(kept[1].id)?.dismissed).toBeUndefined();
   });
 
   it("leaves a live card alone at boot", async () => {

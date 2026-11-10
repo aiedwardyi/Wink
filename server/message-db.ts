@@ -51,6 +51,9 @@ function open(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
     CREATE INDEX IF NOT EXISTS messages_parent ON messages(thread_id, json_extract(json, '$.parentId'));
     CREATE INDEX IF NOT EXISTS messages_bot_text_at ON messages(at) WHERE role = 'bot' AND kind = 'text';
+    CREATE INDEX IF NOT EXISTS messages_thread_at ON messages(thread_id, at);
+    CREATE INDEX IF NOT EXISTS messages_mail_handed ON messages(thread_id) WHERE json_extract(json, '$.comm.read.state') = 'handed';
+    CREATE INDEX IF NOT EXISTS messages_peer_card ON messages(thread_id) WHERE json_extract(json, '$.card.tool') IN ('ask_bot', 'delegate_bot');
     CREATE TABLE IF NOT EXISTS thread_state (
       thread_id TEXT PRIMARY KEY,
       active_leaf_id TEXT
