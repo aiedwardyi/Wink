@@ -312,7 +312,7 @@ import { GoogleAccount, applyGoogleAccountMessage, googlePhotoOffered, googlePro
 import { quorumRoute } from "./quorum-route.ts";
 import { quickAnswersSinceLastUserTurn, quickAnswersTaken, recoverQuickAsks } from "./quick-ask.ts";
 import { quickAsk, sweepSide } from "./side-chat.ts";
-import { teamRoute } from "./team-route.ts";
+import { teamRelayBase, teamRoute } from "./team-route.ts";
 import { effectiveModelDial, teamDialMember } from "./model-dial-default.ts";
 import { readErrorReportConsent, TeamSnags } from "./team-snags.ts";
 import { chiefSnagIds, postChiefNote, startTeamSnagOwner } from "./team-snags-owner.ts";
@@ -7779,7 +7779,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/devices") {
       const folder = profileSyncSettings.folder;
       const listed = folder ? listDevices(folder, profileSyncSettings.deviceId, Date.now(), undefined, googleSync.deviceKnown) : [];
-      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null);
+      const devices = pickerDevices(relay ? listed : devicePresence(listed, REMOTE_HOST), relay ? phoneAccess.base() : null, teamRelayBase(googleEnv.teamRelay));
       return json(res, 200, { devices });
     }
     if (method === "PUT" && path === "/api/devices/name") {

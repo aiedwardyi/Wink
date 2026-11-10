@@ -233,7 +233,10 @@
           const ua = navigator.userAgent;
           if (/iPhone/.test(ua)) return "iPhone";
           if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "iPad";
-          return /Android/.test(ua) ? t("android") : t("phone");
+          if (/Android/.test(ua)) return t("android");
+          if (/Windows/.test(ua)) return "Windows PC";
+          if (/Macintosh/.test(ua)) return "Mac";
+          return /Linux/.test(ua) ? "Linux PC" : t("phone");
         };
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
