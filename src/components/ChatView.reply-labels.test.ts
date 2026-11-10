@@ -464,7 +464,7 @@ describe("ChatView handoff status lines", () => {
     expect(error.querySelector("details")?.open).toBe(false);
     expect(error.querySelector("details div")?.textContent).toBe("delegation failed \u2014 Atlas is offline");
     expect(host.querySelector('[data-mid="steered"]')?.textContent).toContain("sent mid-turn");
-    expect(midTitle(host, "sent mid-turn")).toBe("Sent while the bot was working \u2014 it saw this before its next step, inside the same turn.");
+    expect(midTitle(host, "sent mid-turn")).toBe("Sent while the bot worked. The bot read it before its next step.");
   });
 
   it("shows the chip, the error row and the mid-turn note in Korean", async () => {
@@ -477,7 +477,7 @@ describe("ChatView handoff status lines", () => {
     expect(error.querySelector("details")?.open).toBe(false);
     expect(error.querySelector("details div")?.textContent).toBe("delegation failed \u2014 Atlas is offline");
     expect(host.querySelector('[data-mid="steered"]')?.textContent).toContain("작업 중에 전송됨");
-    expect(midTitle(host, "작업 중에 전송됨")).toBe("봇이 작업하는 동안 보냄 - 같은 턴 안에서 다음 단계 전에 이 메시지를 확인했습니다.");
+    expect(midTitle(host, "작업 중에 전송됨")).toBe("봇이 작업하는 동안 보냄. 봇이 다음 단계 전에 읽었습니다.");
   });
 
   it("translates a non-chip line inside a Terminal skin run", async () => {
