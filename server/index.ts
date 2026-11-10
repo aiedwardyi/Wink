@@ -31,6 +31,8 @@ import {
 import { appendDecision } from "./decision-log.ts";
 import "./bot-cwd.ts";
 import { resolveBotTerminalFolder } from "./terminal-cwd.ts";
+import { warmPool } from "./drivers/warm-pool.ts";
+import { prewarmTurn, type PrewarmDeps } from "./prewarm-turn.ts";
 import {
   applyResolvedProjectFolder,
   opensHostFiles,
@@ -7335,6 +7337,20 @@ const botRoutes = createBotRoutes({
   activeVpsThreads,
   resumePaneWakes,
 });
+const prewarmDeps: PrewarmDeps = {
+  store,
+  platform: process.platform,
+  incarnation: (id) => registry.incarnation(id),
+  resolve: (bot, required) => botAccounts.resolve(bot, required),
+  requirements: automaticRequirements,
+  candidate: (id) => { const instance = registry.get(id); return instance ? liveAutomaticCandidate(instance) : undefined; },
+  accountOf: (id) => accounts.get(id)?.of,
+  agents: agentsIntegration,
+  terminal: terminalIntegration,
+  composioConfigured: () => composio.configured(cfg),
+  composio: connectedAppsIntegration,
+  boxConfigured: () => box.boxConfigured(cfg),
+};
 applyBrandLeadBot({
   dataDir: DATA_DIR,
   leadBot: process.env.OMB_BRAND_LEAD_BOT,
@@ -7347,6 +7363,8 @@ applyBrandLeadBot({
 });
 const liveCall = createLiveCallRoutes({ cfg, store, dataDir: DATA_DIR });
 const botChatRoutes = createBotChatRoutes({
+  prewarmTurn: (bot, instance) => prewarmTurn(prewarmDeps, bot, instance),
+  smallerPc: () => warmPool.smallerPc(),
   instanceForBot: (bot, threadId) => botAccounts.instance(bot, threadId),
   cancelUsageWait: (botId, waitId, preserveTurn) => limitWaits.cancel(botId, waitId, preserveTurn),
   cfg,

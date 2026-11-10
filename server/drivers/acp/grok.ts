@@ -314,6 +314,12 @@ const GROK_COMPACTION_UPDATES = new Set(["auto_compact_started", "compaction_che
 export const grokSupport: AcpSupport = {
   driverKind: "grokAgent",
   grokInterjections: true,
+  discardSession: ({ id, cwd, env }) => {
+    if (!/^[\w-]+$/.test(id)) return;
+    try {
+      for (const dir of new Set([cwd, cwd.replaceAll("\\", "/")])) rmSync(join(grokHome(env), "sessions", encodeURIComponent(dir), id), { recursive: true, force: true });
+    } catch { /* the CLI still holds a file */ }
+  },
   warmSessionIdentity: (env) => {
     try {
       return hashGrokAuthJson(join(grokHome(env), "auth.json"));

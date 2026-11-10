@@ -143,6 +143,7 @@ export interface AcpConfig {
 export interface AcpSupport {
   grokInterjections?: boolean;
   warmSessionIdentity?(env: Record<string, string | undefined>): string | null;
+  discardSession?(session: { id: string; cwd: string; env: Record<string, string | undefined> }): void;
   warmPool?: WarmPool;
   /** When true the harness can report subscription windows. */
   rateLimits?: boolean;
@@ -459,8 +460,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         onPromptWrite?: () => void;
         setupStarted?: boolean;
         closing?: Promise<void>;
+        discard?: () => void;
       };
       const entries = new WeakMap<Lease, WarmEntry>();
+      const takenLeases = new WeakSet<Lease>();
       const preparing = new Set<Promise<void>>();
       const borrowedHandshakes = new Set<string>();
       let disposed = false;
@@ -471,8 +474,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         if (entry.detached) return Promise.resolve();
         if (entry.closing) return entry.closing;
         const child = entry.connection.child;
-        if (child.exitCode !== null || child.signalCode != null) return Promise.resolve();
-        entry.closing = new Promise<void>((resolve) => child.once("close", () => resolve()));
+        if (child.exitCode !== null || child.signalCode != null) { entry.discard?.(); return Promise.resolve(); }
+        entry.closing = new Promise<void>((resolve) => child.once("close", () => { entry.discard?.(); resolve(); }));
         entry.connection.rejectPending("warm child closed");
         killCliTree(child);
         return entry.closing;
@@ -674,7 +677,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const turn: SendTurnInput = { ...(shape ?? { threadId: "__prewarm__" }), text: "" };
         const ctx = context(turn, captured);
         const fingerprint = warmFingerprint(ctx.eligibility);
-        const lease = pool.reserve(keyFor(turn.threadId), fingerprint, captured, shape ? "speculative" : "handshake");
+        const lease = pool.reserve(keyFor(turn.threadId), fingerprint, captured, shape ? "speculative" : "handshake", { focus: !!shape });
         if (typeof lease === "string") return Promise.resolve();
         const existing = entries.get(lease);
         if (existing) return existing.ready.catch(() => { lease.release("prepare failed"); });
@@ -700,8 +703,11 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               if (!authenticated) throw new Error(support.loginNote);
             }
             check();
-            entry = spawnEntry(ctx.cliTurn, ctx.env, ctx.cwd, lease);
+            const spawned = entry = spawnEntry(ctx.cliTurn, ctx.env, ctx.cwd, lease);
             entry.ready = holder.ready;
+            if (shape && !shape.resumeCursor) entry.discard = () => {
+              if (spawned.sessionId && !takenLeases.has(lease)) support.discardSession?.({ id: spawned.sessionId, cwd: ctx.paths.cwd, env: ctx.env });
+            };
             await setup(entry, ctx.cliTurn, ctx.paths, lease.signal, () => check(entry), !shape,
               skipSubscriptionAuthForLocalInject(turn.model));
             check(entry);
@@ -853,6 +859,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           if (take === "busy") throw new Error("a warm child is already in use on this thread");
           borrowed = typeof take === "string" ? undefined : "hit" in take ? take.hit : take.pending;
+          if (borrowed) takenLeases.add(borrowed);
           emit({ ...base(threadId, turnId), type: "turn.started" });
           started = true;
           check();

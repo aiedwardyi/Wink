@@ -6,7 +6,7 @@
 //
 // The fake CLI is a shebang script Windows cannot exec directly —
 // resolveCliSpawn turns it into `node <script>`, so these run everywhere.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ import { ProviderRegistry } from "../../harness/registry.ts";
 import * as procs from "../../procs.ts";
 import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { acpConnection } from "./connection.ts";
+import { selectBundledSkills } from "../../skill-library.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -334,6 +335,80 @@ describe("Grok warm leases (recorded transport)", () => {
     await instance.prepare!();
     expect(pool.stats()).toMatchObject({ reserved: 1, idle: 1 });
     expect(methods(peers[0])).toEqual(["initialize", "authenticate"]);
+  });
+
+  it.each([false, true, "user-only"])("a guess over a kept session does nothing (phone %s)", async (phone) => {
+    await start();
+    const selected = selectBundledSkills("my custom phone", ["phoneMcp"], phone ? [{
+      directory: phone === "user-only" ? "/fake/user/skills/phone" : "/fake/bundled/phone", instructions: "Use phone",
+      manifest: { id: "phone", name: "Phone", version: "1", description: "Phone", defaultEnabled: true, triggerTerms: ["my custom phone"], requiredCapabilities: ["phoneMcp"] },
+    }] : []);
+    const integrations = selected.length ? { phone: { command: "node", args: ["phone-proxy.ts"], env: { SERIAL: "fake" } } } : shape().integrations;
+    await send({ integrations });
+    expect(prompts()).toHaveLength(1);
+    await instance.prepare!();
+    await instance.prepare!(shape());
+    await instance.prepare!(shape());
+    expect(prompts()).toHaveLength(1);
+    expect(peers[0].child.killed).toBe(false);
+    await send({ resumeCursor: "recorded-session", integrations });
+    expect(peers[0].requests.filter((message) => message.method === "session/prompt")).toHaveLength(2);
+    expect(prompts()).toHaveLength(2);
+    expect(peers[0].child.killed).toBe(false);
+  });
+
+  it("an unused fresh guess discards only its own session, after exit", async () => {
+    const discardSession = vi.fn();
+    await start({ discardSession });
+    await instance.prepare!();
+    await instance.prepare!(shape());
+    expect(discardSession).not.toHaveBeenCalled();
+    await pool.closeAll("test");
+    expect(discardSession.mock.calls).toEqual([[{ id: "recorded-session", cwd: expect.stringContaining("recorded-workspace"), env: expect.any(Object) }]]);
+  });
+
+  it("a guess that served a Send keeps its session", async () => {
+    const discardSession = vi.fn();
+    await start({ discardSession });
+    await instance.prepare!();
+    await instance.prepare!(shape());
+    await send();
+    await pool.closeAll("test");
+    expect(prompts()).toHaveLength(1);
+    expect(discardSession).not.toHaveBeenCalled();
+  });
+
+  it("a resumed guess keeps its session", async () => {
+    const discardSession = vi.fn();
+    await start({ discardSession });
+    await instance.prepare!();
+    await instance.prepare!({ ...shape(), resumeCursor: "recorded-session" });
+    await pool.closeAll("test");
+    expect(discardSession).not.toHaveBeenCalled();
+  });
+
+  it("Grok discards only the named session folder", () => {
+    const home = temps.make(join(tmpdir(), "omb-grok-discard-"));
+    const cwd = "C:\\work\\bot";
+    const folder = join(home, "sessions", encodeURIComponent("C:/work/bot"));
+    for (const id of ["guess", "kept"]) mkdirSync(join(folder, id), { recursive: true });
+    const env = { GROK_HOME: home };
+    grokSupport.discardSession!({ id: "guess", cwd, env });
+    grokSupport.discardSession!({ id: "..", cwd, env });
+    expect(existsSync(join(folder, "guess"))).toBe(false);
+    expect(existsSync(join(folder, "kept"))).toBe(true);
+  });
+
+  it("a guess that misses at Send runs today's path", async () => {
+    await start();
+    await instance.prepare!();
+    await instance.prepare!(shape());
+    await instance.prepare!(shape());
+    expect(prompts()).toHaveLength(0);
+    await send({ resumeCursor: "other-cursor" });
+    expect(prompts()).toHaveLength(1);
+    expect(peers[1].child.killed).toBe(true);
+    expect(methods(peers.at(-1)!)).toContain("session/load");
   });
 
   it("Stop aborts authentication waits before any child exists", async () => {

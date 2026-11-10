@@ -19,6 +19,7 @@ import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { createWarmPool, type WarmPool } from "../warm-pool.ts";
 import { MspMuseAgentDriver } from "./muse.ts";
 import { createMspDriver, mspMcpServers, translateMspServerForWsl } from "./runtime.ts";
+import { selectBundledSkills } from "../../skill-library.ts";
 
 const temps = createTempDirs();
 afterAll(() => temps.remove());
@@ -1170,6 +1171,57 @@ describe("MSP warm host (recorded transport)", () => {
     return gateOpen;
   };
 
+  it.each([false, true, "user-only"])("a guess over a kept session does nothing (phone %s)", async (phone) => {
+    await start();
+    const selected = selectBundledSkills("my custom phone", ["phoneMcp"], phone ? [{
+      directory: phone === "user-only" ? "/fake/user/skills/phone" : "/fake/bundled/phone", instructions: "Use phone",
+      manifest: { id: "phone", name: "Phone", version: "1", description: "Phone", defaultEnabled: true, triggerTerms: ["my custom phone"], requiredCapabilities: ["phoneMcp"] },
+    }] : []);
+    const integrations = selected.length ? { phone: { command: "node", args: ["phone-proxy.ts"], env: { SERIAL: "fake" } } } : undefined;
+    const first = await send({ integrations });
+    await completed(first);
+    await instance.prepare!();
+    await instance.prepare!(shapeFor());
+    await instance.prepare!(shapeFor());
+    expect(peers.flatMap(turnStarts)).toHaveLength(1);
+    expect(exited(peers[0])).toBe(false);
+    const second = await send({ resumeCursor: cursorOf(first), integrations });
+    await completed(second);
+    expect(turnStarts(peers[0])).toHaveLength(2);
+    expect(peers.flatMap(turnStarts)).toHaveLength(2);
+  });
+
+  it("a guess that misses at Send takes the handshake", async () => {
+    await start();
+    await instance.prepare!();
+    await instance.prepare!(shapeFor({ resumeCursor: "cursor-1" }));
+    await instance.prepare!(shapeFor({ resumeCursor: "cursor-1" }));
+    expect(peers.flatMap(turnStarts)).toHaveLength(0);
+    const sent = await send({ resumeCursor: "other-cursor" });
+    await completed(sent);
+    expect(turnStarts(peers[0])).toHaveLength(1);
+    expect(turnStarts(peers[1])).toHaveLength(0);
+    expect(exited(peers[1])).toBe(true);
+    expect(peers).toHaveLength(2);
+  });
+
+  it("a pending guess with no handshake still races cold", async () => {
+    vi.spyOn(os, "cpus").mockReturnValue(Array.from({ length: 16 }, () => ({} as os.CpuInfo)));
+    vi.spyOn(os, "totalmem").mockReturnValue(32 * 1024 ** 3);
+    await start();
+    const ready = hold();
+    gate = (method, _reply, peer) => peer === 0 && method === "initialize" ? ready.held : undefined;
+    const preparing = instance.prepare!(shapeFor());
+    await vi.waitFor(() => expect(peers).toHaveLength(1));
+    const sent = await send();
+    await completed(sent);
+    ready.release();
+    await preparing;
+    expect(turnStarts(peers[0])).toHaveLength(0);
+    expect(turnStarts(peers[1])).toHaveLength(1);
+    expect(exited(peers[0])).toBe(true);
+  });
+
   it("never ends the turn at foregroundCompleted; background items land before turn.completed", async () => {
     const background = hold();
     gate = (method, reply) => (method === "turn/start" && reply.method === "usage/changed" ? background.held : undefined);
@@ -1333,6 +1385,23 @@ describe("MSP warm host (recorded transport)", () => {
     expect(peers).toHaveLength(1);
     expect(methods(peers[0]).filter((m) => m === "initialize" || m === "session/resume")).toEqual(["initialize", "session/resume"]);
     expect(stagesOf(turnId)).toEqual(["prompt-sent", "finishing"]);
+  });
+
+  it("a pending guess at Send takes the ready handshake", async () => {
+    await start();
+    await instance.prepare!();
+    const ready = hold();
+    gate = (method, _reply, peer) => peer === 1 && method === "session/resume" ? ready.held : undefined;
+    const preparing = instance.prepare!(shapeFor({ resumeCursor: "cursor-1" }));
+    await vi.waitFor(() => expect(peers[1] && methods(peers[1])).toContain("session/resume"));
+    const turnId = await send({ resumeCursor: "cursor-1" });
+    await completed(turnId);
+    ready.release();
+    await preparing;
+    expect(turnStarts(peers[0])).toHaveLength(1);
+    expect(turnStarts(peers[1])).toHaveLength(0);
+    expect(exited(peers[1])).toBe(true);
+    expect(peers).toHaveLength(2);
   });
 
   it.each([0, 1])("a pending prepare never makes the turn later than cold (winner %i)", async (winner) => {
