@@ -257,6 +257,7 @@ import { updateBridgeResponse, updateStateFromMessage } from "./update-proxy.ts"
 import { botClosedPanes, paneLabel, raisePaneAttention, terminalPaneCountsResponse, terminalSendResponse, terminalSnapshotResponse, terminalStartResponse } from "./terminal-snapshot.ts";
 import { closeBotPanes } from "./terminal-cleanup.ts";
 import { commitLaunchNote, submittedAgo } from "./launch-note.ts";
+import { createTerminalLive } from "./terminal-live.ts";
 import { terminalResumeResponse } from "./terminal-resume.ts";
 import { deferMailboxAuto, mailboxNoteText, mailboxPostSchema, mailboxRecipient, mailboxScope, mailboxSecretFor, readMailboxBody } from "./mailbox.ts";
 import { NoteSteerer, steerUntilTaken } from "./note-steer.ts";
@@ -7152,6 +7153,7 @@ function configStatus() {
       detailedReplies: detailedRepliesEnabled(cfg),
       memoryNotes: memoryNotesEnabled(cfg),
       terminalHost: Boolean(terminalBridgeAccess),
+      terminalLive: true,
       modelDial: effectiveModelDial(cfg, teamDialMember(DATA_DIR, phoneAccess.base(), googleEnv.teamOwner, phoneAccess.status())),
     },
   };
@@ -7368,6 +7370,7 @@ const threadRoutes = createThreadRoutes({
   resolveAndSendRoutine,
   approvalBus,
 });
+const terminalLive = createTerminalLive({ access: () => terminalBridgeAccess, botCaller: (header) => Boolean(commsCallers.resolve(header)) });
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -8116,6 +8119,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "POST") {
       const resumed = await terminalResumeResponse({ store, access: terminalBridgeAccess, credentials, cookie: req.headers.cookie }, m[1], await readBody(req));
       return json(res, resumed.status, resumed.body);
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/terminal\/(live|input|resize|lease)$/);
+    if (m) {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return await terminalLive.handle(req, res, bot.id, m[2], url);
     }
     // ── bot memory: MEMORY.md + memory/ topic files ─────────────────────
     // The files already belong to the user (plain markdown in the bot's
