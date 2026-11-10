@@ -105,7 +105,8 @@ describe("live call in the message box", () => {
       for (const label of ["Captions", "Mute", "End"]) expect(button(box, label)).not.toBeNull();
       expect(host.querySelector("[data-live-call]")?.querySelector("button")).toBeNull();
       const header = button(host, "Hang up on Atlas")!;
-      expect(header.className).toContain("bg-danger/15");
+      expect(header.className).toContain("bg-accent/15");
+      expect(button(box, "End")!.className).toContain("bg-danger");
       expect(header.className).not.toContain("text-white");
       expect(host.textContent).toContain("Free Gemini");
 
@@ -172,6 +173,7 @@ describe("live call in the message box", () => {
       await connect(host);
       const bars = [...frame(host).querySelectorAll<HTMLElement>("[data-voice-bars] > span")];
       expect(bars).toHaveLength(4);
+      expect(bars.every((bar) => bar.classList.contains("bg-accent"))).toBe(true);
       const scale = (bar: HTMLElement) => Number(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)?.[1] ?? 0);
       for (let i = 0; i < 5; i++) frames.shift()?.(i * 16);
       expect(scale(bars[1]!)).toBeCloseTo(0.2);

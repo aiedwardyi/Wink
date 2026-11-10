@@ -1576,7 +1576,7 @@ export function ChatView({ bot, hidden = false, focusComposerBlocked = false, on
                 void ctx.resume();
                 setLiveCall({ botId: bot.id, ctx });
               }}
-              className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-danger/15 text-danger" : "text-ink-secondary hover:bg-raised hover:text-ink")}
+              className={cn("flex size-9 shrink-0 items-center justify-center rounded-full max-md:size-11", onLiveCall ? "bg-accent/15 text-accent" : "text-ink-secondary hover:bg-raised hover:text-ink")}
             >
               <Phone size={18} />
             </button>
