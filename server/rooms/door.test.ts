@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { Agent, createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
@@ -740,7 +741,7 @@ describe("send", () => {
 });
 
 describe("files", () => {
-  const upload = (roomId: string, key: string, body: string | Buffer, name = "notes.txt") => call(`/room/v1/rooms/${roomId}/files?name=${name}`, { method: "POST", key, body });
+  const upload = (roomId: string, key: string, body: string | Buffer, name = "notes.txt") => call(`/room/v1/rooms/${roomId}/files?uploadId=${randomBytes(12).toString("base64url")}&name=${name}`, { method: "POST", key, body });
 
   it("open only to current members of that room, before any read", async () => {
     const a = peopleRoom("A");

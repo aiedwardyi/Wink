@@ -29,6 +29,20 @@ import { closeJoinedDb, joinedEntries, joinedKey, joinedRoom, resetJoined } from
 import { createPeopleOnlyRoom } from "./people-only.ts";
 import { hostedSend } from "./send.ts";
 
+const disk = vi.hoisted(() => ({ shortWrites: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  const open = async (...args: Parameters<typeof fs.open>) =>
+    new Proxy(await fs.open(...args), {
+      get(target, key) {
+        if (key === "write" && disk.shortWrites) return (buffer: Buffer, offset = 0, length = buffer.length - offset) => target.write(buffer, offset, Math.min(length, 7));
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  return { ...fs, open };
+});
+
 const BASE = "wink.test";
 const HOST = `abcdefghijklmnop.${BASE}`;
 
@@ -218,9 +232,10 @@ const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const png = (size: number) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), randomBytes(size - 8)]);
 const pdf = (size: number) => Buffer.concat([Buffer.from("%PDF-1.7\n"), randomBytes(size - 9)]);
 
-const hostUpload = async (roomId: string, bytes: Buffer, name: string) => (await call("POST", `/api/rooms/${roomId}/files?name=${name}`, bytes)).json.file;
-const guestUpload = (roomId: string, bytes: Buffer, name: string, uploadId?: string) =>
-  call("POST", `/api/joined/rooms/${roomId}/files?${new URLSearchParams({ name, ...(uploadId ? { uploadId } : {}) })}`, bytes);
+const newUploadId = () => randomBytes(12).toString("base64url");
+const hostUpload = async (roomId: string, bytes: Buffer, name: string) => (await call("POST", `/api/rooms/${roomId}/files?uploadId=${newUploadId()}&name=${name}`, bytes)).json.file;
+const guestUpload = (roomId: string, bytes: Buffer, name: string, uploadId = newUploadId()) =>
+  call("POST", `/api/joined/rooms/${roomId}/files?${new URLSearchParams({ name, uploadId })}`, bytes);
 const filesOf = (roomId: string, text: string) => joinedEntries(roomId, 500).find((entry) => entry.text === text)?.files ?? [];
 
 describe("pictures and files in a team room, through the real door", () => {
@@ -330,5 +345,30 @@ describe("pictures and files in a team room, through the real door", () => {
     hostedSend(store.groups[0] as HostedGroup, { kind: "host" }, "after");
     await until(() => joinedEntries(roomId, 10).some((entry) => entry.text === "after"));
     expect(joinedEntries(roomId, 10).map((entry) => entry.text)).toEqual(["welcome", "after"]);
+  });
+});
+
+describe("room file writes and retries, through the real door", () => {
+  it("the teammate's copy keeps every byte when the disk takes a write short", async () => {
+    const { roomId } = await joinedTeam();
+    const bytes = pdf(4096);
+    disk.shortWrites = true;
+    try {
+      const file = await hostUpload(roomId, bytes, "a.pdf");
+      expect((await call("POST", `/api/rooms/${roomId}/send`, Buffer.from(JSON.stringify({ text: "short", fileIds: [file.id] })))).status).toBe(200);
+      await until(() => filesOf(roomId, "short").length === 1);
+      expect(sha((await call("GET", `/api/joined/rooms/${roomId}/files/${file.id}`)).body)).toBe(sha(bytes));
+    } finally {
+      disk.shortWrites = false;
+    }
+  });
+
+  it("an upload must name its uploadId, and the same one twice keeps one blob", async () => {
+    const { roomId } = await joinedTeam();
+    expect(await call("POST", `/api/joined/rooms/${roomId}/files?name=a.pdf`, pdf(1024))).toMatchObject({ status: 400, json: { error: "bad uploadId" } });
+    const bytes = pdf(1024);
+    const first = await guestUpload(roomId, bytes, "a.pdf", "upload-twice-000001");
+    expect((await guestUpload(roomId, bytes, "a.pdf", "upload-twice-000001")).json.file).toEqual(first.json.file);
+    expect(readdirSync(join(DATA_DIR, "room-files", roomId))).toEqual([first.json.file.id]);
   });
 });

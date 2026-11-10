@@ -33,6 +33,15 @@ const inflight = new Map<string, number>();
 
 const statusError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
+/** A write may land short; loop until the whole chunk is on disk. */
+export async function writeAll(handle: FileHandle, chunk: Buffer): Promise<void> {
+  for (let at = 0; at < chunk.length;) {
+    const { bytesWritten } = await handle.write(chunk, at, chunk.length - at);
+    if (!bytesWritten) throw new Error("no progress");
+    at += bytesWritten;
+  }
+}
+
 // Opened per call, like people-only: a held handle would outlive closeRoomsDb.
 function withDb<T>(run: (db: DatabaseSync) => T): T {
   // db.ts owns the file, its mode, WAL and the log's files column.
@@ -111,6 +120,7 @@ export interface Upload {
   /** "host" or a person id. */
   owner: string;
   name: string | null;
+  /** Required: a resent upload after a lost reply must find the first one. */
   uploadId: string | null;
   /** Rechecked once the bytes are on disk, before the row: the uploader may have been removed meanwhile. */
   still?: () => boolean;
@@ -157,7 +167,7 @@ function receive(req: IncomingMessage, file: string, roomId: string, base: numbe
       }
       req.pause();
       writes = writes.then(async () => {
-        await (await opened).write(chunk);
+        await writeAll(await opened, chunk);
       });
       writes.then(() => req.resume(), () => fail(500, "couldn't save the file"));
     };
@@ -208,7 +218,7 @@ const tooLarge = (max: number) => (max === IMAGE_MAX_BYTES ? "pictures can be up
 
 /** Durable before the reply: bytes fsynced and renamed into place, then the row committed. */
 export async function saveRoomFile(req: IncomingMessage, roomId: string, upload: Upload): Promise<RoomFile> {
-  if (upload.uploadId !== null && !UPLOAD_ID.test(upload.uploadId)) throw statusError(400, "bad uploadId");
+  if (upload.uploadId === null || !UPLOAD_ID.test(upload.uploadId)) throw statusError(400, "bad uploadId");
   if (!uploads.take(`${roomId}\n${upload.owner}`)) throw statusError(429, "too many files at once, try again in a few minutes");
   const length = Number(req.headers["content-length"] ?? 0);
   if (length > DOCUMENT_MAX_BYTES) throw statusError(413, tooLarge(DOCUMENT_MAX_BYTES));
@@ -267,7 +277,7 @@ export async function saveRoomFile(req: IncomingMessage, roomId: string, upload:
   }
 }
 
-/** Windows can't fsync a folder; there the rename is as durable as it gets. */
+/** Windows can't fsync a folder (EPERM); there the rename is as durable as it gets. */
 async function syncDir(dir: string): Promise<void> {
   try {
     const handle = await open(dir, "r");
@@ -276,7 +286,9 @@ async function syncDir(dir: string): Promise<void> {
     } finally {
       await handle.close();
     }
-  } catch {}
+  } catch (error) {
+    if (!["EPERM", "EISDIR", "EINVAL"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
 }
 
 /** Pictures preview inline under their own fixed type; everything else only downloads. */

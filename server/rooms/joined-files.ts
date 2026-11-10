@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 
 import { DATA_DIR } from "../config.ts";
-import { sendBlob } from "./files.ts";
+import { sendBlob, writeAll } from "./files.ts";
 import type { GuestClient, GuestResult } from "./guest-client.ts";
 import type { JoinedFile } from "./joined.ts";
 
@@ -37,7 +37,7 @@ export async function keepJoinedFile(roomId: string, file: JoinedFile, body: Inc
         size += chunk.length;
         if (size > file.bytes) break;
         hash.update(chunk);
-        await handle.write(chunk);
+        await writeAll(handle, chunk);
       }
       await handle.sync();
     } finally {
@@ -73,7 +73,7 @@ export async function joinedFileRoute(
   }
   client.start();
   if (!fileId) {
-    const result = await client.upload(roomId, req, url.searchParams.get("name") ?? "", url.searchParams.get("uploadId") ?? undefined, req.headers["content-length"]);
+    const result = await client.upload(roomId, req, url.searchParams.get("name") ?? "", url.searchParams.get("uploadId") ?? "", req.headers["content-length"]);
     const extra = result.uploadId ? { uploadId: result.uploadId } : {};
     reply(res, result.ok ? 200 : result.status, result.ok ? { file: result.value, ...extra } : { error: result.error, ...extra });
     return true;

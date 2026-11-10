@@ -13,6 +13,25 @@ import { appendRoomEntry, closeRoomsDb, createRoom, recentRoomEntries } from "./
 import { FILE_PATH, fileRoute } from "./file-routes.ts";
 import { ROOM_DISK_BYTES, sweepRoomFiles } from "./files.ts";
 
+const disk = vi.hoisted(() => ({ shortWrites: false, failSync: null as { path: string; code: string } | null }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  const open = async (...args: Parameters<typeof fs.open>) => {
+    const fail = disk.failSync;
+    if (fail && String(args[0]) === fail.path) {
+      return { sync: () => Promise.reject(Object.assign(new Error("sync failed"), { code: fail.code })), close: () => Promise.resolve() };
+    }
+    return new Proxy(await fs.open(...args), {
+      get(target, key) {
+        if (key === "write" && disk.shortWrites) return (buffer: Buffer, offset = 0, length = buffer.length - offset) => target.write(buffer, offset, Math.min(length, 7));
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  return { ...fs, open };
+});
+
 interface Reply {
   status: number;
   headers: IncomingHttpHeaders;
@@ -80,7 +99,8 @@ function call(method: string, path: string, init: { body?: Buffer | Buffer[]; ow
 }
 
 const upload = (roomId: string, body: Buffer | Buffer[], query: Record<string, string> = {}, owner?: string) =>
-  call("POST", `/rooms/${roomId}/files?${new URLSearchParams(query)}`, { body, owner });
+  call("POST", `/rooms/${roomId}/files?${new URLSearchParams({ uploadId: newUploadId(), ...query })}`, { body, owner });
+const newUploadId = () => randomBytes(12).toString("base64url");
 
 const png = (size: number) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), randomBytes(size - 8)]);
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -114,7 +134,7 @@ describe("room file types", () => {
       [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'), "text/plain"],
     ];
     for (const [bytes, type] of cases) {
-      const res = await call("POST", `/rooms/${room}/files?name=${encodeURIComponent("photo.png")}`, { body: bytes, headers: { "content-type": "image/png" } });
+      const res = await call("POST", `/rooms/${room}/files?uploadId=${newUploadId()}&name=${encodeURIComponent("photo.png")}`, { body: bytes, headers: { "content-type": "image/png" } });
       expect(res.status).toBe(200);
       expect(res.json.file).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9_-]{24}$/), name: "photo.png", type, bytes: bytes.length, sha256: sha(bytes) });
     }
@@ -150,7 +170,7 @@ describe("room file limits", () => {
     expect(picture).toMatchObject({ status: 413, json: { error: "pictures can be up to 10 MB" } });
     const line = Buffer.alloc(1024 * 1024, "a");
     expect(await upload(room, Array.from({ length: 26 }, () => line))).toMatchObject({ status: 413, json: { error: "files can be up to 25 MB" } });
-    expect(await call("POST", `/rooms/${room}/files`, { body: Buffer.from("x"), headers: { "content-length": String(26 * 1024 * 1024) } }).catch(() => null)).toMatchObject({ status: 413 });
+    expect(await call("POST", `/rooms/${room}/files?uploadId=${newUploadId()}`, { body: Buffer.from("x"), headers: { "content-length": String(26 * 1024 * 1024) } }).catch(() => null)).toMatchObject({ status: 413 });
     expect(rows(room)).toEqual([]);
     expect(readdirSync(roomDir(room))).toEqual([]);
   });
@@ -188,7 +208,7 @@ describe("room file durability", () => {
 
   it("streams to disk as it arrives, and an upload cut halfway leaves no row and no file", async () => {
     const room = createRoom("Team").id;
-    const req = request({ host: "127.0.0.1", port, method: "POST", path: `/rooms/${room}/files`, headers: { "content-length": String(8 * 1024 * 1024) }, agent: false });
+    const req = request({ host: "127.0.0.1", port, method: "POST", path: `/rooms/${room}/files?uploadId=${newUploadId()}`, headers: { "content-length": String(8 * 1024 * 1024) }, agent: false });
     req.on("error", () => {});
     req.write(png(1024 * 1024));
     const deadline = Date.now() + 4_000;
@@ -292,5 +312,55 @@ describe("room file edges", () => {
     while (!destroy.mock.calls.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
     expect(destroy).toHaveBeenCalled();
     destroy.mockRestore();
+  });
+});
+
+describe("room file writes, quota and retries", () => {
+  it("keep every byte when the disk takes a write short", async () => {
+    const room = createRoom("Team").id;
+    const bytes = png(2048);
+    disk.shortWrites = true;
+    try {
+      const file = (await upload(room, bytes)).json.file;
+      expect(readFileSync(join(roomDir(room), file.id)).equals(bytes)).toBe(true);
+      expect(sha((await call("GET", `/rooms/${room}/files/${file.id}`)).body)).toBe(sha(bytes));
+    } finally {
+      disk.shortWrites = false;
+    }
+  });
+
+  it("let exactly one of two racing uploads take room for one", async () => {
+    const room = createRoom("Team").id;
+    expect((await upload(room, Buffer.from("first"))).status).toBe(200);
+    exec("INSERT INTO room_files (room_id, id, owner, name, type, bytes, sha256, at) VALUES (?, ?, 'host', 'big', 'text/plain', ?, '', ?)", room, "D".repeat(24), ROOM_DISK_BYTES - 1_005, Date.now());
+    const results = await Promise.all([1, 2].map(() => upload(room, [Buffer.alloc(300, "a"), Buffer.alloc(300, "b")])));
+    expect(results.map((result) => result.status).sort()).toEqual([200, 507]);
+    expect(results.find((result) => result.status === 507)!.json).toEqual({ error: "this room is out of space for files" });
+    const total = new DatabaseSync(join(DATA_DIR, "rooms.db"));
+    try {
+      expect((total.prepare("SELECT SUM(bytes) AS bytes FROM room_files WHERE room_id = ?").get(room) as { bytes: number }).bytes).toBeLessThanOrEqual(ROOM_DISK_BYTES);
+    } finally {
+      total.close();
+    }
+  });
+
+  it("turn down an upload with no uploadId", async () => {
+    const room = createRoom("Team").id;
+    expect(await call("POST", `/rooms/${room}/files?name=a.txt`, { body: Buffer.from("hello") })).toMatchObject({ status: 400, json: { error: "bad uploadId" } });
+    expect(existsSync(roomDir(room))).toBe(false);
+  });
+
+  it("fail the upload before its row when the folder won't sync, but not where folders can't sync", async () => {
+    const room = createRoom("Team").id;
+    disk.failSync = { path: roomDir(room), code: "EIO" };
+    try {
+      expect(await upload(room, Buffer.from("hello"))).toMatchObject({ status: 500, json: { error: "couldn't save the file" } });
+      expect(rows(room)).toEqual([]);
+      expect(readdirSync(roomDir(room))).toEqual([]);
+      disk.failSync = { path: roomDir(room), code: "EPERM" };
+      expect((await upload(room, Buffer.from("hello"))).status).toBe(200);
+    } finally {
+      disk.failSync = null;
+    }
   });
 });

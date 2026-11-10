@@ -207,21 +207,20 @@ export class GuestClient {
     return { ok: true, value: this.view(joinedRoom(roomId)!) };
   }
 
-  /** Streams `body` to the door, which sniffs and caps it. A caller retrying passes the same uploadId back; no retry here, the body is spent. */
-  async upload(roomId: string, body: Buffer | Readable, name: string, uploadId?: string, length?: string): Promise<GuestResult<JoinedFile> & { uploadId?: string }> {
+  /** Streams `body` to the door, which sniffs and caps it. The caller owns uploadId and resends it on retry; no retry here, the body is spent. */
+  async upload(roomId: string, body: Buffer | Readable, name: string, uploadId: string, length?: string): Promise<GuestResult<JoinedFile> & { uploadId?: string }> {
     if (!joinedRoom(roomId)) return failed(404, "not found");
     const creds = joinedKey(roomId);
     if (!creds) return failed(409, "this room is read-only");
-    if (uploadId !== undefined && !SEND_ID.test(uploadId)) return failed(400, "bad uploadId");
-    const chosen = uploadId ?? randomBytes(18).toString("base64url");
-    const query = new URLSearchParams({ uploadId: chosen, name: name.slice(0, 200) });
+    if (!SEND_ID.test(uploadId)) return failed(400, "bad uploadId");
+    const query = new URLSearchParams({ uploadId, name: name.slice(0, 200) });
     const reply = await this.call(creds.relayHost, "POST", `/room/v1/rooms/${roomId}/files?${query}`, creds.key, body, length, UPLOAD_MS);
     if (!reply.ok) {
       if (reply.status === 401) this.end(roomId, creds.key);
-      return { ...reply, uploadId: chosen };
+      return { ...reply, uploadId };
     }
     const file = z.object({ file: fileSchema }).safeParse(reply.value);
-    return file.success ? { ok: true, value: file.data.file, uploadId: chosen } : { ...unavailable(), uploadId: chosen };
+    return file.success ? { ok: true, value: file.data.file, uploadId } : { ...unavailable(), uploadId };
   }
 
   /** A file a held entry carries: the local copy, else fetched through the door with this room's key. */
