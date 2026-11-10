@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEvent } from "./contracts.ts";
 import { createQuietTurns } from "./quiet-turn.ts";
@@ -20,13 +20,18 @@ describe("quiet turns", () => {
   let chat: string[];
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     store = new Store(() => ({ instanceId: "fake", model: "fake" }));
     threadId = store.createBot().threadId;
     quietTurnText = createQuietTurns((id) => store.messagesFor(id));
     chat = [];
   });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   const publish = (patch: Record<string, unknown>, turnId = "t1") => {
+    vi.advanceTimersByTime(1);
     const event = { provider: "claude", eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), threadId, turnId, ...patch } as RuntimeEvent;
     if (!shownByIndex({ event, staleTurnEvent: () => false, quietTurnText })) return;
     if (event.type === "content.delta") chat.push(`delta:${event.delta}`);
@@ -60,6 +65,15 @@ describe("quiet turns", () => {
 
   it("keeps the reply to the message that started the turn", () => {
     store.appendMessage(threadId, { role: "user", kind: "text", text: "status?" });
+    publish({ type: "turn.started" });
+    tool("no_reply_needed");
+    text("All green.");
+    expect(chat).toEqual(["delta:All green.", "All green."]);
+  });
+
+  it("keeps the reply when a note lands between the send and the turn start", () => {
+    store.appendMessage(threadId, { role: "user", kind: "text", text: "status?" });
+    store.appendMessage(threadId, { role: "bot", kind: "note", text: "Live Verify checked notes.md: 0 problems." });
     publish({ type: "turn.started" });
     tool("no_reply_needed");
     text("All green.");
