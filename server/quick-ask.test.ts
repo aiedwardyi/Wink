@@ -518,6 +518,28 @@ describe("Gate 0", () => {
     expect(routesQuick({ ...base, ...patch })).toBe(false);
   });
 
+  const typed = { id: "u", at: 2, role: "user", kind: "text", text: "nevermind, keep going" } as Message;
+  const newer = { ...card, id: "c2", at: 3 } as Message;
+  const approval = { ...card, card: { title: "?", subtitle: "", options: [], requestId: "r1", tool: "Bash" } } as Message;
+  const closed = (patch: object) => ({ ...card, card: { ...card.card!, ...patch } }) as Message;
+
+  describe.each([QUESTION, "지금 뭐 하고 있어?"])("open cards: %s", (text) => {
+    it.each<[string, Message[]]>([
+      ["an old card the person typed past", [card, typed]],
+      ["an answered card", [closed({ answered: "Yes" })]],
+      ["a dismissed card", [closed({ dismissed: true })]],
+    ])("passes: %s", (_name, messages) => {
+      expect(routesQuick({ ...base, text, messages })).toBe(true);
+    });
+
+    it.each<[string, Message[]]>([
+      ["the newest card, still open", [card, typed, newer]],
+      ["an open approval the person typed past", [approval, typed]],
+    ])("skips the helper: %s", (_name, messages) => {
+      expect(routesQuick({ ...base, text, messages })).toBe(false);
+    });
+  });
+
   it.each(["codex", "grokAgent", "antigravityAgent", "museAgent"])("skips the helper: a %s bot", (driverKind) => {
     expect(routesQuick({ ...base, instance: { driverKind, fork: () => null, generateText: async () => "" } as never })).toBe(false);
   });
