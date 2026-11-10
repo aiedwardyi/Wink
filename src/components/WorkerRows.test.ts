@@ -714,7 +714,7 @@ describe("WorkerChip", () => {
 
   it("closes the open desktop list when the phone breakpoint flips", async () => {
     let flip: (() => void) | undefined;
-    stubMedia({ matches: false, addEventListener: (_type, listener) => { flip = listener; } });
+    stubMedia({ matches: false, addEventListener: (_type, listener) => { flip ??= listener; } });
     const { host, chip, unmount } = await mount([shown("WORK", "working", "work-1", 1)]);
     try {
       await act(async () => chip()!.click());

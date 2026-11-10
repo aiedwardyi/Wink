@@ -2,6 +2,7 @@
 import { useId } from "react";
 import { Monitor } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useDevicePixelRatio } from "@/lib/use-device-pixel-ratio";
 
 export interface IconProps {
   size?: number;
@@ -44,16 +45,22 @@ const CLAUDE_BOT = [
 // anti-slop/no-shape-in-symbol-names flags the JSX attribute name, so spread it.
 const CRISP = { "shapeRendering": "crispEdges" } as const;
 
+/** viewBox giving each bot column the same whole number of device px, centered on whole device px. */
+export function claudeViewBox(size: number, ratio: number): [number, number, number, number] {
+  // 17 columns need 1 device px each or the eyes and legs merge, so the bot overflows a box under 17 px. Ties round down.
+  const device = Math.max(1, Math.ceil((Math.max(size, 17) / 17) * ratio - 0.5));
+  const v = (size * ratio) / device;
+  const snap = (center: number) => Math.round((center - v / 2) * device) / device;
+  return [snap(9.5), snap(5), v, v];
+}
+
 export function ClaudeMark({ size = 16, className }: IconProps) {
-  // 17 columns need 1 css px each or the eyes and legs merge, so the bot overflows a box under 17 px.
-  const v = Math.min(size, 17);
-  // Past 17 px the scale is fractional anyway, so center exactly instead of on a whole px.
-  const snap = size > 17 ? (n: number) => n : Math.round;
+  const ratio = useDevicePixelRatio();
   return (
     <svg
       width={size}
       height={size}
-      viewBox={`${snap(9.5 - v / 2)} ${snap(5 - v / 2)} ${v} ${v}`}
+      viewBox={claudeViewBox(size, ratio).join(" ")}
       {...CRISP}
       className={cn("shrink-0 overflow-visible fill-[#d97757]", className)}
       aria-hidden

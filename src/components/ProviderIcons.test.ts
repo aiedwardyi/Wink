@@ -2,7 +2,7 @@ import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ClaudeMark, GeminiMark, MuseMark, ProviderMark, QwenMark } from "./ProviderIcons";
+import { ClaudeMark, claudeViewBox, GeminiMark, MuseMark, ProviderMark, QwenMark } from "./ProviderIcons";
 
 describe("ProviderMark", () => {
   it.each(["grok", "grokAgent"])("renders the Grok mark as an SVG for %s", (driverKind) => {
@@ -80,12 +80,30 @@ describe("ClaudeMark", () => {
     expect(viewBox(size)[2]).toBe(size);
   });
 
-  it.each([24, 32])("scales the bot from the exact center at %i px", (size) => {
-    const [x, y, w, h] = viewBox(size);
-    expect(w).toBe(17);
-    expect(h).toBe(17);
-    expect(x + w / 2).toBe(9.5);
-    expect(y + h / 2).toBe(5);
+  it.each([
+    [14, 1, 1],
+    [14, 1.25, 1],
+    [14, 1.5, 1],
+    [14, 1.75, 2],
+    [14, 2, 2],
+    [18, 1, 1],
+    [20, 1.25, 1],
+    [72, 1, 4],
+    [72, 1.25, 5],
+    [72, 1.5, 6],
+    [72, 2, 8],
+  ])("gives every bot column the same whole device px at %i px and ratio %d", (size, ratio, device) => {
+    const [x, y, w, h] = claudeViewBox(size, ratio);
+    expect(h).toBe(w);
+    expect((size * ratio) / w).toBeCloseTo(device, 9);
+    expect(x * device).toBeCloseTo(Math.round(x * device), 9);
+    expect(y * device).toBeCloseTo(Math.round(y * device), 9);
+    expect(Math.abs(x + w / 2 - 9.5) * device).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(y + h / 2 - 5) * device).toBeLessThanOrEqual(0.5);
+  });
+
+  it.each([14, 16])("keeps the %i px bot at its ratio 1 size on a ratio 2 screen", (size) => {
+    expect(claudeViewBox(size, 2)[2]).toBe(claudeViewBox(size, 1)[2]);
   });
 });
 
