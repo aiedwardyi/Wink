@@ -240,7 +240,8 @@ export async function answerQuick(deps: QuickDeps, botId: string, threadId: stri
   }
   const path = store.activePath(threadId);
   // the bot's own reply already stands under the ask; a late answer could contradict it
-  if (!current.busy && !stopped.has(ask.id) && path.slice(path.findIndex((row) => row.id === ask.id) + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && row.text?.trim())) {
+  const asked = path.findIndex((row) => row.id === ask.id);
+  if (!current.busy && !stopped.has(ask.id) && asked >= 0 && path.slice(asked + 1).some((row) => row.role === "bot" && row.kind === "text" && !row.quick && row.text?.trim())) {
     queueAsk(store, botId, threadId, ask);
     deps.drain();
     return;
